@@ -53,9 +53,7 @@ impl Staged for CreateIndexStage {
     ) -> Result<StageResult<Box<Self>>, AdapterError> {
         match self {
             CreateIndexStage::Optimize(stage) => coord.create_index_optimize(stage).await,
-            CreateIndexStage::Finish(stage) => {
-                coord.create_index_finish(ctx.session(), stage).await
-            }
+            CreateIndexStage::Finish(stage) => coord.create_index_finish(ctx, stage).await,
             CreateIndexStage::Explain(stage) => {
                 coord.create_index_explain(ctx.session(), stage).await
             }
@@ -412,8 +410,10 @@ impl Coordinator {
     #[instrument]
     async fn create_index_finish(
         &mut self,
-        session: &Session,
-        CreateIndexFinish {
+        ctx: &mut ExecuteContext,
+        stage: CreateIndexFinish,
+    ) -> Result<StageResult<Box<CreateIndexStage>>, AdapterError> {
+        let CreateIndexFinish {
             item_id,
             global_id,
             plan:
@@ -433,8 +433,7 @@ impl Coordinator {
             global_mir_plan,
             global_lir_plan,
             ..
-        }: CreateIndexFinish,
-    ) -> Result<StageResult<Box<CreateIndexStage>>, AdapterError> {
+        } = stage;
         let id_bundle = dataflow_import_id_bundle(global_lir_plan.df_desc(), cluster_id);
 
         let ops = vec![catalog::Op::CreateItem {
@@ -461,7 +460,7 @@ impl Coordinator {
             .collect::<Vec<_>>();
 
         let transact_result = self
-            .catalog_transact_with_side_effects(Some(session), ops, |coord| async {
+            .catalog_transact_with_side_effects(Some(ctx), ops, async move |coord, ctx| {
                 let (mut df_desc, df_meta) = global_lir_plan.unapply();
 
                 // Save plan structures.
@@ -473,7 +472,7 @@ impl Coordinator {
                     .set_physical_plan(global_id, df_desc.clone());
 
                 let notice_builtin_updates_fut = coord
-                    .process_dataflow_metainfo(df_meta, global_id, session, notice_ids)
+                    .process_dataflow_metainfo(df_meta, global_id, ctx, notice_ids)
                     .await;
 
                 // We're putting in place read holds, such that ship_dataflow,
@@ -513,10 +512,11 @@ impl Coordinator {
                 kind:
                     mz_catalog::memory::error::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
             })) if if_not_exists => {
-                session.add_notice(AdapterNotice::ObjectAlreadyExists {
-                    name: name.item,
-                    ty: "index",
-                });
+                ctx.session()
+                    .add_notice(AdapterNotice::ObjectAlreadyExists {
+                        name: name.item,
+                        ty: "index",
+                    });
                 Ok(StageResult::Response(ExecuteResponse::CreatedIndex))
             }
             Err(err) => Err(err),

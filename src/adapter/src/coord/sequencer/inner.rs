@@ -636,7 +636,7 @@ impl Coordinator {
     #[instrument]
     pub(super) async fn sequence_create_source(
         &mut self,
-        session: &mut Session,
+        ctx: &mut ExecuteContext,
         plans: Vec<plan::CreateSourcePlanBundle>,
     ) -> Result<ExecuteResponse, AdapterError> {
         let item_ids: Vec<_> = plans.iter().map(|plan| plan.item_id).collect();
@@ -644,10 +644,10 @@ impl Coordinator {
             ops,
             sources,
             if_not_exists_ids,
-        } = self.create_source_inner(session, plans).await?;
+        } = self.create_source_inner(ctx.session(), plans).await?;
 
         let transact_result = self
-            .catalog_transact_with_side_effects(Some(session), ops, |coord| async {
+            .catalog_transact_with_side_effects(Some(ctx), ops, async |coord, ctx| {
                 // TODO(roshan): This will be unnecessary when we drop support for
                 // automatically created subsources.
                 // To improve the performance of creating a source and many
@@ -724,7 +724,10 @@ impl Coordinator {
                         DataSourceDesc::Webhook { .. } => {
                             if let Some(url) = coord.catalog().state().try_get_webhook_url(&item_id)
                             {
-                                session.add_notice(AdapterNotice::WebhookSourceCreated { url })
+                                if let Some(ctx) = ctx.as_ref() {
+                                    ctx.session()
+                                        .add_notice(AdapterNotice::WebhookSourceCreated { url })
+                                }
                             }
 
                             (DataSource::Webhook, None)
@@ -785,10 +788,11 @@ impl Coordinator {
                 kind:
                     mz_catalog::memory::error::ErrorKind::Sql(CatalogError::ItemAlreadyExists(id, _)),
             })) if if_not_exists_ids.contains_key(&id) => {
-                session.add_notice(AdapterNotice::ObjectAlreadyExists {
-                    name: if_not_exists_ids[&id].item.clone(),
-                    ty: "source",
-                });
+                ctx.session()
+                    .add_notice(AdapterNotice::ObjectAlreadyExists {
+                        name: if_not_exists_ids[&id].item.clone(),
+                        ty: "source",
+                    });
                 Ok(ExecuteResponse::CreatedSource)
             }
             Err(err) => Err(err),
@@ -886,7 +890,7 @@ impl Coordinator {
         } else {
             let result = self
                 .sequence_create_connection_stage_finish(
-                    ctx.session_mut(),
+                    &mut ctx,
                     connection_id,
                     connection_gid,
                     plan,
@@ -900,7 +904,7 @@ impl Coordinator {
     #[instrument]
     pub(crate) async fn sequence_create_connection_stage_finish(
         &mut self,
-        session: &mut Session,
+        ctx: &mut ExecuteContext,
         connection_id: CatalogItemId,
         connection_gid: GlobalId,
         plan: plan::CreateConnectionPlan,
@@ -915,11 +919,11 @@ impl Coordinator {
                 details: plan.connection.details.clone(),
                 resolved_ids,
             }),
-            owner_id: *session.current_role_id(),
+            owner_id: *ctx.session().current_role_id(),
         }];
 
-        let transact_result = self
-            .catalog_transact_with_side_effects(Some(session), ops, |coord| async {
+        let transact_result =
+            self.catalog_transact_with_side_effects(Some(ctx), ops, async move |coord, _ctx| {
                 match plan.connection.details {
                     ConnectionDetails::AwsPrivatelink(ref privatelink) => {
                         let spec = VpcEndpointConfig {
@@ -952,10 +956,11 @@ impl Coordinator {
                 kind:
                     mz_catalog::memory::error::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
             })) if plan.if_not_exists => {
-                session.add_notice(AdapterNotice::ObjectAlreadyExists {
-                    name: plan.name.item,
-                    ty: "connection",
-                });
+                ctx.session()
+                    .add_notice(AdapterNotice::ObjectAlreadyExists {
+                        name: plan.name.item,
+                        ty: "connection",
+                    });
                 Ok(ExecuteResponse::CreatedConnection)
             }
             Err(err) => Err(err),
@@ -1164,7 +1169,7 @@ impl Coordinator {
         }];
 
         let catalog_result = self
-            .catalog_transact_with_side_effects(Some(ctx.session()), ops, |coord| async {
+            .catalog_transact_with_side_effects(Some(ctx), ops, async move |coord, ctx| {
                 // The table data_source determines whether this table will be written to
                 // by environmentd (e.g. with INSERT INTO statements) or by the storage layer
                 // (e.g. a source-fed table).
@@ -1185,7 +1190,7 @@ impl Coordinator {
                             .await
                             .unwrap_or_terminate("unable to confirm leadership");
 
-                        if let Some(id) = ctx.extra().contents() {
+                        if let Some(id) = ctx.as_ref().and_then(|ctx| ctx.extra().contents()) {
                             coord.set_statement_execution_timestamp(id, register_ts);
                         }
 
@@ -1261,8 +1266,10 @@ impl Coordinator {
                                 if let Some(url) =
                                     coord.catalog().state().try_get_webhook_url(&table_id)
                                 {
-                                    ctx.session()
-                                        .add_notice(AdapterNotice::WebhookSourceCreated { url })
+                                    if let Some(ctx) = ctx.as_ref() {
+                                        ctx.session()
+                                            .add_notice(AdapterNotice::WebhookSourceCreated { url })
+                                    }
                                 }
 
                                 // Create the underlying collection with the latest schema from the Table.
@@ -3343,7 +3350,7 @@ impl Coordinator {
     #[instrument]
     pub(super) async fn sequence_alter_retain_history(
         &mut self,
-        session: &mut Session,
+        ctx: &mut ExecuteContext,
         plan: plan::AlterRetainHistoryPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let ops = vec![catalog::Op::AlterRetainHistory {
@@ -3351,7 +3358,7 @@ impl Coordinator {
             value: plan.value,
             window: plan.window,
         }];
-        self.catalog_transact_with_side_effects(Some(session), ops, |coord| async {
+        self.catalog_transact_with_side_effects(Some(ctx), ops, async move |coord, _ctx| {
             let catalog_item = coord.catalog().get_entry(&plan.id).item();
             let cluster = match catalog_item {
                 CatalogItem::Table(_)
@@ -5018,7 +5025,7 @@ impl Coordinator {
     #[allow(clippy::unused_async)]
     pub(super) async fn sequence_alter_table(
         &mut self,
-        session: &Session,
+        ctx: &mut ExecuteContext,
         plan: plan::AlterTablePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let plan::AlterTablePlan {
@@ -5048,7 +5055,7 @@ impl Coordinator {
         let expected_version = table.desc.latest_version();
         let existing_global_id = table.global_id_writes();
 
-        self.catalog_transact_with_side_effects(Some(session), ops, |coord| async {
+        self.catalog_transact_with_side_effects(Some(ctx), ops, async move |coord, _ctx| {
             let entry = coord.catalog().get_entry(&relation_id);
             let CatalogItem::Table(table) = &entry.item else {
                 panic!("programming error, expected table found {:?}", entry.item);
@@ -5292,11 +5299,13 @@ impl Coordinator {
         &mut self,
         df_meta: DataflowMetainfo,
         export_id: GlobalId,
-        session: &Session,
+        ctx: Option<&mut ExecuteContext>,
         notice_ids: Vec<GlobalId>,
     ) -> Option<BuiltinTableAppendNotify> {
         // Emit raw notices to the user.
-        self.emit_optimizer_notices(session, &df_meta.optimizer_notices);
+        if let Some(ctx) = ctx {
+            self.emit_optimizer_notices(ctx.session(), &df_meta.optimizer_notices);
+        }
 
         // Create a metainfo with rendered notices.
         let df_meta = self
