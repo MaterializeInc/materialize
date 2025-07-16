@@ -399,7 +399,7 @@ fn mfp_to_safe_plan(
     mfp: mz_expr::MapFilterProject,
 ) -> Result<mz_expr::SafeMfpPlan, OptimizerError> {
     mfp.into_plan()
-        .map_err(OptimizerError::Internal)?
+        .map_err(|_e| OptimizerError::UnsafeMfpPlan)?
         .into_nontemporal()
         .map_err(|_e| OptimizerError::UnsafeMfpPlan)
 }
