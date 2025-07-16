@@ -13,6 +13,7 @@ the expected-result/actual-result (aka golden testing) paradigm. A query is
 retried until it produces the desired result.
 """
 import glob
+import os
 
 from materialize import MZ_ROOT, ci_util, spawn
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
@@ -231,6 +232,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 file,
                 persistent=False,
             )
+            # Uploading successful junit files wastes time and contains no useful information
+            os.remove(f"test/testdrive-old-kafka-src-syntax/{junit_report}")
 
         c.test_parts(args.files, process)
         c.sanity_restart_mz()

@@ -16,16 +16,26 @@ MySQL/Kafka, see Testdrive for that.
 from __future__ import annotations
 
 import argparse
+import os
+import threading
 from argparse import Namespace
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from queue import Queue
 
 from materialize import buildkite, ci_util, file_util
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.postgres import CockroachOrPostgresMetadata
 from materialize.mzcompose.services.sql_logic_test import SqlLogicTest
+from materialize.ui import CommandFailureCausedUIError
 
-SERVICES = [CockroachOrPostgresMetadata(), SqlLogicTest(), Mz(app_password="")]
+NUM_SLTS = 8
+SLTS = [f"slt_{i+1}" for i in range(NUM_SLTS)]
+
+SERVICES = [CockroachOrPostgresMetadata(), Mz(app_password="")] + [
+    SqlLogicTest(name=slt) for slt in SLTS
+]
 
 COCKROACH_DEFAULT_PORT = 26257
 
@@ -84,27 +94,41 @@ def run_sqllogictest(
     parser.add_argument("--replica-size", default=2, type=int)
     parser.add_argument("--replicas", default=1, type=int)
     args = parser.parse_args()
-
     c.up(c.metadata_store())
 
-    container_name = "sqllogictest"
+    work_queue = Queue()
+    stop_event = threading.Event()
 
-    buildkite.get_parallelism_index()
-    buildkite.get_parallelism_count()
+    for step in run_config.steps:
+        step.configure(args)
+        sharded_files: list[str] = sorted(
+            buildkite.shard_list(step.file_list, lambda file: file)
+        )
+        for file in sharded_files:
+            work_queue.put((step, file))
 
-    j = 0
+    # Hacky way to make sure we have downloaded the image
+    c.up("slt_1", persistent=True)
 
-    for i, step in enumerate(run_config.steps):
-
-        def process(file: str) -> None:
-            nonlocal j
-
-            if "singlereplica_" in file and args.replicas > 1:
+    def worker(container_name: str):
+        exception: Exception | None = None
+        while True:
+            if stop_event.is_set():
                 return
 
-            # Since we run multiple commands, generate a unique junit report for each
-            junit_report_path = ci_util.junit_report_filename(f"{c.name}-{i}-{j}")
+            try:
+                step, file = work_queue.get_nowait()
+            except Exception:
+                break  # Queue is empty
+
+            if "singlereplica_" in file and args.replicas > 1:
+                continue
+
+            junit_report_path = ci_util.junit_report_filename(
+                f"{c.name}-{file.replace('.', '_').replace('/', '_')}"
+            )
             cmd = step.to_command(
+                container_name,
                 file,
                 args.replicas,
                 args.replica_size,
@@ -112,16 +136,25 @@ def run_sqllogictest(
                 c.metadata_store(),
             )
             try:
-                c.run(container_name, *cmd)
-            except:
-                j += 1
-                raise
+                c.run(container_name, *cmd, capture=True, capture_stderr=True)
+                # Uploading successful junit files wastes time and contains no useful information
+                os.remove(junit_report_path)
+            except CommandFailureCausedUIError as e:
+                print(f"+++ {file} failed, STDOUT:\n{e.stdout}\nSTDERR:\n{e.stderr}")
+                exception = e
+            finally:
+                work_queue.task_done()
+        if exception:
+            raise exception
 
-        step.configure(args)
-        sharded_files: list[str] = sorted(
-            buildkite.shard_list(step.file_list, lambda file: file)
-        )
-        c.test_parts(sharded_files, process)
+    with ThreadPoolExecutor(max_workers=len(SLTS)) as executor:
+        futures = [executor.submit(worker, container_name) for container_name in SLTS]
+        try:
+            for future in as_completed(futures):
+                future.result()
+        except Exception:
+            stop_event.set()
+            raise
 
 
 class SltRunConfig:
@@ -141,6 +174,7 @@ class SltRunStepConfig:
 
     def to_command(
         self,
+        container_name: str,
         file: str,
         replicas: int,
         replica_size: int,
@@ -151,6 +185,7 @@ class SltRunStepConfig:
         sqllogictest_config = [
             f"--junit-report={junit_report_path}",
             f"--postgres-url=postgres://root@{metadata_store}:{metadata_store_port}",
+            f"--prefix={container_name}",
             f"--replica-size={replica_size}",
             f"--replicas={replicas}",
         ]

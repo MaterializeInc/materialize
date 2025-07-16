@@ -56,6 +56,9 @@ struct Args {
     /// PostgreSQL connection URL to use for `persist` consensus.
     #[clap(long)]
     postgres_url: String,
+    /// PostgreSQL prefix for this SLT run
+    #[clap(long)]
+    prefix: String,
     /// Path to sqllogictest script to run.
     #[clap(value_name = "PATH", required = true)]
     paths: Vec<String>,
@@ -175,6 +178,7 @@ async fn main() -> ExitCode {
         stderr: &OutputStream::new(io::stderr(), args.timestamps),
         verbosity: args.verbosity,
         postgres_url: args.postgres_url.clone(),
+        prefix: args.prefix.clone(),
         no_fail: args.no_fail,
         fail_fast: args.fail_fast,
         auto_index_tables: args.auto_index_tables,
