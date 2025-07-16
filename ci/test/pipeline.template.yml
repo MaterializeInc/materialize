@@ -589,13 +589,12 @@ steps:
     label: "mz-debug tool"
     depends_on: build-aarch64
     timeout_in_minutes: 45
+    inputs: [test/mz-debug]
     plugins:
       - ./ci/plugins/mzcompose:
           composition: mz-debug
-          ci-builder: stable
     agents:
-      # Faster agent since it currently compiles mz-debug itself
-      queue: hetzner-aarch64-16cpu-32gb
+      queue: hetzner-aarch64-4cpu-8gb
 
   - id: secrets-logging
     label: "Secrets Logging"
