@@ -109,7 +109,7 @@ steps:
         depends_on: []
         timeout_in_minutes: 45
         agents:
-          queue: hetzner-aarch64-16cpu-32gb
+          queue: hetzner-x86-64-16cpu-32gb-merge-skew
         if: "build.pull_request.id != null"
         coverage: skip
         sanitizer: skip
@@ -144,7 +144,7 @@ steps:
         timeout_in_minutes: 20
         agents:
           # TODO: Revert to aarch64 when https://github.com/trufflesecurity/trufflehog/issues/4229 is solved
-          queue: hetzner-x86-64-16cpu-32gb
+          queue: hetzner-x86-64-16cpu-32gb-lint-rustfmt
         coverage: skip
         sanitizer: skip
 
@@ -156,11 +156,10 @@ steps:
           - Cargo.toml
           - "**/Cargo.toml"
           - "**/*.rs"
-          - misc/helm-charts
         depends_on: []
         timeout_in_minutes: 40
         agents:
-          queue: hetzner-x86-64-dedi-32cpu-128gb
+          queue: hetzner-x86-64-16cpu-32gb-clippy
         coverage: skip
         sanitizer: skip
 
@@ -176,7 +175,7 @@ steps:
         depends_on: []
         timeout_in_minutes: 40
         agents:
-          queue: hetzner-x86-64-dedi-32cpu-128gb
+          queue: hetzner-x86-64-16cpu-32gb-doctests
         coverage: skip
         sanitizer: skip
 
@@ -238,14 +237,14 @@ steps:
           composition: cargo-test
           ci-builder: stable
     agents:
-      queue: hetzner-x86-64-dedi-48cpu-192gb
+      queue: hetzner-x86-64-dedi-32cpu-128gb-cargo-test
 
   - id: testdrive
     label: "Testdrive"
     depends_on: build-aarch64
     timeout_in_minutes: 40
     inputs: [test/testdrive]
-    parallelism: 10
+    parallelism: 20
     plugins:
       - ./ci/plugins/mzcompose:
           composition: testdrive
@@ -257,7 +256,7 @@ steps:
     depends_on: build-aarch64
     timeout_in_minutes: 30
     inputs: [test/cluster]
-    parallelism: 8
+    parallelism: 16
     plugins:
       - ./ci/plugins/mzcompose:
           composition: cluster
@@ -281,7 +280,7 @@ steps:
     label: "Restart test"
     depends_on: build-aarch64
     timeout_in_minutes: 30
-    parallelism: 2
+    parallelism: 4
     plugins:
       - ./ci/plugins/mzcompose:
           composition: restart
@@ -293,7 +292,7 @@ steps:
     steps:
       - id: mysql-cdc
         label: "MySQL CDC tests"
-        parallelism: 4
+        parallelism: 8
         depends_on: build-aarch64
         timeout_in_minutes: 30
         inputs: [test/mysql-cdc]
@@ -319,7 +318,7 @@ steps:
     steps:
       - id: pg-cdc
         label: "Postgres CDC tests"
-        parallelism: 4
+        parallelism: 8
         depends_on: build-aarch64
         timeout_in_minutes: 30
         inputs: [test/pg-cdc]
@@ -375,6 +374,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 40
         inputs: [test/ssh-connection]
+        parallelism: 2
         plugins:
           - ./ci/plugins/mzcompose:
               composition: ssh-connection
@@ -399,7 +399,8 @@ steps:
         label: Kafka auth test
         depends_on: build-aarch64
         timeout_in_minutes: 30
-        inputs: [test/kafka-auth/smoketest.td]
+        inputs: [test/kafka-auth]
+        parallelism: 2
         plugins:
           - ./ci/plugins/mzcompose:
               composition: kafka-auth
@@ -437,14 +438,14 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: zippy
-          args: [--scenario=KafkaSources, --actions=100]
+          args: [--scenario=KafkaSources, --actions=80]
 
   - id: checks-no-restart-no-upgrade
     label: "Checks without restart or upgrade"
     depends_on: build-aarch64
     inputs: [misc/python/materialize/checks]
     timeout_in_minutes: 45
-    parallelism: 8
+    parallelism: 16
     agents:
       queue: hetzner-aarch64-8cpu-16gb
     plugins:
@@ -459,7 +460,7 @@ steps:
   - id: source-sink-errors
     label: "Source/Sink Error Reporting"
     depends_on: build-aarch64
-    parallelism: 2
+    parallelism: 3
     timeout_in_minutes: 30
     agents:
       queue: hetzner-aarch64-4cpu-8gb
@@ -477,7 +478,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: persistence
     agents:
-      queue: hetzner-aarch64-4cpu-8gb
+      queue: hetzner-aarch64-8cpu-16gb
 
   - id: cluster-isolation
     label: Cluster isolation test
@@ -513,7 +514,7 @@ steps:
               composition: debezium
               run: postgres
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          queue: hetzner-aarch64-8cpu-16gb
 
       - id: debezium-sql-server
         label: "Debezium SQL Server tests"

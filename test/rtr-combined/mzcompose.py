@@ -78,7 +78,7 @@ def workflow_default(c: Composition) -> None:
     for thread in threads:
         thread.start()
 
-    end_time = time.time() + 300
+    end_time = time.time() + 150
     while time.time() < end_time:
         # Only reaches one execution every 4 seconds currently, instead of the targetted 1 second, so probably need to parallelize this
         start_time = time.time()

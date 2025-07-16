@@ -13,10 +13,12 @@ Test sources with SSH connections using an SSH bastion host.
 
 from prettytable import PrettyTable
 
+from materialize import buildkite
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mysql import MySql
+from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
@@ -36,6 +38,7 @@ SERVICES = [
     TestCerts(),
     Redpanda(),
     MySql(),
+    Mz(app_password=""),
 ]
 
 
@@ -659,47 +662,37 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     # Test against both standard schema registry
     # and kafka implementations, if --extended is passed
-    #
-    # These tests core functionality related to kafka with ssh and error reporting.
-    for workflow in [
-        workflow_kafka,
-        workflow_hidden_hosts,
-    ]:
-        workflow(c, redpanda=False)
-        c.sanity_restart_mz()
-        c.run_testdrive_files("--no-reset", "validate-success.td")
-        if args.extended:
-            workflow(c, redpanda=True)
-            c.sanity_restart_mz()
-            c.run_testdrive_files("--no-reset", "validate-success.td")
-
-    # These tests core functionality related to pg with ssh and error reporting.
-    workflow_basic_ssh_features(c)
-    c.sanity_restart_mz()
-    for workflow in [
-        workflow_pg,
-        workflow_kafka_restart_replica,
-        workflow_kafka_sink,
-    ]:
-        workflow(c)
-        c.sanity_restart_mz()
-        c.run_testdrive_files("--no-reset", "validate-success.td")
-
+    workflows = [
+        # These tests core functionality related to kafka with ssh and error reporting.
+        (workflow_kafka, (False,), True),
+        (workflow_hidden_hosts, (False,), True),
+        # These tests core functionality related to pg with ssh and error reporting.
+        (workflow_basic_ssh_features, (), False),
+        (workflow_pg, (), True),
+        (workflow_kafka_restart_replica, (), True),
+        (workflow_kafka_sink, (), True),
+    ]
     if args.extended:
-        # Various special cases related to ssh
-        for workflow in [
-            workflow_ssh_key_after_restart,
-            workflow_rotated_ssh_key_after_restart,
-        ]:
-            workflow(c)
-            c.sanity_restart_mz()
+        workflows.extend(
+            [
+                (workflow_kafka, (True,), True),
+                (workflow_hidden_hosts, (True,), True),
+                # Various special cases related to ssh
+                (workflow_ssh_key_after_restart, (), False),
+                (workflow_rotated_ssh_key_after_restart, (), False),
+                (workflow_validate_connection, (), True),
+                (workflow_pg_via_ssh_tunnel_with_ssl, (), True),
+                (workflow_pg_restart_bastion, (), True),
+                (workflow_pg_restart_postgres, (), True),
+            ]
+        )
 
-        for workflow in [
-            workflow_validate_connection,
-            workflow_pg_via_ssh_tunnel_with_ssl,
-            workflow_pg_restart_bastion,
-            workflow_pg_restart_postgres,
-        ]:
-            workflow(c)
-            c.sanity_restart_mz()
+    def process(p) -> None:
+        workflow, args, validate_success = p
+        workflow(c, *args)
+        c.sanity_restart_mz()
+        if validate_success:
             c.run_testdrive_files("--no-reset", "validate-success.td")
+
+    sharded_workflows = buildkite.shard_list(workflows, lambda w: w[0].__name__)
+    c.test_parts(sharded_workflows, process)
