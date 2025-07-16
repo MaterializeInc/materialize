@@ -175,7 +175,7 @@ INSERT INTO t1_pk VALUES ('x', 'xeon'), ('y', 'yellow'), ('z', 'zion');
 
 # CDC is asynchronous, and LSN selection at snapshot time is incorrect, we we give
 # CDC time to process the previous update.
-# TODO (maz): remove when we fix LSN selection (https://github.com/MaterializeInc/database-issues/issues/9476)
+# TODO (maz): remove when we fix LSN selection (database-issues#9476)
 $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=5s
 
 > CREATE TABLE t2 FROM SOURCE ms_src (REFERENCE t1_pk);
