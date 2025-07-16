@@ -281,3 +281,85 @@ FROM t2
 WHERE
   ts + INTERVAL '30' minutes >= mz_now()
   OR ts IS NULL;
+
+# This view will only work in one-off queries.
+statement ok
+CREATE VIEW v_one_off AS
+SELECT *
+FROM t2
+WHERE
+  ts + INTERVAL '30' minutes >= mz_now()
+  OR ts IS NULL;
+
+statement ok
+SELECT * FROM v_one_off;
+
+query error db error: ERROR: Unsupported temporal predicate\. Note: `mz_now\(\)` must be directly compared to a non\-temporal expression of mz_timestamp\-castable type\. Expression found: \(\(#0\{ts\}\) IS NULL OR \(timestamp_to_mz_timestamp\(\(#0\{ts\} \+ 00:30:00\)\) >= mz_now\(\)\)\)
+CREATE DEFAULT INDEX ON v_one_off;
+
+query error db error: ERROR: Unsupported temporal predicate\. Note: `mz_now\(\)` must be directly compared to a non\-temporal expression of mz_timestamp\-castable type\. Expression found: \(\(#0\{ts\}\) IS NULL OR \(timestamp_to_mz_timestamp\(\(#0\{ts\} \+ 00:30:00\)\) >= mz_now\(\)\)\)
+CREATE MATERIALIZED VIEW mv_err AS
+SELECT * FROM v_one_off;
+
+query error db error: ERROR: Unsupported temporal predicate\. Note: `mz_now\(\)` must be directly compared to a non\-temporal expression of mz_timestamp\-castable type\. Expression found: \(\(#0\{ts\}\) IS NULL OR \(timestamp_to_mz_timestamp\(\(#0\{ts\} \+ 00:30:00\)\) >= mz_now\(\)\)\)
+SUBSCRIBE v_one_off;
+
+# This view will work also in maintained dataflows.
+statement ok
+CREATE VIEW v_maintained AS
+SELECT *
+FROM t2
+WHERE
+  ts + INTERVAL '30' minutes >= mz_now();
+
+statement ok
+SELECT * FROM v_one_off;
+
+statement ok
+CREATE DEFAULT INDEX ON v_maintained;
+
+statement ok
+CREATE MATERIALIZED VIEW mv2 AS
+SELECT * FROM v_maintained;
+
+simple
+DECLARE c CURSOR FOR SUBSCRIBE v_maintained;
+FETCH 0 c;
+----
+COMPLETE 0
+COMPLETE 0
+
+# Valid temporal expression remains valid if ANDed with a non-temporal expression
+statement ok
+CREATE MATERIALIZED VIEW mv3 AS
+SELECT *
+FROM t2
+WHERE
+  ts + INTERVAL '30' minutes >= mz_now()
+  AND x != 7;
+
+# UNION ALL workaround for OR
+
+query error db error: ERROR: Unsupported temporal predicate\. Note: `mz_now\(\)` must be directly compared to a non\-temporal expression of mz_timestamp\-castable type\. Expression found: \(\(#1\{x\} = 7\) OR \(timestamp_to_mz_timestamp\(\(#0\{ts\} \+ 00:30:00\)\) >= mz_now\(\)\)\)
+CREATE MATERIALIZED VIEW mv_err AS
+SELECT *
+FROM t2
+WHERE
+  x = 7
+  OR ts + INTERVAL '30' minutes >= mz_now();
+
+statement ok
+CREATE MATERIALIZED VIEW mv4 AS
+(
+    SELECT *
+    FROM t2
+    WHERE x = 7
+)
+UNION ALL
+(
+  SELECT *
+  FROM t2
+  WHERE
+    ts + INTERVAL '30' minutes >= mz_now()
+    AND x != 7
+);
