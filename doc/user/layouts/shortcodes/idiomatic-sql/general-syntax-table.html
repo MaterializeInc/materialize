@@ -45,7 +45,7 @@ Rewrite the query expression; specifically, move the operation to the other side
 </td>
 </tr>
 <tr>
-<td><code>mz_now()</code> cannot be used with <code>OR</code>s </td>
+<td><code>mz_now()</code> cannot be used with <code>OR</code>s in materialized/indexed view definitions and <code>SUBSCRIBE</code> statements</td>
 <td>
 Rewrite as <code>UNION ALL</code> or <code>UNION</code>, deduplicating as
 necessary:

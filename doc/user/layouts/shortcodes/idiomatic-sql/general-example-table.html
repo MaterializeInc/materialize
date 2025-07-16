@@ -58,23 +58,25 @@ WHERE mz_now() > order_date + INTERVAL '5min'
 </td>
 </tr>
 <tr>
-<td><code>mz_now()</code> cannot be used with <code>OR</code>s </td>
+<td><code>mz_now()</code> cannot be used with <code>OR</code>s in materialized/indexed view definitions and <code>SUBSCRIBE</code> statements</td>
 <td class="copyableCode">
 
 **Rewrite as `UNION ALL` with possible duplicates**
 
 ```mzsql
+CREATE MATERIALIZED VIEW forecast_completed_orders_duplicates_possible AS
 SELECT item, quantity, status from orders
 WHERE status = 'Shipped'
 UNION ALL
 SELECT item, quantity, status from orders
-WHERE  order_date + interval '30' minutes >= mz_now()
+WHERE order_date + interval '30' minutes >= mz_now()
 ;
 ```
 
-**Rewrite as UNION ALL with deduplication condition**
+**Rewrite as UNION ALL that avoids duplicates across queries**
 
 ```mzsql
+CREATE MATERIALIZED VIEW forecast_completed_orders_deduplicated_union_all AS
 SELECT item, quantity, status from orders
 WHERE status = 'Shipped'
 UNION ALL
@@ -84,9 +86,10 @@ AND status != 'Shipped' -- Deduplicate by excluding those with status 'Shipped'
 ;
 ```
 
-**Rewrite as UNION to handle any and all duplicated results**
+**Rewrite as UNION to deduplicate any and all duplicated results**
 
 ```mzsql
+CREATE MATERIALIZED VIEW forecast_completed_orders_deduplicated_results AS
 SELECT item, quantity, status from orders
 WHERE status = 'Shipped'
 UNION

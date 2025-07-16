@@ -8,9 +8,10 @@ rows:
     "mz_now() SQL": |
       **Rewrite as UNION ALL with possible duplicates**
 
-      <div style="background-color: var(--code-block)">
+      <span class="copyableCode">
 
       ```mzsql
+      CREATE MATERIALIZED VIEW forecast_completed_orders_duplicates_possible AS
       SELECT item, quantity, status from orders
       WHERE status = 'Shipped'
       UNION ALL
@@ -19,29 +20,31 @@ rows:
       ;
       ```
 
-      </div>
+      </span>
 
-      **Rewrite as UNION ALL with deduplication condition**
+      **Rewrite as UNION ALL that avoids duplicates across queries**
 
-      <div style="background-color: var(--code-block)">
+      <span class="copyableCode">
 
       ```mzsql
+      CREATE MATERIALIZED VIEW forecast_completed_orders_deduplicated_union_all AS
       SELECT item, quantity, status from orders
       WHERE status = 'Shipped'
-      UNION
+      UNION ALL
       SELECT item, quantity, status from orders
       WHERE order_date + interval '30' minutes >= mz_now()
       AND status != 'Shipped' -- Deduplicate by excluding those with status 'Shipped'
       ;
       ```
 
-      </div>
+      </span>
 
-      **Rewrite as UNION to handle any and all duplicated results**
+      **Rewrite as UNION to deduplicate any and all duplicated results**
 
-      <div style="background-color: var(--code-block)">
+      <span class="copyableCode">
 
       ```mzsql
+      CREATE MATERIALIZED VIEW forecast_completed_orders_deduplicated_results AS
       SELECT item, quantity, status from orders
       WHERE status = 'Shipped'
       UNION
@@ -50,7 +53,7 @@ rows:
       ;
       ```
 
-      </div>
+      </span>
   - "Valid/Invalid": |
       <red>Anti-pattern</red> ❌
 
@@ -62,6 +65,7 @@ rows:
 
       ```none
       -- Unsupported
+      CREATE MATERIALIZED VIEW forecast_completed_orders_unsupported AS
       SELECT item, quantity, status from orders
       WHERE status = 'Shipped'
       OR order_date + interval '30' minutes >= mz_now();

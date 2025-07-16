@@ -53,7 +53,9 @@ a logical timestamp within a few seconds of 9pm, even if data for 8:30–9pm has
 not yet arrived and the query will need to block until the data for 9pm arrives.
 In this scenario, both `now()` and `mz_now()` would return 9pm.
 
-### Materialization limitations
+### Limitations
+
+#### Materialization
 
 * Queries that use `now()` cannot be materialized. In other words, you cannot
   create an index or a materialized view on a query that calls `now()`.
@@ -64,6 +66,23 @@ In this scenario, both `now()` and `mz_now()` would return 9pm.
 These limitations are in place because `now()` changes every microsecond and
 `mz_now()` changes every millisecond. Allowing these functions to be
 materialized would be resource prohibitive.
+
+#### `mz_now()` restrictions
+
+The [`mz_now()`](/sql/functions/now_and_mz_now) clause has the following
+restrictions:
+
+- {{< include-md file="shared-content/mz_now_clause_disjunction_restrictions.md" >}}
+
+  For example:
+
+  {{< yaml-table data="mz_now/mz_now_combination" >}}
+
+  For alternatives, see [Disjunction (OR)
+  alternatives](http://localhost:1313/docs/transform-data/idiomatic-materialize-sql/mz_now/#disjunctions-or).
+
+- If part of a  `WHERE` clause, the `WHERE` clause cannot be an [aggregate
+ `FILTER` expression](/sql/functions/filters).
 
 ## Examples
 
