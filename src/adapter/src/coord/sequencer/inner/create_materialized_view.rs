@@ -73,9 +73,7 @@ impl Staged for CreateMaterializedViewStage {
                 coord.create_materialized_view_optimize(stage).await
             }
             CreateMaterializedViewStage::Finish(stage) => {
-                coord
-                    .create_materialized_view_finish(ctx.session(), stage)
-                    .await
+                coord.create_materialized_view_finish(ctx, stage).await
             }
             CreateMaterializedViewStage::Explain(stage) => {
                 coord
@@ -548,8 +546,10 @@ impl Coordinator {
     #[instrument]
     async fn create_materialized_view_finish(
         &mut self,
-        session: &Session,
-        CreateMaterializedViewFinish {
+        ctx: &mut ExecuteContext,
+        stage: CreateMaterializedViewFinish,
+    ) -> Result<StageResult<Box<CreateMaterializedViewStage>>, AdapterError> {
+        let CreateMaterializedViewFinish {
             item_id,
             global_id,
             plan:
@@ -575,13 +575,12 @@ impl Coordinator {
             global_mir_plan,
             global_lir_plan,
             ..
-        }: CreateMaterializedViewFinish,
-    ) -> Result<StageResult<Box<CreateMaterializedViewStage>>, AdapterError> {
+        } = stage;
         // Timestamp selection
         let id_bundle = dataflow_import_id_bundle(global_lir_plan.df_desc(), cluster_id);
 
         let read_holds_owned;
-        let read_holds = if let Some(txn_reads) = self.txn_read_holds.get(session.conn_id()) {
+        let read_holds = if let Some(txn_reads) = self.txn_read_holds.get(ctx.session().conn_id()) {
             // In some cases, for example when REFRESH is used, the preparatory
             // stages will already have acquired ReadHolds, we can re-use those.
 
@@ -650,7 +649,7 @@ impl Coordinator {
                     refresh_schedule: refresh_schedule.clone(),
                     initial_as_of: Some(initial_as_of.clone()),
                 }),
-                owner_id: *session.current_role_id(),
+                owner_id: *ctx.session().current_role_id(),
             },
         ];
 
@@ -661,7 +660,7 @@ impl Coordinator {
             .collect::<Vec<_>>();
 
         let transact_result = self
-            .catalog_transact_with_side_effects(Some(session), ops, |coord| async {
+            .catalog_transact_with_side_effects(Some(ctx), ops, async move |coord, ctx| {
                 let output_desc = global_lir_plan.desc().clone();
                 let (mut df_desc, df_meta) = global_lir_plan.unapply();
 
@@ -674,7 +673,7 @@ impl Coordinator {
                     .set_physical_plan(global_id, df_desc.clone());
 
                 let notice_builtin_updates_fut = coord
-                    .process_dataflow_metainfo(df_meta, global_id, session, notice_ids)
+                    .process_dataflow_metainfo(df_meta, global_id, ctx, notice_ids)
                     .await;
 
                 df_desc.set_as_of(dataflow_as_of.clone());
@@ -727,7 +726,7 @@ impl Coordinator {
                 kind:
                     mz_catalog::memory::error::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
             })) if if_not_exists => {
-                session
+                ctx.session()
                     .add_notice(AdapterNotice::ObjectAlreadyExists {
                         name: name.item,
                         ty: "materialized view",

@@ -37,20 +37,19 @@ use mz_storage_client::controller::{CollectionDescription, DataSource};
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::OptimizerNotice;
 
-use crate::catalog;
 use crate::command::ExecuteResponse;
 use crate::coord::Coordinator;
 use crate::error::AdapterError;
 use crate::optimize::dataflows::dataflow_import_id_bundle;
 use crate::optimize::{self, Optimize, OptimizerCatalog};
-use crate::session::Session;
 use crate::util::ResultExt;
+use crate::{ExecuteContext, catalog};
 
 impl Coordinator {
     #[instrument]
     pub(crate) async fn sequence_create_continual_task(
         &mut self,
-        session: &Session,
+        ctx: &mut ExecuteContext,
         plan: plan::CreateContinualTaskPlan,
         resolved_ids: ResolvedIds,
     ) -> Result<ExecuteResponse, AdapterError> {
@@ -82,7 +81,7 @@ impl Coordinator {
             id: item_id,
             oid: 0,
             name: name.clone(),
-            owner_id: *session.current_role_id(),
+            owner_id: *ctx.session().current_role_id(),
             privileges: PrivilegeMap::new(),
         };
         let bootstrap_catalog = ContinualTaskCatalogBootstrap {
@@ -96,7 +95,7 @@ impl Coordinator {
 
         // Construct the CatalogItem for this CT and optimize it.
         let mut item = crate::continual_task::ct_item_from_plan(plan, global_id, resolved_ids)?;
-        let full_name = bootstrap_catalog.resolve_full_name(&name, Some(session.conn_id()));
+        let full_name = bootstrap_catalog.resolve_full_name(&name, Some(ctx.session().conn_id()));
         let (optimized_plan, mut physical_plan, metainfo) = self.optimize_create_continual_task(
             &item,
             global_id,
@@ -130,11 +129,11 @@ impl Coordinator {
             id: item_id,
             name: name.clone(),
             item: CatalogItem::ContinualTask(item),
-            owner_id: *session.current_role_id(),
+            owner_id: *ctx.session().current_role_id(),
         }];
 
         let () = self
-            .catalog_transact_with_side_effects(Some(session), ops, |coord| async {
+            .catalog_transact_with_side_effects(Some(ctx), ops, async move |coord, _ctx| {
                 let catalog = coord.catalog_mut();
                 catalog.set_optimized_plan(global_id, optimized_plan);
                 catalog.set_physical_plan(global_id, physical_plan.clone());
