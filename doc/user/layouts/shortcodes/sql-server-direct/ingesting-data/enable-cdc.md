@@ -23,13 +23,12 @@ ALTER ROLE materialize_role ADD MEMBER materialize;
 GO
 ```
 
-Create a second materialize user to enable authenticating into the default database
+Create a second materialize user to enable authenticating into the database
 for the materialize login and replicating the database.
 ```sql
 USE <DATABASE_NAME>;
 CREATE USER materialize FOR LOGIN materialize;
-CREATE ROLE materialize_role;
-ALTER ROLE materialize_role ADD MEMBER materialize;
+ALTER ROLE db_datareader ADD MEMBER materialize;
 GO
 ```
 
@@ -84,11 +83,10 @@ GO
 
 For guidance on enabling `SNAPSHOT` transaction isolation, see the [SQL Server documentation](https://learn.microsoft.com/en-us/sql/relational-databases/system-stored-procedures/sys-sp-cdc-enable-table-transact-sql)
 
-### 5. Add permissions to read from the Change-Data-Capture of the database tables.
+### 5. Add permissions to read the Change-Data-Capture of the database tables.
 
-Finally, add permissions to the materialize user to enable reading from the Change Data Capture for each table.
-
-Grant permissions on master database to materialize user.
+Grant permissions on the master database to the materialize user to enable discovering
+the tables that can be replicated and monitoring the progress of replication.
 ```sql
 USE master;
 
@@ -102,45 +100,6 @@ GRANT SELECT ON OBJECT::INFORMATION_SCHEMA.TABLE_CONSTRAINTS TO materialize_role
 GRANT EXECUTE ON sys.fn_cdc_get_min_lsn TO materialize_role;
 GRANT EXECUTE ON sys.fn_cdc_get_max_lsn TO materialize_role;
 GRANT EXECUTE ON sys.fn_cdc_increment_lsn TO materialize_role;
-
--- Allows cleaning up CDC change tables,
--- required for the Source to be able to track progress.
-GRANT EXECUTE ON sys.sp_cdc_cleanup_change_table TO materialize_role;
-
-GO
-```
-
-Grant permissions on replicated database to materialize user.
-```sql
-USE <DATABASE_NAME>;
-
-GRANT CONNECT TO materialize_role;
-
--- Allows viewing the database state to check if CDC and snapshot isolation are enabled,
--- required for the Source to be created.
-GRANT VIEW DATABASE STATE TO materialize_role;
-
--- Required for metadata about tables, schemas, and columns,
--- required to discover the schema of replicated tables.
-GRANT SELECT ON sys.tables TO materialize_role;
-GRANT SELECT ON sys.schemas TO materialize_role;
-GRANT SELECT ON sys.columns TO materialize_role;
-GRANT SELECT ON sys.types TO materialize_role;
-GRANT SELECT ON sys.objects TO materialize_role;
-
--- Required for CDC metadata necessary to create the Source.
-GRANT SELECT ON cdc.change_tables TO materialize_role;
-GRANT SELECT ON cdc.lsn_time_mapping TO materialize_role;
-
--- Required to check for the presence of the desired schema and find underlying tables
--- for replication. Repeat for each relevant schema.
-GRANT VIEW DEFINITION ON SCHEMA::<SCHEMA_NAME> TO materialize_role;
-
--- Required to be able pull data from the tables that will be replicated
--- by the Source.
-GRANT SELECT ON cdc.<SCHEMA_NAME>_<TABLE_NAME>_CT TO materialize_role;
-GRANT SELECT ON SCHEMA::cdc TO materialize_role;
-GRANT SELECT ON <SCHEMA_NAME>.<DATABASE_NAME> TO materialize_role;
 
 GO
 ```
