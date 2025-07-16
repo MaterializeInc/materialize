@@ -4290,6 +4290,7 @@ pub(crate) mod tests {
 
     #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // too slow
+    #[ignore] // TODO: Reenable when database-issues#9472 is fixed
     async fn sneaky_downgrades(dyncfgs: ConfigUpdates) {
         let mut clients = new_test_client_cache(&dyncfgs);
         let shard_id = ShardId::new();
