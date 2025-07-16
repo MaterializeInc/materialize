@@ -140,6 +140,7 @@ GRANT VIEW DEFINITION ON SCHEMA::<SCHEMA_NAME> TO materialize_role;
 -- by the Source.
 GRANT SELECT ON cdc.<SCHEMA_NAME>_<TABLE_NAME>_CT TO materialize_role;
 GRANT SELECT ON SCHEMA::cdc TO materialize_role;
+GRANT SELECT ON <SCHEMA_NAME>.<DATABASE_NAME> TO materialize_role;
 
 GO
 ```
