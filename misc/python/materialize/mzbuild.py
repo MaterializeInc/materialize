@@ -43,7 +43,7 @@ import requests
 import yaml
 
 from materialize import bazel as bazel_utils
-from materialize import cargo, git, rustc_flags, spawn, ui, xcompile
+from materialize import buildkite, cargo, git, rustc_flags, spawn, ui, xcompile
 from materialize.rustc_flags import Sanitizer
 from materialize.xcompile import Arch, target
 
@@ -952,6 +952,7 @@ class ResolvedImage:
                         stdout=sys.stderr.buffer,
                     )
                     self.acquired = True
+                    break
                 except subprocess.CalledProcessError:
                     if retry < max_retries:
                         # There seems to be no good way to tell what error
@@ -961,6 +962,12 @@ class ResolvedImage:
                         print(f"Retrying in {sleep_time}s ...")
                         time.sleep(sleep_time)
                         sleep_time = min(sleep_time * 2, 10)
+                        if build := os.getenv("CI_WAITING_FOR_BUILD"):
+                            if buildkite.is_build_failed(build):
+                                print(
+                                    f"Build {build} has been marked as failed, exiting hard"
+                                )
+                                sys.exit(1)
                         continue
                     else:
                         break
@@ -1139,24 +1146,24 @@ class DependencySet:
         if not max_retries:
             max_retries = (
                 90
-                if os.getenv("BUILDKITE_PULL_REQUEST")
-                and os.getenv("BUILDKITE_PIPELINE_SLUG") == "test"
+                if os.getenv("CI_WAITING_FOR_BUILD")
                 else 5 if ui.env_is_truthy("CI") else 1
             )
         assert max_retries > 0
 
-        deps_to_check = [dep for dep in self if not dep.publish]
-        deps_to_build = []
-
-        if deps_to_check:
+        deps_to_check = [dep for dep in self if dep.publish]
+        deps_to_build = [dep for dep in self if not dep.publish]
+        if len(deps_to_check):
             with ThreadPoolExecutor(max_workers=len(deps_to_check)) as executor:
-                futures = {
-                    executor.submit(dep.try_pull, max_retries): dep
-                    for dep in deps_to_check
-                }
-                deps_to_build = [
-                    dep for future, dep in futures.items() if not future.result()
+                futures = [
+                    executor.submit(dep.try_pull, max_retries) for dep in deps_to_check
                 ]
+                for dep, future in zip(deps_to_check, futures):
+                    try:
+                        if not future.result():
+                            deps_to_build.append(dep)
+                    except Exception:
+                        deps_to_build.append(dep)
 
         # Don't attempt to build in CI, as our timeouts and small machines won't allow it anyway
         if ui.env_is_truthy("CI"):

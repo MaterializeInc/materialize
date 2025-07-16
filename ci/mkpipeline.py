@@ -196,7 +196,7 @@ so it is executed.""",
     add_version_to_preflight_tests(pipeline)
     trim_builds_prep_thread.join()
     trim_builds(pipeline, hash_check)
-    remove_dependencies_on_prs(pipeline, args.pipeline)
+    remove_dependencies_on_prs(pipeline, args.pipeline, hash_check)
     remove_mz_specific_keys(pipeline)
 
     print("--- Uploading new pipeline:")
@@ -861,6 +861,7 @@ def trim_tests_pipeline(
 def remove_dependencies_on_prs(
     pipeline: Any,
     pipeline_name: str,
+    hash_check: dict[Arch, tuple[str, bool]],
 ) -> None:
     """On PRs in test pipeline remove dependencies on the build, start up tests immediately, they keep retrying for the Docker image"""
     if pipeline_name != "test":
@@ -874,9 +875,12 @@ def remove_dependencies_on_prs(
         ):
             continue
         if step.get("depends_on") in ("build-x86_64", "build-aarch64"):
+            if step["depends_on"] == "build-x86_64" and hash_check[Arch.X86_64][1]:
+                continue
+            if step["depends_on"] == "build-aarch64" and hash_check[Arch.AARCH64][1]:
+                continue
+            step.setdefault("env", {})["CI_WAITING_FOR_BUILD"] = step["depends_on"]
             del step["depends_on"]
-            # In turn we have to stop the tests once builds are failing
-            step["cancel_on_build_failing"] = True
 
 
 def trim_builds(

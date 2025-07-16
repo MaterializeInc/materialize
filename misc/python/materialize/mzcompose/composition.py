@@ -284,6 +284,7 @@ class Composition:
         max_tries: int = 1,
         silent: bool = False,
         environment: dict[str, str] | None = None,
+        build: str | None = None,
     ) -> subprocess.CompletedProcess:
         """Invoke `docker compose` on the rendered composition.
 
@@ -423,6 +424,9 @@ class Composition:
                 if retry < max_tries:
                     print("Retrying ...")
                     time.sleep(3)
+                    if build and buildkite.is_build_failed(build):
+                        print(f"Build {build} has been marked as failed, exiting hard")
+                        sys.exit(1)
                     continue
                 else:
                     raise CommandFailureCausedUIError(
@@ -934,12 +938,6 @@ class Composition:
                 service["command"] = []
             self.files = {}
 
-        if (
-            os.getenv("BUILDKITE_PULL_REQUEST")
-            and os.getenv("BUILDKITE_PIPELINE_SLUG") == "test"
-        ):
-            max_tries = 300
-
         self.capture_logs()
         self.invoke(
             "up",
@@ -947,7 +945,8 @@ class Composition:
             *(["--wait"] if wait else []),
             *(["--quiet-pull"] if ui.env_is_truthy("CI") else []),
             *services,
-            max_tries=max_tries,
+            max_tries=300 if os.getenv("CI_WAITING_FOR_BUILD") else max_tries,
+            build=os.getenv("CI_WAITING_FOR_BUILD"),
         )
 
         if persistent:
