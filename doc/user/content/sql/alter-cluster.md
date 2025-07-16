@@ -293,13 +293,10 @@ scheduled clusters.
 
 {{< note >}}
 
-The use of [unmanaged clusters](/sql/create-cluster/#unmanaged-clusters) is a
-[private preview](https://materialize.com/preview-terms/) feature of Materialize
-that required manual management of cluster replicas, [`CREATE CLUSTER
-REPLICA`](/sql/create-cluster-replica/) and [`DROP CLUSTER REPLICA`].
+When getting started with Materialize, we recommend using managed clusters. You
+can convert any unmanaged clusters to managed clusters by following the
+instructions below.
 
-In general, we recommend using managed clusters when possible. You can convert
-any unmanaged clusters to managed clusters by following the instructions below.
 {{< /note >}}
 
 Alter the `managed` status of a cluster to managed:

@@ -7,13 +7,13 @@ menu:
     parent: commands
 ---
 
-{{< private-preview />}}
 
 `CREATE CLUSTER REPLICA` provisions a new replica for an [**unmanaged**
 cluster](/sql/create-cluster/#unmanaged-clusters).
 
 {{< tip >}}
-When possible, prefer to use a managed cluster.
+When getting started with Materialize, we recommend starting with managed
+clusters.
 {{</ tip >}}
 
 ## Conceptual framework

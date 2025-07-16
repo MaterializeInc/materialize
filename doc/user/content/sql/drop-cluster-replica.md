@@ -7,14 +7,13 @@ menu:
 
 ---
 
-{{< private-preview />}}
-
 `DROP CLUSTER REPLICA` deprovisions an existing replica of the specified
 [unmanaged cluster](/sql/create-cluster/#unmanaged-clusters). To remove
 the cluster itself, use the [`DROP CLUSTER`](/sql/drop-cluster) command.
 
 {{< tip >}}
-When possible, prefer to use a managed cluster.
+When getting started with Materialize, we recommend starting with managed
+clusters.
 {{</ tip >}}
 
 ## Syntax

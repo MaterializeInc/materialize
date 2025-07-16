@@ -42,17 +42,18 @@ rows:
       Whether to automatically manage the cluster's replicas based on the
       configured size and replication factor.
 
-      {{< private-preview >}}
-
       <a name="unmanaged-clusters"></a>
 
-      Specify `FALSE` to create an **unmanaged** cluster and enable the use of
+      Specify `FALSE` to create an **unmanaged** cluster. With unmanaged
+      clusters, you need to manually manage the cluster's replicas using the
       the [`CREATE CLUSTER REPLICA`](/sql/create-cluster-replica) and [`DROP
       CLUSTER REPLICA`](/sql/drop-cluster-replica) commands. When creating an
       unmanaged cluster, you must specify the `REPLICAS` option as well.
 
-      The use of unmanaged clusters and associated commands
-      {{< /private-preview >}}
+      {{< tip >}}
+      When getting started with Materialize, we recommend starting with managed
+      clusters.
+      {{</ tip >}}
 
       Default: `TRUE`
   - Field: "`SCHEDULE`"
