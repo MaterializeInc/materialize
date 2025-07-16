@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-sql-timeout duration=120s
 $ set-arg-default default-replica-size=1
 
 # Test for a subset of the information returned by introspection sources.
@@ -16,6 +17,7 @@ $ set-arg-default default-replica-size=1
 
 # Note that we count on the retry behavior of testdrive in this test
 # since introspection sources may take some time to catch up.
+$ set-sql-timeout duration=60s
 
 # Introspection subscribes add noise to the introspection sources, so disable them.
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}

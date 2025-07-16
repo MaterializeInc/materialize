@@ -167,6 +167,7 @@ SERVICES = [
     ),
     Testdrive(
         volumes_extra=["secrets:/share/secrets"],
+        default_timeout="30s",
     ),
     Mz(app_password=""),
 ]

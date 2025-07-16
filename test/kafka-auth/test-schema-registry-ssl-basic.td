@@ -14,6 +14,7 @@ ALTER SYSTEM SET enable_connection_validation_syntax = true
 # ==> Set up. <==
 
 $ set-from-file ca-crt=/share/secrets/ca.crt
+$ set-sql-timeout duration=60s
 
 > CREATE SECRET password AS 'sekurity'
 > CREATE SECRET password_wrong AS 'wrong'
