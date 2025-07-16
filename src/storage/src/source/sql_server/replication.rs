@@ -222,7 +222,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
 
             // Start replicating from the LSN __after__ we took the snapshot.
             let replication_start_lsn = snapshot_lsn.increment();
-            let mut rewinds:BTreeMap<_,_> = export_ids_to_snapshot
+            let mut rewinds: BTreeMap<_, _> = export_ids_to_snapshot
                 .values()
                 .flat_map(|export_ids| export_ids.iter().map(|idx| (*idx, replication_start_lsn)))
                 .collect();
