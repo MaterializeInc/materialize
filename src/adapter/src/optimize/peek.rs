@@ -333,7 +333,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
             self.config.persist_fast_path_order,
         ) {
             Ok(maybe_fast_path_plan) => maybe_fast_path_plan.is_some(),
-            Err(OptimizerError::UnsafeMfpPlan) => {
+            Err(OptimizerError::InternalUnsafeMfpPlan) => {
                 // This is expected, in that `create_fast_path_plan` can choke on `mz_now`, which we
                 // haven't removed yet.
                 false

@@ -395,13 +395,15 @@ pub enum PeekPlan<T = mz_repr::Timestamp> {
 
 /// Convert `mfp` to an executable, non-temporal plan.
 /// It should be non-temporal, as OneShot preparation populates `mz_now`.
+///
+/// If the `mfp` can't be converted into a non-temporal plan, this returns an _internal_ error.
 fn mfp_to_safe_plan(
     mfp: mz_expr::MapFilterProject,
 ) -> Result<mz_expr::SafeMfpPlan, OptimizerError> {
     mfp.into_plan()
-        .map_err(|_e| OptimizerError::UnsafeMfpPlan)?
+        .map_err(|_e| OptimizerError::InternalUnsafeMfpPlan)?
         .into_nontemporal()
-        .map_err(|_e| OptimizerError::UnsafeMfpPlan)
+        .map_err(|_e| OptimizerError::InternalUnsafeMfpPlan)
 }
 
 fn permute_oneshot_mfp_around_index(
