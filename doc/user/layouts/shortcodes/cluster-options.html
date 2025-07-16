@@ -4,5 +4,8 @@ Field                               | Value      | Description
 `REPLICATION FACTOR`                | `text`     | The number of replicas to provision for the cluster. See [Replication factor](/sql/create-cluster#replication-factor) for details.<br>Default: `1`
 `INTROSPECTION INTERVAL`            | `interval` | The interval at which to collect introspection data. See [Troubleshooting](/ops/troubleshooting) for details about introspection data. The special value `0` entirely disables the gathering of introspection data.<br>Default: `1s`
 `INTROSPECTION DEBUGGING`           | `bool`     | Indicates whether to introspect the gathering of the introspection data.<br>Default: `FALSE`
-`MANAGED`                           | `bool`     | Whether to automatically manage the cluster's replicas based on the configured size and replication factor. If `FALSE`, enables the use of the deprecated [`CREATE CLUSTER REPLICA`](/sql/create-cluster-replica) command.<br>Default: `TRUE`
+`MANAGED`                           | `bool`     | Whether to automatically
+manage the cluster's replicas based on the configured size and replication
+factor. If `FALSE`, enables the use of the **private preview** feature [`CREATE CLUSTER
+REPLICA`](/sql/create-cluster-replica) command.<br>Default: `TRUE`
 `SCHEDULE`                          | [`MANUAL`,`ON REFRESH`]     | The [scheduling type](/sql/create-cluster/#scheduling) for the cluster. <br>Default: `MANUAL`

@@ -1,0 +1,64 @@
+columns:
+  - column: "Field"
+  - column: "Value"
+  - column: "Description"
+rows:
+  - Field: "`SIZE`"
+    Value: "text"
+    Description: |
+
+      The size of the resource allocations for the cluster. See
+      [Size](/sql/create-cluster#size) for details.
+
+  - Field: "`REPLICATION FACTOR`"
+    Value: "text"
+    Description: |
+
+      The number of replicas to provision for the cluster. See
+      [Replication factor](/sql/create-cluster#replication-factor) for details.
+
+      Default: `1`
+  - Field: "`INTROSPECTION INTERVAL`"
+    Value: "interval"
+    Description: |
+
+      The interval at which to collect introspection data. See
+      [Troubleshooting](/ops/troubleshooting) for details about introspection
+      data. The special value `0` entirely disables the gathering of
+      introspection data.
+
+      Default: `1s`
+  - Field: "`INTROSPECTION DEBUGGING`"
+    Value: "bool"
+    Description: |
+
+      Indicates whether to introspect the gathering of the introspection data.
+
+      Default: `FALSE`
+  - Field: "`MANAGED`"
+    Value: "bool"
+    Description: >-
+
+      Whether to automatically manage the cluster's replicas based on the
+      configured size and replication factor.
+
+      {{< private-preview >}}
+
+      <a name="unmanaged-clusters"></a>
+
+      Specify `FALSE` to create an **unmanaged** cluster and enable the use of
+      the [`CREATE CLUSTER REPLICA`](/sql/create-cluster-replica) and [`DROP
+      CLUSTER REPLICA`](/sql/drop-cluster-replica) commands. When creating an
+      unmanaged cluster, you must specify the `REPLICAS` option as well.
+
+      The use of unmanaged clusters and associated commands
+      {{< /private-preview >}}
+
+      Default: `TRUE`
+  - Field: "`SCHEDULE`"
+    Value: "[`MANUAL`,`ON REFRESH`]"
+    Description: |
+
+      The [scheduling type](/sql/create-cluster/#scheduling) for the cluster.
+
+      Default: `MANUAL`
