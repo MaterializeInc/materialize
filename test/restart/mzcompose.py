@@ -247,6 +247,7 @@ def workflow_stash(c: Composition) -> None:
 
 
 def workflow_storage_managed_collections(c: Composition) -> None:
+    c.down(destroy_volumes=True)
     c.up("materialized")
 
     # Create some storage shard entries.
