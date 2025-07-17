@@ -130,7 +130,7 @@ pub enum ControllerResponse<T = mz_repr::Timestamp> {
 /// Whether one of the underlying controllers is ready for their `process`
 /// method to be called.
 #[derive(Debug, Default)]
-enum Readiness<T> {
+pub enum Readiness<T> {
     /// No underlying controllers are ready.
     #[default]
     NotReady,
@@ -164,7 +164,7 @@ pub struct Controller<T: ComputeControllerTimestamp = mz_repr::Timestamp> {
     /// The cluster orchestrator.
     orchestrator: Arc<dyn NamespacedOrchestrator>,
     /// Tracks the readiness of the underlying controllers.
-    readiness: Readiness<T>,
+    pub readiness: Readiness<T>,
     /// Tasks for collecting replica metrics.
     metrics_tasks: BTreeMap<ReplicaId, AbortOnDropHandle<()>>,
     /// Sender for the channel over which replica metrics are sent.
