@@ -88,17 +88,6 @@ traffic from the bastion host.
 
 1. Configure the SSH bastion host to allow traffic only from Materialize.
 
-    1. In the [SQL Shell](/console/), or your preferred
-       SQL client connected to Materialize, get the static egress IP addresses for
-       the Materialize region you are running in:
-
-       ```mzsql
-       SELECT * FROM mz_egress_ips;
-       ```
-
-    1. Update your SSH bastion host's firewall rules to allow traffic from each
-       IP address from the previous step.
-
 1. Update your database firewall rules to allow traffic from the SSH bastion
    host.
 
