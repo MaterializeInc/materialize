@@ -204,7 +204,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                     data_output
                         .give_fueled(
                             &snapshot_cap,
-                            ((*partition_idx, message), snapshot_lsn, Diff::ONE),
+                            ((*partition_idx, message), Lsn::minimum(), Diff::ONE),
                         )
                         .await;
                 }
