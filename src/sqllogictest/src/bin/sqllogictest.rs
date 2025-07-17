@@ -57,7 +57,7 @@ struct Args {
     #[clap(long)]
     postgres_url: String,
     /// PostgreSQL prefix for this SLT run
-    #[clap(long)]
+    #[clap(long, default_value = "sqllogictest")]
     prefix: String,
     /// Path to sqllogictest script to run.
     #[clap(value_name = "PATH", required = true)]
