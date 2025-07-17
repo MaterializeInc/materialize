@@ -14,6 +14,7 @@
 Test Kafka Upsert sources using Testdrive.
 """
 
+import os
 from textwrap import dedent
 
 from materialize import ci_util
@@ -147,6 +148,8 @@ def workflow_testdrive(c: Composition, parser: WorkflowArgumentParser) -> None:
                 f"--var=default-storage-size={materialized.default_storage_size}",
                 file,
             )
+            # Uploading successful junit files wastes time and contains no useful information
+            os.remove(f"test/upsert/{junit_report}")
 
         c.test_parts(args.files, process)
         c.sanity_restart_mz()

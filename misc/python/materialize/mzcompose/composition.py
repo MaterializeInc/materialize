@@ -775,10 +775,6 @@ class Composition:
             capture_and_print: Print during execution and capture the
                 stdout+stderr of the `docker compose` invocation.
         """
-        # Restart any dependencies whose definitions have changed. The trick,
-        # taken from Buildkite's Docker Compose plugin, is to run an `up`
-        # command that requests zero instances of the requested service.
-        self.up("--scale", f"{service}=0", service, wait=False)
         return self.invoke(
             "run",
             *(["--entrypoint", entrypoint] if entrypoint else []),

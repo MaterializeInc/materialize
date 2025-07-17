@@ -973,6 +973,7 @@ impl<'a> RunnerInner<'a> {
         let environment_id = EnvironmentId::for_tests();
         let (consensus_uri, timestamp_oracle_url): (SensitiveUrl, SensitiveUrl) = {
             let postgres_url = &config.postgres_url;
+            let prefix = &config.prefix;
             info!(%postgres_url, "starting server");
             let (client, conn) = Retry::default()
                 .max_tries(5)
@@ -992,17 +993,17 @@ impl<'a> RunnerInner<'a> {
                 }
             });
             client
-                .batch_execute(
-                    "DROP SCHEMA IF EXISTS sqllogictest_tsoracle CASCADE;
-                     CREATE SCHEMA IF NOT EXISTS sqllogictest_consensus;
-                     CREATE SCHEMA sqllogictest_tsoracle;",
-                )
+                .batch_execute(&format!(
+                    "DROP SCHEMA IF EXISTS {prefix}_tsoracle CASCADE;
+                     CREATE SCHEMA IF NOT EXISTS {prefix}_consensus;
+                     CREATE SCHEMA {prefix}_tsoracle;"
+                ))
                 .await?;
             (
-                format!("{postgres_url}?options=--search_path=sqllogictest_consensus")
+                format!("{postgres_url}?options=--search_path={prefix}_consensus")
                     .parse()
                     .expect("invalid consensus URI"),
-                format!("{postgres_url}?options=--search_path=sqllogictest_tsoracle")
+                format!("{postgres_url}?options=--search_path={prefix}_tsoracle")
                     .parse()
                     .expect("invalid timestamp oracle URI"),
             )
@@ -1930,6 +1931,7 @@ pub struct RunConfig<'a> {
     pub stderr: &'a dyn WriteFmt,
     pub verbosity: u8,
     pub postgres_url: String,
+    pub prefix: String,
     pub no_fail: bool,
     pub fail_fast: bool,
     pub auto_index_tables: bool,

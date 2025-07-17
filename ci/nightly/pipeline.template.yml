@@ -2056,9 +2056,8 @@ steps:
     label: ":bulb: SQL logic tests (4 replicas)"
     depends_on: build-aarch64
     timeout_in_minutes: 480
-    parallelism: 10
+    parallelism: 4
     agents:
-      # Runs faster/more consistently on larger agent
       queue: hetzner-aarch64-16cpu-32gb
     plugins:
       - ./ci/plugins/mzcompose:
