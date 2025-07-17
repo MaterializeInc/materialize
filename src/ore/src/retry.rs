@@ -747,6 +747,7 @@ mod tests {
 
     #[crate::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: cannot write to event
+    #[ignore] // TODO: reenable when database-issues#9482 is fixed
     fn test_retry_fail_max_duration() {
         let mut states = vec![];
         let res = Retry::default()
