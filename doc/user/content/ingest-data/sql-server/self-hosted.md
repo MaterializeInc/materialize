@@ -4,7 +4,7 @@ description: "How to stream data from self-hosted SQL Server database to Materia
 menu:
   main:
     parent: "sql-server"
-    name: "Self-hosted"
+    name: "Self-hosted SQL Server"
     identifier: "sql-server-self-hosted"
 aliases:
   - /ingest-data/cdc-sql-server/
@@ -23,28 +23,15 @@ to Materialize using the [SQL Server source](/sql/create-source/sql-server/).
 
 ## A. Configure SQL Server
 
-### 1. Enable Change-Data-Capture for the database
+{{< note >}}
 
-Before creating a source in Materialize, you **must** configure your SQL Server
-database for change data capture. This requires running the following stored procedures:
+To configure SQL Server for data ingestion into Materialize, you must be a user
+with privileges to enable CDC and create/manage login, users, roles, and
+privileges.
 
-```sql
-EXEC sys.sp_cdc_enable_db;
-```
+{{</ note >}}
 
-For guidance on enabling Change Data Capture, see the [SQL Server documentation](https://learn.microsoft.com/en-us/sql/relational-databases/system-stored-procedures/sys-sp-cdc-enable-db-transact-sql).
-
-### 2. Enable `SNAPSHOT` transaction isolation.
-
-In addition to enabling Change-Data-Capture you **must** also enable your
-`SNAPSHOT` transaction isolation in your SQL Server database. This requires running
-the following SQL:
-
-```sql
-ALTER DATABASE <DATABASE_NAME> SET ALLOW_SNAPSHOT_ISOLATION ON;
-```
-
-For guidance on enabling `SNAPSHOT` transaction isolation, see the [SQL Server documentation](https://learn.microsoft.com/en-us/dotnet/framework/data/adonet/sql/snapshot-isolation-in-sql-server).
+{{% sql-server-direct/ingesting-data/enable-cdc %}}
 
 ## B. (Optional) Configure network security
 
@@ -100,17 +87,6 @@ traffic from the bastion host.
       address when connecting Materialize to your bastion host.
 
 1. Configure the SSH bastion host to allow traffic only from Materialize.
-
-    1. In the [SQL Shell](/console/), or your preferred
-       SQL client connected to Materialize, get the static egress IP addresses for
-       the Materialize region you are running in:
-
-       ```mzsql
-       SELECT * FROM mz_egress_ips;
-       ```
-
-    1. Update your SSH bastion host's firewall rules to allow traffic from each
-       IP address from the previous step.
 
 1. Update your database firewall rules to allow traffic from the SSH bastion
    host.

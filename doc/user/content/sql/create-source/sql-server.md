@@ -148,7 +148,8 @@ CREATE CONNECTION sqlserver_connection TO SQL SERVER (
     HOST 'instance.foo000.us-west-1.rds.amazonaws.com',
     PORT 1433,
     USER 'materialize',
-    PASSWORD SECRET sqlserver_pass
+    PASSWORD SECRET sqlserver_pass,
+    DATABASE '<DATABASE_NAME>'
 );
 ```
 
@@ -162,14 +163,16 @@ through and SSH bastion host.
 CREATE CONNECTION ssh_connection TO SSH TUNNEL (
     HOST 'bastion-host',
     PORT 22,
-    USER 'materialize'
+    USER 'materialize',
+    DATABASE '<DATABASE_NAME>'
 );
 ```
 
 ```mzsql
 CREATE CONNECTION sqlserver_connection TO SQL SERVER (
     HOST 'instance.foo000.us-west-1.rds.amazonaws.com',
-    SSH TUNNEL ssh_connection
+    SSH TUNNEL ssh_connection,
+    DATABASE '<DATABASE_NAME>'
 );
 ```
 
@@ -182,18 +185,7 @@ an SSH bastion server to accept connections from Materialize, check
 
 ### Creating a source {#create-source-example}
 
-Once Change Data Capture and `SNAPSHOT` transaction isolation are enabled for
-the database in your SQL Server instance, you also need to enable [Change Data
-capture for the specific tables](https://learn.microsoft.com/en-us/sql/relational-databases/system-stored-procedures/sys-sp-cdc-enable-table-transact-sql) you want to replicate.
-
-```sql
--- In SQL Server.
-EXEC sys.sp_cdc_enable_table
-  @source_schema = '<SCHEMA_NAME>',
-  @source_name = '<TABLE_NAME>',
-  @role_name = '<ROLE_FROM_MZ_CONNECTION>',
-  @supports_net_changes = 0;
-```
+You **must** enable Change Data Capture, see [Enable Change Data Capture SQL Server Instructions](/ingest-data/sql-server/self-hosted/#a-configure-sql-server).
 
 Once CDC is enabled for all of the relevant tables, you can create a `SOURCE` in
 Materialize to begin replicating data!
