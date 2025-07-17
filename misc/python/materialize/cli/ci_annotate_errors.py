@@ -1057,6 +1057,9 @@ def format_message_as_code_block(
 def store_known_issues_in_test_analytics(
     test_analytics: TestAnalyticsDb, known_issues: list[KnownGitHubIssue]
 ) -> None:
+    if os.getenv("BUILDKITE_PIPELINE_SLUG") == "test":
+        # Too slow, run only on slower pipelines. We don't need the updates to be immediate anyway.
+        return
     for issue in known_issues:
         test_analytics.known_issues.add_or_update_issue(issue)
 
