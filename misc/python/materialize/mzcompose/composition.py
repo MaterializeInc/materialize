@@ -64,6 +64,15 @@ from materialize.ui import (
     UIError,
 )
 
+SECRETS = [
+    "mzp_",
+    "-----BEGIN PRIVATE KEY-----",
+    "confluent-api-key=",
+    "confluent-api-secret=",
+    "aws-access-key-id=",
+    "aws-secret-access-key=",
+]
+
 
 class UnknownCompositionError(UIError):
     """The specified composition was unknown."""
@@ -302,11 +311,7 @@ class Composition:
         if not self.silent and not silent:
             # Don't print out secrets in test logs
             filtered_args = [
-                (
-                    "[REDACTED]"
-                    if "mzp_" in arg or "-----BEGIN PRIVATE KEY-----" in arg
-                    else arg
-                )
+                "[REDACTED]" if any(secret in arg for secret in SECRETS) else arg
                 for arg in args
             ]
             print(f"$ docker compose {' '.join(filtered_args)}", file=sys.stderr)

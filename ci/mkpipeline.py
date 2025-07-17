@@ -866,7 +866,7 @@ def remove_dependencies_on_prs(
     """On PRs in test pipeline remove dependencies on the build, start up tests immediately, they keep retrying for the Docker image"""
     if pipeline_name != "test":
         return
-    if not os.getenv("BUILDKITE_PULL_REQUEST"):
+    if not ui.env_is_truthy("BUILDKITE_PULL_REQUEST"):
         return
     for step in steps(pipeline):
         if step.get("id") in (

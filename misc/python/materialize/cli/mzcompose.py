@@ -39,7 +39,11 @@ from humanize import naturalsize
 from semver.version import Version
 
 from materialize import MZ_ROOT, ci_util, mzbuild, spawn, ui
-from materialize.mzcompose.composition import Composition, UnknownCompositionError
+from materialize.mzcompose.composition import (
+    SECRETS,
+    Composition,
+    UnknownCompositionError,
+)
 from materialize.mzcompose.test_result import TestResult
 from materialize.ui import UIError
 
@@ -819,6 +823,20 @@ To see the available workflows, run:
                 junit_suite.test_cases.append(test_case)
 
     def write_junit_report_to_file(self, junit_suite: junit_xml.TestSuite) -> Path:
+        for test_case in junit_suite.test_cases:
+            for obj in test_case.errors + test_case.failures + test_case.skipped:
+                for typ in ("message", "output"):
+                    if obj[typ]:
+                        obj[typ] = " ".join(
+                            [
+                                (
+                                    "[REDACTED]"
+                                    if any(secret in word for secret in SECRETS)
+                                    else word
+                                )
+                                for word in obj[typ].split(" ")
+                            ]
+                        )
         junit_report = ci_util.junit_report_filename("mzcompose")
         with junit_report.open("w") as f:
             junit_xml.to_xml_report_file(f, [junit_suite])

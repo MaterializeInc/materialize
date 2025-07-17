@@ -52,7 +52,7 @@ pub struct Args {
     tracing: TracingCliArgs,
 
     #[clap(long, hide = true, value_parser(parse_crd_columns))]
-    additional_crd_columns: std::vec::Vec<CustomResourceColumnDefinition>,
+    additional_crd_columns: Option<std::vec::Vec<CustomResourceColumnDefinition>>,
 }
 
 fn parse_crd_columns(val: &str) -> Result<Vec<CustomResourceColumnDefinition>, serde_json::Error> {
@@ -88,7 +88,11 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     let metrics = Arc::new(Metrics::register_into(&metrics_registry));
 
     let (client, namespace) = create_client(args.kubernetes_context.clone()).await?;
-    register_crds(client.clone(), args.additional_crd_columns).await?;
+    register_crds(
+        client.clone(),
+        args.additional_crd_columns.unwrap_or_default(),
+    )
+    .await?;
 
     {
         let router = mz_prof_http::router(&BUILD_INFO);
