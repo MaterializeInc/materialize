@@ -85,6 +85,12 @@ impl PlanInsights {
         humanizer: &dyn ExprHumanizer,
         ctx: Box<PlanInsightsContext>,
     ) {
+        // Warning: This function is currently dangerous, because it does optimizer work
+        // proportional to the number of clusters, and does so on the main coordinator task.
+        // see https://github.com/MaterializeInc/database-issues/issues/9492
+        if !ctx.optimizer_config.features.enable_fast_path_plan_insights {
+            return;
+        }
         let session: Arc<dyn SessionMetadata + Send> = Arc::new(ctx.session);
         let tasks = ctx
             .compute_instances
