@@ -1053,7 +1053,7 @@ mod tests {
             Arc::clone(&write.blob),
             Arc::clone(&write.metrics),
             write.metrics.shards.shard(&write.machine.shard_id(), ""),
-            Arc::new(IsolatedRuntime::default()),
+            Arc::new(IsolatedRuntime::new_for_tests()),
             req.clone(),
             schemas.clone(),
         )

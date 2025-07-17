@@ -64,6 +64,11 @@ impl IsolatedRuntime {
         }
     }
 
+    /// Create an isolated runtime with appropriate values for tests.
+    pub fn new_for_tests() -> Self {
+        IsolatedRuntime::new(&MetricsRegistry::new(), None)
+    }
+
     /// Spawns a task onto this runtime.
     ///
     /// Note: We purposefully do not use the [`tokio::task::spawn_blocking`] API here, see the doc
@@ -79,12 +84,6 @@ impl IsolatedRuntime {
             .as_ref()
             .expect("exists until drop")
             .spawn_named(name, fut)
-    }
-}
-
-impl Default for IsolatedRuntime {
-    fn default() -> Self {
-        IsolatedRuntime::new(&MetricsRegistry::new(), None)
     }
 }
 
