@@ -15,6 +15,107 @@ mode cockroach
 statement ok
 CREATE TABLE t (a int)
 
+# No fast_path_clusters and fast_path_limit when the feature flag is off.
+query T multiline
+EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t
+----
+{
+  "plans": {
+    "raw": {
+      "text": "Get materialize.public.t\n\nTarget cluster: quickstart\n",
+      "json": {
+        "Get": {
+          "id": {
+            "Global": {
+              "User": 1
+            }
+          },
+          "typ": {
+            "column_types": [
+              {
+                "scalar_type": "Int32",
+                "nullable": true
+              }
+            ],
+            "keys": []
+          }
+        }
+      }
+    },
+    "optimized": {
+      "global": {
+        "text": "Explained Query:\n  ReadStorage materialize.public.t\n\nSource materialize.public.t\n\nTarget cluster: quickstart\n",
+        "json": {
+          "plans": [
+            {
+              "id": "Explained Query",
+              "plan": {
+                "Get": {
+                  "id": {
+                    "Global": {
+                      "User": 1
+                    }
+                  },
+                  "typ": {
+                    "column_types": [
+                      {
+                        "scalar_type": "Int32",
+                        "nullable": true
+                      }
+                    ],
+                    "keys": []
+                  },
+                  "access_strategy": "Persist"
+                }
+              }
+            }
+          ],
+          "sources": [
+            {
+              "id": {
+                "User": 1
+              },
+              "op": null
+            }
+          ]
+        }
+      },
+      "fast_path": {
+        "text": "<unknown>",
+        "json": null
+      }
+    }
+  },
+  "insights": {
+    "imports": {
+      "u1": {
+        "name": {
+          "database": "materialize",
+          "schema": "public",
+          "item": "t"
+        },
+        "type": "storage"
+      }
+    },
+    "fast_path_clusters": {},
+    "fast_path_limit": null,
+    "persist_count": []
+  },
+  "cluster": {
+    "name": "quickstart",
+    "id": {
+      "User": 1
+    }
+  },
+  "redacted_sql": "SELECT * FROM [u1 AS materialize.public.t]"
+}
+EOF
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_fast_path_plan_insights TO true;
+----
+COMPLETE 0
+
 # Assert fast_path_limit is true. This must be done before adding the index.
 query T multiline
 EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t
