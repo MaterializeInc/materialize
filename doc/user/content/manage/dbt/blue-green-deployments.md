@@ -42,7 +42,7 @@ If your dbt project includes [sinks](/manage/dbt/get-started/#sinks), you
 Unlike other objects, sinks must not be recreated in the process of a blue/green
 deployment, and must instead cut over to the new definition of their upstream
 dependencies after the environment swap. The schema and cluster for your sinks should be
-included in the dbt_project definition as well. 
+included in the dbt_project definition as well.
 {{</ warning >}}
 
 In a blue/green deployment, you first deploy your code changes to a deployment
@@ -53,9 +53,9 @@ These environments are later swapped transparently.
 <br>
 
 1. In `dbt_project.yml`, use the `deployment` variable to specify the cluster(s)
-   and schema(s) that contain the changes you want to deploy. If you have sinks that 
-   should be altered to point to the new green environment, their schemas and clusters 
-   should be included as well. 
+   and schema(s) that contain the changes you want to deploy. If you have sinks that
+   should be altered to point to the new green environment, their schemas and clusters
+   should be included as well.
 
     ```yaml
     vars:
