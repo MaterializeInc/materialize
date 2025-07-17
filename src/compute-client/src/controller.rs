@@ -724,6 +724,7 @@ where
         replica_id: ReplicaId,
         location: ClusterReplicaLocation,
         config: ComputeReplicaConfig,
+        enable_ctp: bool,
     ) -> Result<(), ReplicaCreationError> {
         use ReplicaCreationError::*;
 
@@ -755,6 +756,7 @@ where
             enable_zero_copy: ENABLE_TIMELY_ZERO_COPY.get(&self.dyncfg),
             enable_zero_copy_lgalloc: ENABLE_TIMELY_ZERO_COPY_LGALLOC.get(&self.dyncfg),
             zero_copy_limit: TIMELY_ZERO_COPY_LIMIT.get(&self.dyncfg),
+            enable_ctp,
         };
 
         let instance = self.instance_mut(instance_id).expect("validated");
