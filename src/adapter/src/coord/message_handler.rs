@@ -61,7 +61,7 @@ impl Coordinator {
                 span.in_scope(|| otel_ctx.attach_as_parent());
                 self.message_command(cmd).instrument(span).await
             }
-            Message::ControllerReady => {
+            Message::ControllerReady { controller: _ } => {
                 let Coordinator {
                     controller,
                     catalog,
