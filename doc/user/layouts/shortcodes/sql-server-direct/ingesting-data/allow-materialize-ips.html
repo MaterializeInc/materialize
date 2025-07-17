@@ -18,7 +18,8 @@
         PORT 1433,
         USER 'materialize',
         PASSWORD SECRET sqlserver_pass,
-        DATABASE <database>
+        DATABASE <database>,
+        SSL MODE 'require'
     );
     ```
 

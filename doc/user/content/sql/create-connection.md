@@ -880,6 +880,14 @@ Field                       | Value            | Required | Description
 `DATABASE`                  | `text`           | ✓        | Target database.
 `USER`                      | `text`           | ✓        | Database username.
 `PASSWORD`                  | secret           | ✓        | Password for the connection.
+`SSL MODE`                  | `text`           |          | Default: `disabled`. Enables SSL connections if set to `required`, `verify_ca`, or `verify`. See the [SQL Server documentation](https://learn.microsoft.com/en-us/sql/database-engine/configure-windows/configure-sql-server-encryption) for more details.
+`SSL CERTIFICATE AUTHORITY` | secret or `text` |          | One or more client SSL certificates in PEM format.
+
+##### SSL MODE
+`disabled` - no encryption.
+`required` - encryption required, no certificate validation.
+`verify` - encryption required, validate server certificate using OS configured CA.
+`verify_ca` - encryption required, validate server certificate using provided CA certificates (requires `SSL CERTIFICATE AUTHORITY`).
 
 #### `WITH` options {#sql-server-with-options}
 
