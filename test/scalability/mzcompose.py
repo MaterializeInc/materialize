@@ -78,17 +78,6 @@ from materialize.version_list import (
 )
 
 SERVICES = [
-    Cockroach(setup_materialize=True),
-    Materialized(
-        image="materialize/materialized:latest",
-        sanity_restart=False,
-        additional_system_parameter_defaults=ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS,
-        external_metadata_store=True,
-        metadata_store="cockroach",
-    ),
-    Postgres(),
-    Balancerd(),
-    Mz(app_password=""),
 ]
 
 DEFAULT_REGRESSION_THRESHOLD = 0.2
