@@ -57,7 +57,7 @@ from .deploy.deploy_util import rust_version
 # err on the side of including too much rather than too little. (For example,
 # bin/resync-submodules is not presently used by CI, but it's just not worth
 # trying to capture that.)
-CI_GLUE_GLOBS = ["bin", "ci"]
+CI_GLUE_GLOBS = ["bin", "ci", "misc/python/materialize/cli/ci_annotate_errors.py"]
 
 DEFAULT_AGENT = "hetzner-aarch64-4cpu-8gb"
 
