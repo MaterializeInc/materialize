@@ -290,13 +290,13 @@ scheduled clusters.
 
 ### Converting unmanaged to managed clusters
 
-{{< warning >}}
-[Unmanaged clusters](/sql/create-cluster-replica) are a deprecated feature of
-Materialize that required manual management of cluster replicas.
+{{< note >}}
 
-We recommend converting any unmanaged clusters to managed clusters
-by following the instructions below.
-{{< /warning >}}
+When getting started with Materialize, we recommend using managed clusters. You
+can convert any unmanaged clusters to managed clusters by following the
+instructions below.
+
+{{< /note >}}
 
 Alter the `managed` status of a cluster to managed:
 

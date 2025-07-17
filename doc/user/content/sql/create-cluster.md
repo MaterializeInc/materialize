@@ -27,7 +27,7 @@ to be associated with a cluster:
 
 ### Options
 
-{{% cluster-options %}}
+{{< yaml-table data="syntax_options/create_cluster_options" >}}
 
 ## Details
 
