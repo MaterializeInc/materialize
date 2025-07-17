@@ -16,10 +16,11 @@ use smallvec::SmallVec;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
+use tiberius::numeric::Numeric;
 
 use crate::cdc::{Lsn, RowFilterOption};
 use crate::desc::{SqlServerColumnRaw, SqlServerTableRaw};
-use crate::{Client, SqlServerError};
+use crate::{Client, SqlServerError, Transaction};
 
 /// Returns the minimum log sequence number for the specified `capture_instance`.
 ///
@@ -59,6 +60,34 @@ pub async fn increment_lsn(client: &mut Client, lsn: Lsn) -> Result<Lsn, SqlServ
     parse_lsn(&result[..1])
 }
 
+/// Retrieves the current LSN of the database by calling SAVE TRANSACTION to create a savepoint with the provided name,
+/// which forces an LSN to be written to the transaction log.
+///
+/// The savepoint name must follow rules for SQL Server identifiers
+/// - starts with letter or underscore
+/// - only contains letters, digits, and underscores
+/// - no resserved words
+/// - 32 char max
+pub async fn lsn_at_savepoint(
+    txn: &mut Transaction<'_>,
+    savepoint_name: &str,
+) -> Result<Lsn, SqlServerError> {
+    let current_lsn_query: &str = "
+SELECT dt.database_transaction_begin_lsn
+FROM sys.dm_tran_database_transactions AS dt
+JOIN sys.dm_tran_session_transactions AS st
+  ON dt.transaction_id = st.transaction_id
+WHERE st.session_id = @@SPID
+";
+    // TODO (maz): make sure savepoint name is safe
+
+    txn.client
+        .simple_query(format!("SAVE TRANSACTION [{savepoint_name}]"))
+        .await?;
+    let result = txn.client.simple_query(current_lsn_query).await?;
+    parse_numeric_lsn(&result)
+}
+
 /// Parse an [`Lsn`] from the first column of the provided [`tiberius::Row`].
 ///
 /// Returns an error if the provided slice doesn't have exactly one row.
@@ -77,6 +106,28 @@ fn parse_lsn(result: &[tiberius::Row]) -> Result<Lsn, SqlServerError> {
                 })?;
                 Ok(lsn)
             }
+        }
+        other => Err(SqlServerError::InvalidData {
+            column_name: "lsn".to_string(),
+            error: format!("expected 1 column, got {other:?}"),
+        }),
+    }
+}
+
+/// Parse an [`Lsn`] in Decimal(25,0) format of the provided [`tiberius::Row`].
+///
+/// Returns an error if the provided slice doesn't have exactly one row.
+fn parse_numeric_lsn(row: &[tiberius::Row]) -> Result<Lsn, SqlServerError> {
+    match row {
+        [r] => {
+            let numeric_lsn = r
+                .try_get::<Numeric, _>(0)?
+                .ok_or_else(|| SqlServerError::NullLsn)?;
+            let lsn = Lsn::try_from(numeric_lsn).map_err(|msg| SqlServerError::InvalidData {
+                column_name: "lsn".to_string(),
+                error: msg,
+            })?;
+            Ok(lsn)
         }
         other => Err(SqlServerError::InvalidData {
             column_name: "lsn".to_string(),
