@@ -16,6 +16,12 @@ use mz_ore::metrics::{MetricsRegistry, register_runtime_metrics};
 use mz_ore::task::{JoinHandle, RuntimeExt};
 use tokio::runtime::{Builder, Runtime};
 
+/// A reasonable number of threads to use in tests: enough to reproduce nontrivial
+/// orderings if necessary and avoid blocking, but not too many.
+// This was done as a workaround for https://sourceware.org/bugzilla/show_bug.cgi?id=19951
+// in tests, but seems useful in general.
+pub const TEST_THREADS: usize = 4;
+
 /// An isolated runtime for asynchronous tasks, particularly work
 /// that may be CPU intensive such as encoding/decoding and shard
 /// maintenance.
@@ -66,7 +72,7 @@ impl IsolatedRuntime {
 
     /// Create an isolated runtime with appropriate values for tests.
     pub fn new_for_tests() -> Self {
-        IsolatedRuntime::new(&MetricsRegistry::new(), None)
+        IsolatedRuntime::new(&MetricsRegistry::new(), Some(TEST_THREADS))
     }
 
     /// Spawns a task onto this runtime.
