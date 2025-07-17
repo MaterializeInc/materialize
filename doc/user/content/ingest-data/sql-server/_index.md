@@ -32,7 +32,8 @@ SQL Server Change Data Capture (CDC) in Materialize gives you the following bene
 
 ## Supported versions
 
-Materialize supports replicating data from SQL Server 2016 or higher.
+Materialize supports replicating data from SQL Server 2016 or higher with Change
+Data Capture (CDC) support.
 
 ## Integration Guides
 

@@ -4,7 +4,7 @@ description: "How to stream data from self-hosted SQL Server database to Materia
 menu:
   main:
     parent: "sql-server"
-    name: "Self-hosted"
+    name: "Self-hosted SQL Server"
     identifier: "sql-server-self-hosted"
 aliases:
   - /ingest-data/cdc-sql-server/
@@ -22,6 +22,14 @@ to Materialize using the [SQL Server source](/sql/create-source/sql-server/).
 {{% sql-server-direct/before-you-begin %}}
 
 ## A. Configure SQL Server
+
+{{< note >}}
+
+To configure SQL Server for data ingestion into Materialize, you must be a user
+with privileges to enable CDC and create/manage login, users, roles, and
+privileges.
+
+{{</ note >}}
 
 {{% sql-server-direct/ingesting-data/enable-cdc %}}
 
