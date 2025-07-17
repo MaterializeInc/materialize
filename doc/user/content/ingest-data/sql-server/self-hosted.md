@@ -121,7 +121,7 @@ networking configuration, so start by selecting the relevant option.
 {{< /tab >}}
 
 {{< tab "Use an SSH tunnel">}}
-{{% sql-server-direct/ingesting-data/allow-materialize-ips %}}
+{{% sql-server-direct/ingesting-data/use-ssh-tunnel %}}
 {{< /tab >}}
 
 {{< /tabs >}}
