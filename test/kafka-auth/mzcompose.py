@@ -12,9 +12,13 @@ Tests that Materialize can connect to Kafka's various connection modes:
 plaintext, ssl, mssl, sasl_plaintext, sasl_ssl, sasl_mssl
 """
 
+import glob
+
+from materialize import MZ_ROOT, buildkite
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.ssh_bastion_host import SshBastionHost
 from materialize.mzcompose.services.test_certs import TestCerts
@@ -164,6 +168,7 @@ SERVICES = [
     Testdrive(
         volumes_extra=["secrets:/share/secrets"],
     ),
+    Mz(app_password=""),
 ]
 
 
@@ -264,7 +269,16 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         f"echo '{public_key}' >> /etc/authorized_keys/mz",
     )
 
-    c.run_testdrive_files(f"test-{args.filter}.td")
+    files = buildkite.shard_list(
+        [
+            file
+            for file in glob.glob(
+                f"test-{args.filter}.td", root_dir=MZ_ROOT / "test" / "kafka-auth"
+            )
+        ],
+        lambda file: file,
+    )
+    c.test_parts(files, c.run_testdrive_files)
 
 
 def add_acl(

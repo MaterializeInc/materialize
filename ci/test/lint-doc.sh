@@ -13,7 +13,7 @@ set -euo pipefail
 
 . misc/shlib/shlib.bash
 
-try bin/doc
+git restore-mtime || true # Used in CI, but don't fail locally
 try bin/doc --document-private-items
 
 try bin/ci-closed-issues-detect --changed-lines-only

@@ -211,6 +211,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         def process(file: str) -> None:
             if not args.slow and file in (
+                "fivetran-destination.td",
                 "materialized-view-refresh-options.td",
                 "upsert-source-race.td",
             ):
