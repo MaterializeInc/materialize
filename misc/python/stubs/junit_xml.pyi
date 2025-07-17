@@ -10,6 +10,9 @@
 from typing import TextIO
 
 class TestCase:
+    errors: list[dict]
+    failures: list[dict]
+    skipped: list[dict]
     def __init__(
         self,
         name: str,
