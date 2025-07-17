@@ -240,6 +240,7 @@ class ObservedError(ObservedBaseError):
     location_url: str | None = None
     max_error_length: int = 10000
     max_details_length: int = 10000
+    occurrences: int = 1
 
     def error_message_as_markdown(self) -> str:
         return format_message_as_code_block(self.error_message, self.max_error_length)
@@ -421,21 +422,16 @@ and finds associated open GitHub issues in Materialize repository.""",
     )
     test_analytics = TestAnalyticsDb(test_analytics_config)
 
-    try:
-        # always insert a build job regardless whether it has annotations or not
-        test_analytics.builds.add_build_job(was_successful=args.test_result == 0)
+    # always insert a build job regardless whether it has annotations or not
+    test_analytics.builds.add_build_job(was_successful=args.test_result == 0)
 
-        number_of_unknown_errors, ignore_failure = annotate_logged_errors(
-            args.log_files,
-            test_analytics,
-            args.test_cmd,
-            args.test_desc,
-            args.test_result,
-        )
-    except Exception as e:
-        test_analytics.on_upload_failed(e)
-        # Don't fail
-        return 0
+    number_of_unknown_errors, ignore_failure = annotate_logged_errors(
+        args.log_files,
+        test_analytics,
+        args.test_cmd,
+        args.test_desc,
+        args.test_result,
+    )
 
     try:
         test_analytics.submit_updates()
@@ -713,10 +709,8 @@ def annotate_logged_errors(
             else:
                 raise RuntimeError(f"Unexpected error type: {type(error)}")
 
-    ignore_failure = True
-    if len(unknown_errors) > 0:
-        ignore_failure = False
-    else:
+    ignore_failure = bool(known_errors) and not unknown_errors
+    if not unknown_errors:
         for error in known_errors:
             if not isinstance(error, ObservedErrorWithIssue):
                 ignore_failure = False
@@ -726,16 +720,19 @@ def annotate_logged_errors(
                 break
 
     build_history_on_main = get_failures_on_main(test_analytics)
-    annotate_errors(
-        unknown_errors,
-        known_errors,
-        build_history_on_main,
-        test_analytics,
-        test_cmd,
-        test_desc,
-        test_result,
-        ignore_failure,
-    )
+    try:
+        annotate_errors(
+            unknown_errors,
+            known_errors,
+            build_history_on_main,
+            test_analytics,
+            test_cmd,
+            test_desc,
+            test_result,
+            ignore_failure,
+        )
+    except Exception as e:
+        print(f"Annotating failed, continuing: {e}")
 
     # No need for rest of the logic as no error logs were found, but since
     # this script was called the test still failed, so showing the current
