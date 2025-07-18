@@ -33,7 +33,7 @@ INSERT INTO t1_columns VALUES (1.444889, '12:00:00', '$100.99', 0x1100AB);
 CREATE TABLE t2_columns (c1 varchar(256));
 EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 't2_columns', @role_name = 'SA', @supports_net_changes = 0;
 
-INSERT INTO t2_columns VALUES (1.444889, '12:00:00', '$100.99', 0x1100AB);
+INSERT INTO t2_columns VALUES ('invisible');
 
 > CREATE SECRET IF NOT EXISTS sql_server_pass AS '${arg.default-sql-server-password}'
 
@@ -73,7 +73,7 @@ INSERT INTO t1_columns VALUES (2.000001, '01:59:32.99901', '$0.89', 0x1122AABBCC
 
 ! CREATE SOURCE t2_columns_sql_server
   FROM SQL SERVER CONNECTION sql_server_columns_connection (
-    EXCLUDE (dbo.t2_columns.c1)
+    EXCLUDE COLUMNS (dbo.t2_columns.c1)
   )
   FOR TABLES (dbo.t2_columns);
 contains:Table t2_columns had all columns excluded
