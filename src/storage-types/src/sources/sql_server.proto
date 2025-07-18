@@ -28,9 +28,11 @@ message ProtoSqlServerSourceExportDetails {
   mz_sql_server_util.ProtoSqlServerTableDesc table = 2;
   repeated string text_columns = 3;
   repeated string exclude_columns = 4;
+  bytes initial_lsn = 5;
 }
 
 message ProtoSqlServerSourceExportStatementDetails {
   mz_sql_server_util.ProtoSqlServerTableDesc table = 1;
   string capture_instance = 2;
+  bytes initial_lsn = 3;
 }

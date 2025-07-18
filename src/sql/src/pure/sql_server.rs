@@ -57,6 +57,7 @@ pub(super) async fn purify_source_exports(
     text_columns: &[UnresolvedItemName],
     excl_columns: &[UnresolvedItemName],
     unresolved_source_name: &UnresolvedItemName,
+    initial_lsn: mz_sql_server_util::cdc::Lsn,
     reference_policy: &SourceReferencePolicy,
 ) -> Result<PurifiedSourceExports, PlanError> {
     let requested_exports = match requested_references.as_ref() {
@@ -236,6 +237,7 @@ pub(super) async fn purify_source_exports(
                     text_columns,
                     excl_columns,
                     capture_instance: Arc::clone(capture_instance),
+                    initial_lsn: initial_lsn.clone(),
                 },
             };
 
@@ -308,16 +310,16 @@ pub fn generate_create_subsource_statements(
     Ok(subsources)
 }
 
-struct SqlServerExportStatementValues {
-    pub columns: Vec<ColumnDef<Aug>>,
-    pub constraints: Vec<TableConstraint<Aug>>,
-    pub text_columns: Option<Vec<WithOptionValue<Aug>>>,
-    pub excl_columns: Option<Vec<WithOptionValue<Aug>>>,
-    pub details: SourceExportStatementDetails,
-    pub external_reference: UnresolvedItemName,
+pub(super) struct SqlServerExportStatementValues {
+    pub(super) columns: Vec<ColumnDef<Aug>>,
+    pub(super) constraints: Vec<TableConstraint<Aug>>,
+    pub(super) text_columns: Option<Vec<WithOptionValue<Aug>>>,
+    pub(super) excl_columns: Option<Vec<WithOptionValue<Aug>>>,
+    pub(super) details: SourceExportStatementDetails,
+    pub(super) external_reference: UnresolvedItemName,
 }
 
-fn generate_source_export_statement_values(
+pub(super) fn generate_source_export_statement_values(
     scx: &StatementContext,
     purified_export: PurifiedSourceExport,
 ) -> Result<SqlServerExportStatementValues, PlanError> {
@@ -326,6 +328,7 @@ fn generate_source_export_statement_values(
         text_columns,
         excl_columns,
         capture_instance,
+        initial_lsn,
     } = purified_export.details
     else {
         unreachable!("purified export details must be SQL Server")
@@ -391,6 +394,7 @@ fn generate_source_export_statement_values(
     let details = SourceExportStatementDetails::SqlServer {
         table,
         capture_instance,
+        initial_lsn,
     };
     let text_columns = text_columns.map(|mut columns| {
         columns.sort();
