@@ -10,10 +10,7 @@
 //! In-memory implementations for testing and benchmarking.
 
 use std::collections::BTreeMap;
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::{Arc, Mutex};
-use std::task::{Context, Poll};
 
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -21,38 +18,13 @@ use bytes::Bytes;
 use futures_util::{StreamExt, stream};
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
+use mz_ore::future::yield_now;
 
 use crate::error::Error;
 use crate::location::{
     Blob, BlobMetadata, CaSResult, Consensus, Determinate, ExternalError, ResultStream, SeqNo,
     VersionedData,
 };
-
-// A snapshot of the old tokio::task::yield_now() implementation, from before it
-// had sneaky TLS shenangans.
-//
-// TODO: Move this into mz_ore somewhere so others can use it, too.
-async fn yield_now() {
-    struct YieldNow {
-        yielded: bool,
-    }
-
-    impl Future for YieldNow {
-        type Output = ();
-
-        fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
-            if self.yielded {
-                return Poll::Ready(());
-            }
-
-            self.yielded = true;
-            cx.waker().wake_by_ref();
-            Poll::Pending
-        }
-    }
-
-    YieldNow { yielded: false }.await
-}
 
 /// An in-memory representation of a set of [Log]s and [Blob]s that can be reused
 /// across dataflows
