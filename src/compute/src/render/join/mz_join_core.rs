@@ -36,8 +36,10 @@
 //! join and as responsive as `mz_join_core`. Whether that means adding merge-join matching to
 //! `mz_join_core` or adding better fueling to DD's join implementation is still TBD.
 
+use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::VecDeque;
+use std::rc::Rc;
 use std::time::Instant;
 
 use differential_dataflow::Data;
@@ -70,7 +72,7 @@ pub(super) fn mz_join_core<G, Tr1, Tr2, L, I, YFn, C>(
     arranged1: &Arranged<G, Tr1>,
     arranged2: &Arranged<G, Tr2>,
     shutdown_probe: ShutdownProbe,
-    mut result: L,
+    result: L,
     yield_fn: YFn,
 ) -> StreamCore<G, C>
 where
@@ -115,8 +117,15 @@ where
             let mut acknowledged2 = Antichain::from_elem(<G::Timestamp>::minimum());
 
             // deferred work of batches from each input.
-            let mut todo1 = VecDeque::new();
-            let mut todo2 = VecDeque::new();
+            let result_fn = Rc::new(RefCell::new(result));
+            let yield_fn = Rc::new(yield_fn);
+            let mut todo1 = Work::<<Tr1::Batch as BatchReader>::Cursor, Tr2::Cursor, _, _, _>::new(
+                Rc::clone(&result_fn),
+                Rc::clone(&yield_fn),
+            );
+            let mut todo2 = Work::<Tr1::Cursor, <Tr2::Batch as BatchReader>::Cursor, _, _, _>::new(
+                result_fn, yield_fn,
+            );
 
             // We'll unload the initial batches here, to put ourselves in a less non-deterministic state to start.
             trace1.map_batches(|batch1| {
@@ -193,13 +202,13 @@ where
                 // TODO: downgrade the capability by searching out the one time in `batch2.lower()` and not
                 // in `batch2.upper()`. Only necessary for non-empty batches, as empty batches may not have
                 // that property.
-                todo2.push_back(Deferred::new(
+                todo2.push(
                     trace1_cursor,
                     trace1_storage,
                     batch2_cursor,
                     batch2.clone(),
                     capability.clone(),
-                ));
+                );
             }
 
             trace!(
@@ -223,8 +232,8 @@ where
                     input2.for_each(|_cap, _data| ());
 
                     // Discard queued work.
-                    todo1 = Default::default();
-                    todo2 = Default::default();
+                    todo1.discard();
+                    todo2.discard();
 
                     // Stop holding on to input traces.
                     trace1_option = None;
@@ -277,13 +286,13 @@ where
                                 let (trace2_cursor, trace2_storage) =
                                     trace2.cursor_through(acknowledged2.borrow()).unwrap();
                                 let batch1_cursor = batch1.cursor();
-                                todo1.push_back(Deferred::new(
+                                todo1.push(
                                     batch1_cursor,
                                     batch1.clone(),
                                     trace2_cursor,
                                     trace2_storage,
                                     capability.clone(),
-                                ));
+                                );
                             }
 
                             // To update `acknowledged1` we might presume that `batch1.lower` should equal it, but we
@@ -333,13 +342,13 @@ where
                                 let (trace1_cursor, trace1_storage) =
                                     trace1.cursor_through(acknowledged1.borrow()).unwrap();
                                 let batch2_cursor = batch2.cursor();
-                                todo2.push_back(Deferred::new(
+                                todo2.push(
                                     trace1_cursor,
                                     trace1_storage,
                                     batch2_cursor,
                                     batch2.clone(),
                                     capability.clone(),
-                                ));
+                                );
                             }
 
                             // To update `acknowledged2` we might presume that `batch2.lower` should equal it, but we
@@ -388,65 +397,33 @@ where
                 // which results in unintentionally quadratic processing time (each batch of either
                 // input must scan all batches from the other input).
 
-                // Perform some amount of outstanding work.
+                // Perform some amount of outstanding work for input 1.
                 trace!(
                     operator_id,
                     input = 1,
-                    work_left = todo1.len(),
-                    "starting work",
+                    work_left = todo1.remaining(),
+                    "starting work"
                 );
-
-                let start_time = Instant::now();
-                let mut work = 0;
-                while !todo1.is_empty() && !yield_fn(start_time, work) {
-                    todo1.front_mut().unwrap().work(
-                        output,
-                        &mut result,
-                        |w| yield_fn(start_time, w),
-                        &mut work,
-                    );
-                    if !todo1.front().unwrap().work_remains() {
-                        todo1.pop_front();
-                    }
-                }
-
+                todo1.process(output);
                 trace!(
                     operator_id,
                     input = 1,
-                    work_left = todo1.len(),
-                    work_done = work,
-                    elapsed = ?start_time.elapsed(),
+                    work_left = todo1.remaining(),
                     "ceasing work",
                 );
 
-                // Perform some amount of outstanding work.
+                // Perform some amount of outstanding work for input 2.
                 trace!(
                     operator_id,
                     input = 2,
-                    work_left = todo2.len(),
-                    "starting work",
+                    work_left = todo2.remaining(),
+                    "starting work"
                 );
-
-                let start_time = Instant::now();
-                let mut work = 0;
-                while !todo2.is_empty() && !yield_fn(start_time, work) {
-                    todo2.front_mut().unwrap().work(
-                        output,
-                        &mut result,
-                        |w| yield_fn(start_time, w),
-                        &mut work,
-                    );
-                    if !todo2.front().unwrap().work_remains() {
-                        todo2.pop_front();
-                    }
-                }
-
+                todo2.process(output);
                 trace!(
                     operator_id,
                     input = 2,
-                    work_left = todo2.len(),
-                    work_done = work,
-                    elapsed = ?start_time.elapsed(),
+                    work_left = todo2.remaining(),
                     "ceasing work",
                 );
 
@@ -518,6 +495,107 @@ where
     )
 }
 
+/// Work collected by the join operator.
+///
+/// The join operator enqueues new work here first, and then processes it at a controlled rate,
+/// potentially yielding control to the Timely runtime in between. This allows it to avoid OOMs,
+/// caused by buffering massive amounts of data at the output, and loss of interactivity.
+///
+/// Collected work can be reduced by calling the `process` method. The amount of work processed in
+/// one go is controlled by the `yield_fn`.
+struct Work<C1, C2, D, L, YFn>
+where
+    C1: Cursor,
+    C2: Cursor,
+{
+    /// Pending work.
+    todo: VecDeque<Deferred<C1, C2, D>>,
+    /// A function that transforms raw join matches into join results.
+    result_fn: Rc<RefCell<L>>,
+    /// A function that given a start time and an amount of results produced decides whether it is
+    /// time to yield control.
+    yield_fn: Rc<YFn>,
+}
+
+impl<C1, C2, D, L, I, YFn> Work<C1, C2, D, L, YFn>
+where
+    C1: Cursor<Diff = Diff>,
+    C2: for<'a> Cursor<Key<'a> = C1::Key<'a>, Time = C1::Time, Diff = Diff>,
+    D: Data,
+    L: FnMut(C1::Key<'_>, C1::Val<'_>, C2::Val<'_>) -> I,
+    I: IntoIterator<Item = D>,
+    YFn: Fn(Instant, usize) -> bool,
+{
+    fn new(result_fn: Rc<RefCell<L>>, yield_fn: Rc<YFn>) -> Self {
+        Self {
+            todo: Default::default(),
+            result_fn,
+            yield_fn,
+        }
+    }
+
+    /// Return the amount of remaining work chunks.
+    fn remaining(&self) -> usize {
+        self.todo.len()
+    }
+
+    /// Return whether there is any work pending.
+    fn is_empty(&self) -> bool {
+        self.remaining() == 0
+    }
+
+    /// Append some pending work.
+    fn push(
+        &mut self,
+        cursor1: C1,
+        storage1: C1::Storage,
+        cursor2: C2,
+        storage2: C2::Storage,
+        capability: Capability<C1::Time>,
+    ) {
+        self.todo.push_back(Deferred {
+            cursor1,
+            storage1,
+            cursor2,
+            storage2,
+            capability,
+            done: false,
+            temp: Default::default(),
+        });
+    }
+
+    /// Discard all pending work.
+    fn discard(&mut self) {
+        self.todo = Default::default();
+    }
+
+    /// Process pending work until none is remaining or `yield_fn` requests a yield.
+    fn process<C>(
+        &mut self,
+        output: &mut OutputHandleCore<C1::Time, CapacityContainerBuilder<C>, Tee<C1::Time, C>>,
+    ) where
+        C: SizableContainer + PushInto<(D, C1::Time, Diff)> + Data,
+    {
+        let start_time = Instant::now();
+        let mut produced = 0;
+
+        while !(self.yield_fn)(start_time, produced)
+            && let Some(mut deferred) = self.todo.pop_front()
+        {
+            deferred.work(
+                output,
+                &mut *self.result_fn.borrow_mut(),
+                |w| (self.yield_fn)(start_time, w),
+                &mut produced,
+            );
+
+            if !deferred.done {
+                self.todo.push_front(deferred);
+            }
+        }
+    }
+}
+
 /// Deferred join computation.
 ///
 /// The structure wraps cursors which allow us to play out join computation at whatever rate we like.
@@ -525,8 +603,8 @@ where
 /// dataflow system a chance to run operators that can consume and aggregate the data.
 struct Deferred<C1, C2, D>
 where
-    C1: Cursor<Diff = Diff>,
-    C2: for<'a> Cursor<Key<'a> = C1::Key<'a>, Time = C1::Time, Diff = Diff>,
+    C1: Cursor,
+    C2: Cursor,
 {
     cursor1: C1,
     storage1: C1::Storage,
@@ -543,35 +621,13 @@ where
     C2: for<'a> Cursor<Key<'a> = C1::Key<'a>, Time = C1::Time, Diff = Diff>,
     D: Data,
 {
-    fn new(
-        cursor1: C1,
-        storage1: C1::Storage,
-        cursor2: C2,
-        storage2: C2::Storage,
-        capability: Capability<C1::Time>,
-    ) -> Self {
-        Deferred {
-            cursor1,
-            storage1,
-            cursor2,
-            storage2,
-            capability,
-            done: false,
-            temp: Vec::new(),
-        }
-    }
-
-    fn work_remains(&self) -> bool {
-        !self.done
-    }
-
     /// Process keys until at least `fuel` output tuples produced, or the work is exhausted.
     fn work<L, I, YFn, C>(
         &mut self,
         output: &mut OutputHandleCore<C1::Time, CapacityContainerBuilder<C>, Tee<C1::Time, C>>,
         mut logic: L,
         yield_fn: YFn,
-        work: &mut usize,
+        produced: &mut usize,
     ) where
         I: IntoIterator<Item = D>,
         L: FnMut(C1::Key<'_>, C1::Val<'_>, C2::Val<'_>) -> I,
@@ -657,14 +713,14 @@ where
                         cursor1.step_val(storage1);
                         cursor2.rewind_vals(storage2);
 
-                        *work = work.saturating_add(temp.len());
+                        *produced = produced.saturating_add(temp.len());
 
-                        if yield_fn(*work) {
+                        if yield_fn(*produced) {
                             // Returning here is only allowed because we leave the cursors in a
                             // state that will let us pick up the work correctly on the next
                             // invocation.
-                            *work -= flush(temp, &mut session);
-                            if yield_fn(*work) {
+                            *produced -= flush(temp, &mut session);
+                            if yield_fn(*produced) {
                                 return;
                             }
                         }
@@ -677,7 +733,7 @@ where
         }
 
         if !temp.is_empty() {
-            *work -= flush(temp, &mut session);
+            *produced -= flush(temp, &mut session);
         }
 
         // We only get here after having iterated through all keys.
