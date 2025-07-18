@@ -157,6 +157,8 @@ operation, any other reconfiguration command issued against this cluster will
 fail. Additionally, any connection interruption or statement cancelation will
 cause a rollback — no size change will take effect in that case.
 
+{{< include-md file="shared-content/alter-cluster-wait-until-ready-note.md" >}}
+
 ### Replication factor
 
 The `REPLICATION FACTOR` option determines the number of replicas provisioned
@@ -247,6 +249,8 @@ CLUSTER` command with the `WAIT UNTIL READY` [option](#with-options):
 ALTER CLUSTER c1
 SET (SIZE '100CC') WITH (WAIT UNTIL READY (TIMEOUT = '10m', ON TIMEOUT = 'COMMIT'));
 ```
+
+{{< include-md file="shared-content/alter-cluster-wait-until-ready-note.md" >}}
 
 Alternatively, you can alter the cluster size immediately, without waiting, by
 running the `ALTER CLUSTER` command:
