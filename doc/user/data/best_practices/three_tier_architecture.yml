@@ -12,20 +12,26 @@ rows:
     Description: |
       **A dedicated cluster(s)** for compute/transformation:
 
-      - [Materialized views](/concepts/views/#materialized-views) to persist the
-      results in durable storage. Results of materialized views are available
-      across all clusters.
+      - [Materialized views](/concepts/views/#materialized-views) to persist, in
+        durable storage, the results that will be served. Results of
+        materialized views are available across all clusters.
+
+        {{< tip >}}
+        {{< include-md file="shared-content/stacked-view-consideration.md" >}}
+        {{< /tip >}}
 
       - Indexes, **only as needed**, to make transformation fast (such as
       possibly [indexes on join
       keys](/transform-data/optimization/#optimize-multi-way-joins-with-delta-joins)).
 
-      {{< tip >}}
-      From the compute/transformation clusters, do not create indexes on the
-      materialized views for the purposes of serving the view results. Instead,
-      use the [serving cluster(s)](#tier-serving-clusters) when creating indexes
-      to serve the results.
-      {{< /tip >}}
+        {{< tip >}}
+
+        From the compute/transformation clusters, do not create indexes on the
+        materialized views for the purposes of serving the view results.
+        Instead, use the [serving cluster(s)](#tier-serving-clusters) when
+        creating indexes to serve the results.
+
+        {{< /tip >}}
 
   - "Tier": "**Serving cluster(s)**"
     Description: |
@@ -33,8 +39,3 @@ rows:
       **A dedicated cluster(s)** for serving queries, including
       [indexes](/concepts/indexes/) on the materialized views. Indexes are local
       to the cluster in which they are created.
-
-      **Additional Considerations:**
-
-      - Clusters containing [sinks](/serve-results/sink/) can only have a
-      replication factor of 0 or 1.
