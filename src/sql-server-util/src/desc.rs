@@ -235,6 +235,11 @@ impl SqlServerColumnDesc {
     pub fn exclude(&mut self) {
         self.column_type = None;
     }
+
+    /// Check if this [`SqlServerColumnDesc`] is excluded from being replicated into Materialize.
+    pub fn is_excluded(&self) -> bool {
+        self.column_type == None
+    }
 }
 
 impl RustType<ProtoSqlServerColumnDesc> for SqlServerColumnDesc {
