@@ -68,24 +68,63 @@ pub async fn increment_lsn(client: &mut Client, lsn: Lsn) -> Result<Lsn, SqlServ
 /// - only contains letters, digits, and underscores
 /// - no resserved words
 /// - 32 char max
-pub async fn lsn_at_savepoint(
+pub async fn create_savepoint(
     txn: &mut Transaction<'_>,
     savepoint_name: &str,
-) -> Result<Lsn, SqlServerError> {
-    let current_lsn_query: &str = "
+) -> Result<(), SqlServerError> {
+    // TODO (maz): make sure savepoint name is safe
+    let _result = txn
+        .client
+        .simple_query(format!("SAVE TRANSACTION [{savepoint_name}]"))
+        .await?;
+    Ok(())
+}
+
+pub async fn get_lsn(txn: &mut Transaction<'_>) -> Result<Lsn, SqlServerError> {
+    static CURRENT_LSN_QUERY: &str = "
 SELECT dt.database_transaction_begin_lsn
 FROM sys.dm_tran_database_transactions AS dt
 JOIN sys.dm_tran_session_transactions AS st
   ON dt.transaction_id = st.transaction_id
 WHERE st.session_id = @@SPID
 ";
-    // TODO (maz): make sure savepoint name is safe
-
-    txn.client
-        .simple_query(format!("SAVE TRANSACTION [{savepoint_name}]"))
-        .await?;
-    let result = txn.client.simple_query(current_lsn_query).await?;
+    let result = txn.client.simple_query(CURRENT_LSN_QUERY).await?;
     parse_numeric_lsn(&result)
+}
+
+pub async fn lock_table(
+    txn: &mut Transaction<'_>,
+    schema: &str,
+    table: &str,
+) -> Result<(), SqlServerError> {
+    // This query probably seems odd, but there is no LOCK command in MS SQL. Locks are specified
+    // in SELECT using the WITH keyword.  This query does not need to return any rows to lock the table,
+    // hence the 1=0, which is something short that always evaluates to false in this universe;
+    let query = format!("SELECT * FROM {schema}.{table} WITH (TABLOCKX) WHERE 1=0;");
+    let _result = txn.client.query(query, &[]).await?;
+    Ok(())
+}
+
+/// Parse an [`Lsn`] in Decimal(25,0) format of the provided [`tiberius::Row`].
+///
+/// Returns an error if the provided slice doesn't have exactly one row.
+fn parse_numeric_lsn(row: &[tiberius::Row]) -> Result<Lsn, SqlServerError> {
+    match row {
+        [r] => {
+            let numeric_lsn = r
+                .try_get::<Numeric, _>(0)?
+                .ok_or_else(|| SqlServerError::NullLsn)?;
+            let lsn = Lsn::try_from(numeric_lsn).map_err(|msg| SqlServerError::InvalidData {
+                column_name: "lsn".to_string(),
+                error: msg,
+            })?;
+            Ok(lsn)
+        }
+        other => Err(SqlServerError::InvalidData {
+            column_name: "lsn".to_string(),
+            error: format!("expected 1 column, got {other:?}"),
+        }),
+    }
 }
 
 /// Parse an [`Lsn`] from the first column of the provided [`tiberius::Row`].
@@ -106,28 +145,6 @@ fn parse_lsn(result: &[tiberius::Row]) -> Result<Lsn, SqlServerError> {
                 })?;
                 Ok(lsn)
             }
-        }
-        other => Err(SqlServerError::InvalidData {
-            column_name: "lsn".to_string(),
-            error: format!("expected 1 column, got {other:?}"),
-        }),
-    }
-}
-
-/// Parse an [`Lsn`] in Decimal(25,0) format of the provided [`tiberius::Row`].
-///
-/// Returns an error if the provided slice doesn't have exactly one row.
-fn parse_numeric_lsn(row: &[tiberius::Row]) -> Result<Lsn, SqlServerError> {
-    match row {
-        [r] => {
-            let numeric_lsn = r
-                .try_get::<Numeric, _>(0)?
-                .ok_or_else(|| SqlServerError::NullLsn)?;
-            let lsn = Lsn::try_from(numeric_lsn).map_err(|msg| SqlServerError::InvalidData {
-                column_name: "lsn".to_string(),
-                error: msg,
-            })?;
-            Ok(lsn)
         }
         other => Err(SqlServerError::InvalidData {
             column_name: "lsn".to_string(),

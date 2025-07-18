@@ -123,6 +123,8 @@ impl<'a> CdcStream<'a> {
         ),
         SqlServerError,
     > {
+        static SAVEPOINT_NAME: &str = "_mz_snap_";
+
         // Determine what table we need to snapshot.
         let instances = self
             .capture_instances
@@ -147,9 +149,25 @@ impl<'a> CdcStream<'a> {
         let mut txn = self.client.transaction().await?;
         // Get the current LSN of the database. This operation assigns a savepoint to our
         // current transaction.
-        let lsn = crate::inspect::lsn_at_savepoint(&mut txn, "_mz_snapshot").await?;
 
+        // create a savepoint that we will lock the tables under and collect an LSN
+        // this allows us to rollback the savepoint while maintaining the outer transaction
+        txn.create_savepoint(SAVEPOINT_NAME).await?;
+        // lock all the tables we are planning to snapshot so that we can ensure that
+        // writes that might be in progress are properly ordered before or after this snapshot
+        // in addition to the LSN being properly ordered.
+        // TODO (maz): we should considering a timeout here because we may lock some tables,
+        // and the next table may be locked for some extended period, resulting in a traffic
+        // jam.
+        for (_capture_instance, schema, table) in &tables {
+            tracing::trace!(%schema, %table, "locking table");
+            crate::inspect::lock_table(&mut txn, &*schema, &*table).await?;
+        }
+
+        let lsn = crate::inspect::get_lsn(&mut txn).await?;
         tracing::info!(?tables, ?lsn, "starting snapshot");
+
+        txn.rollback_savepoint(SAVEPOINT_NAME).await?;
 
         // Get the size of each table we're about to snapshot.
         //
@@ -564,11 +582,11 @@ impl TryFrom<Numeric> for Lsn {
 
         let vlf_id = u32::try_from(decimal_lsn / 10_i128.pow(15))
             .map_err(|e| format!("Failed to decode vlf_id for lsn {decimal_lsn}: {e:?}"))?;
-        decimal_lsn -= vlf_id as i128 * 10_i128.pow(15);
+        decimal_lsn -= i128::try_from(vlf_id).unwrap() * 10_i128.pow(15);
 
         let block_id = u32::try_from(decimal_lsn / 10_i128.pow(5))
             .map_err(|e| format!("Failed to decode block_id for lsn {decimal_lsn}: {e:?}"))?;
-        decimal_lsn -= block_id as i128 * 10_i128.pow(5);
+        decimal_lsn -= i128::try_from(block_id).unwrap() * 10_i128.pow(5);
 
         let record_id = u16::try_from(decimal_lsn)
             .map_err(|e| format!("Failed to decode record_id for lsn {decimal_lsn}: {e:?}"))?;
