@@ -1821,7 +1821,7 @@ pub struct Index {
     pub create_sql: String,
     /// Collection this index is on top of.
     pub on: GlobalId,
-    pub keys: Vec<mz_expr::MirScalarExpr>,
+    pub key: Vec<mz_expr::MirScalarExpr>,
     pub compaction_window: Option<CompactionWindow>,
     pub cluster_id: ClusterId,
 }

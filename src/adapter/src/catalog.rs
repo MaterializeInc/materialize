@@ -1760,7 +1760,7 @@ impl ExprHumanizer for ConnCatalog<'_> {
                     .map(|col_name| col_name.to_string())
                     .collect::<Vec<_>>();
 
-                let (p, _) = mz_expr::permutation_for_arrangement(&index.keys, on_desc.arity());
+                let (p, _) = mz_expr::permutation_for_arrangement(&index.key, on_desc.arity());
 
                 // Init ix_names with unknown column names. Unknown columns are
                 // represented as an empty String and rendered as `#c` by the

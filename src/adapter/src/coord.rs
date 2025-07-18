@@ -2950,7 +2950,7 @@ impl Coordinator {
                                     let index_plan = optimize::index::Index::new(
                                         entry.name().clone(),
                                         idx.on,
-                                        idx.keys.to_vec(),
+                                        idx.key.to_vec(),
                                     );
                                     let global_mir_plan = optimizer.optimize(index_plan)?;
                                     let optimized_plan = global_mir_plan.df_desc().clone();

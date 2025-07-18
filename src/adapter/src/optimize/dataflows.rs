@@ -194,7 +194,7 @@ impl<'a> DataflowBuilder<'a> {
                 for (index_id, idx) in valid_indexes {
                     let index_desc = IndexDesc {
                         on_id: *id,
-                        key: idx.keys.to_vec(),
+                        key: idx.key.to_vec(),
                     };
                     let entry = self.catalog.get_entry(id);
                     let desc = entry

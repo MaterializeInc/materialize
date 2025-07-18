@@ -89,13 +89,13 @@ impl Optimizer {
 pub struct Index {
     name: QualifiedItemName,
     on: GlobalId,
-    keys: Vec<mz_expr::MirScalarExpr>,
+    key: Vec<mz_expr::MirScalarExpr>,
 }
 
 impl Index {
     /// Construct a new [`Index`]. Arguments are recorded as-is.
-    pub fn new(name: QualifiedItemName, on: GlobalId, keys: Vec<mz_expr::MirScalarExpr>) -> Self {
-        Self { name, on, keys }
+    pub fn new(name: QualifiedItemName, on: GlobalId, key: Vec<mz_expr::MirScalarExpr>) -> Self {
+        Self { name, on, key }
     }
 }
 
@@ -159,7 +159,7 @@ impl Optimize<Index> for Optimizer {
 
         let index_desc = IndexDesc {
             on_id: index.on,
-            key: index.keys.clone(),
+            key: index.key.clone(),
         };
         df_desc.export_index(self.exported_index_id, index_desc, on_desc.typ().clone());
 
@@ -189,7 +189,7 @@ impl Optimize<Index> for Optimizer {
         }
 
         // Emit a notice if we are trying to create an empty index.
-        if index.keys.is_empty() {
+        if index.key.is_empty() {
             df_meta.push_optimizer_notice_dedup(IndexKeyEmpty);
         }
 
@@ -197,11 +197,11 @@ impl Optimize<Index> for Optimizer {
         // currently optimizing.
         for (index_id, idx) in df_builder
             .indexes_on(index.on)
-            .filter(|(_id, idx)| idx.keys.as_ref() == &index.keys)
+            .filter(|(_id, idx)| idx.key.as_ref() == &index.key)
         {
             df_meta.push_optimizer_notice_dedup(IndexAlreadyExists {
                 index_id,
-                index_key: idx.keys.to_vec(),
+                index_key: idx.key.to_vec(),
                 index_on_id: idx.on,
                 exported_index_id: self.exported_index_id,
             });

@@ -1613,9 +1613,9 @@ impl CatalogState {
             diff,
         ));
 
-        for (i, key) in index.keys.iter().enumerate() {
+        for (i, key_col) in index.key.iter().enumerate() {
             let on_entry = self.get_entry_by_global_id(&index.on);
-            let nullable = key
+            let nullable = key_col
                 .typ(
                     &on_entry
                         .desc(&self.resolve_full_name(on_entry.name(), on_entry.conn_id()))
@@ -1625,15 +1625,15 @@ impl CatalogState {
                 )
                 .nullable;
             let seq_in_index = u64::cast_from(i + 1);
-            let key_sql = key_sqls
+            let key_col_sql = key_sqls
                 .get(i)
                 .expect("missing sql information for index key")
                 .to_ast_string_simple();
-            let (field_number, expression) = match key {
+            let (field_number, expression) = match key_col {
                 MirScalarExpr::Column(col, _) => {
                     (Datum::UInt64(u64::cast_from(*col + 1)), Datum::Null)
                 }
-                _ => (Datum::Null, Datum::String(&key_sql)),
+                _ => (Datum::Null, Datum::String(&key_col_sql)),
             };
             updates.push(BuiltinTableUpdate::row(
                 &*MZ_INDEX_COLUMNS,
