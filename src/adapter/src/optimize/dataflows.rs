@@ -431,7 +431,7 @@ pub fn prep_relation_expr(
                     let mfp =
                         MapFilterProject::new(input.arity()).filter(predicates.iter().cloned());
                     match mfp.into_plan() {
-                        Err(e) => Err(OptimizerError::Internal(e)),
+                        Err(e) => Err(OptimizerError::UnsupportedTemporalExpression(e)),
                         Ok(mut mfp) => {
                             for s in mfp.iter_nontemporal_exprs() {
                                 prep_scalar_expr(s, style)?;
