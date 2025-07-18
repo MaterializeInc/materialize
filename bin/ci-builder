@@ -234,6 +234,8 @@ case "$cmd" in
             --env BUILDKITE_BRANCH
             --env BUILDKITE_ORGANIZATION_SLUG
             --env BUILDKITE_PULL_REQUEST
+            --env DOCKERHUB_USERNAME
+            --env DOCKERHUB_ACCESS_TOKEN
         )
 
         if [[ $detach_container == "true" ]]; then

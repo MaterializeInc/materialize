@@ -41,9 +41,10 @@ from typing import IO, Any, cast
 
 import requests
 import yaml
+from requests.auth import HTTPBasicAuth
 
+from materialize import MZ_ROOT, buildkite, cargo, git, rustc_flags, spawn, ui, xcompile
 from materialize import bazel as bazel_utils
-from materialize import buildkite, cargo, git, rustc_flags, spawn, ui, xcompile
 from materialize.rustc_flags import Sanitizer
 from materialize.xcompile import Arch, target
 
@@ -211,21 +212,9 @@ def docker_images() -> set[str]:
     )
 
 
-_docker_hub_token: str | None = None
-
-
-def _get_docker_hub_token(image: str) -> str:
-    global _docker_hub_token
-    if _docker_hub_token is None:
-        _docker_hub_token = requests.get(
-            "https://auth.docker.io/token",
-            params={
-                "service": "registry.docker.io",
-                "scope": f"repository:{image}:pull",
-            },
-        ).json()["token"]
-    assert _docker_hub_token
-    return _docker_hub_token
+KNOWN_DOCKER_IMAGES_FILE = Path(MZ_ROOT / "known-docker-images.txt")
+_known_docker_images: set[str] | None = None
+_known_docker_images_lock = Lock()
 
 
 def is_docker_image_pushed(name: str) -> bool:
@@ -233,47 +222,77 @@ def is_docker_image_pushed(name: str) -> bool:
 
     Note that this operation requires a rather slow network request.
     """
+    global _known_docker_images
+
+    if _known_docker_images is None:
+        with _known_docker_images_lock:
+            if not KNOWN_DOCKER_IMAGES_FILE.exists():
+                _known_docker_images = set()
+            else:
+                with KNOWN_DOCKER_IMAGES_FILE.open() as f:
+                    _known_docker_images = set(line.strip() for line in f)
+
+    if name in _known_docker_images:
+        return True
+
     if ":" not in name:
         image, tag = name, "latest"
     else:
         image, tag = name.rsplit(":", 1)
 
-    # TODO(def-) Investigate why this is not working properly, would speed us up by a factor of 5
-    # dockerhub_username = os.getenv("DOCKERHUB_USERNAME")
-    # dockerhub_token = os.getenv("DOCKERHUB_ACCESS_TOKEN")
+    dockerhub_username = os.getenv("DOCKERHUB_USERNAME")
+    dockerhub_token = os.getenv("DOCKERHUB_ACCESS_TOKEN")
 
-    # try:
-    #     if dockerhub_username and dockerhub_token:
-    #         response = requests.head(
-    #             f"https://registry-1.docker.io/v2/{image}/manifests/{tag}",
-    #             headers={
-    #                 "Accept": "application/vnd.docker.distribution.manifest.v2+json",
-    #             },
-    #             auth=HTTPBasicAuth(dockerhub_username, dockerhub_token),
-    #         )
-    #     else:
-    #         token = _get_docker_hub_token(image)
-    #         response = requests.head(
-    #             f"https://registry-1.docker.io/v2/{image}/manifests/{tag}",
-    #             headers={
-    #                 "Accept": "application/vnd.docker.distribution.manifest.v2+json",
-    #                 "Authorization": f"Bearer {token}",
-    #             },
-    #         )
+    exists: bool = False
 
-    #     return response.status_code == 200
+    try:
+        if dockerhub_username and dockerhub_token:
+            response = requests.head(
+                f"https://registry-1.docker.io/v2/{image}/manifests/{tag}",
+                headers={
+                    "Accept": "application/vnd.docker.distribution.manifest.v2+json",
+                },
+                auth=HTTPBasicAuth(dockerhub_username, dockerhub_token),
+            )
+        else:
+            token = requests.get(
+                "https://auth.docker.io/token",
+                params={
+                    "service": "registry.docker.io",
+                    "scope": f"repository:{image}:pull",
+                },
+            ).json()["token"]
+            response = requests.head(
+                f"https://registry-1.docker.io/v2/{image}/manifests/{tag}",
+                headers={
+                    "Accept": "application/vnd.docker.distribution.manifest.v2+json",
+                    "Authorization": f"Bearer {token}",
+                },
+            )
 
-    # except Exception as e:
-    #     print(f"Error checking Docker image: {e}")
-    #     return False
+        if response.status_code in (401, 429, 500, 502, 503, 504):
+            # Fall back to 5x slower method
+            proc = subprocess.run(
+                ["docker", "manifest", "inspect", name],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                env=dict(os.environ, DOCKER_CLI_EXPERIMENTAL="enabled"),
+            )
+            exists = proc.returncode == 0
+        else:
+            exists = response.status_code == 200
 
-    proc = subprocess.run(
-        ["docker", "manifest", "inspect", name],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        env=dict(os.environ, DOCKER_CLI_EXPERIMENTAL="enabled"),
-    )
-    return proc.returncode == 0
+    except Exception as e:
+        print(f"Error checking Docker image: {e}")
+        return False
+
+    if exists:
+        with _known_docker_images_lock:
+            _known_docker_images.add(name)
+            with KNOWN_DOCKER_IMAGES_FILE.open("a") as f:
+                print(name, file=f)
+
+    return exists
 
 
 def chmod_x(path: Path) -> None:
