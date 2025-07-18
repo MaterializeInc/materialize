@@ -121,6 +121,16 @@ materialize.public.jsonb_fields  2826  0  2  0
 statement ok
 CREATE MATERIALIZED VIEW big_numbers AS SELECT * FROM numbers WHERE value > 10000;
 
+statement ok
+SET CLUSTER = quickstart;
+
+# Wait for the data to show up in EXPLAIN
+statement ok
+SELECT mz_unsafe.mz_sleep(2);
+
+statement ok
+SET CLUSTER = no_replicas;
+
 query TIIII
 EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW big_numbers
 ----
