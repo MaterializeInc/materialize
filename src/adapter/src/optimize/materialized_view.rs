@@ -274,7 +274,7 @@ impl Optimize<LocalMirPlan> for Optimizer {
         df_desc.export_sink(self.sink_id, sink_description);
 
         // Prepare expressions in the assembled dataflow.
-        let style = ExprPrepStyle::Index;
+        let style = ExprPrepStyle::Maintained;
         df_desc.visit_children(
             |r| prep_relation_expr(r, style),
             |s| prep_scalar_expr(s, style),
