@@ -36,7 +36,7 @@ WHERE mz_now() <= event_ts + INTERVAL '5min'
 {{< note >}}
 It may feel more natural to write this filter as the equivalent `WHERE event_ts >= mz_now() - INTERVAL '5min'`.
 However, there are currently no valid operators for the [`mz_timestamp`
-type](/sql/types/mz_timestamp) that would allow this.  See [Requirements](#requirements).
+type](/sql/types/mz_timestamp) that would allow this.  See [`mz_now()` requirements and restrictions](#mz_now-requirements-and-restrictions).
 {{< /note >}}
 
 The following diagram shows record `B` falling out of the result set as time
@@ -50,40 +50,35 @@ moves forward:
 
 ![temporal filter diagram](/images/temporal-filter.svg)
 
-## Requirements
+## `mz_now()` requirements and restrictions
 
-When creating a temporal filter using `mz_now()`in a `WHERE` or `HAVING` clause,
-the clause has the following shape:
-
-```mzsql
-mz_now() <comparison_operator> <numeric_expr | timestamp_expr>
-```
-
-- The `mz_now()` must be used with a comparison operator.
-
-- The comparison operator must be one of `=`, `<`, `<=`, `>`, or `>=`, or
-  operators that desugar to them or a conjunction of them (for example,
-  `BETWEEN...AND...`).
-
-- The clause can only compare `mz_now()` to either a
-  [`numeric`](/sql/types/numeric) expression or a
-  [`timestamp`](/sql/types/timestamp) expression not containing `mz_now()`.
-
-### Restrictions
-
-- If part of a  `WHERE` clause, the `WHERE` clause cannot be an [aggregate
- `FILTER` expression](/sql/functions/filters).
-
-- The `mz_now()` only accepts comparison operators `=`, `<`, `<=`, `>`, or `>=`,
-  or operators that desugar to them or a conjunction of them (for example,
-  `BETWEEN...AND...`); i.e., you cannot use `mz_now()` with date/time operators.
+### `mz_now()` requirements
 
 {{< tip >}}
 
-When possible, prefer materialized views (instead of indexed views) when using
-temporal filter to take advantage of custom consolidation.
+When possible, prefer materialized views when using temporal filter to take
+advantage of custom consolidation.
 
 {{</ tip >}}
+
+When creating a temporal filter using
+[`mz_now()`](/sql/functions/now_and_mz_now) in a `WHERE` or `HAVING` clause, the
+clause has the following shape:
+
+{{< include-md file="shared-content/mz_now_clause_requirements.md" >}}
+
+### `mz_now()` restrictions
+
+The [`mz_now()`](/sql/functions/now_and_mz_now) clause has the following
+restrictions:
+
+- {{< include-md file="shared-content/mz_now_clause_disjunction_restrictions.md" >}}
+
+  To rewrite the query, see [Disjunction (OR)
+  alternatives](http://localhost:1313/docs/transform-data/idiomatic-materialize-sql/mz_now/#disjunctions-or).
+
+- If part of a  `WHERE` clause, the `WHERE` clause cannot be an [aggregate
+ `FILTER` expression](/sql/functions/filters).
 
 ## Examples
 

@@ -1,0 +1,15 @@
+<table>
+<tbody>
+{{ range .rows }}
+{{ $row := . }}
+<tr>
+{{ range $.columns }}
+{{ $field := .column }}
+<td>
+{{ index $row $field | markdownify }}
+</td>
+{{ end }}
+</tr>
+{{ end }}
+</tbody>
+</table>

@@ -38,5 +38,30 @@ JOIN my_expanded_values t ON a.fieldZ = t.fieldZ
 
 </td>
 </tr>
+<tr>
+<td><code>mz_now()</code> cannot be used with date/time operators</td>
+<td>
+Rewrite the query expression; specifically, move the operation to the other side of the comparison.
+</td>
+</tr>
+<tr>
+<td><code>mz_now()</code> cannot be used with <code>OR</code>s in materialized/indexed view definitions and <code>SUBSCRIBE</code> statements</td>
+<td>
+Rewrite as <code>UNION ALL</code> or <code>UNION</code>, deduplicating as
+necessary:
+
+<ul>
+<li>In some cases, you may need to modify the conditions to deduplicate results
+when using <code>UNION ALL</code>. For example, you might add the negation of
+one input's condition to the other as a conjunction.</li>
+
+<li>In some cases, using <code>UNION</code> instead of <code>UNION ALL</code>
+may suffice if the inputs do not contain other duplicates that need to be
+retained.</li>
+
+</ul>
+
+</td>
+</tr>
 </tbody>
 </table>

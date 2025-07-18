@@ -16,7 +16,11 @@ as a [`mz_timestamp`] value.
 
 ## Details
 
-### Common patterns
+### `mz_now()` clause
+
+{{< include-md file="shared-content/mz_now_clause_requirements.md" >}}
+
+### Usage patterns
 
 The typical uses of `now()` and `mz_now()` are:
 
@@ -52,22 +56,33 @@ In this scenario, both `now()` and `mz_now()` would return 9pm.
 ### Limitations
 
 #### Materialization
-  * Queries that use `now()` cannot be materialized. In other words, you cannot
-    create an index or a materialized view on a query that calls `now()`.
 
-  * Queries that use `mz_now()` can only be materialized if the call to
-    `mz_now()` is used in a [temporal filter](/sql/patterns/temporal-filters).
+* Queries that use `now()` cannot be materialized. In other words, you cannot
+  create an index or a materialized view on a query that calls `now()`.
+
+* Queries that use `mz_now()` can only be materialized if the call to
+  `mz_now()` is used in a [temporal filter](/sql/patterns/temporal-filters).
 
 These limitations are in place because `now()` changes every microsecond and
 `mz_now()` changes every millisecond. Allowing these functions to be
 materialized would be resource prohibitive.
 
-#### Comparison operators
+#### `mz_now()` restrictions
 
-  * `mz_now()` only accepts comparison operators `=`, `<`, `<=`, `>`, or
-  `>=`, or operators that desugar to them or a conjunction of them (for example,
-  `BETWEEN...AND...`). You cannot use `mz_now()` with date/time operators (for
-  example, `mz_now() - INTERVAL '5min'`).
+The [`mz_now()`](/sql/functions/now_and_mz_now) clause has the following
+restrictions:
+
+- {{< include-md file="shared-content/mz_now_clause_disjunction_restrictions.md" >}}
+
+  For example:
+
+  {{< yaml-table data="mz_now/mz_now_combination" >}}
+
+  For alternatives, see [Disjunction (OR)
+  alternatives](http://localhost:1313/docs/transform-data/idiomatic-materialize-sql/mz_now/#disjunctions-or).
+
+- If part of a  `WHERE` clause, the `WHERE` clause cannot be an [aggregate
+ `FILTER` expression](/sql/functions/filters).
 
 ## Examples
 

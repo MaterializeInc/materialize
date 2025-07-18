@@ -1,0 +1,29 @@
+columns:
+  - column: "Window Function"
+  - column: "Idiomatic Materialize"
+
+rows:
+  - Window Function: |
+      [First value within groups](/transform-data/idiomatic-materialize-sql/first-value/)
+    Idiomatic Materialize: |
+      [Use `MIN/MAX ... GROUP BY` subquery](/transform-data/idiomatic-materialize-sql/first-value/).
+
+  - Window Function: |
+      [Lag over a regularly increasing field](/transform-data/idiomatic-materialize-sql/lag/)
+    Idiomatic Materialize: |
+      [Use self join or a self `LEFT JOIN/LEFT OUTER JOIN` by an **equality match** on the regularly increasing field](/transform-data/idiomatic-materialize-sql/lag/).
+
+  - Window Function: |
+      [Last value within groups](/transform-data/idiomatic-materialize-sql/last-value/)
+    Idiomatic Materialize: |
+      [Use `MIN/MAX ... GROUP BY` subquery](/transform-data/idiomatic-materialize-sql/last-value/)
+
+  - Window Function: |
+      [Lead over a regularly increasing field](/transform-data/idiomatic-materialize-sql/lead/)
+    Idiomatic Materialize: |
+      [Use self join or a self `LEFT JOIN/LEFT OUTER JOIN` by an **equality match** on the regularly increasing field](/transform-data/idiomatic-materialize-sql/lead/).
+
+  - Window Function: |
+      [Top-K](/transform-data/idiomatic-materialize-sql/top-k/)
+    Idiomatic Materialize: |
+      [Use an `ORDER BY ... LIMIT` subquery with a `LATERAL JOIN` on a `DISTINCT` subquery (or, for K=1,  a `SELECT DISTINCT ON ... ORDER BY ... LIMIT` query)](/transform-data/idiomatic-materialize-sql/top-k/)

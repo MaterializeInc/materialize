@@ -1,9 +1,15 @@
 {{ $pathArray := split (lower (.Get "data")) "/" }}
+{{ $noHeader := .Get "noHeader" }}
 {{ $data := $.Site.Data }}
 
 {{ range $pathArray }}
   {{ $data = index $data . }}
 {{ end }}
 
-{{ partial "yaml-tables/generic-table.html" (dict "rows" $data.rows "columns"
-$data.columns) }}
+{{ if $noHeader }}
+  {{ partial "yaml-tables/generic-table-no-header.html" (dict "rows" $data.rows "columns"
+  $data.columns) }}
+{{ else }}
+  {{ partial "yaml-tables/generic-table.html" (dict "rows" $data.rows "columns"
+  $data.columns) }}
+{{ end }}

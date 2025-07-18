@@ -1179,6 +1179,10 @@ td:not(.copyableCode) .copy_button {
     display: none !important;
 }
 
+td span.copyableCode pre:hover .copy_button {
+    display: inline-block !important;
+}
+
 pre {
     position: relative;
 
@@ -1259,6 +1263,12 @@ body.dark {
 }
 
 td.copyableCode{
+    .chroma {
+        background-color: var(--code-block);
+    }
+
+}
+span.copyableCode{
     .chroma {
         background-color: var(--code-block);
     }
