@@ -735,7 +735,6 @@ mod tests {
 
     #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
-    #[ignore] // TODO: Reenable when database-issues#9472 is fixed
     async fn size(dyncfgs: ConfigUpdates) {
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),

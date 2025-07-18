@@ -667,7 +667,7 @@ impl Service for TransactorService {
             Arc::new(UnreliableConsensus::new(consensus, unreliable));
 
         // Wire up the TransactorService.
-        let isolated_runtime = Arc::new(IsolatedRuntime::default());
+        let isolated_runtime = Arc::new(IsolatedRuntime::new_for_tests());
         let pubsub_sender = PubSubClientConnection::noop().sender;
         let shared_states = Arc::new(StateCache::new(
             &config,

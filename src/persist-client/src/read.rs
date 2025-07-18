@@ -1616,7 +1616,7 @@ mod tests {
             blob,
             consensus,
             metrics,
-            Arc::new(IsolatedRuntime::default()),
+            Arc::new(IsolatedRuntime::new_for_tests()),
             Arc::new(StateCache::new_no_metrics()),
             pubsub_sender,
         )

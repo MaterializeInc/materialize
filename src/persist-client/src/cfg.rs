@@ -27,6 +27,7 @@ use semver::Version;
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 
+use crate::async_runtime;
 use crate::internal::machine::{
     NEXT_LISTEN_BATCH_RETRYER_CLAMP, NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF,
     NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER,
@@ -263,6 +264,7 @@ impl PersistConfig {
 
         let mut cfg = Self::new_default_configs(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
         cfg.hostname = "tests".into();
+        cfg.isolated_runtime_worker_threads = async_runtime::TEST_THREADS;
         cfg
     }
 }

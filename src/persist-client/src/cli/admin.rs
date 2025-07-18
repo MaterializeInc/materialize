@@ -494,7 +494,10 @@ where
                 Arc::clone(&blob),
                 Arc::clone(&metrics),
                 Arc::clone(&machine.applier.shard_metrics),
-                Arc::new(IsolatedRuntime::default()),
+                Arc::new(IsolatedRuntime::new(
+                    metrics_registry,
+                    Some(cfg.isolated_runtime_worker_threads),
+                )),
                 req,
                 schemas,
             )
@@ -631,7 +634,10 @@ where
         state_versions,
         Arc::new(StateCache::new(cfg, metrics, Arc::new(NoopPubSubSender))),
         Arc::new(NoopPubSubSender),
-        Arc::new(IsolatedRuntime::default()),
+        Arc::new(IsolatedRuntime::new(
+            &MetricsRegistry::new(),
+            Some(cfg.isolated_runtime_worker_threads),
+        )),
         Diagnostics::from_purpose("admin"),
     )
     .await?;
