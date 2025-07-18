@@ -336,6 +336,7 @@ pub type RowStream<'a> =
 pub struct Transaction<'a> {
     client: &'a mut Client,
     closed: bool,
+    nested_xact_names: Vec<String>,
 }
 
 impl<'a> Transaction<'a> {
@@ -352,8 +353,35 @@ impl<'a> Transaction<'a> {
             Ok(Transaction {
                 client,
                 closed: false,
+                nested_xact_names: Default::default(),
             })
         }
+    }
+
+    /// Creates a savepoint with a transaction that can be committed or rolled back
+    /// without affecting the out transaction.
+    pub async fn create_savepoint(&mut self, savepoint_name: &str) -> Result<(), SqlServerError> {
+        let stmt = format!("SAVE TRANSACTION [{savepoint_name}]");
+        let _result = self.client.simple_query(stmt).await?;
+        self.nested_xact_names.push(savepoint_name.to_string());
+        Ok(())
+    }
+
+    pub async fn rollback_savepoint(&mut self, savepoint_name: &str) -> Result<(), SqlServerError> {
+        let last_xact_name = self.nested_xact_names.pop();
+        if last_xact_name
+            .as_ref()
+            .is_none_or(|last_xact_name| *last_xact_name != savepoint_name)
+        {
+            panic!(
+                "Attempt to rollback savepoint {savepoint_name} doesn't match last savepoint {:?}",
+                last_xact_name
+            );
+        }
+        let stmt = format!("ROLLBACK TRANSACTION [{savepoint_name}]");
+        let _result = self.client.simple_query(stmt).await?;
+        self.nested_xact_names.push(savepoint_name.to_string());
+        Ok(())
     }
 
     /// See [`Client::execute`].
