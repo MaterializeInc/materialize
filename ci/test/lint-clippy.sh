@@ -13,7 +13,6 @@ set -euo pipefail
 
 . misc/shlib/shlib.bash
 
-git restore-mtime || true # Used in CI, but don't fail locally
 try cargo clippy --all-targets -- -D warnings
 
 try_status_report

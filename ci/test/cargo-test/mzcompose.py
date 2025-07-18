@@ -224,11 +224,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     ],
                 )
             else:
-                try:
-                    spawn.runv(["git", "restore-mtime"])
-                except subprocess.CalledProcessError:
-                    pass  # Used in CI, but don't fail locally
-
                 assert (
                     buildkite.get_parallelism_count() <= 2
                 ), "Special handling of parallelism, only 1 and 2 supported"

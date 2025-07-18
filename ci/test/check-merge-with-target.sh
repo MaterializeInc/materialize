@@ -19,7 +19,6 @@ set -euo pipefail
 
 fetch_pr_target_branch
 merge_pr_target_branch
-bin/ci-builder run stable git restore-mtime || true # Used in CI, but don't fail locally
 
 ci_collapsed_heading "Conduct checks"
 bin/ci-builder run stable cargo check --all-targets

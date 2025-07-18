@@ -11,5 +11,4 @@
 #
 # lint-fast.sh — fast linters that don't require building any code.
 
-git restore-mtime || true # Used in CI, but don't fail locally
 bin/lint --verbose

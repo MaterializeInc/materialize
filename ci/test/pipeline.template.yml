@@ -109,7 +109,7 @@ steps:
         depends_on: []
         timeout_in_minutes: 45
         agents:
-          queue: hetzner-x86-64-16cpu-32gb-merge-skew
+          queue: hetzner2-x86-64-16cpu-32gb-merge-skew
         if: "build.pull_request.id != null"
         coverage: skip
         sanitizer: skip
@@ -144,7 +144,7 @@ steps:
         timeout_in_minutes: 20
         agents:
           # TODO: Revert to aarch64 when https://github.com/trufflesecurity/trufflehog/issues/4229 is solved
-          queue: hetzner-x86-64-16cpu-32gb-lint-rustfmt
+          queue: hetzner2-x86-64-16cpu-32gb-lint-rustfmt
         coverage: skip
         sanitizer: skip
 
@@ -159,7 +159,7 @@ steps:
         depends_on: []
         timeout_in_minutes: 40
         agents:
-          queue: hetzner-x86-64-16cpu-32gb-clippy
+          queue: hetzner2-x86-64-16cpu-32gb-clippy
         coverage: skip
         sanitizer: skip
 
@@ -175,7 +175,7 @@ steps:
         depends_on: []
         timeout_in_minutes: 40
         agents:
-          queue: hetzner-x86-64-16cpu-32gb-doctests
+          queue: hetzner2-x86-64-16cpu-32gb-doctests
         coverage: skip
         sanitizer: skip
 
@@ -237,7 +237,7 @@ steps:
           composition: cargo-test
           ci-builder: stable
     agents:
-      queue: hetzner-x86-64-dedi-32cpu-128gb-cargo-test
+      queue: hetzner2-x86-64-dedi-32cpu-128gb-cargo-test
 
   - id: testdrive
     label: "Testdrive"
