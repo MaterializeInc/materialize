@@ -8844,6 +8844,165 @@ WHERE worker_id = 0",
     access: vec![PUBLIC_SELECT],
 });
 
+pub static MZ_OPERATOR_SIZES_PER_WORKER: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+    name: "mz_operator_sizes_per_worker",
+    schema: MZ_INTROSPECTION_SCHEMA,
+    oid: oid::VIEW_MZ_OPERATOR_SIZES_PER_WORKER_OID,
+    desc: RelationDesc::builder()
+        .with_column("operator_id", ScalarType::UInt64.nullable(false))
+        .with_column("worker_id", ScalarType::UInt64.nullable(false))
+        .with_column("records", ScalarType::Int64.nullable(true))
+        .with_column("size", ScalarType::Int64.nullable(true))
+        .with_column("capacity", ScalarType::Int64.nullable(true))
+        .with_column("allocations", ScalarType::Int64.nullable(true))
+        .finish(),
+    column_comments: BTreeMap::new(),
+    sql: "
+WITH batcher_records_cte AS (
+    SELECT
+        operator_id,
+        worker_id,
+        pg_catalog.count(*) AS records
+    FROM
+        mz_introspection.mz_arrangement_batcher_records_raw
+    GROUP BY
+        operator_id, worker_id
+),
+batcher_size_cte AS (
+    SELECT
+        operator_id,
+        worker_id,
+        pg_catalog.count(*) AS size
+    FROM
+        mz_introspection.mz_arrangement_batcher_size_raw
+    GROUP BY
+        operator_id, worker_id
+),
+batcher_capacity_cte AS (
+    SELECT
+        operator_id,
+        worker_id,
+        pg_catalog.count(*) AS capacity
+    FROM
+        mz_introspection.mz_arrangement_batcher_capacity_raw
+    GROUP BY
+        operator_id, worker_id
+),
+batcher_allocations_cte AS (
+    SELECT
+        operator_id,
+        worker_id,
+        pg_catalog.count(*) AS allocations
+    FROM
+        mz_introspection.mz_arrangement_batcher_allocations_raw
+    GROUP BY
+        operator_id, worker_id
+),
+combined AS (
+    SELECT
+        opw.id AS operator_id,
+        opw.worker_id,
+        batcher_records_cte.records AS records,
+        batcher_size_cte.size AS size,
+        batcher_capacity_cte.capacity AS capacity,
+        batcher_allocations_cte.allocations AS allocations
+    FROM
+                    mz_introspection.mz_dataflow_operators_per_worker opw
+    LEFT OUTER JOIN batcher_records_cte
+        ON  opw.id =        batcher_records_cte.operator_id
+        AND opw.worker_id = batcher_records_cte.worker_id
+    LEFT OUTER JOIN batcher_size_cte
+        ON  opw.id =        batcher_size_cte.operator_id
+        AND opw.worker_id = batcher_size_cte.worker_id
+    LEFT OUTER JOIN batcher_capacity_cte
+        ON  opw.id =        batcher_capacity_cte.operator_id
+        AND opw.worker_id = batcher_capacity_cte.worker_id
+    LEFT OUTER JOIN batcher_allocations_cte
+        ON  opw.id =        batcher_allocations_cte.operator_id
+        AND opw.worker_id = batcher_allocations_cte.worker_id
+)
+SELECT
+    operator_id,
+    worker_id,
+    records,
+    size,
+    capacity,
+    allocations
+FROM
+    combined
+WHERE
+       records     IS NOT NULL
+    OR size        IS NOT NULL
+    OR capacity    IS NOT NULL
+    OR allocations IS NOT NULL
+",
+    access: vec![PUBLIC_SELECT],
+});
+
+pub static MZ_OPERATOR_SIZES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+    name: "mz_operator_sizes",
+    schema: MZ_INTROSPECTION_SCHEMA,
+    oid: oid::VIEW_MZ_OPERATOR_SIZES_OID,
+    desc: RelationDesc::builder()
+        .with_column("operator_id", ScalarType::UInt64.nullable(false))
+        .with_column(
+            "records",
+            ScalarType::Numeric {
+                max_scale: Some(NumericMaxScale::ZERO),
+            }
+            .nullable(false),
+        )
+        .with_column(
+            "size",
+            ScalarType::Numeric {
+                max_scale: Some(NumericMaxScale::ZERO),
+            }
+            .nullable(false),
+        )
+        .with_column(
+            "capacity",
+            ScalarType::Numeric {
+                max_scale: Some(NumericMaxScale::ZERO),
+            }
+            .nullable(false),
+        )
+        .with_column(
+            "allocations",
+            ScalarType::Numeric {
+                max_scale: Some(NumericMaxScale::ZERO),
+            }
+            .nullable(false),
+        )
+        .with_key(vec![0])
+        .finish(),
+    column_comments: BTreeMap::from_iter([
+        (
+            "operator_id",
+            "The ID of the operator. Corresponds to `mz_dataflow_operators.id`.",
+        ),
+        ("records", "The number of records in the operator."),
+        ("size", "The utilized size in bytes of the operator."),
+        (
+            "capacity",
+            "The capacity in bytes of the operator. Can be larger than the size.",
+        ),
+        (
+            "allocations",
+            "The number of separate memory allocations backing the operator.",
+        ),
+    ]),
+    sql: "
+SELECT
+    operator_id,
+    pg_catalog.sum(records) AS records,
+    pg_catalog.sum(size) AS size,
+    pg_catalog.sum(capacity) AS capacity,
+    pg_catalog.sum(allocations) AS allocations
+FROM mz_introspection.mz_operator_sizes_per_worker
+GROUP BY operator_id",
+    access: vec![PUBLIC_SELECT],
+});
+
 pub static MZ_CLUSTER_REPLICA_UTILIZATION: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_cluster_replica_utilization",
     schema: MZ_INTERNAL_SCHEMA,
@@ -9059,6 +9218,66 @@ SELECT
     COALESCE(sum(mas.allocations), 0) AS allocations
 FROM mz_introspection.mz_dataflow_operator_dataflows AS mdod
 LEFT JOIN mz_introspection.mz_arrangement_sizes AS mas
+    ON mdod.id = mas.operator_id
+GROUP BY mdod.dataflow_id, mdod.dataflow_name",
+    access: vec![PUBLIC_SELECT],
+});
+
+pub static MZ_DATAFLOW_OPERATOR_SIZES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+    name: "mz_dataflow_operator_sizes",
+    schema: MZ_INTROSPECTION_SCHEMA,
+    oid: oid::VIEW_MZ_DATAFLOW_OPERATOR_SIZES_OID,
+    desc: RelationDesc::builder()
+        .with_column("id", ScalarType::UInt64.nullable(false))
+        .with_column("name", ScalarType::String.nullable(false))
+        .with_column(
+            "records",
+            ScalarType::Numeric { max_scale: None }.nullable(false),
+        )
+        .with_column(
+            "size",
+            ScalarType::Numeric { max_scale: None }.nullable(false),
+        )
+        .with_column(
+            "capacity",
+            ScalarType::Numeric { max_scale: None }.nullable(false),
+        )
+        .with_column(
+            "allocations",
+            ScalarType::Numeric { max_scale: None }.nullable(false),
+        )
+        .with_key(vec![0, 1])
+        .finish(),
+    column_comments: BTreeMap::from_iter([
+        (
+            "id",
+            "The ID of the [dataflow]. Corresponds to `mz_dataflows.id`.",
+        ),
+        ("name", "The name of the [dataflow]."),
+        (
+            "records",
+            "The number of records in all operators in the dataflow.",
+        ),
+        ("size", "The utilized size in bytes of the operators."),
+        (
+            "capacity",
+            "The capacity in bytes of the operators. Can be larger than the size.",
+        ),
+        (
+            "allocations",
+            "The number of separate memory allocations backing the operators.",
+        ),
+    ]),
+    sql: "
+SELECT
+    mdod.dataflow_id AS id,
+    mdod.dataflow_name AS name,
+    COALESCE(sum(mas.records), 0) AS records,
+    COALESCE(sum(mas.size), 0) AS size,
+    COALESCE(sum(mas.capacity), 0) AS capacity,
+    COALESCE(sum(mas.allocations), 0) AS allocations
+FROM mz_introspection.mz_dataflow_operator_dataflows AS mdod
+LEFT JOIN mz_introspection.mz_operator_sizes AS mas
     ON mdod.id = mas.operator_id
 GROUP BY mdod.dataflow_id, mdod.dataflow_name",
     access: vec![PUBLIC_SELECT],
@@ -13740,6 +13959,8 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_ARRANGEMENT_SHARING),
         Builtin::View(&MZ_ARRANGEMENT_SIZES_PER_WORKER),
         Builtin::View(&MZ_ARRANGEMENT_SIZES),
+        Builtin::View(&MZ_OPERATOR_SIZES_PER_WORKER),
+        Builtin::View(&MZ_OPERATOR_SIZES),
         Builtin::View(&MZ_DATAFLOWS_PER_WORKER),
         Builtin::View(&MZ_DATAFLOWS),
         Builtin::View(&MZ_DATAFLOW_ADDRESSES),
@@ -13758,6 +13979,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_DATAFLOW_OPERATOR_PARENTS),
         Builtin::View(&MZ_COMPUTE_EXPORTS),
         Builtin::View(&MZ_DATAFLOW_ARRANGEMENT_SIZES),
+        Builtin::View(&MZ_DATAFLOW_OPERATOR_SIZES),
         Builtin::View(&MZ_EXPECTED_GROUP_SIZE_ADVICE),
         Builtin::View(&MZ_COMPUTE_FRONTIERS),
         Builtin::View(&MZ_DATAFLOW_CHANNEL_OPERATORS_PER_WORKER),
