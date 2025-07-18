@@ -97,6 +97,22 @@ Materialize](doc/developer/design/20231127_pv2_uci_logical_architecture.md)
 goes into more detail here and argues how the primitives that we have now
 suffice to provide correctness.
 
+### Interesting Components
+
+For this doc, were are interested in ADAPTER components and how they interact:
+
+- _adapter frontend_: this is the code that terminates a `pgwire` connection.
+  Each connection is being run by an `async` task that sends commands to the
+  Coordinator and sends responses from the Coordinator back to the client.
+- Coordinator: the component that sits in between the frontend and the
+  controllers and is responsible for durable environment state, including the
+  catalog, and mediating access to it. The Coordinator talks to the controllers
+  to affect things.
+- Controller(s): the storage and compute controllers. For the purposes of this
+  document the interesting facets are that we need to talk to the controllers
+  to acquire read holds for a SELECT and that we need to talk to the compute
+  controller for executing a SELECT.
+
 ### Staged Processing
 
 To work around the limitation that time on the coordinator main loop is limited
@@ -121,7 +137,7 @@ The benchmark runs simple `SELECT` statements with concurrent clients (128
 connections). On my machine, I get about 5000 tps. And we see these metrics on
 the rate of commands (also known as "messages" in the code and elsewhere):
 
-![SELECT benchmark - message counts](./static/a_small_coordinator/select-metrics-message-count.png)
+<img src="./static/a_small_coordinator/select-metrics-message-count.png" alt="SELECT benchmark - message counts" width="50%">
 
 Around 5000 we see a number of interesting message types, these correspond with
 our 5000 tps. They are `controller:
@@ -143,15 +159,15 @@ on the main loop, we see that we are very near our 1 second theoretical
 maximum. Especially when accounting for overhead of the loop machiner, message
 channels, etc. we can say that this is currently the bottleneck:
 
-![SELECT benchmark - total time spend processing commands](./static/a_small_coordinator/select-metrics-message-time-total.png)
+<img src="./static/a_small_coordinator/select-metrics-message-time-total.png" alt="SELECT benchmark - total time spend processing commands" width="50%">
 
 ## Proposal
 
-![Big Coordinator - processing SELECT](./static/a_small_coordinator/big-coord-select.png)
-![Small Coordinator - processing SELECT](./static/a_small_coordinator/small-coord-select.png)
+<img src="./static/a_small_coordinator/big-coord-select.png" alt="Big Coordinator - processing SELECT" width="50%">
+<img src="./static/a_small_coordinator/small-coord-select.png" alt="Small Coordinator - processing SELECT" width="50%">
 
-![Big Coordinator - controller processing](./static/a_small_coordinator/big-coord-controller.png)
-![Small Coordinator - controller processing](./static/a_small_coordinator/small-coord-controller.png)
+<img src="./static/a_small_coordinator/big-coord-controller.png" alt="Big Coordinator - controller processing" width="50%">
+<img src="./static/a_small_coordinator/small-coord-controller.png" alt="Small Coordinator - controller processing" width="50%">
 
 ## Alternatives
 
