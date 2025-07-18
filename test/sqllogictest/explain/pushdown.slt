@@ -100,6 +100,19 @@ EXPLAIN FILTER PUSHDOWN FOR SELECT * FROM jsonb_fields where timestamp > 1000 AN
 ----
 materialize.public.jsonb_fields  2826  0  2  0
 
+# EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW is also supported
+
+statement ok
+CREATE MATERIALIZED VIEW big_numbers AS SELECT * FROM numbers WHERE value > 10000;
+
+statement ok
+SELECT mz_unsafe.mz_sleep(3);
+
+query TIIII
+EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW big_numbers
+----
+materialize.public.numbers  1233  0  1  0
+
 # EXPLAIN FILTER PUSHDOWN should work even if there are no replicas.
 statement ok
 CREATE CLUSTER no_replicas (SIZE '1', REPLICATION FACTOR 0);
@@ -115,26 +128,6 @@ materialize.public.jsonb_fields  2826  0  2  0
 # ----------------------------------------
 # Cleanup
 # ----------------------------------------
-
-# EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW is also supported
-
-statement ok
-CREATE MATERIALIZED VIEW big_numbers AS SELECT * FROM numbers WHERE value > 10000;
-
-statement ok
-SET CLUSTER = quickstart;
-
-# Wait for the data to show up in EXPLAIN
-statement ok
-SELECT mz_unsafe.mz_sleep(2);
-
-statement ok
-SET CLUSTER = no_replicas;
-
-query TIIII
-EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW big_numbers
-----
-materialize.public.numbers  0  0  0  0
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_explain_pushdown = false
