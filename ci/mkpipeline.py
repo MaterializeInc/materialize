@@ -660,7 +660,6 @@ def trim_test_selection_id(pipeline: Any, step_ids_to_run: set[int]) -> None:
                 "build-aarch64",
                 "build-x86_64-lto",
                 "build-aarch64-lto",
-                "build-wasm",
             )
             and not step.get("async")
         ):
@@ -683,7 +682,6 @@ def trim_test_selection_name(pipeline: Any, steps_to_run: set[str]) -> None:
                 "build-aarch64",
                 "build-x86_64-lto",
                 "build-aarch64-lto",
-                "build-wasm",
             )
             and not step.get("async")
         ):

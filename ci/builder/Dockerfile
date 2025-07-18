@@ -342,11 +342,6 @@ RUN curl -fsSL https://github.com/mikefarah/yq/releases/download/v4.45.1/yq_linu
     && chmod +x yq \
     && mv yq /usr/local/bin
 
-RUN curl -fsSL https://raw.githubusercontent.com/MestreLion/git-tools/refs/tags/v2022.12/git-restore-mtime > git-restore-mtime \
-  && echo 'c4a276017e29b68b5513b200cc15b717070856470db56d41517386159b333276 git-restore-mtime' |sha256sum --check \
-  && chmod +x git-restore-mtime \
-  && mv git-restore-mtime /usr/local/bin
-
 # Hardcode some known SSH hosts, or else SSH will ask whether the host is
 # trustworthy on the first connection.
 
