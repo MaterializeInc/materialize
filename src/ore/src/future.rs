@@ -489,3 +489,29 @@ where
         Some(buffer)
     }
 }
+
+/// Yield execution back to the runtime.
+///
+/// A snapshot of the old `tokio::task::yield_now` implementation, from before it
+/// had sneaky TLS shenangans.
+pub async fn yield_now() {
+    struct YieldNow {
+        yielded: bool,
+    }
+
+    impl Future for YieldNow {
+        type Output = ();
+
+        fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+            if self.yielded {
+                return Poll::Ready(());
+            }
+
+            self.yielded = true;
+            cx.waker().wake_by_ref();
+            Poll::Pending
+        }
+    }
+
+    YieldNow { yielded: false }.await
+}
