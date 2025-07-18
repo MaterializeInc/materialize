@@ -13,7 +13,7 @@ operator:
     # -- The Docker repository for the operator image
     repository: materialize/orchestratord
     # -- The tag/version of the operator image to be used
-    tag: v0.150.0
+    tag: v0.151.0
     # -- Policy for pulling the image: "IfNotPresent" avoids unnecessary re-pulling of images
     pullPolicy: IfNotPresent
 
@@ -24,7 +24,7 @@ operator:
     enableInternalStatementLogging: true
 
   # -- Additional columns to display when printing the Materialize CRD in table format.
-  additionalMaterializeCRDColumns: null
+  additionalMaterializeCRDColumns:
     ## Example:
     #- description: "Metadata from the context annotator"
     #  jsonPath: ".metadata.annotations['materialize\\.cloud/analytics-context']"
