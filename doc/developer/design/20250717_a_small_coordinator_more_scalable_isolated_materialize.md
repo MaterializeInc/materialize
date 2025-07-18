@@ -84,7 +84,74 @@ the more qualitative goals below.
 
 ## Background
 
+Explain how current Coordinator was like this for a long time. Was necessary
+for providing the Materialize correctness experience: strict serializability.
+It had to sequence DDL, user queries, everything. Timestamp selection was an
+in-memory thing, not the distributed timestamp oracle we have now. Today, the
+timestamp oracle provides correctness, and DDL goes through catalog
+modifications which would realize concurrent modifications.
+
+The platform v2 design doc on [a logical architecture for a scalable and
+isolated
+Materialize](doc/developer/design/20231127_pv2_uci_logical_architecture.md)
+goes into more detail here and argues how the primitives that we have now
+suffice to provide correctness.
+
+### Staged Processing
+
+To work around the limitation that time on the coordinator main loop is limited
+the concept of _stages_, or _staged processing_ was introduced. First for peeks
+(aka SELECT) but then also for other things. The idea is that the Coordinator
+gathers the pieces that are required for a certain step in processing a peek,
+on the main loop, then fires of an async task to do the actual work. The task
+will then send a command back to the Coordinator when ready, which will then
+resume processing on the main loop, potentially firing off more stages.
+
+Ultimately, this is a band aid because it doesn't fix the ultimate scalability
+problems _and_ it makes the code more complicated and harder to understand. It
+makes it harder to audit code running in the tight main loop.
+
+## "Benchmarks"
+
+We did not run comprehensive benchmarks, the purpose here is to show how the
+Coordinator behaves when there is a sustained workload and how command
+processing becomes the bottleneck.
+
+The benchmark runs simple `SELECT` statements with concurrent clients (128
+connections). On my machine, I get about 5000 tps. And we see these metrics on
+the rate of commands (also known as "messages" in the code and elsewhere):
+
+![SELECT benchmark - message counts](./static/a_small_coordinator/select-metrics-message-count.png)
+
+Around 5000 we see a number of interesting message types, these correspond with
+our 5000 tps. They are `controller:
+
+- `command-execute`: this is the command that starts execution of the SELECT.
+- `catalog-snapshot_snapshot`: this is a command for getting a snapshot of the
+  catalog, needed for processing SELECT.
+- `command-commit`: this is the command that will be executed for finalizing a
+  single SELECT execution.
+- `controller_ready(compute)`: this is the compute controller signaling that a
+  peek result is ready, and the the Coordinator needs to do something about it.
+
+The top line is `peek_stage_ready`, which emanate from the staged processing
+machinery explained above. We can see that there are two async stages that are
+fired off for processing each SELECT.
+
+When we look at the metric that shows the total time spend processing commands
+on the main loop, we see that we are very near our 1 second theoretical
+maximum. Especially when accounting for overhead of the loop machiner, message
+channels, etc. we can say that this is currently the bottleneck:
+
+![SELECT benchmark - total time spend processing commands](./static/a_small_coordinator/select-metrics-message-time-total.png)
+
 ## Proposal
+
+![Big Coordinator - processing SELECT](./static/a_small_coordinator/big-coord-select.png)
+![Small Coordinator - processing SELECT](./static/a_small_coordinator/small-coord-select.png)
+
+![Big Coordinator - controller processing](./static/a_small_coordinator/big-coord-controller.png)
+![Small Coordinator - controller processing](./static/a_small_coordinator/small-coord-controller.png)
 
 ## Alternatives
 
