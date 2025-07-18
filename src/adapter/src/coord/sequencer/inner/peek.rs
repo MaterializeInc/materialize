@@ -296,9 +296,6 @@ impl Coordinator {
         let optimizer = match copy_to_ctx {
             None => {
                 // Collect optimizer parameters specific to the peek::Optimizer.
-                let compute_instance = self
-                    .instance_snapshot(cluster.id())
-                    .expect("compute instance does not exist");
                 let (_, view_id) = self.allocate_transient_id();
                 let (_, index_id) = self.allocate_transient_id();
 
