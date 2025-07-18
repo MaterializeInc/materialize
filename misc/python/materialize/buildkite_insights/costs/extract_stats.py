@@ -57,12 +57,24 @@ aws_instance_cost = {
     "m7a.8xlarge": 1.855,
     "m6a.12xlarge": 2.074,
     "m7a.12xlarge": 2.782,
+    "m6a.16xlarge": 2.7648,
+    "m7a.16xlarge": 3.7094,
+    "m6a.24xlarge": 4.1472,
+    "m7a.24xlarge": 5.5642,
+    "m6a.32xlarge": 5.5296,
+    "m7a.32xlarge": 7.4189,
+    "m6a.48xlarge": 8.2944,
+    "m7a.48xlarge": 11.1283,
     "m6g.4xlarge": 0.616,
     "m6g.8xlarge": 1.232,
     "m7g.8xlarge": 1.306,
     "m6g.12xlarge": 1.848,
     "m7g.12xlarge": 1.958,
+    "m7g.16xlarge": 2.6112,
     "m8g.12xlarge": 2.154,
+    "m8g.16xlarge": 2.8723,
+    "m8g.24xlarge": 4.3085,
+    "m8g.48xlarge": 8.617,
     "m6i.4xlarge": 0.768,
     "m6i.12xlarge": 2.304,
     "m7i.8xlarge": 1.613,
@@ -105,6 +117,8 @@ def main() -> None:
         lambda: defaultdict(lambda: Failures(failures=0, total=0))
     )
     job_to_pipeline = {}
+    build_durations = defaultdict(lambda: defaultdict(float))
+    build_counts = defaultdict(lambda: defaultdict(int))
 
     data = read_results_from_file(SimpleFilePath("data.json"))
 
@@ -113,6 +127,37 @@ def main() -> None:
         created = datetime.fromisoformat(build["created_at"])
         year_month = f"{created.year}-{created.month:02}"
         pipeline_counts[year_month][pipeline_name] += 1
+
+        if build["started_at"] and build["finished_at"]:
+            if not build["state"] in ("passed", "failed"):
+                continue
+            pipeline = build["pipeline"]["slug"]
+            if pipeline not in ("test", "nightly", "release-qualification"):
+                continue
+            if "CI_SANITIZER" in build["env"]:
+                continue
+            if "CI_COVERAGE_ENABLED" in build["env"]:
+                continue
+            if any(job.get("retries_count") for job in build["jobs"]):
+                continue
+            year_month_day = f"{created.year}-{created.month:02}-{created.day:02}"
+            start = datetime.fromisoformat(build["started_at"])
+            finished = datetime.fromisoformat(build["finished_at"])
+            duration = (finished - start).total_seconds()
+            is_main = build["branch"] == "main"
+            with_build = any(
+                job.get("step_key")
+                in (
+                    "build-x86_64",
+                    "build-aarch64",
+                    "build-x86_64-lto",
+                    "build-aarch64-lto",
+                )
+                and job["state"] == "passed"
+                for job in build["jobs"]
+            )
+            build_durations[(pipeline, is_main, with_build)][year_month_day] += duration
+            build_counts[(pipeline, is_main, with_build)][year_month_day] += 1
 
         for job in build["jobs"]:
             if (
@@ -134,9 +179,10 @@ def main() -> None:
                     ]
                     break
                 if metadata.startswith("queue=hetzner-"):
-                    cost = hetzner_instance_cost[
-                        metadata.removeprefix("queue=hetzner-")
-                    ]
+                    name = metadata.removeprefix("queue=hetzner-")
+                    if "gb-" in name:
+                        name = name[: name.index("gb-") + 2]
+                    cost = hetzner_instance_cost[name]
                     break
             else:
                 # Can't calculate cost for mac-aarch64
@@ -155,6 +201,39 @@ def main() -> None:
                 job_failures[year_month][job_name].failures += 1
             if job["state"] in ("passed", "failed", "broken"):
                 job_failures[year_month][job_name].total += 1
+
+    def print_stats_day(
+        name,
+        data,
+        print_fn=lambda x, key: "" if key not in x else f"{x.get(key, 0):.2f}",
+    ):
+        keys = set()
+        for ps in data.values():
+            for p in ps.keys():
+                keys.add(p)
+        keys = sorted(keys)
+
+        year_month_days = sorted(data.keys())
+
+        additional_keys = [name]
+        print(
+            ",".join(
+                additional_keys
+                + [
+                    f"{ymd} ({'main' if is_main else 'PR'} {'with build' if with_build else 'without build'})"
+                    for ymd, is_main, with_build in year_month_days
+                ]
+            )
+        )
+
+        for key in keys:
+            additional_values = [f'"{key}"']
+            print(
+                ",".join(
+                    additional_values
+                    + [print_fn(data[day], key) for day in year_month_days]
+                )
+            )
 
     def print_stats(
         name,
@@ -195,6 +274,13 @@ def main() -> None:
         for key, value in pipeline_costs.items()
     }
 
+    build_durations_per_run = {
+        key: {key2: value2 / build_counts[key][key2] for key2, value2 in value.items()}
+        for key, value in build_durations.items()
+    }
+
+    print_stats_day("Runtime [s/run]", build_durations_per_run)
+    print()
     print_stats("Pipeline [$]", pipeline_costs)
     print()
     print_stats("Pipeline [$/run]", pipeline_cost_per_run)
