@@ -1395,20 +1395,18 @@ fn test_transactional_explain_timestamps() {
     assert_eq!(*explain_timestamp, mz_now_timestamp);
 }
 
-// Test that the since for `mz_cluster_replica_utilization` is held back by at least
+// Test that the since for `mz_cluster_replicas` is held back by at least
 // 30 days, which is required for the frontend observability work.
 //
 // Feel free to modify this test if that product requirement changes,
 // but please at least keep _something_ that tests that custom compaction windows are working.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/database-issues/issues/5600
-#[ignore] // TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/8491 is fixed
 async fn test_utilization_hold() {
     const THIRTY_DAYS_MS: u64 = 30 * 24 * 60 * 60 * 1000;
     // `mz_catalog_server` tests indexes, `quickstart` tests tables.
     // The bool determines whether we are testing indexes.
     const CLUSTERS_TO_TRY: &[&str] = &["mz_catalog_server", "quickstart"];
-    const QUERIES_TO_TRY: &[&str] = &["SELECT * FROM mz_internal.mz_cluster_replica_statuses"];
+    const QUERIES_TO_TRY: &[&str] = &["SELECT * FROM mz_catalog.mz_cluster_replicas"];
 
     let now_millis = 619388520000;
     let past_millis = now_millis - THIRTY_DAYS_MS;
