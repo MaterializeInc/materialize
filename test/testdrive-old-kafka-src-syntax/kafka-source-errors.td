@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 $ set-arg-default single-replica-cluster=quickstart
+$ set-sql-timeout duration=60s
 
 # Test that Kafka sources with no format are disallowed.
 

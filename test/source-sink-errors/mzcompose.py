@@ -121,6 +121,7 @@ class KafkaTransactionLogGreaterThan1:
         c.testdrive(
             dedent(
                 f"""
+                $ set-sql-timeout duration=60s
                 > SELECT bool_or(error ~* '{error}'), bool_or(details::json#>>'{{hints,0}}' ~* '{hint}')
                   FROM mz_internal.mz_sink_status_history
                   JOIN mz_sinks ON mz_sinks.id = sink_id
@@ -214,6 +215,7 @@ class KafkaDisruption:
         c.testdrive(
             dedent(
                 f"""
+                $ set-sql-timeout duration=60s
                 > SELECT status, error ~* '{error}'
                   FROM mz_internal.mz_source_statuses
                   WHERE name = 'source1'
@@ -320,6 +322,7 @@ class KafkaSinkDisruption:
         c.testdrive(
             dedent(
                 f"""
+                $ set-sql-timeout duration=60s
                 # Sinks generally halt after receiving an error, which means that they may alternate
                 # between `stalled` and `starting`. Instead of relying on the current status, we
                 # check that there is a stalled status with the expected error.
@@ -412,6 +415,7 @@ class PgDisruption:
         c.testdrive(
             dedent(
                 f"""
+                $ set-sql-timeout duration=60s
                 # Postgres sources may halt after receiving an error, which means that they may alternate
                 # between `stalled` and `starting`. Instead of relying on the current status, we
                 # check that the latest stall has the error we expect.

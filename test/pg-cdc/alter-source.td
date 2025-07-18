@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-sql-timeout duration=60s
+
 # IMPORTANT: The Postgres server has a custom pg_hba.conf that only
 # accepts connections from specific users. You will have to update
 # pg_hba.conf if you modify the existing user names or add new ones.

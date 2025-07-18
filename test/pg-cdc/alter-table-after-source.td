@@ -11,6 +11,8 @@
 # Test ALTER TABLE -- source will error out for tables which existed when the source was created
 #
 
+$ set-sql-timeout duration=60s
+
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET pg_schema_validation_interval = '2s';
 

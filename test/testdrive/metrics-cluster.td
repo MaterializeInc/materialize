@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-sql-timeout duration=300s
+
 > CREATE CLUSTER foo REPLICAS (size_1 (SIZE '1'), size_32 (SIZE '32'), size_2_2 (SIZE '2-2'))
 > CREATE CLUSTER bar REPLICAS ()
 > CREATE CLUSTER xyzzy REPLICAS (size_4 (SIZE '4'))

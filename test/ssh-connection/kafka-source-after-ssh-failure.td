@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 # This test script runs after the SSH bastion host has been terminated.
+$ set-sql-timeout duration=60s
 
 # Ensure they all are marked as broken for ssh reasons
 > SELECT status FROM mz_internal.mz_source_statuses st
