@@ -398,20 +398,18 @@ impl StorageInstanceContext {
         scratch_directory: Option<PathBuf>,
         cluster_memory_limit: Option<usize>,
     ) -> Result<Self, anyhow::Error> {
+        // If no file system is available, fall back to running RocksDB in memory.
+        let rocksdb_env = if scratch_directory.is_some() {
+            rocksdb::Env::new()?
+        } else {
+            rocksdb::Env::mem_env()?
+        };
+
         Ok(Self {
             scratch_directory,
-            rocksdb_env: rocksdb::Env::new()?,
+            rocksdb_env,
             cluster_memory_limit,
         })
-    }
-
-    /// Constructs a new connection context for usage in tests.
-    pub fn for_tests(rocksdb_env: rocksdb::Env) -> Self {
-        Self {
-            scratch_directory: None,
-            rocksdb_env,
-            cluster_memory_limit: None,
-        }
     }
 }
 
