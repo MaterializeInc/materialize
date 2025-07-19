@@ -36,6 +36,7 @@ use futures::{Stream, StreamExt};
 use mz_ore::retry::RetryResult;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
+use tiberius::numeric::Numeric;
 
 use crate::{Client, SqlServerError, TransactionIsolationLevel};
 
@@ -122,6 +123,8 @@ impl<'a> CdcStream<'a> {
         ),
         SqlServerError,
     > {
+        static SAVEPOINT_NAME: &str = "_mz_snap_";
+
         // Determine what table we need to snapshot.
         let instances = self
             .capture_instances
@@ -143,11 +146,28 @@ impl<'a> CdcStream<'a> {
         self.client
             .set_transaction_isolation(TransactionIsolationLevel::Snapshot)
             .await?;
-        let txn = self.client.transaction().await?;
+        let mut txn = self.client.transaction().await?;
+        // Get the current LSN of the database. This operation assigns a savepoint to our
+        // current transaction.
 
-        // Get the current LSN of the database.
-        let lsn = crate::inspect::get_max_lsn(txn.client).await?;
+        // create a savepoint that we will lock the tables under and collect an LSN
+        // this allows us to rollback the savepoint while maintaining the outer transaction
+        txn.create_savepoint(SAVEPOINT_NAME).await?;
+        // lock all the tables we are planning to snapshot so that we can ensure that
+        // writes that might be in progress are properly ordered before or after this snapshot
+        // in addition to the LSN being properly ordered.
+        // TODO (maz): we should considering a timeout here because we may lock some tables,
+        // and the next table may be locked for some extended period, resulting in a traffic
+        // jam.
+        for (_capture_instance, schema, table) in &tables {
+            tracing::trace!(%schema, %table, "locking table");
+            crate::inspect::lock_table(&mut txn, &*schema, &*table).await?;
+        }
+
+        let lsn = crate::inspect::get_lsn(&mut txn).await?;
         tracing::info!(?tables, ?lsn, "starting snapshot");
+
+        txn.rollback_savepoint(SAVEPOINT_NAME).await?;
 
         // Get the size of each table we're about to snapshot.
         //
@@ -177,10 +197,10 @@ impl<'a> CdcStream<'a> {
                 tracing::trace!(%capture_instance, %schema_name, %table_name, "snapshot end");
             }
 
-            // Slightly awkward, but if the commit fails we need to conform to
+            // Slightly awkward, but if the rollback fails we need to conform to
             // type of the stream.
-            if let Err(e) = txn.commit().await {
-                yield ("commit".into(), Err(e));
+            if let Err(e) = txn.rollback().await {
+                yield ("rollback".into(), Err(e));
             }
         };
 
@@ -545,6 +565,40 @@ impl TryFrom<&[u8]> for Lsn {
     }
 }
 
+impl TryFrom<Numeric> for Lsn {
+    type Error = String;
+
+    fn try_from(value: Numeric) -> Result<Self, Self::Error> {
+        if value.dec_part() != 0 {
+            return Err(format!(
+                "LSN expect Numeric(25,0), but found decimal portion {}",
+                value.dec_part()
+            ));
+        }
+        let mut decimal_lsn = value.int_part();
+        // LSN is composed of 4 bytes : 4 bytes : 2 bytes
+        // and MS provided the method to decode that here
+        // https://github.com/microsoft/sql-server-samples/blob/master/samples/features/ssms-templates/Sql/Change%20Data%20Capture/Enumeration/Create%20Function%20fn_convertnumericlsntobinary.sql
+
+        let vlf_id = u32::try_from(decimal_lsn / 10_i128.pow(15))
+            .map_err(|e| format!("Failed to decode vlf_id for lsn {decimal_lsn}: {e:?}"))?;
+        decimal_lsn -= i128::try_from(vlf_id).unwrap() * 10_i128.pow(15);
+
+        let block_id = u32::try_from(decimal_lsn / 10_i128.pow(5))
+            .map_err(|e| format!("Failed to decode block_id for lsn {decimal_lsn}: {e:?}"))?;
+        decimal_lsn -= i128::try_from(block_id).unwrap() * 10_i128.pow(5);
+
+        let record_id = u16::try_from(decimal_lsn)
+            .map_err(|e| format!("Failed to decode record_id for lsn {decimal_lsn}: {e:?}"))?;
+
+        Ok(Lsn {
+            vlf_id,
+            block_id,
+            record_id,
+        })
+    }
+}
+
 impl columnation::Columnation for Lsn {
     type InnerRegion = columnation::CopyRegion<Lsn>;
 }
@@ -695,6 +749,7 @@ impl Operation {
 mod tests {
     use super::Lsn;
     use proptest::prelude::*;
+    use tiberius::numeric::Numeric;
 
     #[mz_ore::test]
     fn smoketest_lsn_ordering() {
@@ -775,5 +830,38 @@ mod tests {
         proptest!(|(random_bytes in any::<[u8; 10]>(), num_increment in any::<u8>())| {
             test_case(random_bytes, num_increment)
         })
+    }
+
+    #[mz_ore::test]
+    fn test_numeric_lsn_ordering() {
+        let a = Lsn::try_from(Numeric::new_with_scale(45_0000008784_00001_i128, 0)).unwrap();
+        let b = Lsn::try_from(Numeric::new_with_scale(45_0000008784_00002_i128, 0)).unwrap();
+        let c = Lsn::try_from(Numeric::new_with_scale(45_0000008785_00002_i128, 0)).unwrap();
+        let d = Lsn::try_from(Numeric::new_with_scale(49_0000008784_00002_i128, 0)).unwrap();
+        assert!(a < b);
+        assert!(b < c);
+        assert!(c < d);
+        assert!(a < d);
+
+        assert_eq!(a, a);
+        assert_eq!(b, b);
+        assert_eq!(c, c);
+        assert_eq!(d, d);
+    }
+
+    #[mz_ore::test]
+    fn test_numeric_lsn_invalid() {
+        let with_decimal = Numeric::new_with_scale(1, 20);
+        assert!(Lsn::try_from(with_decimal).is_err());
+
+        for v in [
+            4294967296_0000000000_00000_i128, // vlf_id is too large
+            1_4294967296_00000_i128,          // block_id is too large
+            1_0000000001_65536_i128,          // record_id is too large
+            -49_0000008784_00002_i128,        // negative is invalid
+        ] {
+            let invalid_lsn = Numeric::new_with_scale(v, 0);
+            assert!(Lsn::try_from(invalid_lsn).is_err());
+        }
     }
 }

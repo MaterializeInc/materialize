@@ -40,6 +40,31 @@ INSERT INTO t1_columns VALUES (1.444889, '12:00:00', '$100.99', 0x1100AB);
     PASSWORD = SECRET sql_server_pass
   );
 
+> CREATE SOURCE maz
+  FROM SQL SERVER CONNECTION sql_server_columns_connection (
+    EXCLUDE COLUMNS (dbo.t1_columns.c1, dbo.t1_columns.c2, dbo.t1_columns.c3),
+    TEXT COLUMNS (dbo.t1_columns.c4)
+  )
+  FOR TABLES (dbo.t1_columns);
+
+> SHOW COLUMNS FROM t1_columns;
+c4 true text ""
+
+> SELECT * FROM t1_columns;
+EQCr
+
+$ sql-server-execute name=sql-server
+INSERT INTO t1_columns VALUES (2.000001, '01:59:32.99901', '$0.89', 0x1122AABBCC00DD)
+
+> SELECT * FROM t1_columns;
+EQCr
+ESKqu8wA3Q==
+
+$ sql-server-execute name=sql-server
+DELETE FROM t1_columns WHERE c1=2.000001;
+
+> DROP SOURCE maz CASCADE;
+
 > CREATE SOURCE t1_columns_sql_server
   FROM SQL SERVER CONNECTION sql_server_columns_connection (
     TEXT COLUMNS (dbo.t1_columns.c1, dbo.t1_columns.c2, dbo.t1_columns.c4),
