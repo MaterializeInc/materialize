@@ -46,8 +46,8 @@ use std::time::Instant;
 
 use differential_dataflow::Data;
 use differential_dataflow::IntoOwned;
-use differential_dataflow::consolidation::{consolidate, consolidate_updates};
-use differential_dataflow::difference::Multiply;
+use differential_dataflow::consolidation::consolidate_from;
+use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arranged;
 use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
@@ -564,17 +564,18 @@ where
         storage2: C2::Storage,
         capability: Capability<C1::Time>,
     ) {
-        let deferred = Deferred {
+        let joiner = Joiner {
+            result_fn: Rc::clone(&self.result_fn),
+            yield_fn: Rc::clone(&self.yield_fn),
+            shared: Rc::clone(&self.shared),
+            _cursors: PhantomData,
+        };
+        let fut = joiner.work(
             cursor1,
             storage1,
             cursor2,
             storage2,
-            capability: capability.clone(),
-        };
-        let fut = deferred.work(
-            Rc::clone(&self.result_fn),
-            Rc::clone(&self.yield_fn),
-            Rc::clone(&self.shared),
+            capability.time().clone(),
         );
 
         self.todo.push_back((Box::pin(fut), capability));
@@ -645,119 +646,290 @@ struct Shared<D, T> {
     produced: usize,
 }
 
-/// Deferred join computation.
-///
-/// The structure wraps cursors which allow us to play out join computation at whatever rate we like.
-/// This allows us to avoid producing and buffering massive amounts of data, without giving the timely
-/// dataflow system a chance to run operators that can consume and aggregate the data.
-struct Deferred<C1, C2>
+struct Joiner<C1, C2, D, L, YFn>
 where
     C1: Cursor,
     C2: Cursor,
 {
-    cursor1: C1,
-    storage1: C1::Storage,
-    cursor2: C2,
-    storage2: C2::Storage,
-    capability: Capability<C1::Time>,
+    /// A function that transforms raw join matches into join results.
+    result_fn: Rc<RefCell<L>>,
+    /// A function that given a start time and an amount of results produced decides whether it is
+    /// time to yield control.
+    yield_fn: Rc<YFn>,
+    /// Information shared with the work futures.
+    shared: Rc<RefCell<Shared<D, C1::Time>>>,
+
+    _cursors: PhantomData<(C1, C2)>,
 }
 
-impl<C1, C2> Deferred<C1, C2>
+impl<C1, C2, D, L, I, YFn> Joiner<C1, C2, D, L, YFn>
 where
     C1: Cursor<Diff = Diff>,
     C2: for<'a> Cursor<Key<'a> = C1::Key<'a>, Time = C1::Time, Diff = Diff>,
+    D: Data,
+    L: FnMut(C1::Key<'_>, C1::Val<'_>, C2::Val<'_>) -> I + 'static,
+    I: IntoIterator<Item = D> + 'static,
+    YFn: Fn(Instant, usize) -> bool + 'static,
 {
-    /// Process keys until at least `fuel` output tuples produced, or the work is exhausted.
-    async fn work<L, I, YFn, D>(
-        mut self,
-        logic: Rc<RefCell<L>>,
-        yield_fn: Rc<YFn>,
-        shared: Rc<RefCell<Shared<D, C1::Time>>>,
-    ) where
-        I: IntoIterator<Item = D>,
-        L: FnMut(C1::Key<'_>, C1::Val<'_>, C2::Val<'_>) -> I,
-        YFn: Fn(Instant, usize) -> bool,
-        D: Data,
-    {
-        let meet = self.capability.time();
+    /// Join the given cursors.
+    ///
+    /// This being implemented as an async function allows the work to be paused at any point
+    /// `yield_fn` requests it. We are allowed to hold references across yield points, which is
+    /// something we wouldn't get with a hand-rolled state machine.
+    async fn work(
+        self,
+        mut cursor1: C1,
+        storage1: C1::Storage,
+        mut cursor2: C2,
+        storage2: C2::Storage,
+        meet: C1::Time,
+    ) {
+        let mut history1 = ValueHistory::new();
+        let mut history2 = ValueHistory::new();
 
-        let storage1 = &self.storage1;
-        let storage2 = &self.storage2;
-
-        let cursor1 = &mut self.cursor1;
-        let cursor2 = &mut self.cursor2;
-
-        let mut buffer = Vec::default();
-
-        while cursor1.key_valid(storage1) && cursor2.key_valid(storage2) {
-            match cursor1.key(storage1).cmp(&cursor2.key(storage2)) {
-                Ordering::Less => cursor1.seek_key(storage1, cursor2.key(storage2)),
-                Ordering::Greater => cursor2.seek_key(storage2, cursor1.key(storage1)),
+        while let Some(key1) = cursor1.get_key(&storage1)
+            && let Some(key2) = cursor2.get_key(&storage2)
+        {
+            match key1.cmp(&key2) {
+                Ordering::Less => cursor1.seek_key(&storage1, key2),
+                Ordering::Greater => cursor2.seek_key(&storage2, key1),
                 Ordering::Equal => {
-                    // Populate `output` with the results, until we should yield.
-                    let key = cursor2.key(storage2);
-                    while let Some(val1) = cursor1.get_val(storage1) {
-                        let mut logic = logic.borrow_mut();
-                        let mut shared = shared.borrow_mut();
+                    history1.edits.load(&mut cursor1, &storage1, &meet);
+                    history2.edits.load(&mut cursor2, &storage2, &meet);
 
-                        while let Some(val2) = cursor2.get_val(storage2) {
-                            // Evaluate logic on `key, val1, val2`. Note the absence of time and diff.
-                            let mut result = logic(key, val1, val2).into_iter().peekable();
+                    self.join_key(key1, &mut history1, &mut history2).await;
 
-                            // We can only produce output if the result return something.
-                            if let Some(first) = result.next() {
-                                // Join times.
-                                cursor1.map_times(storage1, |time1, diff1| {
-                                    let mut time1 = time1.into_owned();
-                                    time1.join_assign(meet);
-                                    let diff1 = diff1.into_owned();
-                                    cursor2.map_times(storage2, |time2, diff2| {
-                                        let mut time2 = time2.into_owned();
-                                        time2.join_assign(&time1);
-                                        let diff = diff1.multiply(&diff2.into_owned());
-                                        buffer.push((time2, diff));
-                                    });
-                                });
-                                consolidate(&mut buffer);
-
-                                shared.produced += buffer.len();
-
-                                // Special case no results, one result, and potentially many results
-                                match (result.peek().is_some(), buffer.len()) {
-                                    // Certainly no output
-                                    (_, 0) => {}
-                                    // Single element, single time
-                                    (false, 1) => {
-                                        let (time, diff) = buffer.pop().unwrap();
-                                        shared.output.push((first, time, diff));
-                                    }
-                                    // Multiple elements or multiple times
-                                    (_, _) => {
-                                        for d in std::iter::once(first).chain(result) {
-                                            let updates = buffer
-                                                .drain(..)
-                                                .map(|(time, diff)| (d.clone(), time, diff));
-                                            shared.output.extend(updates);
-                                        }
-                                    }
-                                }
-                            }
-                            cursor2.step_val(storage2);
-                        }
-                        cursor1.step_val(storage1);
-                        cursor2.rewind_vals(storage2);
-
-                        if yield_fn(shared.start_time, shared.produced) {
-                            // Drop the shared state before yielding, so others can use it.
-                            drop((logic, shared));
-                            yield_now().await;
-                        }
-                    }
-
-                    cursor1.step_key(storage1);
-                    cursor2.step_key(storage2);
+                    cursor1.step_key(&storage1);
+                    cursor2.step_key(&storage2);
                 }
             }
         }
+    }
+
+    async fn join_key(
+        &self,
+        key: C1::Key<'_>,
+        history1: &mut ValueHistory<'_, C1>,
+        history2: &mut ValueHistory<'_, C2>,
+    ) {
+        if history1.edits.len() < 10 || history2.edits.len() < 10 {
+            self.join_key_nested_loop(key, &history1.edits, &history2.edits);
+        } else {
+            self.join_key_linear_scan(key, history1, history2).await;
+        }
+    }
+
+    fn join_key_nested_loop(
+        &self,
+        key: C1::Key<'_>,
+        edits1: &EditList<'_, C1>,
+        edits2: &EditList<'_, C2>,
+    ) {
+        let mut result_fn = self.result_fn.borrow_mut();
+        let mut shared = self.shared.borrow_mut();
+
+        edits1.for_each(|v1, t1, r1| {
+            edits2.for_each(|v2, t2, r2| {
+                for data in result_fn(key, v1, v2) {
+                    shared.output.push((data, t1.join(t2), r1 * r2));
+                    shared.produced += 1;
+                }
+            })
+        })
+    }
+
+    async fn join_key_linear_scan(
+        &self,
+        key: C1::Key<'_>,
+        history1: &mut ValueHistory<'_, C1>,
+        history2: &mut ValueHistory<'_, C2>,
+    ) {
+        history1.replay();
+        history2.replay();
+
+        // TODO: It seems like there is probably a good deal of redundant `advance_buffer_by`
+        //       in here. If a time is ever repeated, for example, the call will be identical
+        //       and accomplish nothing. If only a single record has been added, it may not
+        //       be worth the time to collapse (advance, re-sort) the data when a linear scan
+        //       is sufficient.
+
+        // Join the next entry in `history1`, return whether we should yield.
+        let work_history1 = |history1: &mut ValueHistory<C1>, history2: &mut ValueHistory<C2>| {
+            let mut result_fn = self.result_fn.borrow_mut();
+            let mut shared = self.shared.borrow_mut();
+
+            let (t1, meet, v1, r1) = history1.get().unwrap();
+            history2.advance_past_by(meet);
+            for &(v2, ref t2, r2) in &history2.past {
+                for data in result_fn(key, v1, v2) {
+                    shared.output.push((data, t1.join(t2), r1 * r2));
+                    shared.produced += 1;
+                }
+            }
+            history1.step();
+
+            (self.yield_fn)(shared.start_time, shared.produced)
+        };
+
+        // Join the next entry in `history2`, return whether we should yield.
+        let work_history2 = |history1: &mut ValueHistory<C1>, history2: &mut ValueHistory<C2>| {
+            let mut result_fn = self.result_fn.borrow_mut();
+            let mut shared = self.shared.borrow_mut();
+
+            let (t2, meet, v2, r2) = history2.get().unwrap();
+            history1.advance_past_by(meet);
+            for &(v1, ref t1, r1) in &history1.past {
+                for data in result_fn(key, v1, v2) {
+                    shared.output.push((data, t1.join(t2), r1 * r2));
+                    shared.produced += 1;
+                }
+            }
+            history2.step();
+
+            (self.yield_fn)(shared.start_time, shared.produced)
+        };
+
+        while let Some(time1) = history1.get_time()
+            && let Some(time2) = history2.get_time()
+        {
+            let should_yield = if time1 < time2 {
+                work_history1(history1, history2)
+            } else {
+                work_history2(history1, history2)
+            };
+            if should_yield {
+                yield_now().await;
+            }
+        }
+
+        while !history1.is_empty() {
+            if work_history1(history1, history2) {
+                yield_now().await;
+            }
+        }
+        while !history2.is_empty() {
+            if work_history2(history1, history2) {
+                yield_now().await;
+            }
+        }
+    }
+}
+
+/// An accumulation of (value, time, diff) updates.
+struct EditList<'a, C: Cursor> {
+    values: Vec<(C::Val<'a>, usize)>,
+    edits: Vec<(C::Time, Diff)>,
+}
+
+impl<'a, C> EditList<'a, C>
+where
+    C: Cursor<Diff = Diff>,
+{
+    fn len(&self) -> usize {
+        self.edits.len()
+    }
+
+    fn load(&mut self, cursor: &mut C, storage: &'a C::Storage, meet: &C::Time) {
+        self.values.clear();
+        self.edits.clear();
+
+        let mut edit_idx = 0;
+        while let Some(value) = cursor.get_val(storage) {
+            cursor.map_times(storage, |time, diff| {
+                let mut time = time.into_owned();
+                time.join_assign(meet);
+                self.edits.push((time, diff.into_owned()));
+            });
+
+            consolidate_from(&mut self.edits, edit_idx);
+
+            if self.edits.len() > edit_idx {
+                edit_idx = self.edits.len();
+                self.values.push((value, edit_idx));
+            }
+
+            cursor.step_val(storage);
+        }
+    }
+
+    fn for_each(&self, mut f: impl FnMut(C::Val<'a>, &C::Time, Diff)) {
+        for (idx, (value, end)) in self.values.iter().enumerate() {
+            let start = if idx == 0 { 0 } else { self.values[idx - 1].1 };
+            for edit_idx in start..*end {
+                let (time, diff) = &self.edits[edit_idx];
+                f(*value, time, *diff);
+            }
+        }
+    }
+}
+
+struct ValueHistory<'a, C: Cursor> {
+    edits: EditList<'a, C>,
+    future: Vec<(C::Time, C::Time, usize, Diff)>,
+    past: Vec<(C::Val<'a>, C::Time, Diff)>,
+}
+
+impl<'a, C> ValueHistory<'a, C>
+where
+    C: Cursor,
+{
+    fn new() -> Self {
+        Self {
+            edits: EditList {
+                values: Default::default(),
+                edits: Default::default(),
+            },
+            future: Default::default(),
+            past: Default::default(),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.future.is_empty()
+    }
+
+    fn get(&self) -> Option<(&C::Time, &C::Time, C::Val<'a>, Diff)> {
+        self.future.last().map(|(t, m, v, r)| {
+            let (value, _) = self.edits.values[*v];
+            (t, m, value, *r)
+        })
+    }
+
+    fn get_time(&self) -> Option<&C::Time> {
+        self.future.last().map(|(t, _, _, _)| t)
+    }
+
+    fn replay(&mut self) {
+        self.future.clear();
+        self.past.clear();
+
+        let values = &self.edits.values;
+        let edits = &self.edits.edits;
+        for (idx, (_, end)) in values.iter().enumerate() {
+            let start = if idx == 0 { 0 } else { values[idx - 1].1 };
+            for edit_idx in start..*end {
+                let (time, diff) = &edits[edit_idx];
+                self.future.push((time.clone(), time.clone(), idx, *diff));
+            }
+        }
+
+        self.future.sort_by(|x, y| y.cmp(x));
+
+        for idx in 1..self.future.len() {
+            self.future[idx].1 = self.future[idx].1.meet(&self.future[idx - 1].1);
+        }
+    }
+
+    fn step(&mut self) {
+        let (time, _, value_idx, diff) = self.future.pop().unwrap();
+        let (value, _) = self.edits.values[value_idx];
+        self.past.push((value, time, diff));
+    }
+
+    fn advance_past_by(&mut self, meet: &C::Time) {
+        for (_, time, _) in &mut self.past {
+            time.join_assign(meet);
+        }
+        consolidate_updates(&mut self.past);
     }
 }
