@@ -336,6 +336,7 @@ pub enum PlanNode<T = mz_repr::Timestamp> {
         /// MFP must preserve the key for the reduction; otherwise, the results
         /// become undefined. Additionally, the MFP must be free from temporal
         /// predicates so that it can be readily evaluated.
+        /// TODO(ggevay): should we wrap this in [`mz_expr::SafeMfpPlan`]?
         mfp_after: MapFilterProject,
     },
     /// Key-based "Top K" operator, retaining the first K records in each group.

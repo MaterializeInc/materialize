@@ -293,7 +293,7 @@ pub enum OptimizerError {
     /// This is a specific kind of internal error. It's distinct from `Internal`, because we want to
     /// catch it and swallow it in some cases.
     #[error("internal optimizer error: MfpPlan couldn't be converted into SafeMfpPlan")]
-    InternalUnsafeMfpPlan,
+    InternalUnsafeMfpPlan(String),
     #[error("internal optimizer error: {0}")]
     Internal(String),
 }
