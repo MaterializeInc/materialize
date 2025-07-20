@@ -9,32 +9,24 @@
 
 //! A fork of DD's `JoinCore::join_core`.
 //!
-//! Currently, compute rendering knows two implementations for linear joins:
+//! Currently, compute rendering knows three implementations for linear joins:
 //!
 //!  * Differential's `JoinCore::join_core`
 //!  * A Materialize fork thereof, called `mz_join_core`
+//!  * Another Materialize fork thereof, called `mz_join_core_v2`
 //!
 //! `mz_join_core` exists to solve a responsiveness problem with the DD implementation.
 //! DD's join is only able to yield between keys. When computing a large cross-join or a highly
 //! skewed join, this can result in loss of interactivity when the join operator refuses to yield
 //! control for multiple seconds or longer, which in turn causes degraded user experience.
 //!
-//! `mz_join_core` currently fixes the yielding issue by omitting the merge-join matching strategy
-//! implemented in DD's join implementation. This leaves only the nested loop strategy for which it
-//! is easy to implement yielding within keys.
+//! `mz_join_core` resolves the yielding issue but compromises by being quadratic over the number
+//! of distinct times in the input. `mz_join_core_v2` is an attempt to replace the quadratic
+//! behavior by using a linear scan through times, copied from the DD implementation.
 //!
-//! While `mz_join_core` retains responsiveness in the face of cross-joins it is also, due to its
-//! sole reliance on nested-loop matching, significantly slower than DD's join for workloads that
-//! have a large amount of edits at different times. We consider these niche workloads for
-//! Materialize today, due to the way source ingestion works, but that might change in the future.
-//!
-//! For the moment, we keep both implementations around, selectable through a feature flag.
-//! We expect `mz_join_core` to be more useful in Materialize today, but being able to fall back to
-//! DD's implementation provides a safety net in case that assumption is wrong.
-//!
-//! In the mid-term, we want to arrive at a single join implementation that is as efficient as DD's
-//! join and as responsive as `mz_join_core`. Whether that means adding merge-join matching to
-//! `mz_join_core` or adding better fueling to DD's join implementation is still TBD.
+//! For the moment, we keep all three implementations around, selectable through feature flags.
+//! Eventually, we hope that `mz_join_core_v2` proves itself sufficiently to become the only join
+//! implementation.
 
 use std::cmp::Ordering;
 use std::collections::VecDeque;
