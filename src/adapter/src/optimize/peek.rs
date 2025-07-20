@@ -325,6 +325,8 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
         // whole optimizer pipeline, but just a tiny subset of it. (But we'll need to run
         // `create_fast_path_plan` later again, because, e.g., running `LiteralConstraints` is still
         // ahead of us.)
+        // Note: One limitation of this is that view inlining hasn't happened yet, hiding some fast
+        // path opportunities.
         let use_fast_path_optimizer = match create_fast_path_plan(
             &mut df_desc,
             self.select_id,
