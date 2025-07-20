@@ -38,8 +38,7 @@ use std::rc::Rc;
 use std::time::Instant;
 
 use differential_dataflow::Data;
-use differential_dataflow::consolidation::{consolidate, consolidate_updates};
-use differential_dataflow::difference::Multiply;
+use differential_dataflow::consolidation::{consolidate_from, consolidate_updates};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arranged;
 use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
@@ -550,17 +549,12 @@ where
         storage2: C2::Storage,
         capability: Capability<C1::Time>,
     ) {
-        let deferred = Deferred {
+        let fut = self.start_work(
             cursor1,
             storage1,
             cursor2,
             storage2,
-            capability: capability.clone(),
-        };
-        let fut = deferred.work(
-            Rc::clone(&self.result_fn),
-            Rc::clone(&self.output),
-            Rc::clone(&self.produced),
+            capability.time().clone(),
         );
 
         self.todo.push_back((Box::pin(fut), capability));
@@ -621,118 +615,355 @@ where
             }
         }
     }
+
+    /// Start the work of joining the updates produced by the given cursors.
+    ///
+    /// This method returns a `Future` that can be polled to make progress on the join work.
+    /// Returning a future allows us to implement the logic using async/await syntax where we can
+    /// conveniently pause the work at any point by calling `yield_now().await`. We are allowed to
+    /// hold references across yield points, which is something we wouldn't get with a hand-rolled
+    /// state machine implementation.
+    fn start_work(
+        &self,
+        mut cursor1: C1,
+        storage1: C1::Storage,
+        mut cursor2: C2,
+        storage2: C2::Storage,
+        meet: C1::Time,
+    ) -> impl Future<Output = ()> + use<C1, C2, D, L, I> {
+        let result_fn = Rc::clone(&self.result_fn);
+        let output = Rc::clone(&self.output);
+        let produced = Rc::clone(&self.produced);
+
+        async move {
+            let mut joiner = Joiner::new(result_fn, output, produced, meet);
+
+            while let Some(key1) = cursor1.get_key(&storage1)
+                && let Some(key2) = cursor2.get_key(&storage2)
+            {
+                match key1.cmp(&key2) {
+                    Ordering::Less => cursor1.seek_key(&storage1, key2),
+                    Ordering::Greater => cursor2.seek_key(&storage2, key1),
+                    Ordering::Equal => {
+                        joiner
+                            .join_key(key1, &mut cursor1, &storage1, &mut cursor2, &storage2)
+                            .await;
+
+                        cursor1.step_key(&storage1);
+                        cursor2.step_key(&storage2);
+                    }
+                }
+            }
+        }
+    }
 }
 
-/// Deferred join computation.
+/// Type that knows how to perform the core join logic.
 ///
-/// The structure wraps cursors which allow us to play out join computation at whatever rate we like.
-/// This allows us to avoid producing and buffering massive amounts of data, without giving the timely
-/// dataflow system a chance to run operators that can consume and aggregate the data.
-struct Deferred<C1, C2>
+/// The joiner implements two join strategies:
+///
+///  * The "simple" strategy produces a match for each combination of (val1, time1, val2, time2)
+///    found in the inputs. If there are multiple times in the input, it may produce matches for
+///    times in which one of the values wasn't present. These matches cancel each other out, so the
+///    result ends up correct.
+///  * The "linear scan over times" strategy sorts the input data by time and then steps through
+///    the input histories, producing matches for a pair of values only if both values where
+///    present at the same time.
+///
+/// The linear scan strategy avoids redundant work and is much more efficient than the simple
+/// strategy when many distinct times are present in the inputs. However, sorting the input data
+/// incurs some overhead, so we still prefer the simple variant when the input data is small.
+struct Joiner<'a, C1, C2, D, L>
 where
     C1: Cursor,
     C2: Cursor,
 {
-    cursor1: C1,
-    storage1: C1::Storage,
-    cursor2: C2,
-    storage2: C2::Storage,
-    capability: Capability<C1::Time>,
+    /// A function that transforms raw join matches into join results.
+    result_fn: Rc<RefCell<L>>,
+    /// A buffer holding the join results.
+    output: Rc<RefCell<Vec<(D, C1::Time, Diff)>>>,
+    /// The number of join results produced.
+    produced: Rc<Cell<usize>>,
+    /// A time to which all join results should be advanced.
+    meet: C1::Time,
+
+    /// Buffer for edit histories from the first input.
+    history1: ValueHistory<'a, C1>,
+    /// Buffer for edit histories from the second input.
+    history2: ValueHistory<'a, C2>,
 }
 
-impl<C1, C2> Deferred<C1, C2>
+impl<'a, C1, C2, D, L, I> Joiner<'a, C1, C2, D, L>
 where
     C1: Cursor<Diff = Diff>,
-    C2: for<'a> Cursor<Key<'a> = C1::Key<'a>, Time = C1::Time, Diff = Diff>,
+    C2: Cursor<Key<'a> = C1::Key<'a>, Time = C1::Time, Diff = Diff>,
+    D: Data,
+    L: FnMut(C1::Key<'_>, C1::Val<'_>, C2::Val<'_>) -> I + 'static,
+    I: IntoIterator<Item = D> + 'static,
 {
-    /// Process keys until at least `fuel` output tuples produced, or the work is exhausted.
-    async fn work<L, I, D>(
-        mut self,
-        logic: Rc<RefCell<L>>,
+    fn new(
+        result_fn: Rc<RefCell<L>>,
         output: Rc<RefCell<Vec<(D, C1::Time, Diff)>>>,
         produced: Rc<Cell<usize>>,
-    ) where
-        I: IntoIterator<Item = D>,
-        L: FnMut(C1::Key<'_>, C1::Val<'_>, C2::Val<'_>) -> I,
-        D: Data,
-    {
-        let meet = self.capability.time();
+        meet: C1::Time,
+    ) -> Self {
+        Self {
+            result_fn,
+            output,
+            produced,
+            meet,
+            history1: ValueHistory::new(),
+            history2: ValueHistory::new(),
+        }
+    }
 
-        let storage1 = &self.storage1;
-        let storage2 = &self.storage2;
+    /// Produce matches for the values of a single key.
+    async fn join_key(
+        &mut self,
+        key: C1::Key<'_>,
+        cursor1: &mut C1,
+        storage1: &'a C1::Storage,
+        cursor2: &mut C2,
+        storage2: &'a C2::Storage,
+    ) {
+        self.history1.edits.load(cursor1, storage1, &self.meet);
+        self.history2.edits.load(cursor2, storage2, &self.meet);
 
-        let cursor1 = &mut self.cursor1;
-        let cursor2 = &mut self.cursor2;
+        // If the input data is small, use the simple strategy.
+        //
+        // TODO: This conditional is taken directly from DD. We should check if it might make sense
+        //       to do something different, like using the simple strategy always when the number
+        //       of distinct times is small.
+        if self.history1.edits.len() < 10 || self.history2.edits.len() < 10 {
+            self.join_key_simple(key);
+            yield_now().await;
+        } else {
+            self.join_key_linear_time_scan(key).await;
+        }
+    }
 
-        let mut buffer = Vec::default();
+    /// Produce matches for the values of a single key, using the simple strategy.
+    ///
+    /// This strategy is only meant to be used for small inputs, so we don't bother including yield
+    /// points or optimizations.
+    fn join_key_simple(&self, key: C1::Key<'_>) {
+        let mut result_fn = self.result_fn.borrow_mut();
+        let mut output = self.output.borrow_mut();
 
-        while cursor1.key_valid(storage1) && cursor2.key_valid(storage2) {
-            match cursor1.key(storage1).cmp(&cursor2.key(storage2)) {
-                Ordering::Less => cursor1.seek_key(storage1, cursor2.key(storage2)),
-                Ordering::Greater => cursor2.seek_key(storage2, cursor1.key(storage1)),
-                Ordering::Equal => {
-                    // Populate `output` with the results, until we should yield.
-                    let key = cursor2.key(storage2);
-                    while let Some(val1) = cursor1.get_val(storage1) {
-                        let mut logic = logic.borrow_mut();
-                        let mut output = output.borrow_mut();
-
-                        while let Some(val2) = cursor2.get_val(storage2) {
-                            // Evaluate logic on `key, val1, val2`. Note the absence of time and diff.
-                            let mut result = logic(key, val1, val2).into_iter().peekable();
-
-                            // We can only produce output if the result return something.
-                            if let Some(first) = result.next() {
-                                // Join times.
-                                cursor1.map_times(storage1, |time1, diff1| {
-                                    let mut time1 = C1::owned_time(time1);
-                                    time1.join_assign(meet);
-                                    let diff1 = C1::owned_diff(diff1);
-                                    cursor2.map_times(storage2, |time2, diff2| {
-                                        let mut time2 = C2::owned_time(time2);
-                                        time2.join_assign(&time1);
-                                        let diff = diff1.multiply(&C2::owned_diff(diff2));
-                                        buffer.push((time2, diff));
-                                    });
-                                });
-                                consolidate(&mut buffer);
-
-                                produced.update(|x| x + buffer.len());
-
-                                // Special case no results, one result, and potentially many results
-                                match (result.peek().is_some(), buffer.len()) {
-                                    // Certainly no output
-                                    (_, 0) => {}
-                                    // Single element, single time
-                                    (false, 1) => {
-                                        let (time, diff) = buffer.pop().unwrap();
-                                        output.push((first, time, diff));
-                                    }
-                                    // Multiple elements or multiple times
-                                    (_, _) => {
-                                        for d in std::iter::once(first).chain(result) {
-                                            let updates = buffer
-                                                .drain(..)
-                                                .map(|(time, diff)| (d.clone(), time, diff));
-                                            output.extend(updates);
-                                        }
-                                    }
-                                }
-                            }
-                            cursor2.step_val(storage2);
-                        }
-                        cursor1.step_val(storage1);
-                        cursor2.rewind_vals(storage2);
-
-                        // Drop all shared state before yielding.
-                        drop((logic, output));
-                        yield_now().await;
-                    }
-
-                    cursor1.step_key(storage1);
-                    cursor2.step_key(storage2);
+        for (v1, t1, r1) in self.history1.edits.iter() {
+            for (v2, t2, r2) in self.history2.edits.iter() {
+                for data in result_fn(key, v1, v2) {
+                    output.push((data, t1.join(t2), r1 * r2));
+                    self.produced.update(|x| x + 1);
                 }
             }
         }
+    }
+
+    /// Produce matches for the values of a single key, using a linear scan through times.
+    async fn join_key_linear_time_scan(&mut self, key: C1::Key<'_>) {
+        let history1 = &mut self.history1;
+        let history2 = &mut self.history2;
+
+        history1.replay();
+        history2.replay();
+
+        // TODO: It seems like there is probably a good deal of redundant `advance_buffer_by`
+        //       in here. If a time is ever repeated, for example, the call will be identical
+        //       and accomplish nothing. If only a single record has been added, it may not
+        //       be worth the time to collapse (advance, re-sort) the data when a linear scan
+        //       is sufficient.
+
+        // Join the next entry in `history1`.
+        let work_history1 = |history1: &mut ValueHistory<C1>, history2: &mut ValueHistory<C2>| {
+            let mut result_fn = self.result_fn.borrow_mut();
+            let mut output = self.output.borrow_mut();
+
+            let (t1, meet, v1, r1) = history1.get().unwrap();
+            history2.advance_past_by(meet);
+            for &(v2, ref t2, r2) in &history2.past {
+                for data in result_fn(key, v1, v2) {
+                    output.push((data, t1.join(t2), r1 * r2));
+                    self.produced.update(|x| x + 1);
+                }
+            }
+            history1.step();
+        };
+
+        // Join the next entry in `history2`.
+        let work_history2 = |history1: &mut ValueHistory<C1>, history2: &mut ValueHistory<C2>| {
+            let mut result_fn = self.result_fn.borrow_mut();
+            let mut output = self.output.borrow_mut();
+
+            let (t2, meet, v2, r2) = history2.get().unwrap();
+            history1.advance_past_by(meet);
+            for &(v1, ref t1, r1) in &history1.past {
+                for data in result_fn(key, v1, v2) {
+                    output.push((data, t1.join(t2), r1 * r2));
+                    self.produced.update(|x| x + 1);
+                }
+            }
+            history2.step();
+        };
+
+        while let Some(time1) = history1.get_time()
+            && let Some(time2) = history2.get_time()
+        {
+            if time1 < time2 {
+                work_history1(history1, history2)
+            } else {
+                work_history2(history1, history2)
+            };
+            yield_now().await;
+        }
+
+        while !history1.is_empty() {
+            work_history1(history1, history2);
+            yield_now().await;
+        }
+        while !history2.is_empty() {
+            work_history2(history1, history2);
+            yield_now().await;
+        }
+    }
+}
+
+/// An accumulation of (value, time, diff) updates.
+///
+/// Deduplicated values are stored in `values`. Each entry includes the end index of the
+/// corresponding range in `edits`. The edits stored for a value are consolidated.
+struct EditList<'a, C: Cursor> {
+    values: Vec<(C::Val<'a>, usize)>,
+    edits: Vec<(C::Time, Diff)>,
+}
+
+impl<'a, C> EditList<'a, C>
+where
+    C: Cursor<Diff = Diff>,
+{
+    fn len(&self) -> usize {
+        self.edits.len()
+    }
+
+    /// Load the updates in the given cursor.
+    ///
+    /// Steps over values, but not over keys.
+    fn load(&mut self, cursor: &mut C, storage: &'a C::Storage, meet: &C::Time) {
+        self.values.clear();
+        self.edits.clear();
+
+        let mut edit_idx = 0;
+        while let Some(value) = cursor.get_val(storage) {
+            cursor.map_times(storage, |time, diff| {
+                let mut time = C::owned_time(time);
+                time.join_assign(meet);
+                self.edits.push((time, C::owned_diff(diff)));
+            });
+
+            consolidate_from(&mut self.edits, edit_idx);
+
+            if self.edits.len() > edit_idx {
+                edit_idx = self.edits.len();
+                self.values.push((value, edit_idx));
+            }
+
+            cursor.step_val(storage);
+        }
+    }
+
+    /// Iterate over the contained updates.
+    fn iter(&self) -> impl Iterator<Item = (C::Val<'a>, &C::Time, Diff)> {
+        self.values
+            .iter()
+            .enumerate()
+            .flat_map(|(idx, (value, end))| {
+                let start = if idx == 0 { 0 } else { self.values[idx - 1].1 };
+                let edits = &self.edits[start..*end];
+                edits.iter().map(|(time, diff)| (*value, time, *diff))
+            })
+    }
+}
+
+/// A history for replaying updates in time order.
+struct ValueHistory<'a, C: Cursor> {
+    /// Unsorted updates to replay.
+    edits: EditList<'a, C>,
+    /// Time-sorted updates that have not been stepped over yet.
+    ///
+    /// Entries are (time, meet, value_idx, diff).
+    future: Vec<(C::Time, C::Time, usize, Diff)>,
+    /// Rolled-up updates that have been stepped over.
+    past: Vec<(C::Val<'a>, C::Time, Diff)>,
+}
+
+impl<'a, C> ValueHistory<'a, C>
+where
+    C: Cursor,
+{
+    /// Create a new empty `ValueHistory`.
+    fn new() -> Self {
+        Self {
+            edits: EditList {
+                values: Default::default(),
+                edits: Default::default(),
+            },
+            future: Default::default(),
+            past: Default::default(),
+        }
+    }
+
+    /// Return whether there are updates left to step over.
+    fn is_empty(&self) -> bool {
+        self.future.is_empty()
+    }
+
+    /// Return the next update.
+    fn get(&self) -> Option<(&C::Time, &C::Time, C::Val<'a>, Diff)> {
+        self.future.last().map(|(t, m, v, r)| {
+            let (value, _) = self.edits.values[*v];
+            (t, m, value, *r)
+        })
+    }
+
+    /// Return the time of the next update.
+    fn get_time(&self) -> Option<&C::Time> {
+        self.future.last().map(|(t, _, _, _)| t)
+    }
+
+    /// Populate `future` with the updates stored in `edits`.
+    fn replay(&mut self) {
+        self.future.clear();
+        self.past.clear();
+
+        let values = &self.edits.values;
+        let edits = &self.edits.edits;
+        for (idx, (_, end)) in values.iter().enumerate() {
+            let start = if idx == 0 { 0 } else { values[idx - 1].1 };
+            for edit_idx in start..*end {
+                let (time, diff) = &edits[edit_idx];
+                self.future.push((time.clone(), time.clone(), idx, *diff));
+            }
+        }
+
+        self.future.sort_by(|x, y| y.cmp(x));
+
+        for idx in 1..self.future.len() {
+            self.future[idx].1 = self.future[idx].1.meet(&self.future[idx - 1].1);
+        }
+    }
+
+    /// Advance the history by moving the next entry from `future` into `past`.
+    fn step(&mut self) {
+        let (time, _, value_idx, diff) = self.future.pop().unwrap();
+        let (value, _) = self.edits.values[value_idx];
+        self.past.push((value, time, diff));
+    }
+
+    /// Advance all times in `past` by `meet`.
+    fn advance_past_by(&mut self, meet: &C::Time) {
+        for (_, time, _) in &mut self.past {
+            time.join_assign(meet);
+        }
+        consolidate_updates(&mut self.past);
     }
 }
