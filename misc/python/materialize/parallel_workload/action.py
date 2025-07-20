@@ -1303,6 +1303,7 @@ class FlipFlagsAction(Action):
             "storage_statistics_retention_duration",
             "enable_ctp_cluster_protocols",
             "enable_paused_cluster_readhold_downgrade",
+            "enable_mz_join_core_v2",
         ]
 
     def run(self, exe: Executor) -> bool:
