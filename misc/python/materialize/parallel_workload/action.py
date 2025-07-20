@@ -1299,6 +1299,7 @@ class FlipFlagsAction(Action):
             "enable_timely_init_at_process_startup",
             "persist_enable_incremental_compaction",
             "storage_statistics_retention_duration",
+            "enable_mz_join_core_v2",
         ]
 
     def run(self, exe: Executor) -> bool:
