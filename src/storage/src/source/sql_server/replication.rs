@@ -19,6 +19,7 @@ use differential_dataflow::AsCollection;
 use differential_dataflow::containers::TimelyStack;
 use futures::StreamExt;
 use mz_ore::cast::CastFrom;
+use mz_ore::columnar::Boxed;
 use mz_ore::future::InTask;
 use mz_repr::{Diff, GlobalId, Row, RowArena};
 use mz_sql_server_util::cdc::{CdcEvent, Lsn, Operation as CdcOperation};
@@ -195,7 +196,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                             let kind = DecodeErrorKind::Text(e.to_string().into());
                             // TODO(sql_server2): Get the raw bytes from `tiberius`.
                             let raw = format!("{sql_server_row:?}");
-                            Err(DataflowError::DecodeError(Box::new(DecodeError {
+                            Err(DataflowError::DecodeError(Boxed::new(DecodeError {
                                 kind,
                                 raw: raw.as_bytes().to_vec(),
                             })))
@@ -310,7 +311,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                             let kind = DecodeErrorKind::Text(e.to_string().into());
                             // TODO(sql_server2): Get the raw bytes from `tiberius`.
                             let raw = format!("{sql_server_row:?}");
-                            Err(DataflowError::DecodeError(Box::new(DecodeError {
+                            Err(DataflowError::DecodeError(Boxed::new(DecodeError {
                                 kind,
                                 raw: raw.as_bytes().to_vec(),
                             })))

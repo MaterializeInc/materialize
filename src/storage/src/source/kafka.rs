@@ -26,6 +26,7 @@ use mz_kafka_util::client::{
 };
 use mz_ore::assert_none;
 use mz_ore::cast::CastFrom;
+use mz_ore::columnar::Boxed;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
 use mz_ore::iter::IteratorExt;
@@ -744,7 +745,7 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
                                     let pid = time.interval().singleton().unwrap().unwrap_exact();
                                     let part_cap = &reader.partition_capabilities[pid].data;
                                     let msg = msg.map_err(|e| {
-                                        DataflowError::SourceError(Box::new(SourceError {
+                                        DataflowError::SourceError(Boxed::new(SourceError {
                                             error: SourceErrorDetails::Other(e.to_string().into()),
                                         }))
                                     });
@@ -790,7 +791,7 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
                                     let pid = time.interval().singleton().unwrap().unwrap_exact();
                                     let part_cap = &reader.partition_capabilities[pid].data;
                                     let msg = msg.map_err(|e| {
-                                        DataflowError::SourceError(Box::new(SourceError {
+                                        DataflowError::SourceError(Boxed::new(SourceError {
                                             error: SourceErrorDetails::Other(e.to_string().into()),
                                         }))
                                     });
