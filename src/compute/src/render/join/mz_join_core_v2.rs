@@ -28,9 +28,12 @@
 //! Eventually, we hope that `mz_join_core_v2` proves itself sufficiently to become the only join
 //! implementation.
 
+use std::cell::Cell;
 use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::VecDeque;
+use std::marker::PhantomData;
+use std::pin::Pin;
 use std::rc::Rc;
 use std::time::Instant;
 
@@ -40,12 +43,12 @@ use differential_dataflow::difference::Multiply;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arranged;
 use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
+use mz_ore::future::yield_now;
 use mz_repr::Diff;
 use timely::PartialOrder;
 use timely::container::{CapacityContainerBuilder, PushInto, SizableContainer};
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::channels::pushers::Tee;
-use timely::dataflow::channels::pushers::buffer::Session;
 use timely::dataflow::operators::generic::OutputHandleCore;
 use timely::dataflow::operators::{Capability, Operator};
 use timely::dataflow::{Scope, StreamCore};
@@ -74,8 +77,7 @@ where
         + Clone
         + 'static,
     L: FnMut(Tr1::Key<'_>, Tr1::Val<'_>, Tr2::Val<'_>) -> I + 'static,
-    I: IntoIterator,
-    I::Item: Data,
+    I: IntoIterator<Item: Data> + 'static,
     YFn: Fn(Instant, usize) -> bool + 'static,
     C: SizableContainer + PushInto<(I::Item, G::Timestamp, Diff)> + Data,
 {
@@ -496,23 +498,36 @@ where
     C2: Cursor,
 {
     /// Pending work.
-    todo: VecDeque<Deferred<C1, C2, D>>,
+    todo: VecDeque<(Pin<Box<dyn Future<Output = ()>>>, Capability<C1::Time>)>,
     /// A function that transforms raw join matches into join results.
     result_fn: Rc<RefCell<L>>,
+    /// A buffer holding the join results.
+    ///
+    /// Written by the work futures, drained by `Work::process`.
+    output: Rc<RefCell<Vec<(D, C1::Time, Diff)>>>,
+    /// The number of join results produced by work futures.
+    ///
+    /// Used with `yield_fn` to inform when `Work::process` should yield.
+    produced: Rc<Cell<usize>>,
+
+    _cursors: PhantomData<(C1, C2)>,
 }
 
 impl<C1, C2, D, L, I> Work<C1, C2, D, L>
 where
-    C1: Cursor<Diff = Diff>,
-    C2: for<'a> Cursor<Key<'a> = C1::Key<'a>, Time = C1::Time, Diff = Diff>,
+    C1: Cursor<Diff = Diff> + 'static,
+    C2: for<'a> Cursor<Key<'a> = C1::Key<'a>, Time = C1::Time, Diff = Diff> + 'static,
     D: Data,
-    L: FnMut(C1::Key<'_>, C1::Val<'_>, C2::Val<'_>) -> I,
-    I: IntoIterator<Item = D>,
+    L: FnMut(C1::Key<'_>, C1::Val<'_>, C2::Val<'_>) -> I + 'static,
+    I: IntoIterator<Item = D> + 'static,
 {
     fn new(result_fn: Rc<RefCell<L>>) -> Self {
         Self {
             todo: Default::default(),
             result_fn,
+            output: Default::default(),
+            produced: Default::default(),
+            _cursors: PhantomData,
         }
     }
 
@@ -535,15 +550,20 @@ where
         storage2: C2::Storage,
         capability: Capability<C1::Time>,
     ) {
-        self.todo.push_back(Deferred {
+        let deferred = Deferred {
             cursor1,
             storage1,
             cursor2,
             storage2,
-            capability,
-            done: false,
-            temp: Default::default(),
-        });
+            capability: capability.clone(),
+        };
+        let fut = deferred.work(
+            Rc::clone(&self.result_fn),
+            Rc::clone(&self.output),
+            Rc::clone(&self.produced),
+        );
+
+        self.todo.push_back((Box::pin(fut), capability));
     }
 
     /// Discard all pending work.
@@ -561,20 +581,43 @@ where
         YFn: Fn(Instant, usize) -> bool,
     {
         let start_time = Instant::now();
-        let mut produced = 0;
+        self.produced.set(0);
 
-        while !yield_fn(start_time, produced)
-            && let Some(mut deferred) = self.todo.pop_front()
-        {
-            deferred.work(
-                output,
-                &mut *self.result_fn.borrow_mut(),
-                |w| yield_fn(start_time, w),
-                &mut produced,
-            );
+        let waker = futures::task::noop_waker();
+        let mut ctx = std::task::Context::from_waker(&waker);
 
-            if !deferred.done {
-                self.todo.push_front(deferred);
+        while let Some((mut fut, cap)) = self.todo.pop_front() {
+            // Drive the work future until it's done or it's time to yield.
+            let mut done = false;
+            let mut should_yield = false;
+            while !done && !should_yield {
+                done = fut.as_mut().poll(&mut ctx).is_ready();
+                should_yield = yield_fn(start_time, self.produced.get());
+            }
+
+            // Drain the produced join results.
+            let mut output_buf = self.output.borrow_mut();
+
+            // Consolidating here is important when the join closure produces data that
+            // consolidates well, for example when projecting columns.
+            let old_len = output_buf.len();
+            consolidate_updates(&mut output_buf);
+            let recovered = old_len - output_buf.len();
+            self.produced.update(|x| x - recovered);
+
+            output.session(&cap).give_iterator(output_buf.drain(..));
+
+            if done {
+                // We have finished processing a chunk of work. Use this opportunity to truncate
+                // the output buffer, so we don't keep excess memory allocated forever.
+                *output_buf = Default::default();
+            } else if !done {
+                // Still work to do in this chunk.
+                self.todo.push_front((fut, cap));
+            }
+
+            if should_yield {
+                break;
             }
         }
     }
@@ -585,7 +628,7 @@ where
 /// The structure wraps cursors which allow us to play out join computation at whatever rate we like.
 /// This allows us to avoid producing and buffering massive amounts of data, without giving the timely
 /// dataflow system a chance to run operators that can consume and aggregate the data.
-struct Deferred<C1, C2, D>
+struct Deferred<C1, C2>
 where
     C1: Cursor,
     C2: Cursor,
@@ -595,52 +638,31 @@ where
     cursor2: C2,
     storage2: C2::Storage,
     capability: Capability<C1::Time>,
-    done: bool,
-    temp: Vec<(D, C1::Time, Diff)>,
 }
 
-impl<C1, C2, D> Deferred<C1, C2, D>
+impl<C1, C2> Deferred<C1, C2>
 where
     C1: Cursor<Diff = Diff>,
     C2: for<'a> Cursor<Key<'a> = C1::Key<'a>, Time = C1::Time, Diff = Diff>,
-    D: Data,
 {
     /// Process keys until at least `fuel` output tuples produced, or the work is exhausted.
-    fn work<L, I, YFn, C>(
-        &mut self,
-        output: &mut OutputHandleCore<C1::Time, CapacityContainerBuilder<C>, Tee<C1::Time, C>>,
-        mut logic: L,
-        yield_fn: YFn,
-        produced: &mut usize,
+    async fn work<L, I, D>(
+        mut self,
+        logic: Rc<RefCell<L>>,
+        output: Rc<RefCell<Vec<(D, C1::Time, Diff)>>>,
+        produced: Rc<Cell<usize>>,
     ) where
         I: IntoIterator<Item = D>,
         L: FnMut(C1::Key<'_>, C1::Val<'_>, C2::Val<'_>) -> I,
-        YFn: Fn(usize) -> bool,
-        C: SizableContainer + PushInto<(D, C1::Time, Diff)> + Data,
+        D: Data,
     {
         let meet = self.capability.time();
-
-        let mut session = output.session(&self.capability);
 
         let storage1 = &self.storage1;
         let storage2 = &self.storage2;
 
         let cursor1 = &mut self.cursor1;
         let cursor2 = &mut self.cursor2;
-
-        let temp = &mut self.temp;
-
-        let flush = |data: &mut Vec<_>, session: &mut Session<_, _, _>| {
-            let old_len = data.len();
-            // Consolidating here is important when the join closure produces data that
-            // consolidates well, for example when projecting columns.
-            consolidate_updates(data);
-            let recovered = old_len - data.len();
-            session.give_iterator(data.drain(..));
-            recovered
-        };
-
-        assert_eq!(temp.len(), 0);
 
         let mut buffer = Vec::default();
 
@@ -649,9 +671,12 @@ where
                 Ordering::Less => cursor1.seek_key(storage1, cursor2.key(storage2)),
                 Ordering::Greater => cursor2.seek_key(storage2, cursor1.key(storage1)),
                 Ordering::Equal => {
-                    // Populate `temp` with the results, until we should yield.
+                    // Populate `output` with the results, until we should yield.
                     let key = cursor2.key(storage2);
                     while let Some(val1) = cursor1.get_val(storage1) {
+                        let mut logic = logic.borrow_mut();
+                        let mut output = output.borrow_mut();
+
                         while let Some(val2) = cursor2.get_val(storage2) {
                             // Evaluate logic on `key, val1, val2`. Note the absence of time and diff.
                             let mut result = logic(key, val1, val2).into_iter().peekable();
@@ -672,6 +697,8 @@ where
                                 });
                                 consolidate(&mut buffer);
 
+                                produced.update(|x| x + buffer.len());
+
                                 // Special case no results, one result, and potentially many results
                                 match (result.peek().is_some(), buffer.len()) {
                                     // Certainly no output
@@ -679,35 +706,27 @@ where
                                     // Single element, single time
                                     (false, 1) => {
                                         let (time, diff) = buffer.pop().unwrap();
-                                        temp.push((first, time, diff));
+                                        output.push((first, time, diff));
                                     }
                                     // Multiple elements or multiple times
                                     (_, _) => {
                                         for d in std::iter::once(first).chain(result) {
-                                            temp.extend(buffer.iter().map(|(time, diff)| {
-                                                (d.clone(), time.clone(), diff.clone())
-                                            }))
+                                            let updates = buffer
+                                                .drain(..)
+                                                .map(|(time, diff)| (d.clone(), time, diff));
+                                            output.extend(updates);
                                         }
                                     }
                                 }
-                                buffer.clear();
                             }
                             cursor2.step_val(storage2);
                         }
                         cursor1.step_val(storage1);
                         cursor2.rewind_vals(storage2);
 
-                        *produced = produced.saturating_add(temp.len());
-
-                        if yield_fn(*produced) {
-                            // Returning here is only allowed because we leave the cursors in a
-                            // state that will let us pick up the work correctly on the next
-                            // invocation.
-                            *produced -= flush(temp, &mut session);
-                            if yield_fn(*produced) {
-                                return;
-                            }
-                        }
+                        // Drop all shared state before yielding.
+                        drop((logic, output));
+                        yield_now().await;
                     }
 
                     cursor1.step_key(storage1);
@@ -715,12 +734,5 @@ where
                 }
             }
         }
-
-        if !temp.is_empty() {
-            *produced -= flush(temp, &mut session);
-        }
-
-        // We only get here after having iterated through all keys.
-        self.done = true;
     }
 }

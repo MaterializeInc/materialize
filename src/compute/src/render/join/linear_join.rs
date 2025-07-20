@@ -113,8 +113,7 @@ impl LinearJoinSpec {
             + Clone
             + 'static,
         L: FnMut(Tr1::Key<'_>, Tr1::Val<'_>, Tr2::Val<'_>) -> I + 'static,
-        I: IntoIterator,
-        I::Item: Data,
+        I: IntoIterator<Item: Data> + 'static,
     {
         use LinearJoinImpl::*;
 
