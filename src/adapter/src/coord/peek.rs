@@ -395,22 +395,25 @@ pub enum PeekPlan<T = mz_repr::Timestamp> {
 
 /// Convert `mfp` to an executable, non-temporal plan.
 /// It should be non-temporal, as OneShot preparation populates `mz_now`.
+///
+/// If the `mfp` can't be converted into a non-temporal plan, this returns an _internal_ error.
 fn mfp_to_safe_plan(
     mfp: mz_expr::MapFilterProject,
 ) -> Result<mz_expr::SafeMfpPlan, OptimizerError> {
     mfp.into_plan()
-        .map_err(OptimizerError::Internal)?
+        .map_err(OptimizerError::InternalUnsafeMfpPlan)?
         .into_nontemporal()
-        .map_err(|_e| OptimizerError::UnsafeMfpPlan)
+        .map_err(|e| OptimizerError::InternalUnsafeMfpPlan(format!("{:?}", e)))
 }
 
+/// If it can't convert `mfp` into a `SafeMfpPlan`, this returns an _internal_ error.
 fn permute_oneshot_mfp_around_index(
     mfp: mz_expr::MapFilterProject,
     key: &[MirScalarExpr],
 ) -> Result<mz_expr::SafeMfpPlan, OptimizerError> {
     let input_arity = mfp.input_arity;
     let mut safe_mfp = mfp_to_safe_plan(mfp)?;
-    let (permute, thinning) = mz_expr::permutation_for_arrangement(key, input_arity);
+    let (permute, thinning) = permutation_for_arrangement(key, input_arity);
     safe_mfp.permute_fn(|c| permute[c], key.len() + thinning.len());
     Ok(safe_mfp)
 }

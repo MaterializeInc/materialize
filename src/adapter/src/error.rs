@@ -528,9 +528,10 @@ impl AdapterError {
                 OptimizerError::TransformError(_) => SqlState::INTERNAL_ERROR,
                 OptimizerError::UnmaterializableFunction(_) => SqlState::FEATURE_NOT_SUPPORTED,
                 OptimizerError::UncallableFunction { .. } => SqlState::FEATURE_NOT_SUPPORTED,
+                OptimizerError::UnsupportedTemporalExpression(_) => SqlState::FEATURE_NOT_SUPPORTED,
                 // This should be handled by peek optimization, so it's an internal error if it
                 // reaches the user.
-                OptimizerError::UnsafeMfpPlan => SqlState::INTERNAL_ERROR,
+                OptimizerError::InternalUnsafeMfpPlan(_) => SqlState::INTERNAL_ERROR,
             },
             AdapterError::UnallowedOnCluster { .. } => {
                 SqlState::S_R_E_PROHIBITED_SQL_STATEMENT_ATTEMPTED
@@ -896,6 +897,7 @@ impl From<OptimizerError> for AdapterError {
             PlanError(e) => Self::PlanError(e),
             RecursionLimitError(e) => Self::RecursionLimit(e),
             EvalError(e) => Self::Eval(e),
+            InternalUnsafeMfpPlan(e) => Self::Internal(e),
             Internal(e) => Self::Internal(e),
             e => Self::Optimizer(e),
         }
