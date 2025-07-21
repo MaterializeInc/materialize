@@ -37,7 +37,7 @@
 
     If no validation error is returned, move to the next step.
 
-1. Use the [`CREATE SECRET`](/sql/create-secret/) command to securely store the password for the `materialize` SQL Server user you already created:
+1. Use the [`CREATE SECRET`](/sql/create-secret/) command to securely store the password for the `materialize` SQL Server user [you created](#1-create-a-materialize-user-in-sql-server):
 
     ```mzsql
     CREATE SECRET sql_server_pass AS '<PASSWORD>';
