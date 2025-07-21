@@ -50,6 +50,16 @@ Another way of seeing this in action is of course when one use-case is using
 the environment a lot, say high SELECT throughput: this will also make the
 system less responsive for other use cases/users of the system.
 
+Both of these _might_ not obviously be problematic today, but we think we will
+have customers soon for which our scalability limits become a blocker for
+expansion and we do see a trickle of bugs where the lack of isolation makes it
+so that Materialize becomes unresponsive for customers, for multiple seconds at
+a time. This can shake confidence in Materialize, which would also be a blocker
+for adoption or expansion. There is some recency bias to thinking how urgend
+these bugs are, but here's the latest example, where we had to disable a
+feature because it can block the coordinator main loop for 10s of seconds or
+more: https://github.com/MaterializeInc/materialize/pull/33070.
+
 ## Success Criteria
 
 We want to address both of the problems mentioned above, but scalability is the
