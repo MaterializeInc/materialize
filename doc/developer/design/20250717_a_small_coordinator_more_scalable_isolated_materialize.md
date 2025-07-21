@@ -287,3 +287,5 @@ what is and isn't blocking for a long time, and ultimately a single loop that
 sequentializes will keep being a bottleneck.
 
 ## Open questions
+
+None, so far.
