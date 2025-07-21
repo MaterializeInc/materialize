@@ -59,32 +59,31 @@ more: https://github.com/MaterializeInc/materialize/pull/33070.
 
 ## Success Criteria
 
-We want to address both of the problems mentioned above, but scalability is the
-one where its easier to give more quantitative goals. Isolation is covered by
-the more qualitative goals.
+We want to address both problems mentioned above, but scalability is easier to
+quantify. Isolation is covered by the qualitative goals.
 
-- When running throughput benchmarks, the metric showing time spend processing
-  messages on the main loop must be nowhere near 1 second. That is the main
-  loop must not be the bottleneck.
-- The Coordinator is so small, in terms of types of commands and the complexity
-  of each command, that it is feasible to audit all of them and conclude that
-  nothing can block the main loop unreasonably long.
+- When running throughput benchmarks, the metric showing time spent processing
+  messages on the main loop must be nowhere near 1 second. The main loop must
+  not be the bottleneck.
+- The Coordinator is so small -- in terms of the types of commands and the
+  complexity of each command -- that it is feasible to audit all commands and
+  conclude that nothing can block the main loop unreasonably long.
 
 ## Out of Scope
 
 - We want to do this work within the current singleton `environmentd` process.
-  No aspirations beyond that. So no horizontal scalability of the Coordinator.
-- We don't want to improve numbers in throughput benchmarks. Only remove the
-  Coordinator as a bottleneck. Our work _might_ increase throughput numbers, or
-  it might show that there are similar bottlenecks in other parts of the
-  system.
+  That is, we don't yet address horizontal scalability of the query/control
+  layer.
+- We don't want to improve throughput benchmark numbers, only remove the
+  Coordinator as a bottleneck. Our work might increase throughput numbers or
+  reveal similar bottlenecks in other parts of the system.
 
 ## Background
 
-The Coordinator has had its current design since the early days of the code
-base. The fact that it is a single control loop that sequentializes all
-modifications of durable state was necessary for providing the Materialize
-correctness experience, our consistency guarantees, strict serializability.
+The Coordinator has had its current design since the early days of the
+codebase. A single control loop that sequentializes all modifications of
+durable state was put in place to provide Materialize's correctness guarantees,
+consistency, strict serializability.
 
 It had to sequence DDL, regular queries, the storage/compute controllers
 changing state, everything. Putting it in Rust terms, all of the persistent or
@@ -94,9 +93,9 @@ consistency) was using in-memory state (backed by periodically synced disk
 state), that was not shareable, not the distributed timestamp oracle we have
 now.
 
-Today, the distributed timestamp oracle provides correctness, and DDL goes
-through catalog modifications, which is backed by a persist shard. And the
-machinery would notice and handle concurrent modifications.
+Today, the distributed timestamp oracle provides correctness, and DDL has to
+modify the catalog, which is backed by a persist shard. And that machinery
+notices and handles concurrent modifications (with some caveats).
 
 The platform v2 design doc on [a logical architecture for a scalable and
 isolated Materialize](20231127_pv2_uci_logical_architecture.md) goes into more
@@ -106,14 +105,12 @@ the Coordinator below.
 
 > [!NOTE]
 > The coordinator main loop runs inside an `async` task, but throughout this
-> doc we will also use the term single-threaded, or single thread. For the
-> discussion it is not important whether it's an async task or a thread. It's
-> an implementation detail.
+> doc we use the term single-threaded. Whether it's an async task or thread is
+> not important for this discussion.
 
 ### Interesting Components
 
-For this design doc, we are interested in ADAPTER components and how they
-interact:
+We are interested in ADAPTER components and how they interact:
 
 - _adapter frontend_: this is the code that terminates a `pgwire` connection
   from the user/client. Each connection is being run by an `async` task that
@@ -131,27 +128,26 @@ interact:
 
 ### Small vs. Big Coordinator
 
-In this document, we are arguing for a _Small Coordinator_ and we retroactively
-call what we have right now a _Big Coordinator_. The Coordinator is big in
-terms of the types of commands it supports, how complex ("big") those commands
-are, and how much time the Coordinator has to spend on its main loop for
-processing those commands. Currently, the frontend sends commands of the shape
-EXECUTE SELECT or EXECUTE DDL. These are higher-level, complex commands. The
-alternative is a Small Coordinator that supports a much reduced set of simpler
-commands: most of the work would have to happen in other parts of the system
-and the Coordinator only has too be involved when absolutely necessary. A good
-analogy might be CISC vs RISC instruction sets, where CISC has fewer, more
-complex opcodes and RISC has possibly more, but simpler opcodes.
+We argue for a _Small Coordinator_ and retroactively call what we have now a
+_Big Coordinator_. The Coordinator is big in terms of the types of commands it
+supports, how complex ("big") those commands are, and how much time the
+Coordinator has to spend on its main loop for processing those commands.
+Currently, the frontend sends commands of the shape EXECUTE SELECT or EXECUTE
+DDL. These are higher-level, complex commands. The alternative is a Small
+Coordinator that supports a much reduced set of simpler commands: most of the
+work would have to happen in other parts of the system and the Coordinator only
+has too be involved when absolutely necessary. A good analogy might be CISC vs
+RISC instruction sets, where CISC has fewer, more complex opcodes and RISC has
+possibly more, but simpler opcodes.
 
 ### Staged Processing
 
-To work around the limitation that time on the coordinator main loop is limited
-the concept of _stages_, or _staged processing_ was introduced. First for peeks
-(aka SELECT) but then also for other things. The idea is that the Coordinator
-gathers the pieces that are required for a certain step in processing a peek,
-on the main loop, then fires of an async task to do the actual work. The task
-will then send a command back to the Coordinator when ready, which will then
-resume processing on the main loop, potentially firing off more stages.
+To work around limited time on the coordinator main loop, the concept of
+_staged processing_ was introduced. First for peeks (SELECT) but then for other
+things. The Coordinator gathers required pieces for processing a peek on the
+main loop, then fires off an async task to do the actual work. The task sends a
+command back to the Coordinator when ready, which resumes processing on the
+main loop, potentially firing off more stages.
 
 This is a band aid because it doesn't fix the ultimate scalability problems
 _and_ it makes the code more complicated and harder to understand. It makes it
@@ -159,63 +155,58 @@ harder to audit code running in the main loop.
 
 ## Benchmarks
 
-We did not run comprehensive benchmarks, the purpose here is to show how the
-Coordinator behaves when there is a sustained workload and how command
-processing becomes the bottleneck.
+We did not run comprehensive benchmarks; the purpose is to show how the
+Coordinator behaves under sustained workload and how command processing becomes
+the bottleneck.
 
 The benchmark runs `SELECT` statements with concurrent clients (128
-connections). On my machine, I get about 5000 qps. And we see these metrics on
-the rate of commands being processed (also known as "messages" in the code and
-elsewhere):
+connections). On my machine, I get about 5000 qps. We see these metrics on the
+rate of commands being processed (also known as "messages" in the code and
+metrics):
 
 <img src="./static/a_small_coordinator/select-metrics-message-count.png" alt="SELECT benchmark - message counts" width="50%">
 
-Around 5000 we see a number of interesting message types, these correspond with
-our 5000 qps. They are:
+Around 5000 we see interesting message types that correspond with our 5000 qps:
 
-- `command-execute`: this is the command that starts execution of the SELECT.
-- `command-catalog_snapshot`: this is a command for getting a snapshot of the
-  catalog, needed for processing SELECT.
-- `command-commit`: this is the command that will be executed for finalizing a
-  single SELECT execution.
-- `controller_ready(compute)`: this is the compute controller signaling that a
-  peek result is ready, and the the Coordinator needs to do something about it.
+- `command-execute`: starts execution of the SELECT.
+- `command-catalog_snapshot`: gets a snapshot of the catalog, needed for
+  processing SELECT.
+- `command-commit`: finalizes a single SELECT execution.
+- `controller_ready(compute)`: the compute controller signaling that a peek
+  result is ready and the Coordinator needs to act.
 
-The top line is `peek_stage_ready`, which originate in the staged processing
-machinery explained above. We can see that there are two async stages that are
-fired off for processing each SELECT.
+The top line is `peek_stage_ready`, which originates in the staged processing
+machinery explained above. There are two async stages fired off for processing
+each SELECT.
 
-When we look at the metric that shows the total time spend processing commands
-on the main loop, we see that we are very near our 1 second theoretical
-maximum. Especially when accounting for overhead of the loop machinery, message
-channels, etc., we can say that this is currently the bottleneck:
+When we look at the metric showing total time spent processing commands on the
+main loop, we are very near our 1 second theoretical maximum. When accounting
+for overhead of the loop machinery, message channels, etc., we can see that
+this is currently the bottleneck:
 
 <img src="./static/a_small_coordinator/select-metrics-message-time-total.png" alt="SELECT benchmark - total time spend processing commands" width="50%">
 
 ## Proposal
 
-As is likely clear by now, we propose to work towards a Small Coordinator. We
-propose to start that work _now_ because of the urgency, but do it
-incrementally, so that over time we will arrive at the goal of a Small
+We propose to work towards a Small Coordinator. We should start this work _now_
+because of urgency, but do it incrementally to arrive at the goal of a Small
 Coordinator. We will not outline a comprehensive step-by-step implementation
-plan but instead we will provide examples of workflows and how we can move from
-big to small and then provide a rough implementation plan for immediate next
-steps.
+plan but instead provide examples of workflows and how we can move from big to
+small, then provide a rough implementation plan for immediate next steps.
 
-Overall, we should use a data-driven approach: we can use the
-message-processing metrics to find where we spend time on the Coordinator main
-loop, both at steady state and when processing certain important or
-representative workloads. And then we tackle those usages of the loop and the
-associated commands. Additionally, we can lean into recency bias and let bugs
-or observations of lack of isolation guide what other parts we need to address.
+We should use a data-driven approach: use message-processing metrics to find
+where we spend time on the Coordinator main loop, both at steady state and when
+processing important or representative workloads. Then we tackle those usages
+of the loop and associated commands. Additionally, we can let bugs or
+observations of lack of isolation guide what other parts we need to address.
 
 ### Processing SELECTs
 
 For SELECT, the bulk of the work is currently driven by the main loop. The
-frontend sends an EXECUTE SELECT message and the Coordinator then does the
-sequencing, firing off of staged tasks, and talking to the controller(s). This
-diagram visualizes the workflow for the current Big Coordinator. We can clearly
-see that a lot of time is spent on the main loop:
+frontend sends an EXECUTE SELECT message and the Coordinator does sequencing,
+fires off staged tasks, and talks to controllers. This diagram visualizes the
+workflow for the current Big Coordinator. A lot of time is spent on the main
+loop:
 
 <img src="./static/a_small_coordinator/big-coord-select.png" alt="Big Coordinator - processing SELECT" width="50%">
 
@@ -224,10 +215,10 @@ We propose this approach for moving towards a Small Coordinator:
 - Determine what bundles of data and access is needed for processing SELECT.
 - Introduce interfaces/clients (or re-use existing ones) and small commands
   that allow the frontend to get them from the Coordinator.
-- Move main driver code for executing SELECT to the frontend. And it uses the
-  new interfaces and commands to retrieve what it needs.
+- Move main driver code for executing SELECT to the frontend, using the new
+  interfaces and commands to retrieve what it needs.
 
-Concretely, we think for SELECT the required interfaces and commands are:
+For SELECT, the required interfaces and commands are:
 
 - `get_catalog_snapshot` -> `Catalog` (exists)
 - `get_timestamp_oracle` -> `TimestampOracle` (exists)
@@ -237,10 +228,9 @@ Concretely, we think for SELECT the required interfaces and commands are:
   `StorageCollections` (exists, from [design: decoupled storage
   controller](20240117_decoupled_storage_controller.md))
 
-The workflow after those changes will look like this. The work is "pushed out"
-from the main loop to the frontend (which already has a task/thread per
-connection), and the controller. Much less time is spent on the coordinator
-main loop:
+The workflow after those changes looks like this. The work is "pushed out" from
+the main loop to the frontend (which already has a task/thread per connection)
+and the controller. Much less time is spent on the coordinator main loop:
 
 <img src="./static/a_small_coordinator/small-coord-select.png" alt="Small Coordinator - processing SELECT" width="50%">
 
@@ -278,32 +268,30 @@ this:
 
 ### Implementation Plan
 
-We think this will be a longer-running project, but as immediate next steps we
-suggest changes that address the problems mentioned in the introduction. We
-start with SELECT processing as the workload where we want to reduce command
-processing time/count. Additionally, because they are low-hanging fruits, we
-should take the rest of controller processing off the Coordinator main loop.
+This will be a longer-running project, but as immediate next steps we suggest
+changes that address the problems mentioned in the introduction. We start with
+SELECT processing as the workload where we want to reduce command processing
+time/count. Additionally, because they are low-hanging fruit, we should take
+the rest of controller processing off the Coordinator main loop.
 
-That is, we initially have these small-ish tasks which can be worked off
-concurrently:
+We initially have these tasks which can be worked on concurrently:
 
 1. Move SELECT processing to the frontend.
 2. Remove remaining places where the compute controller needs processing on the
-   main loop. So follow-ups to [PR: decoupled compute
-   controller](https://github.com/MaterializeInc/materialize/pull/29559).
-3. Move storage controller processing to a background task, similar to how we
-   did it already for the compute controller. Again, see [PR: decoupled compute
-   controller](https://github.com/MaterializeInc/materialize/pull/29559).
+   main loop (follow-ups to [PR: decoupled compute
+   controller](https://github.com/MaterializeInc/materialize/pull/29559)).
+3. Move storage controller processing to a background task, similar to the
+   compute controller (again, see [PR: decoupled compute
+   controller](https://github.com/MaterializeInc/materialize/pull/29559)).
 
-And then we retake stock of what are the pressing issues and continue shrinking
-the Coordinator.
+Then we reassess pressing issues and continue shrinking the Coordinator.
 
 ## Alternatives
 
-An alternative is that we keep the Big Coordinator and invest more into staged
-command processing. I don't think this helps because we cannot audit easily
-what is and isn't blocking for a long time, and ultimately a single loop that
-sequentializes will keep being a bottleneck.
+An alternative is keeping the Big Coordinator and investing more into staged
+command processing. This doesn't help because we cannot easily audit what is
+and isn't blocking for a long time, and ultimately a single loop that
+sequentializes will remain a bottleneck.
 
 ## Open questions
 
