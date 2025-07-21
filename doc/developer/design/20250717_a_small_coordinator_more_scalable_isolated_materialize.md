@@ -27,11 +27,11 @@ COMPUTE) updates. There are two important consequences of that:
    needed 10ms of time on the main loop that would impose a strict upper limit
    of 100 SELECTs/s, regardless of how much capacity other parts of the system
    have for processing.
-2. Lack of use-case isolation: When, because of bugs or because of unexpected
-   behavior or just because, an operation takes more time on the main loop than
-   expected, this will "steal" time from other operations that are vying for
-   time on the loop. One use-case that is using a lot of Materialize will make
-   Materialize worse for other use cases.
+2. Lack of use-case isolation: When an operation takes longer than expected on
+   the main loop -- due to bugs, unexpected behavior, or other reasons -- it
+   "steals" time from other operations that need time on the loop. One use-case
+   that is using a lot of Materialize will make Materialize worse for other use
+   cases.
 
 We can see the first of these when running benchmarks. We have metrics about
 how many commands the main loop is processing and how much time they're taking
@@ -52,7 +52,7 @@ have customers soon for which our scalability limits become a blocker for
 expansion and we do see a trickle of bugs where the lack of isolation makes it
 so that Materialize becomes unresponsive for customers, for multiple seconds at
 a time. This can shake confidence in Materialize, which would also be a blocker
-for adoption or expansion. There is some recency bias to thinking how urgend
+for adoption or expansion. There is some recency bias to thinking how urgent
 these bugs are, but here's the latest example, where we had to disable a
 feature because it can block the coordinator main loop for 10s of seconds or
 more: https://github.com/MaterializeInc/materialize/pull/33070.
@@ -95,7 +95,8 @@ state), that was not shareable, not the distributed timestamp oracle we have
 now.
 
 Today, the distributed timestamp oracle provides correctness, and DDL goes
-through catalog modifications which would realize concurrent modifications.
+through catalog modifications, which is backed by a persist shard. And the
+machinery would notice and handle concurrent modifications.
 
 The platform v2 design doc on [a logical architecture for a scalable and
 isolated Materialize](20231127_pv2_uci_logical_architecture.md) goes into more
@@ -111,7 +112,8 @@ the Coordinator below.
 
 ### Interesting Components
 
-For this doc, were are interested in ADAPTER components and how they interact:
+For this design doc, we are interested in ADAPTER components and how they
+interact:
 
 - _adapter frontend_: this is the code that terminates a `pgwire` connection
   from the user/client. Each connection is being run by an `async` task that
@@ -155,7 +157,7 @@ This is a band aid because it doesn't fix the ultimate scalability problems
 _and_ it makes the code more complicated and harder to understand. It makes it
 harder to audit code running in the main loop.
 
-## "Benchmarks"
+## Benchmarks
 
 We did not run comprehensive benchmarks, the purpose here is to show how the
 Coordinator behaves when there is a sustained workload and how command
