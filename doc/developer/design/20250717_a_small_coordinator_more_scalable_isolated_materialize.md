@@ -228,6 +228,10 @@ For SELECT, the required interfaces and commands are:
   `StorageCollections` (exists, from [design: decoupled storage
   controller](20240117_decoupled_storage_controller.md))
 
+We need the `Catalog` for resolving objects in the query, the `TimestampOracle`
+for selecting a query timestamp, and the controllers for acquiring read holds
+and actually setting off the peek.
+
 The workflow after those changes looks like this. The work is "pushed out" from
 the main loop to the frontend (which already has a task/thread per connection)
 and the controller. Much less time is spent on the coordinator main loop:
@@ -274,7 +278,7 @@ SELECT processing as the workload where we want to reduce command processing
 time/count. Additionally, because they are low-hanging fruit, we should take
 the rest of controller processing off the Coordinator main loop.
 
-We initially have these tasks which can be worked on concurrently:
+We propose these tasks which can be worked on concurrently:
 
 1. Move SELECT processing to the frontend.
 2. Remove remaining places where the compute controller needs processing on the
@@ -285,6 +289,36 @@ We initially have these tasks which can be worked on concurrently:
    controller](https://github.com/MaterializeInc/materialize/pull/29559)).
 
 Then we reassess pressing issues and continue shrinking the Coordinator.
+
+## A Note on Horizontal Scalability and Use-Case Isolation
+
+This proposal does not aim at working on horizontal scalability of
+`environmentd` but we think it is an incremental step towards that. Pushing
+processing out of the Coordinator and into the frontend will make us put in
+place the interfaces that are needed for processing queries and will make the
+code more amenable to running in concurrent processes.
+
+Taking the example of processing SELECTs from above, together with a good dose
+of hand waving, we argue that none of the required clients/interfaces will need
+a central coordinator: anyone with a persist client can read and write the
+Catalog, the distributed timestamp oracle is a "thin client" of CRDB right now
+and so can also be invoked from anywhere.
+
+As a strawman sketch, we could now put one cluster-specific `environmentd` in
+front of every cluster. The controllers running within are only responsible for
+replicas of its cluster and it could serve peeks from its cluster. It could
+also execute DDL and any other command that don't involve clusters, but not
+queries that would require talking to another `environmentd`'s cluster
+replicas.
+
+One wrinkle with the above is that the Catalog Client/Coordinator code cannot
+currently act on Catalog changes that it discovers from other writers, but that
+is achievable with a good amount of elbow grease.
+
+There are more thorough arguments for this in the already mentioned [a logical
+architecture for a scalable and isolated
+Materialize](20231127_pv2_uci_logical_architecture.md).
+
 
 ## Alternatives
 
