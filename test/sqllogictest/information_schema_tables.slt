@@ -389,6 +389,10 @@ mz_kafka_source_tables
 BASE TABLE
 materialize
 mz_internal
+mz_license_keys
+BASE TABLE
+materialize
+mz_internal
 mz_materialization_dependencies
 VIEW
 materialize

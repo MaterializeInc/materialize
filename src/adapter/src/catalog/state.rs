@@ -41,6 +41,7 @@ use mz_controller::clusters::{
 };
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::{CollectionPlan, OptimizedMirRelationExpr};
+use mz_license_keys::ValidatedLicenseKey;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NOW_ZERO;
 use mz_ore::soft_assert_no_log;
@@ -158,6 +159,10 @@ pub struct CatalogState {
     pub(super) aws_principal_context: Option<AwsPrincipalContext>,
     pub(super) aws_privatelink_availability_zones: Option<BTreeSet<String>>,
     pub(super) http_host_name: Option<String>,
+
+    // Read-only not derived from the durable catalog.
+    #[serde(skip)]
+    pub(super) license_key: ValidatedLicenseKey,
 }
 
 /// Keeps track of what expressions are cached or not during startup.
@@ -309,6 +314,7 @@ impl CatalogState {
             comments: Default::default(),
             source_references: Default::default(),
             storage_metadata: Default::default(),
+            license_key: ValidatedLicenseKey::for_tests(),
         }
     }
 
