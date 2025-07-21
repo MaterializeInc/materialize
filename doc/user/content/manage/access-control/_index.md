@@ -1,119 +1,139 @@
 ---
-title: "Access control"
-description: "How to configure and manage access control in Materialize."
+title: "Access control (Role-based)"
+description: "How to configure and manage role-based access control (RBAC) in Materialize."
 disable_list: true
+aliases:
+  - /manage/access-control/rbac/
 menu:
   main:
     parent: manage
-    name: Access control
     identifier: 'access-control'
-    weight: 10
+    weight: 12
 ---
 
 {{< note >}}
 Configuring and managing access control in Materialize
-requires **administrator** privileges.
+requires **administrator** privileges; e.g., **Organization Admin** role.
 {{</ note >}}
 
-Access control in Materialize is configured at two levels: access to the
-[Materialize Console](https://console.materialize.com/) and access within the
-database. The privileges assigned on user invitation have implications at both
-levels, so we recommend carefully evaluating your access control needs ahead of
-expanding the number of users in your Materialize organization.
+<a name="role-based-access-control-rbac" ></a>
 
-## Account management
+In Materialize, organizations can use role-based access management (RBAC) to
+help prevent unauthorized or improper access to sensitive objects. For example,
+organization administrators can sue RBAC to:
 
-### Inviting users
+* Determine which users have read or write privileges for specific objects.
 
-As an **administrator**, you can invite new users via the Materialize Console.
-Depending on the level of access each user should have, you can assign them
-`Organization Admin` or `Organization Member` privileges.
+* Control how users interact with clusters by giving them different levels of
+access to resources.
 
-   - `Organization Admin`: can perform adminstration tasks in the console, like
-     inviting new users, editing account and security information, or managing
-     billing. Admins have _superuser_ privileges in the database.
+* Prevent accidental operations from unauthorized users.
 
-   - `Organization Member`: can log in to the console and has restricted access
-     to the database, depending  on the privileges defined via
-     [role-based access control (RBAC)](#role-based-access-control-rbac).
+* Isolate access to user-facing data from internal organization data.
 
-These privileges primarily determine a user's **access level to the console**,
-but also have implications in the **default access level to the database**.
-More granular permissions within the database must be handled separately using
-[role-based access control (RBAC)](#role-based-access-control-rbac).
+A role is a collection of privileges you can apply to users. Roles make it
+easier to assign or revoke privileges on Materialize objects. You can group
+users into specified roles with different levels of privileges and adjust those
+privileges to ensure they have the correct level of access to objects.
 
-[//]: # "TODO(morsapaes) Add a specific anotation for tutorial call-outs, to
-make these more noticeable."
+In Materialize, you have both:
 
-To invite users to your Materialize organization, follow [this step-by-step guide](/manage/access-control/invite-users).
+- Predefined [Organization roles](#organization-roles)
 
-### Configuring single sign-on (SSO)
+- Custom user roles (associated with a specific user/function/etc.)
 
-As an **administrator** of a Materialize organization, you can configure single
-sign-on (SSO) as an additional layer of account security using your existing
-[SAML](https://auth0.com/blog/how-saml-authentication-works/)- or
-[OpenID Connect](https://auth0.com/intro-to-iam/what-is-openid-connect-oidc)-based
-identity provider. This ensures that all users can securely log in to the
-Materialize Console using the same authentication scheme and credentials across
-all systems in your organization.
+## Organization roles
 
-To configure SSO for your Materialize organization, follow [this step-by-step guide](/manage/access-control/sso).
+Each user/service account in Materialize is associated with an organization
+role:
 
-### Configuring network policies
-
-By default, Materialize is available on the public internet without any
-network-layer access control. As an **administrator** of a Materialize
-organization, you can configure network policies to restrict access to a
-Materialize region using IP-based rules.
-
-To configure network policies in your Materialize organization, follow
-[this step-by-step guide](/manage/access-control/manage-network-policies).
-
-### Creating service accounts
-
-It's a best practice to use service accounts (i.e., non-human users) to connect
-external applications and services to Materialize. As an **administrator** of a
-Materialize organization, you can create service accounts manually via the
-[Materialize Console](https://console.materialize.com/), or programatically
-via [Terraform](/manage/terraform/).
-
-To create a service account in your Materialize organization, follow
-[this step-by-step guide](/manage/access-control/create-service-accounts).
-
-### Using an external secret store
-
-[//]: # "NOTE(morsapaes) This sits kind of awkward in here, but feels like the
-best place to plug it. Need to add some more meat if we keep it."
-
-Although Materialize does not integrate directly with external secret stores,
-it’s possible to manage this integration via [Terraform](/manage/terraform).
-
-Check the [Terraform documentation](/manage/terraform/appendix-secret-stores/)
-for more details on how to integrate with common external secret stores, like
-HashiCorp Vault or AWS Secrets Manager.
-
-## Role-based access control (RBAC)
-
-[//]: # "NOTE(morsapaes) These instructions assume that RBAC is enabled at the
-time of region creation. For existing regions, we assume that migration to RBAC
-is whitegloved."
+{{< yaml-table data="access-controls/organization_roles" >}}
 
 The default level of access to the database is determined by the
-organization-level role a user is assigned on invitation (`Organization Admin`
-or `Organization Member`). When an invited user logs in for the first time
-(and only then), a [role](./rbac/#roles) with the same name as their e-mail
-address is created.
+organization-level role a user/service account is assigned.
 
 The first user in an organization, and subsequently any user that is assigned
 `Organization Admin`, is a database _superuser_, and has unrestricted access to
 all resources in a Materialize region. Users that are assigned `Organization
-Member` are restricted to a [default set of basic privileges](#modifying-default-privileges)
-that need to be configured and modified via role-based access control (RBAC).
+Member` are restricted to a [default set of basic
+privileges](#modifying-default-privileges) that need to be configured and
+modified via role-based access control (RBAC).
 
-RBAC allows you to configure granular access control to the resources in your
-Materialize region through a hierarchy of [roles](/sql/grant-role/) and
-[privileges](/sql/grant-privilege/). For a deep-dive into how RBAC works in
-Materialize, check [Role-based access control (RBAC)](./rbac).
+## User roles
+
+When an invited user logs in for the first time (and only then), a role with the
+same name as their e-mail address is created. Administrators can also separately
+create roles.
+
+### Role attributes
+
+Role attributes are actions available to any role you create. Attributes are
+independent of any other object in Materialize and apply to the entire
+organization. You can edit these actions when you create the role:
+
+| Name              | Description                                                                 |
+|-------------------|-----------------------------------------------------------------------------|
+| `INHERIT`         | **Read-only.** Can inherit privileges of other roles.                       |
+
+PostgreSQL uses role attributes to determine if a role is allowed to execute certain statements. In
+Materialize these have all been replaced by system privileges.
+
+### Privileges
+
+Privileges are the actions or operations a role is allowed to perform on a
+specific object. After you create a role, you can grant it the following
+object-specific privileges in Materialize:
+
+| Privilege             | Description                                                                                    | `psql` |
+|-----------------------|------------------------------------------------------------------------------------------------|--------|
+| `SELECT`              | Allows selecting rows from an object.                                                          | `r`    |
+| `INSERT`              | Allows inserting into an object.                                                               | `a`    |
+| `UPDATE`              | Allows updating an object (requires `SELECT`).                                                 | `w`    |
+| `DELETE`              | Allows deleting from an object (requires `SELECT`).                                            | `d`    |
+| `CREATE`              | Allows creating a new object within another object.                                            | `C`    |
+| `USAGE`               | Allows using an object or looking up members of an object.                                     | `U`    |
+| `CREATEROLE`          | Allows creating, altering, deleting roles and the ability to grant and revoke role membership. | `R`    |
+| `CREATEDB`            | Allows creating databases.                                                                     | `B`    |
+| `CREATECLUSTER`       | Allows creating clusters.                                                                      | `N`    |
+| `CREATENETWORKPOLICY` | Allows creating network policies.                                                              | `P`    |
+
+
+Note that the system catalog uses the abbreviation of the privilege name.
+
+Objects in Materialize have different levels of privileges available to them.
+Materialize supports the following object type privileges:
+
+| Object Type          | Privileges                                                       |
+|----------------------|------------------------------------------------------------------|
+| `SYSTEM`             | `CREATEROLE`, `CREATEDB`, `CREATECLUSTER`, `CREATENETWORKPOLICY` |
+| `DATABASE`           | `USAGE`, `CREATE`                                                |
+| `SCHEMA`             | `USAGE`, `CREATE`                                                |
+| `TABLE`              | `INSERT`, `SELECT`, `UPDATE`, `DELETE`                           |
+| `VIEW`               | `SELECT`                                                         |
+| `MATERIALIZED  VIEW` | `SELECT`                                                         |
+| `TYPE`               | `USAGE`                                                          |
+| `SOURCE`             | `SELECT`                                                         |
+| `CONNECTION`         | `USAGE`                                                          |
+| `SECRET`             | `USAGE`                                                          |
+| `CLUSTER`            | `USAGE`, `CREATE`                                                |
+
+Materialize object access is also dependent on cluster privileges.
+Roles that need access to an object that use compute resources must also have
+the same level of access to the cluster. Materialize objects that use compute
+resources are:
+
+* Replicas
+* Sources
+* Sinks
+* Indexes
+* Materialized views
+
+### Inheritance
+
+Inheritance in RBAC allows you to create roles that inherit privileges from
+other roles. Inheritance only applies to role privileges; role attributes and
+parameters are **not inherited**. Inheriting privileges allows you to minimize
+the number of roles you have to manage.
 
 ### Configuring basic RBAC
 
@@ -331,6 +351,3 @@ This strategy allows you to add an extra layer of access control to your
 critical environments, and ensure that any user with privileges to perform
 destructive actions is performing them intentionally in that specific
 environment. It's like `sudo` for your database!
-
-[//]: # "TODO(morsapaes) It feels too specific to add the RBAC observability
-views here. Need to think about where to work these in."

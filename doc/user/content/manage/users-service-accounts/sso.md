@@ -1,8 +1,13 @@
 ---
-title: "Single sign-on (SSO)"
+title: "Configure single sign-on (SSO)"
 description: "Configure single sign-on (SSO) using SAML or Open ID Connect as an additional layer of account security."
 aliases:
   - /manage/sso/
+  - /manage/access-control/sso/
+menu:
+  main:
+    parent: user-service-accounts
+    weight: 15
 ---
 
 As an **administrator** of a Materialize organization, you can configure single

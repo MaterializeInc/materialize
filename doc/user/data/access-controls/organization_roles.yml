@@ -1,0 +1,15 @@
+columns:
+  - column: Organization role
+  - column: Description
+
+rows:
+  - Organization role: "**Organization Admin**"
+    Description: |
+      - Admins can perform adminstration tasks in the Console; e.g., invite new
+      users, create service accounts, edit account and security information, or
+      manage billing.
+
+      - Admins have **superuser** privileges in the database.
+  - Organization role: "**Organization Member**"
+    Description: |
+      - Members have access to the database as determined by the privileges defined via [role-based access control (RBAC)](/manage/access-control/).
