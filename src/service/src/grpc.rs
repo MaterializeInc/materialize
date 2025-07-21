@@ -357,7 +357,7 @@ where
                             None => break,
                             Some(Ok(command)) => command,
                             Some(Err(e)) => {
-                                error!("error handling client: {e}");
+                                warn!("error handling client: {e}");
                                 break;
                             }
                         };
