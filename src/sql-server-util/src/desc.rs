@@ -238,7 +238,7 @@ impl SqlServerColumnDesc {
 
     /// Check if this [`SqlServerColumnDesc`] is excluded from being replicated into Materialize.
     pub fn is_excluded(&self) -> bool {
-        self.column_type == None
+        self.column_type.is_none()
     }
 }
 
