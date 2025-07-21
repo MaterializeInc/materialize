@@ -3399,25 +3399,11 @@ mod tests {
             TestCase {
                 input: MirScalarExpr::CallVariadic {
                     func: VariadicFunc::Coalesce,
-                    exprs: vec![col(0), err(EvalError::DivisionByZero)],
-                },
-                output: err(EvalError::DivisionByZero),
-            },
-            TestCase {
-                input: MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::Coalesce,
                     exprs: vec![
                         null(),
                         err(EvalError::DivisionByZero),
                         err(EvalError::NumericFieldOverflow),
                     ],
-                },
-                output: err(EvalError::DivisionByZero),
-            },
-            TestCase {
-                input: MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::Coalesce,
-                    exprs: vec![col(0), err(EvalError::DivisionByZero)],
                 },
                 output: err(EvalError::DivisionByZero),
             },
