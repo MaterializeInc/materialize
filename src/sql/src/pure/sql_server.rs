@@ -163,30 +163,33 @@ pub(super) async fn purify_source_exports(
         })
         .collect();
 
-    let tables: Vec<_> = requested_exports
-        .into_iter()
-        .map(|requested| {
-            let mut table = requested
-                .meta
-                .sql_server_table()
-                .expect("sql server source")
-                .clone();
+    let mut tables = vec![];
+    for requested in requested_exports {
+        let mut table = requested
+            .meta
+            .sql_server_table()
+            .expect("sql server source")
+            .clone();
 
-            let maybe_text_cols = text_cols_map.get(&table.qualified_name());
-            let maybe_excl_cols = excl_cols_map.get(&table.qualified_name());
+        let maybe_text_cols = text_cols_map.get(&table.qualified_name());
+        let maybe_excl_cols = excl_cols_map.get(&table.qualified_name());
 
-            if let Some(text_cols) = maybe_text_cols {
-                table.apply_text_columns(text_cols);
-            }
-            // TODO(sql_server2): Should we prevent excluding all columns? What do our other
-            // sources do?
-            if let Some(excl_cols) = maybe_excl_cols {
-                table.apply_excl_columns(excl_cols);
-            }
+        if let Some(text_cols) = maybe_text_cols {
+            table.apply_text_columns(text_cols);
+        }
 
-            requested.change_meta(table)
-        })
-        .collect();
+        if let Some(excl_cols) = maybe_excl_cols {
+            table.apply_excl_columns(excl_cols);
+        }
+
+        if table.columns.iter().all(|c| c.is_excluded()) {
+            Err(SqlServerSourcePurificationError::AllColumnsExcluded {
+                tbl_name: Arc::clone(&table.name),
+            })?
+        }
+
+        tables.push(requested.change_meta(table));
+    }
 
     if tables.is_empty() {
         Err(SqlServerSourcePurificationError::NoTables)?;
