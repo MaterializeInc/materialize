@@ -1,10 +1,14 @@
 ---
 title: "Manage network policies"
-description: ""
+description: "Manage/configure network policies to restrict access to a Materialize region using IP-based rules."
+aliases:
+  - /manage/access-control/manage-network-policies/
 menu:
   main:
-    parent: access-control
-    weight: 17
+    parent: "manage"
+    weight: 14
+    name: "Manage network policies"
+    identifier: "manage-network-policies"
 ---
 
 {{< tip >}}

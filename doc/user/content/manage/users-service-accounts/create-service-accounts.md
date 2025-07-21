@@ -1,20 +1,22 @@
 ---
 title: "Create service accounts"
-description: "How to create a new service account (i.e., non-human user) to connect external applications and services to Materialize."
+description: "Create a new service account (i.e., non-human user) to connect external applications and services to Materialize."
+aliases:
+  - /manage/access-control/create-service-accounts/
 menu:
   main:
-    parent: access-control
-    weight: 16
+    parent: user-service-accounts
+    weight: 10
 ---
 
 It's a best practice to use service accounts (i.e., non-human users) to connect
 external applications and services to Materialize. As an **administrator** of a
 Materialize organization, you can create service accounts manually via the
-[Materialize Console](#materialize-console), or programatically via
+[Materialize Console](#materialize-console) or programatically via
 [Terraform](#terraform).
 
 More granular permissions for the service account can then be configured using
-[role-based access control (RBAC)](/manage/access-control/#role-based-access-control-rbac).
+[role-based access control (RBAC)](/manage/access-control/).
 
 ## Materialize Console
 
