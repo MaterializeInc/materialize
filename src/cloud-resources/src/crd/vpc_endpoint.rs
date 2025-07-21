@@ -11,7 +11,7 @@
 //! environment-controller.
 use std::fmt;
 
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -46,7 +46,7 @@ pub mod v1 {
         pub role_suffix: String,
     }
 
-    #[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq)]
+    #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq)]
     #[serde(rename_all = "camelCase")]
     pub struct VpcEndpointStatus {
         // This will be None if the customer hasn't allowed our principal, got the name of their
@@ -54,8 +54,34 @@ pub mod v1 {
         pub vpc_endpoint_id: Option<String>,
         pub state: Option<VpcEndpointState>,
         pub conditions: Option<Vec<Condition>>,
+        pub auto_assigned_azs: Option<Vec<String>>,
     }
 
+    impl Default for VpcEndpointStatus {
+        fn default() -> Self {
+            Self {
+                vpc_endpoint_id: None,
+                state: Some(VpcEndpointState::Unknown),
+                conditions: Some(Self::default_conditions()),
+                auto_assigned_azs: None,
+            }
+        }
+    }
+
+    impl VpcEndpointStatus {
+        pub fn default_conditions() -> Vec<Condition> {
+            vec![Condition {
+                type_: "Available".into(),
+                status: "Unknown".to_string(),
+                last_transition_time: Time(chrono::offset::Utc::now()),
+                message: v1::VpcEndpointState::Unknown.message().into(),
+                observed_generation: None,
+                reason: "".into(),
+            }]
+        }
+    }
+
+    /// The AWS SDK State enum is not serializable, so we have to make our own.
     #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq)]
     #[serde(rename_all = "camelCase")]
     pub enum VpcEndpointState {
@@ -78,24 +104,66 @@ pub mod v1 {
         PendingAcceptance,
         Rejected,
         Unknown,
+        // Could not place the endpoint in a subnet with the provided AZs
+        MissingAvailabilityZones,
+    }
+
+    impl VpcEndpointState {
+        // These are high level messages that can be used in conditions and
+        // may be forwarded to end users. It is important to make them concise
+        // and at a level which can be understand by end users of materialize
+        pub fn message(&self) -> &str {
+            match self {
+                VpcEndpointState::PendingServiceDiscovery => {
+                    "Endpoint cannot be discovered, ensure the Vpc Endpoint Service is allowing discovery"
+                }
+                VpcEndpointState::CreatingEndpoint => "Endpoint is being created",
+                VpcEndpointState::RecreatingEndpoint => "Endpoint is being re-created",
+                VpcEndpointState::UpdatingEndpoint => "Endpoint is being updated",
+                VpcEndpointState::Available => "Endpoint is available",
+                VpcEndpointState::Deleted => "Endpoint has been deleted",
+                VpcEndpointState::Deleting => "Endpoint is being deleted",
+                VpcEndpointState::Expired => {
+                    "The Endpoint acceptance period has lapsed, you can still manually accept the Endpoint"
+                }
+                VpcEndpointState::Failed => "Endpoint creation has failed",
+                VpcEndpointState::Pending => {
+                    "Endpoint creation is pending, this should resolve shortly"
+                }
+                VpcEndpointState::PendingAcceptance => {
+                    "The Endpoint connection to the Endpoint Service is pending acceptance"
+                }
+                VpcEndpointState::Rejected => {
+                    "The Endpoint connection to the Endpoint Service has been rejected"
+                }
+                VpcEndpointState::Unknown => {
+                    "The Endpoint is in an unknown state, this should resolve momentarily"
+                }
+                VpcEndpointState::MissingAvailabilityZones => {
+                    "The Endpoint cannot be created due to missing availability zones"
+                }
+            }
+        }
     }
 
     impl fmt::Display for VpcEndpointState {
+        // Internal States
         fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
             let repr = match self {
-                VpcEndpointState::PendingServiceDiscovery => "pending-service-discovery",
-                VpcEndpointState::CreatingEndpoint => "creating-endpoint",
-                VpcEndpointState::RecreatingEndpoint => "recreating-endpoint",
-                VpcEndpointState::UpdatingEndpoint => "updating-endpoint",
+                VpcEndpointState::PendingServiceDiscovery => "pendingServiceDiscovery",
+                VpcEndpointState::CreatingEndpoint => "creatingEndpoint",
+                VpcEndpointState::RecreatingEndpoint => "recreatingEndpoint",
+                VpcEndpointState::UpdatingEndpoint => "updatingEndpoint",
                 VpcEndpointState::Available => "available",
                 VpcEndpointState::Deleted => "deleted",
                 VpcEndpointState::Deleting => "deleting",
                 VpcEndpointState::Expired => "expired",
                 VpcEndpointState::Failed => "failed",
                 VpcEndpointState::Pending => "pending",
-                VpcEndpointState::PendingAcceptance => "pending-acceptance",
+                VpcEndpointState::PendingAcceptance => "pendingAcceptance",
                 VpcEndpointState::Rejected => "rejected",
                 VpcEndpointState::Unknown => "unknown",
+                VpcEndpointState::MissingAvailabilityZones => "missingAvailabilityZones",
             };
             write!(f, "{}", repr)
         }
