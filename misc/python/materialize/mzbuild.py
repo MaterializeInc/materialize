@@ -1207,7 +1207,19 @@ class DependencySet:
             post_build: A callback to invoke with each dependency that was built
                 locally.
         """
-        deps_to_build = [dep for dep in self if not dep.is_published_if_necessary()]
+        num_deps = len(list(self))
+        if not num_deps:
+            deps_to_build = []
+        else:
+            with ThreadPoolExecutor(max_workers=num_deps) as executor:
+                futures = list(
+                    executor.map(
+                        lambda dep: (dep, not dep.is_published_if_necessary()), self
+                    )
+                )
+
+            deps_to_build = [dep for dep, should_build in futures if should_build]
+
         prep = self._prepare_batch(deps_to_build)
         lock = Lock()
         built_deps: set[str] = set([dep.name for dep in self]) - set(
