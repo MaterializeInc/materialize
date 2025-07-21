@@ -747,7 +747,6 @@ mod tests {
 
     #[crate::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: cannot write to event
-    #[ignore] // TODO: reenable when database-issues#9482 is fixed
     fn test_retry_fail_max_duration() {
         let mut states = vec![];
         let res = Retry::default()
@@ -759,41 +758,43 @@ mod tests {
             });
         assert_eq!(res, Err("injected"));
 
-        // The first try should indicate a next backoff of exactly 10ms.
-        assert_eq!(
-            states[0],
-            RetryState {
-                i: 0,
-                next_backoff: Some(Duration::from_millis(10))
-            },
-        );
+        // Normally we expect three tries. However, on a busy system it might take longer than 10ms
+        // for the thread to be unparked after the backoff sleep ends, in which case the second try
+        // may be be skipped.
+        match &*states {
+            [try1, try2, try3] => {
+                // The first try should indicate a next backoff of exactly 10ms.
+                assert_eq!(try1.i, 0);
+                assert_eq!(try1.next_backoff, Some(Duration::from_millis(10)));
 
-        // The next try should indicate a next backoff of between 0 and 10ms. The
-        // exact value depends on how long it took for the first try itself to
-        // execute.
-        assert_eq!(states[1].i, 1);
-        let backoff = states[1].next_backoff.unwrap();
-        assert!(backoff > Duration::from_millis(0) && backoff < Duration::from_millis(10));
+                // The next try should indicate a next backoff of between 0 and 10ms.
+                assert_eq!(try2.i, 1);
+                let backoff = try2.next_backoff.unwrap();
+                assert!(backoff > Duration::ZERO || backoff < Duration::from_millis(10));
 
-        // The final try should indicate that the operation is complete with
-        // a next backoff of None.
-        assert_eq!(
-            states[2],
-            RetryState {
-                i: 2,
-                next_backoff: None,
-            },
-        );
+                // The final try should indicate that the operation is complete with a next backoff
+                // of None.
+                assert_eq!(try3.i, 2);
+                assert_eq!(try3.next_backoff, None);
+            }
+            [try1, try2] => {
+                assert_eq!(try1.i, 0);
+                assert_eq!(try1.next_backoff, Some(Duration::from_millis(10)));
+
+                assert_eq!(try2.i, 1);
+                assert_eq!(try2.next_backoff, None);
+            }
+            _ => panic!("unexpected number of tries: {states:?}"),
+        }
     }
 
     #[crate::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: cannot write to event
-    #[ignore] // TODO: Reenable when database-issues#7441 is fixed
     async fn test_retry_async_fail_max_duration() {
         let mut states = vec![];
         let res = Retry::default()
-            .initial_backoff(Duration::from_millis(5))
-            .max_duration(Duration::from_millis(10))
+            .initial_backoff(Duration::from_millis(10))
+            .max_duration(Duration::from_millis(20))
             .retry_async(|state| {
                 states.push(state);
                 async { Err::<(), _>("injected") }
@@ -801,34 +802,34 @@ mod tests {
             .await;
         assert_eq!(res, Err("injected"));
 
-        // The first try should indicate a next backoff of exactly 5ms.
-        assert_eq!(
-            states[0],
-            RetryState {
-                i: 0,
-                next_backoff: Some(Duration::from_millis(5))
-            },
-        );
+        // Normally we expect three tries. However, on a busy system it might take longer than 10ms
+        // for the task to be scheduled again after the backoff sleep ends, in which case the
+        // second try may be be skipped.
+        match &*states {
+            [try1, try2, try3] => {
+                // The first try should indicate a next backoff of exactly 10ms.
+                assert_eq!(try1.i, 0);
+                assert_eq!(try1.next_backoff, Some(Duration::from_millis(10)));
 
-        // The next try should indicate a next backoff of between 0 (None) and 5ms. The
-        // exact value depends on how long it took for the first try itself to
-        // execute.
-        assert_eq!(states[1].i, 1);
-        assert!(match states[1].next_backoff {
-            None => true,
-            Some(backoff) =>
-                backoff > Duration::from_millis(0) && backoff < Duration::from_millis(5),
-        });
+                // The next try should indicate a next backoff of between 0 and 10ms.
+                assert_eq!(try2.i, 1);
+                let backoff = try2.next_backoff.unwrap();
+                assert!(backoff > Duration::ZERO || backoff < Duration::from_millis(10));
 
-        // The final try should indicate that the operation is complete with
-        // a next backoff of None.
-        assert_eq!(
-            states[2],
-            RetryState {
-                i: 2,
-                next_backoff: None,
-            },
-        );
+                // The final try should indicate that the operation is complete with a next backoff
+                // of None.
+                assert_eq!(try3.i, 2);
+                assert_eq!(try3.next_backoff, None);
+            }
+            [try1, try2] => {
+                assert_eq!(try1.i, 0);
+                assert_eq!(try1.next_backoff, Some(Duration::from_millis(10)));
+
+                assert_eq!(try2.i, 1);
+                assert_eq!(try2.next_backoff, None);
+            }
+            _ => panic!("unexpected number of tries: {states:?}"),
+        }
     }
 
     #[crate::test]
