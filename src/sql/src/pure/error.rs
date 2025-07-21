@@ -383,7 +383,7 @@ pub enum SqlServerSourcePurificationError {
         col_type: Arc<str>,
     },
     #[error("Table {tbl_name} had all columns excluded")]
-    NoColumnsForTable { tbl_name: Arc<str> },
+    AllColumnsExcluded { tbl_name: Arc<str> },
     #[error("No tables found for provided reference")]
     NoTables,
     #[error("programming error: {0}")]

@@ -183,7 +183,7 @@ pub(super) async fn purify_source_exports(
         }
 
         if table.columns.iter().all(|c| c.is_excluded()) {
-            Err(SqlServerSourcePurificationError::NoColumnsForTable {
+            Err(SqlServerSourcePurificationError::AllColumnsExcluded {
                 tbl_name: Arc::clone(&table.name),
             })?
         }
