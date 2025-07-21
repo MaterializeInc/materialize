@@ -84,12 +84,14 @@ impl Client {
 
                 (tcp, Some(Box::new(tunnel)))
             }
-            TunnelConfig::AwsPrivatelink { connection_id: _ } => {
-                // TODO(sql_server2): Getting this right is tricky because
-                // there is some subtle logic with hostname validation.
-                return Err(SqlServerError::Generic(anyhow::anyhow!(
-                    "Support PrivateLink connections"
-                )));
+            TunnelConfig::AwsPrivatelink { connection_id } => {
+                let privatelink_host = mz_cloud_resources::vpc_endpoint_name(*connection_id);
+
+                let tcp = TcpStream::connect(privatelink_host)
+                    .await
+                    .context("aws privatelink")?;
+
+                (tcp, None)
             }
         };
 

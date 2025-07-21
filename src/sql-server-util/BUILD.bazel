@@ -32,6 +32,7 @@ rust_library(
     version = "0.1.0",
     deps = [
         ":mz_sql_server_util_build_script",
+        "//src/cloud-resources:mz_cloud_resources",
         "//src/ore:mz_ore",
         "//src/proto:mz_proto",
         "//src/repr:mz_repr",
@@ -67,6 +68,7 @@ rust_test(
     rustc_flags = [],
     version = "0.1.0",
     deps = [
+        "//src/cloud-resources:mz_cloud_resources",
         "//src/ore:mz_ore",
         "//src/proto:mz_proto",
         "//src/repr:mz_repr",
@@ -81,6 +83,7 @@ rust_doc_test(
     name = "mz_sql_server_util_doc_test",
     crate = ":mz_sql_server_util",
     deps = [
+        "//src/cloud-resources:mz_cloud_resources",
         "//src/ore:mz_ore",
         "//src/proto:mz_proto",
         "//src/repr:mz_repr",

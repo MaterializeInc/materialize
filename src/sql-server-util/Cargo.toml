@@ -27,6 +27,7 @@ mz-ore = { path = "../ore", features = ["async"] }
 mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr" }
 mz-ssh-util = { path = "../ssh-util" }
+mz-cloud-resources = { path = "../cloud-resources" }
 ordered-float = { version = "5.0.0", features = ["serde"] }
 proptest = { version = "1.7.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.5.1", features = ["boxed_union"] }
