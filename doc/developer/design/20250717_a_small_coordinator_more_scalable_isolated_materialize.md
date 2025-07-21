@@ -276,8 +276,25 @@ this:
 
 ### Implementation Plan
 
-- Decoupled Compute Controller: https://github.com/MaterializeInc/materialize/pull/29559
-- decoupled storage controller: [decoupled storage controller](20240117_decoupled_storage_controller.md)
+We think this will be a longer-running project, but as immediate next steps we
+suggest changes that address the problems mentioned in the introduction. We
+start with SELECT processing as the workload where we want to reduce command
+processing time/count. Additionally, because they are low-hanging fruits, we
+should take the rest of controller processing off the Coordinator main loop.
+
+That is, we initially have these small-ish tasks which can be worked off
+concurrently:
+
+1. Move SELECT processing to the frontend.
+2. Remove remaining places where the compute controller needs processing on the
+   main loop. So follow-ups to [PR: decoupled compute
+   controller](https://github.com/MaterializeInc/materialize/pull/29559).
+3. Move storage controller processing to a background task, similar to how we
+   did it already for the compute controller. Again, see [PR: decoupled compute
+   controller](https://github.com/MaterializeInc/materialize/pull/29559).
+
+And then we retake stock of what are the pressing issues and continue shrinking
+the Coordinator.
 
 ## Alternatives
 
