@@ -1,0 +1,23 @@
+columns:
+  - column: "Valid/Invalid"
+  - column: "mz_now() clause"
+
+rows:
+  - "mz_now() clause": |
+      ```mzsql
+      WHERE mz_now() > order_date + INTERVAL '5min';
+      ```
+
+    "Valid/Invalid": |
+      <blue>Materialize SQL</blue> ✅
+
+  - "Valid/Invalid": |
+      <red>Anti-pattern</red> ❌
+
+    "mz_now() clause": |
+
+      <red>Not supported</red>
+
+      ```mzsql
+      WHERE mz_now() - INTERVAL '5min' > order_date;
+      ```
