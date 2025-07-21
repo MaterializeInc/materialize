@@ -11,7 +11,7 @@ aliases:
 ---
 
 This page shows you how to stream data from a self-hosted SQL Server database
-to Materialize using the [SQL Server source](/sql/create-source/sql-server/).
+to Materialize using the [SQL Server Source](/sql/create-source/sql-server/).
 
 {{< tip >}}
 {{< guided-tour-blurb-for-ingest-data >}}
@@ -118,6 +118,10 @@ networking configuration, so start by selecting the relevant option.
 
 {{< tab "Allow Materialize IPs">}}
 {{% sql-server-direct/ingesting-data/allow-materialize-ips %}}
+{{< /tab >}}
+
+{{< tab "Use an SSH tunnel">}}
+{{% sql-server-direct/ingesting-data/use-ssh-tunnel %}}
 {{< /tab >}}
 
 {{< /tabs >}}
