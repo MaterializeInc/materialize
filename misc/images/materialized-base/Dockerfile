@@ -57,7 +57,3 @@ RUN MZ_ENDPOINT=http://localhost:6876 \
     && rm /etc/nginx/templates/default.conf.template
 
 USER materialize
-
-RUN pg_ctlcluster 16 main start \
-    && psql -U postgres -c "CREATE ROLE root WITH LOGIN PASSWORD 'root'" \
-    && psql -U postgres -c "CREATE DATABASE root OWNER root"

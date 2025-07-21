@@ -42,10 +42,9 @@ EOF
 # Start PostgreSQL, unless suppressed.
 if [ -z "${MZ_NO_BUILTIN_POSTGRES:-}" ]; then
   pg_ctlcluster 16 main start
-  psql -U root -c "CREATE SCHEMA IF NOT EXISTS consensus"
-  psql -U root -c "CREATE SCHEMA IF NOT EXISTS storage"
-  psql -U root -c "CREATE SCHEMA IF NOT EXISTS adapter"
-  psql -U root -c "CREATE SCHEMA IF NOT EXISTS tsoracle"
+  psql -U postgres -c "CREATE ROLE root WITH LOGIN PASSWORD 'root'" || true
+  psql -U postgres -c "CREATE DATABASE root OWNER root" || true
+  psql -U root -c "CREATE SCHEMA IF NOT EXISTS consensus; CREATE SCHEMA IF NOT EXISTS storage; CREATE SCHEMA IF NOT EXISTS adapter; CREATE SCHEMA IF NOT EXISTS tsoracle"
 fi
 
 # Start nginx to serve the console.
