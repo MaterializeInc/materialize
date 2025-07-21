@@ -3,6 +3,7 @@ Some general guidelines for usage patterns include:
 | Usage Pattern | General Guideline |
 |--------------------------------------------------------------------------------|--------------------|
 | View results are accessed from a single cluster only;<br>such as in a 1-cluster or a 2-cluster architecture. | View with an [index](/sql/create-index) |
+| View used as a building block for stacked views; i.e., views not used to serve results. | View |
 | View results are accessed across [clusters](/concepts/clusters);<br>such as in a 3-cluster architecture. | Materialized view (in the transform cluster)<br>Index on the materialized view (in the serving cluster) |
 | Use with a [sink](/serve-results/sink/) or a [`SUBSCRIBE`](/sql/subscribe) operation | Materialized view  |
 | Use with [temporal filters](/transform-data/patterns/temporal-filters/) | Materialized view  |

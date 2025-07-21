@@ -12,7 +12,10 @@ architecture](/manage/operational-guidelines/#three-tier-architecture)
 where queries are served from a cluster different from the compute/transform
 cluster that maintains the view results:
 
-- Use materialized view(s) in the compute/transform cluster.
+- Use materialized view(s) in the compute/transform cluster for the query
+  results that will be served.
+
+  {{< include-md file="shared-content/stacked-view-consideration.md" >}}
 
 - Index the materialized view in the serving cluster(s) to serve the results
 from memory.
