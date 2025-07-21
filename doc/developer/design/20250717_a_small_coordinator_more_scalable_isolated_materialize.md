@@ -13,9 +13,6 @@ is, a Coordinator that is less involved in processing user requests. This will
 lead to a more scalable _and_ more isolated system, without grander ambitions
 of implementing full horizontal scalability and isolation of Materialize.
 
-- Decoupled Compute Controller: https://github.com/MaterializeInc/materialize/pull/29559
-- decoupled storage controller: [decoupled storage controller](20240117_decoupled_storage_controller.md)
-
 ## The Problem
 
 The Coordinator is a component of the ADAPTER layer that is sequentializing
@@ -195,13 +192,65 @@ channels, etc., we can say that this is currently the bottleneck:
 
 ## Proposal
 
+As is likely clear by now, we propose to work towards a Small Coordinator. We
+propose to start that work _now_ because of the urgency, but do it
+incrementally, so that over time we will arrive at the goal of a Small
+Coordinator. We will not outline a comprehensive step-by-step implementation
+plan but instead we will provide examples of workflows and how we can move from
+big to small and then provide a rough implementation plan for immediate next
+steps.
+
+Overall, we should use a data-driven approach: we can use the
+message-processing metrics to find where we spend time on the Coordinator main
+loop, both at steady state and when processing certain important or
+representative workloads. And then we tackle those usages of the loop and the
+associated commands. Additionally, we can lean into recency bias and let bugs
+or observations of lack of isolation guide what other parts we need to address.
+
+### Processing SELECTs
+
+For SELECT, the bulk of the work is currently driven by the main loop. The
+frontend sends an EXECUTE SELECT message and the coordinator then does the
+sequencing, firing off of staged tasks, and talking to the controller(s). This
+diagram visualizes the workflow for the current Big Coordinator. We can clearly
+see that a lot of time is spent on the main loop:
+
 <img src="./static/a_small_coordinator/big-coord-select.png" alt="Big Coordinator - processing SELECT" width="50%">
+
+We propose this approach for moving towards a Small Coordinator:
+
+- Determine what bundles of data and access is needed for processing SELECT.
+- Introduce interfaces/clients (or re-use existing ones) and small commands
+  that allow the frontend to get them from the Coordinator.
+- Move main driver code for executing SELECT to the frontend. And it uses the
+  new interfaces and commands to retrieve what it needs.
+
+Concretely, we think for SELECT the required interfaces and commands are:
+
+- `get_catalog_snapshot` -> `Catalog` (exists)
+- `get_timestamp_oracle` -> `TimestampOracle` (exists)
+- `get_controller_clients` -> `ComputeControllerClient` (roughly exists already
+  after [PR: decoupled compute
+  controller](https://github.com/MaterializeInc/materialize/pull/29559)),
+  `StorageCollections` (exists, from [design: decoupled storage
+  controller](20240117_decoupled_storage_controller.md))
+
+The workflow after those changes will look like this. The work is "pushed out"
+from the main loop to the frontend (which already has a task/thread per
+connection), and the controller. Much less time is spent on the coordinator
+main loop:
+
 <img src="./static/a_small_coordinator/small-coord-select.png" alt="Small Coordinator - processing SELECT" width="50%">
+
+### Controller Processing
 
 <img src="./static/a_small_coordinator/big-coord-controller.png" alt="Big Coordinator - controller processing" width="50%">
 <img src="./static/a_small_coordinator/small-coord-controller.png" alt="Small Coordinator - controller processing" width="50%">
 
 ### Implementation Plan
+
+- Decoupled Compute Controller: https://github.com/MaterializeInc/materialize/pull/29559
+- decoupled storage controller: [decoupled storage controller](20240117_decoupled_storage_controller.md)
 
 ## Alternatives
 
