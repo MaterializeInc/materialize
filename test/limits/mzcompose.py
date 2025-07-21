@@ -2047,7 +2047,7 @@ def workflow_main(c: Composition, parser: WorkflowArgumentParser) -> None:
 def run_scenarios(
     c: Composition, scenarios: list[type[Generator]], find_limit: bool, workers: int
 ):
-    c.up("testdrive", persistent=True)
+    c.up({"name": "testdrive", "persistent": True})
 
     setup(c, workers)
 
@@ -2208,7 +2208,6 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
     assert args.replicas <= MAX_REPLICAS, "SERVICES have to be static"
     assert args.nodes <= MAX_NODES, "SERVICES have to be static"
 
-    c.up("testdrive", persistent=True)
     c.up(
         "zookeeper",
         "kafka",
@@ -2216,6 +2215,7 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
         "materialized",
         "balancerd",
         "frontegg-mock",
+        {"name": "testdrive", "persistent": True},
     )
 
     # Construct the requied Clusterd instances and peer them into clusters

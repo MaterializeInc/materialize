@@ -86,7 +86,7 @@ def workflow_default(c: Composition) -> None:
     )
 
     try:
-        c.up("testdrive", persistent=True)
+        c.up({"name": "testdrive", "persistent": True})
 
         # Assert that the default max_result_size is served when sync is disabled.
         with c.override(Materialized(external_metadata_store=True)):

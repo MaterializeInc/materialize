@@ -259,13 +259,13 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
             process_names=["clusterd_2_1", "clusterd_2_2"],
         ),
     ):
-        c.up("testdrive", persistent=True)
         c.up(
             "materialized",
             "clusterd_1_1",
             "clusterd_1_2",
             "clusterd_2_1",
             "clusterd_2_2",
+            {"name": "testdrive", "persistent": True},
         )
 
         c.sql(

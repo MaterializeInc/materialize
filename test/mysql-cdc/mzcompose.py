@@ -203,8 +203,7 @@ def workflow_many_inserts(c: Composition, parser: WorkflowArgumentParser) -> Non
     """
     mysql_version = get_targeted_mysql_version(parser)
     with c.override(create_mysql(mysql_version)):
-        c.up("materialized", "mysql")
-        c.up("testdrive", persistent=True)
+        c.up("materialized", "mysql", {"name": "testdrive", "persistent": True})
 
         # Records to before creating the source.
         (initial_sql, initial_records) = _make_inserts(txns=1, txn_size=1_000_000)
@@ -292,8 +291,7 @@ def workflow_large_scale(c: Composition, parser: WorkflowArgumentParser) -> None
     """
     mysql_version = get_targeted_mysql_version(parser)
     with c.override(create_mysql(mysql_version)):
-        c.up("materialized", "mysql")
-        c.up("testdrive", persistent=True)
+        c.up("materialized", "mysql", {"name": "testdrive", "persistent": True})
 
         # Set up the MySQL server with the initial records, set up the connection to
         # the MySQL server in Materialize.

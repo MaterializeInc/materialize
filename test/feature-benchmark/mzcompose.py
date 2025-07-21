@@ -183,7 +183,7 @@ def run_one_scenario(
 
         entrypoint_host = "balancerd" if balancerd else "materialized"
 
-        c.up("testdrive", persistent=True)
+        c.up({"name": "testdrive", "persistent": True})
 
         additional_system_parameter_defaults = (
             ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS

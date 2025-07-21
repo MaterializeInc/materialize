@@ -108,7 +108,7 @@ def run_sqllogictest(
             work_queue.put((step, file))
 
     # Hacky way to make sure we have downloaded the image
-    c.up("slt_1", persistent=True)
+    c.up({"name": "slt_1", "persistent": True})
 
     def worker(container_name: str):
         exception: Exception | None = None

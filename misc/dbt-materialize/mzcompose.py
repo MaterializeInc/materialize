@@ -56,6 +56,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument("-s", action="store_true", help="don't suppress output")
     args = parser.parse_args()
 
+    c.up({"name": "dbt", "persistent": True})
+
     for test_case in test_cases:
         if args.filter in test_case.name:
             print(f"> Running test case {test_case.name}")
@@ -77,9 +79,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             with c.test_case(test_case.name):
                 with c.override(materialized):
                     c.down()
-                    c.up("redpanda")
-                    c.up("materialized")
-                    c.up("testdrive", persistent=True)
+                    c.up(
+                        "redpanda",
+                        "materialized",
+                        {"name": "testdrive", "persistent": True},
+                    )
 
                     # Create a topic that some tests rely on
                     c.testdrive(

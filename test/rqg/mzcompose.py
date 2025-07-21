@@ -222,7 +222,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     args = parser.parse_args()
 
-    c.up("rqg", persistent=True)
+    c.up({"name": "rqg", "persistent": True})
 
     if args.workloads is not None and len(args.workloads) > 0:
         workloads_to_run = [w for w in WORKLOADS if w.name in args.workloads]

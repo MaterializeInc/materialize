@@ -29,5 +29,5 @@ def workflow_default(c: Composition) -> None:
         "postgres",
         "mysql",
         "materialized",
+        {"name": "testdrive", "persistent": True},
     )
-    c.up("testdrive", persistent=True)

@@ -154,8 +154,6 @@ class ExecutionMode(Enum):
 
 
 def setup(c: Composition) -> None:
-    c.up("testdrive", persistent=True)
-
     c.up(
         "test-certs",
         "zookeeper",
@@ -165,6 +163,7 @@ def setup(c: Composition) -> None:
         "mysql",
         "debezium",
         "ssh-bastion-host",
+        {"name": "testdrive", "persistent": True},
     )
 
     c.enable_minio_versioning()
