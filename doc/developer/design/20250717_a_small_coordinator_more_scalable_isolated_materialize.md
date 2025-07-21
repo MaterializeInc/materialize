@@ -130,9 +130,9 @@ For this doc, were are interested in ADAPTER components and how they interact:
 ### Small vs. Big Coordinator
 
 In this document, we are arguing for a _Small Coordinator_ and we retroactively
-call what we have right now a _Big Coordinator_. The coordinator is big in
+call what we have right now a _Big Coordinator_. The Coordinator is big in
 terms of the types of commands it supports, how complex ("big") those commands
-are, and how much time the coordinator has to spend on its main loop for
+are, and how much time the Coordinator has to spend on its main loop for
 processing those commands. Currently, the frontend sends commands of the shape
 EXECUTE SELECT or EXECUTE DDL. These are higher-level, complex commands. The
 alternative is a Small Coordinator that supports a much reduced set of simpler
@@ -210,7 +210,7 @@ or observations of lack of isolation guide what other parts we need to address.
 ### Processing SELECTs
 
 For SELECT, the bulk of the work is currently driven by the main loop. The
-frontend sends an EXECUTE SELECT message and the coordinator then does the
+frontend sends an EXECUTE SELECT message and the Coordinator then does the
 sequencing, firing off of staged tasks, and talking to the controller(s). This
 diagram visualizes the workflow for the current Big Coordinator. We can clearly
 see that a lot of time is spent on the main loop:
@@ -244,7 +244,34 @@ main loop:
 
 ### Controller Processing
 
+Before more recent changes motivated by [a logical architecture for a scalable
+and isolated Materialize](20231127_pv2_uci_logical_architecture.md), every time
+the controller(s) wanted to affect environment state (ephemeral or durable)
+they needed to do so on the coordinator main loop. This has partially changed
+for the storage controller with the implementation of [decoupled storage
+controller](20240117_decoupled_storage_controller.md) where we factored out a
+`StorageCollections`, which does its work off the main loop. And for the
+compute controller with [PR: decoupled compute
+controller](https://github.com/MaterializeInc/materialize/pull/29559).
+
+But as we can see from the metrics during SELECT processing, there is still
+_some_ work that the controller(s) need to do on the main loop and we should
+aim at removing as much of that as possible.
+
+The pattern before recent changes (and still now), is that the controllers
+report as `ready`, when they need to do processing on the main loop and then
+the Coordinator will invoke them. This is visualized here:
+
 <img src="./static/a_small_coordinator/big-coord-controller.png" alt="Big Coordinator - controller processing" width="50%">
+
+To move to a Small Coordinator, we need to change the storage controller to do
+its work in its own task, similar to how we did for the compute controller in
+[PR: decoupled compute
+controller](https://github.com/MaterializeInc/materialize/pull/29559). With
+that work fully realized, both for the storage controller and the remaining
+compute controller moments a visualization of the workflow would look like
+this:
+
 <img src="./static/a_small_coordinator/small-coord-controller.png" alt="Small Coordinator - controller processing" width="50%">
 
 ### Implementation Plan
@@ -254,7 +281,7 @@ main loop:
 
 ## Alternatives
 
-An alternative is that we keep the big Coordinator and invest more into staged
+An alternative is that we keep the Big Coordinator and invest more into staged
 command processing. I don't think this helps because we cannot audit easily
 what is and isn't blocking for a long time, and ultimately a single loop that
 sequentializes will keep being a bottleneck.
