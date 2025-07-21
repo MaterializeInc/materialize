@@ -45,18 +45,20 @@ ALTER SYSTEM SET enable_introspection_subscribes = false
 
 > CREATE VIEW vv AS SELECT * FROM t
 
-> SELECT COUNT(*)
-  FROM (SELECT import_frontiers.export_id, import_frontiers.import_id
-        FROM
-            mz_introspection.mz_compute_import_frontiers AS import_frontiers)
+> SELECT COUNT(*) FROM (
+    SELECT import_frontiers.export_id, import_frontiers.import_id
+    FROM mz_introspection.mz_compute_import_frontiers AS import_frontiers
+    WHERE export_id LIKE 'u%'
+  )
 1
 
 > CREATE DEFAULT INDEX ON vv
 
-> SELECT COUNT(*)
-  FROM (SELECT import_frontiers.export_id, import_frontiers.import_id
-        FROM
-            mz_introspection.mz_compute_import_frontiers AS import_frontiers)
+> SELECT COUNT(*) FROM (
+    SELECT import_frontiers.export_id, import_frontiers.import_id
+    FROM mz_introspection.mz_compute_import_frontiers AS import_frontiers
+    WHERE export_id LIKE 'u%'
+  )
 2
 
 > SELECT COUNT(*)
@@ -75,34 +77,38 @@ ALTER SYSTEM SET enable_introspection_subscribes = false
 
 > CREATE MATERIALIZED VIEW mvv AS SELECT * FROM vv
 
-> SELECT COUNT(*)
-  FROM (SELECT import_frontiers.export_id, import_frontiers.import_id
-        FROM
-            mz_introspection.mz_compute_import_frontiers AS import_frontiers)
+> SELECT COUNT(*) FROM (
+    SELECT import_frontiers.export_id, import_frontiers.import_id
+    FROM mz_introspection.mz_compute_import_frontiers AS import_frontiers
+    WHERE export_id LIKE 'u%'
+  )
 3
 
 > DROP MATERIALIZED VIEW mvv
 
-> SELECT COUNT(*)
-  FROM (SELECT import_frontiers.export_id, import_frontiers.import_id
-        FROM
-            mz_introspection.mz_compute_import_frontiers AS import_frontiers)
+> SELECT COUNT(*) FROM (
+    SELECT import_frontiers.export_id, import_frontiers.import_id
+    FROM mz_introspection.mz_compute_import_frontiers AS import_frontiers
+    WHERE export_id LIKE 'u%'
+  )
 2
 
 > DROP INDEX vv_primary_idx
 
-> SELECT COUNT(*)
-  FROM (SELECT import_frontiers.export_id, import_frontiers.import_id
-        FROM
-            mz_introspection.mz_compute_import_frontiers AS import_frontiers)
+> SELECT COUNT(*) FROM (
+    SELECT import_frontiers.export_id, import_frontiers.import_id
+    FROM mz_introspection.mz_compute_import_frontiers AS import_frontiers
+    WHERE export_id LIKE 'u%'
+  )
 1
 
 > DROP MATERIALIZED VIEW mv
 
-> SELECT COUNT(*)
-  FROM (SELECT import_frontiers.export_id, import_frontiers.import_id
-        FROM
-            mz_introspection.mz_compute_import_frontiers AS import_frontiers)
+> SELECT COUNT(*) FROM (
+    SELECT import_frontiers.export_id, import_frontiers.import_id
+    FROM mz_introspection.mz_compute_import_frontiers AS import_frontiers
+    WHERE export_id LIKE 'u%'
+  )
 0
 
 # Test that frontiers of introspection sources advance at all.
