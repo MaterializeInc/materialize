@@ -20,7 +20,7 @@ requires **administrator** privileges; e.g., **Organization Admin** role.
 
 In Materialize, organizations can use role-based access management (RBAC) to
 help prevent unauthorized or improper access to sensitive objects. For example,
-organization administrators can sue RBAC to:
+organization administrators can use RBAC to:
 
 * Determine which users have read or write privileges for specific objects.
 
