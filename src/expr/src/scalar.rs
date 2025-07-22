@@ -1237,11 +1237,7 @@ impl MirScalarExpr {
                             let mut prior_exprs = BTreeSet::new();
                             exprs.retain(|e| prior_exprs.insert(e.clone()));
 
-                            if let Some(expr) = exprs.iter_mut().find(|e| e.is_literal_err()) {
-                                // One of the remaining arguments is an error, so
-                                // just replace the entire coalesce with that error.
-                                *e = expr.take();
-                            } else if exprs.len() == 1 {
+                            if exprs.len() == 1 {
                                 // Only one argument, so the coalesce is a no-op.
                                 *e = exprs[0].take();
                             }
@@ -3403,25 +3399,11 @@ mod tests {
             TestCase {
                 input: MirScalarExpr::CallVariadic {
                     func: VariadicFunc::Coalesce,
-                    exprs: vec![col(0), err(EvalError::DivisionByZero)],
-                },
-                output: err(EvalError::DivisionByZero),
-            },
-            TestCase {
-                input: MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::Coalesce,
                     exprs: vec![
                         null(),
                         err(EvalError::DivisionByZero),
                         err(EvalError::NumericFieldOverflow),
                     ],
-                },
-                output: err(EvalError::DivisionByZero),
-            },
-            TestCase {
-                input: MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::Coalesce,
-                    exprs: vec![col(0), err(EvalError::DivisionByZero)],
                 },
                 output: err(EvalError::DivisionByZero),
             },
