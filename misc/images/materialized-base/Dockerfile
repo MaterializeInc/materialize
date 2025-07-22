@@ -25,6 +25,7 @@ RUN groupadd --system --gid=999 materialize \
     && useradd --system --gid=999 --uid=999 --create-home materialize \
     && apt-get update \
     && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get -qy install --no-install-recommends \
+        ca-certificates \
         curl \
         gettext-base \
         nginx \
