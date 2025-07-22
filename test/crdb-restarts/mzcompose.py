@@ -171,8 +171,7 @@ def run_disruption(c: Composition, d: CrdbDisruption) -> None:
     ]:
         c.exec("cockroach0", "cockroach", "sql", "--insecure", "-e", query)
 
-    c.up("materialized")
-    c.up("testdrive", persistent=True)
+    c.up("materialized", {"name": "testdrive", "persistent": True})
 
     # We expect the testdrive fragment to complete within Testdrive's default_timeout
     # This will indicate that Mz has not hung for a prolonged period of time

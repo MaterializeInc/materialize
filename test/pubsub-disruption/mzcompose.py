@@ -80,8 +80,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     for disruption in selected_by_name(args.disruptions, disruptions):
         c.down(destroy_volumes=True)
-        c.up("redpanda", "materialized")
-        c.up("testdrive", persistent=True)
+        c.up("redpanda", "materialized", {"name": "testdrive", "persistent": True})
 
         toxiproxy_start(c)
 

@@ -337,8 +337,7 @@ def workflow_large_scale(c: Composition, parser: WorkflowArgumentParser) -> None
             pg_version=pg_version, extra_command=["-c", "max_replication_slots=3"]
         )
     ):
-        c.up("materialized", "postgres")
-        c.up("testdrive", persistent=True)
+        c.up("materialized", "postgres", {"name": "testdrive", "persistent": True})
 
         # Set up the Postgres server with the initial records, set up the connection to
         # the Postgres server in Materialize.

@@ -227,9 +227,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument("tests", nargs="*", default=None, help="run specified tests")
     args = parser.parse_args()
 
-    c.up("redpanda", "postgres", "materialized")
-
-    c.up("testdrive", persistent=True)
+    c.up(
+        "redpanda",
+        "postgres",
+        "materialized",
+        {"name": "testdrive", "persistent": True},
+    )
 
     for database_object in database_objects:
         if (

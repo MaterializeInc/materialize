@@ -38,8 +38,7 @@ def workflow_default(c: Composition) -> None:
 
 
 def setup(c: Composition) -> None:
-    c.up("materialized")
-    c.up("testdrive", persistent=True)
+    c.up("materialized", {"name": "testdrive", "persistent": True})
 
 
 # Test that the catalog is consistent for the three types of retain histories (disabled, default,

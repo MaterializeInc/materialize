@@ -63,7 +63,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             default_timeout="1200s",
         ),
     ):
-        c.up("testdrive", persistent=True)
+        c.up({"name": "testdrive", "persistent": True})
 
         failures: list[TestFailureDetails] = []
 

@@ -73,7 +73,7 @@ class KafkaTransactionLogGreaterThan1:
         print(f"+++ Running disruption scenario {self.name}")
         seed = random.randint(0, 256**4)
 
-        c.up("testdrive", persistent=True)
+        c.up({"name": "testdrive", "persistent": True})
 
         with c.override(
             Testdrive(
@@ -144,8 +144,12 @@ class KafkaDisruption:
         seed = random.randint(0, 256**4)
 
         c.down(destroy_volumes=True, sanity_restart_mz=False)
-        c.up("testdrive", persistent=True)
-        c.up("redpanda", "materialized", "clusterd")
+        c.up(
+            "redpanda",
+            "materialized",
+            "clusterd",
+            {"name": "testdrive", "persistent": True},
+        )
 
         with c.override(
             Testdrive(
@@ -255,8 +259,12 @@ class KafkaSinkDisruption:
         seed = random.randint(0, 256**4)
 
         c.down(destroy_volumes=True, sanity_restart_mz=False)
-        c.up("testdrive", persistent=True)
-        c.up("redpanda", "materialized", "clusterd")
+        c.up(
+            "redpanda",
+            "materialized",
+            "clusterd",
+            {"name": "testdrive", "persistent": True},
+        )
 
         with c.override(
             Testdrive(
@@ -360,8 +368,12 @@ class PgDisruption:
         seed = random.randint(0, 256**4)
 
         c.down(destroy_volumes=True, sanity_restart_mz=False)
-        c.up("testdrive", persistent=True)
-        c.up("postgres", "materialized", "clusterd")
+        c.up(
+            "postgres",
+            "materialized",
+            "clusterd",
+            {"name": "testdrive", "persistent": True},
+        )
 
         with c.override(
             Testdrive(

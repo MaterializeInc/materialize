@@ -643,8 +643,12 @@ def workflow_many_connections(c: Composition) -> None:
 
 
 def workflow_webhook(c: Composition) -> None:
-    c.up("balancerd", "frontegg-mock", "materialized")
-    c.up("testdrive", persistent=True)
+    c.up(
+        "balancerd",
+        "frontegg-mock",
+        "materialized",
+        {"name": "testdrive", "persistent": True},
+    )
 
     grant_all_admin_user(c)
 

@@ -1491,7 +1491,14 @@ def run_scenario(
         Materialized(memory=materialized_memory),
         Clusterd(memory=clusterd_memory),
     ):
-        c.up("redpanda", "materialized", "postgres", "mysql", "clusterd")
+        c.up(
+            "redpanda",
+            "materialized",
+            "postgres",
+            "mysql",
+            "clusterd",
+            {"name": "testdrive", "persistent": True},
+        )
 
         c.sql(
             "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
@@ -1513,7 +1520,6 @@ def run_scenario(
         testdrive_timeout_arg = "--default-timeout=5m"
         statement_timeout = "> SET statement_timeout = '600s';\n"
 
-        c.up("testdrive", persistent=True)
         c.testdrive(
             statement_timeout + scenario.pre_restart, args=[testdrive_timeout_arg]
         )

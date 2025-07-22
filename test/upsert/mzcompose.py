@@ -439,7 +439,7 @@ def workflow_rocksdb_cleanup(c: Composition) -> None:
             Testdrive(no_reset=True),
         ):
             c.rm("testdrive")
-            c.up("testdrive", persistent=True)
+            c.up({"name": "testdrive", "persistent": True})
             c.exec("testdrive", f"rocksdb-cleanup/{testdrive_file}")
 
             (_, kept_source_path) = rocksdb_path("kept_upsert_tbl")
@@ -590,7 +590,7 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
         ),
     ):
         c.rm("testdrive")
-        c.up("testdrive", persistent=True)
+        c.up({"name": "testdrive", "persistent": True})
         c.exec("testdrive", "load-test/setup.td")
         c.testdrive(
             dedent(
@@ -732,7 +732,7 @@ def workflow_large_scale(c: Composition, parser: WorkflowArgumentParser) -> None
         Testdrive(no_reset=True, consistent_seed=True),
     ):
         c.rm("testdrive")
-        c.up("testdrive", persistent=True)
+        c.up({"name": "testdrive", "persistent": True})
 
         c.testdrive(
             dedent(

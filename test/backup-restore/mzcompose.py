@@ -42,8 +42,7 @@ def workflow_default(c: Composition) -> None:
     c.enable_minio_versioning()
 
     # Start Materialize, and set up some basic state in it
-    c.up("materialized")
-    c.up("testdrive", persistent=True)
+    c.up("materialized", {"name": "testdrive", "persistent": True})
     c.testdrive(
         dedent(
             """

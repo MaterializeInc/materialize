@@ -613,8 +613,7 @@ class Concurrent(Scenario):
         for i in range(num_executions):
             # Clean up old state
             self.c.down(destroy_volumes=True)
-            self.c.up(*SERVICE_NAMES)
-            self.c.up("testdrive", persistent=True)
+            self.c.up(*SERVICE_NAMES, {"name": "testdrive", "persistent": True})
 
             for obj in self.objs:
                 self.run_fragment(obj.prepare())
@@ -727,8 +726,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         datetime.datetime.now() + datetime.timedelta(seconds=args.runtime)
     ).timestamp()
 
-    c.up(*SERVICE_NAMES)
-    c.up("testdrive", persistent=True)
+    c.up(*SERVICE_NAMES, {"name": "testdrive", "persistent": True})
 
     seed = args.seed
 

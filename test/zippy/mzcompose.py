@@ -260,7 +260,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         c.rm("materialized")
 
-        c.up("testdrive", persistent=True)
+        c.up({"name": "testdrive", "persistent": True})
 
         print("Generating test...")
         test = Test(

@@ -182,7 +182,7 @@ def workflow_ci(c: Composition, _parser: WorkflowArgumentParser) -> None:
 
 
 def workflow_auth(c: Composition) -> None:
-    c.up("mc", persistent=True)
+    c.up({"name": "mc", "persistent": True})
     c.up("materialized", "minio")
 
     # Set up IAM credentials for 3 users with different permissions levels to S3:

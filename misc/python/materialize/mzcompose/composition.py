@@ -811,7 +811,7 @@ class Composition:
 
         if persistent:
             if not self.is_running(service):
-                self.up(service, persistent=True)
+                self.up({"name": service, "persistent": True})
 
             return self.exec(
                 service,
@@ -912,10 +912,9 @@ class Composition:
 
     def up(
         self,
-        *services: str,
+        *services: str | dict[str, Any],
         detach: bool = True,
         wait: bool = True,
-        persistent: bool = False,
         max_tries: int = 5,  # increased since quay.io returns 502 sometimes
     ) -> None:
         """Build, (re)create, and start the named services.
@@ -927,17 +926,27 @@ class Composition:
             detach: Run containers in the background.
             wait: Wait for health checks to complete before returning.
                 Implies `detach` mode.
-            persistent: Replace the container's entrypoint and command with
-                `sleep infinity` so that additional commands can be scheduled
-                on the container with `Composition.exec`.
             max_tries: Number of tries on failure.
         """
+        persistent = set(
+            [
+                service["name"]
+                for service in services
+                if isinstance(service, dict) and service.get("persistent")
+            ]
+        )
         if persistent:
             old_compose = copy.deepcopy(self.compose)
-            for service in self.compose["services"].values():
-                service["entrypoint"] = ["sleep", "infinity"]
-                service["command"] = []
+            for service_name, service in self.compose["services"].items():
+                if service_name in persistent:
+                    service["entrypoint"] = ["sleep", "infinity"]
+                    service["command"] = []
             self.files = {}
+
+        service_names = [
+            service["name"] if isinstance(service, dict) else service
+            for service in services
+        ]
 
         self.capture_logs()
         self.invoke(
@@ -945,7 +954,7 @@ class Composition:
             *(["--detach"] if detach else []),
             *(["--wait"] if wait else []),
             *(["--quiet-pull"] if ui.env_is_truthy("CI") else []),
-            *services,
+            *service_names,
             max_tries=300 if os.getenv("CI_WAITING_FOR_BUILD") else max_tries,
             build=os.getenv("CI_WAITING_FOR_BUILD"),
         )
@@ -1386,7 +1395,7 @@ class Composition:
             ]
 
         if not self.is_running(service):
-            self.up(service, persistent=True)
+            self.up({"name": service, "persistent": True})
 
         return self.exec(
             service,
@@ -1399,7 +1408,7 @@ class Composition:
 
     def enable_minio_versioning(self) -> None:
         self.up("minio")
-        self.up("mc", persistent=True)
+        self.up({"name": "mc", "persistent": True})
         self.exec(
             "mc",
             "mc",
@@ -1414,7 +1423,7 @@ class Composition:
         self.exec("mc", "mc", "version", "enable", "persist/persist")
 
     def backup_cockroach(self) -> None:
-        self.up("mc", persistent=True)
+        self.up({"name": "mc", "persistent": True})
         self.exec("mc", "mc", "mb", "--ignore-existing", "persist/crdb-backup")
         self.exec(
             "cockroach",
@@ -1447,7 +1456,7 @@ class Composition:
                 DROP EXTERNAL CONNECTION backup_bucket;
             """,
         )
-        self.up("persistcli", persistent=True)
+        self.up({"name": "persistcli", "persistent": True})
         self.exec(
             "persistcli",
             "persistcli",
@@ -1486,7 +1495,7 @@ class Composition:
             "-",
             stdin=backup,
         )
-        self.up("persistcli", persistent=True)
+        self.up({"name": "persistcli", "persistent": True})
         self.exec(
             "persistcli",
             "persistcli",

@@ -526,7 +526,7 @@ class State:
 
         if run_testdrive_files:
             with c.override(testdrive(no_reset=False)):
-                c.up("testdrive", persistent=True)
+                c.up({"name": "testdrive", "persistent": True})
                 c.run_testdrive_files(*TD_CMD, *files)
 
     def connect(self, c: Composition) -> None:
@@ -598,7 +598,7 @@ class State:
                 cur.execute("ALTER SYSTEM SET enable_create_table_from_source = true")
 
         with c.override(testdrive(no_reset=False)):
-            c.up("testdrive", persistent=True)
+            c.up({"name": "testdrive", "persistent": True})
             c.testdrive(
                 dedent(
                     """
@@ -849,7 +849,7 @@ def workflow_aws_upgrade(c: Composition, parser: WorkflowArgumentParser) -> None
 
             if args.run_testdrive_files:
                 with c.override(testdrive(no_reset=False)):
-                    c.up("testdrive", persistent=True)
+                    c.up({"name": "testdrive", "persistent": True})
                     c.run_testdrive_files(*TD_CMD, *args.files)
     finally:
         aws.cleanup()

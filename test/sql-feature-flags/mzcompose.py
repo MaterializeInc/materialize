@@ -230,8 +230,7 @@ class FeatureTestScenario:
 
 
 def run_test(c: Composition, args: argparse.Namespace) -> None:
-    c.up("redpanda", "materialized")
-    c.up("testdrive", persistent=True)
+    c.up("redpanda", "materialized", {"name": "testdrive", "persistent": True})
 
     scenarios = (
         [globals()[args.scenario]]

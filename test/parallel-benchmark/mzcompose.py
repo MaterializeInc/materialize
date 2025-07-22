@@ -464,7 +464,7 @@ def run_once(
     with c.override(*overrides):
         for scenario_class in scenarios:
             if target:
-                c.up("testdrive", persistent=True)
+                c.up({"name": "testdrive", "persistent": True})
                 conn_infos = {"materialized": target}
                 conn = target.connect()
                 with conn.cursor() as cur:
@@ -478,8 +478,7 @@ def run_once(
                 mz_string = f"{mz_version} ({target.host})"
             else:
                 print("~~~ Starting up services")
-                c.up(*service_names)
-                c.up("testdrive", persistent=True)
+                c.up(*service_names, {"name": "testdrive", "persistent": True})
 
                 mz_version = c.query_mz_version()
                 mz_string = f"{mz_version} (docker)"

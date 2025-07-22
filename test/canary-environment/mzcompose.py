@@ -80,8 +80,7 @@ MYSQL_RANGE_FUNCTION = (
 
 
 def workflow_create(c: Composition, parser: WorkflowArgumentParser) -> None:
-    c.up("dbt", persistent=True)
-    c.up("testdrive", persistent=True)
+    c.up({"name": "dbt", "persistent": True}, {"name": "testdrive", "persistent": True})
 
     assert MATERIALIZE_PROD_SANDBOX_USERNAME is not None
     assert MATERIALIZE_PROD_SANDBOX_APP_PASSWORD is not None
@@ -216,7 +215,7 @@ def workflow_create(c: Composition, parser: WorkflowArgumentParser) -> None:
 
 
 def workflow_test(c: Composition, parser: WorkflowArgumentParser) -> None:
-    c.up("dbt", persistent=True)
+    c.up({"name": "dbt", "persistent": True})
 
     con = psycopg.connect(
         host=MATERIALIZE_PROD_SANDBOX_RDS_HOSTNAME,

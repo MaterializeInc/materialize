@@ -153,8 +153,13 @@ def workflow_resumption(c: Composition) -> None:
 
 def workflow_multithreaded(c: Composition) -> None:
     c.down(destroy_volumes=True)
-    c.up("zookeeper", "kafka", "schema-registry", "materialized")
-    c.up("testdrive", persistent=True)
+    c.up(
+        "zookeeper",
+        "kafka",
+        "schema-registry",
+        "materialized",
+        {"name": "testdrive", "persistent": True},
+    )
 
     value = [201]
     lock = threading.Lock()

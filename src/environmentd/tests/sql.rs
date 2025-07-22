@@ -3850,14 +3850,14 @@ async fn test_serialized_ddl_cancel() {
     });
     let handle2 = task::spawn(|| "test", async move {
         // Encourage client1 to always execute first.
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
         let err = client2
             .batch_execute("create view z as select mz_unsafe.mz_sleep(3)")
             .await
             .unwrap_err();
         err
     });
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
     // Cancel the pending statement (this uses different cancellation logic and is the actual thing
     // we are trying to test here).
     cancel2.cancel_query(tokio_postgres::NoTls).await.unwrap();
