@@ -1001,11 +1001,12 @@ async fn purify_create_source(
                 ))?;
             }
             // If CDC is enabled for a table, there is a period where the max LSN will not be
-            // available.  Rather than return an error to the user, we retry for 5 seconds to
-            // allow the CDC job a chance to run.  By default, the job runs every 5 seconds.
+            // available.  Rather than return an error to the user, we retry to allow the CDC
+            // job a chance to run.
+            let timeout = mz_storage_types::sources::sql_server::MAX_LSN_WAIT
+                .get(&storage_configuration.config_set());
             let initial_lsn =
-                mz_sql_server_util::inspect::get_max_lsn_retry(&mut client, Duration::from_secs(5))
-                    .await?;
+                mz_sql_server_util::inspect::get_max_lsn_retry(&mut client, timeout).await?;
 
             // We've validated that CDC is configured for the system, now let's
             // purify the individual exports (i.e. subsources).
@@ -1620,11 +1621,12 @@ async fn purify_alter_source_add_subsources(
                 .await?;
             let mut client = mz_sql_server_util::Client::connect(config).await?;
             // If CDC is enabled for a table, there is a period where the max LSN will not be
-            // available.  Rather than return an error to the user, we retry for 5 seconds to
-            // allow the CDC job a chance to run.  By default, the job runs every 5 seconds.
+            // available.  Rather than return an error to the user, we retry to allow the CDC
+            // job a chance to run.
+            let timeout = mz_storage_types::sources::sql_server::MAX_LSN_WAIT
+                .get(&storage_configuration.config_set());
             let initial_lsn =
-                mz_sql_server_util::inspect::get_max_lsn_retry(&mut client, Duration::from_secs(5))
-                    .await?;
+                mz_sql_server_util::inspect::get_max_lsn_retry(&mut client, timeout).await?;
 
             // Query the upstream SQL Server instance for available tables to replicate.
             let database = sql_server_connection.database.clone().into();
@@ -1997,11 +1999,12 @@ async fn purify_create_table_from_source(
 
             let database: Arc<str> = connection.database.into();
             // If CDC is enabled for a table, there is a period where the max LSN will not be
-            // available.  Rather than return an error to the user, we retry for 5 seconds to
-            // allow the CDC job a chance to run.  By default, the job runs every 5 seconds.
+            // available.  Rather than return an error to the user, we retry to allow the CDC
+            // job a chance to run.
+            let timeout = mz_storage_types::sources::sql_server::MAX_LSN_WAIT
+                .get(&storage_configuration.config_set());
             let initial_lsn =
-                mz_sql_server_util::inspect::get_max_lsn_retry(&mut client, Duration::from_secs(5))
-                    .await?;
+                mz_sql_server_util::inspect::get_max_lsn_retry(&mut client, timeout).await?;
             let reference_client = SourceReferenceClient::SqlServer {
                 client: &mut client,
                 database: Arc::clone(&database),

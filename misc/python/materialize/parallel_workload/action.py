@@ -1266,7 +1266,7 @@ class FlipFlagsAction(Action):
             "storage_sink_progress_search",
             "storage_sink_ensure_topic_config",
             "ore_overflowing_behavior",
-            "sql_server_snapshot_max_lsn_wait",
+            "sql_server_max_lsn_wait",
             "sql_server_snapshot_progress_report_interval",
             "sql_server_cdc_poll_interval",
             "sql_server_cdc_cleanup_change_table",
