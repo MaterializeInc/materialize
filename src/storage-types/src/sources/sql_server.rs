@@ -37,7 +37,7 @@ include!(concat!(
 pub const SNAPSHOT_MAX_LSN_WAIT: Config<Duration> = Config::new(
     "sql_server_snapshot_max_lsn_wait",
     Duration::from_secs(30),
-    "Maximum amount of time we'll wait for SQL Server to report an LSN (in other words for \
+    "Maximum amount of time we'll wait for SQL Server to report a LSN (in other words for \
     CDC to be fully enabled) before taking an initial snapshot.",
 );
 

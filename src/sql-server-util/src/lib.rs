@@ -34,6 +34,7 @@ pub mod inspect;
 pub use config::Config;
 pub use desc::{ProtoSqlServerColumnDesc, ProtoSqlServerTableDesc};
 
+use crate::cdc::Lsn;
 use crate::config::TunnelConfig;
 use crate::desc::SqlServerColumnDecodeType;
 
@@ -105,6 +106,8 @@ impl Client {
         Ok(client)
     }
 
+    /// Create a new Client instance with the same configuration that created
+    /// this configuration.
     pub async fn new_connection(&self) -> Result<Self, SqlServerError> {
         Self::connect(self.config.clone()).await
     }
@@ -342,7 +345,7 @@ pub type RowStream<'a> =
 pub struct Transaction<'a> {
     client: &'a mut Client,
     closed: bool,
-    nested_xact_names: Vec<String>,
+    savepoints: Vec<String>,
 }
 
 impl<'a> Transaction<'a> {
@@ -359,34 +362,68 @@ impl<'a> Transaction<'a> {
             Ok(Transaction {
                 client,
                 closed: false,
-                nested_xact_names: Default::default(),
+                savepoints: Default::default(),
             })
         }
     }
 
-    /// Creates a savepoint with a transaction that can be committed or rolled back
-    /// without affecting the out transaction.
+    /// Creates a savepoint via `SAVE TRANSACTION` with the provided name.
+    /// Creating a savepoint forces a write to the transaction log, which will associate an
+    /// [`Lsn`] with the current transaction.
+    ///
+    /// The savepoint name must follow rules for SQL Server identifiers
+    /// - starts with letter or underscore
+    /// - only contains letters, digits, and underscores
+    /// - no reserved words
+    /// - 32 char max
     pub async fn create_savepoint(&mut self, savepoint_name: &str) -> Result<(), SqlServerError> {
+        // Limit the name checks to prevent sending a potentially dangerous string to the SQL Server.
+        // We prefer the server do the majority of the validation.
+        if savepoint_name.is_empty()
+            || !savepoint_name
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '_')
+        {
+            Err(SqlServerError::ProgrammingError(format!(
+                "Invalid savepoint name: '{savepoint_name}"
+            )))?;
+        }
+
         let stmt = format!("SAVE TRANSACTION [{savepoint_name}]");
         let _result = self.client.simple_query(stmt).await?;
-        self.nested_xact_names.push(savepoint_name.to_string());
+        self.savepoints.push(savepoint_name.to_string());
         Ok(())
     }
 
-    pub async fn rollback_savepoint(&mut self, savepoint_name: &str) -> Result<(), SqlServerError> {
-        let last_xact_name = self.nested_xact_names.pop();
-        if last_xact_name
-            .as_ref()
-            .is_none_or(|last_xact_name| *last_xact_name != savepoint_name)
-        {
-            panic!(
-                "Attempt to rollback savepoint {savepoint_name} doesn't match last savepoint {:?}",
-                last_xact_name
-            );
-        }
-        let stmt = format!("ROLLBACK TRANSACTION [{savepoint_name}]");
-        let _result = self.client.simple_query(stmt).await?;
-        self.nested_xact_names.push(savepoint_name.to_string());
+    /// Retrieve the [`Lsn`] associated with the current session.
+    ///
+    /// MS SQL Server will not assign a [`Lsn`] until a write is performed (e.g. via `SAVE TRANSACTION`).
+    pub async fn get_lsn(&mut self) -> Result<Lsn, SqlServerError> {
+        static CURRENT_LSN_QUERY: &str = "
+SELECT dt.database_transaction_begin_lsn
+FROM sys.dm_tran_database_transactions AS dt
+JOIN sys.dm_tran_session_transactions AS st
+  ON dt.transaction_id = st.transaction_id
+WHERE st.session_id = @@SPID
+";
+        let result = self.client.simple_query(CURRENT_LSN_QUERY).await?;
+        crate::inspect::parse_numeric_lsn(&result)
+    }
+
+    /// Exclusively lock the provided table, uses `TABLOCKX`.
+    ///
+    /// The lock is obtained using a `SELECT` statement that will not read the table. The lock is released
+    /// after transaction commit or rollback.
+    pub async fn lock_table_exclusive(
+        &mut self,
+        schema: &str,
+        table: &str,
+    ) -> Result<(), SqlServerError> {
+        // This query probably seems odd, but there is no LOCK command in MS SQL. Locks are specified
+        // in SELECT using the WITH keyword.  This query does not need to return any rows to lock the table,
+        // hence the 1=0, which is something short that always evaluates to false in this universe;
+        let query = format!("SELECT * FROM [{schema}].[{table}] WITH (TABLOCKX) WHERE 1=0;");
+        let _result = self.client.simple_query(query).await?;
         Ok(())
     }
 
@@ -434,6 +471,7 @@ impl<'a> Transaction<'a> {
         // N.B. Mark closed _before_ running the query. This prevents us from
         // double closing the transaction if this query itself fails.
         self.closed = true;
+        self.savepoints.clear();
         self.client.simple_query(ROLLBACK_QUERY).await?;
         Ok(())
     }
@@ -444,6 +482,7 @@ impl<'a> Transaction<'a> {
         // N.B. Mark closed _before_ running the query. This prevents us from
         // double closing the transaction if this query itself fails.
         self.closed = true;
+        self.savepoints.clear();
         self.client.simple_query(COMMIT_QUERY).await?;
         Ok(())
     }

@@ -16,7 +16,6 @@ import random
 import threading
 from textwrap import dedent
 
-
 from materialize import MZ_ROOT
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.materialized import Materialized
@@ -49,6 +48,15 @@ SERVICES = [
 # Test that SQL Server ingestion works
 #
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
+    for name in c.workflows:
+        if name == "default":
+            continue
+
+        with c.test_case(name):
+            c.workflow(name)
+
+
+def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "filter",
         nargs="*",
@@ -104,13 +112,19 @@ def workflow_snapshot_consistency(
 ) -> None:
     """
     Tests the scenario where a new source creates a snapshot and transitions to replication
-    while the upstream source table is seeing updates.
+    while the upstream source table is seeing updates. This test validates that the source snapshot
+    sees a consistent view of the table during snapshot and identifies the correct LSN to start
+    replication.
     """
+    # Start with a fresh state
+    c.kill("sql-server")
+    c.rm("sql-server")
+    c.kill("materialized")
+    c.rm("materialized")
 
     initial_rows = 100
     with c.override(SqlServer()):
-        c.up("materialized", "sql-server")
-        c.up("testdrive", persistent=True)
+        c.up("materialized", "sql-server", {"name": "testdrive", "persistent": True})
 
         # Setup MS SQL server and materialize
         c.testdrive(
@@ -147,8 +161,9 @@ def workflow_snapshot_consistency(
             )
         )
 
-    # create a concurrent workload that will insert and delete a row repeatedly
-    # at the end, we should have no extra rows
+    # Create a concurrent workload with 2 variaties of updates
+    # - insert of new rows
+    # - insert and delete of a row (the same row)
     update_id_offset = 10000
     update_val_offset = 100000
     insert_delete = lambda i: dedent(
@@ -158,6 +173,9 @@ def workflow_snapshot_consistency(
         """
     )
 
+    # The number of update rows is based on local testing. While this doesn't guarantee that updates
+    # to SQL server are ocurring throughout the snapshot -> replication transition of the source, there is
+    # a generous overlap here. The possibility that they don't overlap should be exremely unlikely.
     update_rows = 1500
     upstream_updates = "\n".join([insert_delete(i) for i in range(update_rows)])
 
@@ -167,7 +185,7 @@ def workflow_snapshot_consistency(
                 f"""
                 $ sql-server-connect name=sql-server
                 server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
-                
+
                 $ sql-server-execute name=sql-server
                 USE consistency_test;
                 """
@@ -184,7 +202,7 @@ def workflow_snapshot_consistency(
     c.testdrive(
         args=["--no-reset"],
         input=dedent(
-            f"""
+            """
             > CREATE SOURCE mssql_source
               FROM SQL SERVER CONNECTION mssql_connection
               FOR TABLES (dbo.t1);
@@ -192,7 +210,7 @@ def workflow_snapshot_consistency(
         ),
     )
 
-    # after the upstream updates are done, we should have no additional rows
+    # validate MZ sees the correct results once the conccurent load is complete
     driver_thread.join()
     print("==== Validate concurrent updates")
     c.testdrive(

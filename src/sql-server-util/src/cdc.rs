@@ -17,11 +17,49 @@
 //! 2. [`CdcStream::into_stream`] returns a [`futures::Stream`] of [`CdcEvent`]s
 //!    optionally from the [`Lsn`] returned in step 1.
 //!
-//! Internally we get a snapshot by setting our transaction isolation level to
-//! [`TransactionIsolationLevel::Snapshot`], getting the current maximum LSN with
-//! [`crate::inspect::get_max_lsn`] and then running a `SELECT *`. We've observed that by
-//! using [`TransactionIsolationLevel::Snapshot`] the LSN remains stable for the entire
-//! transaction.
+//! The snapshot process is responsible for identifying a [`Lsn`] that provides
+//! a point-in-time view of the data for the table(s) being copied.  Similarly to
+//! MySQL, Microsoft SQL server, as far as we know, does not provide an API to
+//! achieve this.
+//!
+//! SQL Server `SNAPSHOT` isolation provides guarantees that a reader will only
+//! see writes committed before the transaction began.  More specficially, this
+//! snapshot is implemented using versions that are visibile based on the
+//! transaction sequence number (`XSN`). The `XSN` is set at the first
+//! read or write, not at `BEGIN TRANSACTION`, see [here](https://learn.microsoft.com/en-us/sql/relational-databases/sql-server-transaction-locking-and-row-versioning-guide?view=sql-server-ver17).
+//! This provides us a suitable starting point for capturing the table data.
+//! To force a `XSN` to be assigned, experiments have shown that a table must
+//! be read. We choose a well-known table that we should already have access to,
+//! [cdc.change_tables](https://learn.microsoft.com/en-us/sql/relational-databases/system-tables/cdc-change-tables-transact-sql?view=sql-server-ver17),
+//! and read a single value from it.
+//!
+//! Due to the asynchronous nature of CDC, we can assume that the [`Lsn`]
+//! returned from any CDC tables or CDC functions will always be stale,
+//! in relation to the source table that CDC is tracking. The system table
+//! [sys.dm_tran_database_transactions](https://learn.microsoft.com/en-us/sql/relational-databases/system-dynamic-management-views/sys-dm-tran-database-transactions-transact-sql?view=sql-server-ver17)
+//! will contain a [`Lsn`] for any transaction that performs a write operation.
+//! Creating a savepoint using [SAVE TRANSACTION](https://learn.microsoft.com/en-us/sql/t-sql/language-elements/save-transaction-transact-sql?view=sql-server-ver17).
+//! is sufficient to generate a [`Lsn`] in this case.
+//!
+//! Unfortunately, it isn't sufficient to just fix the [`Lsn`] and `XSN`. There exists
+//! the possibility that a write transaction may have inserted a row into one
+//! of the tables in the snapshot, but that write has not comitted. In this case,
+//! the `INSERT` has already been written to the transaction log at a [`Lsn`]
+//! less than than the one captured, but the snapshot will *not* observe that INSERT
+//! because the transaction has not committed, and may not commit until after
+//! the snapshot is complete. In order to force a clear delineation of updates,
+//! the upstream tables in the snapshot must be locked. This lock only needs
+//! to exist long enough to establish the [`Lsn`] and `XSN`.
+//!
+//! SQL server supports exclusive table locks, but those will only be released
+//! once the outermost transaction completes. For this reason, this module
+//! uses two connections for the snapshot process.  The first conection is used
+//! to initiate a transaction and lock the upstream tables.  While the first
+//! connection maintains the locks, the second connection starts a transaction
+//! with [`TransactionIsolationLevel::Snapshot`] isolation and creates a
+//! savepoint.  Once the savepoint is created and [`Lsn`] is captured, the first
+//! connection rolls back the transaction. The snapshot is created by the second
+//! connection within the existing transaction.
 //!
 //! After completing the snapshot we use [`crate::inspect::get_changes_asc`] which will return
 //! all changes between a `[lower, upper)` bound of [`Lsn`]s.
@@ -57,7 +95,7 @@ pub struct CdcStream<'a> {
     ///
     /// Note: When CDC is first enabled in an instance of SQL Server it can take a moment
     /// for it to "completely" startup. Before starting a `TRANSACTION` for our snapshot
-    /// we'll wait this duration for SQL Server to report an LSN and thus indicate CDC is
+    /// we'll wait this duration for SQL Server to report a [`Lsn`] and thus indicate CDC is
     /// ready to go.
     max_lsn_wait: Duration,
 }
@@ -96,7 +134,7 @@ impl<'a> CdcStream<'a> {
         self
     }
 
-    /// The max duration we'll wait for SQL Server to return an LSN before taking a
+    /// The max duration we'll wait for SQL Server to return a [`Lsn`] before taking a
     /// snapshot.
     ///
     /// When CDC is first enabled in SQL Server it can take a moment before it is fully
@@ -143,45 +181,55 @@ impl<'a> CdcStream<'a> {
         // the upstream DB is ready for CDC.
         self.wait_for_ready().await?;
 
-        let mut fencing_client = self.client.new_connection().await?;
+        tracing::info!("Upstream is ready");
+
         // The client that will be used for fencing does not need any special isolation level
-        // as it will be just be locking the tables
+        // as it will be just be locking the table(s).
+        let mut fencing_client = self.client.new_connection().await?;
         let mut fence_txn = fencing_client.transaction().await?;
-        // lock all the tables we are planning to snapshot so that we can ensure that
-        // writes that might be in progress are properly ordered before or after this snapshot
-        // in addition to the LSN being properly ordered.
-        // TODO (maz): we should considering a timeout here because we may lock some tables,
-        // and the next table may be locked for some extended period, resulting in a traffic
-        // jam.
+
+        // TODO (maz): we should consider a timeout or a lock + snapshot per-table instead of collectively
         for (_capture_instance, schema, table) in &tables {
             tracing::trace!(%schema, %table, "locking table");
-            crate::inspect::lock_table(&mut fence_txn, &*schema, &*table).await?;
+            fence_txn.lock_table_exclusive(&*schema, &*table).await?;
         }
+        tracing::info!(?tables, "Locked tables");
 
         self.client
             .set_transaction_isolation(TransactionIsolationLevel::Snapshot)
             .await?;
         let mut txn = self.client.transaction().await?;
-        // The result here is not important, what we are doing is establishing a transaction sequence number (XSN)
-        // while using SNAPSHOT isolation that will be concurrent with a quiesced set of tables that we
-        // wish to snapshot.  Regardless what you might read in *many* articles on Microsoft's site, the XSN is not
-        // set at BEGIN TRANSACTION, but at the first read/write.
-        // The choice of table is driven by a few factors:
-        // - it's a system table, we know it must exist and it will have a well defined schema
-        // - MZ is a CDC client, so should be be able to read from it
+
+        // Creating a savepoint forces a write to the transaction log, which will
+        // assign a LSN, but it does not force a transaction sequence number to be
+        // assigned as far as I can tell.  I have not observed any entries added to
+        // `sys.dm_tran_active_snapshot_database_transactions` when creating a savepoint
+        // or when reading system views to retrieve the LSN.
+        //
+        // We choose cdc.change_tables because it is a system table that will exist
+        // when CDC is enabled, it has a well known schema, and as a CDC client,
+        // we should be able to read from it already.
         let res = txn
-            .simple_query("SELECT TOP 1 object_id FROM cdc.change_tables;")
+            .simple_query("SELECT TOP 1 object_id FROM cdc.change_tables")
             .await?;
-        // TODO (maz): nicer error if, somehow, there are no more change tables
-        assert_eq!(res.len(), 1);
+        if res.len() != 1 {
+            Err(SqlServerError::InvariantViolated(
+                "No objects found in cdc.change_tables".into(),
+            ))?
+        }
 
-        // Creating a savepoint forces a write to the transaction log, which will assign an LSN to this transaction
-        // which is concurrent with the tables that are currently in a consistent state.
+        // Because the tables are exclusively locked, any write operation has either
+        // completed, or is blocked. The LSN and XSN acquired now will represent a
+        // consistent point-in-time view, such that any comitted write will be
+        // visible to this snapshot and the LSN of such a write will be less than
+        // or equal to the LSN captured here.
         txn.create_savepoint(SAVEPOINT_NAME).await?;
+        tracing::info!(%SAVEPOINT_NAME, "Created savepoint");
+        let lsn = txn.get_lsn().await?;
 
-        let lsn = crate::inspect::get_lsn(&mut txn).await?;
-
-        // once we have the snapshot, we can rollback the fencing transaction to allow access to the tables.
+        // Once the XSN is esablished and the LSN captured, the tables no longer
+        // need to be locked.  Any writes that happen to the upstream tables
+        // will have a LSN higher than our captured LSN, and will be read from CDC.
         fence_txn.rollback().await?;
 
         tracing::info!(?tables, ?lsn, "starting snapshot");
@@ -392,7 +440,7 @@ impl<'a> CdcStream<'a> {
             }
         }
 
-        // Ensure all of the capture instances are reporting an LSN.
+        // Ensure all of the capture instances are reporting a LSN.
         for instance in self.capture_instances.keys() {
             let (_client, min_result) = mz_ore::retry::Retry::default()
                 .max_duration(self.max_lsn_wait)
@@ -508,7 +556,7 @@ pub struct Lsn {
 impl Lsn {
     const SIZE: usize = 10;
 
-    /// Interpret the provided bytes as an [`Lsn`].
+    /// Interpret the provided bytes as a [`Lsn`].
     pub fn try_from_bytes(bytes: &[u8]) -> Result<Self, String> {
         if bytes.len() != Self::SIZE {
             return Err(format!("incorrect length, expected 10 got {}", bytes.len()));
@@ -660,7 +708,7 @@ impl timely::order::PartialOrder for Lsn {
 }
 impl timely::order::TotalOrder for Lsn {}
 
-/// Structured format of an [`Lsn`].
+/// Structured format of a [`Lsn`].
 ///
 /// Note: The derived impl of [`PartialOrd`] and [`Ord`] relies on the field
 /// ordering so do not change it.

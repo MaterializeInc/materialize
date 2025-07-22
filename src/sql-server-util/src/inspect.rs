@@ -20,7 +20,7 @@ use tiberius::numeric::Numeric;
 
 use crate::cdc::{Lsn, RowFilterOption};
 use crate::desc::{SqlServerColumnRaw, SqlServerTableRaw};
-use crate::{Client, SqlServerError, Transaction};
+use crate::{Client, SqlServerError};
 
 /// Returns the minimum log sequence number for the specified `capture_instance`.
 ///
@@ -60,55 +60,10 @@ pub async fn increment_lsn(client: &mut Client, lsn: Lsn) -> Result<Lsn, SqlServ
     parse_lsn(&result[..1])
 }
 
-/// Retrieves the current LSN of the database by calling SAVE TRANSACTION to create a savepoint with the provided name,
-/// which forces an LSN to be written to the transaction log.
-///
-/// The savepoint name must follow rules for SQL Server identifiers
-/// - starts with letter or underscore
-/// - only contains letters, digits, and underscores
-/// - no resserved words
-/// - 32 char max
-pub async fn create_savepoint(
-    txn: &mut Transaction<'_>,
-    savepoint_name: &str,
-) -> Result<(), SqlServerError> {
-    // TODO (maz): make sure savepoint name is safe
-    let _result = txn
-        .client
-        .simple_query(format!("SAVE TRANSACTION [{savepoint_name}]"))
-        .await?;
-    Ok(())
-}
-
-pub async fn get_lsn(txn: &mut Transaction<'_>) -> Result<Lsn, SqlServerError> {
-    static CURRENT_LSN_QUERY: &str = "
-SELECT dt.database_transaction_begin_lsn
-FROM sys.dm_tran_database_transactions AS dt
-JOIN sys.dm_tran_session_transactions AS st
-  ON dt.transaction_id = st.transaction_id
-WHERE st.session_id = @@SPID
-";
-    let result = txn.client.simple_query(CURRENT_LSN_QUERY).await?;
-    parse_numeric_lsn(&result)
-}
-
-pub async fn lock_table(
-    txn: &mut Transaction<'_>,
-    schema: &str,
-    table: &str,
-) -> Result<(), SqlServerError> {
-    // This query probably seems odd, but there is no LOCK command in MS SQL. Locks are specified
-    // in SELECT using the WITH keyword.  This query does not need to return any rows to lock the table,
-    // hence the 1=0, which is something short that always evaluates to false in this universe;
-    let query = format!("SELECT * FROM {schema}.{table} WITH (TABLOCKX) WHERE 1=0;");
-    let _result = txn.client.query(query, &[]).await?;
-    Ok(())
-}
-
-/// Parse an [`Lsn`] in Decimal(25,0) format of the provided [`tiberius::Row`].
+/// Parse a [`Lsn`] in Decimal(25,0) format of the provided [`tiberius::Row`].
 ///
 /// Returns an error if the provided slice doesn't have exactly one row.
-fn parse_numeric_lsn(row: &[tiberius::Row]) -> Result<Lsn, SqlServerError> {
+pub(crate) fn parse_numeric_lsn(row: &[tiberius::Row]) -> Result<Lsn, SqlServerError> {
     match row {
         [r] => {
             let numeric_lsn = r
@@ -127,7 +82,7 @@ fn parse_numeric_lsn(row: &[tiberius::Row]) -> Result<Lsn, SqlServerError> {
     }
 }
 
-/// Parse an [`Lsn`] from the first column of the provided [`tiberius::Row`].
+/// Parse a [`Lsn`] from the first column of the provided [`tiberius::Row`].
 ///
 /// Returns an error if the provided slice doesn't have exactly one row.
 fn parse_lsn(result: &[tiberius::Row]) -> Result<Lsn, SqlServerError> {
@@ -214,7 +169,7 @@ SELECT @mz_cleanup_status_bit;
     let max_deletes = i64::cast_from(max_deletes);
 
     // First we need to get a valid LSN as our low watermark. If we try to cleanup
-    // a change table with an LSN that doesn't exist in the `cdc.lsn_time_mapping`
+    // a change table with a LSN that doesn't exist in the `cdc.lsn_time_mapping`
     // table we'll get an error code `22964`.
     let result = client
         .query(GET_LSN_QUERY, &[&low_water_mark.as_bytes().as_slice()])
