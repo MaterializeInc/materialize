@@ -17,9 +17,7 @@ use anyhow::{Error, anyhow};
 use async_trait::async_trait;
 use differential_dataflow::trace::ExertionLogic;
 use futures::future;
-use mz_cluster_client::client::{TimelyConfig, TryIntoTimelyConfig};
-use mz_ore::error::ErrorExt;
-use mz_ore::halt;
+use mz_cluster_client::client::{TimelyConfig, TryIntoProtocolNonce};
 use mz_service::client::{GenericClient, Partitionable, Partitioned};
 use mz_service::local::LocalClient;
 use timely::WorkerConfig;
@@ -31,7 +29,7 @@ use timely::execute::execute_from;
 use timely::worker::Worker as TimelyWorker;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc;
-use tracing::{info, warn};
+use tracing::info;
 use uuid::Uuid;
 
 use crate::communication::initialize_networking;
@@ -47,16 +45,11 @@ where
     /// The actual client to talk to the cluster
     inner: Option<PartitionedClient<C::Command, C::Response>>,
     /// The running timely instance
-    timely_container: TimelyContainerRef<C>,
-    /// The handle to the Tokio runtime.
-    tokio_handle: tokio::runtime::Handle,
-    cluster_spec: C,
+    timely_container: Arc<Mutex<TimelyContainer<C>>>,
 }
 
 /// Metadata about timely workers in this process.
 pub struct TimelyContainer<C: ClusterSpec> {
-    /// The current timely config in use
-    config: TimelyConfig,
     /// Channels over which to send endpoints for wiring up a new Client
     client_txs: Vec<
         crossbeam_channel::Sender<(
@@ -85,63 +78,25 @@ impl<C: ClusterSpec> Drop for TimelyContainer<C> {
     }
 }
 
-/// Threadsafe reference to an optional TimelyContainer
-type TimelyContainerRef<C> = Arc<tokio::sync::Mutex<Option<TimelyContainer<C>>>>;
-
 impl<C> ClusterClient<C>
 where
     C: ClusterSpec,
     (C::Command, C::Response): Partitionable<C::Command, C::Response>,
 {
     /// Create a new `ClusterClient`.
-    pub fn new(
-        timely_container: TimelyContainerRef<C>,
-        tokio_handle: tokio::runtime::Handle,
-        cluster_spec: C,
-    ) -> Self {
+    pub fn new(timely_container: Arc<Mutex<TimelyContainer<C>>>) -> Self {
         Self {
             timely_container,
             inner: None,
-            tokio_handle,
-            cluster_spec,
         }
     }
 
-    async fn build(&mut self, config: TimelyConfig, nonce: Uuid) -> Result<(), Error> {
-        let workers = config.workers;
+    /// Connect to the Timely cluster with the given client nonce.
+    fn connect(&mut self, nonce: Uuid) -> Result<(), Error> {
+        let timely = self.timely_container.lock().expect("poisoned");
 
-        // Check if we can reuse the existing timely instance.
-        // We currently do not support reinstantiating timely, we simply panic if another config is
-        // requested. This code must panic before dropping the worker guards contained in
-        // timely_container. As we don't terminate timely workers, the thread join would hang
-        // forever, possibly creating a fair share of confusion in the orchestrator.
-
-        let mut timely_container = self.timely_container.lock().await;
-        match &*timely_container {
-            Some(existing) => {
-                if config != existing.config {
-                    info!(new = ?config, old = ?existing.config, "TimelyConfig mismatch");
-                    halt!("new timely configuration does not match existing timely configuration");
-                }
-                info!("Timely already initialized; re-using.",);
-            }
-            None => {
-                let timely = self
-                    .cluster_spec
-                    .build_cluster(config, self.tokio_handle.clone())
-                    .await
-                    .inspect_err(|e| {
-                        warn!("timely initialization failed: {}", e.display_with_causes())
-                    })?;
-
-                *timely_container = Some(timely);
-            }
-        };
-
-        let timely = timely_container.as_ref().expect("set above");
-
-        let mut command_txs = Vec::with_capacity(workers);
-        let mut response_rxs = Vec::with_capacity(workers);
+        let mut command_txs = Vec::new();
+        let mut response_rxs = Vec::new();
         for client_tx in &timely.client_txs {
             let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
             let (resp_tx, resp_rx) = mpsc::unbounded_channel();
@@ -184,8 +139,9 @@ where
     async fn send(&mut self, cmd: C::Command) -> Result<(), Error> {
         // Changing this debug statement requires changing the replica-isolation test
         tracing::debug!("ClusterClient send={:?}", &cmd);
-        match cmd.try_into_timely_config() {
-            Ok((config, nonce)) => self.build(config, nonce).await,
+
+        match cmd.try_into_protocol_nonce() {
+            Ok(nonce) => self.connect(nonce),
             Err(cmd) => self.inner.as_mut().expect("initialized").send(cmd).await,
         }
     }
@@ -212,7 +168,7 @@ where
 #[async_trait]
 pub trait ClusterSpec: Clone + Send + Sync + 'static {
     /// The cluster command type.
-    type Command: fmt::Debug + Send + TryIntoTimelyConfig;
+    type Command: fmt::Debug + Send + TryIntoProtocolNonce;
     /// The cluster response type.
     type Response: fmt::Debug + Send;
 
@@ -329,7 +285,6 @@ pub trait ClusterSpec: Clone + Send + Sync + 'static {
         .map_err(|e| anyhow!(e))?;
 
         Ok(TimelyContainer {
-            config,
             client_txs,
             worker_guards,
         })

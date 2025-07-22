@@ -1081,14 +1081,16 @@ where
     }
 
     async fn run(mut self) {
-        self.send(ComputeCommand::CreateTimely {
-            config: Default::default(),
+        self.send(ComputeCommand::Hello {
+            // The nonce is protocol iteration-specific and will be set in
+            // `ReplicaTask::specialize_command`.
             nonce: Uuid::default(),
         });
 
         let instance_config = InstanceConfig {
             peek_stash_persist_location: self.peek_stash_persist_location.clone(),
-            // The remaining fields are replica-specific and will be set in `ReplicaTask::specialize_command`.
+            // The remaining fields are replica-specific and will be set in
+            // `ReplicaTask::specialize_command`.
             logging: Default::default(),
             expiration_offset: Default::default(),
         };

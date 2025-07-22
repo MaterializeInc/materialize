@@ -26,8 +26,7 @@ use mz_compute_client::service::{ComputeClient, ComputeGrpcClient};
 use mz_compute_types::config::{ComputeReplicaConfig, ComputeReplicaLogging};
 use mz_controller_types::dyncfgs::{
     ARRANGEMENT_EXERT_PROPORTIONALITY, CONTROLLER_PAST_GENERATION_REPLICA_CLEANUP_RETRY_INTERVAL,
-    ENABLE_TIMELY_INIT_AT_PROCESS_STARTUP, ENABLE_TIMELY_ZERO_COPY,
-    ENABLE_TIMELY_ZERO_COPY_LGALLOC, TIMELY_ZERO_COPY_LIMIT,
+    ENABLE_TIMELY_ZERO_COPY, ENABLE_TIMELY_ZERO_COPY_LGALLOC, TIMELY_ZERO_COPY_LIMIT,
 };
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_orchestrator::NamespacedOrchestrator;
@@ -639,23 +638,18 @@ where
         let persist_pubsub_url = self.persist_pubsub_url.clone();
         let secrets_args = self.secrets_args.to_flags();
 
-        let mut storage_proto_timely_config = None;
-        let mut compute_proto_timely_config = None;
-        if ENABLE_TIMELY_INIT_AT_PROCESS_STARTUP.get(&self.dyncfg) {
-            // TODO(teskje): use the same values as for compute?
-            storage_proto_timely_config = Some(TimelyConfig {
-                arrangement_exert_proportionality: 1337,
-                ..Default::default()
-            });
-            compute_proto_timely_config = Some(TimelyConfig {
-                arrangement_exert_proportionality: ARRANGEMENT_EXERT_PROPORTIONALITY
-                    .get(&self.dyncfg),
-                enable_zero_copy: ENABLE_TIMELY_ZERO_COPY.get(&self.dyncfg),
-                enable_zero_copy_lgalloc: ENABLE_TIMELY_ZERO_COPY_LGALLOC.get(&self.dyncfg),
-                zero_copy_limit: TIMELY_ZERO_COPY_LIMIT.get(&self.dyncfg),
-                ..Default::default()
-            });
-        }
+        // TODO(teskje): use the same values as for compute?
+        let storage_proto_timely_config = TimelyConfig {
+            arrangement_exert_proportionality: 1337,
+            ..Default::default()
+        };
+        let compute_proto_timely_config = TimelyConfig {
+            arrangement_exert_proportionality: ARRANGEMENT_EXERT_PROPORTIONALITY.get(&self.dyncfg),
+            enable_zero_copy: ENABLE_TIMELY_ZERO_COPY.get(&self.dyncfg),
+            enable_zero_copy_lgalloc: ENABLE_TIMELY_ZERO_COPY_LGALLOC.get(&self.dyncfg),
+            zero_copy_limit: TIMELY_ZERO_COPY_LIMIT.get(&self.dyncfg),
+            ..Default::default()
+        };
 
         let service = self.orchestrator.ensure_service(
             &service_name,
@@ -663,6 +657,17 @@ where
                 image: self.clusterd_image.clone(),
                 init_container_image: self.init_container_image.clone(),
                 args: Box::new(move |assigned| {
+                    let storage_timely_config = TimelyConfig {
+                        workers: location.allocation.workers,
+                        addresses: assigned.peer_addresses("storage"),
+                        ..storage_proto_timely_config
+                    };
+                    let compute_timely_config = TimelyConfig {
+                        workers: location.allocation.workers,
+                        addresses: assigned.peer_addresses("compute"),
+                        ..compute_proto_timely_config
+                    };
+
                     let mut args = vec![
                         format!(
                             "--storage-controller-listen-addr={}",
@@ -680,6 +685,14 @@ where
                         format!("--opentelemetry-resource=replica_id={}", replica_id),
                         format!("--persist-pubsub-url={}", persist_pubsub_url),
                         format!("--environment-id={}", environment_id),
+                        format!(
+                            "--storage-timely-config={}",
+                            storage_timely_config.to_string(),
+                        ),
+                        format!(
+                            "--compute-timely-config={}",
+                            compute_timely_config.to_string(),
+                        ),
                     ];
                     if let Some(aws_external_id_prefix) = &aws_external_id_prefix {
                         args.push(format!(
@@ -707,30 +720,6 @@ where
                     }
 
                     args.extend(secrets_args.clone());
-
-                    if let Some(proto) = &storage_proto_timely_config {
-                        let storage_timely_config = TimelyConfig {
-                            workers: location.allocation.workers,
-                            addresses: assigned.peer_addresses("storage"),
-                            ..*proto
-                        };
-                        args.push(format!(
-                            "--storage-timely-config={}",
-                            storage_timely_config.to_string(),
-                        ));
-                    }
-                    if let Some(proto) = &compute_proto_timely_config {
-                        let compute_timely_config = TimelyConfig {
-                            workers: location.allocation.workers,
-                            addresses: assigned.peer_addresses("compute"),
-                            ..*proto
-                        };
-                        args.push(format!(
-                            "--compute-timely-config={}",
-                            compute_timely_config.to_string(),
-                        ));
-                    }
-
                     args
                 }),
                 ports: vec![

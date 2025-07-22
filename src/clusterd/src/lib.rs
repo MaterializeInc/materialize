@@ -90,13 +90,13 @@ struct Args {
     // === Timely cluster options. ===
     /// Configuration for the storage Timely cluster.
     #[clap(long, env = "STORAGE_TIMELY_CONFIG")]
-    storage_timely_config: Option<TimelyConfig>,
+    storage_timely_config: TimelyConfig,
     /// Configuration for the compute Timely cluster.
     #[clap(long, env = "COMPUTE_TIMELY_CONFIG")]
-    compute_timely_config: Option<TimelyConfig>,
+    compute_timely_config: TimelyConfig,
     /// The index of the process in both Timely clusters.
     #[clap(long, env = "PROCESS")]
-    process: Option<usize>,
+    process: usize,
 
     // === Storage options. ===
     /// The URL for the Persist PubSub service.
@@ -348,14 +348,10 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     let grpc_host = args.grpc_host.and_then(|h| (!h.is_empty()).then_some(h));
     let grpc_server_metrics = GrpcServerMetrics::register_with(&metrics_registry);
 
-    let storage_timely_config = args.storage_timely_config.map(|mut cfg| {
-        cfg.process = args.process.expect("process index required");
-        cfg
-    });
-    let compute_timely_config = args.compute_timely_config.map(|mut cfg| {
-        cfg.process = args.process.expect("process index required");
-        cfg
-    });
+    let mut storage_timely_config = args.storage_timely_config;
+    storage_timely_config.process = args.process;
+    let mut compute_timely_config = args.compute_timely_config;
+    compute_timely_config.process = args.process;
 
     // Start storage server.
     let storage_client_builder = mz_storage::serve(

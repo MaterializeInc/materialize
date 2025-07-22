@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::bail;
 use mz_build_info::BuildInfo;
-use mz_cluster_client::client::{ClusterReplicaLocation, TimelyConfig};
+use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_compute_types::dyncfgs::ENABLE_COMPUTE_REPLICA_EXPIRATION;
 use mz_dyncfg::ConfigSet;
 use mz_ore::channel::InstrumentedUnboundedSender;
@@ -49,10 +49,6 @@ pub(super) struct ReplicaConfig {
     pub grpc_client: GrpcClientParameters,
     /// The offset to use for replica expiration, if any.
     pub expiration_offset: Option<Duration>,
-    pub arrangement_exert_proportionality: u32,
-    pub enable_zero_copy: bool,
-    pub enable_zero_copy_lgalloc: bool,
-    pub zero_copy_limit: Option<usize>,
 }
 
 /// A client for a replica task.
@@ -277,18 +273,7 @@ where
     /// contain replica-specific fields that must be adjusted before sending.
     fn specialize_command(&self, command: &mut ComputeCommand<T>) {
         match command {
-            ComputeCommand::CreateTimely { config, nonce } => {
-                **config = TimelyConfig {
-                    workers: self.config.location.workers,
-                    process: 0,
-                    addresses: self.config.location.dataflow_addrs.clone(),
-                    arrangement_exert_proportionality: self
-                        .config
-                        .arrangement_exert_proportionality,
-                    enable_zero_copy: self.config.enable_zero_copy,
-                    enable_zero_copy_lgalloc: self.config.enable_zero_copy_lgalloc,
-                    zero_copy_limit: self.config.zero_copy_limit,
-                };
+            ComputeCommand::Hello { nonce } => {
                 *nonce = Uuid::new_v4();
             }
             ComputeCommand::CreateInstance(config) => {

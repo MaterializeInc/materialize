@@ -420,7 +420,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             .start_timer();
 
         match cmd {
-            CreateTimely { .. } => panic!("CreateTimely must be captured before"),
+            Hello { .. } => panic!("Hello must be captured before"),
             CreateInstance(instance_config) => self.handle_create_instance(*instance_config),
             InitializationComplete => (),
             UpdateConfiguration(params) => self.handle_update_configuration(*params),

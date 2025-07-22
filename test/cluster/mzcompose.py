@@ -202,57 +202,6 @@ def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
         c.sql("DROP CLUSTER cluster1 CASCADE", port=6877, user="mz_system")
 
 
-def workflow_test_invalid_compute_reuse(c: Composition) -> None:
-    """Ensure clusterds correctly crash if used in unsupported communication config"""
-    c.down(destroy_volumes=True)
-    c.up("materialized")
-
-    # Create a remote cluster and verify that tests pass.
-    c.up("clusterd1")
-    c.up("clusterd2")
-    c.sql("DROP CLUSTER IF EXISTS cluster1 CASCADE;")
-    c.sql(
-        "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
-        port=6877,
-        user="mz_system",
-    )
-
-    c.sql(
-        """CREATE CLUSTER cluster1 REPLICAS (replica1 (
-            STORAGECTL ADDRESSES ['clusterd1:2100', 'clusterd2:2100'],
-            STORAGE ADDRESSES ['clusterd1:2103', 'clusterd2:2103'],
-            COMPUTECTL ADDRESSES ['clusterd1:2101', 'clusterd2:2101'],
-            COMPUTE ADDRESSES ['clusterd1:2102', 'clusterd2:2102'],
-            WORKERS 2
-        ));
-    """
-    )
-    c.sql("DROP CLUSTER cluster1 CASCADE;")
-
-    # Note the different WORKERS argument
-    c.sql(
-        """CREATE CLUSTER cluster1 REPLICAS (replica1 (
-            STORAGECTL ADDRESSES ['clusterd1:2100', 'clusterd2:2100'],
-            STORAGE ADDRESSES ['clusterd1:2103', 'clusterd2:2103'],
-            COMPUTECTL ADDRESSES ['clusterd1:2101', 'clusterd2:2101'],
-            COMPUTE ADDRESSES ['clusterd1:2102', 'clusterd2:2102'],
-            WORKERS 1
-        ));
-    """
-    )
-
-    for i in range(5):
-        # This should ensure that compute crashed (and does not just hang forever)
-        c1 = c.invoke("logs", "clusterd1", capture=True)
-        if (
-            "halting process: new timely configuration does not match existing timely configuration"
-            in c1.stdout
-        ):
-            break
-        # Waiting for logs to arrive
-        time.sleep(1)
-
-
 def workflow_test_github_3553(c: Composition) -> None:
     """Test that clients do not wait indefinitely for a crashed resource."""
 
@@ -2627,8 +2576,8 @@ def workflow_test_replica_metrics(c: Composition) -> None:
         # Check that expected metrics exist and have sensible values.
         metrics = fetch_metrics()
 
-        count = metrics.get_replica_history_command_count("create_timely")
-        assert count == 0, f"unexpected create_timely count: {count}"
+        count = metrics.get_replica_history_command_count("hello")
+        assert count == 0, f"unexpected hello count: {count}"
         count = metrics.get_replica_history_command_count("create_instance")
         assert count == 1, f"unexpected create_instance count: {count}"
         count = metrics.get_replica_history_command_count("allow_compaction")
@@ -2744,7 +2693,7 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
     metrics = fetch_metrics()
 
     # mz_compute_commands_total
-    count = metrics.get_commands_total("create_timely")
+    count = metrics.get_commands_total("hello")
     assert count == 1, f"got {count}"
     count = metrics.get_commands_total("create_instance")
     assert count == 1, f"got {count}"
@@ -2762,7 +2711,7 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
     assert count == 1, f"got {count}"
 
     # mz_compute_command_message_bytes_total
-    count = metrics.get_command_bytes_total("create_timely")
+    count = metrics.get_command_bytes_total("hello")
     assert count > 0, f"got {count}"
     count = metrics.get_command_bytes_total("create_instance")
     assert count > 0, f"got {count}"
@@ -2816,7 +2765,7 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
     assert count == 0, f"got {count}"
 
     # mz_compute_controller_history_command_count
-    count = metrics.get_compute_controller_history_command_count("create_timely")
+    count = metrics.get_compute_controller_history_command_count("hello")
     assert count == 1, f"got {count}"
     count = metrics.get_compute_controller_history_command_count("create_instance")
     assert count == 1, f"got {count}"
@@ -2969,7 +2918,7 @@ def workflow_test_storage_controller_metrics(c: Composition) -> None:
     assert count > 0, f"got {count}"
 
     # mz_storage_controller_history_command_count
-    count = metrics_u2.get_storage_controller_history_command_count("create_timely")
+    count = metrics_u2.get_storage_controller_history_command_count("hello")
     assert count == 1, f"got {count}"
     count = metrics_u2.get_storage_controller_history_command_count("allow_compaction")
     assert count > 0, f"got {count}"

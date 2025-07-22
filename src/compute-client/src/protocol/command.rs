@@ -12,7 +12,7 @@
 use std::str::FromStr;
 use std::time::Duration;
 
-use mz_cluster_client::client::{TimelyConfig, TryIntoTimelyConfig};
+use mz_cluster_client::client::TryIntoProtocolNonce;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_dyncfg::ConfigUpdates;
@@ -49,33 +49,27 @@ include!(concat!(
 /// [Protocol Stages]: super#protocol-stages
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ComputeCommand<T = mz_repr::Timestamp> {
-    /// `CreateTimely` is the first command sent to a replica after a connection was established.
-    /// It instructs the replica to initialize the timely dataflow runtime using the given
-    /// `config`.
+    /// `Hello` is the first command sent to a replica after a connection was established. It
+    /// provides the replica with meta information about the connection.
     ///
     /// This command is special in that it is broadcast to all workers of a multi-worker replica.
     /// All subsequent commands, except `UpdateConfiguration`, are only sent to the first worker,
-    /// which then distributes them to the other workers using a dataflow. This method of command
-    /// distribution requires the timely dataflow runtime to be initialized, which is why the
-    /// `CreateTimely` command exists.
-    ///
-    /// The `nonce` value allows identifying different iterations of the compute protocol. When the
-    /// compute controller connects to a replica, it must send a `nonce` that is different from all
-    /// nonces it sent to the same replica on previous connections. Multi-process replicas should
-    /// use the `nonce` to ensure that their individual processes agree on which protocol iteration
-    /// they are in.
-    CreateTimely {
-        /// The Timely runtime configuration.
-        config: Box<TimelyConfig>,
+    /// which then distributes them to the other workers using a dataflow.
+    Hello {
         /// A nonce unique to the current iteration of the compute protocol.
+        ///
+        /// The nonce allows identifying different iterations of the compute protocol. When the
+        /// compute controller connects to a replica, it must send a nonce that is different from
+        /// all nonces it sent to the same replica on previous connections. Multi-worker replicas
+        /// should use the nonce to ensure that their individual workers agree on which protocol
+        /// iteration they are in.
         nonce: Uuid,
     },
 
-    /// `CreateInstance` must be sent after `CreateTimely` to complete the [Creation Stage] of the
-    /// compute protocol. Unlike `CreateTimely`, it is only sent to the first worker of the
-    /// replica, and then distributed through the timely runtime. `CreateInstance` instructs the
-    /// replica to initialize its state to a point where it is ready to start maintaining
-    /// dataflows.
+    /// `CreateInstance` must be sent after `Hello` to complete the [Creation Stage] of the compute
+    /// protocol. Unlike `Hello`, it is only sent to the first worker of the replica, and then
+    /// distributed through the timely runtime. `CreateInstance` instructs the replica to
+    /// initialize its state to a point where it is ready to start maintaining dataflows.
     ///
     /// Upon receiving a `CreateInstance` command, the replica must further initialize logging
     /// dataflows according to the given [`LoggingConfig`].
@@ -117,9 +111,9 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// `UpdateConfiguration` instructs the replica to update its configuration, according to the
     /// given [`ComputeParameters`].
     ///
-    /// This command is special in that, like `CreateTimely`, it is broadcast to all workers of the
-    /// replica. However, unlike `CreateTimely`, it is ignored by all workers except the first one,
-    /// which distributes the command to the other workers through the timely runtime.
+    /// This command is special in that, like `Hello`, it is broadcast to all workers of the
+    /// replica. However, unlike `Hello`, it is ignored by all workers except the first one, which
+    /// distributes the command to the other workers through the timely runtime.
     /// `UpdateConfiguration` commands are broadcast only to allow the intermediary parts of the
     /// networking fabric to observe them and learn of configuration updates.
     ///
@@ -280,8 +274,7 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
         use proto_compute_command::*;
         ProtoComputeCommand {
             kind: Some(match self {
-                ComputeCommand::CreateTimely { config, nonce } => CreateTimely(ProtoCreateTimely {
-                    config: Some(*config.into_proto()),
+                ComputeCommand::Hello { nonce } => Hello(ProtoHello {
                     nonce: Some(nonce.into_proto()),
                 }),
                 ComputeCommand::CreateInstance(config) => CreateInstance(*config.into_proto()),
@@ -308,11 +301,9 @@ impl RustType<ProtoComputeCommand> for ComputeCommand<mz_repr::Timestamp> {
         use proto_compute_command::Kind::*;
         use proto_compute_command::*;
         match proto.kind {
-            Some(CreateTimely(ProtoCreateTimely { config, nonce })) => {
-                let config = Box::new(config.into_rust_if_some("ProtoCreateTimely::config")?);
-                let nonce = nonce.into_rust_if_some("ProtoCreateTimely::nonce")?;
-                Ok(ComputeCommand::CreateTimely { config, nonce })
-            }
+            Some(Hello(ProtoHello { nonce })) => Ok(ComputeCommand::Hello {
+                nonce: nonce.into_rust_if_some("ProtoHello::nonce")?,
+            }),
             Some(CreateInstance(config)) => {
                 let config = Box::new(config.into_rust()?);
                 Ok(ComputeCommand::CreateInstance(config))
@@ -700,10 +691,10 @@ fn empty_otel_ctx() -> impl Strategy<Value = OpenTelemetryContext> {
     (0..1).prop_map(|_| OpenTelemetryContext::empty())
 }
 
-impl TryIntoTimelyConfig for ComputeCommand {
-    fn try_into_timely_config(self) -> Result<(TimelyConfig, Uuid), Self> {
+impl TryIntoProtocolNonce for ComputeCommand {
+    fn try_into_protocol_nonce(self) -> Result<Uuid, Self> {
         match self {
-            ComputeCommand::CreateTimely { config, nonce } => Ok((*config, nonce)),
+            ComputeCommand::Hello { nonce } => Ok(nonce),
             cmd => Err(cmd),
         }
     }

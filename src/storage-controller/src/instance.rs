@@ -20,7 +20,7 @@ use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::ReplicaId;
-use mz_cluster_client::client::{ClusterReplicaLocation, TimelyConfig};
+use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_dyncfg::ConfigSet;
 use mz_ore::cast::CastFrom;
 use mz_ore::now::NowFn;
@@ -132,8 +132,9 @@ where
             response_tx: instance_response_tx,
         };
 
-        instance.send(StorageCommand::CreateTimely {
-            config: Default::default(),
+        instance.send(StorageCommand::Hello {
+            // The nonce is protocol iteration-specific and will be set in
+            // `ReplicaTask::specialize_command`.
             nonce: Default::default(),
         });
 
@@ -942,23 +943,7 @@ where
     /// Most [`StorageCommand`]s are independent of the target replica, but some contain
     /// replica-specific fields that must be adjusted before sending.
     fn specialize_command(&self, command: &mut StorageCommand<T>) {
-        if let StorageCommand::CreateTimely { config, nonce } = command {
-            **config = TimelyConfig {
-                workers: self.config.location.workers,
-                // Overridden by the storage `PartitionedState` implementation.
-                process: 0,
-                addresses: self.config.location.dataflow_addrs.clone(),
-                // This value is not currently used by storage, so we just choose
-                // some identifiable value.
-                arrangement_exert_proportionality: 1337,
-                // Disable zero-copy by default.
-                // TODO: Bring in line with compute.
-                enable_zero_copy: false,
-                // Do not use lgalloc to back zero-copy memory.
-                enable_zero_copy_lgalloc: false,
-                // No limit; zero-copy is disabled.
-                zero_copy_limit: None,
-            };
+        if let StorageCommand::Hello { nonce } = command {
             *nonce = Uuid::new_v4();
         }
     }

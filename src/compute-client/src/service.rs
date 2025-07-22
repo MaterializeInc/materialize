@@ -111,11 +111,11 @@ where
 ///   * One instance on the controller side, dispatching between cluster processes.
 ///   * One instance in each cluster process, dispatching between timely worker threads.
 ///
-/// Note that because compute commands, except `CreateTimely` and `UpdateConfiguration`, are only
+/// Note that because compute commands, except `Hello` and `UpdateConfiguration`, are only
 /// sent to the first process, the cluster-side instances of `PartitionedComputeState` are not
 /// guaranteed to see all compute commands. Or more specifically: The instance running inside
 /// process 0 sees all commands, whereas the instances running inside the other processes only see
-/// `CreateTimely` and `UpdateConfiguration`. The `PartitionedComputeState` implementation must be
+/// `Hello` and `UpdateConfiguration`. The `PartitionedComputeState` implementation must be
 /// able to cope with this limited visiblity. It does so by performing most of its state management
 /// based on observed compute responses rather than commands.
 #[derive(Debug)]
@@ -232,23 +232,11 @@ where
         self.observe_command(&command);
 
         // As specified by the compute protocol:
-        //  * Forward `CreateTimely` and `UpdateConfiguration` commands to all shards.
+        //  * Forward `Hello` and `UpdateConfiguration` commands to all shards.
         //  * Forward all other commands to the first shard only.
         match command {
-            ComputeCommand::CreateTimely { config, nonce } => {
-                let timely_cmds = config.split_command(self.parts);
-
-                timely_cmds
-                    .into_iter()
-                    .map(|config| {
-                        Some(ComputeCommand::CreateTimely {
-                            config: Box::new(config),
-                            nonce,
-                        })
-                    })
-                    .collect()
-            }
-            command @ ComputeCommand::UpdateConfiguration(_) => {
+            command @ ComputeCommand::Hello { .. }
+            | command @ ComputeCommand::UpdateConfiguration(_) => {
                 vec![Some(command); self.parts]
             }
             command => {

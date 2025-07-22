@@ -11,15 +11,11 @@
 
 use std::str::FromStr;
 
-use mz_proto::{ProtoType, RustType, TryFromProtoError};
-use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-include!(concat!(env!("OUT_DIR"), "/mz_cluster_client.client.rs"));
-
 /// Configuration of the cluster we will spin up
-#[derive(Arbitrary, Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct TimelyConfig {
     /// Number of per-process worker threads
     pub workers: usize,
@@ -58,50 +54,10 @@ impl FromStr for TimelyConfig {
     }
 }
 
-impl RustType<ProtoTimelyConfig> for TimelyConfig {
-    fn into_proto(&self) -> ProtoTimelyConfig {
-        ProtoTimelyConfig {
-            workers: self.workers.into_proto(),
-            addresses: self.addresses.into_proto(),
-            process: self.process.into_proto(),
-            arrangement_exert_proportionality: self.arrangement_exert_proportionality,
-            enable_zero_copy: self.enable_zero_copy,
-            enable_zero_copy_lgalloc: self.enable_zero_copy_lgalloc,
-            zero_copy_limit: self.zero_copy_limit.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoTimelyConfig) -> Result<Self, TryFromProtoError> {
-        Ok(Self {
-            process: proto.process.into_rust()?,
-            workers: proto.workers.into_rust()?,
-            addresses: proto.addresses.into_rust()?,
-            arrangement_exert_proportionality: proto.arrangement_exert_proportionality,
-            enable_zero_copy: proto.enable_zero_copy,
-            enable_zero_copy_lgalloc: proto.enable_zero_copy_lgalloc,
-            zero_copy_limit: proto.zero_copy_limit.into_rust()?,
-        })
-    }
-}
-
-impl TimelyConfig {
-    /// Split the timely configuration into `parts` pieces, each with a different `process` number.
-    pub fn split_command(&self, parts: usize) -> Vec<Self> {
-        (0..parts)
-            .map(|part| TimelyConfig {
-                process: part,
-                ..self.clone()
-            })
-            .collect()
-    }
-}
-
-/// A trait for specific cluster commands that can be unpacked into
-/// `CreateTimely` variants.
-pub trait TryIntoTimelyConfig {
-    /// Attempt to unpack `self` into a `(TimelyConfig, Uuid)`. Otherwise,
-    /// fail and return `self` back.
-    fn try_into_timely_config(self) -> Result<(TimelyConfig, Uuid), Self>
+/// A trait for cluster commands that provide a protocol nonce.
+pub trait TryIntoProtocolNonce {
+    /// Attempt to unpack `self` into a nonce. Otherwise, fail and return `self` back.
+    fn try_into_protocol_nonce(self) -> Result<Uuid, Self>
     where
         Self: Sized;
 }
@@ -120,26 +76,4 @@ pub struct ClusterReplicaLocation {
     pub dataflow_addrs: Vec<String>,
     /// The workers per process in the replica.
     pub workers: usize,
-}
-
-#[cfg(test)]
-mod tests {
-    use mz_ore::assert_ok;
-    use mz_proto::protobuf_roundtrip;
-    use proptest::prelude::{ProptestConfig, any};
-    use proptest::proptest;
-
-    use super::*;
-
-    proptest! {
-        #![proptest_config(ProptestConfig::with_cases(32))]
-
-        #[mz_ore::test]
-        #[cfg_attr(miri, ignore)] // slow
-        fn timely_config_protobuf_roundtrip(expect in any::<TimelyConfig>() ) {
-            let actual = protobuf_roundtrip::<_, ProtoTimelyConfig>(&expect);
-            assert_ok!(actual);
-            assert_eq!(actual.unwrap(), expect);
-        }
-    }
 }

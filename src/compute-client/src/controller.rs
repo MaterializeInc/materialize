@@ -42,10 +42,6 @@ use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::config::ComputeReplicaConfig;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::dyncfgs::COMPUTE_REPLICA_EXPIRATION_OFFSET;
-use mz_controller_types::dyncfgs::{
-    ARRANGEMENT_EXERT_PROPORTIONALITY, ENABLE_TIMELY_ZERO_COPY, ENABLE_TIMELY_ZERO_COPY_LGALLOC,
-    TIMELY_ZERO_COPY_LIMIT,
-};
 use mz_dyncfg::ConfigSet;
 use mz_expr::RowSetFinishing;
 use mz_ore::cast::CastFrom;
@@ -751,10 +747,6 @@ where
             },
             grpc_client: self.config.grpc_client.clone(),
             expiration_offset: (!expiration_offset.is_zero()).then_some(expiration_offset),
-            arrangement_exert_proportionality: ARRANGEMENT_EXERT_PROPORTIONALITY.get(&self.dyncfg),
-            enable_zero_copy: ENABLE_TIMELY_ZERO_COPY.get(&self.dyncfg),
-            enable_zero_copy_lgalloc: ENABLE_TIMELY_ZERO_COPY_LGALLOC.get(&self.dyncfg),
-            zero_copy_limit: TIMELY_ZERO_COPY_LIMIT.get(&self.dyncfg),
         };
 
         let instance = self.instance_mut(instance_id).expect("validated");

@@ -5458,21 +5458,11 @@ name = "mz-cluster-client"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "http 1.2.0",
- "mz-build-tools",
  "mz-ore",
- "mz-proto",
  "mz-repr",
  "prometheus",
- "proptest",
- "proptest-derive",
- "prost",
- "prost-build",
  "serde",
  "serde_json",
- "tokio-stream",
- "tonic",
- "tonic-build",
  "uuid",
  "workspace-hack",
 ]
