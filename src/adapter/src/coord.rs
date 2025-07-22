@@ -108,8 +108,8 @@ use mz_compute_client::controller::error::InstanceMissing;
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::Plan;
-use mz_controller::ControllerConfig;
 use mz_controller::clusters::{ClusterConfig, ClusterEvent, ClusterStatus, ProcessId};
+use mz_controller::{ControllerConfig, Readiness};
 use mz_controller_types::{ClusterId, ReplicaId, WatchSetId};
 use mz_expr::{MapFilterProject, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_license_keys::ValidatedLicenseKey;
@@ -232,7 +232,9 @@ mod validity;
 #[derive(Debug)]
 pub enum Message {
     Command(OpenTelemetryContext, Command),
-    ControllerReady,
+    ControllerReady {
+        controller: ControllerReadiness,
+    },
     PurifiedStatementReady(PurifiedStatementReady),
     CreateConnectionValidationReady(CreateConnectionValidationReady),
     AlterConnectionValidationReady(AlterConnectionValidationReady),
@@ -356,7 +358,18 @@ impl Message {
                 Command::Dump { .. } => "command-dump",
                 Command::AuthenticatePassword { .. } => "command-auth_check",
             },
-            Message::ControllerReady => "controller_ready",
+            Message::ControllerReady {
+                controller: ControllerReadiness::Compute,
+            } => "controller_ready(compute)",
+            Message::ControllerReady {
+                controller: ControllerReadiness::Storage,
+            } => "controller_ready(storage)",
+            Message::ControllerReady {
+                controller: ControllerReadiness::Metrics,
+            } => "controller_ready(metrics)",
+            Message::ControllerReady {
+                controller: ControllerReadiness::Internal,
+            } => "controller_ready(internal)",
             Message::PurifiedStatementReady(_) => "purified_statement_ready",
             Message::CreateConnectionValidationReady(_) => "create_connection_validation_ready",
             Message::TryDeferred { .. } => "try_deferred",
@@ -395,6 +408,19 @@ impl Message {
             Message::DeferredStatementReady => "deferred_statement_ready",
         }
     }
+}
+
+/// The reason for why a controller needs processing on the main loop.
+#[derive(Debug)]
+pub enum ControllerReadiness {
+    /// The storage controller is ready.
+    Storage,
+    /// The compute controller is ready.
+    Compute,
+    /// A batch of metric data is ready.
+    Metrics,
+    /// An internally-generated message is ready to be returned.
+    Internal,
 }
 
 #[derive(Derivative)]
@@ -3329,7 +3355,17 @@ impl Coordinator {
                     // on why this is cancel-safe.
                     // Receive a single command.
                     () = self.controller.ready() => {
-                        messages.push(Message::ControllerReady);
+                        // NOTE: We don't get a `Readiness` back from `ready()`
+                        // because the controller wants to keep it and it's not
+                        // trivially `Clone` or `Copy`. Hence this accessor.
+                        let controller = match self.controller.get_readiness() {
+                            Readiness::Storage => ControllerReadiness::Storage,
+                            Readiness::Compute => ControllerReadiness::Compute,
+                            Readiness::Metrics(_) => ControllerReadiness::Metrics,
+                            Readiness::Internal(_) => ControllerReadiness::Internal,
+                            Readiness::NotReady => unreachable!("just signaled as ready"),
+                        };
+                        messages.push(Message::ControllerReady { controller });
                     }
                     // See [`appends::GroupCommitWaiter`] for notes on why this is cancel safe.
                     // Receive a single command.
