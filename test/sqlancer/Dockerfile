@@ -19,7 +19,8 @@ RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y -
     default-jdk \
     maven \
     && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/info/* /usr/share/locale/* /var/cache/* /var/log/*
 
 # Build SQLancer
 RUN git clone --depth=1 --single-branch https://github.com/sqlancer/sqlancer \
@@ -27,4 +28,4 @@ RUN git clone --depth=1 --single-branch https://github.com/sqlancer/sqlancer \
     && rm -rf .git \
     && mvn package -DskipTests
 
-ENTRYPOINT ["/usr/bin/java", "-jar", "sqlancer/target/sqlancer-2.0.0.jar"]
+ENTRYPOINT ["/usr/bin/eatmydata", "/usr/bin/java", "-jar", "sqlancer/target/sqlancer-2.0.0.jar"]

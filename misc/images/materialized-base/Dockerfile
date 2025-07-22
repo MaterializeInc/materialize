@@ -37,9 +37,9 @@ RUN groupadd --system --gid=999 materialize \
        fi \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean \
-    && mkdir -p /mzdata /scratch /var/lib/postgresql/data /var/run/postgresql /var/lib/nginx /var/log/nginx \
+    && mkdir -p /mzdata /scratch /var/lib/postgresql/data /var/run/postgresql /var/lib/nginx /var/log/nginx /etc/postgresql/16/main \
     && touch /run/nginx.pid \
-    && chown -R materialize /mzdata /scratch /var/lib/postgresql/data /var/run/postgresql /var/log/postgresql /var/lib/postgresql/16/main /var/lib/nginx /var/log/nginx /run/nginx.pid
+    && chown -R materialize /mzdata /scratch /var/lib/postgresql/data /var/run/postgresql /var/log/postgresql /var/lib/postgresql/16/main /var/lib/nginx /var/log/nginx /run/nginx.pid /etc/postgresql/16/main
 
 COPY postgresql.conf pg_hba.conf /etc/postgresql/16/main/
 

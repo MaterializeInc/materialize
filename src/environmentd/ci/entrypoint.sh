@@ -11,6 +11,12 @@
 
 set -euo pipefail
 
+if [ -z "${MZ_EAT_MY_DATA:-}" ]; then
+    unset LD_PRELOAD
+else
+    export LD_PRELOAD=libeatmydata.so
+fi
+
 if environmentd "$@"; then
     echo "environmentd exited gracefully; sleeping forever" >&2
     sleep infinity

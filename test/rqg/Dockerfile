@@ -21,7 +21,8 @@ RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y -
     libparse-yapp-perl \
     postgresql-client \
     && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/info/* /usr/share/locale/* /var/cache/* /var/log/*
 
 RUN perl -MCPAN -e 'install DBIx::MyParsePP'
 
@@ -30,6 +31,6 @@ RUN git clone --single-branch https://github.com/MaterializeInc/RQG.git \
     && git checkout 4fe4e6f09f9599ce9f8ffd3f75d593b20518cc50 \
     && rm -rf .git
 
-ENTRYPOINT ["/usr/bin/perl"]
+ENTRYPOINT ["/usr/bin/eatmydata", "/usr/bin/perl"]
 
 WORKDIR RQG

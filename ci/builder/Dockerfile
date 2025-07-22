@@ -40,6 +40,7 @@ RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-ge
     ca-certificates \
     curl \
     docker.io \
+    eatmydata \
     gdb \
     git \
     gnupg2 \

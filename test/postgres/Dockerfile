@@ -13,9 +13,10 @@ FROM postgres:17.4
 
 ENV POSTGRES_PASSWORD=postgres
 
-RUN apt update
-
-RUN apt install postgresql-17-cron
+RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends postgresql-17-cron eatmydata \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* \
+    && rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/info/* /usr/share/locale/* /var/cache/* /var/log/*
 
 COPY --chown=postgres --from=certs /secrets/* /share/secrets/
 COPY pg_hba.conf /share/conf/pg_hba.conf

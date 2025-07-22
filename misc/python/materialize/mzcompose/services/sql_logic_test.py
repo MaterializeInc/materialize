@@ -27,6 +27,7 @@ class SqlLogicTest(Service):
         if environment is None:
             environment = [
                 "MZ_SOFT_ASSERTIONS=1",
+                "LD_PRELOAD=libeatmydata.so",
             ]
         environment += [
             "MZ_SYSTEM_PARAMETER_DEFAULT="
