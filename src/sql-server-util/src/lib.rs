@@ -42,6 +42,8 @@ use crate::desc::SqlServerColumnDecodeType;
 #[derive(Debug)]
 pub struct Client {
     tx: UnboundedSender<Request>,
+    // The configuration used to create this client.
+    config: Config,
 }
 // While a Client could implement Clone, it's not obvious how multiple Clients
 // using the same SQL Server connection would interact, so ban it for now.
@@ -103,18 +105,22 @@ impl Client {
         Ok(client)
     }
 
+    pub async fn new_connection(&self) -> Result<Self, SqlServerError> {
+        Self::connect(self.config.clone()).await
+    }
+
     pub async fn connect_raw(
         config: Config,
         tcp: tokio::net::TcpStream,
         resources: Option<Box<dyn Any + Send + Sync>>,
     ) -> Result<(Self, Connection), SqlServerError> {
-        let client = tiberius::Client::connect(config.inner, tcp.compat_write()).await?;
+        let client = tiberius::Client::connect(config.inner.clone(), tcp.compat_write()).await?;
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
         // TODO(sql_server2): Add a lot more logging here like the Postgres and MySQL clients have.
 
         Ok((
-            Client { tx },
+            Client { tx, config },
             Connection {
                 rx,
                 client,

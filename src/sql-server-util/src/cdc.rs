@@ -143,16 +143,10 @@ impl<'a> CdcStream<'a> {
         // the upstream DB is ready for CDC.
         self.wait_for_ready().await?;
 
-        self.client
-            .set_transaction_isolation(TransactionIsolationLevel::Snapshot)
-            .await?;
-        let mut txn = self.client.transaction().await?;
-        // Get the current LSN of the database. This operation assigns a savepoint to our
-        // current transaction.
-
-        // create a savepoint that we will lock the tables under and collect an LSN
-        // this allows us to rollback the savepoint while maintaining the outer transaction
-        txn.create_savepoint(SAVEPOINT_NAME).await?;
+        let mut fencing_client = self.client.new_connection().await?;
+        // The client that will be used for fencing does not need any special isolation level
+        // as it will be just be locking the tables
+        let mut fence_txn = fencing_client.transaction().await?;
         // lock all the tables we are planning to snapshot so that we can ensure that
         // writes that might be in progress are properly ordered before or after this snapshot
         // in addition to the LSN being properly ordered.
@@ -161,13 +155,36 @@ impl<'a> CdcStream<'a> {
         // jam.
         for (_capture_instance, schema, table) in &tables {
             tracing::trace!(%schema, %table, "locking table");
-            crate::inspect::lock_table(&mut txn, &*schema, &*table).await?;
+            crate::inspect::lock_table(&mut fence_txn, &*schema, &*table).await?;
         }
 
-        let lsn = crate::inspect::get_lsn(&mut txn).await?;
-        tracing::info!(?tables, ?lsn, "starting snapshot");
+        self.client
+            .set_transaction_isolation(TransactionIsolationLevel::Snapshot)
+            .await?;
+        let mut txn = self.client.transaction().await?;
+        // The result here is not important, what we are doing is establishing a transaction sequence number (XSN)
+        // while using SNAPSHOT isolation that will be concurrent with a quiesced set of tables that we
+        // wish to snapshot.  Regardless what you might read in *many* articles on Microsoft's site, the XSN is not
+        // set at BEGIN TRANSACTION, but at the first read/write.
+        // The choice of table is driven by a few factors:
+        // - it's a system table, we know it must exist and it will have a well defined schema
+        // - MZ is a CDC client, so should be be able to read from it
+        let res = txn
+            .simple_query("SELECT TOP 1 object_id FROM cdc.change_tables;")
+            .await?;
+        // TODO (maz): nicer error if, somehow, there are no more change tables
+        assert_eq!(res.len(), 1);
 
-        txn.rollback_savepoint(SAVEPOINT_NAME).await?;
+        // Creating a savepoint forces a write to the transaction log, which will assign an LSN to this transaction
+        // which is concurrent with the tables that are currently in a consistent state.
+        txn.create_savepoint(SAVEPOINT_NAME).await?;
+
+        let lsn = crate::inspect::get_lsn(&mut txn).await?;
+
+        // once we have the snapshot, we can rollback the fencing transaction to allow access to the tables.
+        fence_txn.rollback().await?;
+
+        tracing::info!(?tables, ?lsn, "starting snapshot");
 
         // Get the size of each table we're about to snapshot.
         //
