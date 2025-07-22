@@ -137,8 +137,8 @@ DDL. These are higher-level, complex commands. The alternative is a Small
 Coordinator that supports a much reduced set of simpler commands: most of the
 work would have to happen in other parts of the system and the Coordinator only
 has too be involved when absolutely necessary. A good analogy might be CISC vs
-RISC instruction sets, where CISC has fewer, more complex opcodes and RISC has
-possibly more, but simpler opcodes.
+RISC instruction sets, where CISC has more opcodes which are more complex and
+RISC has fewer and simpler opcodes.
 
 ### Staged Processing
 
