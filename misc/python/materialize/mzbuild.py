@@ -938,20 +938,45 @@ class ResolvedImage:
             "CI_SANITIZER": str(self.image.rd.sanitizer),
         }
         f = self.write_dockerfile()
-        cmd: Sequence[str] = [
-            "docker",
-            "buildx",
-            "build",
-            "--progress=plain",  # less noisy
-            "-f",
-            "-",
-            *(f"--build-arg={k}={v}" for k, v in build_args.items()),
-            "-t",
-            self.spec(),
-            f"--platform=linux/{self.image.rd.arch.go_str()}",
-            str(self.image.path),
-            *(("--push",) if push else ()),
-        ]
+
+        try:
+            spawn.capture(["docker", "buildx", "version"])
+        except subprocess.CalledProcessError:
+            if push:
+                print(
+                    "docker buildx not found, required to push images. Installation: https://github.com/docker/buildx?tab=readme-ov-file#installing"
+                )
+                raise
+            print(
+                "docker buildx not found, you can install it to build faster. Installation: https://github.com/docker/buildx?tab=readme-ov-file#installing"
+            )
+            print("Falling back to docker build")
+            cmd: Sequence[str] = [
+                "docker",
+                "build",
+                "-f",
+                "-",
+                *(f"--build-arg={k}={v}" for k, v in build_args.items()),
+                "-t",
+                self.spec(),
+                f"--platform=linux/{self.image.rd.arch.go_str()}",
+                str(self.image.path),
+            ]
+        else:
+            cmd: Sequence[str] = [
+                "docker",
+                "buildx",
+                "build",
+                "--progress=plain",  # less noisy
+                "-f",
+                "-",
+                *(f"--build-arg={k}={v}" for k, v in build_args.items()),
+                "-t",
+                self.spec(),
+                f"--platform=linux/{self.image.rd.arch.go_str()}",
+                str(self.image.path),
+                *(("--push",) if push else ()),
+            ]
         spawn.runv(cmd, stdin=f, stdout=sys.stderr.buffer)
 
     def try_pull(self, max_retries: int) -> bool:
