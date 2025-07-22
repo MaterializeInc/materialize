@@ -7,8 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# This file is for SQL planning errors only. Parse errors should live in the
-# sql-parser test suite!
+# This file is for SQL planning errors only.
+# - Parse errors should live in the sql-parser test suite!
+# - Error semantics issues due to evaluation order live in `error_semantics.slt`
 
 query error VALUES expression in FROM clause must be surrounded by parentheses
 SELECT * FROM VALUES (1)
