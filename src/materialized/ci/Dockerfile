@@ -15,6 +15,16 @@ COPY materialized entrypoint.sh /usr/local/bin/
 USER root
 RUN ln -s /usr/local/bin/materialized /usr/local/bin/environmentd \
   && ln -s /usr/local/bin/materialized /usr/local/bin/clusterd
+
 USER materialize
+
+RUN bash -c '\
+  set -euo pipefail; \
+  tini -- entrypoint.sh & \
+  tini_pid=$!; \
+  until curl -sf localhost:6878/api/readyz; do sleep 0.1; done; \
+  kill -TERM "$tini_pid"; \
+  wait "$tini_pid" || true; \
+  pg_ctlcluster 16 main stop --mode=fast --force'
 
 ENTRYPOINT ["tini", "--", "entrypoint.sh"]

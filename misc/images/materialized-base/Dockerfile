@@ -19,21 +19,18 @@ FROM materialize/console:25.2.3 AS console
 
 MZFROM ubuntu-base
 
-RUN groupadd --system --gid=999 materialize \
-    && useradd --system --gid=999 --uid=999 --create-home materialize
-
 ARG CI_SANITIZER=none
 
-RUN apt-get update \
+RUN groupadd --system --gid=999 materialize \
+    && useradd --system --gid=999 --uid=999 --create-home materialize \
+    && apt-get update \
     && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get -qy install --no-install-recommends \
-        ca-certificates \
         curl \
         gettext-base \
         nginx \
         postgresql \
-        postgresql-contrib \
-        tini \
         ssh \
+        tini \
     && if [ "$CI_SANITIZER" != "none" ]; then \
         TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get -qy install --no-install-recommends llvm; \
        fi \
@@ -57,7 +54,3 @@ RUN MZ_ENDPOINT=http://localhost:6876 \
     && rm /etc/nginx/templates/default.conf.template
 
 USER materialize
-
-RUN pg_ctlcluster 16 main start \
-    && psql -U postgres -c "CREATE ROLE root WITH LOGIN PASSWORD 'root'" \
-    && psql -U postgres -c "CREATE DATABASE root OWNER root"
