@@ -6,9 +6,23 @@ menu:
     weight: 50
     name: "Release notes"
     identifier: "release-notes"
+    parent: releases
+    weight: 1
 ---
 
-## v25.2
+#v25.2
+
+## v25.2.3
+
+### TLS Support for SQL Server Source
+v25.2.3 bumps the Environmentd version 0.147.4 which supports TLS connections for SQL Server.
+For more information, see [Ingest data: SQL Server](/ingest-data/sql-server/).
+
+### Basic Authentication for HTTP interface
+v25.2.3 bumps the Environmentd version 0.147.4 which supports TLS connections for SQL Server.
+For more information, see [Integrations HTTP API](/integrations/http-api).
+
+## v25.2.0
 
 ### Support for SQL Server Source
 
@@ -30,11 +44,11 @@ Starting in v25.2, password authentication and role-based access control are ava
 
 Starting in v25.2, self-managed Materialize adds support for a new `PARTITION
 BY` option for materialized views and tables. `PARTITION BY` allows you to
-control how Materializes interally groups and stores your data. This can lead to
+control how Materializes internally groups and stores your data. This can lead to
 dramatically faster query performance and rehydration times for certain
 workloads.
 
-For details, see [Partioning and filter
+For details, see [Partitioning and filter
 pushdown](/transform-data/patterns/partition-by/).
 
 ## Console Improvements
