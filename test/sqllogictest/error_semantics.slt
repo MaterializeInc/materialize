@@ -1,0 +1,95 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# This file is for error semantics and evaluation order/short-circuiting, see
+# https://github.com/MaterializeInc/database-issues/issues/4972
+#
+
+########################################################################################################################
+# NOTE: THESE EXPECTED RESULTS ARE NOT SET IN STONE! The results, together with occasional comments above them, are our
+# current best guess of what our error semantics will be, but it's ok to change this for now as we learn more.
+########################################################################################################################
+
+statement ok
+create table test (a int, b int);
+
+statement ok
+insert into test values (1, 0);
+
+query I
+select coalesce(a, 1/b) from test;
+----
+1
+
+# Postgres errors on it, which we consider to be a bug in Postgres, because Postgres' coalesce docs say it should
+# short-circuit: https://www.postgresql.org/docs/current/functions-conditional.html#FUNCTIONS-COALESCE-NVL-IFNULL
+query I
+select coalesce(a, 1/0) from test;
+----
+1
+
+query I
+select coalesce(a, 1/b) from test where b = 0;
+----
+1
+
+query I
+select coalesce(7, 1/b) from test;
+----
+7
+
+query I
+select coalesce(7, 1/0) from test;
+----
+7
+
+statement ok
+create table test_nonnull (a int not null, b int);
+
+statement ok
+insert into test_nonnull values (1, 0);
+
+query I
+select coalesce(a, 1/b) from test_nonnull;
+----
+1
+
+# Postgres errors, which we consider to be a bug in Postgres
+query I
+select coalesce(a, 1/0) from test_nonnull;
+----
+1
+
+query I
+select coalesce(a, 1/b) from test_nonnull where b = 0;
+----
+1
+
+query I
+select coalesce(7, 1/b) from test_nonnull;
+----
+7
+
+query I
+select coalesce(7, 1/0) from test_nonnull;
+----
+7
+
+# MFP CSE, see https://github.com/MaterializeInc/materialize/pull/33109
+query I
+select coalesce(a, a/b + 1, a/b + 2) from test;
+----
+1
+
+# The following two results are probably wrong (but depends on what error semantics we agree on later).
+query error db error: ERROR: Evaluation error: division by zero
+select coalesce(a, (select a/b from test)) from test;
+
+query error db error: ERROR: Evaluation error: division by zero
+select *, case when a = 5 then (select a/b from test) else 7 end from test;
