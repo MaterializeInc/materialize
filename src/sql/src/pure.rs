@@ -16,7 +16,6 @@ use std::fmt;
 use std::iter;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::anyhow;
 use itertools::Itertools;
@@ -1004,7 +1003,7 @@ async fn purify_create_source(
             // available.  Rather than return an error to the user, we retry to allow the CDC
             // job a chance to run.
             let timeout = mz_storage_types::sources::sql_server::MAX_LSN_WAIT
-                .get(&storage_configuration.config_set());
+                .get(storage_configuration.config_set());
             let initial_lsn =
                 mz_sql_server_util::inspect::get_max_lsn_retry(&mut client, timeout).await?;
 
@@ -1624,7 +1623,7 @@ async fn purify_alter_source_add_subsources(
             // available.  Rather than return an error to the user, we retry to allow the CDC
             // job a chance to run.
             let timeout = mz_storage_types::sources::sql_server::MAX_LSN_WAIT
-                .get(&storage_configuration.config_set());
+                .get(storage_configuration.config_set());
             let initial_lsn =
                 mz_sql_server_util::inspect::get_max_lsn_retry(&mut client, timeout).await?;
 
@@ -2002,7 +2001,7 @@ async fn purify_create_table_from_source(
             // available.  Rather than return an error to the user, we retry to allow the CDC
             // job a chance to run.
             let timeout = mz_storage_types::sources::sql_server::MAX_LSN_WAIT
-                .get(&storage_configuration.config_set());
+                .get(storage_configuration.config_set());
             let initial_lsn =
                 mz_sql_server_util::inspect::get_max_lsn_retry(&mut client, timeout).await?;
             let reference_client = SourceReferenceClient::SqlServer {
