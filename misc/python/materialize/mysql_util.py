@@ -40,6 +40,7 @@ def retrieve_ssl_context_for_mysql(c: Composition) -> MySqlSslContext:
 
 def retrieve_invalid_ssl_context_for_mysql(c: Composition) -> MySqlSslContext:
     # Use the TestCert service to obtain a wrong CA and client cert/key:
+    c.up({"name": "test-certs", "persistent": True})
     ssl_wrong_ca = c.run("test-certs", "cat", "/secrets/ca.crt", capture=True).stdout
     ssl_wrong_client_cert = c.run(
         "test-certs", "cat", "/secrets/certuser.crt", capture=True

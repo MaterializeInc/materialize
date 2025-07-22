@@ -300,6 +300,7 @@ def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     print(f"Files: {sharded_files}")
 
+    c.up({"name": "test-certs", "persistent": True})
     ssl_ca = c.run("test-certs", "cat", "/secrets/ca.crt", capture=True).stdout
     ssl_cert = c.run("test-certs", "cat", "/secrets/certuser.crt", capture=True).stdout
     ssl_key = c.run("test-certs", "cat", "/secrets/certuser.key", capture=True).stdout
