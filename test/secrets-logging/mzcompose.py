@@ -75,13 +75,15 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         )
 
     files = buildkite.shard_list(
-        [
-            file
-            for pattern in args.files
-            for file in glob.glob(
-                pattern, root_dir=MZ_ROOT / "test" / "secrets-logging"
-            )
-        ],
+        sorted(
+            [
+                file
+                for pattern in args.files
+                for file in glob.glob(
+                    pattern, root_dir=MZ_ROOT / "test" / "secrets-logging"
+                )
+            ]
+        ),
         lambda file: file,
     )
     c.test_parts(files, process)

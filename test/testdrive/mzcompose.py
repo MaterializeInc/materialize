@@ -230,11 +230,15 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             os.remove(f"test/testdrive/{junit_report}")
 
         files = buildkite.shard_list(
-            [
-                file
-                for pattern in args.files
-                for file in glob.glob(pattern, root_dir=MZ_ROOT / "test" / "testdrive")
-            ],
+            sorted(
+                [
+                    file
+                    for pattern in args.files
+                    for file in glob.glob(
+                        pattern, root_dir=MZ_ROOT / "test" / "testdrive"
+                    )
+                ]
+            ),
             lambda file: file,
         )
         c.test_parts(files, process)

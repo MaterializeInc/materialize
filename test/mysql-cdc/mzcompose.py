@@ -108,8 +108,8 @@ def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
         matching_files.extend(
             glob.glob(filter, root_dir=MZ_ROOT / "test" / "mysql-cdc")
         )
-    sharded_files: list[str] = sorted(
-        buildkite.shard_list(matching_files, lambda file: file)
+    sharded_files: list[str] = buildkite.shard_list(
+        sorted(matching_files), lambda file: file
     )
     print(f"Files: {sharded_files}")
 
