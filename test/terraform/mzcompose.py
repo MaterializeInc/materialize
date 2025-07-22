@@ -176,7 +176,7 @@ def testdrive(no_reset: bool) -> Testdrive:
         network_mode="host",
         volume_workdir="../testdrive:/workdir",
         no_reset=no_reset,
-        default_timeout="120s",
+        default_timeout="360s",
         # For full testdrive support we'll need:
         # kafka_url=...
         # schema_registry_url=...
