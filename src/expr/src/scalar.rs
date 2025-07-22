@@ -2539,7 +2539,7 @@ mod term_graph {
             done.pop().unwrap()
         }
 
-        pub fn reduce(&mut self) {}
+        pub fn reduce(&self) {}
     }
 }
 
@@ -3595,7 +3595,7 @@ mod tests {
 
         for tc in test_cases {
             let mut actual = tc.input.clone();
-            actual.reduce(&relation_type);
+            actual.reduce(&relation_type, false);
             assert!(
                 actual == tc.output,
                 "input: {}\nactual: {}\nexpected: {}",

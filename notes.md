@@ -1,0 +1,6 @@
+- use smallvec 3
+- algorithm is basically just 
+- hash conjing key the op by the hash of the operands
+- the overall process:
+  - reduce
+  - 
