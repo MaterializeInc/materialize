@@ -888,7 +888,7 @@ mod tests {
 
         // Record the walltime and execution time of an async sleep.
         let async_sleep_future = async {
-            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+            tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
         };
         runtime.block_on(
             async_sleep_future
@@ -911,7 +911,7 @@ mod tests {
         let exec_histogram = exec_metric[0].get_histogram();
         assert_eq!(exec_histogram.get_sample_count(), 1);
         // The 4th bucket is 1ms, which we should complete faster than, but is still much quicker
-        // than the 1 second we slept for.
+        // than the 3 seconds we slept for.
         assert_eq!(exec_histogram.get_bucket()[3].get_cumulative_count(), 1);
 
         let wall_family = reports

@@ -17,6 +17,8 @@
 # tolerances into these checks that verify whether induced lag is present. A
 # threshold value of 2 seconds seems to work fine.
 
+$ set-sql-timeout duration=60s
+
 $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 
 $ postgres-execute connection=mz_system
