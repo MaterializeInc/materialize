@@ -34,11 +34,11 @@ include!(concat!(
     "/mz_storage_types.sources.sql_server.rs"
 ));
 
-pub const SNAPSHOT_MAX_LSN_WAIT: Config<Duration> = Config::new(
-    "sql_server_snapshot_max_lsn_wait",
+pub const MAX_LSN_WAIT: Config<Duration> = Config::new(
+    "sql_server_max_lsn_wait",
     Duration::from_secs(30),
     "Maximum amount of time we'll wait for SQL Server to report an LSN (in other words for \
-    CDC to be fully enabled) before taking an initial snapshot.",
+    CDC to be fully enabled)",
 );
 
 pub const SNAPSHOT_PROGRESS_REPORT_INTERVAL: Config<Duration> = Config::new(

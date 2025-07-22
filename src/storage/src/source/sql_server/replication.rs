@@ -25,7 +25,7 @@ use mz_sql_server_util::cdc::{CdcEvent, Lsn, Operation as CdcOperation};
 use mz_storage_types::errors::{DataflowError, DecodeError, DecodeErrorKind};
 use mz_storage_types::sources::SqlServerSource;
 use mz_storage_types::sources::sql_server::{
-    CDC_POLL_INTERVAL, SNAPSHOT_MAX_LSN_WAIT, SNAPSHOT_PROGRESS_REPORT_INTERVAL,
+    CDC_POLL_INTERVAL, MAX_LSN_WAIT, SNAPSHOT_PROGRESS_REPORT_INTERVAL,
 };
 use mz_timely_util::builder_async::{
     AsyncOutputHandle, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
@@ -124,7 +124,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
 
             let mut cdc_handle = client
                 .cdc(capture_instances.keys().cloned())
-                .max_lsn_wait(SNAPSHOT_MAX_LSN_WAIT.get(config.config.config_set()));
+                .max_lsn_wait(MAX_LSN_WAIT.get(config.config.config_set()));
 
             // Snapshot any instance that requires it.
             // The LSN returned here will be the max LSN for any capture instance on the SQL server.
