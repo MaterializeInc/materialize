@@ -799,7 +799,7 @@ impl MirScalarExpr {
     /// test.reduce(&input_type);
     /// assert_eq!(test, expr_t);
     /// ```
-    pub fn reduce(&mut self, column_types: &[ColumnType]) {
+    pub fn reduce(&mut self, column_types: &[ColumnType], use_term_graph: bool) {
         let temp_storage = &RowArena::new();
         let eval = |e: &MirScalarExpr| {
             MirScalarExpr::literal(e.eval(&[], temp_storage), e.typ(column_types).scalar_type)
@@ -807,6 +807,12 @@ impl MirScalarExpr {
 
         // Simplifications run in a loop until `self` no longer changes.
         let mut old_self = MirScalarExpr::column(0);
+        let mut old_self_term_graph = term_graph::TermGraph::default();
+        if use_term_graph {
+            old_self_term_graph.ensure(&old_self);
+            old_self_term_graph.reduce();
+            old_self = old_self_term_graph.extract(0);
+        }
         while old_self != *self {
             old_self = self.clone();
             #[allow(deprecated)]
@@ -2374,6 +2380,166 @@ impl MirScalarExpr {
             f(expr);
             worklist.extend(expr.children_mut().rev());
         }
+    }
+}
+
+mod term_graph {
+    use crate::EvalError;
+    use crate::MirScalarExpr;
+    use crate::{BinaryFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc};
+    use mz_ore::treat_as_equal::TreatAsEqual;
+    use mz_repr::{ColumnType, Row};
+    use smallvec::SmallVec;
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+
+    pub type Id = usize;
+    pub type Term<Op> = (Op, SmallVec<[Id; 2]>);
+
+    pub struct TermGraph<Op> {
+        /// Map from identifiers to terms.
+        id_to_term: BTreeMap<Id, Term<Op>>,
+        /// Map from terms to identifiers.
+        term_to_id: BTreeMap<Term<Op>, Id>,
+    }
+
+    impl<Op> Default for TermGraph<Op> {
+        fn default() -> Self {
+            Self {
+                id_to_term: Default::default(),
+                term_to_id: Default::default(),
+            }
+        }
+    }
+
+    impl<Op: Clone + Ord> TermGraph<Op> {
+        pub fn insert(&mut self, term: Term<Op>) -> usize {
+            if !self.term_to_id.contains_key(&term) {
+                let new_id = self.id_to_term.keys().last().map(|x| *x + 1).unwrap_or(0);
+                self.id_to_term.insert(new_id, term.clone());
+                self.term_to_id.insert(term, new_id);
+                new_id
+            } else {
+                self.term_to_id[&term]
+            }
+        }
+    }
+
+    #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+    pub enum MseOp {
+        Column(usize, TreatAsEqual<Option<Arc<str>>>),
+        Literal(Result<Row, EvalError>, ColumnType),
+        CallNullary { func: UnmaterializableFunc },
+        CallUnary { func: UnaryFunc },
+        CallBinary { func: BinaryFunc },
+        CallVariadic { func: VariadicFunc },
+        If,
+    }
+
+    impl TermGraph<MseOp> {
+        /// Introduces `root` to the term graph and returns its identifier.
+        pub fn ensure(&mut self, root: &MirScalarExpr) -> usize {
+            let mut stack = vec![root];
+            let mut post_order = vec![];
+            while let Some(expr) = stack.pop() {
+                post_order.push(expr);
+                stack.extend(expr.children());
+            }
+            post_order.reverse();
+
+            // Map from &MSE to their term graph identifier.
+            let mut look_up: BTreeMap<&MirScalarExpr, Id> = BTreeMap::default();
+            for expr in post_order {
+                if !look_up.contains_key(expr) {
+                    let args: SmallVec<[Id; 2]> = expr.children().map(|c| look_up[c]).collect();
+                    let op = match expr {
+                        MirScalarExpr::Column(col, idk) => MseOp::Column(*col, idk.clone()),
+                        MirScalarExpr::Literal(row, typ) => {
+                            MseOp::Literal(row.clone(), typ.clone())
+                        }
+                        MirScalarExpr::CallUnmaterializable(func) => {
+                            MseOp::CallNullary { func: func.clone() }
+                        }
+                        MirScalarExpr::CallUnary { func, .. } => {
+                            MseOp::CallUnary { func: func.clone() }
+                        }
+                        MirScalarExpr::CallBinary { func, .. } => {
+                            MseOp::CallBinary { func: func.clone() }
+                        }
+                        MirScalarExpr::CallVariadic { func, .. } => {
+                            MseOp::CallVariadic { func: func.clone() }
+                        }
+                        MirScalarExpr::If { .. } => MseOp::If,
+                    };
+                    let term = (op, args);
+                    let new_id = self.insert(term);
+                    look_up.insert(expr, new_id);
+                }
+            }
+
+            look_up[root]
+        }
+
+        /// Extracts a `MSE` from the term graph and a supplied root.
+        pub fn extract(&self, root: Id) -> MirScalarExpr {
+            // Maintains a stack of ids to process, where the `Result` encodes:
+            // 1. Err(id): we haven't started the recursive call on `id` yet,
+            // 2. Ok(id): I am ready to return with my recursive calls complete.
+            let mut todo: Vec<Result<Id, Id>> = vec![Err(root)];
+            let mut done: Vec<MirScalarExpr> = vec![];
+
+            while let Some(next) = todo.pop() {
+                match next {
+                    Ok(id) => {
+                        let (op, args) = &self.id_to_term[&id];
+                        let formed = match op {
+                            MseOp::Column(col, idk) => MirScalarExpr::Column(*col, idk.clone()),
+                            MseOp::Literal(row, typ) => {
+                                MirScalarExpr::Literal(row.clone(), typ.clone())
+                            }
+                            MseOp::CallNullary { func } => {
+                                MirScalarExpr::CallUnmaterializable(func.clone())
+                            }
+                            MseOp::CallUnary { func } => MirScalarExpr::CallUnary {
+                                func: func.clone(),
+                                expr: Box::new(done.pop().unwrap()),
+                            },
+                            MseOp::CallBinary { func } => MirScalarExpr::CallBinary {
+                                func: func.clone(),
+                                expr1: Box::new(done.pop().unwrap()),
+                                expr2: Box::new(done.pop().unwrap()),
+                            },
+                            MseOp::CallVariadic { func } => {
+                                let mut exprs = Vec::with_capacity(args.len());
+                                for _ in 0..args.len() {
+                                    exprs.push(done.pop().unwrap());
+                                }
+                                MirScalarExpr::CallVariadic {
+                                    func: func.clone(),
+                                    exprs,
+                                }
+                            }
+                            MseOp::If => MirScalarExpr::If {
+                                cond: Box::new(done.pop().unwrap()),
+                                then: Box::new(done.pop().unwrap()),
+                                els: Box::new(done.pop().unwrap()),
+                            },
+                        };
+                        done.push(formed);
+                    }
+                    Err(id) => {
+                        todo.push(Ok(id));
+                        for arg in self.id_to_term[&id].1.iter() {
+                            todo.push(Err(*arg));
+                        }
+                    }
+                }
+            }
+            assert_eq!(done.len(), 1);
+            done.pop().unwrap()
+        }
+
+        pub fn reduce(&mut self) {}
     }
 }
 

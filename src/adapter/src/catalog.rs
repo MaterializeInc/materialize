@@ -3461,7 +3461,7 @@ mod tests {
                         // Check that `MirScalarExpr::reduce` yields the same result
                         // as the real evaluation.
                         let mut reduced = mir.clone();
-                        reduced.reduce(&[]);
+                        reduced.reduce(&[], false);
                         match reduced {
                             MirScalarExpr::Literal(reduce_result, ctyp) => {
                                 match reduce_result {
