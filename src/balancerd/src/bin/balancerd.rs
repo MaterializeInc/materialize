@@ -18,6 +18,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::Context;
+use domain::resolv::StubResolver;
 use jsonwebtoken::DecodingKey;
 use mz_balancerd::{
     BUILD_INFO, BalancerConfig, BalancerService, CancellationResolver, FronteggResolver, Resolver,
@@ -231,10 +232,13 @@ pub async fn run(args: ServiceArgs, tracing_handle: TracingHandle) -> Result<(),
                 anyhow::bail!("{cancellation_resolver_dir:?} is not a directory");
             }
             (
-                Resolver::Frontegg(FronteggResolver {
-                    auth,
-                    addr_template,
-                }),
+                Resolver::Frontegg(
+                    FronteggResolver {
+                        auth,
+                        addr_template,
+                    },
+                    StubResolver::new(),
+                ),
                 CancellationResolver::Directory(cancellation_resolver_dir),
             )
         }

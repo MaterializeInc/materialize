@@ -16,6 +16,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
+use domain::resolv::StubResolver;
 use futures::StreamExt;
 use jsonwebtoken::{DecodingKey, EncodingKey};
 use mz_balancerd::{
@@ -142,10 +143,13 @@ async fn test_balancer() {
             CancellationResolver::Static(envd_server.sql_local_addr().to_string()),
         ),
         (
-            Resolver::Frontegg(FronteggResolver {
-                auth: frontegg_auth,
-                addr_template: envd_server.sql_local_addr().to_string(),
-            }),
+            Resolver::Frontegg(
+                FronteggResolver {
+                    auth: frontegg_auth,
+                    addr_template: envd_server.sql_local_addr().to_string(),
+                },
+                StubResolver::new(),
+            ),
             CancellationResolver::Directory(cancel_dir.path().to_owned()),
         ),
     ];
@@ -167,7 +171,7 @@ async fn test_balancer() {
     for (resolver, cancellation_resolver) in resolvers {
         let (mut reload_tx, reload_rx) = futures::channel::mpsc::channel(1);
         let ticker = Box::pin(reload_rx);
-        let is_frontegg_resolver = matches!(resolver, Resolver::Frontegg(_));
+        let is_frontegg_resolver = matches!(resolver, Resolver::Frontegg(_, _));
         let balancer_cfg = BalancerConfig::new(
             &BUILD_INFO,
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
