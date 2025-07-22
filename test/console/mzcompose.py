@@ -19,7 +19,7 @@ SERVICES = [
     Postgres(),
     MySql(),
     Testdrive(),
-    Materialized(),
+    Materialized(system_parameter_defaults={"enable_rbac_checks": "false"}),
 ]
 
 
