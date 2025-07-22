@@ -69,20 +69,28 @@ where
             let mut cap = Some(cap);
             let mut buffer = Vec::new();
             move |input, output| {
+                let (mut inputs, mut stashed, mut passed, mut peeled_count) = (0, 0, 0, 0);
                 let frontier =
                     if PartialOrder::less_than(&input.frontier().frontier(), &as_of.borrow()) {
-                        input.frontier().frontier()
-                    } else {
                         as_of.borrow()
+                    } else {
+                        input.frontier().frontier()
                     };
                 let threshold: Antichain<_> = frontier
                     .iter()
                     .flat_map(|f| threshold.results_in(f))
                     .collect();
+
+                let mut times = std::collections::BTreeSet::new();
+
                 while let Some((time, data)) = input.next() {
+                    inputs += data.len();
                     // Skip data that is about to be revealed.
-                    let extracted = data.extract_if(.., |(_, t, _)| !threshold.less_than(t));
+                    let before = data.len();
+                    let extracted = data.extract_if(.., |(_, t, _)| !threshold.less_equal(t));
                     output.session_with_builder(&time).give_iterator(extracted);
+                    passed += before - data.len();
+                    stashed += data.len();
 
                     // Sort data by time, then drain it into a buffer that contains data for a
                     // single bucket.
@@ -91,6 +99,7 @@ where
                     let mut range = None;
 
                     for (datum, time, diff) in data.drain(..) {
+                        times.insert(time.clone());
                         // If we have a range, check if the time is not within it.
                         if let Some((start, end)) = &range
                             && (time < *start || time >= *end)
@@ -118,10 +127,11 @@ where
                 }
 
                 // Check for data that is ready to be revealed.
-                let peeled = chain.peel(input.frontier().frontier());
+                let peeled = chain.peel(threshold.borrow());
                 if let Some(cap) = cap.as_ref() {
                     let mut session = output.session_with_builder(cap);
                     for stack in peeled.into_iter().flat_map(|x| x.done()) {
+                        peeled_count += stack.len();
                         // TODO: If we have a columnar merge batcher, cloning won't be necessary.
                         session.give_iterator(stack.iter().cloned());
                     }
@@ -135,10 +145,10 @@ where
                 }
 
                 // Downgrade the cap to the current input frontier.
-                if input.frontier().is_empty() {
+                if input.frontier().is_empty() || threshold.is_empty() {
                     cap = None;
                 } else if let Some(cap) = cap.as_mut() {
-                    cap.downgrade(&input.frontier().frontier()[0]);
+                    cap.downgrade(&threshold[0]);
                 }
 
                 // Maintain the bucket chain by restoring it with fuel.
@@ -147,6 +157,22 @@ where
                 if fuel <= 0 {
                     // If we run out of fuel, we activate the operator to continue processing.
                     activator.activate();
+                }
+
+                if inputs > 0 || peeled_count > 0 {
+                    println!(
+                        "[{}] frontier: {:?}, as-of: {:?} threshold: {:?}\tinputs: {}, stashed: {}, passed: {}, peeled: {}\ttimes: {:?}",
+                        info.global_id,
+                        &*input.frontier().frontier(),
+                        &*as_of.borrow(),
+                        &*threshold.borrow(),
+                        inputs,
+                        stashed,
+                        passed,
+                        peeled_count,
+                        times,
+                    );
+
                 }
             }
         })
