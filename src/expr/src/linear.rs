@@ -1490,6 +1490,17 @@ pub fn memoize_expr(
             if let MirScalarExpr::If { cond, .. } = e {
                 return Some(vec![cond]);
             }
+            // We should not eagerly memoize `COALESCE` expressions after the first,
+            // as they are only meant to be evaluated if the preceding expressions
+            // evaluate to NULL. We could memoize any preceding by expressions that
+            // are certain not to error.
+            if let MirScalarExpr::CallVariadic {
+                func: crate::VariadicFunc::Coalesce,
+                exprs,
+            } = e
+            {
+                return Some(exprs.iter_mut().take(1).collect());
+            }
             None
         },
         &mut |e| {
