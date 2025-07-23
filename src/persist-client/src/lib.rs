@@ -19,7 +19,7 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use differential_dataflow::difference::Semigroup;
+use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
 use mz_build_info::{BuildInfo, build_info};
@@ -240,7 +240,7 @@ impl PersistClient {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64 + Sync,
-        D: Semigroup + Codec64 + Send + Sync,
+        D: Monoid + Codec64 + Send + Sync,
     {
         let state_versions = StateVersions::new(
             self.cfg.clone(),
@@ -292,7 +292,7 @@ impl PersistClient {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + TotalOrder + Lattice + Codec64 + Sync,
-        D: Semigroup + Ord + Codec64 + Send + Sync,
+        D: Monoid + Ord + Codec64 + Send + Sync,
     {
         Ok((
             self.open_writer(
@@ -334,7 +334,7 @@ impl PersistClient {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + TotalOrder + Lattice + Codec64 + Sync,
-        D: Semigroup + Codec64 + Send + Sync,
+        D: Monoid + Codec64 + Send + Sync,
     {
         let machine = self.make_machine(shard_id, diagnostics.clone()).await?;
         let gc = GarbageCollector::new(machine.clone(), Arc::clone(&self.isolated_runtime));
@@ -386,7 +386,7 @@ impl PersistClient {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64 + Sync,
-        D: Semigroup + Codec64 + Send + Sync,
+        D: Monoid + Codec64 + Send + Sync,
     {
         let machine = self.make_machine(shard_id, diagnostics.clone()).await?;
         let read_schemas = Schemas {
@@ -465,7 +465,7 @@ impl PersistClient {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64 + Sync,
-        D: Semigroup + Codec64 + Send + Sync,
+        D: Monoid + Codec64 + Send + Sync,
         O: Opaque + Codec64,
     {
         let machine = self.make_machine(shard_id, diagnostics.clone()).await?;
@@ -506,7 +506,7 @@ impl PersistClient {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + TotalOrder + Lattice + Codec64 + Sync,
-        D: Semigroup + Ord + Codec64 + Send + Sync,
+        D: Monoid + Ord + Codec64 + Send + Sync,
     {
         let machine = self.make_machine(shard_id, diagnostics.clone()).await?;
         let gc = GarbageCollector::new(machine.clone(), Arc::clone(&self.isolated_runtime));
@@ -569,7 +569,7 @@ impl PersistClient {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64 + TotalOrder + Sync,
-        D: Semigroup + Ord + Codec64 + Send + Sync,
+        D: Monoid + Ord + Codec64 + Send + Sync,
     {
         let mut compact_cfg = CompactConfig::new(&self.cfg, shard_id);
         compact_cfg.batch.max_runs = max_runs;
@@ -604,7 +604,7 @@ impl PersistClient {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64 + Sync,
-        D: Semigroup + Ord + Codec64 + Send + Sync,
+        D: Monoid + Ord + Codec64 + Send + Sync,
     {
         let batch_shard_id: ShardId = batch
             .shard_id
@@ -659,7 +659,7 @@ impl PersistClient {
         K: Debug + Codec + Ord,
         V: Debug + Codec + Ord,
         T: Timestamp + Lattice + Codec64 + TotalOrder + Sync,
-        D: Semigroup + Ord + Codec64 + Send + Sync,
+        D: Monoid + Ord + Codec64 + Send + Sync,
     {
         let shard_metrics = self.metrics.shards.shard(&shard_id, "peek_stash");
 
@@ -692,7 +692,7 @@ impl PersistClient {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64 + Sync,
-        D: Semigroup + Codec64 + Send + Sync,
+        D: Monoid + Codec64 + Send + Sync,
     {
         let machine = self
             .make_machine::<K, V, T, D>(shard_id, diagnostics)
@@ -710,7 +710,7 @@ impl PersistClient {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64 + Sync,
-        D: Semigroup + Codec64 + Send + Sync,
+        D: Monoid + Codec64 + Send + Sync,
     {
         let machine = self
             .make_machine::<K, V, T, D>(shard_id, diagnostics)
@@ -740,7 +740,7 @@ impl PersistClient {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64 + Sync,
-        D: Semigroup + Codec64 + Send + Sync,
+        D: Monoid + Codec64 + Send + Sync,
     {
         let machine = self
             .make_machine::<K, V, T, D>(shard_id, diagnostics)
@@ -765,7 +765,7 @@ impl PersistClient {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64 + Sync,
-        D: Semigroup + Codec64 + Send + Sync,
+        D: Monoid + Codec64 + Send + Sync,
     {
         let machine = self
             .make_machine::<K, V, T, D>(shard_id, diagnostics)
@@ -793,7 +793,7 @@ impl PersistClient {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64 + Sync,
-        D: Semigroup + Codec64 + Send + Sync,
+        D: Monoid + Codec64 + Send + Sync,
     {
         let machine = self
             .make_machine::<K, V, T, D>(shard_id, diagnostics)
@@ -847,7 +847,7 @@ impl PersistClient {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + TotalOrder + Lattice + Codec64 + Sync,
-        D: Semigroup + Ord + Codec64 + Send + Sync,
+        D: Monoid + Ord + Codec64 + Send + Sync,
         K::Schema: Default,
         V::Schema: Default,
     {
@@ -931,7 +931,7 @@ mod tests {
         K: Ord + Clone + 'a,
         V: Ord + Clone + 'a,
         T: Timestamp + Lattice + Clone + 'a,
-        D: Semigroup + Clone + 'a,
+        D: Monoid + Clone + 'a,
         I: IntoIterator<Item = &'a ((K, V), T, D)>,
     {
         let as_of = Antichain::from_elem(as_of);

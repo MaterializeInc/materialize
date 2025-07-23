@@ -9,7 +9,7 @@
 
 use anyhow::ensure;
 use async_stream::{stream, try_stream};
-use differential_dataflow::difference::Semigroup;
+use differential_dataflow::difference::Monoid;
 use mz_persist::metrics::ColumnarMetrics;
 use proptest::prelude::{Arbitrary, Strategy};
 use std::borrow::Cow;
@@ -390,7 +390,7 @@ impl<T: Timestamp + Codec64> BatchPart<T> {
         }
     }
 
-    pub fn diffs_sum<D: Codec64 + Semigroup>(&self, metrics: &ColumnarMetrics) -> Option<D> {
+    pub fn diffs_sum<D: Codec64 + Monoid>(&self, metrics: &ColumnarMetrics) -> Option<D> {
         match self {
             BatchPart::Hollow(x) => x.diffs_sum.map(D::decode),
             BatchPart::Inline { updates, .. } => updates
@@ -451,7 +451,7 @@ impl<T> HollowRunRef<T> {
 
 impl<T: Timestamp + Codec64> HollowRunRef<T> {
     /// Stores the given runs and returns a [HollowRunRef] that points to them.
-    pub async fn set<D: Codec64 + Semigroup>(
+    pub async fn set<D: Codec64 + Monoid>(
         shard_id: ShardId,
         blob: &dyn Blob,
         writer: &WriterKey,
@@ -657,7 +657,7 @@ impl<T> RunPart<T>
 where
     T: Timestamp + Codec64,
 {
-    pub fn diffs_sum<D: Codec64 + Semigroup>(&self, metrics: &ColumnarMetrics) -> Option<D> {
+    pub fn diffs_sum<D: Codec64 + Monoid>(&self, metrics: &ColumnarMetrics) -> Option<D> {
         match self {
             Self::Single(p) => p.diffs_sum(metrics),
             Self::Many(hollow_run) => hollow_run.diffs_sum.map(D::decode),
@@ -1821,7 +1821,7 @@ where
         Continue(merge_reqs)
     }
 
-    pub fn apply_merge_res<D: Codec64 + Semigroup + PartialEq>(
+    pub fn apply_merge_res<D: Codec64 + Monoid + PartialEq>(
         &mut self,
         res: &FueledMergeRes<T>,
         metrics: &ColumnarMetrics,

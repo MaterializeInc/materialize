@@ -21,7 +21,7 @@ use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, Int64Type, ToByteSlice};
 use base64::Engine;
 use bytes::{BufMut, Bytes};
-use differential_dataflow::difference::Semigroup;
+use differential_dataflow::difference::Monoid;
 use differential_dataflow::trace::Description;
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
@@ -265,7 +265,7 @@ impl BlobTraceUpdates {
     }
 
     /// Return the sum of the diffs in the blob.
-    pub fn diffs_sum<D: Codec64 + Semigroup>(&self) -> Option<D> {
+    pub fn diffs_sum<D: Codec64 + Monoid>(&self) -> Option<D> {
         let mut sum = None;
         for d in self.diffs().values().iter() {
             let d = D::decode(d.to_le_bytes());

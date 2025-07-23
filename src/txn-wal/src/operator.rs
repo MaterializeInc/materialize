@@ -17,7 +17,7 @@ use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
 use differential_dataflow::Hashable;
-use differential_dataflow::difference::Semigroup;
+use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use futures::StreamExt;
 use mz_dyncfg::{Config, ConfigSet};
@@ -108,7 +108,7 @@ where
     K: Debug + Codec + Send + Sync,
     V: Debug + Codec + Send + Sync,
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
-    D: Debug + Data + Semigroup + Ord + Codec64 + Send + Sync,
+    D: Debug + Data + Monoid + Ord + Codec64 + Send + Sync,
     P: Debug + Data,
     C: TxnsCodec + 'static,
     F: Future<Output = PersistClient> + Send + 'static,
@@ -170,7 +170,7 @@ where
     K: Debug + Codec + Send + Sync,
     V: Debug + Codec + Send + Sync,
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
-    D: Debug + Data + Semigroup + Ord + Codec64 + Send + Sync,
+    D: Debug + Data + Monoid + Ord + Codec64 + Send + Sync,
     P: Debug + Data,
     C: TxnsCodec + 'static,
     G: Scope<Timestamp = T>,
@@ -242,7 +242,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
-    D: Data + Semigroup + Codec64 + Send + Sync,
+    D: Data + Monoid + Codec64 + Send + Sync,
     P: Debug + Data,
     C: TxnsCodec,
     G: Scope<Timestamp = T>,
@@ -761,7 +761,7 @@ mod tests {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
-        D: Debug + Semigroup + Ord + Codec64 + Send + Sync,
+        D: Debug + Monoid + Ord + Codec64 + Send + Sync,
         O: Opaque + Debug + Codec64,
         C: TxnsCodec,
     {

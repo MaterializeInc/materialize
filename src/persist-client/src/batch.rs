@@ -19,7 +19,7 @@ use std::time::Instant;
 
 use arrow::array::{Array, Int64Array};
 use bytes::Bytes;
-use differential_dataflow::difference::Semigroup;
+use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures_util::stream::StreamExt;
@@ -111,7 +111,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64,
-    D: Semigroup + Codec64,
+    D: Monoid + Codec64,
 {
     pub(crate) fn new(
         batch_delete_enabled: bool,
@@ -284,7 +284,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64 + TotalOrder,
-    D: Semigroup + Codec64,
+    D: Monoid + Codec64,
 {
     /// Efficiently rewrites the timestamps in this not-yet-committed batch.
     ///
@@ -519,7 +519,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64,
-    D: Semigroup + Codec64,
+    D: Monoid + Codec64,
 {
     pub(crate) fn new(
         builder: BatchBuilderInternal<K, V, T, D>,
@@ -651,7 +651,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64,
-    D: Semigroup + Codec64,
+    D: Monoid + Codec64,
 {
     pub(crate) fn new(
         _cfg: BatchBuilderConfig,
@@ -819,7 +819,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         K: Codec + Debug,
         V: Codec + Debug,
         T: Lattice + Send + Sync,
-        D: Semigroup + Ord + Codec64 + Send + Sync,
+        D: Monoid + Ord + Codec64 + Send + Sync,
     {
         let writing_runs = {
             let cfg = cfg.clone();
@@ -915,7 +915,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         }
     }
 
-    pub(crate) fn new_ordered<D: Semigroup + Codec64>(
+    pub(crate) fn new_ordered<D: Monoid + Codec64>(
         cfg: BatchBuilderConfig,
         order: RunOrder,
         metrics: Arc<Metrics>,
@@ -1477,7 +1477,7 @@ impl<T: Timestamp> PartDeletes<T> {
 }
 
 /// Returns the total sum of diffs or None if there were no updates.
-fn diffs_sum<D: Semigroup + Codec64>(updates: &Int64Array) -> Option<D> {
+fn diffs_sum<D: Monoid + Codec64>(updates: &Int64Array) -> Option<D> {
     let mut sum = None;
     for d in updates.values().iter() {
         let d = D::decode(d.to_le_bytes());

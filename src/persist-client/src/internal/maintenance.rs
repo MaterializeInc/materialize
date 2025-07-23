@@ -15,7 +15,7 @@ use std::fmt::Debug;
 use std::mem;
 use std::sync::Arc;
 
-use differential_dataflow::difference::Semigroup;
+use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
@@ -58,7 +58,7 @@ impl RoutineMaintenance {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64 + Sync,
-        D: Semigroup + Codec64 + Send + Sync,
+        D: Monoid + Codec64 + Send + Sync,
     {
         let _ = self.perform_in_background(machine, gc);
     }
@@ -76,7 +76,7 @@ impl RoutineMaintenance {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64 + Sync,
-        D: Semigroup + Codec64 + Send + Sync,
+        D: Monoid + Codec64 + Send + Sync,
     {
         let mut more_maintenance = RoutineMaintenance::default();
         for future in self.perform_in_background(machine, gc) {
@@ -104,7 +104,7 @@ impl RoutineMaintenance {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64 + Sync,
-        D: Semigroup + Codec64 + Send + Sync,
+        D: Monoid + Codec64 + Send + Sync,
     {
         let mut futures = vec![];
         if let Some(gc_req) = self.garbage_collection {
@@ -195,7 +195,7 @@ where
     ) where
         K: Debug + Codec,
         V: Debug + Codec,
-        D: Semigroup + Ord + Codec64 + Send + Sync,
+        D: Monoid + Ord + Codec64 + Send + Sync,
     {
         let machine = machine.clone();
         let gc = gc.clone();
@@ -215,7 +215,7 @@ where
     ) where
         K: Debug + Codec,
         V: Debug + Codec,
-        D: Semigroup + Ord + Codec64 + Send + Sync,
+        D: Monoid + Ord + Codec64 + Send + Sync,
     {
         let Self {
             routine,

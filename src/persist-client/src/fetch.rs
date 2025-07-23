@@ -17,7 +17,7 @@ use std::time::Instant;
 use anyhow::anyhow;
 use arrow::array::{Array, ArrayRef, AsArray, BooleanArray, Int64Array};
 use arrow::compute::FilterBuilder;
-use differential_dataflow::difference::Semigroup;
+use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use itertools::EitherOrBoth;
@@ -138,7 +138,7 @@ where
     // These are only here so we can use them in the auto-expiring `Drop` impl.
     K: Debug + Codec,
     V: Debug + Codec,
-    D: Semigroup + Codec64 + Send + Sync,
+    D: Monoid + Codec64 + Send + Sync,
 {
     pub(crate) cfg: BatchFetcherConfig,
     pub(crate) blob: Arc<dyn Blob>,
@@ -159,7 +159,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64 + Sync,
-    D: Semigroup + Codec64 + Send + Sync,
+    D: Monoid + Codec64 + Send + Sync,
 {
     /// Trade in an exchange-able [LeasedBatchPart] for the data it represents.
     ///
@@ -327,7 +327,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64 + Sync,
-    D: Semigroup + Codec64 + Send + Sync,
+    D: Monoid + Codec64 + Send + Sync,
 {
     let fetch_config = FetchConfig::from_persist_config(cfg);
     let encoded_part = EncodedPart::fetch(
@@ -986,7 +986,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64,
-    D: Semigroup + Codec64 + Send + Sync,
+    D: Monoid + Codec64 + Send + Sync,
 {
     /// [Self::next] but optionally providing a `K` and `V` for alloc reuse.
     ///
@@ -1151,7 +1151,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64,
-    D: Semigroup + Codec64 + Send + Sync,
+    D: Monoid + Codec64 + Send + Sync,
 {
     type Item = ((Result<K, String>, Result<V, String>), T, D);
 

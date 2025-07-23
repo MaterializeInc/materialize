@@ -14,7 +14,7 @@ use std::ops::ControlFlow::{self, Continue};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
-use differential_dataflow::difference::Semigroup;
+use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use futures::FutureExt;
 use futures::future::{self, BoxFuture};
@@ -102,7 +102,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64 + Sync,
-    D: Semigroup + Codec64,
+    D: Monoid + Codec64,
 {
     pub async fn new(
         cfg: PersistConfig,
@@ -1069,7 +1069,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64 + Sync,
-    D: Semigroup + Codec64 + PartialEq,
+    D: Monoid + Codec64 + PartialEq,
 {
     pub async fn merge_res(
         &self,
@@ -1166,7 +1166,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64 + Sync,
-    D: Semigroup + Codec64 + Send + Sync,
+    D: Monoid + Codec64 + Send + Sync,
 {
     #[allow(clippy::unused_async)]
     pub async fn start_reader_heartbeat_tasks(
