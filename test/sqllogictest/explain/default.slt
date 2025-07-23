@@ -356,6 +356,60 @@ Target cluster: quickstart
 
 EOF
 
+# as above, but EXPLAIN PHYSICAL PLAN without AS will use VERBOSE text
+query T multiline
+EXPLAIN PHYSICAL PLAN WITH(humanized expressions) FOR
+SELECT abs(min(a) - max(a)) FROM t
+----
+Explained Query:
+  With
+    cte l0 =
+      Reduce::Hierarchical
+        aggr_funcs=[min, max]
+        skips=[0, 0]
+        monotonic
+        must_consolidate
+        val_plan
+          project=(#0, #0)
+        key_plan
+          project=()
+        Get::Arrangement materialize.public.t
+          project=(#0)
+          key=#0{a}
+          raw=false
+          arrangements[0]={ key=[#0{a}], permutation=id, thinning=(#1) }
+          types=[integer?, integer?]
+  Return
+    Mfp
+      project=(#2)
+      map=(abs((#0{"?column?"} - #1{"?column?"})))
+      Union
+        ArrangeBy
+          input_key=[]
+          raw=true
+          Get::PassArrangements l0
+            raw=false
+            arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
+        Mfp
+          project=(#0, #1)
+          map=(null, null)
+          Union consolidate_output=true
+            Negate
+              Get::Arrangement l0
+                project=()
+                key=
+                raw=false
+                arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
+            Constant
+              - ()
+
+Used Indexes:
+  - materialize.public.t_a_idx (*** full scan ***)
+
+Target cluster: quickstart
+
+EOF
+
 # Test Reduce (local).
 query T multiline
 EXPLAIN WITH(humanized expressions)

@@ -8788,6 +8788,9 @@ impl<'a> Parser<'a> {
                 None => return Err(ParserError::new(self.index, "expected a format")),
                 _ => unreachable!(),
             }
+        } else if has_stage && stage == Some(ExplainStage::PhysicalPlan) {
+            // if EXPLAIN PHYSICAL PLAN is explicitly specified without AS, default to VERBOSE TEXT
+            Some(ExplainFormat::VerboseText)
         } else {
             None
         };

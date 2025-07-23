@@ -56,9 +56,9 @@ ExplainPlan(ExplainPlanStatement { stage: Some(GlobalPlan), with_options: [], fo
 parse-statement
 EXPLAIN PHYSICAL PLAN FOR SELECT 665
 ----
-EXPLAIN PHYSICAL PLAN FOR SELECT 665
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR SELECT 665
 =>
-ExplainPlan(ExplainPlanStatement { stage: Some(PhysicalPlan), with_options: [], format: None, explainee: Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None }, false) })
+ExplainPlan(ExplainPlanStatement { stage: Some(PhysicalPlan), with_options: [], format: Some(VerboseText), explainee: Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None }, false) })
 
 parse-statement
 EXPLAIN SELECT 665
