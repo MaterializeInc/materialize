@@ -38,18 +38,18 @@ The server supports two transports:
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 
 from mcp.server import NotificationOptions, Server
-from mcp.types import EmbeddedResource, ImageContent, TextContent, Tool
+from mcp.types import Tool
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
 from mcp_materialize.transports import http_transport, sse_transport, stdio_transport
 
-from .config import load_config, Config
+from .config import Config, load_config
 from .mz_client import MzClient
 
 logger = logging.getLogger("mz_mcp_server")

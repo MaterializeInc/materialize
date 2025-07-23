@@ -17,15 +17,14 @@ import base64
 import decimal
 import json
 import logging
-from collections.abc import Sequence
 from importlib.resources import files
 from textwrap import dedent
-from typing import Any, Union
+from typing import Any
 from uuid import UUID
 
 import aiorwlock
 from mcp import Tool
-from mcp.types import EmbeddedResource, ImageContent, TextContent, ToolAnnotations
+from mcp.types import ToolAnnotations
 from psycopg import sql
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
