@@ -11,6 +11,10 @@
 # topic creation
 # $ kafka-create-topic topic=bytes
 
+# TODO(def-) Reenable when Confluent Kafka is working with Testdrive again
+$ skip-if
+SELECT true
+
 $ kafka-ingest format=bytes key-terminator=: key-format=bytes topic=bytes repeat=100
 abc:abc
 
