@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::anyhow;
 use bytes::{BufMut, Bytes};
-use differential_dataflow::difference::{IsZero, Semigroup};
+use differential_dataflow::difference::{IsZero, Monoid, Semigroup};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures_util::{StreamExt, TryStreamExt};
@@ -815,6 +815,12 @@ impl Codec64 for D {
 
 impl Semigroup for D {
     fn plus_equals(&mut self, _rhs: &Self) {}
+}
+
+impl Monoid for D {
+    fn zero() -> Self {
+        D(0)
+    }
 }
 
 impl IsZero for D {
