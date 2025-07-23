@@ -181,6 +181,9 @@ impl<'a> CdcStream<'a> {
         // the upstream DB is ready for CDC.
         self.wait_for_ready().await?;
 
+        // Intentionally logging this at info for debugging. This section won't get entered
+        // often, but if there are problems here, it will be much easier to troubleshoot
+        // knowing where stall/hang might be happening.
         tracing::info!("Upstream is ready");
 
         // The client that will be used for fencing does not need any special isolation level
@@ -193,6 +196,9 @@ impl<'a> CdcStream<'a> {
             tracing::trace!(%schema, %table, "locking table");
             fence_txn.lock_table_exclusive(&*schema, &*table).await?;
         }
+
+        // So we know that we locked that tables and roughly how long that took based on the time diff
+        // from the last message.
         tracing::info!(?tables, "Locked tables");
 
         self.client
