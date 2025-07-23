@@ -176,7 +176,6 @@ class MzClient:
             return [tool.as_tool() for tool in self.tools.values()]
 
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        print(name, arguments)
         pool = self.pool
 
         async with self._lock.reader_lock:
