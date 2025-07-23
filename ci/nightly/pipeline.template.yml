@@ -28,7 +28,7 @@ steps:
         depends_on: []
         timeout_in_minutes: 60
         agents:
-          queue: l-builder-linux-x86_64
+          queue: builder-linux-x86_64
 
       - id: build-aarch64
         label: ":bazel: Build aarch64"
@@ -39,7 +39,7 @@ steps:
         depends_on: []
         timeout_in_minutes: 60
         agents:
-          queue: l-builder-linux-aarch64
+          queue: builder-linux-aarch64-mem
 
       - id: build-x86_64-asan
         label: ":bazel: Build x86_64 (ASan)"
@@ -50,7 +50,7 @@ steps:
         depends_on: []
         timeout_in_minutes: 60
         agents:
-          queue: l-builder-linux-x86_64
+          queue: builder-linux-x86_64
         env:
           CI_SANITIZER: address
         sanitizer: skip
@@ -65,7 +65,7 @@ steps:
         depends_on: []
         timeout_in_minutes: 60
         agents:
-          queue: l-builder-linux-aarch64
+          queue: builder-linux-aarch64-mem
         env:
           CI_SANITIZER: address
         sanitizer: skip

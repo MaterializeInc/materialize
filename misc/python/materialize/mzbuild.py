@@ -147,7 +147,7 @@ class RepositoryDetails:
         if self.bazel:
             return ["bazel", "run", f"@//misc/bazel/tools:{name}", "--"]
         else:
-            return ["bin/ci-builder", "run", "stable", name]
+            return [name]
 
     def cargo_target_dir(self) -> Path:
         """Determine the path to the target directory for Cargo."""
@@ -1099,16 +1099,10 @@ class ResolvedImage:
             self_hash.update(pre_image.extra().encode())
             self_hash.update(b"\0")
 
+        self_hash.update(f"profile={self.image.rd.profile}".encode())
         self_hash.update(f"arch={self.image.rd.arch}".encode())
         self_hash.update(f"coverage={self.image.rd.coverage}".encode())
         self_hash.update(f"sanitizer={self.image.rd.sanitizer}".encode())
-
-        lto = self.image.rd.profile == Profile.RELEASE and (
-            ui.env_is_truthy("BUILDKITE_TAG")
-            or ui.env_is_truthy("CI_RELEASE_LTO_BUILD")
-            or self.image.rd.bazel_lto
-        )
-        self_hash.update(f"lto={lto}".encode())
 
         full_hash = hashlib.sha1()
         full_hash.update(self_hash.digest())
@@ -1302,7 +1296,9 @@ class Repository:
         self,
         root: Path,
         arch: Arch = Arch.host(),
-        profile: Profile = Profile.RELEASE,
+        profile: Profile = (
+            Profile.RELEASE if ui.env_is_truthy("CI_BAZEL_LTO") else Profile.OPTIMIZED
+        ),
         coverage: bool = False,
         sanitizer: Sanitizer = Sanitizer.none,
         image_registry: str = "materialize",
@@ -1451,7 +1447,11 @@ class Repository:
         elif args.dev:
             profile = Profile.DEV
         else:
-            profile = Profile.RELEASE
+            profile = (
+                Profile.RELEASE
+                if ui.env_is_truthy("CI_BAZEL_LTO")
+                else Profile.OPTIMIZED
+            )
 
         return cls(
             root,

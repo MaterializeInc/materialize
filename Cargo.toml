@@ -301,7 +301,7 @@ debug = 2
 [profile.optimized]
 inherits = "release"
 lto = "off"
-debug = false
+debug = 1
 incremental = true
 
 # IMPORTANT: when patching a dependency, you should only depend on "main",

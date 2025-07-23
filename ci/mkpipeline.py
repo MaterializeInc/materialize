@@ -116,8 +116,12 @@ so it is executed.""",
     raw = raw.replace("$BAZEL_REMOTE_CACHE", bazel_remote_cache)
     pipeline = yaml.safe_load(raw)
 
-    bazel = pipeline.get("env", {}).get("CI_BAZEL_BUILD", 1) == 1
-    bazel_lto = pipeline.get("env", {}).get("CI_BAZEL_LTO", 0) == 1
+    bazel = pipeline.get("env", {}).get("CI_BAZEL_BUILD", 0) == 1
+    bazel_lto = (
+        pipeline.get("env", {}).get("CI_BAZEL_LTO", 0) == 1
+        or ui.env_is_truthy("BUILDKITE_TAG")
+        or ui.env_is_truthy("CI_RELEASE_LTO_BUILD")
+    )
 
     hash_check: dict[Arch, tuple[str, bool]] = {}
 
@@ -194,6 +198,7 @@ so it is executed.""",
     set_parallelism_name(pipeline)
     check_depends_on(pipeline, args.pipeline)
     add_version_to_preflight_tests(pipeline)
+    move_build_to_bazel_lto(pipeline, args.pipeline)
     trim_builds_prep_thread.join()
     trim_builds(pipeline, hash_check)
     remove_dependencies_on_prs(pipeline, args.pipeline, hash_check)
@@ -864,7 +869,11 @@ def remove_dependencies_on_prs(
     """On PRs in test pipeline remove dependencies on the build, start up tests immediately, they keep retrying for the Docker image"""
     if pipeline_name != "test":
         return
-    if not ui.env_is_truthy("BUILDKITE_PULL_REQUEST"):
+    if (
+        not ui.env_is_truthy("BUILDKITE_PULL_REQUEST")
+        or ui.env_is_truthy("BUILDKITE_TAG")
+        or ui.env_is_truthy("CI_RELEASE_LTO_BUILD")
+    ):
         return
     for step in steps(pipeline):
         if step.get("id") in (
@@ -881,19 +890,40 @@ def remove_dependencies_on_prs(
             del step["depends_on"]
 
 
+def move_build_to_bazel_lto(pipeline: Any, pipeline_name: str) -> None:
+    if pipeline_name != "test":
+        return
+    if not ui.env_is_truthy("BUILDKITE_TAG") and not ui.env_is_truthy(
+        "CI_RELEASE_LTO_BUILD"
+    ):
+        return
+    pipeline.setdefault("env", {})["CI_BAZEL_BUILD"] = 1
+    pipeline["env"]["CI_BAZEL_LTO"] = 1
+    for step in steps(pipeline):
+        if step.get("id") == "build-x86_64":
+            step["label"] = ":bazel: Build x86_64"
+            step["agents"]["queue"] = "builder-linux-x86_64"
+        elif step.get("id") == "build-aarch64":
+            step["label"] = ":bazel: Build aarch64"
+            step["agents"]["queue"] = "builder-linux-aarch64-mem"
+
+
 def trim_builds(
     pipeline: Any,
     hash_check: dict[Arch, tuple[str, bool]],
 ) -> None:
     """Trim unnecessary x86-64/aarch64 builds if all artifacts already exist. Also mark remaining builds with a unique concurrency group for the code state so that the same build doesn't happen multiple times."""
     for step in steps(pipeline):
-        if step.get("id") in ("build-x86_64", "upload-debug-symbols-x86_64"):
+        if step.get("id") == "build-x86_64":
             if hash_check[Arch.X86_64][1]:
                 step["skip"] = True
             else:
                 step["concurrency"] = 1
                 step["concurrency_group"] = f"build-x86_64/{hash_check[Arch.X86_64][0]}"
-        elif step.get("id") in ("build-aarch64", "upload-debug-symbols-aarch64"):
+        elif step.get("id") == "upload-debug-symbols-x86_64":
+            if hash_check[Arch.X86_64][1]:
+                step["skip"] = True
+        elif step.get("id") == "build-aarch64":
             if hash_check[Arch.AARCH64][1]:
                 step["skip"] = True
             else:
@@ -901,6 +931,9 @@ def trim_builds(
                 step["concurrency_group"] = (
                     f"build-aarch64/{hash_check[Arch.AARCH64][0]}"
                 )
+        elif step.get("id") == "upload-debug-symbols-aarch64":
+            if hash_check[Arch.AARCH64][1]:
+                step["skip"] = True
 
 
 _github_changed_files: set[str] | None = None
