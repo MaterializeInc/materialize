@@ -52,6 +52,8 @@ The privileges required to execute this statement are:
 
 ## Examples
 
+`EXPLAIN ANALYZE` attributes runtime metrics to [`PHYSICAL PLAN` operators](/sql/explain-plan#reference-plan-operators).
+
 The attribution examples in this
 section reference the `wins_by_item` index (and the underlying `winning_bids`
 view) from the [quickstart

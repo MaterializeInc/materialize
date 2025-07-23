@@ -96,13 +96,19 @@ FOR ] -- The FOR keyword is required if the PLAN keyword is specified
 {{</tab>}}
 {{</tabs>}}
 
-Note that the `FOR` keyword is required if the `PLAN` keyword is present. The following four statements are equivalent:
+Note that the `FOR` keyword is required if the `PLAN` keyword is present. The following three statements are equivalent:
 
 ```mzsql
 EXPLAIN <explainee>;
 EXPLAIN PLAN FOR <explainee>;
-EXPLAIN PHYSICAL PLAN FOR <explainee>;
 EXPLAIN PHYSICAL PLAN AS TEXT FOR <explainee>;
+```
+
+If `PHSYICAL PLAN` is specified without an `AS`-format, we will provide verbose output. The following two statements are equivalent:
+
+```mzsql
+EXPLAIN PHYSICAL PLAN FOR <explainee>;
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR <explainee>;
 ```
 
 ### Explained object
@@ -228,7 +234,7 @@ Queries are sometimes implemented using a _fast path_.
 In this mode, the program that implements the query will just hit an existing index,
 transform the results, and optionally apply a finishing action. For fast path queries,
 all of these actions happen outside of the regular dataflow engine. The fast path is
-indicated by an "Explained Query (fast path):" heading before the explained query in the
+indicated by an "Explained Query (fast path):" heading before the explained query in the `EXPLAIN`,
 `EXPLAIN OPTIMIZED PLAN` and `EXPLAIN PHYSICAL PLAN` result.
 
 ```text
@@ -241,7 +247,7 @@ Used Indexes:
 ```
 
 
-### Reading decorrelated and optimized plans
+### Reading plans
 
 Materialize plans are directed, potentially cyclic, graphs of operators. Each operator in the graph
 receives inputs from zero or more other operators and produces a single output.
@@ -289,8 +295,7 @@ Many operators need to refer to columns in their input. These are displayed like
 `#3` for column number 3. (Columns are numbered starting from column 0). To get a better sense of
 columns assigned to `Map` operators, it might be useful to request [the `arity` output modifier](#output-modifiers).
 
-Each operator can also be annotated with additional metadata. Details are shown
-by default in the `EXPLAIN PHYSICAL PLAN` output (the default), but are hidden elsewhere. <a
+Each operator can also be annotated with additional metadata. Some details are shown in the default `EXPLAIN` output (`EXPLAIN PHYSICAL PLAN AS TEXT`), but are hidden elsewhere. <a
 name="explain-with-join-implementations"></a>In `EXPLAIN OPTIMIZED
 PLAN`, details about the implementation in the `Join` operator can be requested
 with [the `join implementations` output modifier](#output-modifiers) (that is,
@@ -370,7 +375,7 @@ actually run).
 
 {{< /tabs >}}
 
-Operators are sometimes marked as `Fused ...`. We write this to mean that the operator is fused with its input. That is, if you see a `Fused X` operator above a `Y` operator:
+Operators are sometimes marked as `Fused ...`. We write this to mean that the operator is fused with its input, i.e., the operator below it. That is, if you see a `Fused X` operator above a `Y` operator:
 
 ```
 →Fused X
@@ -415,7 +420,7 @@ EXPLAIN WITH(types) FOR
 SELECT a.id, sum(b.amount) FROM accounts a JOIN bids b ON(a.id = b.buyer) GROUP BY a.id;
 ```
 
-Explain the physical plan as text:
+Explain the physical plan as verbose text:
 
 ```mzsql
 EXPLAIN PHYSICAL PLAN FOR
@@ -464,7 +469,7 @@ EXPLAIN WITH(types) FOR
 INDEX my_view_idx;
 ```
 
-Explain the physical plan as text:
+Explain the physical plan as verbose text:
 
 ```mzsql
 EXPLAIN PHYSICAL PLAN FOR
@@ -510,7 +515,7 @@ EXPLAIN WITH(types)
 MATERIALIZED VIEW my_mat_view;
 ```
 
-Explain the physical plan as text:
+Explain the physical plan as verbose text:
 
 ```mzsql
 EXPLAIN PHYSICAL PLAN FOR

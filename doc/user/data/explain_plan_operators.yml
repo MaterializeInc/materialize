@@ -442,4 +442,4 @@ operators:
     uses_memory: False
     memory_details: ""
     expansive: False
-    example: "[See above](#reading-decorrelated-and-optimized-plans)"
+    example: "[See above](#reading-plans)"
