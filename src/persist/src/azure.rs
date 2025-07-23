@@ -208,8 +208,11 @@ impl AzureBlob {
             // TODO: we could move this logic into the test harness.
             // it's currently here because it's surprisingly annoying to
             // create the container out-of-band
-            if let Err(e) = config.client.create().await {
-                warn!("Failed to create container: {e}");
+            if let Err(error) = config.client.create().await {
+                info!(
+                    ?error,
+                    "failed to create emulator container; this is expected on repeat runs"
+                );
             }
         }
 

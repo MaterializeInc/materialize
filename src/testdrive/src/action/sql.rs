@@ -61,6 +61,7 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
         | CreateDatabase(_)
         | CreateSchema(_)
         | CreateSource(_)
+        | CreateWebhookSource(_)
         | CreateSink(_)
         | CreateMaterializedView(_)
         | CreateView(_)
