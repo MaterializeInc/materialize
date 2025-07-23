@@ -241,8 +241,7 @@ where
                 let updates = updates
                     .decode::<T>(&self.metrics.columnar)
                     .expect("valid inline part");
-                let diffs_sum =
-                    diffs_sum::<D>(updates.updates.diffs()).expect("inline parts are not empty");
+                let diffs_sum = diffs_sum::<D>(updates.updates.diffs());
                 let mut write_schemas = write_schemas.clone();
                 write_schemas.id = *schema_id;
 
@@ -743,7 +742,7 @@ where
         if num_updates == 0 {
             return;
         }
-        let diffs_sum = diffs_sum::<D>(&columnar.diff).expect("part is non empty");
+        let diffs_sum = diffs_sum::<D>(&columnar.diff);
 
         let start = Instant::now();
         self.parts
@@ -1477,16 +1476,12 @@ impl<T: Timestamp> PartDeletes<T> {
 }
 
 /// Returns the total sum of diffs or None if there were no updates.
-fn diffs_sum<D: Monoid + Codec64>(updates: &Int64Array) -> Option<D> {
-    let mut sum = None;
+fn diffs_sum<D: Monoid + Codec64>(updates: &Int64Array) -> D {
+    let mut sum = D::zero();
     for d in updates.values().iter() {
         let d = D::decode(d.to_le_bytes());
-        match &mut sum {
-            None => sum = Some(d),
-            Some(x) => x.plus_equals(&d),
-        }
+        sum.plus_equals(&d);
     }
-
     sum
 }
 
