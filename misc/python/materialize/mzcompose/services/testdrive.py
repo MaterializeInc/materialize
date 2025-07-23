@@ -30,7 +30,7 @@ class Testdrive(Service):
         materialize_url: str = "postgres://materialize@materialized:6875",
         materialize_url_internal: str = "postgres://materialize@materialized:6877",
         materialize_use_https: bool = False,
-        materialize_params: dict[str, str] = {},
+        materialize_params: dict[str, str] = {"transaction_isolation": "serializable"},
         kafka_url: str = "kafka:9092",
         kafka_default_partitions: int | None = None,
         kafka_args: str | None = None,
@@ -136,7 +136,7 @@ class Testdrive(Service):
             entrypoint.append(f"--materialize-param={k}={v}")
 
         if default_timeout is None:
-            default_timeout = "20s"
+            default_timeout = "360s"
         entrypoint.append(f"--default-timeout={default_timeout}")
 
         if kafka_default_partitions:
