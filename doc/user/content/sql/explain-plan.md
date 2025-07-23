@@ -104,7 +104,7 @@ EXPLAIN PLAN FOR <explainee>;
 EXPLAIN PHYSICAL PLAN AS TEXT FOR <explainee>;
 ```
 
-If `PHSYICAL PLAN` is specified without an `AS`-format, we will provide verbose output. The following two statements are equivalent:
+If `PHSYICAL PLAN` is specified without an `AS`-format, we will provide output similar to the above, but more verbose. The following two statements are equivalent (and produce the more verbose output):
 
 ```mzsql
 EXPLAIN PHYSICAL PLAN FOR <explainee>;
@@ -399,14 +399,14 @@ EXPLAIN
 SELECT a.id, sum(b.amount) FROM accounts a JOIN bids b ON(a.id = b.buyer) GROUP BY a.id;
 ```
 
-Same as above, but a bit more verbose:
+Same explanation as above, but with the `EXPLAIN` expressed a bit more verbosely:
 
 ```mzsql
-EXPLAIN PLAN
+EXPLAIN PLAN FOR
 SELECT a.id, sum(b.amount) FROM accounts a JOIN bids b ON(a.id = b.buyer) GROUP BY a.id;
 ```
 
-Same as above, but even more verbose:
+Same explanation as above, but expressed even more verbosely:
 
 ```mzsql
 EXPLAIN OPTIMIZED PLAN AS TEXT FOR
@@ -420,7 +420,7 @@ EXPLAIN WITH(types) FOR
 SELECT a.id, sum(b.amount) FROM accounts a JOIN bids b ON(a.id = b.buyer) GROUP BY a.id;
 ```
 
-Explain the physical plan as verbose text:
+Explain the physical plan as verbose text (i.e., in complete detail):
 
 ```mzsql
 EXPLAIN PHYSICAL PLAN FOR
