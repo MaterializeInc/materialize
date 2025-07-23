@@ -7,6 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+# TODO(def-) Remove when https://github.com/MaterializeInc/database-issues/issues/9507 is fixed
+> SET transaction_isolation = 'strict serializable'
+
 $ set-arg-default default-replica-size=1
 $ set-arg-default single-replica-cluster=quickstart
 

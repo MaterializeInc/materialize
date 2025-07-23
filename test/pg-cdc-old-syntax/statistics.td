@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 $ set-sql-timeout duration=60s
+> SET transaction_isolation = 'strict serializable'
 
 #
 # Test progress statistics

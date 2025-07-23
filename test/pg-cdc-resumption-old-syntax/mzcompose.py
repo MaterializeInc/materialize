@@ -28,7 +28,11 @@ SERVICES = [
     Materialized(default_replication_factor=2),
     Postgres(),
     Toxiproxy(),
-    Testdrive(no_reset=True, default_timeout="300s"),
+    Testdrive(
+        no_reset=True,
+        default_timeout="300s",
+        materialize_params={"transaction_isolation": "'strict serializable'"},
+    ),
 ]
 
 

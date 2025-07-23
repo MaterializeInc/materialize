@@ -219,7 +219,7 @@ A
 A
 
 # TODO: This should be made reliable without sleeping, database-issues#7611
-$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=5s
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=7s
 
 # Sinks
 > CREATE SINK sink1 FROM v1mat

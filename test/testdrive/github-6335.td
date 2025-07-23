@@ -15,7 +15,6 @@
 # This test relies on testdrive's automatic retries, since it queries
 # introspection sources that take a while to update.
 
-$ set-regex match=\d{13,20} replacement=<TIMESTAMP>
 $ set-sql-timeout duration=120s
 
 # This test uses introspection queries that need to be targeted to a replica
@@ -26,8 +25,10 @@ $ set-sql-timeout duration=120s
 
 > BEGIN
 > DECLARE c CURSOR FOR SUBSCRIBE mv
+$ set-regex match=0|\d{13,20} replacement=<TIMESTAMP>
 > FETCH c
 <TIMESTAMP> 1 1
+$ unset-regex
 > COMMIT
 
 # To ensure that the subscribe has reached the introspection sources, we

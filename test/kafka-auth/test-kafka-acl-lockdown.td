@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+> SET transaction_isolation = 'strict serializable'
+
 # Test that Materialize can create a sink using a Kafka user with restricted
 # access to consumer groups and transactional IDs.
 

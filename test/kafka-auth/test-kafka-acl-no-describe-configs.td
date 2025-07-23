@@ -12,6 +12,8 @@
 
 # ==> Set up. <==
 
+> SET transaction_isolation = 'strict serializable'
+
 > CREATE SECRET kafka_password AS 'sekurity'
 
 > CREATE CONNECTION kafka TO KAFKA (

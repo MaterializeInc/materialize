@@ -81,7 +81,7 @@ statement_logging_sample_rate            0.01                    "User-facing se
 statement_timeout                        "1 min"                  "Sets the maximum allowed duration of INSERT...SELECT, UPDATE, and DELETE operations. If this value is specified without units, it is taken as milliseconds."
 superuser_reserved_connections           3                       "The number of connections that are reserved for superusers (PostgreSQL)."
 TimeZone                                 UTC                     "Sets the time zone for displaying and interpreting time stamps (PostgreSQL)."
-transaction_isolation                    "strict serializable"   "Sets the current transaction's isolation level (PostgreSQL)."
+transaction_isolation                    "serializable"          "Sets the current transaction's isolation level (PostgreSQL)."
 unsafe_new_transaction_wall_time         ""                      "Sets the wall time for all new explicit or implicit transactions to control the value of `now()`. If not set, uses the system's clock."
 welcome_message                          on                      "Whether to send a notice with a welcome message after a successful connection (Materialize)."
 enable_consolidate_after_union_negate    on                      "consolidation after Unions that have a Negated input (Materialize)."
@@ -156,7 +156,7 @@ contains:invalid value for parameter "TimeZone": "nope"
 # The `transaction_isolation` variable has dedicated syntax as mandated by the
 # SQL standard.
 > SHOW TRANSACTION ISOLATION LEVEL
-"strict serializable"
+"serializable"
 
 ! SET transaction_isolation = 'read draft'
 contains:invalid value for parameter "transaction_isolation": "read draft"

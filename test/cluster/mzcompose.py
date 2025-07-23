@@ -3824,7 +3824,9 @@ def workflow_blue_green_deployment(
 
     with c.override(
         Testdrive(
-            no_reset=True, default_timeout="300s"
+            no_reset=True,
+            default_timeout="300s",
+            materialize_params={"transaction_isolation": "'strict serializable'"},
         ),  # pending dataflows can take a while
         Clusterd(
             name="clusterd1",

@@ -34,7 +34,11 @@ from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.ui import UIError
 
-testdrive_no_reset = Testdrive(name="testdrive_no_reset", no_reset=True)
+testdrive_no_reset = Testdrive(
+    name="testdrive_no_reset",
+    no_reset=True,
+    materialize_params={"transaction_isolation": "'strict serializable'"},
+)
 
 SERVICES = [
     Zookeeper(),

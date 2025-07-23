@@ -9,6 +9,8 @@
 
 $ set-arg-default single-replica-cluster=quickstart
 
+> SET transaction_isolation = 'strict serializable'
+
 #
 # Make sure that FETCH-ing using multiple cursors from different sources works as expected
 #

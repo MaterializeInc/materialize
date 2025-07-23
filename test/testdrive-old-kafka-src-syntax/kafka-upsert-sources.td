@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+> SET transaction_isolation = 'strict serializable'
 $ set-arg-default default-storage-size=1
 
 # This testdrive file is exactly the same as upsert-kafka.td, but using the new syntax.

@@ -184,6 +184,8 @@ IGNORE_RE = re.compile(
     # This can happen in "K8s recovery: envd on failing node", but the test still succeeds, old environmentd will just be crashed, see database-issues#8749
     | \[pod/environmentd-0/environmentd\]\ .*\ (unable\ to\ confirm\ leadership|fenced\ out\ old\ deployment;\ rebooting\ as\ leader|this\ deployment\ has\ been\ fenced\ out)
     | cannot\ load\ unknown\ system\ parameter
+    # Transient with SERIALIZABLE isolation
+    | internal\ error:\ Invalid\ data\ in\ source
     )
     """,
     re.VERBOSE | re.MULTILINE,

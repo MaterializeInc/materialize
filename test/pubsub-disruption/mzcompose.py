@@ -26,7 +26,12 @@ SERVICES = [
     Materialized(options=["--persist-pubsub-url=http://toxiproxy:6879"]),
     Redpanda(),
     Toxiproxy(),
-    Testdrive(no_reset=True, seed=1, default_timeout="60s"),
+    Testdrive(
+        no_reset=True,
+        seed=1,
+        default_timeout="60s",
+        materialize_params={"transaction_isolation": "'strict serializable'"},
+    ),
 ]
 
 SCHEMA = dedent(

@@ -56,7 +56,10 @@ SERVICES = [
     Materialized(default_replication_factor=2),
     # Occasional timeouts in CI with 60s timeout
     Testdrive(
-        volumes_extra=["../testdrive:/workdir/testdrive"], default_timeout="120s"
+        volumes_extra=["../testdrive:/workdir/testdrive"],
+        default_timeout="120s",
+        # TODO: Remove when https://github.com/MaterializeInc/database-issues/issues/9510 is fixed
+        materialize_params={"transaction_isolation": "'strict serializable'"},
     ),
     Redpanda(),
     Zookeeper(),

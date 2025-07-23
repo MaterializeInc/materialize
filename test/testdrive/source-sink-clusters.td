@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+> SET transaction_isolation = 'strict serializable'
+
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true
 ALTER SYSTEM SET enable_create_table_from_source = true

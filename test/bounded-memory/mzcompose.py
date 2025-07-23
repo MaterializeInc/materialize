@@ -55,6 +55,7 @@ SERVICES = [
         no_reset=True,
         seed=1,
         default_timeout="3600s",
+        materialize_params={"transaction_isolation": "'strict serializable'"},
         entrypoint_extra=[
             f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
             f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",

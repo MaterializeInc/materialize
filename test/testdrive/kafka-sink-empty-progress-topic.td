@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+> SET transaction_isolation = 'strict serializable'
+
 # Test creating a sink when the progress topic is empty but has a non-zero low
 # water mark.
 #

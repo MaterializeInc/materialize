@@ -39,7 +39,7 @@ def schema() -> str:
 SERVICES = [
     Redpanda(),
     Materialized(),
-    Testdrive(),
+    Testdrive(materialize_params={"transaction_isolation": "'strict serializable'"}),
     Clusterd(),
     Postgres(),
     Zookeeper(),
@@ -80,6 +80,7 @@ class KafkaTransactionLogGreaterThan1:
                 no_reset=True,
                 seed=seed,
                 kafka_url="badkafka",
+                materialize_params={"transaction_isolation": "'strict serializable'"},
                 entrypoint_extra=[
                     "--initial-backoff=1s",
                     "--backoff-factor=0",
@@ -155,6 +156,7 @@ class KafkaDisruption:
             Testdrive(
                 no_reset=True,
                 seed=seed,
+                materialize_params={"transaction_isolation": "'strict serializable'"},
                 entrypoint_extra=["--initial-backoff=1s", "--backoff-factor=0"],
             )
         ):
@@ -270,6 +272,7 @@ class KafkaSinkDisruption:
             Testdrive(
                 no_reset=True,
                 seed=seed,
+                materialize_params={"transaction_isolation": "'strict serializable'"},
                 entrypoint_extra=["--initial-backoff=1s", "--backoff-factor=0"],
             )
         ):
@@ -379,6 +382,7 @@ class PgDisruption:
             Testdrive(
                 no_reset=True,
                 seed=seed,
+                materialize_params={"transaction_isolation": "'strict serializable'"},
                 entrypoint_extra=["--initial-backoff=1s", "--backoff-factor=0"],
             )
         ):

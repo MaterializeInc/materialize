@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+> SET transaction_isolation = 'strict serializable'
+
 # These just test that statement
 # logging is set up in CI. The values
 # in prod won't necessarily be the same.

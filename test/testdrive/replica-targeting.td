@@ -12,7 +12,6 @@
 # These tests rely on testdrive's retry feature, as they query introspection
 # sources whose data might not be immediately available.
 
-$ set-regex match=\d{13} replacement=<TIMESTAMP>
 
 # Test that replica-targeted queries return results from the target replica.
 #
@@ -40,8 +39,10 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 > DECLARE c CURSOR FOR SUBSCRIBE (
     SELECT count(DISTINCT worker_id) FROM mz_introspection.mz_compute_frontiers_per_worker
   )
+$ set-regex match=0|\d{13,20} replacement=<TIMESTAMP>
 > FETCH c
 <TIMESTAMP> 1 1
+$ unset-regex
 > COMMIT
 
 > SET cluster_replica = r2
@@ -54,8 +55,10 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 > DECLARE c CURSOR FOR SUBSCRIBE (
     SELECT count(DISTINCT worker_id) FROM mz_introspection.mz_compute_frontiers_per_worker
   )
+$ set-regex match=0|\d{13,20} replacement=<TIMESTAMP>
 > FETCH c
 <TIMESTAMP> 1 2
+$ unset-regex
 > COMMIT
 
 > SET cluster_replica = r4
@@ -70,6 +73,7 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 > DECLARE c CURSOR FOR SUBSCRIBE (
     SELECT count(DISTINCT worker_id) FROM mz_introspection.mz_compute_frontiers_per_worker
   )
+$ set-regex match=0|\d{13,20} replacement=<TIMESTAMP>
 > FETCH c
 <TIMESTAMP> 1 4
 > COMMIT
