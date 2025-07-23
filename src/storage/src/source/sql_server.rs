@@ -165,7 +165,7 @@ impl SourceRender for SqlServerSource {
             self.clone(),
         );
 
-        let (progress_stats, progress_errs, progress_token) = progress::render(
+        let (progress_stats, progress_errs, progress_probes, progress_token) = progress::render(
             scope.clone(),
             config.clone(),
             self.connection.clone(),
@@ -218,7 +218,7 @@ impl SourceRender for SqlServerSource {
             uppers,
             health,
             stats,
-            None,
+            Some(progress_probes),
             vec![repl_token, progress_token],
         )
     }
