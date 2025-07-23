@@ -3,13 +3,11 @@ title: "Release Compatibility"
 description: "Release Compatibility"
 menu:
   main:
-    weight: 50
     name: "Release Compatibility"
     identifier: "release-compatibility"
-    parent: "releases"
+    parent: "release-notes"
+    weight: 10
 ---
-
-{{% self-managed/self-managed-editions-table %}}
 
 ### Materialize Operator
 
@@ -81,24 +79,3 @@ for release specific notes.
 
 {{</ tab >}}
 {{</ tabs >}}
-
-### Known Limitations
-
-| Item                                    | Status      |
-|-----------------------------------------|-------------|
-| **License Compliance** <br> License key support to make it easier to comply with license terms. | In progress |
-| **Network Policies** <br> Materialize Network policies are not yet supported. | |
-| **AWS Connections** <br> AWS connections require backing cluster that hosts Materialize to be AWS EKS.  | |
-| **EKS/Azure Connections** | |
-| **Temporal Filtering** <br> Memory optimizations for filtering time-series data are not yet implemented. | |
-
-## Self-managed versioning and lifecycle
-
-Self-managed Materialize uses a calendar versioning (calver) scheme of the form
-`vYY.R.PP` where:
-
-- `YY` indicates the year.
-- `R` indicates major release.
-- `PP` indicates the patch number.
-
-For Self-managed Materialize, Materialize supports the latest 2 major releases.
