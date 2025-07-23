@@ -54,7 +54,7 @@ from .mz_client import MzClient
 
 logger = logging.getLogger("mz_mcp_server")
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 
@@ -123,9 +123,7 @@ async def run():
         return tools
 
     @server.call_tool()
-    async def call_tool(
-        name: str, arguments: dict[str, Any]
-    ) -> Sequence[TextContent | ImageContent | EmbeddedResource]:
+    async def call_tool(name: str, arguments: dict[str, Any]):
         logger.debug(f"Calling tool '{name}' with arguments: {arguments}")
         try:
             result = await server.request_context.lifespan_context.call_tool(

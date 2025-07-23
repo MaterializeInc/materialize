@@ -522,6 +522,8 @@ dependencies = [
     { name = "mcp" },
     { name = "psycopg", extra = ["binary"] },
     { name = "psycopg-pool" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
     { name = "pyyaml" },
     { name = "requests" },
 ]
@@ -541,6 +543,8 @@ requires-dist = [
     { name = "mcp", specifier = ">=1.10.1" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2.6" },
     { name = "psycopg-pool", specifier = ">=3.2.6" },
+    { name = "pytest", specifier = ">=8.4.1" },
+    { name = "pytest-asyncio", specifier = ">=1.0.0" },
     { name = "pyyaml", specifier = ">=6.0.2" },
     { name = "requests", specifier = ">=2.32.3" },
 ]

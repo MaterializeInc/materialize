@@ -20,7 +20,7 @@ import logging
 from collections.abc import Sequence
 from importlib.resources import files
 from textwrap import dedent
-from typing import Any
+from typing import Any, Union
 from uuid import UUID
 
 import aiorwlock
@@ -175,9 +175,8 @@ class MzClient:
         async with self._lock.reader_lock:
             return [tool.as_tool() for tool in self.tools.values()]
 
-    async def call_tool(
-        self, name: str, arguments: dict[str, Any]
-    ) -> Sequence[TextContent | ImageContent | EmbeddedResource]:
+    async def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        print(name, arguments)
         pool = self.pool
 
         async with self._lock.reader_lock:
@@ -217,19 +216,21 @@ class MzClient:
                 rows = await cur.fetchall()
                 columns = [desc.name for desc in cur.description]
 
-                result = [
+                raw = [
                     {k: v for k, v in dict(zip(columns, row)).items()} for row in rows
                 ]
 
-                match len(result):
-                    case 0:
-                        return []
-                    case 1:
-                        text = json.dumps(result[0], default=json_serial)
-                    case _:
-                        text = json.dumps(result, default=json_serial)
+                return serialize({"rows": raw})
 
-                return [TextContent(text=text, type="text")]
+
+def serialize(obj):
+    """Serialize any Decimal/date/bytes/UUID into JSON-safe primitives."""
+    # json.dumps will call json_serial for any non-standard type,
+    # then json.loads turns it back into a Python dict/list of primitives.
+    # Structured output types require the tool returns dict[str, Any]
+    # but the json encoder used by the mcp library does not support all
+    # standard postgres types
+    return json.loads(json.dumps(obj, default=json_serial))
 
 
 def json_serial(obj):
@@ -243,7 +244,7 @@ def json_serial(obj):
     elif isinstance(obj, bytes):
         return base64.b64encode(obj).decode("ascii")
     elif isinstance(obj, decimal.Decimal):
-        return str(obj)
+        return float(obj)
     elif isinstance(obj, UUID):
         return str(obj)
     else:

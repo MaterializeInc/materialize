@@ -55,8 +55,8 @@ def load_config() -> Config:
     parser.add_argument(
         "--port",
         type=int,
-        default=int(os.getenv("MCP_PORT", "3001")),
-        help="Server port (default: 3001)",
+        default=os.getenv("MCP_PORT"),
+        help="Server port (default: 3001 for SSE, 8001 for HTTP)",
     )
 
     parser.add_argument(
@@ -85,7 +85,11 @@ def load_config() -> Config:
         dsn=args.mz_dsn,
         transport=args.transport,
         host=args.host,
-        port=args.port,
+        port=int(args.port)
+        if args.port is not None
+        else 3001
+        if args.transport == "sse"
+        else 8001,
         pool_min_size=args.pool_min_size,
         pool_max_size=args.pool_max_size,
         log_level=args.log_level,
