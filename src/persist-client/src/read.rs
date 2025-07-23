@@ -24,10 +24,10 @@ use differential_dataflow::trace::Description;
 use futures::Stream;
 use futures_util::{StreamExt, stream};
 use mz_dyncfg::Config;
-use mz_ore::halt;
 use mz_ore::instrument;
 use mz_ore::now::EpochMillis;
 use mz_ore::task::{AbortOnDropHandle, JoinHandle, RuntimeExt};
+use mz_ore::{halt, soft_assert_or_log};
 use mz_persist::location::{Blob, SeqNo};
 use mz_persist_types::columnar::{ColumnDecoder, Schema};
 use mz_persist_types::{Codec, Codec64};
@@ -677,6 +677,12 @@ where
     /// `as_of` that would have been accepted.
     #[instrument(level = "debug", fields(shard = %self.machine.shard_id()))]
     pub async fn listen(self, as_of: Antichain<T>) -> Result<Listen<K, V, T, D>, Since<T>> {
+        soft_assert_or_log!(
+            PartialOrder::less_equal(self.since(), &as_of),
+            "attempted listen at {:?}, but the since of our read handle is merely {:?}... we may not hold the since back far enough",
+            as_of.elements(),
+            self.since().elements()
+        );
         let () = self.machine.verify_listen(&as_of)?;
         Ok(Listen::new(self, as_of).await)
     }
