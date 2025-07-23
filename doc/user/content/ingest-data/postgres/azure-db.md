@@ -182,8 +182,8 @@ created [earlier](#2-create-a-publication-and-a-replication-user):
     ALL TABLES`.
 
 1. After source creation, you can handle upstream [schema changes](/sql/create-source/postgres/#schema-changes)
-   for specific replicated tables using the [`ALTER SOURCE...{ADD | DROP} SUBSOURCE`](/sql/alter-source/#context)
-   syntax.
+   for specific replicated tables using the [`ALTER SOURCE...ADD SUBSOURCE`](/sql/alter-source/#context)
+   and [`DROP SOURCE`](/sql/drop-source) syntax.
 
 {{< /tab >}}
 
