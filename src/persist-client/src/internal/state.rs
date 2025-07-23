@@ -393,11 +393,13 @@ impl<T: Timestamp + Codec64> BatchPart<T> {
     pub fn diffs_sum<D: Codec64 + Monoid>(&self, metrics: &ColumnarMetrics) -> Option<D> {
         match self {
             BatchPart::Hollow(x) => x.diffs_sum.map(D::decode),
-            BatchPart::Inline { updates, .. } => updates
-                .decode::<T>(metrics)
-                .expect("valid inline part")
-                .updates
-                .diffs_sum(),
+            BatchPart::Inline { updates, .. } => Some(
+                updates
+                    .decode::<T>(metrics)
+                    .expect("valid inline part")
+                    .updates
+                    .diffs_sum(),
+            ),
         }
     }
 }

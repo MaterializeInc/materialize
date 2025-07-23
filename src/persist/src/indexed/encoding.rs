@@ -265,16 +265,12 @@ impl BlobTraceUpdates {
     }
 
     /// Return the sum of the diffs in the blob.
-    pub fn diffs_sum<D: Codec64 + Monoid>(&self) -> Option<D> {
-        let mut sum = None;
+    pub fn diffs_sum<D: Codec64 + Monoid>(&self) -> D {
+        let mut sum = D::zero();
         for d in self.diffs().values().iter() {
             let d = D::decode(d.to_le_bytes());
-            match &mut sum {
-                None => sum = Some(d),
-                Some(x) => x.plus_equals(&d),
-            }
+            sum.plus_equals(&d);
         }
-
         sum
     }
 
