@@ -49,6 +49,7 @@ def main():
     parser_run.add_argument("--dev", action="store_true")
     parser_run.add_argument("--namespace", default="materialize")
     parser_run.add_argument("--values")
+    parser_run.add_argument("--set", action="append")
     parser_run.set_defaults(func=run)
 
     parser_reset = subparsers.add_parser("reset")
@@ -106,6 +107,8 @@ def run(args: argparse.Namespace):
     ]
     if args.values is not None:
         helm_args.extend(["--values", args.values])
+    if args.set is not None:
+        helm_args.extend([f"--set={v}" for v in args.set])
     subprocess.check_call(helm_args)
 
 
