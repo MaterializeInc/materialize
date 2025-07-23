@@ -312,7 +312,7 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
     where
         K: mz_persist_types::Codec + std::fmt::Debug,
         V: mz_persist_types::Codec + std::fmt::Debug,
-        D: differential_dataflow::difference::Semigroup + Codec64,
+        D: differential_dataflow::difference::Monoid + Codec64,
     {
         use mz_proto::RustType;
         use prost::Message;

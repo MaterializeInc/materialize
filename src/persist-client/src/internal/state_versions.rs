@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use bytes::Bytes;
-use differential_dataflow::difference::Semigroup;
+use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use mz_ore::cast::CastFrom;
@@ -152,7 +152,7 @@ impl StateVersions {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64,
-        D: Semigroup + Codec64,
+        D: Monoid + Codec64,
     {
         let shard_id = shard_metrics.shard_id;
 
@@ -232,7 +232,7 @@ impl StateVersions {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64,
-        D: Semigroup + Codec64,
+        D: Monoid + Codec64,
     {
         assert_eq!(shard_metrics.shard_id, new_state.shard_id);
         let path = new_state.shard_id.to_string();
@@ -662,7 +662,7 @@ impl StateVersions {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64,
-        D: Semigroup + Codec64,
+        D: Monoid + Codec64,
     {
         let empty_state = TypedState::new(
             self.cfg.build_version.clone(),
@@ -715,7 +715,7 @@ impl StateVersions {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64,
-        D: Semigroup + Codec64,
+        D: Monoid + Codec64,
     {
         let (latest_rollup_seqno, _rollup) = state.latest_rollup();
         let seqno = state.seqno();
@@ -793,7 +793,7 @@ impl StateVersions {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64,
-        D: Semigroup + Codec64,
+        D: Monoid + Codec64,
     {
         let shard_id = state.shard_id;
         let rollup_seqno = state.seqno;
