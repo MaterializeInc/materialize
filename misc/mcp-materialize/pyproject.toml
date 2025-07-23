@@ -15,7 +15,7 @@
 
 [project]
 name = "mcp-materialize"
-version = "0.3.0"
+version = "0.3.1"
 description = "A server that exposes Materialize indexes as tools over the Model Context Protocol (MCP)"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -31,6 +31,8 @@ dependencies = [
     "mcp>=1.10.1",
     "psycopg-pool>=3.2.6",
     "psycopg[binary]>=3.2.6",
+    "pytest>=8.4.1",
+    "pytest-asyncio>=1.0.0",
     "pyyaml>=6.0.2",
     "requests>=2.32.3",
 ]
@@ -46,9 +48,6 @@ build-backend = "hatchling.build"
 packages = ["mcp_materialize"]
 
 [tool.hatch.build]
-include = [
-    "mcp_materialize/sql/*.sql"
-]
 
 [dependency-groups]
 dev = [

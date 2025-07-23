@@ -13,7 +13,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import json
 import os
 
 import pytest
@@ -85,17 +84,28 @@ async def test_basic_tool(materialize_pool):
             },
             outputSchema={
                 "type": "object",
-                "required": ["result"],
-                "properties": {"result": {"type": "string"}},
+                "properties": {
+                    "rows": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "required": ["result"],
+                            "properties": {"result": {"type": "string"}},
+                        },
+                    }
+                },
+                "required": ["rows"],
             },
             annotations=ToolAnnotations(
-                title="materialize::tools::my_tool(id)", readOnlyHint=True
+                title="materialize::tools::my_tool(id)",
+                readOnlyHint=True,
             ),
         )
 
         result = await client.call_tool("materialize_tools_my_tool_id_idx", {"id": 1})
-        assert len(result) == 1
-        assert json.loads(result[0].text) == {"result": "hello"}
+        rows = result["rows"]
+        assert len(rows) == 1
+        assert rows[0] == {"result": "hello"}
 
 
 @pytest.mark.asyncio
@@ -109,12 +119,14 @@ async def test_exists_tool(materialize_pool):
 
     async with MzClient(pool=materialize_pool) as client:
         result = await client.call_tool("materialize_tools_my_tool_id_idx", {"id": 1})
-        assert len(result) == 1
-        assert json.loads(result[0].text) == {"exists": True}
+        rows = result["rows"]
+        assert len(rows) == 1
+        assert rows[0] == {"exists": True}
 
         result = await client.call_tool("materialize_tools_my_tool_id_idx", {"id": 2})
-        assert len(result) == 1
-        assert json.loads(result[0].text) == {"exists": False}
+        rows = result["rows"]
+        assert len(rows) == 1
+        assert rows[0] == {"exists": False}
 
 
 @pytest.mark.asyncio
