@@ -49,7 +49,7 @@ use crate::internal::metrics::ShardMetrics;
 use crate::internal::state::{
     ENABLE_INCREMENTAL_COMPACTION, HollowBatch, RunMeta, RunOrder, RunPart,
 };
-use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
+use crate::internal::trace::{ApplyMergeResult, CompactionInput, FueledMergeRes};
 use crate::iter::{Consolidator, StructuredSort};
 use crate::{Metrics, PersistConfig, ShardId};
 
@@ -396,7 +396,11 @@ where
                     );
                     let res = Self::compact_all(stream, req.clone()).await?;
                     let maintenance = Self::apply(
-                        FueledMergeRes { output: res.output },
+                        FueledMergeRes {
+                            output: res.output,
+                            input: CompactionInput::Legacy,
+                            new_active_compaction: None,
+                        },
                         &metrics_clone,
                         &machine_clone,
                     )

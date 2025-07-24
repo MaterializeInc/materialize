@@ -40,7 +40,7 @@ use crate::internal::compact::{CompactConfig, CompactReq, Compactor};
 use crate::internal::encoding::Schemas;
 use crate::internal::gc::{GarbageCollector, GcReq};
 use crate::internal::machine::Machine;
-use crate::internal::trace::FueledMergeRes;
+use crate::internal::trace::{CompactionInput, FueledMergeRes};
 use crate::rpc::{NoopPubSubSender, PubSubSender};
 use crate::write::{WriteHandle, WriterId};
 use crate::{
@@ -512,7 +512,11 @@ where
                 start.elapsed(),
             );
             let (apply_res, maintenance) = machine
-                .merge_res(&FueledMergeRes { output: res.output })
+                .merge_res(&FueledMergeRes {
+                    output: res.output,
+                    input: CompactionInput::Legacy,
+                    new_active_compaction: None,
+                })
                 .await;
             if !maintenance.is_empty() {
                 info!("ignoring non-empty requested maintenance: {maintenance:?}")
