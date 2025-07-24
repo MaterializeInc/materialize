@@ -294,9 +294,9 @@ ingesting data.
     (<schema1>,<schema2>)` or `FOR TABLES (<table1>, <table2>)` instead of `FOR
     ALL TABLES`.
 
-4. After source creation, you can handle upstream [schema changes](/sql/create-source/postgres/#schema-changes)
-   for specific replicated tables using the [`ALTER SOURCE...{ADD | DROP} SUBSOURCE`](/sql/alter-source/#context)
-   syntax.
+1. After source creation, you can handle upstream [schema changes](/sql/create-source/postgres/#schema-changes)
+   for specific replicated tables using the [`ALTER SOURCE...ADD SUBSOURCE`](/sql/alter-source/#context)
+   and [`DROP SOURCE`](/sql/alter-source/#dropping-subsources) syntax.
 
 ### 3. Monitor the ingestion status
 
