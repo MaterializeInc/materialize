@@ -67,6 +67,7 @@ from materialize.ui import (
 SECRETS = [
     "mzp_",
     "-----BEGIN PRIVATE KEY-----",
+    "-----BEGIN CERTIFICATE-----",
     "confluent-api-key=",
     "confluent-api-secret=",
     "aws-access-key-id=",
