@@ -86,10 +86,17 @@ impl Client {
             }
             TunnelConfig::AwsPrivatelink { connection_id } => {
                 let privatelink_host = mz_cloud_resources::vpc_endpoint_name(*connection_id);
+                let mut privatelink_addrs =
+                    tokio::net::lookup_host((privatelink_host.clone(), 11111)).await?;
 
-                let tcp = TcpStream::connect(privatelink_host)
-                    .await
-                    .context("aws privatelink")?;
+                let Some(addr) = privatelink_addrs.next() else {
+                    return Err(SqlServerError::InvariantViolated(format!(
+                        "aws privatelink: no addresses found for host {:?}",
+                        privatelink_host
+                    )));
+                };
+
+                let tcp = TcpStream::connect(addr).await.context("aws privatelink")?;
 
                 (tcp, None)
             }
