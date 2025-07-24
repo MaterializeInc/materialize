@@ -44,6 +44,6 @@ created [earlier](#2-create-a-publication-and-a-replication-user):
     (<schema1>,<schema2>)` or `FOR TABLES (<table1>, <table2>)` instead of `FOR
     ALL TABLES`.
 
-1. After source creation, you can handle upstream [schema changes](/sql/create-source/postgres/#schema-changes)
-   for specific replicated tables using the [`ALTER SOURCE...ADD SUBSOURCE`](/sql/alter-source/#context)
-   and [`DROP SOURCE`](/sql/drop-source) syntax.
+    1. After source creation, you can handle upstream [schema changes](/sql/create-source/postgres/#schema-changes)
+    for specific replicated tables using the [`ALTER SOURCE...ADD SUBSOURCE`](/sql/alter-source/#context)
+    and [`DROP SOURCE`](/sql/alter-source/#dropping-subsources) syntax.
