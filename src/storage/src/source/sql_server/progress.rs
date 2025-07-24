@@ -140,9 +140,11 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                             let known_lsn_abrv = known_lsn.abbreviate();
                             let commit_lsn_abrv = prev_commit_lsn.abbreviate();
                             emit_stats(&stats_cap[0], known_lsn_abrv, commit_lsn_abrv);
-                            let probe = Probe { probe_ts, upstream_frontier: Antichain::from_elem(known_lsn) };
-                            emit_probe(&probe_cap[0], probe);
                         }
+
+                        let probe = Probe { probe_ts, upstream_frontier: Antichain::from_elem(known_lsn) };
+                        emit_probe(&probe_cap[0], probe);
+
                         prev_offset_known = Some(known_lsn);
                     },
                     Some(resume_upper) = resume_uppers.next() => {
