@@ -291,4 +291,9 @@ where
     pub fn iter(&self) -> impl Iterator<Item = &ComputeCommand<T>> {
         self.commands.iter()
     }
+
+    /// Return whether the history is in reduced form.
+    pub fn is_reduced(&self) -> bool {
+        self.commands.len() == self.reduced_count
+    }
 }
