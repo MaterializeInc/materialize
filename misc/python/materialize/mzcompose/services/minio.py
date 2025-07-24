@@ -48,9 +48,6 @@ class Minio(Service):
                     "MINIO_HEAL_DISABLE=on",
                     "MINIO_DISK_WATERMARK_LOW=1",
                     "MINIO_DISK_WATERMARK_HIGH=1",
-                    "MINIO_CACHE=on",
-                    "MINO_CACHE_DRIVES=/data",
-                    "MINIO_CACHE_MAXUSE=20",
                 ],
                 "healthcheck": {
                     "test": [
