@@ -115,8 +115,9 @@ SELECT tableA.fieldA, tableA.fieldB, minmax.Z
     MAX(fieldZ),
     MIN(fieldZ)
  FROM tableA
+ GROUP BY fieldA
  OPTIONS (AGGREGATE INPUT GROUP SIZE = ...)
- GROUP BY fieldA) minmax
+ ) minmax
 WHERE tableA.fieldA = minmax.fieldA
 ORDER BY fieldA ... ;
 ```
