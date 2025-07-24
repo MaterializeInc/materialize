@@ -13,7 +13,7 @@ use std::borrow::Borrow;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use differential_dataflow::difference::Semigroup;
+use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures::StreamExt;
@@ -147,7 +147,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + TotalOrder + Lattice + Codec64 + Sync,
-    D: Semigroup + Ord + Codec64 + Send + Sync,
+    D: Monoid + Ord + Codec64 + Send + Sync,
 {
     pub(crate) fn new(
         cfg: PersistConfig,

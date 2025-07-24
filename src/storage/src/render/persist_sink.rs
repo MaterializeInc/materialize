@@ -95,7 +95,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use differential_dataflow::difference::Semigroup;
+use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{AsCollection, Collection, Hashable};
 use futures::{StreamExt, future};
@@ -176,7 +176,7 @@ where
     K: Codec + Debug,
     V: Codec + Debug,
     T: Timestamp + Lattice + Codec64,
-    D: Semigroup + Codec64,
+    D: Monoid + Codec64,
 {
     /// Creates a new batch.
     ///

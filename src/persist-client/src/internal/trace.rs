@@ -48,7 +48,7 @@
 //! [Batch::Merger]: differential_dataflow::trace::Batch::Merger
 
 use arrayvec::ArrayVec;
-use differential_dataflow::difference::Semigroup;
+use differential_dataflow::difference::Monoid;
 use mz_persist::metrics::ColumnarMetrics;
 use mz_persist_types::Codec64;
 use std::cmp::Ordering;
@@ -651,7 +651,7 @@ impl<T: Timestamp + Lattice> Trace<T> {
 }
 
 impl<T: Timestamp + Lattice + Codec64> Trace<T> {
-    pub fn apply_merge_res_checked<D: Codec64 + Semigroup + PartialEq>(
+    pub fn apply_merge_res_checked<D: Codec64 + Monoid + PartialEq>(
         &mut self,
         res: &FueledMergeRes<T>,
         metrics: &ColumnarMetrics,
@@ -902,7 +902,7 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
 }
 
 impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
-    fn diffs_sum<'a, D: Semigroup + Codec64>(
+    fn diffs_sum<'a, D: Monoid + Codec64>(
         parts: impl Iterator<Item = &'a RunPart<T>>,
         metrics: &ColumnarMetrics,
     ) -> Option<D> {
@@ -949,7 +949,7 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
         metrics: &ColumnarMetrics,
     ) -> ApplyMergeResult
     where
-        D: Semigroup + Codec64 + PartialEq + Debug,
+        D: Monoid + Codec64 + PartialEq + Debug,
     {
         // The spine's and merge res's sinces don't need to match (which could occur if Spine
         // has been reloaded from state due to compare_and_set mismatch), but if so, the Spine
