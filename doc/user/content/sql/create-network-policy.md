@@ -51,7 +51,8 @@ change the default value.
 
 The privileges required to execute this statement are:
 
-- `CREATENETWORKPOLICY` privileges on the system.
+{{< include-md
+file="shared-content/sql-command-privileges/create-network-policy.md" >}}
 
 ## Examples
 

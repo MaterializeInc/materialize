@@ -28,7 +28,7 @@ CREATE SECRET kafka_ca_cert AS decode('c2VjcmV0Cg==', 'base64');
 
 The privileges required to execute this statement are:
 
-- `CREATE` privileges on the containing schema.
+{{< include-md file="shared-content/sql-command-privileges/create-secret.md" >}}
 
 ## Related pages
 

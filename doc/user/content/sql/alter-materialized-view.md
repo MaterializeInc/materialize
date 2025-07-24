@@ -24,7 +24,7 @@ _retention_period_ | ***Private preview.** This option has known performance or 
 
 The privileges required to execute this statement are:
 
-- Ownership of the materialized view.
+{{< include-md file="shared-content/sql-command-privileges/alter-materialized-view.md" >}}
 
 ## Related pages
 

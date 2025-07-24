@@ -107,7 +107,7 @@ quickstart
 
 The privileges required to execute this statement are:
 
-- `CREATEROLE` privileges on the system.
+{{< include-md file="shared-content/sql-command-privileges/alter-role.md" >}}
 
 ## Related pages
 

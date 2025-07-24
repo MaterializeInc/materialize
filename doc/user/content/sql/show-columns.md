@@ -70,7 +70,7 @@ SHOW COLUMNS FROM my_source;
 
 The privileges required to execute this statement are:
 
-- `USAGE` privileges on the schema containing `item_ref`.
+{{< include-md file="shared-content/sql-command-privileges/show-columns.md" >}}
 
 ## Related pages
 

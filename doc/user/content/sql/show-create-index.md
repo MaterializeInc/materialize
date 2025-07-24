@@ -44,7 +44,8 @@ SHOW CREATE INDEX my_view_idx;
 
 The privileges required to execute this statement are:
 
-- `USAGE` privileges on the schema containing the index.
+{{< include-md file="shared-content/sql-command-privileges/show-create-index.md"
+>}}
 
 ## Related pages
 

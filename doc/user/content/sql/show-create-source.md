@@ -34,7 +34,8 @@ SHOW CREATE SOURCE market_orders_raw;
 
 The privileges required to execute this statement are:
 
-- `USAGE` privileges on the schema containing the source.
+{{< include-md
+file="shared-content/sql-command-privileges/show-create-source.md" >}}
 
 ## Related pages
 

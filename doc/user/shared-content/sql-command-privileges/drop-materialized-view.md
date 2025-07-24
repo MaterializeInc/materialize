@@ -1,0 +1,2 @@
+- Ownership of the dropped materialized view.
+- `USAGE` privileges on the containing schema.

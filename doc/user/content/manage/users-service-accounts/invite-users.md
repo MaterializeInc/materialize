@@ -24,7 +24,7 @@ Materialize Console.
 
 1. In the **Select Role**, select the organization role for the user:
 
-   {{< yaml-table data="access-controls/organization_roles" >}}
+   {{< yaml-table data="rbac/organization_roles" >}}
 
 2. Click the **Invite** button at the bottom right section of the screen.
 
