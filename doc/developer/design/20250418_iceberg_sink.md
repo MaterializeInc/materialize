@@ -19,7 +19,7 @@ As with all icebergs, most of it is below the surface.  Iceberg is a table speci
     - [Apache Polaris](https://polaris.apache.org/)
     - [Snowflake Open Catalog (managed Polaris)](https://other-docs.snowflake.com/en/opencatalog/overview)
     - [Unity OSS Catalog](https://www.unitycatalog.io/)
-    - [S3 Tables](https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables-integrating-open-source.html) 
+    - [S3 Tables](https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables-integrating-open-source.html)
 
 
 ## Success Criteria
@@ -98,7 +98,7 @@ Creating the SINK
 ```SQL
 CREATE SINK iceberg_sink
 FROM my_favorite_materialized_view
-TO ICEBERG CATALOG iceberg_catalog_connection 
+TO ICEBERG CATALOG iceberg_catalog_connection
 USING AWS CONNECTION iceberg_s3_conn
 NAMESPACE "namespace_name" TABLE "table_name"
 WITH (
@@ -210,7 +210,7 @@ A MVP implementation will support the following:
 
 ## Open questions
 
-- TBD 
+- TBD
 
 ## Extra Bits and Bobs
 
@@ -235,6 +235,6 @@ Streaming for Iceberg involves writing a large number of small files to object s
 #### Cleanup of orphaned files
 
 Each append to a table will generate a new metadata file.  For streaming use cases, these will accumulate quickly as appends will likely be small.
-One of the recommended tasks is to [remove old metadata files](https://iceberg.apache.org/docs/latest/maintenance/#remove-old-metadata-files`) - especially important for streaming as there are many small writes.  
+One of the recommended tasks is to [remove old metadata files](https://iceberg.apache.org/docs/latest/maintenance/#remove-old-metadata-files`) - especially important for streaming as there are many small writes.
 
 In the event of a crash while writing to iceberg, it's possible that a replica leaves [orphaned files, which will need to be cleaned up](https://iceberg.apache.org/docs/latest/maintenance/#delete-orphan-files).  S3Tables does perform unreferenced file removal, see [AWS documentation](https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables-considerations.html#s3-tables-unreferenced-file-removal-considerations) for additional details.
