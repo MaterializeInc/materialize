@@ -1712,7 +1712,10 @@ def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
         c.up("materialized", "clusterd1", "clusterd2")
 
         c.sql(
-            "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
+            """
+            ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;
+            ALTER SYSTEM SET enable_introspection_subscribes = false;
+            """,
             port=6877,
             user="mz_system",
         )
@@ -1863,7 +1866,10 @@ def workflow_test_compute_reconciliation_replace(c: Composition) -> None:
         c.up("materialized", "clusterd1")
 
         c.sql(
-            "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
+            """
+            ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;
+            ALTER SYSTEM SET enable_introspection_subscribes = false;
+            """,
             port=6877,
             user="mz_system",
         )
