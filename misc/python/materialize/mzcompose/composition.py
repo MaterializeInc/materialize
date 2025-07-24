@@ -115,6 +115,7 @@ class Composition:
         project_name: str | None = None,
         sanity_restart_mz: bool = False,
     ):
+        self.conns = {}
         self.name = name
         self.description = None
         self.repo = repo
@@ -667,13 +668,17 @@ class Composition:
         password: str | None = None,
         sslmode: str = "disable",
         startup_params: dict[str, str] = {},
+        reuse_connection: bool = False,
     ) -> Connection:
         if service is None:
             service = "materialized"
 
         """Get a connection (with autocommit enabled) to the materialized service."""
         port = self.port(service, port) if port else self.default_port(service)
-        print(" ".join([f"-c {key}={val}" for key, val in startup_params.items()]))
+        options = " ".join([f"-c {key}={val}" for key, val in startup_params.items()])
+        key = (threading.get_ident(), database, user, password, port, sslmode, options)
+        if reuse_connection and key in self.conns:
+            return self.conns[key]
         conn = psycopg.connect(
             host="localhost",
             dbname=database,
@@ -681,11 +686,11 @@ class Composition:
             password=password,
             port=port,
             sslmode=sslmode,
-            options=" ".join(
-                [f"-c {key}={val}" for key, val in startup_params.items()]
-            ),
+            options=options,
         )
         conn.autocommit = True
+        if reuse_connection:
+            self.conns[key] = conn
         return conn
 
     def sql_cursor(
@@ -697,10 +702,18 @@ class Composition:
         password: str | None = None,
         sslmode: str = "disable",
         startup_params: dict[str, str] = {},
+        reuse_connection: bool = False,
     ) -> Cursor:
         """Get a cursor to run SQL queries against the materialized service."""
         conn = self.sql_connection(
-            service, user, database, port, password, sslmode, startup_params
+            service,
+            user,
+            database,
+            port,
+            password,
+            sslmode,
+            startup_params,
+            reuse_connection,
         )
         return conn.cursor()
 
@@ -713,10 +726,16 @@ class Composition:
         port: int | None = None,
         password: str | None = None,
         print_statement: bool = True,
+        reuse_connection: bool = True,
     ) -> None:
         """Run a batch of SQL statements against the materialized service."""
         with self.sql_cursor(
-            service=service, user=user, database=database, port=port, password=password
+            service=service,
+            user=user,
+            database=database,
+            port=port,
+            password=password,
+            reuse_connection=reuse_connection,
         ) as cursor:
             for statement in sqlparse.split(sql):
                 if print_statement:
@@ -731,10 +750,16 @@ class Composition:
         database: str = "materialize",
         port: int | None = None,
         password: str | None = None,
+        reuse_connection: bool = True,
     ) -> Any:
         """Execute and return results of a SQL query."""
         with self.sql_cursor(
-            service=service, user=user, database=database, port=port, password=password
+            service=service,
+            user=user,
+            database=database,
+            port=port,
+            password=password,
+            reuse_connection=reuse_connection,
         ) as cursor:
             cursor.execute(sql.encode())
             return cursor.fetchall()

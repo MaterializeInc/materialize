@@ -1592,7 +1592,8 @@ def workflow_test_replica_targeted_subscribe_abort(c: Composition) -> None:
             BEGIN;
             DECLARE c CURSOR FOR SUBSCRIBE t;
             FETCH c WITH (timeout = '5s');
-            """
+            """,
+            reuse_connection=False,
         )
     except InternalError_ as e:
         assert (
@@ -3141,9 +3142,9 @@ def workflow_test_pgwire_metrics(c: Composition) -> None:
         c.sql(
             """
             BEGIN;
-            DECLARE c1 CURSOR FOR (SELECT * FROM t);
-            FETCH 1 c1;
-            FETCH 1 c1;
+            DECLARE c2 CURSOR FOR (SELECT * FROM t);
+            FETCH 1 c2;
+            FETCH 1 c2;
             """
         )
         metrics = fetch_metrics()
@@ -3156,10 +3157,10 @@ def workflow_test_pgwire_metrics(c: Composition) -> None:
         c.sql(
             """
             BEGIN;
-            DECLARE c1 CURSOR FOR (SELECT * FROM t);
-            FETCH 1 c1;
-            FETCH 1 c1;
-            FETCH 1 c1;
+            DECLARE c3 CURSOR FOR (SELECT * FROM t);
+            FETCH 1 c3;
+            FETCH 1 c3;
+            FETCH 1 c3;
             """
         )
         metrics = fetch_metrics()
@@ -3172,8 +3173,8 @@ def workflow_test_pgwire_metrics(c: Composition) -> None:
         c.sql(
             """
             BEGIN;
-            DECLARE c1 CURSOR FOR (SELECT * FROM t);
-            FETCH ALL c1;
+            DECLARE c4 CURSOR FOR (SELECT * FROM t);
+            FETCH ALL c4;
             """
         )
         metrics = fetch_metrics()
@@ -3189,10 +3190,11 @@ def workflow_test_pgwire_metrics(c: Composition) -> None:
             """
             CREATE VIEW v1 AS SELECT 3;
             BEGIN;
-            DECLARE c1 CURSOR FOR SUBSCRIBE (SELECT * FROM v1);
-            FETCH ALL c1;
-            FETCH ALL c1;
-            """
+            DECLARE c5 CURSOR FOR SUBSCRIBE (SELECT * FROM v1);
+            FETCH ALL c5;
+            FETCH ALL c5;
+            """,
+            reuse_connection=False,
         )
         metrics = fetch_metrics()
         rrftlbs_subscribe_1 = metrics.get_result_rows_first_to_last_byte_seconds(
@@ -3204,10 +3206,11 @@ def workflow_test_pgwire_metrics(c: Composition) -> None:
         c.sql(
             """
             BEGIN;
-            DECLARE c1 CURSOR FOR SUBSCRIBE (SELECT * FROM v1);
-            FETCH ALL c1;
-            FETCH ALL c1;
-            """
+            DECLARE c6 CURSOR FOR SUBSCRIBE (SELECT * FROM v1);
+            FETCH ALL c6;
+            FETCH ALL c6;
+            """,
+            reuse_connection=False,
         )
         metrics = fetch_metrics()
         rrftlbs_subscribe_2 = metrics.get_result_rows_first_to_last_byte_seconds(
@@ -3221,10 +3224,11 @@ def workflow_test_pgwire_metrics(c: Composition) -> None:
         c.sql(
             """
             BEGIN;
-            DECLARE c1 CURSOR FOR SUBSCRIBE (SELECT * FROM t);
-            FETCH ALL c1;
-            FETCH ALL c1 WITH (TIMEOUT = INTERVAL '1500 milliseconds');
-            """
+            DECLARE c7 CURSOR FOR SUBSCRIBE (SELECT * FROM t);
+            FETCH ALL c7;
+            FETCH ALL c7 WITH (TIMEOUT = INTERVAL '1500 milliseconds');
+            """,
+            reuse_connection=False,
         )
         metrics = fetch_metrics()
         rrftlbs_subscribe_3 = metrics.get_result_rows_first_to_last_byte_seconds(
