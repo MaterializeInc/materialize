@@ -43,7 +43,7 @@
 //!
 //! Unfortunately, it isn't sufficient to just fix the [`Lsn`] and `XSN`. There exists
 //! the possibility that a write transaction may have inserted a row into one
-//! of the tables in the snapshot, but that write has not comitted. In this case,
+//! of the tables in the snapshot, but that write has not committed. In this case,
 //! the `INSERT` has already been written to the transaction log at a [`Lsn`]
 //! less than than the one captured, but the snapshot will *not* observe that INSERT
 //! because the transaction has not committed, and may not commit until after
@@ -53,7 +53,7 @@
 //!
 //! SQL server supports exclusive table locks, but those will only be released
 //! once the outermost transaction completes. For this reason, this module
-//! uses two connections for the snapshot process.  The first conection is used
+//! uses two connections for the snapshot process.  The first connection is used
 //! to initiate a transaction and lock the upstream tables.  While the first
 //! connection maintains the locks, the second connection starts a transaction
 //! with [`TransactionIsolationLevel::Snapshot`] isolation and creates a
