@@ -345,7 +345,6 @@ pub type RowStream<'a> =
 pub struct Transaction<'a> {
     client: &'a mut Client,
     closed: bool,
-    savepoints: Vec<String>,
 }
 
 impl<'a> Transaction<'a> {
@@ -362,7 +361,6 @@ impl<'a> Transaction<'a> {
             Ok(Transaction {
                 client,
                 closed: false,
-                savepoints: Default::default(),
             })
         }
     }
@@ -391,38 +389,43 @@ impl<'a> Transaction<'a> {
 
         let stmt = format!("SAVE TRANSACTION [{savepoint_name}]");
         let _result = self.client.simple_query(stmt).await?;
-        self.savepoints.push(savepoint_name.to_string());
         Ok(())
     }
 
     /// Retrieve the [`Lsn`] associated with the current session.
     ///
-    /// MS SQL Server will not assign a [`Lsn`] until a write is performed (e.g. via `SAVE TRANSACTION`).
+    /// MS SQL Server will not assign an [`Lsn`] until a write is performed (e.g. via `SAVE TRANSACTION`).
     pub async fn get_lsn(&mut self) -> Result<Lsn, SqlServerError> {
         static CURRENT_LSN_QUERY: &str = "
-SELECT dt.database_transaction_begin_lsn
-FROM sys.dm_tran_database_transactions AS dt
-JOIN sys.dm_tran_session_transactions AS st
-  ON dt.transaction_id = st.transaction_id
-WHERE st.session_id = @@SPID
+SELECT dt.database_transaction_most_recent_savepoint_lsn
+FROM sys.dm_tran_database_transactions dt
+JOIN sys.dm_tran_current_transaction ct
+    ON ct.transaction_id = dt.transaction_id
+WHERE dt.database_transaction_most_recent_savepoint_lsn IS NOT NULL
 ";
         let result = self.client.simple_query(CURRENT_LSN_QUERY).await?;
         crate::inspect::parse_numeric_lsn(&result)
     }
 
-    /// Exclusively lock the provided table, uses `TABLOCKX`.
+    /// Lock the provided table to prevent writes but allow reads , uses `(TABLOCK, HOLDLOCK)`.
     ///
-    /// The lock is obtained using a `SELECT` statement that will not read the table. The lock is released
-    /// after transaction commit or rollback.
-    pub async fn lock_table_exclusive(
+    /// This will set the transaction isolation level to `READ COMMITTED` and then obtain the
+    /// lock is obtained using a `SELECT` statement that will not read and data from the table.
+    /// The lock is released after transaction commit or rollback.
+    pub async fn lock_table_shared(
         &mut self,
         schema: &str,
         table: &str,
     ) -> Result<(), SqlServerError> {
+        // Locks in MS SQL server do not behave the same way under all isolation levels. In testing,
+        // it has been observed that if the isolation level is SNAPSHOT, these locks are ineffective.
+        static SET_READ_COMMITTED: &str = "SET TRANSACTION ISOLATION LEVEL READ COMMITTED;";
         // This query probably seems odd, but there is no LOCK command in MS SQL. Locks are specified
         // in SELECT using the WITH keyword.  This query does not need to return any rows to lock the table,
-        // hence the 1=0, which is something short that always evaluates to false in this universe;
-        let query = format!("SELECT * FROM [{schema}].[{table}] WITH (TABLOCKX) WHERE 1=0;");
+        // hence the 1=0, which is something short that always evaluates to false in this universe.
+        let query = format!(
+            "{SET_READ_COMMITTED}\nSELECT * FROM [{schema}].[{table}] WITH (TABLOCK, HOLDLOCK) WHERE 1=0;"
+        );
         let _result = self.client.simple_query(query).await?;
         Ok(())
     }
@@ -471,7 +474,6 @@ WHERE st.session_id = @@SPID
         // N.B. Mark closed _before_ running the query. This prevents us from
         // double closing the transaction if this query itself fails.
         self.closed = true;
-        self.savepoints.clear();
         self.client.simple_query(ROLLBACK_QUERY).await?;
         Ok(())
     }
@@ -482,7 +484,6 @@ WHERE st.session_id = @@SPID
         // N.B. Mark closed _before_ running the query. This prevents us from
         // double closing the transaction if this query itself fails.
         self.closed = true;
-        self.savepoints.clear();
         self.client.simple_query(COMMIT_QUERY).await?;
         Ok(())
     }

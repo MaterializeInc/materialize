@@ -60,7 +60,7 @@ pub async fn increment_lsn(client: &mut Client, lsn: Lsn) -> Result<Lsn, SqlServ
     parse_lsn(&result[..1])
 }
 
-/// Parse a [`Lsn`] in Decimal(25,0) format of the provided [`tiberius::Row`].
+/// Parse an [`Lsn`] in Decimal(25,0) format of the provided [`tiberius::Row`].
 ///
 /// Returns an error if the provided slice doesn't have exactly one row.
 pub(crate) fn parse_numeric_lsn(row: &[tiberius::Row]) -> Result<Lsn, SqlServerError> {
@@ -82,7 +82,7 @@ pub(crate) fn parse_numeric_lsn(row: &[tiberius::Row]) -> Result<Lsn, SqlServerE
     }
 }
 
-/// Parse a [`Lsn`] from the first column of the provided [`tiberius::Row`].
+/// Parse an [`Lsn`] from the first column of the provided [`tiberius::Row`].
 ///
 /// Returns an error if the provided slice doesn't have exactly one row.
 fn parse_lsn(result: &[tiberius::Row]) -> Result<Lsn, SqlServerError> {
@@ -169,7 +169,7 @@ SELECT @mz_cleanup_status_bit;
     let max_deletes = i64::cast_from(max_deletes);
 
     // First we need to get a valid LSN as our low watermark. If we try to cleanup
-    // a change table with a LSN that doesn't exist in the `cdc.lsn_time_mapping`
+    // a change table with an LSN that doesn't exist in the `cdc.lsn_time_mapping`
     // table we'll get an error code `22964`.
     let result = client
         .query(GET_LSN_QUERY, &[&low_water_mark.as_bytes().as_slice()])

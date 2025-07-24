@@ -17,8 +17,8 @@
 //! 2. [`CdcStream::into_stream`] returns a [`futures::Stream`] of [`CdcEvent`]s
 //!    optionally from the [`Lsn`] returned in step 1.
 //!
-//! The snapshot process is responsible for identifying a [`Lsn`] that provides
-//! a point-in-time view of the data for the table(s) being copied.  Similarly to
+//! The snapshot process is responsible for identifying an [`Lsn`] that corresponds to
+//! a point-in-time view of the data for the table(s) being copied. Similarly to
 //! MySQL, Microsoft SQL server, as far as we know, does not provide an API to
 //! achieve this.
 //!
@@ -28,7 +28,7 @@
 //! transaction sequence number (`XSN`). The `XSN` is set at the first
 //! read or write, not at `BEGIN TRANSACTION`, see [here](https://learn.microsoft.com/en-us/sql/relational-databases/sql-server-transaction-locking-and-row-versioning-guide?view=sql-server-ver17).
 //! This provides us a suitable starting point for capturing the table data.
-//! To force a `XSN` to be assigned, experiments have shown that a table must
+//! To force an `XSN` to be assigned, experiments have shown that a table must
 //! be read. We choose a well-known table that we should already have access to,
 //! [cdc.change_tables](https://learn.microsoft.com/en-us/sql/relational-databases/system-tables/cdc-change-tables-transact-sql?view=sql-server-ver17),
 //! and read a single value from it.
@@ -37,29 +37,26 @@
 //! returned from any CDC tables or CDC functions will always be stale,
 //! in relation to the source table that CDC is tracking. The system table
 //! [sys.dm_tran_database_transactions](https://learn.microsoft.com/en-us/sql/relational-databases/system-dynamic-management-views/sys-dm-tran-database-transactions-transact-sql?view=sql-server-ver17)
-//! will contain a [`Lsn`] for any transaction that performs a write operation.
-//! Creating a savepoint using [SAVE TRANSACTION](https://learn.microsoft.com/en-us/sql/t-sql/language-elements/save-transaction-transact-sql?view=sql-server-ver17).
-//! is sufficient to generate a [`Lsn`] in this case.
+//! will contain an [`Lsn`] for any transaction that performs a write operation.
+//! Creating a savepoint using [SAVE TRANSACTION](https://learn.microsoft.com/en-us/sql/t-sql/language-elements/save-transaction-transact-sql?view=sql-server-ver17)
+//! is sufficient to generate an [`Lsn`] in this case.
 //!
-//! Unfortunately, it isn't sufficient to just fix the [`Lsn`] and `XSN`. There exists
-//! the possibility that a write transaction may have inserted a row into one
-//! of the tables in the snapshot, but that write has not committed. In this case,
-//! the `INSERT` has already been written to the transaction log at a [`Lsn`]
-//! less than than the one captured, but the snapshot will *not* observe that INSERT
-//! because the transaction has not committed, and may not commit until after
-//! the snapshot is complete. In order to force a clear delineation of updates,
-//! the upstream tables in the snapshot must be locked. This lock only needs
-//! to exist long enough to establish the [`Lsn`] and `XSN`.
+//! To ensure that the the point-in-time view is established atomically with
+//! collection of the [`Lsn`], we lock the tables to prevent writes from being
+//! interleaved between the 2 commands (read to establish `XSN` and creation of
+//! the savepoint).
 //!
-//! SQL server supports exclusive table locks, but those will only be released
+//! SQL server supports table locks, but those will only be released
 //! once the outermost transaction completes. For this reason, this module
-//! uses two connections for the snapshot process.  The first connection is used
-//! to initiate a transaction and lock the upstream tables.  While the first
-//! connection maintains the locks, the second connection starts a transaction
-//! with [`TransactionIsolationLevel::Snapshot`] isolation and creates a
-//! savepoint.  Once the savepoint is created and [`Lsn`] is captured, the first
-//! connection rolls back the transaction. The snapshot is created by the second
-//! connection within the existing transaction.
+//! uses two connections for the snapshot process. The first connection is used
+//! to initiate a transaction and lock the upstream tables under
+//! [`TransactionIsolationLevel::ReadCommitted`] isolation. While the first
+//! connection maintains the locks, the second connection starts a
+//! transaction with [`TransactionIsolationLevel::Snapshot`] isolation and
+//! creates a savepoint. Once the savepoint is created, SQL server has assigned
+//! an [`Lsn`] and the the first connection rolls back the transaction.
+//! The [`Lsn`] and snapshot are captured by the second connection within the
+//! existing transaction.
 //!
 //! After completing the snapshot we use [`crate::inspect::get_changes_asc`] which will return
 //! all changes between a `[lower, upper)` bound of [`Lsn`]s.
@@ -72,6 +69,7 @@ use std::time::Duration;
 use derivative::Derivative;
 use futures::{Stream, StreamExt};
 use mz_ore::retry::RetryResult;
+use mz_repr::GlobalId;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use tiberius::numeric::Numeric;
@@ -95,7 +93,7 @@ pub struct CdcStream<'a> {
     ///
     /// Note: When CDC is first enabled in an instance of SQL Server it can take a moment
     /// for it to "completely" startup. Before starting a `TRANSACTION` for our snapshot
-    /// we'll wait this duration for SQL Server to report a [`Lsn`] and thus indicate CDC is
+    /// we'll wait this duration for SQL Server to report an [`Lsn`] and thus indicate CDC is
     /// ready to go.
     max_lsn_wait: Duration,
 }
@@ -134,7 +132,7 @@ impl<'a> CdcStream<'a> {
         self
     }
 
-    /// The max duration we'll wait for SQL Server to return a [`Lsn`] before taking a
+    /// The max duration we'll wait for SQL Server to return an [`Lsn`] before taking a
     /// snapshot.
     ///
     /// When CDC is first enabled in SQL Server it can take a moment before it is fully
@@ -153,6 +151,8 @@ impl<'a> CdcStream<'a> {
     pub async fn snapshot<'b>(
         &'b mut self,
         instances: Option<BTreeSet<Arc<str>>>,
+        worker_id: usize,
+        source_id: &'b GlobalId,
     ) -> Result<
         (
             Lsn,
@@ -175,7 +175,7 @@ impl<'a> CdcStream<'a> {
             .map(|i| i.as_ref());
         let tables =
             crate::inspect::get_tables_for_capture_instance(self.client, instances).await?;
-        tracing::info!(?tables, "got table for capture instance");
+        tracing::info!(%source_id, ?tables, "timely-{worker_id} got table for capture instance");
 
         // Before starting a transaction where the LSN will not advance, ensure
         // the upstream DB is ready for CDC.
@@ -184,22 +184,22 @@ impl<'a> CdcStream<'a> {
         // Intentionally logging this at info for debugging. This section won't get entered
         // often, but if there are problems here, it will be much easier to troubleshoot
         // knowing where stall/hang might be happening.
-        tracing::info!("Upstream is ready");
+        tracing::info!(%source_id, "timely-{worker_id} upstream is ready");
 
         // The client that will be used for fencing does not need any special isolation level
         // as it will be just be locking the table(s).
         let mut fencing_client = self.client.new_connection().await?;
         let mut fence_txn = fencing_client.transaction().await?;
 
-        // TODO (maz): we should consider a timeout or a lock + snapshot per-table instead of collectively
+        // TODO improve table locking: https://github.com/MaterializeInc/database-issues/issues/9512
         for (_capture_instance, schema, table) in &tables {
-            tracing::trace!(%schema, %table, "locking table");
-            fence_txn.lock_table_exclusive(&*schema, &*table).await?;
+            tracing::trace!(%source_id, %schema, %table, "timely-{worker_id} locking table");
+            fence_txn.lock_table_shared(&*schema, &*table).await?;
         }
 
         // So we know that we locked that tables and roughly how long that took based on the time diff
         // from the last message.
-        tracing::info!(?tables, "Locked tables");
+        tracing::info!(%source_id, "timely-{worker_id} locked tables");
 
         self.client
             .set_transaction_isolation(TransactionIsolationLevel::Snapshot)
@@ -207,7 +207,7 @@ impl<'a> CdcStream<'a> {
         let mut txn = self.client.transaction().await?;
 
         // Creating a savepoint forces a write to the transaction log, which will
-        // assign a LSN, but it does not force a transaction sequence number to be
+        // assign an LSN, but it does not force a transaction sequence number to be
         // assigned as far as I can tell.  I have not observed any entries added to
         // `sys.dm_tran_active_snapshot_database_transactions` when creating a savepoint
         // or when reading system views to retrieve the LSN.
@@ -228,17 +228,19 @@ impl<'a> CdcStream<'a> {
         // completed, or is blocked. The LSN and XSN acquired now will represent a
         // consistent point-in-time view, such that any comitted write will be
         // visible to this snapshot and the LSN of such a write will be less than
-        // or equal to the LSN captured here.
+        // or equal to the LSN captured here. Creating the savepoint sets the LSN,
+        // we can read it after rolling back the locks.
         txn.create_savepoint(SAVEPOINT_NAME).await?;
-        tracing::info!(%SAVEPOINT_NAME, "Created savepoint");
-        let lsn = txn.get_lsn().await?;
+        tracing::info!(%source_id, %SAVEPOINT_NAME, "timely-{worker_id} created savepoint");
 
         // Once the XSN is esablished and the LSN captured, the tables no longer
         // need to be locked.  Any writes that happen to the upstream tables
-        // will have a LSN higher than our captured LSN, and will be read from CDC.
+        // will have an LSN higher than our captured LSN, and will be read from CDC.
         fence_txn.rollback().await?;
 
-        tracing::info!(?tables, ?lsn, "starting snapshot");
+        let lsn = txn.get_lsn().await?;
+
+        tracing::info!(%source_id, ?lsn, "timely-{worker_id} starting snapshot");
 
         // Get the size of each table we're about to snapshot.
         //
@@ -249,7 +251,7 @@ impl<'a> CdcStream<'a> {
             tracing::trace!(%capture_instance, %schema, %table, "snapshot stats start");
             let size = crate::inspect::snapshot_size(txn.client, &*schema, &*table).await?;
             snapshot_stats.insert(Arc::clone(capture_instance), size);
-            tracing::trace!(%capture_instance, %schema, %table, "snapshot stats end");
+            tracing::trace!(%source_id, %capture_instance, %schema, %table, "timely-{worker_id} snapshot stats end");
         }
 
         // Run a `SELECT` query to snapshot the entire table.
@@ -257,7 +259,7 @@ impl<'a> CdcStream<'a> {
             // TODO(sql_server3): A stream of streams would be better here than
             // returning the name with each result, but the lifetimes are tricky.
             for (capture_instance, schema_name, table_name) in tables {
-                tracing::trace!(%capture_instance, %schema_name, %table_name, "snapshot start");
+                tracing::trace!(%source_id, %capture_instance, %schema_name, %table_name, "timely-{worker_id} snapshot start");
 
                 let snapshot = crate::inspect::snapshot(txn.client, &*schema_name, &*table_name);
                 let mut snapshot = std::pin::pin!(snapshot);
@@ -265,7 +267,7 @@ impl<'a> CdcStream<'a> {
                     yield (Arc::clone(&capture_instance), result);
                 }
 
-                tracing::trace!(%capture_instance, %schema_name, %table_name, "snapshot end");
+                tracing::trace!(%source_id, %capture_instance, %schema_name, %table_name, "timely-{worker_id} tmsnapshot end");
             }
 
             // Slightly awkward, but if the rollback fails we need to conform to
@@ -446,7 +448,7 @@ impl<'a> CdcStream<'a> {
             }
         }
 
-        // Ensure all of the capture instances are reporting a LSN.
+        // Ensure all of the capture instances are reporting an LSN.
         for instance in self.capture_instances.keys() {
             let (_client, min_result) = mz_ore::retry::Retry::default()
                 .max_duration(self.max_lsn_wait)
@@ -562,7 +564,7 @@ pub struct Lsn {
 impl Lsn {
     const SIZE: usize = 10;
 
-    /// Interpret the provided bytes as a [`Lsn`].
+    /// Interpret the provided bytes as an [`Lsn`].
     pub fn try_from_bytes(bytes: &[u8]) -> Result<Self, String> {
         if bytes.len() != Self::SIZE {
             return Err(format!("incorrect length, expected 10 got {}", bytes.len()));
@@ -653,11 +655,11 @@ impl TryFrom<Numeric> for Lsn {
 
         let vlf_id = u32::try_from(decimal_lsn / 10_i128.pow(15))
             .map_err(|e| format!("Failed to decode vlf_id for lsn {decimal_lsn}: {e:?}"))?;
-        decimal_lsn -= i128::try_from(vlf_id).unwrap() * 10_i128.pow(15);
+        decimal_lsn -= i128::from(vlf_id) * 10_i128.pow(15);
 
         let block_id = u32::try_from(decimal_lsn / 10_i128.pow(5))
             .map_err(|e| format!("Failed to decode block_id for lsn {decimal_lsn}: {e:?}"))?;
-        decimal_lsn -= i128::try_from(block_id).unwrap() * 10_i128.pow(5);
+        decimal_lsn -= i128::from(block_id) * 10_i128.pow(5);
 
         let record_id = u16::try_from(decimal_lsn)
             .map_err(|e| format!("Failed to decode record_id for lsn {decimal_lsn}: {e:?}"))?;
@@ -714,7 +716,7 @@ impl timely::order::PartialOrder for Lsn {
 }
 impl timely::order::TotalOrder for Lsn {}
 
-/// Structured format of a [`Lsn`].
+/// Structured format of an [`Lsn`].
 ///
 /// Note: The derived impl of [`PartialOrd`] and [`Ord`] relies on the field
 /// ordering so do not change it.
