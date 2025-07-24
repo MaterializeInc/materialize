@@ -271,12 +271,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     files = buildkite.shard_list(
-        [
-            file
-            for file in glob.glob(
-                f"test-{args.filter}.td", root_dir=MZ_ROOT / "test" / "kafka-auth"
-            )
-        ],
+        sorted(
+            [
+                file
+                for file in glob.glob(
+                    f"test-{args.filter}.td", root_dir=MZ_ROOT / "test" / "kafka-auth"
+                )
+            ]
+        ),
         lambda file: file,
     )
     c.test_parts(files, c.run_testdrive_files)

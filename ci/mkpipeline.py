@@ -196,6 +196,14 @@ so it is executed.""",
     add_version_to_preflight_tests(pipeline)
     trim_builds_prep_thread.join()
     trim_builds(pipeline, hash_check)
+    add_cargo_test_dependency(
+        pipeline,
+        args.pipeline,
+        args.coverage,
+        args.sanitizer,
+        args.bazel_remote_cache,
+        bazel_lto,
+    )
     remove_dependencies_on_prs(pipeline, args.pipeline, hash_check)
     remove_mz_specific_keys(pipeline)
 
@@ -854,6 +862,45 @@ def trim_tests_pipeline(
         or ("group" in step and step["steps"])
         or step.get("id") in needed
     ]
+
+
+def add_cargo_test_dependency(
+    pipeline: Any,
+    pipeline_name: str,
+    coverage: bool,
+    sanitizer: Sanitizer,
+    bazel_remote_cache: str,
+    bazel_lto: bool,
+) -> None:
+    """Cargo Test normally doesn't have to wait for the build to complete, but it requires a few images (ubuntu-base, postgres), which are rarely changed. So only add a dependency when those images are not on Dockerhub yet."""
+    if pipeline_name not in ("test", "nightly"):
+        return
+    if ui.env_is_truthy("BUILDKITE_PULL_REQUEST") and pipeline_name == "test":
+        for step in steps(pipeline):
+            if step.get("id") == "cargo-test":
+                step["depends_on"] = "build-x86_64"
+        return
+
+    repo = mzbuild.Repository(
+        Path("."),
+        arch=Arch.X86_64,
+        coverage=coverage,
+        sanitizer=sanitizer,
+        bazel=True,
+        bazel_remote_cache=bazel_remote_cache,
+        bazel_lto=bazel_lto,
+    )
+    composition = Composition(repo, name="cargo-test")
+    deps = composition.dependencies
+    if deps.check():
+        # We already have the dependencies available, no need to add a build dependency
+        return
+
+    for step in steps(pipeline):
+        if step.get("id") == "cargo-test":
+            step["depends_on"] = "build-x86_64"
+        if step.get("id") == "miri-test":
+            step["depends_on"] = "build-aarch64"
 
 
 def remove_dependencies_on_prs(

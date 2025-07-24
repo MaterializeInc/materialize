@@ -24,8 +24,8 @@ def test_full_testdrive(mz: MaterializeApplication) -> None:
     parser.add_argument("--file-pattern", default="*.td", type=str)
     args, _ = parser.parse_known_args()
 
-    matching_files = glob.glob(
-        f"testdrive/{args.file_pattern}", root_dir=MZ_ROOT / "test"
+    matching_files = sorted(
+        glob.glob(f"testdrive/{args.file_pattern}", root_dir=MZ_ROOT / "test")
     )
 
     # TODO: database-issues#7827 (test requires fivetran running in cloudtest)

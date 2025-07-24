@@ -308,6 +308,7 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
         for file in matching_files
         if file != "session.td" and file != "status-history.td"
     ]
+    matching_files: list[str] = sorted(matching_files)
 
     dependencies = [
         "fivetran-destination",

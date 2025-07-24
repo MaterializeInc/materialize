@@ -295,11 +295,12 @@ def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
     matching_files = []
     for filter in args.filter:
         matching_files.extend(glob.glob(filter, root_dir=MZ_ROOT / "test" / "pg-cdc"))
-    sharded_files: list[str] = sorted(
-        buildkite.shard_list(matching_files, lambda file: file)
+    sharded_files: list[str] = buildkite.shard_list(
+        sorted(matching_files), lambda file: file
     )
     print(f"Files: {sharded_files}")
 
+    c.up({"name": "test-certs", "persistent": True})
     ssl_ca = c.run("test-certs", "cat", "/secrets/ca.crt", capture=True).stdout
     ssl_cert = c.run("test-certs", "cat", "/secrets/certuser.crt", capture=True).stdout
     ssl_key = c.run("test-certs", "cat", "/secrets/certuser.key", capture=True).stdout
