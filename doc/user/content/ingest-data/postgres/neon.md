@@ -296,7 +296,7 @@ ingesting data.
 
 1. After source creation, you can handle upstream [schema changes](/sql/create-source/postgres/#schema-changes)
    for specific replicated tables using the [`ALTER SOURCE...ADD SUBSOURCE`](/sql/alter-source/#context)
-   and [`DROP SOURCE`](/sql/drop-source) syntax.
+   and [`DROP SOURCE`](/sql/alter-source/#dropping-subsources) syntax.
 
 ### 3. Monitor the ingestion status
 
