@@ -15,7 +15,7 @@ collects:
 
 - Snapshots of system catalog tables from your Materialize instance.
 
-By default, the tool will automatically port-forward to collect system catalog information. You can disable this by setting `--auto-port-forward false` and specifying your own connection URL via `--mz-connection-url`.
+By default, the tool will automatically port-forward to collect system catalog information. You can disable this by specifying your own connection URL via `--mz-connection-url`.
 
 ## Requirements
 
@@ -76,7 +76,7 @@ mz-debug self-managed --k8s-namespace materialize-environment
 ### Debug the `materialize` namespace
 
 ```shell
-mz-debug --dump-system-catalog=false self-managed --k8s-namespace materialize --auto-port-forward false
+mz-debug --dump-system-catalog=false self-managed --k8s-namespace materialize
 ```
 
 ### Debug namespaces without automatic port-forwarding
@@ -85,7 +85,6 @@ mz-debug --dump-system-catalog=false self-managed --k8s-namespace materialize --
 mz-debug self-managed \
     --k8s-namespace materialize \
     --k8s-namespace materialize-environment \
-    --auto-port-forward false \
     --mz-connection-url 'postgres://root@127.0.0.1:6875/materialize?sslmode=disable'
 ```
 

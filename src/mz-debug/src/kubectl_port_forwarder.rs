@@ -28,8 +28,6 @@ pub struct KubectlPortForwarder {
     pub namespace: String,
     pub service_name: String,
     pub target_port: i32,
-    pub local_address: String,
-    pub local_port: i32,
     pub context: Option<String>,
 }
 
@@ -39,13 +37,16 @@ pub struct PortForwardConnection {
     // We need to keep the lines otherwise the process will be killed when new lines
     // are added to the stdout.
     pub _lines: tokio::io::Lines<tokio::io::BufReader<tokio::process::ChildStdout>>,
+    // The local address and port that the port forward is established on
+    pub local_address: String,
+    pub local_port: i32,
 }
 
 impl KubectlPortForwarder {
     /// Spawns a port forwarding process that resolves when
     /// the port forward is established.
     pub async fn spawn_port_forward(&self) -> Result<PortForwardConnection, anyhow::Error> {
-        let port_arg_str = format!("{}:{}", &self.local_port, &self.target_port);
+        let port_arg_str = format!(":{}", &self.target_port);
         let service_name_arg_str = format!("services/{}", &self.service_name);
         let mut args = vec![
             "port-forward",
@@ -53,8 +54,6 @@ impl KubectlPortForwarder {
             &port_arg_str,
             "-n",
             &self.namespace,
-            "--address",
-            &self.local_address,
         ];
 
         if let Some(k8s_context) = &self.context {
@@ -73,10 +72,23 @@ impl KubectlPortForwarder {
             if let Some(stdout) = child.stdout.take() {
                 let stdout_reader = tokio::io::BufReader::new(stdout);
                 let mut lines = stdout_reader.lines();
+                let mut local_address = None;
+                let mut local_port = None;
+                let local_address_and_port_regex =
+                    regex::Regex::new(r"Forwarding from ([^:]+):(\d+)")?;
+
                 // Wait until we know port forwarding is established
                 let timeout = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                    // kubectl-port-forward output looks like:
+                    // ```
+                    // Forwarding from 127.0.0.1:6875 -> 6875
+                    // Forwarding from [::1]:6875 -> 6875
+                    // ```
+                    // We want to extract the local address and port from the first line.
                     while let Ok(Some(line)) = lines.next_line().await {
-                        if line.contains("Forwarding from") {
+                        if let Some(captures) = local_address_and_port_regex.captures(&line) {
+                            local_address = Some(captures[1].to_string());
+                            local_port = captures[2].parse::<i32>().ok();
                             break;
                         }
                     }
@@ -87,15 +99,22 @@ impl KubectlPortForwarder {
                     return Err(anyhow::anyhow!("Port forwarding timed out after 5 seconds"));
                 }
 
-                info!(
-                    "Port forwarding established for {} from ports {}:{} -> {}",
-                    &self.service_name, &self.local_address, &self.local_port, &self.target_port
-                );
-
-                return Ok(PortForwardConnection {
-                    _lines: lines,
-                    _port_forward_process: child,
-                });
+                if let (Some(local_address), Some(local_port)) = (local_address, local_port) {
+                    info!(
+                        "Port forwarding established for {} from ports {}:{} -> {}",
+                        &self.service_name, local_address, local_port, &self.target_port
+                    );
+                    return Ok(PortForwardConnection {
+                        _lines: lines,
+                        _port_forward_process: child,
+                        local_address,
+                        local_port,
+                    });
+                } else {
+                    return Err(anyhow::anyhow!(
+                        "Failed to extract local address and port from kubectl-port-forward output"
+                    ));
+                }
             }
         }
         Err(anyhow::anyhow!("Failed to spawn port forwarding process"))
@@ -192,19 +211,17 @@ pub async fn find_cluster_services(
     Err(anyhow::anyhow!("Could not find cluster services"))
 }
 
-/// Creates a port forwarder for the external pg wire port of balancerd.
+/// Creates a port forwarder for the external pg wire port of environmentd.
 pub async fn create_pg_wire_port_forwarder(
     client: &Client,
     k8s_context: &Option<String>,
     k8s_namespaces: &Vec<String>,
-    port_forward_local_address: &String,
-    port_forward_local_port: i32,
 ) -> Result<KubectlPortForwarder> {
     let service_info = find_environmentd_service(client, k8s_namespaces)
         .await
         .with_context(|| "Cannot find ports for environmentd service")?;
 
-    let maybe_internal_sql_port = service_info.service_ports.iter().find_map(|port_info| {
+    let maybe_external_sql_port = service_info.service_ports.iter().find_map(|port_info| {
         if let Some(port_name) = &port_info.name {
             let port_name = port_name.to_lowercase();
             if port_name == "sql" {
@@ -214,18 +231,16 @@ pub async fn create_pg_wire_port_forwarder(
         None
     });
 
-    if let Some(internal_sql_port) = maybe_internal_sql_port {
+    if let Some(external_sql_port) = maybe_external_sql_port {
         Ok(KubectlPortForwarder {
             context: k8s_context.clone(),
             namespace: service_info.namespace,
             service_name: service_info.service_name,
-            target_port: internal_sql_port.port,
-            local_address: port_forward_local_address.clone(),
-            local_port: port_forward_local_port,
+            target_port: external_sql_port.port,
         })
     } else {
         Err(anyhow::anyhow!(
-            "No SQL port forwarding info found. Set --auto-port-forward to false and point --mz-connection-url to a Materialize instance."
+            "No SQL port forwarding info found. Set --mz-connection-url to a Materialize instance."
         ))
     }
 }
