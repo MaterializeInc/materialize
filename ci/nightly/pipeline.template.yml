@@ -1858,6 +1858,17 @@ steps:
   - group: Slow cluster tests
     key: slow-cluster
     steps:
+      - id: crash-on-replica-expiration-index
+        label: "Crash on Replica Expiration Index"
+        depends_on: build-aarch64
+        timeout_in_minutes: 60
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: cluster
+              run: crash-on-replica-expiration-index
+
       - id: incident-70
         label: "Test for incident 70"
         depends_on: build-aarch64
