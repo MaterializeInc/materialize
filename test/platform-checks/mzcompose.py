@@ -65,6 +65,7 @@ def create_mzs(
             volumes_extra=["secrets:/share/secrets"],
             additional_system_parameter_defaults=additional_system_parameter_defaults,
             default_replication_factor=default_replication_factor,
+            support_external_clusterd=True,
         )
         for mz_name in ["materialized", "mz_1", "mz_2", "mz_3", "mz_4", "mz_5"]
     ] + [

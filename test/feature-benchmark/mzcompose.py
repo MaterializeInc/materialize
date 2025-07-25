@@ -340,6 +340,7 @@ def create_mz_service(
         external_blob_store=True,
         blob_store_is_azure=azurite,
         sanity_restart=False,
+        support_external_clusterd=True,
     )
 
 

@@ -36,6 +36,7 @@ SERVICES = [
             "unsafe_enable_unsafe_functions": "true",
             "unsafe_enable_unstable_dependencies": "true",
         },
+        support_external_clusterd=True,
     ),
     Clusterd(name="clusterd_1_1"),
     Clusterd(name="clusterd_1_2"),

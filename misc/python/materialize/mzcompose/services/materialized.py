@@ -96,6 +96,7 @@ class Materialized(Service):
         bootstrap_replica_size: str | None = None,
         default_replication_factor: int = 1,
         listeners_config_path: str = f"{MZ_ROOT}/src/materialized/ci/listener_configs/no_auth.json",
+        support_external_clusterd: bool = False,
     ) -> None:
         if name is None:
             name = "materialized"
@@ -180,6 +181,9 @@ class Materialized(Service):
                     f"{key}={value}" for key, value in system_parameter_defaults.items()
                 )
             ]
+
+        if not support_external_clusterd:
+            environment.append("MZ_NO_EXTERNAL_CLUSTERD=1")
 
         command = []
 

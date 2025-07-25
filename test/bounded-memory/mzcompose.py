@@ -1489,7 +1489,7 @@ def run_scenario(
     c.down(destroy_volumes=True)
 
     with c.override(
-        Materialized(memory=materialized_memory),
+        Materialized(memory=materialized_memory, support_external_clusterd=True),
         Clusterd(memory=clusterd_memory),
     ):
         c.up(

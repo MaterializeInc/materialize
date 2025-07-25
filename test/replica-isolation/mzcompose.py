@@ -40,6 +40,7 @@ SERVICES = [
         additional_system_parameter_defaults={
             "log_filter": "mz_cluster::client=debug,info",
         },
+        support_external_clusterd=True,
     ),
     Clusterd(name="clusterd_1_1"),
     Clusterd(name="clusterd_1_2"),

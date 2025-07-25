@@ -71,6 +71,7 @@ SERVICES = [
             "unsafe_enable_unsafe_functions": "true",
             "unsafe_enable_unorchestrated_cluster_replicas": "true",
         },
+        support_external_clusterd=True,
     ),
     CockroachOrPostgresMetadata(),
     Postgres(),
@@ -2043,6 +2044,7 @@ def workflow_test_drop_during_reconciliation(c: Composition) -> None:
                 "unsafe_enable_unsafe_functions": "true",
                 "unsafe_enable_unorchestrated_cluster_replicas": "true",
             },
+            support_external_clusterd=True,
         ),
         Clusterd(
             name="clusterd1",
@@ -3671,7 +3673,9 @@ def workflow_test_github_cloud_7998(
     with c.override(
         Testdrive(no_reset=True),
         Clusterd(name="clusterd1"),
-        Materialized(),
+        Materialized(
+            support_external_clusterd=True,
+        ),
     ):
         c.up("materialized")
         c.up("clusterd1")
@@ -3849,6 +3853,7 @@ def workflow_blue_green_deployment(
                 "unsafe_enable_unsafe_functions": "true",
                 "unsafe_enable_unorchestrated_cluster_replicas": "true",
             },
+            support_external_clusterd=True,
         ),
     ):
         c.up("materialized")
@@ -3945,7 +3950,7 @@ def workflow_cluster_drop_concurrent(
             no_reset=True,
         ),
         Clusterd(name="clusterd1"),
-        Materialized(),
+        Materialized(support_external_clusterd=True),
     ):
         c.up("materialized")
         c.up("clusterd1")
@@ -3991,6 +3996,7 @@ def workflow_test_refresh_mv_warmup(
             additional_system_parameter_defaults={
                 "enable_refresh_every_mvs": "true",
             },
+            support_external_clusterd=True,
         ),
         Testdrive(no_reset=True),
     ):
@@ -4168,6 +4174,7 @@ def workflow_test_refresh_mv_restart(
                 "enable_refresh_every_mvs": "true",
                 "enable_cluster_schedule_refresh": "true",
             },
+            support_external_clusterd=True,
         ),
         Testdrive(no_reset=True),
     ):
@@ -4554,6 +4561,7 @@ def workflow_test_github_8734(c: Composition) -> None:
             additional_system_parameter_defaults={
                 "enable_refresh_every_mvs": "true",
             },
+            support_external_clusterd=True,
         ),
         Testdrive(no_reset=True),
     ):
@@ -4598,6 +4606,7 @@ def workflow_test_github_7798(c: Composition, parser: WorkflowArgumentParser) ->
                 "unsafe_enable_unsafe_functions": "true",
                 "unsafe_enable_unorchestrated_cluster_replicas": "true",
             },
+            support_external_clusterd=True,
         ),
         Testdrive(
             no_reset=True,
@@ -5042,6 +5051,7 @@ def workflow_test_unified_introspection_during_replica_disconnect(c: Composition
                 "unsafe_enable_unsafe_functions": "true",
                 "unsafe_enable_unorchestrated_cluster_replicas": "true",
             },
+            support_external_clusterd=True,
         ),
         Testdrive(
             no_reset=True,
@@ -5600,6 +5610,7 @@ def workflow_test_lgalloc_limiter(c: Composition) -> None:
                 "enable_compute_correction_v2": "true",
                 "lgalloc_limiter_interval": "100ms",
             },
+            support_external_clusterd=True,
         ),
         Clusterd(
             name="clusterd1",
@@ -5719,6 +5730,7 @@ def workflow_test_memory_limiter(c: Composition) -> None:
                 "memory_limiter_interval": "100ms",
                 "unsafe_enable_unorchestrated_cluster_replicas": "true",
             },
+            support_external_clusterd=True,
         ),
         Clusterd(
             name="clusterd1",
