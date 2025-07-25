@@ -2249,10 +2249,7 @@ impl CatalogState {
         let location = match location {
             mz_catalog::durable::ReplicaLocation::Unmanaged {
                 storagectl_addrs,
-                storage_addrs,
                 computectl_addrs,
-                compute_addrs,
-                workers,
             } => {
                 if allowed_availability_zones.is_some() {
                     return Err(Error {
@@ -2264,10 +2261,7 @@ impl CatalogState {
                 }
                 ReplicaLocation::Unmanaged(UnmanagedReplicaLocation {
                     storagectl_addrs,
-                    storage_addrs,
                     computectl_addrs,
-                    compute_addrs,
-                    workers,
                 })
             }
             mz_catalog::durable::ReplicaLocation::Managed {

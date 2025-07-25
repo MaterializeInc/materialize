@@ -607,10 +607,7 @@ pub struct ComputeReplicaConfig {
 pub enum ReplicaConfig {
     Unorchestrated {
         storagectl_addrs: Vec<String>,
-        storage_addrs: Vec<String>,
         computectl_addrs: Vec<String>,
-        compute_addrs: Vec<String>,
-        workers: usize,
         compute: ComputeReplicaConfig,
     },
     Orchestrated {
