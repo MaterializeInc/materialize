@@ -250,7 +250,7 @@ def run_one_scenario(
                     ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;
 
                     $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-                    CREATE CLUSTER cluster_default REPLICAS (r1 (STORAGECTL ADDRESSES ['clusterd:2100'], STORAGE ADDRESSES ['clusterd:2103'], COMPUTECTL ADDRESSES ['clusterd:2101'], COMPUTE ADDRESSES ['clusterd:2102'], WORKERS 1));
+                    CREATE CLUSTER cluster_default REPLICAS (r1 (STORAGECTL ADDRESSES ['clusterd:2100'], COMPUTECTL ADDRESSES ['clusterd:2101']));
                     ALTER SYSTEM SET cluster = cluster_default;
                     GRANT ALL PRIVILEGES ON CLUSTER cluster_default TO materialize;"""
                 ),
