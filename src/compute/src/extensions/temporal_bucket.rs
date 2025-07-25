@@ -13,6 +13,7 @@ use std::marker::PhantomData;
 
 use differential_dataflow::containers::TimelyStack;
 use differential_dataflow::difference::Semigroup;
+use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::implementations::chunker::ColumnationChunker;
 use differential_dataflow::trace::implementations::merge_batcher::{ColMerger, MergeBatcher};
 use differential_dataflow::trace::{Batcher, Builder, Description};
@@ -22,7 +23,7 @@ use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, StreamCore};
 use timely::order::TotalOrder;
-use timely::progress::{Antichain, Timestamp};
+use timely::progress::{Antichain, PathSummary, Timestamp};
 use timely::{Data, PartialOrder};
 
 use crate::typedefs::MzData;
@@ -32,8 +33,13 @@ use crate::typedefs::MzData;
 /// at times between the last input frontier and the current input frontier.
 pub trait TemporalBucketing<G: Scope, O> {
     /// Construct a new stream that stores updates into a [`BucketChain`] and reveals data
-    /// not in advance of the frontier.
-    fn bucket<CB>(&self) -> StreamCore<G, CB::Container>
+    /// not in advance of the frontier. Data that is within `threshold` distance of the input
+    /// frontier or the `as_of` is passed through without being stored in the chain.
+    fn bucket<CB>(
+        &self,
+        as_of: Antichain<G::Timestamp>,
+        threshold: <G::Timestamp as Timestamp>::Summary,
+    ) -> StreamCore<G, CB::Container>
     where
         CB: ContainerBuilder + PushInto<O>;
 }
@@ -43,10 +49,14 @@ impl<G, D> TemporalBucketing<G, (D, G::Timestamp, mz_repr::Diff)>
     for StreamCore<G, Vec<(D, G::Timestamp, mz_repr::Diff)>>
 where
     G: Scope,
-    G::Timestamp: Data + MzData + BucketTimestamp + TotalOrder,
+    G::Timestamp: Data + MzData + BucketTimestamp + TotalOrder + Lattice,
     D: Data + MzData + Ord + std::fmt::Debug,
 {
-    fn bucket<CB>(&self) -> StreamCore<G, CB::Container>
+    fn bucket<CB>(
+        &self,
+        as_of: Antichain<G::Timestamp>,
+        threshold: <G::Timestamp as Timestamp>::Summary,
+    ) -> StreamCore<G, CB::Container>
     where
         CB: ContainerBuilder + PushInto<(D, G::Timestamp, mz_repr::Diff)>,
     {
@@ -56,46 +66,68 @@ where
         self.unary_frontier::<CB, _, _, _>(Pipeline, "Temporal delay", |cap, info| {
             let mut chain = BucketChain::new(MergeBatcherWrapper::new(logger, info.global_id));
             let activator = scope.activator_for(info.address);
+
             // Cap tracking the lower bound of potentially outstanding data.
             let mut cap = Some(cap);
+
+            // Buffer for data to be inserted into the chain.
             let mut buffer = Vec::new();
+
             move |input, output| {
-                while let Some((_time, data)) = input.next() {
-                    // Sort data by time, then drain it into a buffer that contains data for a
-                    // single bucket.
-                    data.sort_by(|(_, t, _), (_, t2, _)| t.cmp(t2));
-
-                    let mut range = None;
-
-                    for (datum, time, diff) in data.drain(..) {
-                        // If we have a range, check if the time is not within it.
-                        if let Some((start, end)) = &range
-                            && (time < *start || time >= *end)
-                        {
-                            // If the time is outside the range, push the current buffer
-                            // to the chain and reset the range.
-                            if !buffer.is_empty() {
-                                let wrapper = chain.find_mut(start).expect("Must exist");
-                                wrapper.inner.push_container(&mut buffer);
-                                buffer.clear();
-                            }
-                            range = None;
+                // The upper frontier is the join of the input frontier and the `as_of` frontier,
+                // with the `threshold` summary applied to it.
+                let mut upper = Antichain::new();
+                for time1 in &input.frontier().frontier() {
+                    for time2 in as_of.elements() {
+                        // TODO: Use `join_assign` if we ever use a timestamp with allocations.
+                        if let Some(time) = threshold.results_in(&time1.join(time2)) {
+                            upper.insert(time);
                         }
-                        if range.is_none() {
-                            range = chain.range_of(&time);
-                        }
-                        buffer.push((datum, time, diff));
                     }
-                    // Handle leftover data in the buffer.
-                    if !buffer.is_empty() {
-                        let (start, _) = range.as_ref().expect("Must exist");
-                        let wrapper = chain.find_mut(start).expect("Must exist");
-                        wrapper.inner.push_container(&mut buffer);
+                }
+
+                while let Some((time, data)) = input.next() {
+                    // Skip data that is about to be revealed.
+                    let pass_through = data.extract_if(.., |(_, t, _)| !upper.less_equal(t));
+                    output
+                        .session_with_builder(&time)
+                        .give_iterator(pass_through);
+
+                    // Sort data by time, then drain it into a buffer that contains data for a
+                    // single bucket. We scan the data for ranges of time that fall into the same
+                    // bucket so we can push batches of data at once.
+                    data.sort_unstable_by(|(_, t, _), (_, t2, _)| t.cmp(t2));
+
+                    let mut drain = data.drain(..);
+                    if let Some((datum, time, diff)) = drain.next() {
+                        let mut range = chain.range_of(&time).expect("Must exist");
+                        buffer.push((datum, time, diff));
+                        for (datum, time, diff) in drain {
+                            // If we have a range, check if the time is not within it.
+                            if !range.contains(&time) {
+                                // If the time is outside the range, push the current buffer
+                                // to the chain and reset the range.
+                                if !buffer.is_empty() {
+                                    let bucket = chain.find_mut(&range.start).expect("Must exist");
+                                    bucket.inner.push_container(&mut buffer);
+                                    buffer.clear();
+                                }
+                                range = chain.range_of(&time).expect("Must exist");
+                            }
+                            buffer.push((datum, time, diff));
+                        }
+
+                        // Handle leftover data in the buffer.
+                        if !buffer.is_empty() {
+                            let bucket = chain.find_mut(&range.start).expect("Must exist");
+                            bucket.inner.push_container(&mut buffer);
+                            buffer.clear();
+                        }
                     }
                 }
 
                 // Check for data that is ready to be revealed.
-                let peeled = chain.peel(input.frontier().frontier());
+                let peeled = chain.peel(upper.borrow());
                 if let Some(cap) = cap.as_ref() {
                     let mut session = output.session_with_builder(cap);
                     for stack in peeled.into_iter().flat_map(|x| x.done()) {
@@ -112,10 +144,11 @@ where
                 }
 
                 // Downgrade the cap to the current input frontier.
-                if input.frontier().is_empty() {
+                if input.frontier().is_empty() || upper.is_empty() {
                     cap = None;
                 } else if let Some(cap) = cap.as_mut() {
-                    cap.downgrade(&input.frontier().frontier()[0]);
+                    // TODO: This assumes that the time is total ordered.
+                    cap.downgrade(&upper[0]);
                 }
 
                 // Maintain the bucket chain by restoring it with fuel.

@@ -122,7 +122,7 @@ use mz_compute_types::dataflows::{DataflowDescription, IndexDesc};
 use mz_compute_types::dyncfgs::{
     COMPUTE_APPLY_COLUMN_DEMANDS, COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK,
     COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES, ENABLE_COMPUTE_LOGICAL_BACKPRESSURE,
-    ENABLE_TEMPORAL_BUCKETING,
+    ENABLE_TEMPORAL_BUCKETING, TEMPORAL_BUCKETING_SUMMARY,
 };
 use mz_compute_types::plan::LirId;
 use mz_compute_types::plan::render_plan::{
@@ -461,8 +461,13 @@ pub fn build_compute_dataflow<A: Allocate>(
 
                 for (id, (oks, errs)) in imported_sources.into_iter() {
                     let oks = if ENABLE_TEMPORAL_BUCKETING.get(&compute_state.worker_config) {
+                        let as_of = context.as_of_frontier.clone();
+                        let summary = TEMPORAL_BUCKETING_SUMMARY
+                            .get(&compute_state.worker_config)
+                            .try_into()
+                            .expect("must fit");
                         oks.inner
-                            .bucket::<CapacityContainerBuilder<_>>()
+                            .bucket::<CapacityContainerBuilder<_>>(as_of, summary)
                             .as_collection()
                     } else {
                         oks

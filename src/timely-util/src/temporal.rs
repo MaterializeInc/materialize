@@ -80,23 +80,18 @@ impl<S: Bucket> BucketChain<S> {
     }
 
     /// Find the time range for the bucket that contains data for time `timestamp`.
-    /// Returns the lower (inclusive) and upper (exclusive) time bound of the bucket,
+    /// Returns a range of the lower (inclusive) and upper (exclusive) time bound of the bucket,
     /// or `None` if there is no bucket for the requested time. Only times that haven't
     /// been peeled can still be found.
     ///
     /// The bounds are only valid until the next call to `peel` or `restore`.
     #[inline]
-    pub fn range_of(&self, timestamp: &S::Timestamp) -> Option<(S::Timestamp, S::Timestamp)> {
-        self.content
-            .range(..=timestamp)
-            .next_back()
-            .map(|(time, (bits, _))| {
-                (
-                    time.clone(),
-                    time.advance_by_power_of_two(bits.saturating_sub(1))
-                        .expect("must exist"),
-                )
-            })
+    pub fn range_of(&self, timestamp: &S::Timestamp) -> Option<std::ops::Range<S::Timestamp>> {
+        let (time, (bits, _)) = self.content.range(..=timestamp).next_back()?;
+        let top = time
+            .advance_by_power_of_two(bits.saturating_sub(1))
+            .expect("must exist");
+        Some(time.clone()..top)
     }
 
     /// Find the bucket that contains data for time `timestamp`. Returns a reference to the bucket,
