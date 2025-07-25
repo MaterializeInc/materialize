@@ -111,9 +111,10 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                 if decoder_map.insert(output.partition_index, Arc::clone(&output.decoder)).is_some() {
                     panic!("Multiple decoders for output index {}", output.partition_index);
                 }
-                capture_instances.entry(Arc::clone(&output.capture_instance))
-                    .and_modify(|export_ids| export_ids.push(output.partition_index))
-                    .or_insert_with(|| vec![output.partition_index]);
+                capture_instances
+                    .entry(Arc::clone(&output.capture_instance))
+                    .or_default()
+                    .push(output.partition_index);
 
                 if *output.resume_upper == [Lsn::minimum()] {
                     export_ids_to_snapshot.entry(Arc::clone(&output.capture_instance))
@@ -259,7 +260,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
             let Some(resume_lsn) = resume_lsn else {
                 // TODO: this is only in place until we implement RLU
                 // https://github.com/MaterializeInc/database-issues/issues/9212
-                tracing::warn!(%config.id, "timely-{} no resume_lsn, waiting.", config.worker_id);
+                tracing::warn!(%config.id, "timely-{} no resume_lsn, waiting", config.worker_id);
                 std::future::pending::<()>().await;
                 unreachable!();
             };

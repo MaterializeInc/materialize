@@ -54,7 +54,7 @@ pub async fn get_min_lsn_retry(
         })
         .await;
     let Ok(lsn) = lsn_result else {
-        tracing::warn!("database did not report a maximum LSN in time");
+        tracing::warn!("database did not report a minimum LSN in time");
         return lsn_result;
     };
     Ok(lsn)
