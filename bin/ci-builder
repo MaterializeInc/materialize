@@ -76,6 +76,38 @@ else
     rust_components+=,clippy-preview,rustfmt-preview
 fi
 
+# Target a specific CPU to get better performance, i.e. use more modern instructions.
+#
+# All of the x86-64 and ARM hardware we run in production support the v3 and neoverse-n1 micro
+# architectures, respectively.
+#
+# Sync: This target-cpu should be kept in sync with the one in ci-builder and .cargo/config.
+x86_64_target_cpu="x86-64-v3"
+aarch64_target_cpu="neoverse-n1"
+
+rust_cpu_target=""
+case "$arch_gcc" in
+    x86_64) rust_cpu_target="$x86_64_target_cpu" ;;
+    aarch64) rust_cpu_target="$aarch64_target_cpu" ;;
+    *) die "unknown host architecture \"$arch\"" ;;
+esac
+
+# Enable specific CPU features that we know our cloud infra supports.
+#
+# Note: specifying a target_cpu enables many features, these are specific ones that target_cpu
+# might miss.
+#
+# Sync: This list of features should be kept in sync with the one in xcompile and .cargo/config.
+x86_64_target_features="+aes,+pclmulqdq"
+aaarch64_target_features="+aes,+sha2"
+
+rust_target_features=""
+case "$arch_gcc" in
+    x86_64) rust_target_features="$x86_64_target_features" ;;
+    aarch64) rust_target_features="$aaarch64_target_features" ;;
+    *) die "unknown host architecture \"$arch\"" ;;
+esac
+
 bazel_version=$(cat .bazelversion)
 
 uid=$(id -u)
@@ -92,6 +124,8 @@ build() {
         --build-arg "RUST_VERSION=$rust_version" \
         --build-arg "RUST_DATE=$rust_date" \
         --build-arg "RUST_COMPONENTS=$rust_components" \
+        --build-arg "RUST_CPU_TARGET=$rust_cpu_target" \
+        --build-arg "RUST_TARGET_FEATURES=$rust_target_features" \
         --build-arg "BAZEL_VERSION=$bazel_version" \
         --tag materialize/ci-builder:"$tag" \
         --tag materialize/ci-builder:"$cache_tag" \
