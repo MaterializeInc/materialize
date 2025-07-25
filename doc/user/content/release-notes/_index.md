@@ -1,5 +1,5 @@
 ---
-title: "Release notes"
+title: "v25.2 Release notes"
 description: "Release notes for Self-managed Materialize"
 menu:
   main:
@@ -8,7 +8,21 @@ menu:
     identifier: "release-notes"
 ---
 
-## v25.2
+## v25.2.3
+
+### TLS Support for SQL Server Source
+
+v25.2.3 bumps the `environmentd` version 0.147.4 which supports TLS connections
+for SQL Server. For more information, see [Ingest data: SQL
+Server](/ingest-data/sql-server/).
+
+### Basic Authentication for HTTP interface
+
+v25.2.3 bumps the `environmentd` version 0.147.4 which supports TLS connections
+for SQL Server. For more information, see [Integrations HTTP
+API](/integrations/http-api).
+
+## v25.2.0
 
 ### Support for SQL Server Source
 
@@ -26,18 +40,18 @@ Starting in v25.2, password authentication and role-based access control are ava
 - [Role-Based Access
   Control](/manage/access-control/#role-based-access-control-rbac).
 
-## Support for `PARTITION BY`
+### Support for `PARTITION BY`
 
 Starting in v25.2, self-managed Materialize adds support for a new `PARTITION
 BY` option for materialized views and tables. `PARTITION BY` allows you to
-control how Materializes interally groups and stores your data. This can lead to
+control how Materializes internally groups and stores your data. This can lead to
 dramatically faster query performance and rehydration times for certain
 workloads.
 
-For details, see [Partioning and filter
+For details, see [Partitioning and filter
 pushdown](/transform-data/patterns/partition-by/).
 
-## Console Improvements
+### Console Improvements
 
 Self-managed v25.2 also includes various improvements to the Console:
 
@@ -58,13 +72,14 @@ The following improvements to `EXPLAIN` are now available in v25.2:
 For more information, see the [`EXPLAIN`](/sql/explain-plan/) and [`EXPLAIN
 ANALYZE`](/sql/explain-analyze/) reference pages.
 
-## Self-managed versioning and lifecycle
+## Known Limitations
 
-Self-managed Materialize uses a calendar versioning (calver) scheme of the form
-`vYY.R.PP` where:
+| Item                                    | Status      |
+|-----------------------------------------|-------------|
+| **License Compliance** <br> License key support to make it easier to comply with license terms. | In progress |
+| **Network Policies** <br> Materialize Network policies are not yet supported. | |
+| **AWS Connections** <br> AWS connections require backing cluster that hosts Materialize to be AWS EKS.  | |
+| **EKS/Azure Connections** | |
+| **Temporal Filtering** <br> Memory optimizations for filtering time-series data are not yet implemented. | |
 
-- `YY` indicates the year.
-- `R` indicates major release.
-- `PP` indicates the patch number.
-
-For Self-managed Materialize, Materialize supports the latest 2 major releases.
+## See also

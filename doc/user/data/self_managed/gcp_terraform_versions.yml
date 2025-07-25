@@ -5,6 +5,14 @@ columns:
 rows:
 
 - "Terraform version": |
+    [v0.4.6](https://github.com/MaterializeInc/terraform-aws-materialize/releases/)
+  "Notable changes": |
+
+    - Uses `terraform-helm-materialize` v0.1.19.
+    - Bumps Materialize release to [self-managed 25.2](/release-notes)
+    - Adds support for password authentication and enabling RBAC
+
+- "Terraform version": |
     [v0.4.3](https://github.com/MaterializeInc/terraform-google-materialize/releases/)
   "Notable changes": |
 
