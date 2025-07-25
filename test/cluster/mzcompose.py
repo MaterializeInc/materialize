@@ -1712,7 +1712,10 @@ def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
         c.up("materialized", "clusterd1", "clusterd2")
 
         c.sql(
-            "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
+            """
+            ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;
+            ALTER SYSTEM SET enable_introspection_subscribes = false;
+            """,
             port=6877,
             user="mz_system",
         )
@@ -1863,7 +1866,10 @@ def workflow_test_compute_reconciliation_replace(c: Composition) -> None:
         c.up("materialized", "clusterd1")
 
         c.sql(
-            "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
+            """
+            ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;
+            ALTER SYSTEM SET enable_introspection_subscribes = false;
+            """,
             port=6877,
             user="mz_system",
         )
@@ -5681,13 +5687,6 @@ def workflow_test_lgalloc_limiter(c: Composition) -> None:
             user="mz_system",
         )
         setup_workload()
-
-        # Force a reconnect to make sure the replica gets the new config immediately.
-        # TODO(database-issues#9483): make this workaround unnecessary
-        c.up("clusterd1")
-        time.sleep(1)
-        c.kill("clusterd1")
-
         c.up("clusterd1")
 
         c.testdrive("> SELECT count(*) FROM mv\n1000000")
@@ -5800,13 +5799,6 @@ def workflow_test_memory_limiter(c: Composition) -> None:
             user="mz_system",
         )
         setup_workload()
-
-        # Force a reconnect to make sure the replica gets the new config immediately.
-        # TODO(database-issues#9483): make this workaround unnecessary
-        c.up("clusterd1")
-        time.sleep(1)
-        c.kill("clusterd1")
-
         c.up("clusterd1")
 
         c.testdrive("> SELECT count(*) FROM mv\n1000000")
