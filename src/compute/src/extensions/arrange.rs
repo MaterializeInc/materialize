@@ -7,12 +7,14 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::arrange_core;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
+use differential_dataflow::trace::implementations::spine_fueled::Spine;
 use differential_dataflow::trace::{Batch, Batcher, Builder, Trace, TraceReader};
 use differential_dataflow::{Collection, Data, ExchangeData, Hashable};
 use timely::Container;
@@ -234,17 +236,16 @@ pub trait ArrangementSize {
 /// Helper for [`ArrangementSize`] to install a common operator holding on to a trace.
 ///
 /// * `arranged`: The arrangement to inspect.
-/// * `logic`: Closure that calculates the heap size/capacity/allocations for a trace. The return
+/// * `logic`: Closure that calculates the heap size/capacity/allocations for a batch. The return
 ///    value are size and capacity in bytes, and number of allocations, all in absolute values.
-fn log_arrangement_size_inner<G, Tr, L>(
-    arranged: Arranged<G, TraceAgent<Tr>>,
+fn log_arrangement_size_inner<G, B, L>(
+    arranged: Arranged<G, TraceAgent<Spine<Rc<B>>>>,
     mut logic: L,
-) -> Arranged<G, TraceAgent<Tr>>
+) -> Arranged<G, TraceAgent<Spine<Rc<B>>>>
 where
-    G: Scope,
-    G::Timestamp: Lattice,
-    Tr: TraceReader + 'static,
-    L: FnMut(&Tr) -> (usize, usize, usize) + 'static,
+    G: Scope<Timestamp: Lattice>,
+    B: Batch + 'static,
+    L: FnMut(&B) -> (usize, usize, usize) + 'static,
 {
     let scope = arranged.stream.scope();
     let Some(logger) = scope.logger_for::<ComputeEventBuilder>("materialize/compute") else {
@@ -265,15 +266,36 @@ where
                     address: address.to_vec(),
                 },
             ));
+
+            // Weak references to batches, so we can observe batches outside the trace.
+            let mut batches = BTreeMap::new();
+
             move |input, output| {
                 while let Some((time, data)) = input.next() {
+                    batches.extend(
+                        data.iter()
+                            .map(|batch| (Rc::as_ptr(batch), Rc::downgrade(batch))),
+                    );
                     output.session(&time).give_container(data);
                 }
                 let Some(trace) = trace.upgrade() else {
                     return;
                 };
 
-                let (size, capacity, allocations) = logic(&trace.borrow().trace);
+                trace.borrow().trace.map_batches(|batch| {
+                    batches.insert(Rc::as_ptr(batch), Rc::downgrade(batch));
+                });
+
+                let (mut size, mut capacity, mut allocations) = (0, 0, 0);
+                batches.retain(|_, weak| {
+                    if let Some(batch) = weak.upgrade() {
+                        let (sz, c, a) = logic(&batch);
+                        (size += sz, capacity += c, allocations += a);
+                        true
+                    } else {
+                        false
+                    }
+                });
 
                 let size = size.try_into().expect("must fit");
                 if size != old_size {
@@ -323,21 +345,19 @@ where
     R: Semigroup + Ord + MzData + 'static,
 {
     fn log_arrangement_size(self) -> Self {
-        log_arrangement_size_inner(self, |trace| {
+        log_arrangement_size_inner(self, |batch| {
             let (mut size, mut capacity, mut allocations) = (0, 0, 0);
             let mut callback = |siz, cap| {
                 size += siz;
                 capacity += cap;
                 allocations += usize::from(cap > 0);
             };
-            trace.map_batches(|batch| {
-                batch.storage.keys.heap_size(&mut callback);
-                batch.storage.keys_offs.heap_size(&mut callback);
-                batch.storage.vals.heap_size(&mut callback);
-                batch.storage.vals_offs.heap_size(&mut callback);
-                batch.storage.times.heap_size(&mut callback);
-                batch.storage.diffs.heap_size(&mut callback);
-            });
+            batch.storage.keys.heap_size(&mut callback);
+            batch.storage.keys_offs.heap_size(&mut callback);
+            batch.storage.vals.heap_size(&mut callback);
+            batch.storage.vals_offs.heap_size(&mut callback);
+            batch.storage.times.heap_size(&mut callback);
+            batch.storage.diffs.heap_size(&mut callback);
             (size, capacity, allocations)
         })
     }
@@ -351,19 +371,17 @@ where
     R: Semigroup + Ord + MzData + 'static,
 {
     fn log_arrangement_size(self) -> Self {
-        log_arrangement_size_inner(self, |trace| {
+        log_arrangement_size_inner(self, |batch| {
             let (mut size, mut capacity, mut allocations) = (0, 0, 0);
             let mut callback = |siz, cap| {
                 size += siz;
                 capacity += cap;
                 allocations += usize::from(cap > 0);
             };
-            trace.map_batches(|batch| {
-                batch.storage.keys.heap_size(&mut callback);
-                batch.storage.keys_offs.heap_size(&mut callback);
-                batch.storage.times.heap_size(&mut callback);
-                batch.storage.diffs.heap_size(&mut callback);
-            });
+            batch.storage.keys.heap_size(&mut callback);
+            batch.storage.keys_offs.heap_size(&mut callback);
+            batch.storage.times.heap_size(&mut callback);
+            batch.storage.diffs.heap_size(&mut callback);
             (size, capacity, allocations)
         })
     }
@@ -377,21 +395,19 @@ where
     R: Semigroup + Ord + MzArrangeData + 'static,
 {
     fn log_arrangement_size(self) -> Self {
-        log_arrangement_size_inner(self, |trace| {
+        log_arrangement_size_inner(self, |batch| {
             let (mut size, mut capacity, mut allocations) = (0, 0, 0);
             let mut callback = |siz, cap| {
                 size += siz;
                 capacity += cap;
                 allocations += usize::from(cap > 0);
             };
-            trace.map_batches(|batch| {
-                batch.storage.keys.heap_size(&mut callback);
-                batch.storage.keys_offs.heap_size(&mut callback);
-                batch.storage.vals.heap_size(&mut callback);
-                batch.storage.vals_offs.heap_size(&mut callback);
-                batch.storage.times.heap_size(&mut callback);
-                batch.storage.diffs.heap_size(&mut callback);
-            });
+            batch.storage.keys.heap_size(&mut callback);
+            batch.storage.keys_offs.heap_size(&mut callback);
+            batch.storage.vals.heap_size(&mut callback);
+            batch.storage.vals_offs.heap_size(&mut callback);
+            batch.storage.times.heap_size(&mut callback);
+            batch.storage.diffs.heap_size(&mut callback);
             (size, capacity, allocations)
         })
     }
@@ -404,21 +420,19 @@ where
     R: Semigroup + Ord + MzArrangeData + 'static,
 {
     fn log_arrangement_size(self) -> Self {
-        log_arrangement_size_inner(self, |trace| {
+        log_arrangement_size_inner(self, |batch| {
             let (mut size, mut capacity, mut allocations) = (0, 0, 0);
             let mut callback = |siz, cap| {
                 size += siz;
                 capacity += cap;
                 allocations += usize::from(cap > 0);
             };
-            trace.map_batches(|batch| {
-                batch.storage.keys.heap_size(&mut callback);
-                batch.storage.keys_offs.heap_size(&mut callback);
-                batch.storage.vals.heap_size(&mut callback);
-                batch.storage.vals_offs.heap_size(&mut callback);
-                batch.storage.times.heap_size(&mut callback);
-                batch.storage.diffs.heap_size(&mut callback);
-            });
+            batch.storage.keys.heap_size(&mut callback);
+            batch.storage.keys_offs.heap_size(&mut callback);
+            batch.storage.vals.heap_size(&mut callback);
+            batch.storage.vals_offs.heap_size(&mut callback);
+            batch.storage.times.heap_size(&mut callback);
+            batch.storage.diffs.heap_size(&mut callback);
             (size, capacity, allocations)
         })
     }
@@ -431,19 +445,17 @@ where
     R: Semigroup + Ord + MzArrangeData + 'static,
 {
     fn log_arrangement_size(self) -> Self {
-        log_arrangement_size_inner(self, |trace| {
+        log_arrangement_size_inner(self, |batch| {
             let (mut size, mut capacity, mut allocations) = (0, 0, 0);
             let mut callback = |siz, cap| {
                 size += siz;
                 capacity += cap;
                 allocations += usize::from(cap > 0);
             };
-            trace.map_batches(|batch| {
-                batch.storage.keys.heap_size(&mut callback);
-                batch.storage.keys_offs.heap_size(&mut callback);
-                batch.storage.times.heap_size(&mut callback);
-                batch.storage.diffs.heap_size(&mut callback);
-            });
+            batch.storage.keys.heap_size(&mut callback);
+            batch.storage.keys_offs.heap_size(&mut callback);
+            batch.storage.times.heap_size(&mut callback);
+            batch.storage.diffs.heap_size(&mut callback);
             (size, capacity, allocations)
         })
     }
