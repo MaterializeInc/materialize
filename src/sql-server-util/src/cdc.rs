@@ -152,7 +152,7 @@ impl<'a> CdcStream<'a> {
         &'b mut self,
         instances: Option<BTreeSet<Arc<str>>>,
         worker_id: usize,
-        source_id: &'b GlobalId,
+        source_id: GlobalId,
     ) -> Result<
         (
             Lsn,

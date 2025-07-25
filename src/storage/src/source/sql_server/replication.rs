@@ -150,7 +150,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                 }
 
                 let (snapshot_lsn, snapshot_stats, snapshot_streams) = cdc_handle
-                    .snapshot(Some(needs_snapshot), config.worker_id, &config.id)
+                    .snapshot(Some(needs_snapshot), config.worker_id, config.id)
                     .await?;
                 let snapshot_cap = data_cap_set.delayed(&snapshot_lsn);
 
