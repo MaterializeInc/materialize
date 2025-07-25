@@ -3698,6 +3698,18 @@ impl<L> RowSetFinishing<L> {
     }
 }
 
+impl RowSetFinishing<NonNeg<i64>, usize> {
+    /// The number of rows needed from before the finishing to evaluate the finishing:
+    /// offset + limit.
+    ///
+    /// If it returns None, then we need all the rows.
+    pub fn num_rows_needed(&self) -> Option<usize> {
+        self.limit
+            .as_ref()
+            .map(|l| usize::cast_from(u64::from(l.clone())) + self.offset)
+    }
+}
+
 impl RowSetFinishing {
     /// Applies finishing actions to a [`RowCollection`], and reports the total
     /// time it took to run.
