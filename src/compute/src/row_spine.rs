@@ -345,8 +345,6 @@ mod bytes_container {
     use differential_dataflow::trace::implementations::BatchContainer;
     use timely::container::PushInto;
 
-    use mz_ore::region::Region;
-
     /// A slice container with four bytes overhead per slice.
     pub struct BytesContainer {
         /// Total length of `batches`, maintained because recomputation is expensive.
@@ -443,7 +441,7 @@ mod bytes_container {
     /// The backing storage for this batch will not be resized.
     pub struct BytesBatch {
         offsets: crate::row_spine::OffsetOptimized,
-        storage: Region<u8>,
+        storage: Vec<u8>,
         len: usize,
     }
 
@@ -477,7 +475,7 @@ mod bytes_container {
             offsets.push(0);
             Self {
                 offsets,
-                storage: Region::new_auto(byte_cap.next_power_of_two()),
+                storage: Vec::with_capacity(byte_cap.next_power_of_two()),
                 len: 0,
             }
         }

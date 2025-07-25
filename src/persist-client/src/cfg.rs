@@ -101,8 +101,6 @@ pub struct PersistConfig {
     pub build_version: Version,
     /// Hostname of this persist user. Stored in state and used for debugging.
     pub hostname: String,
-    /// Whether this persist instance is running in a "cc" sized cluster.
-    pub is_cc_active: bool,
     /// Memory limit of the process, if known.
     pub announce_memory_limit: Option<usize>,
     /// A clock to use for all leasing and other non-debugging use.
@@ -164,7 +162,6 @@ impl PersistConfig {
 
         Self {
             build_version: build_info.semver_version(),
-            is_cc_active: false,
             announce_memory_limit: None,
             now,
             configs: Arc::new(configs),
@@ -634,10 +631,6 @@ impl BlobKnobs for PersistConfig {
 
     fn read_timeout(&self) -> Duration {
         BLOB_READ_TIMEOUT.get(self)
-    }
-
-    fn is_cc_active(&self) -> bool {
-        self.is_cc_active
     }
 }
 

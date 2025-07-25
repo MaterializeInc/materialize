@@ -26,10 +26,8 @@ use tracing::{info, warn};
 use url::Url;
 use uuid::Uuid;
 
-use mz_dyncfg::ConfigSet;
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
-use mz_ore::lgbytes::MetricsRegion;
 use mz_ore::metrics::MetricsRegistry;
 
 use crate::cfg::BlobKnobs;
@@ -48,7 +46,6 @@ pub struct AzureBlobConfig {
     metrics: S3BlobMetrics,
     client: ContainerClient,
     prefix: String,
-    cfg: Arc<ConfigSet>,
 }
 
 impl AzureBlobConfig {
@@ -66,7 +63,6 @@ impl AzureBlobConfig {
         metrics: S3BlobMetrics,
         url: Url,
         knobs: Box<dyn BlobKnobs>,
-        cfg: Arc<ConfigSet>,
     ) -> Result<Self, Error> {
         let client = if account == EMULATOR_ACCOUNT {
             info!("Connecting to Azure emulator");
@@ -130,7 +126,6 @@ impl AzureBlobConfig {
         Ok(AzureBlobConfig {
             metrics,
             client,
-            cfg,
             prefix,
         })
     }
@@ -159,10 +154,6 @@ impl AzureBlobConfig {
             fn read_timeout(&self) -> Duration {
                 Duration::from_secs(5)
             }
-
-            fn is_cc_active(&self) -> bool {
-                false
-            }
         }
 
         let container_name = match std::env::var(Self::EXTERNAL_TESTS_AZURE_CONTAINER) {
@@ -185,7 +176,6 @@ impl AzureBlobConfig {
             metrics,
             Url::parse(&format!("http://localhost:40111/{}", container_name)).expect("valid url"),
             Box::new(TestBlobKnobs),
-            Arc::new(ConfigSet::default()),
         )?;
 
         Ok(Some(config))
@@ -198,7 +188,6 @@ pub struct AzureBlob {
     metrics: S3BlobMetrics,
     client: ContainerClient,
     prefix: String,
-    _cfg: Arc<ConfigSet>,
 }
 
 impl AzureBlob {
@@ -220,7 +209,6 @@ impl AzureBlob {
             metrics: config.metrics,
             client: config.client,
             prefix: config.prefix,
-            _cfg: config.cfg,
         };
 
         Ok(ret)
@@ -250,10 +238,7 @@ impl Blob for AzureBlob {
             // buffer into lgalloc.
             let mut buffer = match content_length {
                 1.. => {
-                    let region = metrics
-                        .lgbytes
-                        .persist_azure
-                        .new_region(usize::cast_from(content_length));
+                    let region = Vec::with_capacity(usize::cast_from(content_length));
                     PreSizedBuffer::Sized(region)
                 }
                 0 => PreSizedBuffer::Unknown(SegmentedBytes::new()),
@@ -275,7 +260,7 @@ impl Blob for AzureBlob {
                 PreSizedBuffer::Sized(region) => region.into(),
                 // Now that we've collected all of the segments, we know the size of our region.
                 PreSizedBuffer::Unknown(segments) => {
-                    let mut region = metrics.lgbytes.persist_azure.new_region(segments.len());
+                    let mut region = Vec::with_capacity(segments.len());
                     for segment in segments.into_segments() {
                         region.extend_from_slice(segment.as_ref());
                     }
@@ -423,7 +408,7 @@ impl Blob for AzureBlob {
 /// If possible we'll pre-allocate a chunk of memory in lgalloc and write into
 /// that as we read bytes off the network.
 enum PreSizedBuffer {
-    Sized(MetricsRegion<u8>),
+    Sized(Vec<u8>),
     Unknown(SegmentedBytes),
 }
 
@@ -455,7 +440,6 @@ mod tests {
                 let config = AzureBlobConfig {
                     metrics: config.metrics.clone(),
                     client: config.client.clone(),
-                    cfg: Arc::new(ConfigSet::default()),
                     prefix: config.prefix.clone(),
                 };
                 AzureBlob::open(config).await

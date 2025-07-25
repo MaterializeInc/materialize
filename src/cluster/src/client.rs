@@ -195,16 +195,9 @@ pub trait ClusterSpec: Clone + Send + Sync + 'static {
             .unzip();
         let client_rxs: Mutex<Vec<_>> = Mutex::new(client_rxs.into_iter().map(Some).collect());
 
-        let refill = if config.enable_zero_copy_lgalloc {
-            BytesRefill {
-                logic: Arc::new(|size| Box::new(alloc::lgalloc_refill(size))),
-                limit: config.zero_copy_limit,
-            }
-        } else {
-            BytesRefill {
-                logic: Arc::new(|size| Box::new(vec![0; size])),
-                limit: config.zero_copy_limit,
-            }
+        let refill = BytesRefill {
+            logic: Arc::new(|size| Box::new(vec![0; size])),
+            limit: config.zero_copy_limit,
         };
 
         let (builders, other) = if config.enable_zero_copy {
@@ -288,81 +281,5 @@ pub trait ClusterSpec: Clone + Send + Sync + 'static {
             client_txs,
             worker_guards,
         })
-    }
-}
-
-mod alloc {
-    /// A Timely communication refill function that uses lgalloc.
-    ///
-    /// Returns a handle to lgalloc'ed memory if lgalloc can handle
-    /// the request, otherwise we fall back to a heap allocation. In either case, the handle must
-    /// be dropped to free the memory.
-    pub(crate) fn lgalloc_refill(size: usize) -> LgallocHandle {
-        match lgalloc::allocate::<u8>(size) {
-            Ok((pointer, capacity, handle)) => {
-                let handle = Some(handle);
-                LgallocHandle {
-                    handle,
-                    pointer,
-                    capacity,
-                }
-            }
-            Err(_) => {
-                // Allocate memory
-                let mut alloc = vec![0_u8; size];
-                // Ensure that the length matches the capacity.
-                alloc.shrink_to_fit();
-                // Get a pointer to the allocated memory.
-                let pointer = std::ptr::NonNull::new(alloc.as_mut_ptr()).unwrap();
-                // Forget the vector to avoid dropping it. We'll free the memory in `drop`.
-                std::mem::forget(alloc);
-                LgallocHandle {
-                    handle: None,
-                    pointer,
-                    capacity: size,
-                }
-            }
-        }
-    }
-
-    /// A handle to memory allocated by lgalloc. This can either be memory allocated by lgalloc or
-    /// memory allocated by Vec. If the handle is set, it's lgalloc memory. If the handle is None,
-    /// it's a regular heap allocation.
-    pub(crate) struct LgallocHandle {
-        /// Lgalloc handle, set if the memory was allocated by lgalloc.
-        handle: Option<lgalloc::Handle>,
-        /// Pointer to the allocated memory. Always well-aligned, but can be dangling.
-        pointer: std::ptr::NonNull<u8>,
-        /// Capacity of the allocated memory in bytes.
-        capacity: usize,
-    }
-
-    impl std::ops::Deref for LgallocHandle {
-        type Target = [u8];
-        #[inline(always)]
-        fn deref(&self) -> &Self::Target {
-            unsafe { std::slice::from_raw_parts(self.pointer.as_ptr(), self.capacity) }
-        }
-    }
-
-    impl std::ops::DerefMut for LgallocHandle {
-        #[inline(always)]
-        fn deref_mut(&mut self) -> &mut Self::Target {
-            unsafe { std::slice::from_raw_parts_mut(self.pointer.as_ptr(), self.capacity) }
-        }
-    }
-
-    impl Drop for LgallocHandle {
-        fn drop(&mut self) {
-            // If we have a handle, it's lgalloc memory. Otherwise, it's a heap allocation.
-            if let Some(handle) = self.handle.take() {
-                lgalloc::deallocate(handle);
-            } else {
-                unsafe { Vec::from_raw_parts(self.pointer.as_ptr(), 0, self.capacity) };
-            }
-            // Update pointer and capacity such that we don't double-free.
-            self.pointer = std::ptr::NonNull::dangling();
-            self.capacity = 0;
-        }
     }
 }

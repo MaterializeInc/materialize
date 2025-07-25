@@ -46,7 +46,6 @@ mz-ore = { path = "../ore", features = [
     "bytes",
     "id_gen",
     "smallvec",
-    "region",
     "stack",
     "test",
     "tracing",

@@ -20,7 +20,6 @@ differential-dataflow = "0.15.3"
 differential-dogs3 = "0.1.14"
 futures = "0.3.31"
 itertools = "0.14.0"
-lgalloc = "0.6"
 mz-cluster = { path = "../cluster" }
 mz-cluster-client = { path = "../cluster-client" }
 mz-compute-client = { path = "../compute-client" }
@@ -29,7 +28,7 @@ mz-dyncfg = { path = "../dyncfg" }
 mz-dyncfgs = { path = "../dyncfgs" }
 mz-expr = { path = "../expr" }
 mz-metrics = { path = "../metrics" }
-mz-ore = { path = "../ore", features = ["async", "process", "tracing", "columnar", "differential-dataflow", "region"] }
+mz-ore = { path = "../ore", features = ["async", "process", "tracing", "columnar", "differential-dataflow"] }
 mz-persist-client = { path = "../persist-client" }
 mz-persist-types = { path = "../persist-types" }
 mz-repr = { path = "../repr" }

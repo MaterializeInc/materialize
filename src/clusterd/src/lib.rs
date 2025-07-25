@@ -145,6 +145,7 @@ struct Args {
     /// Whether this size represents a modern "cc" size rather than a legacy
     /// T-shirt size.
     #[clap(long)]
+    #[deprecated]
     is_cc: bool,
 
     /// Set core affinity for Timely workers.
@@ -213,7 +214,6 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     mz_metrics::register_metrics_into(&metrics_registry, mz_dyncfgs::all_dyncfgs()).await;
 
     if let Some(memory_limit) = args.announce_memory_limit {
-        mz_compute::lgalloc::start_limiter(memory_limit, &metrics_registry);
         mz_compute::memory_limiter::start_limiter(memory_limit, &metrics_registry);
     } else {
         warn!("no memory limit announced; disabling lgalloc limiter");
@@ -317,7 +317,6 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         .unwrap_or_default();
     let mut persist_cfg =
         PersistConfig::new(&BUILD_INFO, SYSTEM_TIME.clone(), mz_dyncfgs::all_dyncfgs());
-    persist_cfg.is_cc_active = args.is_cc;
     persist_cfg.announce_memory_limit = args.announce_memory_limit;
     // Start with compaction disabled, will get enabled once a cluster receives AllowWrites.
     persist_cfg.disable_compaction();

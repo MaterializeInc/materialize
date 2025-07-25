@@ -140,12 +140,7 @@ impl Metrics {
             move || start.elapsed().as_secs_f64(),
         );
         let s3_blob = S3BlobMetrics::new(registry);
-        let columnar = ColumnarMetrics::new(
-            registry,
-            &s3_blob.lgbytes,
-            Arc::clone(&cfg.configs),
-            cfg.is_cc_active,
-        );
+        let columnar = ColumnarMetrics::new(registry);
         Metrics {
             blob: vecs.blob_metrics(),
             consensus: vecs.consensus_metrics(),
@@ -2540,9 +2535,7 @@ impl SemaphoreMetrics {
         let registry = self.registry.clone();
         let init = async move {
             let total_permits = match cfg.announce_memory_limit {
-                // Non-cc replicas have the old physical flow control mechanism,
-                // so only apply this one on cc replicas.
-                Some(mem) if cfg.is_cc_active => {
+                Some(mem) => {
                     // We can't easily adjust the number of permits later, so
                     // make sure we've synced dyncfg values at least once.
                     info!("fetch semaphore awaiting first dyncfg values");
@@ -2553,7 +2546,7 @@ impl SemaphoreMetrics {
                     info!("fetch_semaphore got first dyncfg values");
                     total_permits
                 }
-                Some(_) | None => Semaphore::MAX_PERMITS,
+                None => Semaphore::MAX_PERMITS,
             };
             MetricsSemaphore::new(&registry, "fetch", total_permits)
         };

@@ -9,11 +9,8 @@
 
 //! Implementation-specific metrics for persist blobs and consensus
 
-use std::sync::Arc;
 use std::time::Instant;
 
-use mz_dyncfg::ConfigSet;
-use mz_ore::lgbytes::{LgBytesMetrics, LgBytesOpMetrics};
 use mz_ore::metric;
 use mz_ore::metrics::{Counter, IntCounter, MetricsRegistry};
 use prometheus::IntCounterVec;
@@ -35,11 +32,6 @@ pub struct S3BlobMetrics {
     pub(crate) delete_object: IntCounter,
     pub(crate) list_objects: IntCounter,
     pub(crate) error_counts: IntCounterVec,
-
-    /// Metrics for all usages of LgBytes. Exposed as public for convenience in
-    /// persist boot, we'll have to pull this out and do the plumbing
-    /// differently if mz gains a non-persist user of LgBytes.
-    pub lgbytes: LgBytesMetrics,
 }
 
 impl S3BlobMetrics {
@@ -82,7 +74,6 @@ impl S3BlobMetrics {
             delete_object: operations.with_label_values(&["delete_object"]),
             list_objects: operations.with_label_values(&["list_objects"]),
             error_counts: errors,
-            lgbytes: LgBytesMetrics::new(registry),
         }
     }
 }
@@ -252,29 +243,16 @@ impl ParquetColumnMetrics {
 /// Metrics for `ColumnarRecords`.
 #[derive(Debug)]
 pub struct ColumnarMetrics {
-    pub(crate) lgbytes_arrow: LgBytesOpMetrics,
     pub(crate) parquet: ParquetMetrics,
     pub(crate) arrow: ArrowMetrics,
-    // TODO: Having these two here isn't quite the right thing to do, but it
-    // saves a LOT of plumbing.
-    pub(crate) cfg: Arc<ConfigSet>,
-    pub(crate) is_cc_active: bool,
 }
 
 impl ColumnarMetrics {
     /// Returns a new [ColumnarMetrics].
-    pub fn new(
-        registry: &MetricsRegistry,
-        lgbytes: &LgBytesMetrics,
-        cfg: Arc<ConfigSet>,
-        is_cc_active: bool,
-    ) -> Self {
+    pub fn new(registry: &MetricsRegistry) -> Self {
         ColumnarMetrics {
             parquet: ParquetMetrics::new(registry),
             arrow: ArrowMetrics::new(registry),
-            lgbytes_arrow: lgbytes.persist_arrow.clone(),
-            cfg,
-            is_cc_active,
         }
     }
 
@@ -293,9 +271,7 @@ impl ColumnarMetrics {
     /// Exposed for testing.
     pub fn disconnected() -> Self {
         let registry = MetricsRegistry::new();
-        let lgbytes = LgBytesMetrics::new(&registry);
-        let cfg = crate::cfg::all_dyn_configs(ConfigSet::default());
 
-        Self::new(&registry, &lgbytes, Arc::new(cfg), false)
+        Self::new(&registry)
     }
 }

@@ -9,14 +9,11 @@
 
 //! Apache Arrow encodings and utils for persist data
 
-use std::ptr::NonNull;
 use std::sync::Arc;
 
 use anyhow::anyhow;
 use arrow::array::{Array, ArrayData, ArrayRef, BinaryArray, Int64Array, RecordBatch, make_array};
-use arrow::buffer::{BooleanBuffer, Buffer, NullBuffer};
-use arrow::datatypes::ToByteSlice;
-use mz_dyncfg::Config;
+use arrow::buffer::{BooleanBuffer, NullBuffer};
 
 use crate::indexed::columnar::{ColumnarRecords, ColumnarRecordsStructuredExt};
 use crate::indexed::encoding::BlobTraceUpdates;
@@ -61,28 +58,12 @@ pub fn encode_arrow_batch(updates: &BlobTraceUpdates) -> RecordBatch {
     RecordBatch::try_from_iter_with_nullable(fields).expect("valid field definitions")
 }
 
-pub(crate) const ENABLE_ARROW_LGALLOC_CC_SIZES: Config<bool> = Config::new(
-    "persist_enable_arrow_lgalloc_cc_sizes",
-    true,
-    "An incident flag to disable copying decoded arrow data into lgalloc on cc sized clusters.",
-);
-
-pub(crate) const ENABLE_ARROW_LGALLOC_NONCC_SIZES: Config<bool> = Config::new(
-    "persist_enable_arrow_lgalloc_noncc_sizes",
-    false,
-    "A feature flag to enable copying decoded arrow data into lgalloc on non-cc sized clusters.",
-);
-
 fn realloc_data(data: ArrayData, nullable: bool, metrics: &ColumnarMetrics) -> ArrayData {
     // NB: Arrow generally aligns buffers very coarsely: see arrow::alloc::ALIGNMENT.
     // However, lgalloc aligns buffers even more coarsely - to the page boundary -
     // so we never expect alignment issues in practice. If that changes, build()
     // will return an error below, as it does for all invalid data.
-    let buffers = data
-        .buffers()
-        .iter()
-        .map(|b| realloc_buffer(b, metrics))
-        .collect();
+    let buffers = data.buffers().iter().cloned().collect();
     let child_data = {
         let field_iter = mz_persist_types::arrow::fields_for_type(data.data_type()).iter();
         let child_iter = data.child_data().iter();
@@ -93,7 +74,7 @@ fn realloc_data(data: ArrayData, nullable: bool, metrics: &ColumnarMetrics) -> A
     };
     let nulls = if nullable {
         data.nulls().map(|n| {
-            let buffer = realloc_buffer(n.buffer(), metrics);
+            let buffer = n.buffer().clone();
             NullBuffer::new(BooleanBuffer::new(buffer, n.offset(), n.len()))
         })
     } else {
@@ -140,31 +121,6 @@ pub fn realloc_any(array: ArrayRef, metrics: &ColumnarMetrics) -> ArrayRef {
     // Top-level arrays are always nullable.
     let data = realloc_data(data, true, metrics);
     make_array(data)
-}
-
-fn realloc_buffer(buffer: &Buffer, metrics: &ColumnarMetrics) -> Buffer {
-    let use_lgbytes_mmap = if metrics.is_cc_active {
-        ENABLE_ARROW_LGALLOC_CC_SIZES.get(&metrics.cfg)
-    } else {
-        ENABLE_ARROW_LGALLOC_NONCC_SIZES.get(&metrics.cfg)
-    };
-    let region = if use_lgbytes_mmap {
-        metrics
-            .lgbytes_arrow
-            .try_mmap_region(buffer.as_slice())
-            .ok()
-    } else {
-        None
-    };
-    let Some(region) = region else {
-        return buffer.clone();
-    };
-    let bytes: &[u8] = region.as_ref().to_byte_slice();
-    let ptr: NonNull<[u8]> = bytes.into();
-    // This is fine: see [[NonNull::as_non_null_ptr]] for an unstable version of this usage.
-    let ptr: NonNull<u8> = ptr.cast();
-    // SAFETY: `ptr` is valid for `len` bytes, and kept alive as long as `region` lives.
-    unsafe { Buffer::from_custom_allocation(ptr, bytes.len(), Arc::new(region)) }
 }
 
 /// Converts an [`arrow`] [RecordBatch] into a [BlobTraceUpdates] and reallocate the backing data.

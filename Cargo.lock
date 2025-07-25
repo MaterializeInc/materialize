@@ -4439,21 +4439,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lgalloc"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ed7f869aaa981ee942e37600f7c5749ae0af82b64c1a6794795ed7267d1b8f1b"
-dependencies = [
- "crossbeam-deque",
- "libc",
- "memmap2 0.5.4",
- "numa_maps",
- "page_size",
- "tempfile",
- "thiserror 1.0.69",
-]
-
-[[package]]
 name = "libc"
 version = "0.2.174"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4708,15 +4693,6 @@ name = "memchr"
 version = "2.7.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32a282da65faaf38286cf3be983213fcf1d2e2a58700e808f83f4ea9a4804bc0"
-
-[[package]]
-name = "memmap2"
-version = "0.5.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d5172b50c23043ff43dd53e51392f36519d9b35a8f3a410d30ece5d1aedd58ae"
-dependencies = [
- "libc",
-]
 
 [[package]]
 name = "memmap2"
@@ -5438,7 +5414,6 @@ dependencies = [
  "crossbeam-channel",
  "differential-dataflow",
  "futures",
- "lgalloc",
  "mz-cluster-client",
  "mz-ore",
  "mz-service",
@@ -5523,7 +5498,6 @@ dependencies = [
  "differential-dogs3",
  "futures",
  "itertools 0.14.0",
- "lgalloc",
  "mz-cluster",
  "mz-cluster-client",
  "mz-compute-client",
@@ -6336,7 +6310,6 @@ dependencies = [
 name = "mz-metrics"
 version = "0.0.0"
 dependencies = [
- "lgalloc",
  "libc",
  "mz-dyncfg",
  "mz-ore",
@@ -6564,7 +6537,6 @@ dependencies = [
  "hyper-tls 0.6.0",
  "hyper-util",
  "itertools 0.14.0",
- "lgalloc",
  "libc",
  "mz-ore",
  "mz-ore-proc",
@@ -7911,7 +7883,6 @@ dependencies = [
  "differential-dataflow",
  "either",
  "futures-util",
- "lgalloc",
  "mz-ore",
  "num-traits",
  "proptest",
@@ -8288,12 +8259,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "numa_maps"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "919af26e03f635d91244e3e3e5a63f0377a78044b39e09a69fdad36514dc919f"
-
-[[package]]
 name = "number_prefix"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8579,16 +8544,6 @@ name = "overload"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b15813163c1d831bf4a13c3610c05c0d03b39feb07f7e09fa234dac9b15aaf39"
-
-[[package]]
-name = "page_size"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "30d5b2194ed13191c1999ae0704b7839fb18384fa22e49b57eeaa97d79ce40da"
-dependencies = [
- "libc",
- "winapi",
-]
 
 [[package]]
 name = "papergrid"
@@ -10820,7 +10775,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e5ba5365997a4e375660bed52f5b42766475d5bc8ceb1bb13fea09c469ea0f49"
 dependencies = [
  "debugid",
- "memmap2 0.9.5",
+ "memmap2",
  "stable_deref_trait",
  "uuid",
 ]
