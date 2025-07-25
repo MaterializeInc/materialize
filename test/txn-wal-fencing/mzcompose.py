@@ -21,7 +21,7 @@ from enum import Enum
 
 from materialize import buildkite
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services.azure import Azurite
+from materialize.mzcompose.services.azurite import Azurite
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Minio
 from materialize.mzcompose.services.postgres import CockroachOrPostgresMetadata

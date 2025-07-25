@@ -25,7 +25,7 @@ from materialize import MZ_ROOT, buildkite
 from materialize.mz_env_util import get_cloud_hostname
 from materialize.mzcompose import ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services.azure import Azurite
+from materialize.mzcompose.services.azurite import Azurite
 from materialize.mzcompose.services.balancerd import Balancerd
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.kafka import Kafka as KafkaService

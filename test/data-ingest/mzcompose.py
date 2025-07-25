@@ -24,7 +24,7 @@ from materialize.data_ingest.workload import *  # noqa: F401 F403
 from materialize.data_ingest.workload import WORKLOADS, execute_workload
 from materialize.mzcompose import get_default_system_parameters
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services.azure import Azurite
+from materialize.mzcompose.services.azurite import Azurite
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized

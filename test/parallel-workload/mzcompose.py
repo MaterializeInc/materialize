@@ -20,7 +20,7 @@ import requests
 
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.service import Service
-from materialize.mzcompose.services.azure import Azurite
+from materialize.mzcompose.services.azurite import Azurite
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized

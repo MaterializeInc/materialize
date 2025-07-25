@@ -27,7 +27,7 @@ from materialize.checks.scenarios_backup_restore import *  # noqa: F401 F403
 from materialize.checks.scenarios_upgrade import *  # noqa: F401 F403
 from materialize.checks.scenarios_zero_downtime import *  # noqa: F401 F403
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
-from materialize.mzcompose.services.azure import Azurite
+from materialize.mzcompose.services.azurite import Azurite
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.debezium import Debezium
 from materialize.mzcompose.services.kafka import Kafka
