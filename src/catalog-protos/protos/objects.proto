@@ -451,10 +451,7 @@ message ClusterConfig {
 message ReplicaConfig {
   message UnmanagedLocation {
     repeated string storagectl_addrs = 1;
-    repeated string storage_addrs = 2;
     repeated string computectl_addrs = 3;
-    repeated string compute_addrs = 4;
-    uint64 workers = 5;
   }
 
   message ManagedLocation {

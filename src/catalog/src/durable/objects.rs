@@ -470,10 +470,7 @@ impl From<mz_controller::clusters::ReplicaConfig> for ReplicaConfig {
 pub enum ReplicaLocation {
     Unmanaged {
         storagectl_addrs: Vec<String>,
-        storage_addrs: Vec<String>,
         computectl_addrs: Vec<String>,
-        compute_addrs: Vec<String>,
-        workers: usize,
     },
     Managed {
         size: String,
@@ -492,17 +489,11 @@ impl From<mz_controller::clusters::ReplicaLocation> for ReplicaLocation {
             mz_controller::clusters::ReplicaLocation::Unmanaged(
                 mz_controller::clusters::UnmanagedReplicaLocation {
                     storagectl_addrs,
-                    storage_addrs,
                     computectl_addrs,
-                    compute_addrs,
-                    workers,
                 },
             ) => Self::Unmanaged {
                 storagectl_addrs,
-                storage_addrs,
                 computectl_addrs,
-                compute_addrs,
-                workers,
             },
             mz_controller::clusters::ReplicaLocation::Managed(
                 mz_controller::clusters::ManagedReplicaLocation {
