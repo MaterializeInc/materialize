@@ -1220,6 +1220,7 @@ pub enum SourceExportStatementDetails {
     SqlServer {
         table: mz_sql_server_util::desc::SqlServerTableDesc,
         capture_instance: Arc<str>,
+        initial_lsn: mz_sql_server_util::cdc::Lsn,
     },
     LoadGenerator {
         output: LoadGeneratorOutput,
@@ -1251,11 +1252,13 @@ impl RustType<ProtoSourceExportStatementDetails> for SourceExportStatementDetail
             SourceExportStatementDetails::SqlServer {
                 table,
                 capture_instance,
+                initial_lsn,
             } => ProtoSourceExportStatementDetails {
                 kind: Some(proto_source_export_statement_details::Kind::SqlServer(
                     sql_server::ProtoSqlServerSourceExportStatementDetails {
                         table: Some(table.into_proto()),
                         capture_instance: capture_instance.to_string(),
+                        initial_lsn: initial_lsn.as_bytes().to_vec(),
                     },
                 )),
             },
@@ -1296,6 +1299,8 @@ impl RustType<ProtoSourceExportStatementDetails> for SourceExportStatementDetail
                     .table
                     .into_rust_if_some("ProtoSqlServerSourceExportStatementDetails::table")?,
                 capture_instance: details.capture_instance.into(),
+                initial_lsn: mz_sql_server_util::cdc::Lsn::try_from(details.initial_lsn.as_slice())
+                    .map_err(|e| TryFromProtoError::InvalidFieldError(e.to_string()))?,
             },
             Some(Kind::Loadgen(details)) => SourceExportStatementDetails::LoadGenerator {
                 output: details

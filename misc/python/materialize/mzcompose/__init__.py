@@ -536,7 +536,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "storage_server_maintenance_interval",
     "storage_sink_progress_search",
     "storage_sink_ensure_topic_config",
-    "sql_server_snapshot_max_lsn_wait",
+    "sql_server_max_lsn_wait",
     "sql_server_snapshot_progress_report_interval",
     "sql_server_cdc_poll_interval",
     "sql_server_cdc_cleanup_change_table",

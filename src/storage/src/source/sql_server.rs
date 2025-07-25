@@ -56,6 +56,8 @@ struct SourceOutputInfo {
     resume_upper: Antichain<Lsn>,
     /// An index to split the timely stream.
     partition_index: u64,
+    /// The basis for the resumption LSN when snapshotting.
+    initial_lsn: Lsn,
 }
 
 #[derive(Debug, Clone, thiserror::Error)]
@@ -151,6 +153,7 @@ impl SourceRender for SqlServerSource {
                 decoder: Arc::new(decoder),
                 resume_upper: Antichain::from_iter(resume_upper),
                 partition_index: u64::cast_from(idx),
+                initial_lsn: details.initial_lsn,
             };
             source_outputs.insert(*id, output_info);
         }
