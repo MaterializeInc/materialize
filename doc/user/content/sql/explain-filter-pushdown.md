@@ -125,4 +125,5 @@ SELECT count(*) FROM bids WHERE bid_time + '1 hour' > mz_now();
 
 The privileges required to execute this statement are:
 
-- `USAGE` privileges on the schemas that all relations in the explainee are contained in.
+{{< include-md
+file="shared-content/sql-command-privileges/explain-filter-pushdown.md" >}}

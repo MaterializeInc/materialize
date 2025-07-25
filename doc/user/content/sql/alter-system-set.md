@@ -25,8 +25,10 @@ _value_                 | The value to assign to the configuration parameter.
 
 ## Privileges
 
-[_Superuser_ privileges](/manage/access-control/#role-based-access-control-rbac) are required to execute
-this statement.
+The privileges required to execute this statement are:
+
+{{< include-md
+file="shared-content/sql-command-privileges/alter-system-set.md" >}}
 
 ## Related pages
 

@@ -33,7 +33,9 @@ SHOW CREATE MATERIALIZED VIEW winning_bids;
 
 The privileges required to execute this statement are:
 
-- `USAGE` privileges on the schema containing the materialized view.
+{{< include-md
+file="shared-content/sql-command-privileges/show-create-materialized-view.md"
+>}}
 
 ## Related pages
 

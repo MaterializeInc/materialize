@@ -38,7 +38,7 @@ DROP OWNED BY joe, george CASCADE;
 
 The privileges required to execute this statement are:
 
-- Role membership in `role_name`.
+{{< include-md file="shared-content/sql-command-privileges/drop-owned.md" >}}
 
 ## Related pages
 

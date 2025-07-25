@@ -48,8 +48,7 @@ DROP VIEW
 
 The privileges required to execute this statement are:
 
-- Ownership of the dropped view.
-- `USAGE` privileges on the containing schema.
+{{< include-md file="shared-content/sql-command-privileges/drop-view.md" >}}
 
 ## Related pages
 

@@ -53,7 +53,8 @@ my_db
 
 The privileges required to execute this statement are:
 
-- `CREATEDB` privileges on the system.
+{{< include-md file="shared-content/sql-command-privileges/create-database.md"
+>}}
 
 ## Related pages
 

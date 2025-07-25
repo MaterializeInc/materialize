@@ -1,0 +1,2 @@
+- Ownership of the dropped cluster replica.
+- `USAGE` privileges on the containing cluster.

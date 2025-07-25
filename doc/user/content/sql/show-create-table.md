@@ -37,7 +37,8 @@ SHOW CREATE TABLE t;
 
 The privileges required to execute this statement are:
 
-- `USAGE` privileges on the schema containing the table.
+{{< include-md file="shared-content/sql-command-privileges/show-create-table.md"
+>}}
 
 ## Related pages
 

@@ -87,10 +87,7 @@ ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT SELECT ON TABLES TO managers;
 
 The privileges required to execute this statement are:
 
-- Role membership in `role_name`.
-- `USAGE` privileges on the containing database if `database_name` is specified.
-- `USAGE` privileges on the containing schema if `schema_name` is specified.
-- _superuser_ status if the _target_role_ is `PUBLIC` or **ALL ROLES** is specified.
+{{< include-md file="shared-content/sql-command-privileges/alter-default-privileges.md" >}}
 
 ## Useful views
 
