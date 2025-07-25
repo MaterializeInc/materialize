@@ -3454,7 +3454,7 @@ impl HirScalarExpr {
     /// - a window function call
     fn simplify_to_literal(self) -> Option<Row> {
         let mut expr = self.lower_uncorrelated().ok()?;
-        expr.reduce(&[]);
+        expr.reduce(&[], false);
         match expr {
             mz_expr::MirScalarExpr::Literal(Ok(row), _) => Some(row),
             _ => None,
@@ -3477,7 +3477,7 @@ impl HirScalarExpr {
         let mut expr = self.lower_uncorrelated().map_err(|err| {
             PlanError::ConstantExpressionSimplificationFailed(err.to_string_with_causes())
         })?;
-        expr.reduce(&[]);
+        expr.reduce(&[], false);
         match expr {
             mz_expr::MirScalarExpr::Literal(Ok(row), _) => Ok(row),
             mz_expr::MirScalarExpr::Literal(Err(err), _) => Err(

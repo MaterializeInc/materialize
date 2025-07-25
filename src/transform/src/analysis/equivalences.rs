@@ -848,7 +848,7 @@ impl EquivalenceClasses {
                 self.remap.reduce_child(expr);
                 if let Some(columns) = columns {
                     let orig_expr = expr.clone();
-                    expr.reduce(columns);
+                    expr.reduce(columns, false);
                     if expr.contains_err() {
                         // Rollback to the original expression if it contains an error.
                         *expr = orig_expr;
