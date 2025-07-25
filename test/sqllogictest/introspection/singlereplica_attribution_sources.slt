@@ -603,6 +603,7 @@ WITH
     summary_memory AS
     (
         SELECT
+            mlm.global_id AS global_id,
             mlm.lir_id AS lir_id,
             sum(mas.size) AS total_memory,
             sum(mas.records) AS total_records,
@@ -629,7 +630,7 @@ WITH
                                 AND
                             mas.operator_id < mlm.operator_id_end
                         )
-        GROUP BY mlm.lir_id
+        GROUP BY mlm.global_id, mlm.lir_id
     )
 SELECT
     repeat(' ', nesting * 2) || operator AS operator,
@@ -637,7 +638,7 @@ SELECT
     sm.total_records AS total_records
 FROM
     mz_introspection.mz_lir_mapping AS mlm
-        LEFT JOIN summary_memory AS sm USING(lir_id)
+        LEFT JOIN summary_memory AS sm USING(global_id, lir_id)
         JOIN
             mz_introspection.mz_mappable_objects AS mo
             ON (mlm.global_id = mo.global_id)
@@ -652,6 +653,7 @@ WITH
     summary_cpu AS
     (
         SELECT
+            mlm.global_id AS global_id,
             mlm.lir_id AS lir_id,
             sum(mse.elapsed_ns) AS total_ns,
             CASE
@@ -672,14 +674,14 @@ WITH
                                 AND
                             mse.id < mlm.operator_id_end
                         )
-        GROUP BY mlm.lir_id
+        GROUP BY mlm.global_id, mlm.lir_id
     )
 SELECT
     repeat(' ', nesting * 2) || operator AS operator,
     sc.total_ns / 1000 * '1 microsecond'::interval AS total_elapsed
 FROM
     mz_introspection.mz_lir_mapping AS mlm
-        LEFT JOIN summary_cpu AS sc USING(lir_id)
+        LEFT JOIN summary_cpu AS sc USING(global_id, lir_id)
         JOIN
             mz_introspection.mz_mappable_objects AS mo
             ON (mlm.global_id = mo.global_id)
@@ -694,6 +696,7 @@ WITH
     summary_memory AS
     (
         SELECT
+            mlm.global_id AS global_id,
             mlm.lir_id AS lir_id,
             sum(mas.size) AS total_memory,
             sum(mas.records) AS total_records,
@@ -720,11 +723,12 @@ WITH
                                 AND
                             mas.operator_id < mlm.operator_id_end
                         )
-        GROUP BY mlm.lir_id
+        GROUP BY mlm.global_id, mlm.lir_id
     ),
     summary_cpu AS
     (
         SELECT
+            mlm.global_id AS global_id,
             mlm.lir_id AS lir_id,
             sum(mse.elapsed_ns) AS total_ns,
             CASE
@@ -745,7 +749,7 @@ WITH
                                 AND
                             mse.id < mlm.operator_id_end
                         )
-        GROUP BY mlm.lir_id
+        GROUP BY mlm.global_id, mlm.lir_id
     )
 SELECT
     repeat(' ', nesting * 2) || operator AS operator,
@@ -754,8 +758,8 @@ SELECT
     sc.total_ns / 1000 * '1 microsecond'::interval AS total_elapsed
 FROM
     mz_introspection.mz_lir_mapping AS mlm
-        LEFT JOIN summary_memory AS sm USING(lir_id)
-        LEFT JOIN summary_cpu AS sc USING(lir_id)
+        LEFT JOIN summary_memory AS sm USING(global_id, lir_id)
+        LEFT JOIN summary_cpu AS sc USING(global_id, lir_id)
         JOIN
             mz_introspection.mz_mappable_objects AS mo
             ON (mlm.global_id = mo.global_id)
@@ -770,6 +774,7 @@ WITH
     summary_memory AS
     (
         SELECT
+            mlm.global_id AS global_id,
             mlm.lir_id AS lir_id,
             sum(mas.size) AS total_memory,
             sum(mas.records) AS total_records,
@@ -796,11 +801,12 @@ WITH
                                 AND
                             mas.operator_id < mlm.operator_id_end
                         )
-        GROUP BY mlm.lir_id
+        GROUP BY mlm.global_id, mlm.lir_id
     ),
     per_worker_memory AS
     (
         SELECT
+            mlm.global_id AS global_id,
             mlm.lir_id AS lir_id,
             mas.worker_id AS worker_id,
             sum(mas.size) AS worker_memory,
@@ -815,11 +821,12 @@ WITH
                                 AND
                             mas.operator_id < mlm.operator_id_end
                         )
-        GROUP BY mlm.lir_id, mas.worker_id
+        GROUP BY mlm.global_id, mlm.lir_id, mas.worker_id
     ),
     summary_cpu AS
     (
         SELECT
+            mlm.global_id AS global_id,
             mlm.lir_id AS lir_id,
             sum(mse.elapsed_ns) AS total_ns,
             CASE
@@ -840,11 +847,12 @@ WITH
                                 AND
                             mse.id < mlm.operator_id_end
                         )
-        GROUP BY mlm.lir_id
+        GROUP BY mlm.global_id, mlm.lir_id
     ),
     per_worker_cpu AS
     (
         SELECT
+            mlm.global_id AS global_id,
             mlm.lir_id AS lir_id,
             mse.worker_id AS worker_id,
             sum(mse.elapsed_ns) AS worker_ns
@@ -858,7 +866,7 @@ WITH
                                 AND
                             mse.id < mlm.operator_id_end
                         )
-        GROUP BY mlm.lir_id, mse.worker_id
+        GROUP BY mlm.global_id, mlm.lir_id, mse.worker_id
     )
 SELECT
     repeat(' ', nesting * 2) || operator AS operator,
@@ -892,10 +900,10 @@ SELECT
     sc.total_ns / 1000 * '1 microsecond'::interval AS total_elapsed
 FROM
     mz_introspection.mz_lir_mapping AS mlm
-        LEFT JOIN summary_memory AS sm USING(lir_id)
-        LEFT JOIN per_worker_memory AS pwm USING(lir_id)
-        LEFT JOIN summary_cpu AS sc USING(lir_id)
-        LEFT JOIN per_worker_cpu AS pwc USING(lir_id)
+        LEFT JOIN summary_memory AS sm USING(global_id, lir_id)
+        LEFT JOIN per_worker_memory AS pwm USING(global_id, lir_id)
+        LEFT JOIN summary_cpu AS sc USING(global_id, lir_id)
+        LEFT JOIN per_worker_cpu AS pwc USING(global_id, lir_id)
         JOIN
             mz_introspection.mz_mappable_objects AS mo
             ON (mlm.global_id = mo.global_id)
@@ -910,6 +918,7 @@ WITH
     summary_cpu AS
     (
         SELECT
+            mlm.global_id AS global_id,
             mlm.lir_id AS lir_id,
             sum(mse.elapsed_ns) AS total_ns,
             CASE
@@ -930,11 +939,12 @@ WITH
                                 AND
                             mse.id < mlm.operator_id_end
                         )
-        GROUP BY mlm.lir_id
+        GROUP BY mlm.global_id, mlm.lir_id
     ),
     per_worker_cpu AS
     (
         SELECT
+            mlm.global_id AS global_id,
             mlm.lir_id AS lir_id,
             mse.worker_id AS worker_id,
             sum(mse.elapsed_ns) AS worker_ns
@@ -948,11 +958,12 @@ WITH
                                 AND
                             mse.id < mlm.operator_id_end
                         )
-        GROUP BY mlm.lir_id, mse.worker_id
+        GROUP BY mlm.global_id, mlm.lir_id, mse.worker_id
     ),
     summary_memory AS
     (
         SELECT
+            mlm.global_id AS global_id,
             mlm.lir_id AS lir_id,
             sum(mas.size) AS total_memory,
             sum(mas.records) AS total_records,
@@ -979,11 +990,12 @@ WITH
                                 AND
                             mas.operator_id < mlm.operator_id_end
                         )
-        GROUP BY mlm.lir_id
+        GROUP BY mlm.global_id, mlm.lir_id
     ),
     per_worker_memory AS
     (
         SELECT
+            mlm.global_id AS global_id,
             mlm.lir_id AS lir_id,
             mas.worker_id AS worker_id,
             sum(mas.size) AS worker_memory,
@@ -998,7 +1010,7 @@ WITH
                                 AND
                             mas.operator_id < mlm.operator_id_end
                         )
-        GROUP BY mlm.lir_id, mas.worker_id
+        GROUP BY mlm.global_id, mlm.lir_id, mas.worker_id
     )
 SELECT
     repeat(' ', nesting * 2) || operator AS operator,
@@ -1032,10 +1044,10 @@ SELECT
     sm.total_records AS total_records
 FROM
     mz_introspection.mz_lir_mapping AS mlm
-        LEFT JOIN summary_cpu AS sc USING(lir_id)
-        LEFT JOIN per_worker_cpu AS pwc USING(lir_id)
-        LEFT JOIN summary_memory AS sm USING(lir_id)
-        LEFT JOIN per_worker_memory AS pwm USING(lir_id)
+        LEFT JOIN summary_cpu AS sc USING(global_id, lir_id)
+        LEFT JOIN per_worker_cpu AS pwc USING(global_id, lir_id)
+        LEFT JOIN summary_memory AS sm USING(global_id, lir_id)
+        LEFT JOIN per_worker_memory AS pwm USING(global_id, lir_id)
         JOIN
             mz_introspection.mz_mappable_objects AS mo
             ON (mlm.global_id = mo.global_id)
@@ -1090,6 +1102,7 @@ WITH
     summary_cpu AS
     (
         SELECT
+            mlm.global_id AS global_id,
             mlm.lir_id AS lir_id,
             sum(mse.elapsed_ns) AS total_ns,
             CASE
@@ -1110,11 +1123,12 @@ WITH
                                 AND
                             mse.id < mlm.operator_id_end
                         )
-        GROUP BY mlm.lir_id
+        GROUP BY mlm.global_id, mlm.lir_id
     ),
     per_worker_cpu AS
     (
         SELECT
+            mlm.global_id AS global_id,
             mlm.lir_id AS lir_id,
             mse.worker_id AS worker_id,
             sum(mse.elapsed_ns) AS worker_ns
@@ -1128,11 +1142,12 @@ WITH
                                 AND
                             mse.id < mlm.operator_id_end
                         )
-        GROUP BY mlm.lir_id, mse.worker_id
+        GROUP BY mlm.global_id, mlm.lir_id, mse.worker_id
     ),
     summary_memory AS
     (
         SELECT
+            mlm.global_id AS global_id,
             mlm.lir_id AS lir_id,
             sum(mas.size) AS total_memory,
             sum(mas.records) AS total_records,
@@ -1159,11 +1174,12 @@ WITH
                                 AND
                             mas.operator_id < mlm.operator_id_end
                         )
-        GROUP BY mlm.lir_id
+        GROUP BY mlm.global_id, mlm.lir_id
     ),
     per_worker_memory AS
     (
         SELECT
+            mlm.global_id AS global_id,
             mlm.lir_id AS lir_id,
             mas.worker_id AS worker_id,
             sum(mas.size) AS worker_memory,
@@ -1178,7 +1194,7 @@ WITH
                                 AND
                             mas.operator_id < mlm.operator_id_end
                         )
-        GROUP BY mlm.lir_id, mas.worker_id
+        GROUP BY mlm.global_id, mlm.lir_id, mas.worker_id
     )
 SELECT
     repeat(' ', nesting * 2) || operator AS operator,
@@ -1212,10 +1228,10 @@ SELECT
     sm.total_records AS total_records
 FROM
     mz_introspection.mz_lir_mapping AS mlm
-        LEFT JOIN summary_cpu AS sc USING(lir_id)
-        LEFT JOIN per_worker_cpu AS pwc USING(lir_id)
-        LEFT JOIN summary_memory AS sm USING(lir_id)
-        LEFT JOIN per_worker_memory AS pwm USING(lir_id)
+        LEFT JOIN summary_cpu AS sc USING(global_id, lir_id)
+        LEFT JOIN per_worker_cpu AS pwc USING(global_id, lir_id)
+        LEFT JOIN summary_memory AS sm USING(global_id, lir_id)
+        LEFT JOIN per_worker_memory AS pwm USING(global_id, lir_id)
         JOIN
             mz_introspection.mz_mappable_objects AS mo
             ON (mlm.global_id = mo.global_id)
