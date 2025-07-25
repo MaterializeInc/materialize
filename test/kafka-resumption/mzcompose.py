@@ -32,7 +32,7 @@ SERVICES = [
     SchemaRegistry(),
     Redpanda(),
     Mz(app_password=""),
-    Materialized(default_replication_factor=2),
+    Materialized(default_replication_factor=2, support_external_clusterd=True),
     Clusterd(),
     Toxiproxy(),
     Testdrive(default_timeout="120s"),
@@ -107,6 +107,7 @@ def workflow_sink_kafka_restart(c: Composition, parser: WorkflowArgumentParser) 
         Materialized(
             environment_extra=["FAILPOINTS=kafka_sink_commit_transaction=sleep(5000)"],
             default_replication_factor=2,
+            support_external_clusterd=True,
         )
     ):
         c.up(*(["materialized"] + get_kafka_services(args.redpanda)))

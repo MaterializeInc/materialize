@@ -59,6 +59,7 @@ def create_mzs(
             metadata_store="cockroach",
             additional_system_parameter_defaults=additional_system_parameter_defaults,
             default_replication_factor=2,
+            support_external_clusterd=True,
         )
         for mz_name in ["materialized", "materialized2"]
     ] + [

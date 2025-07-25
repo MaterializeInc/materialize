@@ -189,6 +189,7 @@ def run_workload(c: Composition, workload: Workload, args: argparse.Namespace) -
                 external_blob_store=True,
                 blob_store_is_azure=args.azurite,
                 sanity_restart=False,
+                support_external_clusterd=True,
             )
             for mz_name in mzs
         ]
