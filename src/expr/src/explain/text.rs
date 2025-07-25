@@ -255,7 +255,22 @@ impl<'a, M: HumanizerMode> HumanizedExpr<'a, MapFilterProject, M> {
         f: &mut fmt::Formatter<'_>,
         ctx: &mut PlanRenderingContext<'_, T>,
     ) -> fmt::Result {
-        // skip projection
+        if self.expr.projection.len() != self.expr.input_arity
+            || self
+                .expr
+                .projection
+                .iter()
+                .enumerate()
+                .any(|(i, p)| i != *p)
+        {
+            if self.expr.projection.len() == 0 {
+                writeln!(f, "{}Project: ()", ctx.indent)?;
+            } else {
+                let outputs = Indices(&self.expr.projection);
+                writeln!(f, "{}Project: {outputs}", ctx.indent)?;
+            }
+        }
+
         // render `filter` field iff predicates are present
         if !self.expr.predicates.is_empty() {
             let predicates = self.expr.predicates.iter().map(|(_, p)| self.child(p));
