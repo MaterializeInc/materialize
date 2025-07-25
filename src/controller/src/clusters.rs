@@ -224,14 +224,16 @@ impl ReplicaLocation {
         }
     }
 
-    pub fn workers(&self) -> usize {
-        let workers_per_process = match self {
+    /// Returns the number of workers specified by this replica location.
+    ///
+    /// `None` for unmanaged replicas, whose worker count we don't know.
+    pub fn workers(&self) -> Option<usize> {
+        match self {
             ReplicaLocation::Managed(ManagedReplicaLocation { allocation, .. }) => {
-                allocation.workers
+                Some(allocation.workers * self.num_processes())
             }
-            ReplicaLocation::Unmanaged(UnmanagedReplicaLocation { workers, .. }) => *workers,
-        };
-        workers_per_process * self.num_processes()
+            ReplicaLocation::Unmanaged(_) => None,
+        }
     }
 
     /// A pending replica is created as part of an alter cluster of an managed
@@ -267,17 +269,9 @@ pub struct UnmanagedReplicaLocation {
     /// The network addresses of the storagectl endpoints for each process in
     /// the replica.
     pub storagectl_addrs: Vec<String>,
-    /// The network addresses of the storage (Timely) endpoints for
-    /// each process in the replica.
-    pub storage_addrs: Vec<String>,
     /// The network addresses of the computectl endpoints for each process in
     /// the replica.
     pub computectl_addrs: Vec<String>,
-    /// The network addresses of the compute (Timely) endpoints for
-    /// each process in the replica.
-    pub compute_addrs: Vec<String>,
-    /// The workers per process in the replica.
-    pub workers: usize,
 }
 
 /// Information about availability zone constraints for replicas.
@@ -416,26 +410,17 @@ where
         match config.location {
             ReplicaLocation::Unmanaged(UnmanagedReplicaLocation {
                 storagectl_addrs,
-                storage_addrs,
                 computectl_addrs,
-                compute_addrs,
-                workers,
             }) => {
                 compute_location = ClusterReplicaLocation {
                     ctl_addrs: computectl_addrs,
-                    dataflow_addrs: compute_addrs,
-                    workers,
                 };
                 storage_location = ClusterReplicaLocation {
                     ctl_addrs: storagectl_addrs,
-                    dataflow_addrs: storage_addrs,
-                    // Storage and compute on the same replica have linked sizes.
-                    workers,
                 };
                 metrics_task = None;
             }
             ReplicaLocation::Managed(m) => {
-                let workers = m.allocation.workers;
                 let (service, metrics_task_join_handle) = self.provision_replica(
                     cluster_id,
                     replica_id,
@@ -448,13 +433,9 @@ where
                 )?;
                 storage_location = ClusterReplicaLocation {
                     ctl_addrs: service.addresses("storagectl"),
-                    dataflow_addrs: service.addresses("storage"),
-                    workers,
                 };
                 compute_location = ClusterReplicaLocation {
                     ctl_addrs: service.addresses("computectl"),
-                    dataflow_addrs: service.addresses("compute"),
-                    workers,
                 };
                 metrics_task = Some(metrics_task_join_handle);
             }
