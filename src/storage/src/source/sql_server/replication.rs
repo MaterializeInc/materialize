@@ -117,9 +117,10 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                     .push(output.partition_index);
 
                 if *output.resume_upper == [Lsn::minimum()] {
-                    export_ids_to_snapshot.entry(Arc::clone(&output.capture_instance))
-                        .and_modify(|export_ids| export_ids.push(output.partition_index))
-                        .or_insert_with(|| vec![output.partition_index]);
+                    export_ids_to_snapshot
+                        .entry(Arc::clone(&output.capture_instance))
+                        .or_default()
+                        .push((output.partition_index, output.initial_lsn));
                 }
             }
 
@@ -183,7 +184,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                             TransientError::ProgrammingError(msg)
                         })?;
 
-                    for partition_idx in partition_indexes {
+                    for (partition_idx, _) in partition_indexes {
                         let decoder = decoder_map.get(partition_idx).expect("decoder for output");
                         // Try to decode a row, returning a SourceError if it fails.
                         let message = match decoder.decode(&sql_server_row, &mut mz_row, &arena) {
@@ -221,12 +222,39 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                 snapshot_lsn
             };
 
-            // Start replicating from the LSN __after__ we took the snapshot.
-            let replication_start_lsn = snapshot_lsn.increment();
+            // Rewinds need to keep track of 2 timestamps to ensure that
+            // all replicas emit the same set of updates for any given timestamp.
+            // These are the initial_lsn and snapshot_lsn, where initial_lsn must be
+            // less than or equal to snapshot_lsn.
+            //
+            // - events at an LSN less than or equal to initial_lsn are ignored
+            // - events at an LSN greater than initial_lsn and less than or equal to
+            //   snapshot_lsn are retracted at Lsn::minimum(), and emitted at the commit_lsn
+            // - events at an LSN greater than snapshot_lsn are emitted at the commit_lsn
+            //
+            // where the commit_lsn is the upstream LSN that the event was committed at
+            //
+            // If initial_lsn == snapshot_lsn, all CDC events at LSNs up to and including the
+            // snapshot_lsn are ignored, and no rewinds are issued.
             let mut rewinds: BTreeMap<_, _> = export_ids_to_snapshot
                 .values()
-                .flat_map(|export_ids| export_ids.iter().map(|idx| (*idx, replication_start_lsn)))
-                .collect();
+                .flat_map(|export_ids|
+                    export_ids
+                        .iter()
+                        .map(|(idx, initial_lsn)| (*idx, (*initial_lsn, snapshot_lsn)))
+                ).collect();
+
+            // For now, we assert that initial_lsn captured during purification is less
+            // than or equal to snapshot_lsn. If that was not true, it would mean that
+            // we observed a SQL server DB that appeared to go back in time.
+            // TODO (maz): not ideal to do this after snapshot, move this into
+            // CdcStream::snapshot after https://github.com/MaterializeInc/materialize/pull/32979 is merged.
+            for (initial_lsn, snapshot_lsn) in rewinds.values() {
+                assert!(
+                    initial_lsn <= snapshot_lsn,
+                    "initial_lsn={initial_lsn} snapshot_lsn={snapshot_lsn}"
+                );
+            }
 
             tracing::debug!("rewinds to process: {rewinds:?}");
 
@@ -237,7 +265,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
             let resume_lsn = outputs
                 .values()
                 .flat_map(|src_info| {
-                    // initial_lsn is the max lsn observed seen, but the resume lsn
+                    // initial_lsn is the max lsn observed, but the resume lsn
                     // is the next lsn that should be read.  After a snapshot, initial_lsn
                     // has been read, so replication will start at the next available lsn.
                     let start_lsn = src_info.initial_lsn.increment();
@@ -291,7 +319,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                         tracing::debug!(?config.id, ?next_lsn, "got a closed lsn");
                         // cannot downgrade capability until rewinds have been processed,
                         // we must be able to produce data at the minimum offset.
-                        rewinds.retain(|_, rewind_lsn| next_lsn < *rewind_lsn);
+                        rewinds.retain(|_, (_, snapshot_lsn)| next_lsn <= *snapshot_lsn);
                         if rewinds.is_empty() {
                             if log_rewinds_complete {
                                 tracing::debug!("rewinds complete");
@@ -345,6 +373,14 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
 
                     for partition_idx in partition_indexes {
                         let decoder = decoder_map.get(partition_idx).unwrap();
+
+                        let rewind = rewinds.get(partition_idx);
+                        // We must continue here to avoid decoding and emitting. We don't have to compare with
+                        // snapshot_lsn as we are guaranteed that initial_lsn <= snapshot_lsn.
+                        if rewind.is_some_and(|(initial_lsn, _)| commit_lsn <= *initial_lsn) {
+                            continue;
+                        }
+
                         // Try to decode a row, returning a SourceError if it fails.
                         let message = match decoder.decode(&sql_server_row, &mut mz_row, &arena) {
                             Ok(()) => Ok(SourceMessage {
@@ -363,7 +399,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                             }
                         };
 
-                        if rewinds.get(partition_idx).is_some_and(|rewind_lsn| commit_lsn < *rewind_lsn){
+                        if rewind.is_some_and(|(_, snapshot_lsn)| commit_lsn <= *snapshot_lsn) {
                             data_output
                                 .give_fueled(
                                     &data_cap_set[0],
