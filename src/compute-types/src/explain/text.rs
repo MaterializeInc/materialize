@@ -119,7 +119,7 @@ impl Plan {
                         }
                     }
                     GetPlan::Arrangement(key, Some(val), mfp) => {
-                        if !mfp.expressions.is_empty() || !mfp.predicates.is_empty() {
+                        if !mfp.is_identity() {
                             writeln!(f, "{}→Fused Map/Filter/Project", ctx.indent)?;
                             ctx.indent += 1;
                             mode.expr(mfp, None).fmt_default_text(f, ctx)?;
@@ -134,7 +134,7 @@ impl Plan {
                         writeln!(f, "Value: {val}")?;
                     }
                     GetPlan::Arrangement(key, None, mfp) => {
-                        if !mfp.expressions.is_empty() || !mfp.predicates.is_empty() {
+                        if !mfp.is_identity() {
                             writeln!(f, "{}→Fused Map/Filter/Project", ctx.indent)?;
                             ctx.indent += 1;
                             mode.expr(mfp, None).fmt_default_text(f, ctx)?;
@@ -147,7 +147,7 @@ impl Plan {
                         writeln!(f, "{}Key: ({key})", ctx.indent)?;
                     }
                     GetPlan::Collection(mfp) => {
-                        if !mfp.expressions.is_empty() || !mfp.predicates.is_empty() {
+                        if !mfp.is_identity() {
                             writeln!(f, "{}→Fused Map/Filter/Project", ctx.indent)?;
                             ctx.indent += 1;
                             mode.expr(mfp, None).fmt_default_text(f, ctx)?;
@@ -217,7 +217,7 @@ impl Plan {
                 mode.expr(mfp, None).fmt_default_text(f, ctx)?;
 
                 // one more nesting level if we showed anything for the MFP
-                if !mfp.expressions.is_empty() || !mfp.predicates.is_empty() {
+                if !mfp.is_identity() {
                     ctx.indent += 1;
                 }
                 input.fmt_text(f, ctx)?;
@@ -366,15 +366,11 @@ impl Plan {
 
                 ctx.indented(|ctx| {
                     let kvp = key_val_plan.key_plan.deref();
-                    if !kvp.expressions.is_empty() || !kvp.predicates.is_empty() {
-                        writeln!(
-                            f,
-                            "{}Aggregate Key Map/Filter/Project{annotations}",
-                            ctx.indent
-                        )?;
+                    if !kvp.is_identity() {
+                        writeln!(f, "{}Key:", ctx.indent)?;
                         ctx.indented(|ctx| {
-                            let key_plan = mode.expr(key_val_plan.key_plan.deref(), None);
-                            key_plan.fmt_text(f, ctx)
+                            let key_plan = mode.expr(kvp, None);
+                            key_plan.fmt_default_text(f, ctx)
                         })?;
                     }
 
