@@ -28,7 +28,6 @@ static PROM_METRICS_DIR: &str = "prom_metrics";
 static PROM_METRICS_ENDPOINT: &str = "metrics";
 static ENVD_HEAP_PROFILE_ENDPOINT: &str = "prof/heap";
 static CLUSTERD_HEAP_PROFILE_ENDPOINT: &str = "heap";
-static INTERNAL_HOST_ADDRESS: &str = "127.0.0.1";
 static INTERNAL_HTTP_PORT: i32 = 6878;
 
 /// A struct that handles downloading and saving profile data from HTTP endpoints.
@@ -115,6 +114,7 @@ impl<'n> InternalHttpDumpClient<'n> {
         })?;
         let output_path = output_dir.join(format!("{}.memprof.pprof.gz", service_name));
 
+        // TODO: Modify such that we can pass in the credentials if they exist.
         self.dump_request_to_file(
             relative_url,
             {
@@ -147,6 +147,7 @@ impl<'n> InternalHttpDumpClient<'n> {
         })?;
 
         let output_path = output_dir.join(format!("{}.metrics.txt", service_name));
+        // TODO: Modify such that we can pass in the credentials if they exist.
         self.dump_request_to_file(
             relative_url,
             {
@@ -229,32 +230,18 @@ pub async fn dump_self_managed_http_resources(
     )
     .await
     .with_context(|| "Failed to find environmentd service")?;
-    // TODO (debug_tool3): Allow user to override temporary local address for http port forwarding
-    let prom_metrics_endpoint = format!(
-        "{}:{}/{}",
-        INTERNAL_HOST_ADDRESS, INTERNAL_HTTP_PORT, PROM_METRICS_ENDPOINT
-    );
-
-    let clusterd_heap_profile_endpoint = format!(
-        "{}:{}/{}",
-        INTERNAL_HOST_ADDRESS, INTERNAL_HTTP_PORT, CLUSTERD_HEAP_PROFILE_ENDPOINT
-    );
-
-    let envd_heap_profile_endpoint = format!(
-        "{}:{}/{}",
-        INTERNAL_HOST_ADDRESS, INTERNAL_HTTP_PORT, ENVD_HEAP_PROFILE_ENDPOINT
-    );
 
     let services = cluster_services
         .iter()
-        .map(|service| (service, &clusterd_heap_profile_endpoint))
+        .map(|service| (service, &CLUSTERD_HEAP_PROFILE_ENDPOINT))
         .chain(std::iter::once((
             &environmentd_service,
-            &envd_heap_profile_endpoint,
+            &ENVD_HEAP_PROFILE_ENDPOINT,
         )));
 
     // Scrape each service
     for (service_info, profiling_endpoint) in services {
+        // TODO: Modify such that we can decide on the internal_http_port vs. the http_port based on if credentials exist
         let maybe_internal_http_port = service_info
             .service_ports
             .iter()
@@ -266,11 +253,9 @@ pub async fn dump_self_managed_http_resources(
                 namespace: service_info.namespace.clone(),
                 service_name: service_info.service_name.clone(),
                 target_port: internal_http_port.port,
-                local_address: INTERNAL_HOST_ADDRESS.to_string(),
-                local_port: INTERNAL_HTTP_PORT,
             };
 
-            let _internal_http_connection =
+            let internal_http_connection =
                 port_forwarder.spawn_port_forward().await.with_context(|| {
                     format!(
                         "Failed to spawn port forwarder for service {}",
@@ -281,12 +266,19 @@ pub async fn dump_self_managed_http_resources(
             let dump_task = InternalHttpDumpClient::new(context, &http_client);
 
             if context.dump_heap_profiles {
+                let profiling_endpoint = format!(
+                    "{}:{}/{}",
+                    internal_http_connection.local_address,
+                    internal_http_connection.local_port,
+                    profiling_endpoint
+                );
+
                 info!(
                     "Dumping heap profile for service {}",
                     service_info.service_name
                 );
                 dump_task
-                    .dump_heap_profile(profiling_endpoint, &service_info.service_name)
+                    .dump_heap_profile(&profiling_endpoint, &service_info.service_name)
                     .await
                     .with_context(|| {
                         format!(
@@ -297,6 +289,12 @@ pub async fn dump_self_managed_http_resources(
             }
 
             if context.dump_prometheus_metrics {
+                let prom_metrics_endpoint = format!(
+                    "{}:{}/{}",
+                    internal_http_connection.local_address,
+                    internal_http_connection.local_port,
+                    PROM_METRICS_ENDPOINT
+                );
                 dump_task
                     .dump_prometheus_metrics(&prom_metrics_endpoint, &service_info.service_name)
                     .await
