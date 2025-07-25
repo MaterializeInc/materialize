@@ -14,11 +14,11 @@
 //! 2. Converting / peeling off part of the enclosing relation expression into
 //!    another relation expression that can represent the same concept.
 
-mod flatmap_to_map;
+mod flat_map_elimination;
 mod projection_extraction;
 mod topk_elision;
 
-pub use flatmap_to_map::FlatMapElimination;
+pub use flat_map_elimination::FlatMapElimination;
 pub use projection_extraction::ProjectionExtraction;
 pub use topk_elision::TopKElision;
 
