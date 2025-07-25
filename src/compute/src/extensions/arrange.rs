@@ -7,7 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::rc::{Rc, Weak};
+use std::collections::BTreeMap;
+use std::rc::Rc;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
@@ -267,33 +268,34 @@ where
             ));
 
             // Weak references to batches, so we can observe batches outside the trace.
-            let mut batches = Vec::new();
+            let mut batches = BTreeMap::new();
 
             move |input, output| {
                 while let Some((time, data)) = input.next() {
-                    batches.extend(data.iter().map(Rc::downgrade));
+                    batches.extend(
+                        data.iter()
+                            .map(|batch| (Rc::as_ptr(batch), Rc::downgrade(batch))),
+                    );
                     output.session(&time).give_container(data);
                 }
                 let Some(trace) = trace.upgrade() else {
                     return;
                 };
 
-                trace
-                    .borrow()
-                    .trace
-                    .map_batches(|batch| batches.push(Rc::downgrade(batch)));
-
-                // Make sure we don't double-count batches: sort by pointer, deduplicate,
-                // and retain only those that are still referenced.
-                batches.sort_unstable_by_key(Weak::as_ptr);
-                batches.dedup_by_key(|batch| batch.as_ptr());
-                batches.retain(|batch| batch.strong_count() > 0);
+                trace.borrow().trace.map_batches(|batch| {
+                    batches.insert(Rc::as_ptr(batch), Rc::downgrade(batch));
+                });
 
                 let (mut size, mut capacity, mut allocations) = (0, 0, 0);
-                for batch in batches.iter().flat_map(Weak::upgrade) {
-                    let (sz, c, a) = logic(&batch);
-                    (size += sz, capacity += c, allocations += a);
-                }
+                batches.retain(|_, weak| {
+                    if let Some(batch) = weak.upgrade() {
+                        let (sz, c, a) = logic(&batch);
+                        (size += sz, capacity += c, allocations += a);
+                        true
+                    } else {
+                        false
+                    }
+                });
 
                 let size = size.try_into().expect("must fit");
                 if size != old_size {
