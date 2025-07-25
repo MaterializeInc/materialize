@@ -1416,8 +1416,8 @@ pub struct Index {
     pub global_id: GlobalId,
     /// The [`GlobalId`] this Index is on.
     pub on: GlobalId,
-    /// Keys of the index.
-    pub keys: Arc<[MirScalarExpr]>,
+    /// The key of the index.
+    pub key: Arc<[MirScalarExpr]>,
     /// If created in the `TEMPORARY` schema, the [`ConnectionId`] for that session.
     pub conn_id: Option<ConnectionId>,
     /// Other catalog objects referenced by this index, e.g. the object we're indexing.
@@ -3272,7 +3272,7 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
     }
 
     fn index_details(&self) -> Option<(&[MirScalarExpr], GlobalId)> {
-        if let CatalogItem::Index(Index { keys, on, .. }) = self.item() {
+        if let CatalogItem::Index(Index { key: keys, on, .. }) = self.item() {
             Some((keys, *on))
         } else {
             None
