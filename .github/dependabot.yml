@@ -101,6 +101,20 @@ updates:
       update-types:
         - minor
         - patch
+- package-ecosystem: docker
+  directory: /test
+  schedule:
+    interval: weekly
+    day: sunday
+    time: "22:00"
+  open-pull-requests-limit: 50
+  labels: [A-dependencies]
+  groups:
+    simple:
+      applies-to: version-updates
+      update-types:
+        - minor
+        - patch
 - package-ecosystem: pip
   directory: /ci/builder
   schedule:

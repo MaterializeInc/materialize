@@ -37,7 +37,7 @@ class SshBastionHost(Service):
         super().__init__(
             name=name,
             config={
-                "image": "quay.io/panubo/sshd:1.7.1",
+                "mzbuild": "ssh-bastion-host",
                 "init": True,
                 "ports": ["22"],
                 "environment": [
