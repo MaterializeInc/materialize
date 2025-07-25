@@ -225,7 +225,7 @@ true true
 > CREATE DEFAULT INDEX ii_empty ON t3
 
 > SELECT records, size < 16 * 1024, allocations < 512 FROM mz_introspection.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_empty'
-0 true true
+null true true
 
 # Tests that arrangement sizes are approximate
 
