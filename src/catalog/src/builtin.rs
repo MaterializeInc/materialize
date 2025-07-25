@@ -8951,7 +8951,7 @@ SELECT
     mdod.dataflow_id AS id,
     mdod.dataflow_name AS name,
     SUM(mas.records)::int8 AS records,
-    SUM(mas.batches::int8) AS batches,
+    SUM(mas.batches)::int8 AS batches,
     SUM(mas.size)::int8 AS size,
     SUM(mas.capacity)::int8 AS capacity,
     SUM(mas.allocations)::int8 AS allocations
@@ -8978,7 +8978,7 @@ pub static MZ_EXPECTED_GROUP_SIZE_ADVICE: LazyLock<BuiltinView> = LazyLock::new(
             ScalarType::Numeric {
                 max_scale: Some(NumericMaxScale::ZERO),
             }
-            .nullable(false),
+            .nullable(true),
         )
         .with_column("hint", ScalarType::Float64.nullable(false))
         .finish(),
