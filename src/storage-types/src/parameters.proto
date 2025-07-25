@@ -36,7 +36,6 @@ message ProtoStorageParameters {
   mz_rocksdb_types.config.ProtoRocksDbTuningParameters upsert_rocksdb_tuning_config = 14;
   bool finalize_shards = 15;
   mz_tracing.params.ProtoTracingParameters tracing = 16;
-  ProtoUpsertAutoSpillConfig upsert_auto_spill_config = 17;
   ProtoStorageMaxInflightBytesConfig storage_dataflow_max_inflight_bytes_config = 18;
   mz_service.params.ProtoGrpcClientParameters grpc_client = 19;
   uint64 shrink_upsert_unused_buffers_by_ratio = 20;
@@ -75,11 +74,6 @@ message ProtoSshTimeoutConfig {
   mz_proto.ProtoDuration check_interval = 1;
   mz_proto.ProtoDuration connect_timeout = 2;
   mz_proto.ProtoDuration keepalives_idle = 3;
-}
-
-message ProtoUpsertAutoSpillConfig {
-  bool allow_spilling_to_disk = 1;
-  uint64 spill_to_disk_threshold_bytes = 2;
 }
 
 message ProtoStorageMaxInflightBytesConfig {

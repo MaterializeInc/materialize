@@ -15,7 +15,6 @@
 #![allow(clippy::disallowed_types)]
 
 use std::collections::HashMap;
-use std::collections::hash_map::Drain;
 
 use itertools::Itertools;
 
@@ -29,21 +28,6 @@ use super::types::{
 pub struct InMemoryHashMap<T, O> {
     state: HashMap<UpsertKey, StateValue<T, O>>,
     total_size: i64,
-}
-
-impl<T, O> InMemoryHashMap<T, O> {
-    /// Drain the map, returning the last total size as well.
-    pub fn drain(&mut self) -> (i64, Drain<'_, UpsertKey, StateValue<T, O>>) {
-        let last_size = self.total_size;
-        self.total_size = 0;
-
-        (last_size, self.state.drain())
-    }
-
-    /// Get the current size of the map. Note that after `drain`-ing, this is 0.
-    pub fn current_size(&self) -> i64 {
-        self.total_size
-    }
 }
 
 impl<T, O> Default for InMemoryHashMap<T, O> {
