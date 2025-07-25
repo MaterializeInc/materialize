@@ -149,8 +149,9 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                     emit_stats(&stats_cap[0], 0, 0);
                 }
 
-                let (snapshot_lsn, snapshot_stats, snapshot_streams) =
-                    cdc_handle.snapshot(Some(needs_snapshot)).await?;
+                let (snapshot_lsn, snapshot_stats, snapshot_streams) = cdc_handle
+                    .snapshot(Some(needs_snapshot), config.worker_id, config.id)
+                    .await?;
                 let snapshot_cap = data_cap_set.delayed(&snapshot_lsn);
 
                 // As we stream rows for the snapshot we'll track the total we've seen.
@@ -204,7 +205,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                     data_output
                         .give_fueled(
                             &snapshot_cap,
-                            ((*partition_idx, message), snapshot_lsn, Diff::ONE),
+                            ((*partition_idx, message), Lsn::minimum(), Diff::ONE),
                         )
                         .await;
                 }

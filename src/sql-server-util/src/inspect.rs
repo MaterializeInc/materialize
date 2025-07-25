@@ -16,6 +16,7 @@ use smallvec::SmallVec;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
+use tiberius::numeric::Numeric;
 
 use crate::cdc::{Lsn, RowFilterOption};
 use crate::desc::{SqlServerColumnRaw, SqlServerTableRaw};
@@ -57,6 +58,28 @@ pub async fn increment_lsn(client: &mut Client, lsn: Lsn) -> Result<Lsn, SqlServ
 
     mz_ore::soft_assert_eq_or_log!(result.len(), 1);
     parse_lsn(&result[..1])
+}
+
+/// Parse an [`Lsn`] in Decimal(25,0) format of the provided [`tiberius::Row`].
+///
+/// Returns an error if the provided slice doesn't have exactly one row.
+pub(crate) fn parse_numeric_lsn(row: &[tiberius::Row]) -> Result<Lsn, SqlServerError> {
+    match row {
+        [r] => {
+            let numeric_lsn = r
+                .try_get::<Numeric, _>(0)?
+                .ok_or_else(|| SqlServerError::NullLsn)?;
+            let lsn = Lsn::try_from(numeric_lsn).map_err(|msg| SqlServerError::InvalidData {
+                column_name: "lsn".to_string(),
+                error: msg,
+            })?;
+            Ok(lsn)
+        }
+        other => Err(SqlServerError::InvalidData {
+            column_name: "lsn".to_string(),
+            error: format!("expected 1 column, got {other:?}"),
+        }),
+    }
 }
 
 /// Parse an [`Lsn`] from the first column of the provided [`tiberius::Row`].
