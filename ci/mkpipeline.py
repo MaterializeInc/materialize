@@ -119,7 +119,7 @@ so it is executed.""",
     bazel = pipeline.get("env", {}).get("CI_BAZEL_BUILD", 0) == 1
     bazel_lto = (
         pipeline.get("env", {}).get("CI_BAZEL_LTO", 0) == 1
-        or ui.env_is_truthy("BUILDKITE_TAG")
+        or bool(os.environ["BUILDKITE_TAG"])
         or ui.env_is_truthy("CI_RELEASE_LTO_BUILD")
     )
 
@@ -134,6 +134,7 @@ so it is executed.""",
     def get_hashes(arch: Arch) -> tuple[str, bool]:
         repo = mzbuild.Repository(
             Path("."),
+            profile=mzbuild.Profile.RELEASE if bazel_lto else mzbuild.Profile.OPTIMIZED,
             arch=arch,
             coverage=args.coverage,
             sanitizer=args.sanitizer,
@@ -725,6 +726,7 @@ def trim_tests_pipeline(
     print("--- Resolving dependencies")
     repo = mzbuild.Repository(
         Path("."),
+        profile=mzbuild.Profile.RELEASE if bazel_lto else mzbuild.Profile.OPTIMIZED,
         coverage=coverage,
         sanitizer=sanitizer,
         bazel=bazel,
@@ -889,6 +891,7 @@ def add_cargo_test_dependency(
     repo = mzbuild.Repository(
         Path("."),
         arch=Arch.X86_64,
+        profile=mzbuild.Profile.RELEASE if bazel_lto else mzbuild.Profile.OPTIMIZED,
         coverage=coverage,
         sanitizer=sanitizer,
         bazel=True,
@@ -918,7 +921,7 @@ def remove_dependencies_on_prs(
         return
     if (
         not ui.env_is_truthy("BUILDKITE_PULL_REQUEST")
-        or ui.env_is_truthy("BUILDKITE_TAG")
+        or os.environ["BUILDKITE_TAG"]
         or ui.env_is_truthy("CI_RELEASE_LTO_BUILD")
     ):
         return
@@ -940,9 +943,7 @@ def remove_dependencies_on_prs(
 def move_build_to_bazel_lto(pipeline: Any, pipeline_name: str) -> None:
     if pipeline_name != "test":
         return
-    if not ui.env_is_truthy("BUILDKITE_TAG") and not ui.env_is_truthy(
-        "CI_RELEASE_LTO_BUILD"
-    ):
+    if not os.environ["BUILDKITE_TAG"] and not ui.env_is_truthy("CI_RELEASE_LTO_BUILD"):
         return
     pipeline.setdefault("env", {})["CI_BAZEL_BUILD"] = 1
     pipeline["env"]["CI_BAZEL_LTO"] = 1
