@@ -47,7 +47,7 @@ In Materialize, you have both:
 Each user/service account in Materialize is associated with an organization
 role:
 
-{{< yaml-table data="access-controls/organization_roles" >}}
+{{< yaml-table data="rbac/organization_roles" >}}
 
 The default level of access to the database is determined by the
 organization-level role a user/service account is assigned.

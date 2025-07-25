@@ -1,0 +1,345 @@
+columns:
+  - column: Command
+  - column: Privileges
+rows:
+  - Command: "[`ALTER CLUSTER`](/sql/alter-cluster)"
+    Privileges: |
+      {{< include-md
+      file="shared-content/sql-command-privileges/alter-cluster.md"
+      >}}
+  - Command: "[`ALTER CONNECTION`](/sql/alter-connection)"
+    Privileges: |
+      {{< include-md
+      file="shared-content/sql-command-privileges/alter-connection.md"
+      >}}
+  - Command: "[`ALTER DEFAULT PRIVILEGES`](/sql/alter-default-privileges)"
+    Privileges: |
+      {{< include-md
+      file="shared-content/sql-command-privileges/alter-default-privileges.md"
+      >}}
+  - Command: "[`ALTER INDEX`](/sql/alter-index)"
+    Privileges: |
+      {{< include-md
+      file="shared-content/sql-command-privileges/alter-index.md"
+      >}}
+  - Command: "[`ALTER MATERIALIZED VIEW`](/sql/alter-materialized-view)"
+    Privileges: |
+      {{< include-md
+      file="shared-content/sql-command-privileges/alter-materialized-view.md"
+      >}}
+  - Command: "[`ALTER NETWORK POLICY`](/sql/alter-network-policy)"
+    Privileges: |
+      {{< include-md
+      file="shared-content/sql-command-privileges/alter-network-policy.md"
+      >}}
+
+  - Command: "[`ALTER ROLE`](/sql/alter-role)"
+    Privileges: |
+      {{< include-md
+      file="shared-content/sql-command-privileges/alter-role.md"
+      >}}
+  - Command: "[`ALTER ... OWNER`](/sql/alter-owner)"
+    Privileges: |
+      {{< include-md
+      file="shared-content/sql-command-privileges/alter-owner.md"
+      >}}
+
+  - Command: "[`ALTER ... RENAME`](/sql/alter-rename)"
+    Privileges: |
+      {{< include-md
+      file="shared-content/sql-command-privileges/alter-rename.md"
+      >}}
+  - Command: "[`ALTER ... SWAP`](/sql/alter-swap)"
+    Privileges: |
+      {{< include-md
+      file="shared-content/sql-command-privileges/alter-swap.md"
+      >}}
+  - Command: "[`ALTER SECRET`](/sql/alter-secret)"
+    Privileges: |
+      {{< include-md
+      file="shared-content/sql-command-privileges/alter-secret.md"
+      >}}
+  - Command: "[`ALTER SINK`](/sql/alter-sink)"
+    Privileges: |
+      {{< include-md
+      file="shared-content/sql-command-privileges/alter-sink.md"
+      >}}
+  - Command: "[`ALTER SOURCE`](/sql/alter-source)"
+    Privileges: |
+      {{< include-md
+      file="shared-content/sql-command-privileges/alter-source.md"
+      >}}
+  - Command: "[`ALTER SYSTEM RESET`](/sql/alter-system-reset)"
+    Privileges: |
+      {{< include-md
+      file="shared-content/sql-command-privileges/alter-system-reset.md"
+      >}}
+  - Command: "[`ALTER SYSTEM SET`](/sql/alter-system-set)"
+    Privileges: |
+      {{< include-md
+      file="shared-content/sql-command-privileges/alter-system-set.md"
+      >}}
+
+
+  - Command: "[`COMMENT ON`](/sql/comment-on)"
+    Privileges: |
+      {{< include-md
+      file="shared-content/sql-command-privileges/comment-on.md"
+      >}}
+
+  - Command: "[`COPY FROM`](/sql/copy-from)"
+    Privileges: |
+
+      {{< include-md file="shared-content/sql-command-privileges/copy-from.md"
+      >}}
+
+  - Command: "[`COPY TO`](/sql/copy-to)"
+    Privileges: |
+
+      {{< include-md file="shared-content/sql-command-privileges/copy-to.md" >}}
+
+  - Command: "[`CREATE CLUSTER`](/sql/create-cluster)"
+    Privileges: |
+      {{< include-md
+      file="shared-content/sql-command-privileges/create-cluster.md" >}}
+
+  - Command: "[`CREATE CLUSTER REPLICA`](/sql/create-cluster-replica)"
+    Privileges: |
+      {{< include-md
+      file="shared-content/sql-command-privileges/create-cluster-replica.md" >}}
+
+  - Command: "[`CREATE CONNECTION`](/sql/create-connection)"
+    Privileges: |
+      {{< include-md
+      file="shared-content/sql-command-privileges/create-connection.md" >}}
+
+  - Command: "[`CREATE DATABASE`](/sql/create-database)"
+    Privileges: |
+      {{< include-md
+      file="shared-content/sql-command-privileges/create-database.md" >}}
+
+  - Command: "[`CREATE INDEX`](/sql/create-index)"
+    Privileges: |
+      {{< include-md
+      file="shared-content/sql-command-privileges/create-index.md" >}}
+
+  - Command: "[`CREATE MATERIALIZED VIEW`](/sql/create-materialized-view)"
+    Privileges: |
+      {{< include-md
+      file="shared-content/sql-command-privileges/create-materialized-view.md"
+      >}}
+
+  - Command: "[`CREATE NETWORK POLICY`](/sql/create-network-policy/)"
+    Privileges: |
+      {{< include-md
+      file="shared-content/sql-command-privileges/create-network-policy.md" >}}
+
+  - Command: "[`CREATE ROLE`](/sql/create-role)"
+    Privileges: |
+      {{< include-md
+      file="shared-content/sql-command-privileges/create-role.md" >}}
+
+  - Command: "[`CREATE SCHEMA`](/sql/create-schema)"
+    Privileges: |
+      {{< include-md
+      file="shared-content/sql-command-privileges/create-schema.md" >}}
+
+  - Command: "[`CREATE SECRET`](/sql/create-secret)"
+    Privileges: |
+
+      {{< include-md
+      file="shared-content/sql-command-privileges/create-secret.md" >}}
+
+  - Command: "[`CREATE SINK`](/sql/create-sink)"
+    Privileges: |
+      {{< include-md file="shared-content/sql-command-privileges/create-sink.md"
+      >}}
+
+  - Command: "[`CREATE SOURCE`](/sql/create-source)"
+    Privileges: |
+      {{< include-md
+      file="shared-content/sql-command-privileges/create-source.md" >}}
+
+  - Command: "[`CREATE TABLE`](/sql/create-table)"
+    Privileges: |
+
+      {{< include-md
+      file="shared-content/sql-command-privileges/create-table.md" >}}
+
+  - Command: "[`CREATE TYPE`](/sql/create-type)"
+    Privileges: |
+      {{< include-md file="shared-content/sql-command-privileges/create-type.md"
+      >}}
+
+  - Command: "[`CREATE VIEW`](/sql/create-view)"
+    Privileges: |
+      {{< include-md file="shared-content/sql-command-privileges/create-view.md"
+      >}}
+
+  - Command: "[`DELETE`](/sql/delete)"
+    Privileges: |
+      {{< include-md file="shared-content/sql-command-privileges/delete.md" >}}
+
+  - Command: "[`DROP CLUSTER REPLICA`](/sql/drop-cluster-replica)"
+    Privileges: |
+      {{< include-md file="shared-content/sql-command-privileges/drop-cluster-replica.md" >}}
+
+  - Command: "[`DROP CLUSTER`](/sql/drop-cluster)"
+    Privileges: |
+      {{< include-md file="shared-content/sql-command-privileges/drop-cluster.md" >}}
+
+  - Command: "[`DROP CONNECTION`](/sql/drop-connection)"
+    Privileges: |
+      {{< include-md file="shared-content/sql-command-privileges/drop-connection.md" >}}
+
+  - Command: "[`DROP DATABASE`](/sql/drop-database)"
+    Privileges: |
+      {{< include-md file="shared-content/sql-command-privileges/drop-database.md" >}}
+
+  - Command: "[`DROP INDEX`](/sql/drop-index)"
+    Privileges: |
+      {{< include-md file="shared-content/sql-command-privileges/drop-index.md" >}}
+
+  - Command: "[`DROP MATERIALIZED VIEW`](/sql/drop-materialized-view)"
+    Privileges: |
+      {{< include-md file="shared-content/sql-command-privileges/drop-materialized-view.md" >}}
+
+  - Command: "[`DROP NETWORK POLICY`](/sql/drop-network-policy)"
+    Privileges: |
+      {{< include-md file="shared-content/sql-command-privileges/drop-network-policy.md" >}}
+
+  - Command: "[`DROP OWNED`](/sql/drop-owned)"
+    Privileges: |
+      {{< include-md file="shared-content/sql-command-privileges/drop-owned.md" >}}
+
+  - Command: "[`DROP ROLE`](/sql/drop-role)"
+    Privileges: |
+      {{< include-md file="shared-content/sql-command-privileges/drop-role.md" >}}
+
+  - Command: "[`DROP SCHEMA`](/sql/drop-schema)"
+    Privileges: |
+      {{< include-md file="shared-content/sql-command-privileges/drop-schema.md" >}}
+
+  - Command: "[`DROP SECRET`](/sql/drop-secret)"
+    Privileges: |
+      {{< include-md file="shared-content/sql-command-privileges/drop-secret.md" >}}
+
+  - Command: "[`DROP SINK`](/sql/drop-sink)"
+    Privileges: |
+      {{< include-md file="shared-content/sql-command-privileges/drop-sink.md" >}}
+
+  - Command: "[`DROP SOURCE`](/sql/drop-source)"
+    Privileges: |
+      {{< include-md file="shared-content/sql-command-privileges/drop-source.md" >}}
+
+  - Command: "[`DROP TABLE`](/sql/drop-table)"
+    Privileges: |
+      {{< include-md file="shared-content/sql-command-privileges/drop-table.md" >}}
+
+  - Command: "[`DROP TYPE`](/sql/drop-type)"
+    Privileges: |
+      {{< include-md file="shared-content/sql-command-privileges/drop-type.md" >}}
+
+  - Command: "[`DROP USER`](/sql/drop-user)"
+    Privileges: |
+      {{< include-md file="shared-content/sql-command-privileges/drop-user.md" >}}
+
+  - Command: "[`DROP VIEW`](/sql/drop-view)"
+    Privileges: |
+      {{< include-md file="shared-content/sql-command-privileges/drop-view.md" >}}
+
+  - Command: "[`EXPLAIN ANALYZE`](/sql/explain-analyze)"
+    Privileges: |
+      {{< include-md file="shared-content/sql-command-privileges/explain-analyze.md" >}}
+
+  - Command: "[`EXPLAIN FILTER PUSHDOWN`](/sql/explain-filter-pushdown)"
+    Privileges: |
+      {{< include-md file="shared-content/sql-command-privileges/explain-filter-pushdown.md" >}}
+
+  - Command: "[`EXPLAIN PLAN`](/sql/explain-plan)"
+    Privileges: |
+      {{< include-md file="shared-content/sql-command-privileges/explain-plan.md" >}}
+
+  - Command: "[`EXPLAIN SCHEMA`](/sql/explain-schema)"
+    Privileges: |
+      {{< include-md file="shared-content/sql-command-privileges/explain-schema.md" >}}
+
+  - Command: "[`EXPLAIN TIMESTAMP`](/sql/explain-timestamp)"
+    Privileges: |
+      {{< include-md file="shared-content/sql-command-privileges/explain-timestamp.md" >}}
+
+  - Command: "[`GRANT PRIVILEGE`](/sql/grant-privilege)"
+    Privileges: |
+      {{< include-md file="shared-content/sql-command-privileges/grant-privilege.md" >}}
+
+  - Command: "[`GRANT ROLE`](/sql/grant-role)"
+    Privileges: |
+      {{< include-md file="shared-content/sql-command-privileges/grant-role.md" >}}
+
+  - Command: "[`INSERT`](/sql/insert)"
+    Privileges: |
+      {{< include-md file="shared-content/sql-command-privileges/insert.md" >}}
+
+  - Command: "[`REASSIGN OWNED`](/sql/reassign-owned)"
+    Privileges: |
+      {{< include-md file="shared-content/sql-command-privileges/reassign-owned.md" >}}
+
+  - Command: "[`REVOKE PRIVILEGE`](/sql/revoke-privilege)"
+    Privileges: |
+      {{< include-md file="shared-content/sql-command-privileges/revoke-privilege.md" >}}
+
+  - Command: "[`REVOKE ROLE`](/sql/revoke-role)"
+    Privileges: |
+      {{< include-md file="shared-content/sql-command-privileges/revoke-role.md" >}}
+
+  - Command: "[`SELECT`](/sql/select)"
+    Privileges: |
+      {{< include-md file="shared-content/sql-command-privileges/select.md" >}}
+
+  - Command: "[`SHOW COLUMNS`](/sql/show-columns)"
+    Privileges: |
+      {{< include-md file="shared-content/sql-command-privileges/show-columns.md" >}}
+
+  - Command: "[`SHOW CREATE CLUSTER`](/sql/show-create-cluster)"
+    Privileges: |
+      {{< include-md file="shared-content/sql-command-privileges/show-create-cluster.md" >}}
+
+  - Command: "[`SHOW CREATE CONNECTION`](/sql/show-create-connection)"
+    Privileges: |
+      {{< include-md file="shared-content/sql-command-privileges/show-create-connection.md" >}}
+
+  - Command: "[`SHOW CREATE INDEX`](/sql/show-create-index)"
+    Privileges: |
+      {{< include-md file="shared-content/sql-command-privileges/show-create-index.md" >}}
+
+  - Command: "[`SHOW CREATE MATERIALIZED VIEW`](/sql/show-create-materialized-view)"
+    Privileges: |
+      {{< include-md file="shared-content/sql-command-privileges/show-create-materialized-view.md" >}}
+
+  - Command: "[`SHOW CREATE SINK`](/sql/show-create-sink)"
+    Privileges: |
+      {{< include-md file="shared-content/sql-command-privileges/show-create-sink.md" >}}
+
+  - Command: "[`SHOW CREATE SOURCE`](/sql/show-create-source)"
+    Privileges: |
+      {{< include-md file="shared-content/sql-command-privileges/show-create-source.md" >}}
+
+  - Command: "[`SHOW CREATE TABLE`](/sql/show-create-table)"
+    Privileges: |
+      {{< include-md file="shared-content/sql-command-privileges/show-create-table.md" >}}
+
+  - Command: "[`SHOW CREATE VIEW`](/sql/show-create-view)"
+    Privileges: |
+      {{< include-md file="shared-content/sql-command-privileges/show-create-view.md" >}}
+
+  - Command: "[`SUBSCRIBE`](/sql/subscribe)"
+    Privileges: |
+      {{< include-md file="shared-content/sql-command-privileges/subscribe.md" >}}
+
+  - Command: "[`UPDATE`](/sql/update)"
+    Privileges: |
+      {{< include-md file="shared-content/sql-command-privileges/update.md" >}}
+
+  - Command: "[`VALIDATE CONNECTION`](/sql/validate-connection)"
+    Privileges: |
+      {{< include-md file="shared-content/sql-command-privileges/validate-connection.md" >}}

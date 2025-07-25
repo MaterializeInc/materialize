@@ -18,7 +18,7 @@ resources.
 Each user/service account in Materialize is associated with an organization
 role:
 
-{{< yaml-table data="access-controls/organization_roles" >}}
+{{< yaml-table data="rbac/organization_roles" >}}
 
 When creating a new account for your Materialize organization, you assign
 an organization role to the account. As such, before creating a new account,

@@ -1,0 +1,4 @@
+- Ownership of affected objects.
+- `USAGE` privileges on the containing database if the affected object is a schema.
+- `USAGE` privileges on the containing schema if the affected object is namespaced by a schema.
+- _superuser_ status if the privilege is a system privilege.

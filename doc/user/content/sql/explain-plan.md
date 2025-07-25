@@ -530,4 +530,4 @@ The [`EXPLAIN ANALYZE`](/sql/explain-analyze/) statement will let you debug memo
 
 The privileges required to execute this statement are:
 
-- `USAGE` privileges on the schemas that all relations in the explainee are contained in.
+{{< include-md file="shared-content/sql-command-privileges/explain-plan.md" >}}

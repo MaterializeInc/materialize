@@ -23,9 +23,12 @@ catalog table.
 
 ## Privileges
 
-To comment on an object, the current role must be the owner of that object. Roles themselves do not
-have owners, so to comment on a role object you must have the `CREATEROLE` privilege. For more
-information on ownership and privileges, see [Role-based access control](/manage/access-control/rbac).
+The privileges required to execute this statement are:
+
+{{< include-md file="shared-content/sql-command-privileges/comment-on.md" >}}
+
+For more information on ownership and privileges, see [Role-based access
+control](/manage/access-control/rbac).
 
 ## Examples
 

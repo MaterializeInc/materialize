@@ -25,7 +25,8 @@ _name_        | The network policy you want to drop. For available network polic
 
 The privileges required to execute this statement are:
 
-- `CREATENETWORKPOLICY` privileges on the system.
+{{< include-md
+file="shared-content/sql-command-privileges/drop-network-policy.md" >}}
 
 ## Related pages
 

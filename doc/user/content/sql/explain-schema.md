@@ -81,4 +81,5 @@ EXPLAIN VALUE SCHEMA FOR
 
 The privileges required to execute this statement are:
 
-- `USAGE` privileges on the schemas that all items in the query are contained in.
+{{< include-md file="shared-content/sql-command-privileges/explain-schema.md"
+>}}

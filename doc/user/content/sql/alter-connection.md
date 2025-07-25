@@ -81,7 +81,7 @@ be unable to authenticate with the bastion server.
 
 The privileges required to execute this statement are:
 
--   Ownership of the connection.
+{{< include-md file="shared-content/sql-command-privileges/alter-connection.md" >}}
 
 ## Related pages
 

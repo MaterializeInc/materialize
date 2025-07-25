@@ -91,10 +91,8 @@ REVOKE CREATEDB ON SYSTEM FROM joe;
 
 The privileges required to execute this statement are:
 
-- Ownership of affected objects.
-- `USAGE` privileges on the containing database if the affected object is a schema.
-- `USAGE` privileges on the containing schema if the affected object is namespaced by a schema.
-- _superuser_ status if the privilege is a system privilege.
+{{< include-md file="shared-content/sql-command-privileges/revoke-privilege.md"
+>}}
 
 ## Useful views
 

@@ -58,7 +58,7 @@ DROP CLUSTER auction_house CASCADE;
 
 The privileges required to execute this statement are:
 
-- Ownership of the dropped cluster.
+{{< include-md file="shared-content/sql-command-privileges/drop-cluster.md" >}}
 
 ## Related pages
 

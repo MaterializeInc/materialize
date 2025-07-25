@@ -4,7 +4,7 @@ description: "Add users, create roles, and assign privileges in Materialize with
 menu:
   main:
     parent: access-control
-    weight: 25
+    weight: 30
 ---
 
 This tutorial walks you through managing roles in Materialize with [Terraform](https://www.terraform.io/). By the end of this tutorial you will:

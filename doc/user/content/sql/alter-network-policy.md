@@ -59,7 +59,8 @@ that could lock them out of the system.
 
 The privileges required to execute this statement are:
 
-- Ownership of the network policy.
+{{< include-md
+file="shared-content/sql-command-privileges/alter-network-policy.md" >}}
 
 ## Examples
 

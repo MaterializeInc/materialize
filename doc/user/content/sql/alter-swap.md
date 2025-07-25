@@ -38,7 +38,7 @@ SELECT * FROM blue.tags;
 
 The privileges required to execute this statement are:
 
-- Ownership of both objects being swapped.
+{{< include-md file="shared-content/sql-command-privileges/alter-swap.md" >}}
 
 ## See also
 

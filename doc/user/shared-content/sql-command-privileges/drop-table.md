@@ -1,0 +1,2 @@
+- Ownership of the dropped table.
+- `USAGE` privileges on the containing schema.
