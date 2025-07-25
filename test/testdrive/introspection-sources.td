@@ -225,7 +225,7 @@ true true
 > CREATE DEFAULT INDEX ii_empty ON t3
 
 > SELECT records, size < 16 * 1024, allocations < 512 FROM mz_introspection.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_empty'
-0 true true
+<null> true true
 
 # Tests that arrangement sizes are approximate
 
@@ -236,7 +236,7 @@ true true
 # We have 16 workers, and only want to ensure that the sizes are not egregious.
 
 > SELECT records, size < 16 * 1024, allocations < 512 FROM mz_introspection.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t4'
-0 true true
+<null> true true
 
 > INSERT INTO t4 SELECT 1
 
@@ -263,7 +263,8 @@ true true true true true
 
 > CREATE INDEX vt5_idx ON vt5(a)
 
-> SELECT records, (size/1024/1024)::int FROM mz_introspection.mz_dataflow_arrangement_sizes WHERE name LIKE '%vt5_idx'
+# Cast to numeric to get its rounding behavior
+> SELECT records, (size::numeric/1024/1024)::int FROM mz_introspection.mz_dataflow_arrangement_sizes WHERE name LIKE '%vt5_idx'
 10000 1
 
 > DROP TABLE t5 CASCADE

@@ -47,11 +47,11 @@ query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_arrangement_sizes' ORDER BY position
 ----
 1  operator_id  uint8
-2  records  numeric
-3  batches  numeric
-4  size  numeric
-5  capacity  numeric
-6  allocations  numeric
+2  records  bigint
+3  batches  bigint
+4  size  bigint
+5  capacity  bigint
+6  allocations  bigint
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_compute_error_counts' ORDER BY position
@@ -102,11 +102,11 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_introspection' AND o
 ----
 1  id  uint8
 2  name  text
-3  records  numeric
-4  batches  numeric
-5  size  numeric
-6  capacity  numeric
-7  allocations  numeric
+3  records  bigint
+4  batches  bigint
+5  size  bigint
+6  capacity  bigint
+7  allocations  bigint
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_dataflow_channels' ORDER BY position
@@ -208,11 +208,11 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_introspection' AND o
 ----
 1  id  uint8
 2  name  text
-3  records  numeric
-4  batches  numeric
-5  size  numeric
-6  capacity  numeric
-7  allocations  numeric
+3  records  bigint
+4  batches  bigint
+5  size  bigint
+6  capacity  bigint
+7  allocations  bigint
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_records_per_dataflow_operator' ORDER BY position
@@ -220,11 +220,11 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_introspection' AND o
 1  id  uint8
 2  name  text
 3  dataflow_id  uint8
-4  records  numeric
-5  batches  numeric
-6  size  numeric
-7  capacity  numeric
-8  allocations  numeric
+4  records  bigint
+5  batches  bigint
+6  size  bigint
+7  capacity  bigint
+8  allocations  bigint
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_scheduling_elapsed' ORDER BY position
