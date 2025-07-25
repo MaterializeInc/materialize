@@ -396,21 +396,19 @@ impl<'a> Transaction<'a> {
     ///
     /// MS SQL Server will not assign an [`Lsn`] until a write is performed (e.g. via `SAVE TRANSACTION`).
     pub async fn get_lsn(&mut self) -> Result<Lsn, SqlServerError> {
-        static CURRENT_LSN_QUERY: &str = "
-SELECT dt.database_transaction_most_recent_savepoint_lsn
-FROM sys.dm_tran_database_transactions dt
-JOIN sys.dm_tran_current_transaction ct
-    ON ct.transaction_id = dt.transaction_id
-WHERE dt.database_transaction_most_recent_savepoint_lsn IS NOT NULL
-";
+        static CURRENT_LSN_QUERY: &str = "SELECT dt.database_transaction_most_recent_savepoint_lsn \
+            FROM sys.dm_tran_database_transactions dt \
+            JOIN sys.dm_tran_current_transaction ct \
+                ON ct.transaction_id = dt.transaction_id \
+            WHERE dt.database_transaction_most_recent_savepoint_lsn IS NOT NULL";
         let result = self.client.simple_query(CURRENT_LSN_QUERY).await?;
         crate::inspect::parse_numeric_lsn(&result)
     }
 
-    /// Lock the provided table to prevent writes but allow reads , uses `(TABLOCK, HOLDLOCK)`.
+    /// Lock the provided table to prevent writes but allow reads, uses `(TABLOCK, HOLDLOCK)`.
     ///
     /// This will set the transaction isolation level to `READ COMMITTED` and then obtain the
-    /// lock is obtained using a `SELECT` statement that will not read and data from the table.
+    /// lock using a `SELECT` statement that will not read any data from the table.
     /// The lock is released after transaction commit or rollback.
     pub async fn lock_table_shared(
         &mut self,

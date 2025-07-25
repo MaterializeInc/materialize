@@ -224,9 +224,9 @@ impl<'a> CdcStream<'a> {
             ))?
         }
 
-        // Because the tables are exclusively locked, any write operation has either
+        // Because the tables are locked, any write operation has either
         // completed, or is blocked. The LSN and XSN acquired now will represent a
-        // consistent point-in-time view, such that any comitted write will be
+        // consistent point-in-time view, such that any committed write will be
         // visible to this snapshot and the LSN of such a write will be less than
         // or equal to the LSN captured here. Creating the savepoint sets the LSN,
         // we can read it after rolling back the locks.
@@ -267,7 +267,7 @@ impl<'a> CdcStream<'a> {
                     yield (Arc::clone(&capture_instance), result);
                 }
 
-                tracing::trace!(%source_id, %capture_instance, %schema_name, %table_name, "timely-{worker_id} tmsnapshot end");
+                tracing::trace!(%source_id, %capture_instance, %schema_name, %table_name, "timely-{worker_id} snapshot end");
             }
 
             // Slightly awkward, but if the rollback fails we need to conform to
