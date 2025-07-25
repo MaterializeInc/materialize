@@ -63,14 +63,14 @@ The size, capacity, and allocations are an approximation, which may underestimat
 Specifically, reductions can use more memory than we show here.
 
 <!-- RELATION_SPEC mz_introspection.mz_arrangement_sizes -->
-| Field         | Type        | Meaning                                                                                                                   |
-|---------------|-------------| --------                                                                                                                  |
-| `operator_id` | [`uint8`]   | The ID of the operator that created the arrangement. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators). |
-| `records`     | [`numeric`] | The number of records in the arrangement.                                                                                 |
-| `batches`     | [`numeric`] | The number of batches in the arrangement.                                                                                 |
-| `size`        | [`numeric`] | The utilized size in bytes of the arrangement.                                                                            |
-| `capacity`    | [`numeric`] | The capacity in bytes of the arrangement. Can be larger than the size.                                                    |
-| `allocations` | [`numeric`] | The number of separate memory allocations backing the arrangement.                                                        |
+| Field         | Type      | Meaning                                                                                                                   |
+|---------------|-----------|---------------------------------------------------------------------------------------------------------------------------|
+| `operator_id` | [`uint8`] | The ID of the operator that created the arrangement. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators). |
+| `records`     | [`int8`]  | The number of records in the arrangement.                                                                                 |
+| `batches`     | [`int8`]  | Tnumber of batches in the arrangement.                                                                                    |
+| `size`        | [`int8`]  | Tutilized size in bytes of the arrangement.                                                                               |
+| `capacity`    | [`int8`]  | Tcapacity in bytes of the arrangement. Can be larger than the size.                                                       |
+| `allocations` | [`int8`]  | Tnumber of separate memory allocations backing the arrangement.                                                           |
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_arrangement_sizes_per_worker -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_arrangement_records_raw -->

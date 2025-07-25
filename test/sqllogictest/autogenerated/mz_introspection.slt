@@ -47,11 +47,11 @@ query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_arrangement_sizes' ORDER BY position
 ----
 1  operator_id  uint8
-2  records  numeric
-3  batches  numeric
-4  size  numeric
-5  capacity  numeric
-6  allocations  numeric
+2  records  int8
+3  batches  int8
+4  size  int8
+5  capacity  int8
+6  allocations  int8
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_compute_error_counts' ORDER BY position

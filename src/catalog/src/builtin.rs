@@ -6429,11 +6429,11 @@ pub static MZ_RECORDS_PER_DATAFLOW_OPERATOR_PER_WORKER: LazyLock<BuiltinView> =
             .with_column("name", ScalarType::String.nullable(false))
             .with_column("worker_id", ScalarType::UInt64.nullable(false))
             .with_column("dataflow_id", ScalarType::UInt64.nullable(false))
-            .with_column("records", ScalarType::Int64.nullable(false))
-            .with_column("batches", ScalarType::Int64.nullable(false))
-            .with_column("size", ScalarType::Int64.nullable(false))
-            .with_column("capacity", ScalarType::Int64.nullable(false))
-            .with_column("allocations", ScalarType::Int64.nullable(false))
+            .with_column("records", ScalarType::Int64.nullable(true))
+            .with_column("batches", ScalarType::Int64.nullable(true))
+            .with_column("size", ScalarType::Int64.nullable(true))
+            .with_column("capacity", ScalarType::Int64.nullable(true))
+            .with_column("allocations", ScalarType::Int64.nullable(true))
             .finish(),
         column_comments: BTreeMap::new(),
         sql: "
@@ -6442,11 +6442,11 @@ SELECT
     dod.name,
     dod.worker_id,
     dod.dataflow_id,
-    COALESCE(ar_size.records, 0) AS records,
-    COALESCE(ar_size.batches, 0) AS batches,
-    COALESCE(ar_size.size, 0) AS size,
-    COALESCE(ar_size.capacity, 0) AS capacity,
-    COALESCE(ar_size.allocations, 0) AS allocations
+    ar_size.records AS records,
+    ar_size.batches AS batches,
+    ar_size.size AS size,
+    ar_size.capacity AS capacity,
+    ar_size.allocations AS allocations
 FROM
     mz_introspection.mz_dataflow_operator_dataflows_per_worker dod
     LEFT OUTER JOIN mz_introspection.mz_arrangement_sizes_per_worker ar_size ON
@@ -6464,41 +6464,11 @@ pub static MZ_RECORDS_PER_DATAFLOW_OPERATOR: LazyLock<BuiltinView> =
             .with_column("id", ScalarType::UInt64.nullable(false))
             .with_column("name", ScalarType::String.nullable(false))
             .with_column("dataflow_id", ScalarType::UInt64.nullable(false))
-            .with_column(
-                "records",
-                ScalarType::Numeric {
-                    max_scale: Some(NumericMaxScale::ZERO),
-                }
-                .nullable(false),
-            )
-            .with_column(
-                "batches",
-                ScalarType::Numeric {
-                    max_scale: Some(NumericMaxScale::ZERO),
-                }
-                .nullable(false),
-            )
-            .with_column(
-                "size",
-                ScalarType::Numeric {
-                    max_scale: Some(NumericMaxScale::ZERO),
-                }
-                .nullable(false),
-            )
-            .with_column(
-                "capacity",
-                ScalarType::Numeric {
-                    max_scale: Some(NumericMaxScale::ZERO),
-                }
-                .nullable(false),
-            )
-            .with_column(
-                "allocations",
-                ScalarType::Numeric {
-                    max_scale: Some(NumericMaxScale::ZERO),
-                }
-                .nullable(false),
-            )
+            .with_column("records", ScalarType::Int64.nullable(true))
+            .with_column("batches", ScalarType::Int64.nullable(true))
+            .with_column("size", ScalarType::Int64.nullable(true))
+            .with_column("capacity", ScalarType::Int64.nullable(true))
+            .with_column("allocations", ScalarType::Int64.nullable(true))
             .with_key(vec![0, 1, 2])
             .finish(),
         column_comments: BTreeMap::from_iter([
@@ -6528,11 +6498,11 @@ SELECT
     id,
     name,
     dataflow_id,
-    pg_catalog.sum(records) AS records,
-    pg_catalog.sum(batches) AS batches,
-    pg_catalog.sum(size) AS size,
-    pg_catalog.sum(capacity) AS capacity,
-    pg_catalog.sum(allocations) AS allocations
+    SUM(records)::int8 AS records,
+    SUM(batches)::int8 AS batches,
+    SUM(size)::int8 AS size,
+    SUM(capacity)::int8 AS capacity,
+    SUM(allocations)::int8 AS allocations
 FROM mz_introspection.mz_records_per_dataflow_operator_per_worker
 GROUP BY id, name, dataflow_id",
         access: vec![PUBLIC_SELECT],
@@ -6547,41 +6517,11 @@ pub static MZ_RECORDS_PER_DATAFLOW_PER_WORKER: LazyLock<BuiltinView> =
             .with_column("id", ScalarType::UInt64.nullable(false))
             .with_column("name", ScalarType::String.nullable(false))
             .with_column("worker_id", ScalarType::UInt64.nullable(false))
-            .with_column(
-                "records",
-                ScalarType::Numeric {
-                    max_scale: Some(NumericMaxScale::ZERO),
-                }
-                .nullable(false),
-            )
-            .with_column(
-                "batches",
-                ScalarType::Numeric {
-                    max_scale: Some(NumericMaxScale::ZERO),
-                }
-                .nullable(false),
-            )
-            .with_column(
-                "size",
-                ScalarType::Numeric {
-                    max_scale: Some(NumericMaxScale::ZERO),
-                }
-                .nullable(false),
-            )
-            .with_column(
-                "capacity",
-                ScalarType::Numeric {
-                    max_scale: Some(NumericMaxScale::ZERO),
-                }
-                .nullable(false),
-            )
-            .with_column(
-                "allocations",
-                ScalarType::Numeric {
-                    max_scale: Some(NumericMaxScale::ZERO),
-                }
-                .nullable(false),
-            )
+            .with_column("records", ScalarType::Int64.nullable(true))
+            .with_column("batches", ScalarType::Int64.nullable(true))
+            .with_column("size", ScalarType::Int64.nullable(true))
+            .with_column("capacity", ScalarType::Int64.nullable(true))
+            .with_column("allocations", ScalarType::Int64.nullable(true))
             .with_key(vec![0, 1, 2])
             .finish(),
         column_comments: BTreeMap::new(),
@@ -6590,11 +6530,11 @@ SELECT
     rdo.dataflow_id as id,
     dfs.name,
     rdo.worker_id,
-    pg_catalog.SUM(rdo.records) as records,
-    pg_catalog.SUM(rdo.batches) as batches,
-    pg_catalog.SUM(rdo.size) as size,
-    pg_catalog.SUM(rdo.capacity) as capacity,
-    pg_catalog.SUM(rdo.allocations) as allocations
+    SUM(rdo.records)::int8 as records,
+    SUM(rdo.batches)::int8 as batches,
+    SUM(rdo.size)::int8 as size,
+    SUM(rdo.capacity)::int8 as capacity,
+    SUM(rdo.allocations)::int8 as allocations
 FROM
     mz_introspection.mz_records_per_dataflow_operator_per_worker rdo,
     mz_introspection.mz_dataflows_per_worker dfs
@@ -6615,41 +6555,11 @@ pub static MZ_RECORDS_PER_DATAFLOW: LazyLock<BuiltinView> = LazyLock::new(|| Bui
     desc: RelationDesc::builder()
         .with_column("id", ScalarType::UInt64.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
-        .with_column(
-            "records",
-            ScalarType::Numeric {
-                max_scale: Some(NumericMaxScale::ZERO),
-            }
-            .nullable(false),
-        )
-        .with_column(
-            "batches",
-            ScalarType::Numeric {
-                max_scale: Some(NumericMaxScale::ZERO),
-            }
-            .nullable(false),
-        )
-        .with_column(
-            "size",
-            ScalarType::Numeric {
-                max_scale: Some(NumericMaxScale::ZERO),
-            }
-            .nullable(false),
-        )
-        .with_column(
-            "capacity",
-            ScalarType::Numeric {
-                max_scale: Some(NumericMaxScale::ZERO),
-            }
-            .nullable(false),
-        )
-        .with_column(
-            "allocations",
-            ScalarType::Numeric {
-                max_scale: Some(NumericMaxScale::ZERO),
-            }
-            .nullable(false),
-        )
+        .with_column("records", ScalarType::Int64.nullable(true))
+        .with_column("batches", ScalarType::Int64.nullable(true))
+        .with_column("size", ScalarType::Int64.nullable(true))
+        .with_column("capacity", ScalarType::Int64.nullable(true))
+        .with_column("allocations", ScalarType::Int64.nullable(true))
         .with_key(vec![0, 1])
         .finish(),
     column_comments: BTreeMap::from_iter([
@@ -6674,11 +6584,11 @@ pub static MZ_RECORDS_PER_DATAFLOW: LazyLock<BuiltinView> = LazyLock::new(|| Bui
 SELECT
     id,
     name,
-    pg_catalog.SUM(records) as records,
-    pg_catalog.SUM(batches) as batches,
-    pg_catalog.SUM(size) as size,
-    pg_catalog.SUM(capacity) as capacity,
-    pg_catalog.SUM(allocations) as allocations
+    SUM(records)::int8 as records,
+    SUM(batches)::int8 as batches,
+    SUM(size)::int8 as size,
+    SUM(capacity)::int8 as capacity,
+    SUM(allocations)::int8 as allocations
 FROM
     mz_introspection.mz_records_per_dataflow_per_worker
 GROUP BY
@@ -8605,11 +8515,11 @@ pub static MZ_ARRANGEMENT_SIZES_PER_WORKER: LazyLock<BuiltinView> = LazyLock::ne
         desc: RelationDesc::builder()
             .with_column("operator_id", ScalarType::UInt64.nullable(false))
             .with_column("worker_id", ScalarType::UInt64.nullable(false))
-            .with_column("records", ScalarType::Int64.nullable(false))
-            .with_column("batches", ScalarType::Int64.nullable(false))
-            .with_column("size", ScalarType::Int64.nullable(false))
-            .with_column("capacity", ScalarType::Int64.nullable(false))
-            .with_column("allocations", ScalarType::Int64.nullable(false))
+            .with_column("records", ScalarType::Int64.nullable(true))
+            .with_column("batches", ScalarType::Int64.nullable(true))
+            .with_column("size", ScalarType::Int64.nullable(true))
+            .with_column("capacity", ScalarType::Int64.nullable(true))
+            .with_column("allocations", ScalarType::Int64.nullable(true))
             .finish(),
         column_comments: BTreeMap::new(),
         sql: "
@@ -8624,7 +8534,7 @@ batches_cte AS (
     SELECT
         operator_id,
         worker_id,
-        pg_catalog.count(*) AS batches
+        COUNT(*) AS batches
     FROM
         mz_introspection.mz_arrangement_batches_raw
     GROUP BY
@@ -8634,7 +8544,7 @@ records_cte AS (
     SELECT
         operator_id,
         worker_id,
-        pg_catalog.count(*) AS records
+        COUNT(*) AS records
     FROM
         mz_introspection.mz_arrangement_records_raw
     GROUP BY
@@ -8644,7 +8554,7 @@ heap_size_cte AS (
     SELECT
         operator_id,
         worker_id,
-        pg_catalog.count(*) AS size
+        COUNT(*) AS size
     FROM
         mz_introspection.mz_arrangement_heap_size_raw
     GROUP BY
@@ -8654,7 +8564,7 @@ heap_capacity_cte AS (
     SELECT
         operator_id,
         worker_id,
-        pg_catalog.count(*) AS capacity
+        COUNT(*) AS capacity
     FROM
         mz_introspection.mz_arrangement_heap_capacity_raw
     GROUP BY
@@ -8664,7 +8574,7 @@ heap_allocations_cte AS (
     SELECT
         operator_id,
         worker_id,
-        pg_catalog.count(*) AS allocations
+        COUNT(*) AS allocations
     FROM
         mz_introspection.mz_arrangement_heap_allocations_raw
     GROUP BY
@@ -8674,7 +8584,7 @@ batcher_records_cte AS (
     SELECT
         operator_id,
         worker_id,
-        pg_catalog.count(*) AS records
+        COUNT(*) AS records
     FROM
         mz_introspection.mz_arrangement_batcher_records_raw
     GROUP BY
@@ -8684,7 +8594,7 @@ batcher_size_cte AS (
     SELECT
         operator_id,
         worker_id,
-        pg_catalog.count(*) AS size
+        COUNT(*) AS size
     FROM
         mz_introspection.mz_arrangement_batcher_size_raw
     GROUP BY
@@ -8694,7 +8604,7 @@ batcher_capacity_cte AS (
     SELECT
         operator_id,
         worker_id,
-        pg_catalog.count(*) AS capacity
+        COUNT(*) AS capacity
     FROM
         mz_introspection.mz_arrangement_batcher_capacity_raw
     GROUP BY
@@ -8704,7 +8614,7 @@ batcher_allocations_cte AS (
     SELECT
         operator_id,
         worker_id,
-        pg_catalog.count(*) AS allocations
+        COUNT(*) AS allocations
     FROM
         mz_introspection.mz_arrangement_batcher_allocations_raw
     GROUP BY
@@ -8714,11 +8624,23 @@ combined AS (
     SELECT
         opw.operator_id,
         opw.worker_id,
-        COALESCE(records_cte.records, 0) + COALESCE(batcher_records_cte.records, 0) AS records,
-        COALESCE(batches_cte.batches, 0) AS batches,
-        COALESCE(heap_size_cte.size, 0) + COALESCE(batcher_size_cte.size, 0) AS size,
-        COALESCE(heap_capacity_cte.capacity, 0) + COALESCE(batcher_capacity_cte.capacity, 0) AS capacity,
-        COALESCE(heap_allocations_cte.allocations, 0) + COALESCE(batcher_allocations_cte.allocations, 0) AS allocations
+        CASE
+            WHEN records_cte.records IS NULL AND batcher_records_cte.records IS NULL THEN NULL
+            ELSE COALESCE(records_cte.records, 0) + COALESCE(batcher_records_cte.records, 0)
+        END AS records,
+        batches_cte.batches AS batches,
+        CASE
+            WHEN heap_size_cte.size IS NULL AND batcher_size_cte.size IS NULL THEN NULL
+            ELSE COALESCE(heap_size_cte.size, 0) + COALESCE(batcher_size_cte.size, 0)
+        END AS size,
+        CASE
+            WHEN heap_capacity_cte.capacity IS NULL AND batcher_capacity_cte.capacity IS NULL THEN NULL
+            ELSE COALESCE(heap_capacity_cte.capacity, 0) + COALESCE(batcher_capacity_cte.capacity, 0)
+        END AS capacity,
+        CASE
+            WHEN heap_allocations_cte.allocations IS NULL AND batcher_allocations_cte.allocations IS NULL THEN NULL
+            ELSE COALESCE(heap_allocations_cte.allocations, 0) + COALESCE(batcher_allocations_cte.allocations, 0)
+        END AS allocations
     FROM
                     operators_per_worker_cte opw
     LEFT OUTER JOIN batches_cte USING (operator_id, worker_id)
@@ -8751,41 +8673,11 @@ pub static MZ_ARRANGEMENT_SIZES: LazyLock<BuiltinView> = LazyLock::new(|| Builti
     oid: oid::VIEW_MZ_ARRANGEMENT_SIZES_OID,
     desc: RelationDesc::builder()
         .with_column("operator_id", ScalarType::UInt64.nullable(false))
-        .with_column(
-            "records",
-            ScalarType::Numeric {
-                max_scale: Some(NumericMaxScale::ZERO),
-            }
-            .nullable(false),
-        )
-        .with_column(
-            "batches",
-            ScalarType::Numeric {
-                max_scale: Some(NumericMaxScale::ZERO),
-            }
-            .nullable(false),
-        )
-        .with_column(
-            "size",
-            ScalarType::Numeric {
-                max_scale: Some(NumericMaxScale::ZERO),
-            }
-            .nullable(false),
-        )
-        .with_column(
-            "capacity",
-            ScalarType::Numeric {
-                max_scale: Some(NumericMaxScale::ZERO),
-            }
-            .nullable(false),
-        )
-        .with_column(
-            "allocations",
-            ScalarType::Numeric {
-                max_scale: Some(NumericMaxScale::ZERO),
-            }
-            .nullable(false),
-        )
+        .with_column("records", ScalarType::Int64.nullable(true))
+        .with_column("batches", ScalarType::Int64.nullable(true))
+        .with_column("size", ScalarType::Int64.nullable(true))
+        .with_column("capacity", ScalarType::Int64.nullable(true))
+        .with_column("allocations", ScalarType::Int64.nullable(true))
         .with_key(vec![0])
         .finish(),
     column_comments: BTreeMap::from_iter([
@@ -8808,11 +8700,11 @@ pub static MZ_ARRANGEMENT_SIZES: LazyLock<BuiltinView> = LazyLock::new(|| Builti
     sql: "
 SELECT
     operator_id,
-    pg_catalog.sum(records) AS records,
-    pg_catalog.sum(batches) AS batches,
-    pg_catalog.sum(size) AS size,
-    pg_catalog.sum(capacity) AS capacity,
-    pg_catalog.sum(allocations) AS allocations
+    SUM(records)::int8 AS records,
+    SUM(batches)::int8 AS batches,
+    SUM(size)::int8 AS size,
+    SUM(capacity)::int8 AS capacity,
+    SUM(allocations)::int8 AS allocations
 FROM mz_introspection.mz_arrangement_sizes_per_worker
 GROUP BY operator_id",
     access: vec![PUBLIC_SELECT],
@@ -9023,26 +8915,11 @@ pub static MZ_DATAFLOW_ARRANGEMENT_SIZES: LazyLock<BuiltinView> = LazyLock::new(
     desc: RelationDesc::builder()
         .with_column("id", ScalarType::UInt64.nullable(false))
         .with_column("name", ScalarType::String.nullable(false))
-        .with_column(
-            "records",
-            ScalarType::Numeric { max_scale: None }.nullable(false),
-        )
-        .with_column(
-            "batches",
-            ScalarType::Numeric { max_scale: None }.nullable(false),
-        )
-        .with_column(
-            "size",
-            ScalarType::Numeric { max_scale: None }.nullable(false),
-        )
-        .with_column(
-            "capacity",
-            ScalarType::Numeric { max_scale: None }.nullable(false),
-        )
-        .with_column(
-            "allocations",
-            ScalarType::Numeric { max_scale: None }.nullable(false),
-        )
+        .with_column("records", ScalarType::Int64.nullable(true))
+        .with_column("batches", ScalarType::Int64.nullable(true))
+        .with_column("size", ScalarType::Int64.nullable(true))
+        .with_column("capacity", ScalarType::Int64.nullable(true))
+        .with_column("allocations", ScalarType::Int64.nullable(true))
         .with_key(vec![0, 1])
         .finish(),
     column_comments: BTreeMap::from_iter([
@@ -9073,11 +8950,11 @@ pub static MZ_DATAFLOW_ARRANGEMENT_SIZES: LazyLock<BuiltinView> = LazyLock::new(
 SELECT
     mdod.dataflow_id AS id,
     mdod.dataflow_name AS name,
-    COALESCE(sum(mas.records), 0) AS records,
-    COALESCE(sum(mas.batches), 0) AS batches,
-    COALESCE(sum(mas.size), 0) AS size,
-    COALESCE(sum(mas.capacity), 0) AS capacity,
-    COALESCE(sum(mas.allocations), 0) AS allocations
+    SUM(mas.records)::int8 AS records,
+    SUM(mas.batches::int8) AS batches,
+    SUM(mas.size)::int8 AS size,
+    SUM(mas.capacity)::int8 AS capacity,
+    SUM(mas.allocations)::int8 AS allocations
 FROM mz_introspection.mz_dataflow_operator_dataflows AS mdod
 LEFT JOIN mz_introspection.mz_arrangement_sizes AS mas
     ON mdod.id = mas.operator_id
