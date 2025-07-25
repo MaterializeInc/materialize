@@ -266,7 +266,7 @@ steps:
     depends_on: build-aarch64
     timeout_in_minutes: 30
     inputs: [test/sqllogictest]
-    parallelism: 3
+    parallelism: 4
     plugins:
       - ./ci/plugins/mzcompose:
           composition: sqllogictest
@@ -373,7 +373,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 40
         inputs: [test/ssh-connection]
-        parallelism: 2
+        parallelism: 3
         plugins:
           - ./ci/plugins/mzcompose:
               composition: ssh-connection
@@ -399,7 +399,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 30
         inputs: [test/kafka-auth]
-        parallelism: 2
+        parallelism: 3
         plugins:
           - ./ci/plugins/mzcompose:
               composition: kafka-auth
@@ -498,7 +498,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: dbt-materialize
     agents:
-      queue: hetzner-aarch64-4cpu-8gb
+      queue: hetzner-aarch64-8cpu-16gb
 
   - group: "Debezium tests"
     key: debezium-tests

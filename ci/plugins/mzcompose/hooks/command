@@ -169,7 +169,7 @@ cleanup() {
 
   echo "--- Running trufflehog to scan artifacts for secrets & uploading artifacts"
   {
-    bin/ci-builder run "$builder" trufflehog --no-update --no-verification --json --exclude-detectors=coda,dockerhub,box,npmtoken,github,snykkey,eightxeight,sumologickey,miro,fmfw,logzio,qase filesystem "${artifacts[@]}" | trufflehog_jq_filter_logs > trufflehog.log
+    bin/ci-builder run "$builder" trufflehog --no-update --no-verification --json --exclude-detectors=coda,dockerhub,box,npmtoken,github,snykkey,eightxeight,sumologickey,miro,fmfw,logzio,qase,cannyio filesystem "${artifacts[@]}" | trufflehog_jq_filter_logs > trufflehog.log
   } &
 
   unset CI_EXTRA_ARGS # We don't want extra args for the annotation
@@ -182,7 +182,7 @@ cleanup() {
   wait
   echo "--- Annotating errors"
   bin/ci-builder run "$builder" bin/ci-annotate-errors --test-cmd="$TEST_CMD" --test-desc="$TEST_DESC" --test-result="$TEST_RESULT" "${artifacts[@]}" trufflehog.log > ci-annotate-errors.log || CI_ANNOTATE_ERRORS_RESULT=$?
-  buildkite-agent artifact upload "ci-annotate-errors.log"
+  buildkite-agent artifact upload "ci-annotate-errors.log" &
 
   export_cov() {
       bin/ci-builder run stable rust-cov export \
@@ -227,18 +227,11 @@ cleanup() {
   fi
 
   ci_unimportant_heading ":docker: Cleaning up after mzcompose"
-
   # docker-compose kill may fail attempting to kill containers
   # that have just exited on their own because of the
   # "shared-fate" mechanism employed by Mz clusters
-  sudo systemctl restart docker
+  (sudo systemctl restart docker; docker ps --all --quiet | xargs --no-run-if-empty docker rm --force --volumes) &
   killall -9 clusterd || true # There might be remaining processes from a cargo-test run
-  if [ -n "${CI_COVERAGE_ENABLED:-}" ]; then
-    find . -name '*.profraw' -delete # Remove remaining profraw files from coverage runs
-  fi
-
-  ci_collapsed_heading ":docker: Purging all existing docker containers and volumes, regardless of origin"
-  docker ps --all --quiet | xargs --no-run-if-empty docker rm --force --volumes
 
   if [ "$BUILDKITE_STEP_KEY" = "terraform-aws" ]; then
     mzcompose run aws-temporary --no-setup --no-test --no-run-mz-debug || CI_ANNOTATE_ERRORS_RESULT=1
@@ -251,14 +244,10 @@ cleanup() {
   fi
   rm -rf ~/.kube # Remove potential state from E2E Terraform tests
 
-  echo "Removing mz-debug files"
-  find . -maxdepth 1 -type d -name 'mz_debug*' -exec rm -r {} +
-
   if [ ! -s services.log ] && [ "$BUILDKITE_LABEL" != "Maelstrom coverage of persist" ] && [ "$BUILDKITE_LABEL" != "Long single-node Maelstrom coverage of persist" ] && [ "$BUILDKITE_LABEL" != "Maelstrom coverage of txn-wal" ] && [ "$BUILDKITE_LABEL" != "Mz E2E Test" ] && [ "$BUILDKITE_LABEL" != "Output consistency (version for DFR)" ] && [ "$BUILDKITE_LABEL" != "Output consistency (version for CTF)" ] && [ "$BUILDKITE_LABEL" != "QA Canary Environment Base Load" ] && [ "$BUILDKITE_LABEL" != "Parallel Benchmark against QA Canary Environment" ] && [ "$BUILDKITE_LABEL" != "Parallel Benchmark against QA Benchmarking Staging Environment" ] && [[ ! "$BUILDKITE_LABEL" =~ Terraform\ .* ]]; then
       echo "+++ services.log is empty, failing"
       exit 1
   fi
-  rm -f services.log
 
   exit "$CI_ANNOTATE_ERRORS_RESULT"
 }

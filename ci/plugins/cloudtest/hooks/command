@@ -162,7 +162,7 @@ cleanup() {
   mapfile -t artifacts < <(printf "run.log\nkubectl-get-logs.log\nkubectl-get-logs-previous.log\nkubectl-get-events.log\nkubectl-get-all.log\nkubectl-describe-all.log\nkubectl-pods-with-nodes.log\nkubectl-get-events-kube-system.log\nkubectl-get-all-kube-system.log\nkubectl-describe-all-kube-system.log\njournalctl-merge.log\nkail-output.log\n"; find . -name 'junit_*.xml')
 
   {
-    bin/ci-builder run stable trufflehog --no-update --no-verification --json --exclude-detectors=coda,dockerhub,box,npmtoken,github,snykkey,eightxeight,sumologickey,miro,fmfw,logzio,qase filesystem "${artifacts[@]}" | trufflehog_jq_filter_logs > trufflehog.log
+    bin/ci-builder run stable trufflehog --no-update --no-verification --json --exclude-detectors=coda,dockerhub,box,npmtoken,github,snykkey,eightxeight,sumologickey,miro,fmfw,logzio,qase,cannyio filesystem "${artifacts[@]}" | trufflehog_jq_filter_logs > trufflehog.log
   } &
   artifacts_str=$(IFS=";"; echo "${artifacts[*]}")
 
@@ -173,7 +173,7 @@ cleanup() {
   buildkite-agent artifact upload "$artifacts_str" &
   wait
   bin/ci-builder run stable bin/ci-annotate-errors --test-cmd="$TEST_CMD" --test-result="$TEST_RESULT" "${artifacts[@]}" trufflehog.log > ci-annotate-errors.log || CI_ANNOTATE_ERRORS_RESULT=$?
-  buildkite-agent artifact upload "ci-annotate-errors.log"
+  buildkite-agent artifact upload "ci-annotate-errors.log" &
 
   # File should not be empty, see database-issues#7569
   test -s kubectl-get-logs-previous.log
