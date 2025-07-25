@@ -74,7 +74,7 @@ where
             let mut buffer = Vec::new();
 
             move |input, output| {
-                // The upper frontier is the meet of the input frontier and the `as_of` frontier,
+                // The upper frontier is the join of the input frontier and the `as_of` frontier,
                 // with the `threshold` summary applied to it.
                 let mut upper = Antichain::new();
                 for time1 in &input.frontier().frontier() {
@@ -96,7 +96,7 @@ where
                     // Sort data by time, then drain it into a buffer that contains data for a
                     // single bucket. We scan the data for ranges of time that fall into the same
                     // bucket so we can push batches of data at once.
-                    data.sort_by(|(_, t, _), (_, t2, _)| t.cmp(t2));
+                    data.sort_unstable_by(|(_, t, _), (_, t2, _)| t.cmp(t2));
 
                     let mut drain = data.drain(..);
                     if let Some((datum, time, diff)) = drain.next() {
@@ -104,11 +104,11 @@ where
                         buffer.push((datum, time, diff));
                         for (datum, time, diff) in drain {
                             // If we have a range, check if the time is not within it.
-                            if time < range.0 || time >= range.1 {
+                            if !range.contains(&time) {
                                 // If the time is outside the range, push the current buffer
                                 // to the chain and reset the range.
                                 if !buffer.is_empty() {
-                                    let bucket = chain.find_mut(&range.0).expect("Must exist");
+                                    let bucket = chain.find_mut(&range.start).expect("Must exist");
                                     bucket.inner.push_container(&mut buffer);
                                     buffer.clear();
                                 }
@@ -119,7 +119,7 @@ where
 
                         // Handle leftover data in the buffer.
                         if !buffer.is_empty() {
-                            let bucket = chain.find_mut(&range.0).expect("Must exist");
+                            let bucket = chain.find_mut(&range.start).expect("Must exist");
                             bucket.inner.push_container(&mut buffer);
                             buffer.clear();
                         }
