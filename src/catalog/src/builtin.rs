@@ -8613,7 +8613,14 @@ pub static MZ_ARRANGEMENT_SIZES_PER_WORKER: LazyLock<BuiltinView> = LazyLock::ne
             .finish(),
         column_comments: BTreeMap::new(),
         sql: "
-WITH batches_cte AS (
+WITH operators_per_worker_cte AS (
+    SELECT
+        id AS operator_id,
+        worker_id
+    FROM
+        mz_introspection.mz_dataflow_operators_per_worker
+),
+batches_cte AS (
     SELECT
         operator_id,
         worker_id,
@@ -8702,24 +8709,38 @@ batcher_allocations_cte AS (
         mz_introspection.mz_arrangement_batcher_allocations_raw
     GROUP BY
         operator_id, worker_id
+),
+combined AS (
+    SELECT
+        opw.operator_id,
+        opw.worker_id,
+        COALESCE(records_cte.records, 0) + COALESCE(batcher_records_cte.records, 0) AS records,
+        COALESCE(batches_cte.batches, 0) AS batches,
+        COALESCE(heap_size_cte.size, 0) + COALESCE(batcher_size_cte.size, 0) AS size,
+        COALESCE(heap_capacity_cte.capacity, 0) + COALESCE(batcher_capacity_cte.capacity, 0) AS capacity,
+        COALESCE(heap_allocations_cte.allocations, 0) + COALESCE(batcher_allocations_cte.allocations, 0) AS allocations
+    FROM
+                    operators_per_worker_cte opw
+    LEFT OUTER JOIN batches_cte USING (operator_id, worker_id)
+    LEFT OUTER JOIN records_cte USING (operator_id, worker_id)
+    LEFT OUTER JOIN heap_size_cte USING (operator_id, worker_id)
+    LEFT OUTER JOIN heap_capacity_cte USING (operator_id, worker_id)
+    LEFT OUTER JOIN heap_allocations_cte USING (operator_id, worker_id)
+    LEFT OUTER JOIN batcher_records_cte USING (operator_id, worker_id)
+    LEFT OUTER JOIN batcher_size_cte USING (operator_id, worker_id)
+    LEFT OUTER JOIN batcher_capacity_cte USING (operator_id, worker_id)
+    LEFT OUTER JOIN batcher_allocations_cte USING (operator_id, worker_id)
 )
 SELECT
-    batches_cte.operator_id,
-    batches_cte.worker_id,
-    COALESCE(records_cte.records, 0) + COALESCE(batcher_records_cte.records, 0) AS records,
-    batches_cte.batches,
-    COALESCE(heap_size_cte.size, 0) + COALESCE(batcher_size_cte.size, 0) AS size,
-    COALESCE(heap_capacity_cte.capacity, 0) + COALESCE(batcher_capacity_cte.capacity, 0) AS capacity,
-    COALESCE(heap_allocations_cte.allocations, 0) + COALESCE(batcher_allocations_cte.allocations, 0) AS allocations
-FROM batches_cte
-LEFT OUTER JOIN records_cte USING (operator_id, worker_id)
-LEFT OUTER JOIN heap_size_cte USING (operator_id, worker_id)
-LEFT OUTER JOIN heap_capacity_cte USING (operator_id, worker_id)
-LEFT OUTER JOIN heap_allocations_cte USING (operator_id, worker_id)
-LEFT OUTER JOIN batcher_records_cte USING (operator_id, worker_id)
-LEFT OUTER JOIN batcher_size_cte USING (operator_id, worker_id)
-LEFT OUTER JOIN batcher_capacity_cte USING (operator_id, worker_id)
-LEFT OUTER JOIN batcher_allocations_cte USING (operator_id, worker_id)",
+    operator_id, worker_id, records, batches, size, capacity, allocations
+FROM combined
+WHERE
+       records     IS NOT NULL
+    OR batches     IS NOT NULL
+    OR size        IS NOT NULL
+    OR capacity    IS NOT NULL
+    OR allocations IS NOT NULL
+",
         access: vec![PUBLIC_SELECT],
     }
 });
