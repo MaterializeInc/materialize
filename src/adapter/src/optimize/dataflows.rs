@@ -109,8 +109,9 @@ pub struct DataflowBuilder<'a> {
 /// The styles in which an expression can be prepared for use in a dataflow.
 #[derive(Clone, Copy, Debug)]
 pub enum ExprPrepStyle<'a> {
-    /// The expression is being prepared for installation as a maintained index.
-    Index,
+    /// The expression is being prepared for installation as a maintained dataflow, e.g.,
+    /// index, materialized view, or subscribe.
+    Maintained,
     /// The expression is being prepared to run once at the specified logical
     /// time in the specified session.
     OneShot {
@@ -424,7 +425,7 @@ pub fn prep_relation_expr(
     style: ExprPrepStyle,
 ) -> Result<(), OptimizerError> {
     match style {
-        ExprPrepStyle::Index => {
+        ExprPrepStyle::Maintained => {
             expr.0.try_visit_mut_post(&mut |e| {
                 // Carefully test filter expressions, which may represent temporal filters.
                 if let MirRelationExpr::Filter { input, predicates } = &*e {
@@ -482,7 +483,7 @@ pub fn prep_scalar_expr(
         }),
 
         // Reject the query if it contains any unmaterializable function calls.
-        ExprPrepStyle::Index | ExprPrepStyle::AsOfUpTo => {
+        ExprPrepStyle::Maintained | ExprPrepStyle::AsOfUpTo => {
             let mut last_observed_unmaterializable_func = None;
             expr.visit_mut_post(&mut |e| {
                 if let MirScalarExpr::CallUnmaterializable(f) = e {
@@ -492,7 +493,7 @@ pub fn prep_scalar_expr(
 
             if let Some(f) = last_observed_unmaterializable_func {
                 let err = match style {
-                    ExprPrepStyle::Index => OptimizerError::UnmaterializableFunction(f),
+                    ExprPrepStyle::Maintained => OptimizerError::UnmaterializableFunction(f),
                     ExprPrepStyle::AsOfUpTo => OptimizerError::UncallableFunction {
                         func: f,
                         context: "AS OF or UP TO",
