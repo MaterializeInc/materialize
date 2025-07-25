@@ -30,7 +30,7 @@ from materialize.mzcompose.service import (
     ServiceConfig,
     ServiceDependency,
 )
-from materialize.mzcompose.services.azure import azure_blob_uri
+from materialize.mzcompose.services.azurite import azure_blob_uri
 from materialize.mzcompose.services.minio import minio_blob_uri
 from materialize.mzcompose.services.postgres import METADATA_STORE
 

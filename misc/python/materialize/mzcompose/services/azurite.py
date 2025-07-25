@@ -16,13 +16,10 @@ def azure_blob_uri(address: str = "azurite") -> str:
 
 
 class Azurite(Service):
-    DEFAULT_AZURITE_TAG = "3.33.0"
-
     def __init__(
         self,
         name: str = "azurite",
         aliases: list[str] = ["azurite", "devstoreaccount1.azurite"],
-        image: str | None = None,
         command: list[str] | None = None,
         in_memory: bool = False,
         healthcheck: ServiceHealthcheck | None = None,
@@ -30,11 +27,6 @@ class Azurite(Service):
         ports: list[int | str] = [10000],
         allow_host_ports: bool = False,
     ):
-        if image is None:
-            image = (
-                f"mcr.microsoft.com/azure-storage/azurite:{self.DEFAULT_AZURITE_TAG}"
-            )
-
         if command is None:
             command = [
                 "azurite-blob",
@@ -59,7 +51,7 @@ class Azurite(Service):
         super().__init__(
             name=name,
             config={
-                "image": image,
+                "mzbuild": "azurite",
                 "networks": {"default": {"aliases": aliases}},
                 "ports": ports,
                 "allow_host_ports": allow_host_ports,
