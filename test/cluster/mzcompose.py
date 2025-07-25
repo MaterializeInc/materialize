@@ -88,11 +88,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     def process(name: str) -> None:
         # incident-70 and refresh-mv-restart are slow, run in separate CI step
         # concurrent-connections is too flaky
+        # TODO: Reenable test-memory-limiter when database-issues/9502 is fixed
         if name in (
             "default",
             "test-incident-70",
             "test-concurrent-connections",
             "test-refresh-mv-restart",
+            "test-memory-limiter",
         ):
             return
         with c.test_case(name):

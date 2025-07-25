@@ -115,6 +115,7 @@ class Materialized(Service):
         environment = [
             "MZ_NO_TELEMETRY=1",
             "MZ_NO_BUILTIN_CONSOLE=1",
+            "MZ_EAT_MY_DATA=1",
             "MZ_TEST_ONLY_DUMMY_SEGMENT_CLIENT=true",
             f"MZ_SOFT_ASSERTIONS={int(soft_assertions)}",
             # The following settings can not be baked in the default image, as they

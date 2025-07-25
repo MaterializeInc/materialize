@@ -32,4 +32,10 @@ if [[ "${KUBERNETES_SERVICE_HOST:-}" ]]; then
     export CLUSTERD_PROCESS=${CLUSTERD_PROCESS:-${HOSTNAME##*-}}
 fi
 
+if [ -z "${MZ_EAT_MY_DATA:-}" ]; then
+    unset LD_PRELOAD
+else
+    export LD_PRELOAD=libeatmydata.so
+fi
+
 exec clusterd "$@"

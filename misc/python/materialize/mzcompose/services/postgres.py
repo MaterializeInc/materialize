@@ -26,7 +26,11 @@ class Postgres(Service):
         image: str | None = None,
         ports: list[str] = ["5432"],
         extra_command: list[str] = [],
-        environment: list[str] = ["POSTGRESDB=postgres", "POSTGRES_PASSWORD=postgres"],
+        environment: list[str] = [
+            "POSTGRESDB=postgres",
+            "POSTGRES_PASSWORD=postgres",
+            "LD_PRELOAD=libeatmydata.so",
+        ],
         volumes: list[str] = [],
         max_wal_senders: int = 100,
         max_replication_slots: int = 100,

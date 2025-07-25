@@ -39,6 +39,14 @@ hosted offering we run these services scaled across many machines.
 ********************************* WARNING ********************************
 EOF
 
+if [ -z "${MZ_EAT_MY_DATA:-}" ]; then
+    unset LD_PRELOAD
+    echo > /etc/postgresql/16/main/environment
+else
+    export LD_PRELOAD="libeatmydata.so"
+    echo "LD_PRELOAD=libeatmydata.so" > /etc/postgresql/16/main/environment
+fi
+
 # Start PostgreSQL, unless suppressed.
 if [ -z "${MZ_NO_BUILTIN_POSTGRES:-}" ]; then
   (trap 'pg_ctlcluster 16 main stop --mode=fast --force' SIGTERM SIGINT

@@ -339,10 +339,10 @@ case "$cmd" in
             args+=(--volume "$GIT_ROOT_DIR:$GIT_ROOT_DIR")
         fi
         rm -f "$cid_file"
-        docker run "${args[@]}" "materialize/ci-builder:$tag" "${docker_command[@]}"
+        docker run "${args[@]}" "materialize/ci-builder:$tag" eatmydata "${docker_command[@]}"
         ;;
     root-shell)
-        docker exec --interactive --tty --user 0:0 "$(<"$cid_file")" ci/builder/root-shell.sh
+        docker exec --interactive --tty --user 0:0 "$(<"$cid_file")" eatmydata ci/builder/root-shell.sh
         ;;
     *)
         printf "unknown command %q\n" "$cmd"

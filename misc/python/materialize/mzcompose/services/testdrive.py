@@ -88,6 +88,7 @@ class Testdrive(Service):
         environment += [
             f"CLUSTER_REPLICA_SIZES={json.dumps(cluster_replica_size)}",
             "MZ_CI_LICENSE_KEY",
+            "LD_PRELOAD=libeatmydata.so",
         ]
 
         volumes = [

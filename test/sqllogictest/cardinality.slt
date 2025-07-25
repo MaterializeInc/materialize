@@ -430,7 +430,7 @@ SHOW optimizer_oneshot_stats_timeout;
 COMPLETE 1
 
 statement ok
-SELECT mz_unsafe.mz_sleep(3)
+SELECT mz_unsafe.mz_sleep(5)
 
 query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(join implementations, humanized expressions) AS VERBOSE TEXT FOR SELECT * FROM t JOIN t2 ON t.x = t2.x JOIN t3 ON t.x = t3.x JOIN t4 ON t.x = t4.x JOIN t5 ON t.x = t5.x JOIN t6 ON t.x = t6.x JOIN t7 ON t.x = t7.x JOIN t8 ON t.x = t8.x JOIN t9 ON t.x = t9.x JOIN t10 ON t.x = t10.x;

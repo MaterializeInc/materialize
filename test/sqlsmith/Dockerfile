@@ -35,4 +35,4 @@ RUN git clone --single-branch --branch=master https://github.com/MaterializeInc/
     && cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=c++ . \
     && cmake --build . -j `nproc`
 
-ENTRYPOINT ["sqlsmith/sqlsmith"]
+ENTRYPOINT ["/usr/bin/eatmydata", "sqlsmith/sqlsmith"]

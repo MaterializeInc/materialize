@@ -43,7 +43,12 @@ class Minio(Service):
                 "image": image,
                 "ports": ports,
                 "allow_host_ports": allow_host_ports,
-                "environment": ["MINIO_STORAGE_CLASS_STANDARD=EC:0"],
+                "environment": [
+                    "MINIO_STORAGE_CLASS_STANDARD=EC:0",
+                    "MINIO_HEAL_DISABLE=on",
+                    "MINIO_DISK_WATERMARK_LOW=1",
+                    "MINIO_DISK_WATERMARK_HIGH=1",
+                ],
                 "healthcheck": {
                     "test": [
                         "CMD",
