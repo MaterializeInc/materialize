@@ -402,6 +402,20 @@ inputs.
 | `replica_id` | [`text`]    | The ID of a cluster replica. |
 | `hydrated`   | [`boolean`] | Whether the object is hydrated on the replica. |
 
+## `mz_license_keys`
+
+The `mz_license_keys` table describes the license keys which are currently in
+use.
+
+<!-- RELATION_SPEC mz_internal.mz_license_keys -->
+| Field            | Type                         | Meaning  |
+| -----------      | -----------                  | -------- |
+| `id`             | [`text`]                     | The identifier of the license key. |
+| `organization`   | [`text`]                     | The name of the organization that this license key was issued to. |
+| `environment_id` | [`text`]                     | The environment ID that this license key was issued for. |
+| `expiration`     | [`timestamp with time zone`] | The date and time when this license key expires. |
+| `not_before`     | [`timestamp with time zone`] | The start of the validity period for this license key. |
+
 ## `mz_index_advice`
 
 {{< warning >}}

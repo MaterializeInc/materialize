@@ -41,6 +41,7 @@ rust_binary(
         "//src/build-info:mz_build_info",
         "//src/catalog:mz_catalog",
         "//src/cloud-resources:mz_cloud_resources",
+        "//src/license-keys:mz_license_keys",
         "//src/orchestrator-tracing:mz_orchestrator_tracing",
         "//src/ore:mz_ore",
         "//src/persist-client:mz_persist_client",

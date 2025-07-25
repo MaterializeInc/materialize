@@ -247,6 +247,15 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 3  hydrated  boolean
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_license_keys' ORDER BY position
+----
+1  id  text
+2  organization  text
+3  environment_id  text
+4  expiration  timestamp␠with␠time␠zone
+5  not_before  timestamp␠with␠time␠zone
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_index_advice' ORDER BY position
 ----
 1  object_id  text
@@ -702,6 +711,7 @@ mz_hydration_statuses
 mz_index_advice
 mz_internal_cluster_replicas
 mz_kafka_source_tables
+mz_license_keys
 mz_materialization_dependencies
 mz_materialization_lag
 mz_materialized_view_refresh_strategies

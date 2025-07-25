@@ -21,14 +21,14 @@ use mz_catalog::builtin::{
     MZ_CONNECTIONS, MZ_CONTINUAL_TASKS, MZ_DATABASES, MZ_DEFAULT_PRIVILEGES, MZ_EGRESS_IPS,
     MZ_FUNCTIONS, MZ_HISTORY_RETENTION_STRATEGIES, MZ_INDEX_COLUMNS, MZ_INDEXES,
     MZ_INTERNAL_CLUSTER_REPLICAS, MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS, MZ_KAFKA_SOURCE_TABLES,
-    MZ_KAFKA_SOURCES, MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES,
-    MZ_MATERIALIZED_VIEWS, MZ_MYSQL_SOURCE_TABLES, MZ_NETWORK_POLICIES, MZ_NETWORK_POLICY_RULES,
-    MZ_OBJECT_DEPENDENCIES, MZ_OPERATORS, MZ_PENDING_CLUSTER_REPLICAS, MZ_POSTGRES_SOURCE_TABLES,
-    MZ_POSTGRES_SOURCES, MZ_PSEUDO_TYPES, MZ_ROLE_MEMBERS, MZ_ROLE_PARAMETERS, MZ_ROLES,
-    MZ_SCHEMAS, MZ_SECRETS, MZ_SESSIONS, MZ_SINKS, MZ_SOURCE_REFERENCES, MZ_SOURCES,
-    MZ_SQL_SERVER_SOURCE_TABLES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD,
-    MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES, MZ_TABLES, MZ_TYPE_PG_METADATA, MZ_TYPES, MZ_VIEWS,
-    MZ_WEBHOOKS_SOURCES,
+    MZ_KAFKA_SOURCES, MZ_LICENSE_KEYS, MZ_LIST_TYPES, MZ_MAP_TYPES,
+    MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES, MZ_MATERIALIZED_VIEWS, MZ_MYSQL_SOURCE_TABLES,
+    MZ_NETWORK_POLICIES, MZ_NETWORK_POLICY_RULES, MZ_OBJECT_DEPENDENCIES, MZ_OPERATORS,
+    MZ_PENDING_CLUSTER_REPLICAS, MZ_POSTGRES_SOURCE_TABLES, MZ_POSTGRES_SOURCES, MZ_PSEUDO_TYPES,
+    MZ_ROLE_MEMBERS, MZ_ROLE_PARAMETERS, MZ_ROLES, MZ_SCHEMAS, MZ_SECRETS, MZ_SESSIONS, MZ_SINKS,
+    MZ_SOURCE_REFERENCES, MZ_SOURCES, MZ_SQL_SERVER_SOURCE_TABLES, MZ_SSH_TUNNEL_CONNECTIONS,
+    MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES, MZ_TABLES,
+    MZ_TYPE_PG_METADATA, MZ_TYPES, MZ_VIEWS, MZ_WEBHOOKS_SOURCES,
 };
 use mz_catalog::config::AwsPrincipalContext;
 use mz_catalog::durable::SourceReferences;
@@ -42,6 +42,7 @@ use mz_controller::clusters::{
 };
 use mz_controller_types::ClusterId;
 use mz_expr::MirScalarExpr;
+use mz_license_keys::ValidatedLicenseKey;
 use mz_orchestrator::{CpuLimit, DiskLimit, MemoryLimit};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
@@ -1981,6 +1982,29 @@ impl CatalogState {
             Datum::String(&addr.to_string()),
             Datum::Int32(ip.prefix_len().into()),
             Datum::String(&format!("{}/{}", addr, ip.prefix_len())),
+        ]);
+        Ok(BuiltinTableUpdate::row(id, row, Diff::ONE))
+    }
+
+    pub fn pack_license_key_update(
+        &self,
+        license_key: &ValidatedLicenseKey,
+    ) -> Result<BuiltinTableUpdate<&'static BuiltinTable>, Error> {
+        let id = &MZ_LICENSE_KEYS;
+        let row = Row::pack_slice(&[
+            Datum::String(&license_key.id),
+            Datum::String(&license_key.organization),
+            Datum::String(&license_key.environment_id),
+            Datum::TimestampTz(
+                mz_ore::now::to_datetime(license_key.expiration * 1000)
+                    .try_into()
+                    .expect("must fit"),
+            ),
+            Datum::TimestampTz(
+                mz_ore::now::to_datetime(license_key.not_before * 1000)
+                    .try_into()
+                    .expect("must fit"),
+            ),
         ]);
         Ok(BuiltinTableUpdate::row(id, row, Diff::ONE))
     }

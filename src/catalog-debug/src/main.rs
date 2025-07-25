@@ -45,6 +45,7 @@ use mz_catalog::durable::{
 };
 use mz_catalog::memory::objects::CatalogItem;
 use mz_cloud_resources::AwsExternalIdPrefix;
+use mz_license_keys::ValidatedLicenseKey;
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::collections::HashSet;
@@ -656,6 +657,7 @@ async fn upgrade_check(
             enable_0dt_deployment: true,
             helm_chart_version: None,
             external_login_password_mz_system: None,
+            license_key: ValidatedLicenseKey::for_tests(),
         },
         &mut storage,
     )

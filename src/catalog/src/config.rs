@@ -17,6 +17,7 @@ use mz_auth::password::Password;
 use mz_build_info::BuildInfo;
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_controller::clusters::ReplicaAllocation;
+use mz_license_keys::ValidatedLicenseKey;
 use mz_orchestrator::MemoryLimit;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
@@ -98,6 +99,7 @@ pub struct StateConfig {
     /// Helm chart version
     pub helm_chart_version: Option<String>,
     pub external_login_password_mz_system: Option<Password>,
+    pub license_key: ValidatedLicenseKey,
 }
 
 #[derive(Debug)]

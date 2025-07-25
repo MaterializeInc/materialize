@@ -4104,6 +4104,7 @@ pub fn serve(
                 enable_0dt_deployment,
                 helm_chart_version,
                 external_login_password_mz_system,
+                license_key: license_key.clone(),
             },
         })
         .await?;

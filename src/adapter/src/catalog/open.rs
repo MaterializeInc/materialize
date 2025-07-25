@@ -180,6 +180,7 @@ impl Catalog {
             aws_principal_context: config.aws_principal_context,
             aws_privatelink_availability_zones: config.aws_privatelink_availability_zones,
             http_host_name: config.http_host_name,
+            license_key: config.license_key,
         };
 
         let mut updates: Vec<_> = storage.sync_to_current_updates().await?;
@@ -559,6 +560,16 @@ impl Catalog {
                     catalog
                         .state
                         .resolve_builtin_table_update(catalog.state.pack_egress_ip_update(ip)?),
+                );
+            }
+
+            if !catalog.state.license_key.id.is_empty() {
+                builtin_table_updates.push(
+                    catalog.state.resolve_builtin_table_update(
+                        catalog
+                            .state
+                            .pack_license_key_update(&catalog.state.license_key)?,
+                    ),
                 );
             }
 

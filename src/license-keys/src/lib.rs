@@ -36,8 +36,14 @@ pub enum ExpirationBehavior {
     Disable,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct ValidatedLicenseKey {
+    pub id: String,
+    pub organization: String,
+    pub environment_id: String,
+    pub expiration: u64,
+    pub not_before: u64,
+
     pub max_credit_consumption_rate: f64,
     pub allow_credit_consumption_override: bool,
     pub expiration_behavior: ExpirationBehavior,
@@ -47,6 +53,12 @@ pub struct ValidatedLicenseKey {
 impl ValidatedLicenseKey {
     pub fn for_tests() -> Self {
         Self {
+            id: "".to_string(),
+            organization: "".to_string(),
+            environment_id: "".to_string(),
+            expiration: 0,
+            not_before: 0,
+
             max_credit_consumption_rate: 999999.0,
             allow_credit_consumption_override: true,
             expiration_behavior: ExpirationBehavior::Warn,
@@ -57,6 +69,12 @@ impl ValidatedLicenseKey {
     // TODO: temporary until we get the rest of the infrastructure in place
     pub fn disabled() -> Self {
         Self {
+            id: "".to_string(),
+            organization: "".to_string(),
+            environment_id: "".to_string(),
+            expiration: 0,
+            not_before: 0,
+
             max_credit_consumption_rate: 999999.0,
             allow_credit_consumption_override: true,
             expiration_behavior: ExpirationBehavior::Warn,
@@ -84,6 +102,12 @@ impl Default for ValidatedLicenseKey {
     fn default() -> Self {
         // this is used for the emulator if no license key is provided
         Self {
+            id: "".to_string(),
+            organization: "".to_string(),
+            environment_id: "".to_string(),
+            expiration: 0,
+            not_before: 0,
+
             max_credit_consumption_rate: 24.0,
             allow_credit_consumption_override: false,
             expiration_behavior: ExpirationBehavior::Disable,
@@ -206,6 +230,12 @@ fn validate_with_pubkey_v1(
     }
 
     Ok(ValidatedLicenseKey {
+        id: jwt.claims.jti,
+        organization: jwt.claims.sub,
+        environment_id: jwt.claims.aud,
+        expiration: jwt.claims.exp,
+        not_before: jwt.claims.nbf,
+
         max_credit_consumption_rate: jwt.claims.max_credit_consumption_rate,
         allow_credit_consumption_override: jwt.claims.allow_credit_consumption_override,
         expiration_behavior: jwt.claims.expiration_behavior,

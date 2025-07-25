@@ -35,6 +35,7 @@ mz-controller-types = { path = "../controller-types" }
 mz-durable-cache = { path = "../durable-cache" }
 mz-dyncfg = { path = "../dyncfg" }
 mz-expr = { path = "../expr" }
+mz-license-keys = { path = "../license-keys" }
 mz-orchestrator = { path = "../orchestrator" }
 mz-ore = { path = "../ore", features = ["chrono", "async", "tracing"] }
 mz-persist-client = { path = "../persist-client" }
