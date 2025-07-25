@@ -12,4 +12,4 @@
 > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'mz_source';
 stalled
 
-> ALTER CONNECTION mysql_conn SET (HOST = '${arg.mysql-source-host}');
+> ALTER CONNECTION mysql_conn SET (HOST = '${arg.mysql-source-host}:${arg.mysql-source-port}');

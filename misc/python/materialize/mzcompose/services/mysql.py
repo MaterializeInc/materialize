@@ -58,6 +58,7 @@ class MySql(Service):
                 ],
                 "command": [
                     "--secure-file-priv=/var/lib/mysql-files",
+                    f"--port={port}",
                     *additional_args,
                 ],
                 "healthcheck": {
@@ -65,6 +66,7 @@ class MySql(Service):
                         "CMD",
                         "mysqladmin",
                         "ping",
+                        f"--port={port}",
                         f"--password={root_password}",
                         "--protocol=TCP",
                     ],

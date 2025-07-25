@@ -32,8 +32,15 @@ from materialize.version_list import resolve_ancestor_image_tag
 
 SERVICES = [
     RQG(),
-    Materialized(name="mz_this", default_replication_factor=2),
-    Materialized(name="mz_other", default_replication_factor=2),
+    Materialized(
+        name="mz_this", default_replication_factor=2, builtin_postgres_port=26258
+    ),
+    Materialized(
+        name="mz_other",
+        default_replication_factor=2,
+        # TODO(def-): Switch over when next version is released
+        # ports=[16875, 16876, 16877, 16878, 16879],
+    ),
     Postgres(),
 ]
 
@@ -69,6 +76,8 @@ class ReferenceImplementation(Enum):
     def dsn(self) -> str:
         match self:
             case ReferenceImplementation.MATERIALIZE:
+                # TODO(def-): Switch over when next version is released
+                # return "dbname=materialize;host=mz_other;user=materialize;port=16875"
                 return "dbname=materialize;host=mz_other;user=materialize;port=6875"
             case ReferenceImplementation.POSTGRES:
                 return "dbname=postgres;host=postgres;user=postgres;password=postgres"
@@ -164,12 +173,12 @@ WORKLOADS = [
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "--this-tag",
-        help="Run Materialize with this git tag on port 16875",
+        help="Run Materialize with this git tag",
     )
     parser.add_argument(
         "--other-tag",
         action=StoreOtherTag,
-        help="Run Materialize with this git tag on port 26875 (for workloads that compare two MZ instances)",
+        help="Run Materialize with this git tag (for workloads that compare two MZ instances)",
     )
     parser.add_argument(
         "--grammar",
@@ -246,7 +255,7 @@ def run_workload(c: Composition, args: argparse.Namespace, workload: Workload) -
     participants: list[Service] = [
         Materialized(
             name="mz_this",
-            ports=["16875:6875", "16876:6876", "16877:6877", "16878:6878"],
+            builtin_postgres_port=26258,
             image=materialize_image(args.this_tag),
             use_default_volumes=False,
             default_replication_factor=2,
@@ -269,11 +278,14 @@ def run_workload(c: Composition, args: argparse.Namespace, workload: Workload) -
                 Materialized(
                     name="mz_other",
                     image=materialize_image(args.other_tag),
-                    ports=["26875:6875", "26876:6876", "26877:6877", "26878:6878"],
+                    # TODO(def-): Switch over when next version is released
+                    # ports=[16875, 16876, 16877, 16878, 16879],
                     use_default_volumes=False,
                     default_replication_factor=2,
                 )
             )
+            # TODO(def-): Switch over when next version is released
+            # psql_urls.append("postgresql://materialize@mz_other:16875/materialize")
             psql_urls.append("postgresql://materialize@mz_other:6875/materialize")
         case ReferenceImplementation.POSTGRES:
             participants.append(Postgres(ports=["15432:5432"]))

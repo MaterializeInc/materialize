@@ -47,9 +47,9 @@ from materialize import MZ_ROOT, buildkite, mzbuild, spawn, ui
 from materialize.mzcompose import cluster_replica_size_map, loader
 from materialize.mzcompose.service import Service
 from materialize.mzcompose.services.materialized import (
-    LEADER_STATUS_HEALTHCHECK,
     DeploymentStatus,
     Materialized,
+    leader_status_healthcheck,
 )
 from materialize.mzcompose.services.minio import minio_blob_uri
 from materialize.mzcompose.test_result import (
@@ -73,6 +73,8 @@ FILTERED_ARGS = [
     "confluent-api-secret=",
     "aws-access-key-id=",
     "aws-secret-access-key=",
+    "sql-server-password",
+    "mysql-root-password",
     # Not a secret, but too spammy, filter too
     "CLUSTER_REPLICA_SIZES",
 ]
@@ -119,7 +121,6 @@ class Composition:
         project_name: str | None = None,
         sanity_restart_mz: bool = False,
     ):
-        self.conns = {}
         self.name = name
         self.description = None
         self.repo = repo
@@ -183,11 +184,29 @@ class Composition:
                     name = name[len("workflow_") :].replace("_", "-")
                     self.workflows[name] = fn
 
+            self.all_hosts = set()
             for python_service in getattr(module, "SERVICES", []):
                 name = python_service.name
                 if name in self.compose["services"]:
                     raise UIError(f"service {name!r} specified more than once")
                 self.compose["services"][name] = python_service.config
+                if self.compose["services"][name].get("network_mode") == "host":
+                    self.all_hosts.add(name)
+                    for alias in (
+                        self.compose["services"][name]
+                        .get("networks", {})
+                        .get("default", {})
+                        .get("aliases", [])
+                    ):
+                        self.all_hosts.add(alias)
+                    if "networks" in self.compose["services"][name]:
+                        del self.compose["services"][name]["networks"]
+            for service in self.compose["services"].values():
+                host_network = service.get("network_mode") == "host"
+                service["extra_hosts"] = [
+                    f"{host}:127.0.0.1" if host_network else f"{host}:172.17.0.1"
+                    for host in self.all_hosts
+                ]
 
             for volume_name, volume_def in getattr(module, "VOLUMES", {}).items():
                 if volume_name in self.compose["volumes"]:
@@ -460,6 +479,8 @@ class Composition:
             service: The name of a service in the composition.
             private_port: A private port exposed by the service.
         """
+        if ui.env_is_truthy("CI_HOST_NETWORK"):
+            return int(private_port)
         proc = self.invoke(
             "port", service, str(private_port), capture=True, silent=True
         )
@@ -538,6 +559,17 @@ class Composition:
                 not fail_on_new_service or service.name in self.compose["services"]
             ), f"Service {service.name} not found in SERVICES: {list(self.compose['services'].keys())}"
             self.compose["services"][service.name] = service.config
+
+            if ui.env_is_truthy("CI_HOST_NETWORK"):
+                host_network = (
+                    self.compose["services"][service.name].get("network_mode") == "host"
+                )
+                self.compose["services"][service.name]["extra_hosts"] = [
+                    f"{host}:127.0.0.1" if host_network else f"{host}:172.17.0.1"
+                    for host in self.all_hosts
+                ]
+                if "networks" in self.compose["services"][service.name]:
+                    del self.compose["services"][service.name]["networks"]
 
         # Re-acquire dependencies, as the override may have swapped an `image`
         # config for an `mzbuild` config.
@@ -676,17 +708,13 @@ class Composition:
         password: str | None = None,
         sslmode: str = "disable",
         startup_params: dict[str, str] = {},
-        reuse_connection: bool = False,
     ) -> Connection:
         if service is None:
             service = "materialized"
 
         """Get a connection (with autocommit enabled) to the materialized service."""
         port = self.port(service, port) if port else self.default_port(service)
-        options = " ".join([f"-c {key}={val}" for key, val in startup_params.items()])
-        key = (threading.get_ident(), database, user, password, port, sslmode, options)
-        if reuse_connection and key in self.conns:
-            return self.conns[key]
+        print(" ".join([f"-c {key}={val}" for key, val in startup_params.items()]))
         conn = psycopg.connect(
             host="localhost",
             dbname=database,
@@ -694,11 +722,11 @@ class Composition:
             password=password,
             port=port,
             sslmode=sslmode,
-            options=options,
+            options=" ".join(
+                [f"-c {key}={val}" for key, val in startup_params.items()]
+            ),
         )
         conn.autocommit = True
-        if reuse_connection:
-            self.conns[key] = conn
         return conn
 
     def sql_cursor(
@@ -710,18 +738,10 @@ class Composition:
         password: str | None = None,
         sslmode: str = "disable",
         startup_params: dict[str, str] = {},
-        reuse_connection: bool = False,
     ) -> Cursor:
         """Get a cursor to run SQL queries against the materialized service."""
         conn = self.sql_connection(
-            service,
-            user,
-            database,
-            port,
-            password,
-            sslmode,
-            startup_params,
-            reuse_connection,
+            service, user, database, port, password, sslmode, startup_params
         )
         return conn.cursor()
 
@@ -734,16 +754,10 @@ class Composition:
         port: int | None = None,
         password: str | None = None,
         print_statement: bool = True,
-        reuse_connection: bool = True,
     ) -> None:
         """Run a batch of SQL statements against the materialized service."""
         with self.sql_cursor(
-            service=service,
-            user=user,
-            database=database,
-            port=port,
-            password=password,
-            reuse_connection=reuse_connection,
+            service=service, user=user, database=database, port=port, password=password
         ) as cursor:
             for statement in sqlparse.split(sql):
                 if print_statement:
@@ -758,16 +772,10 @@ class Composition:
         database: str = "materialize",
         port: int | None = None,
         password: str | None = None,
-        reuse_connection: bool = True,
     ) -> Any:
         """Execute and return results of a SQL query."""
         with self.sql_cursor(
-            service=service,
-            user=user,
-            database=database,
-            port=port,
-            password=password,
-            reuse_connection=reuse_connection,
+            service=service, user=user, database=database, port=port, password=password
         ) as cursor:
             cursor.execute(sql.encode())
             return cursor.fetchall()
@@ -826,6 +834,13 @@ class Composition:
             silent=silent,
         )
 
+    def mz_port(self, mz_service: str, index: int) -> int:
+        ports = self.compose["services"][mz_service]["ports"]
+        if len(ports) <= index:
+            ports = [6875, 6876, 6877, 6878, 6879]
+        port = ports[index]
+        return port if isinstance(port, int) else port.split(":")[-1]
+
     def run_testdrive_files(
         self,
         *args: str,
@@ -838,8 +853,10 @@ class Composition:
             args = tuple(
                 list(args)
                 + [
-                    f"--materialize-url=postgres://materialize@{mz_service}:6875",
-                    f"--materialize-internal-url=postgres://mz_system@{mz_service}:6877",
+                    f"--materialize-url=postgres://materialize@{mz_service}:{self.mz_port(mz_service, 0)}",
+                    f"--materialize-internal-url=postgres://mz_system@{mz_service}:{self.mz_port(mz_service, 2)}",
+                    f"--materialize-http-port={self.mz_port(mz_service, 1)}",
+                    f"--materialize-internal-http-port={self.mz_port(mz_service, 3)}",
                 ]
             )
         environment = {"CLUSTER_REPLICA_SIZES": json.dumps(cluster_replica_size_map())}
@@ -1069,7 +1086,7 @@ class Composition:
                 Materialized(
                     image=f"materialize/materialized:{version}",
                     environment_extra=["MZ_DEPLOY_GENERATION=1"],
-                    healthcheck=LEADER_STATUS_HEALTHCHECK,
+                    healthcheck=leader_status_healthcheck(),
                 )
             ):
                 self.up("materialized")
@@ -1426,8 +1443,10 @@ class Composition:
 
         if mz_service is not None:
             args = args + [
-                f"--materialize-url=postgres://materialize@{mz_service}:6875",
-                f"--materialize-internal-url=postgres://mz_system@{mz_service}:6877",
+                f"--materialize-url=postgres://materialize@{mz_service}:{self.mz_port(mz_service, 0)}",
+                f"--materialize-internal-url=postgres://mz_system@{mz_service}:{self.mz_port(mz_service, 2)}",
+                f"--materialize-http-port={self.mz_port(mz_service, 1)}",
+                f"--materialize-internal-http-port={self.mz_port(mz_service, 3)}",
                 f"--persist-consensus-url=postgres://root@{mz_service}:26257?options=--search_path=consensus",
             ]
 
@@ -1578,7 +1597,7 @@ class Composition:
                         mz_service,
                         "curl",
                         "-s",
-                        "localhost:6878/api/leader/status",
+                        f"localhost:{self.mz_port(mz_service, 3)}/api/leader/status",
                         capture=True,
                         silent=True,
                     ).stdout
@@ -1603,7 +1622,7 @@ class Composition:
                 "-s",
                 "-X",
                 "POST",
-                "localhost:6878/api/leader/promote",
+                f"localhost:{self.mz_port(mz_service, 3)}/api/leader/promote",
                 capture=True,
             ).stdout
         )

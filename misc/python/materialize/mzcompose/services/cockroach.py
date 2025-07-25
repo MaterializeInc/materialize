@@ -43,7 +43,7 @@ class Cockroach(Service):
             image = f"cockroachdb/cockroach:{Cockroach.DEFAULT_COCKROACH_TAG}"
 
         if command is None:
-            command = ["start-single-node", "--insecure"]
+            command = ["start-single-node", "--insecure", "--http-addr=0.0.0.0:8078"]
 
         if setup_materialize:
             path = os.path.relpath(
@@ -58,7 +58,7 @@ class Cockroach(Service):
         if healthcheck is None:
             healthcheck = {
                 # init_success is a file created by the Cockroach container entrypoint
-                "test": "[ -f init_success ] && curl --fail 'http://localhost:8080/health?ready=1'",
+                "test": "[ -f init_success ] && curl --fail 'http://localhost:8078/health?ready=1'",
                 "interval": "1s",
                 "start_period": "30s",
             }

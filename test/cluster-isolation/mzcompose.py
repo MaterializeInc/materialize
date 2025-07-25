@@ -38,10 +38,25 @@ SERVICES = [
         },
         support_external_clusterd=True,
     ),
-    Clusterd(name="clusterd_1_1"),
-    Clusterd(name="clusterd_1_2"),
-    Clusterd(name="clusterd_2_1"),
-    Clusterd(name="clusterd_2_2"),
+    Clusterd(
+        name="clusterd_1_1",
+        processes=[("clusterd_1_1", 2102, 2103), ("clusterd_1_2", 2106, 2107)],
+    ),
+    Clusterd(
+        name="clusterd_1_2",
+        processes=[("clusterd_1_1", 2102, 2103), ("clusterd_1_2", 2106, 2107)],
+        ports=[2104, 2105, 2106, 2107, 6882],
+    ),
+    Clusterd(
+        name="clusterd_2_1",
+        processes=[("clusterd_2_1", 2110, 2111), ("clusterd_2_2", 2114, 2115)],
+        ports=[2108, 2109, 2110, 2111, 6883],
+    ),
+    Clusterd(
+        name="clusterd_2_2",
+        processes=[("clusterd_2_1", 2110, 2111), ("clusterd_2_2", 2114, 2115)],
+        ports=[2112, 2113, 2114, 2115, 6884],
+    ),
     Testdrive(),
 ]
 
@@ -242,23 +257,7 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
             no_reset=True,
             materialize_params={"cluster": "cluster2"},
             seed=id,
-        ),
-        Clusterd(
-            name="clusterd_1_1",
-            process_names=["clusterd_1_1", "clusterd_1_2"],
-        ),
-        Clusterd(
-            name="clusterd_1_2",
-            process_names=["clusterd_1_1", "clusterd_1_2"],
-        ),
-        Clusterd(
-            name="clusterd_2_1",
-            process_names=["clusterd_2_1", "clusterd_2_2"],
-        ),
-        Clusterd(
-            name="clusterd_2_2",
-            process_names=["clusterd_2_1", "clusterd_2_2"],
-        ),
+        )
     ):
         c.up(
             "materialized",
@@ -279,10 +278,10 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
             """
             DROP CLUSTER IF EXISTS cluster1 CASCADE;
             CREATE CLUSTER cluster1 REPLICAS (replica1 (
-                STORAGECTL ADDRESSES ['clusterd_1_1:2100', 'clusterd_1_2:2100'],
-                STORAGE ADDRESSES ['clusterd_1_1:2103', 'clusterd_1_2:2103'],
-                COMPUTECTL ADDRESSES ['clusterd_1_1:2101', 'clusterd_1_2:2101'],
-                COMPUTE ADDRESSES ['clusterd_1_1:2102', 'clusterd_1_2:2102']
+                STORAGECTL ADDRESSES ['clusterd_1_1:2100', 'clusterd_1_2:2104'],
+                STORAGE ADDRESSES ['clusterd_1_1:2103', 'clusterd_1_2:2107'],
+                COMPUTECTL ADDRESSES ['clusterd_1_1:2101', 'clusterd_1_2:2105'],
+                COMPUTE ADDRESSES ['clusterd_1_1:2102', 'clusterd_1_2:2106']
             ));
             """
         )
@@ -291,10 +290,10 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
             """
             DROP CLUSTER IF EXISTS cluster2 CASCADE;
             CREATE CLUSTER cluster2 REPLICAS (replica1 (
-                STORAGECTL ADDRESSES ['clusterd_2_1:2100', 'clusterd_2_2:2100'],
-                STORAGE ADDRESSES ['clusterd_2_1:2103', 'clusterd_2_2:2103'],
-                COMPUTECTL ADDRESSES ['clusterd_2_1:2101', 'clusterd_2_2:2101'],
-                COMPUTE ADDRESSES ['clusterd_2_1:2102', 'clusterd_2_2:2102']
+                STORAGECTL ADDRESSES ['clusterd_2_1:2108', 'clusterd_2_2:2112'],
+                STORAGE ADDRESSES ['clusterd_2_1:2111', 'clusterd_2_2:2115'],
+                COMPUTECTL ADDRESSES ['clusterd_2_1:2109', 'clusterd_2_2:2113'],
+                COMPUTE ADDRESSES ['clusterd_2_1:2110', 'clusterd_2_2:2114']
             ));
             """
         )

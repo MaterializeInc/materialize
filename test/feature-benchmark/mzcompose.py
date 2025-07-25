@@ -181,7 +181,7 @@ def run_one_scenario(
 
         tag = resolve_tag(tag, scenario_class, args.scale)
 
-        entrypoint_host = "balancerd" if balancerd else "materialized"
+        entrypoint_host = "balancerd:6575" if balancerd else "materialized:6875"
 
         c.up({"name": "testdrive", "persistent": True})
 
@@ -235,7 +235,7 @@ def run_one_scenario(
 
         with c.override(
             Testdrive(
-                materialize_url=f"postgres://materialize@{entrypoint_host}:6875",
+                materialize_url=f"postgres://materialize@{entrypoint_host}",
                 default_timeout=default_timeout,
                 materialize_params={"statement_timeout": f"'{default_timeout}'"},
                 metadata_store="cockroach",

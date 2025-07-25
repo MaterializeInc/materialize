@@ -10,7 +10,7 @@
 $ http-request method=POST url=http://toxiproxy:8474/proxies content-type=application/json
 {
   "name": "postgres",
-  "listen": "0.0.0.0:5432",
+  "listen": "0.0.0.0:5433",
   "upstream": "postgres:5432",
   "enabled": true
 }
@@ -19,6 +19,7 @@ $ http-request method=POST url=http://toxiproxy:8474/proxies content-type=applic
 
 > CREATE CONNECTION pg TO POSTGRES (
     HOST toxiproxy,
+    PORT 5433,
     DATABASE postgres,
     USER postgres,
     PASSWORD SECRET pgpass

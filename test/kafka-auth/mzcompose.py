@@ -64,13 +64,15 @@ SERVICES = [
         ],
     ),
     SchemaRegistry(
+        ports=[8079],
         environment_extra=[
             # Only allow this schema registry, which does not require
             # authentication, to be the leader. This simplifies testdrive, as
             # it is assured that it can submit requests to the schema registry
             # without needing authentication.
             "SCHEMA_REGISTRY_LEADER_ELIGIBILITY=true",
-        ]
+            "SCHEMA_REGISTRY_LISTENERS=http://0.0.0.0:8079",
+        ],
     ),
     SchemaRegistry(
         name="schema-registry-basic",
@@ -168,6 +170,7 @@ SERVICES = [
     Testdrive(
         volumes_extra=["secrets:/share/secrets"],
         default_timeout="30s",
+        schema_registry_url="http://schema-registry:8079",
     ),
     Mz(app_password=""),
 ]
@@ -220,14 +223,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     # Now that the Kafka topic has been bootstrapped, it's safe to bring up all
     # the other schema registries in parallel.
-    c.up(
-        "schema-registry-basic",
-        "schema-registry-ssl",
-        "schema-registry-mssl",
-        "schema-registry-ssl-basic",
-        "schema-registry-mssl-basic",
-    )
-
     # Set up SSH connection.
     c.sql(
         """
@@ -235,7 +230,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         CREATE CONNECTION IF NOT EXISTS testdrive_no_reset_connections.public.ssh TO SSH TUNNEL (
             HOST 'ssh-bastion-host',
             USER 'mz',
-            PORT 22
+            PORT 23
         );
     """
     )
@@ -256,7 +251,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         CREATE CONNECTION IF NOT EXISTS testdrive_no_reset_connections.public.ssh_backup TO SSH TUNNEL (
             HOST 'ssh-bastion-host',
             USER 'mz',
-            PORT 22
+            PORT 23
         );
     """
     )
@@ -281,7 +276,17 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         ),
         lambda file: file,
     )
-    c.test_parts(files, c.run_testdrive_files)
+
+    def process(file: str) -> None:
+        if not file.startswith("test-schema-registry-"):
+            c.run_testdrive_files(file)
+        else:
+            sr = file[5:-3]
+            c.up(sr)
+            c.run_testdrive_files(file)
+            c.kill(sr)
+
+    c.test_parts(files, process)
 
 
 def add_acl(

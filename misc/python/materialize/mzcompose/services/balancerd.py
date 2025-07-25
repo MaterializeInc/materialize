@@ -30,9 +30,9 @@ class Balancerd(Service):
         if command is None:
             command = [
                 "service",
-                "--pgwire-listen-addr=0.0.0.0:6875",
-                "--https-listen-addr=0.0.0.0:6876",
-                "--internal-http-listen-addr=0.0.0.0:6878",
+                "--pgwire-listen-addr=0.0.0.0:6575",
+                "--https-listen-addr=0.0.0.0:6576",
+                "--internal-http-listen-addr=0.0.0.0:6578",
                 f"--static-resolver-addr={static_resolver_addr or 'materialized:6875'}",
                 f"--https-resolver-template={https_resolver_template or 'materialized:6876'}",
             ]
@@ -52,7 +52,7 @@ class Balancerd(Service):
         config: ServiceConfig = {
             "mzbuild": mzbuild,
             "command": command,
-            "ports": [6875, 6876, 6877, 6878],
+            "ports": [6575, 6576, 6578],
             "volumes": volumes,
             "depends_on": depends_graph,
         }

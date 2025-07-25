@@ -13,6 +13,7 @@
 > CREATE SECRET mysqlpass AS '${arg.mysql-root-password}'
 > CREATE CONNECTION mysql_conn TO MYSQL (
     HOST "${arg.mysql-source-host}",
+    PORT ${arg.mysql-source-port},
     USER root,
     PASSWORD SECRET mysqlpass
   )

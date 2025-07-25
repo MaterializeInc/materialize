@@ -14,6 +14,8 @@
 # sources. This also serves to verify that logging is correctly cleaned up under
 # active dataflow cancellation.
 
+$ set-sql-timeout duration=60s
+
 # Introspection subscribes add noise to the introspection sources, so disable them.
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_introspection_subscribes = false

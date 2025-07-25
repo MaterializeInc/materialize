@@ -21,7 +21,7 @@ ALTER SYSTEM SET mysql_source_connect_timeout = '2s';
 $ http-request method=POST url=http://toxiproxy:8474/proxies content-type=application/json
 {
   "name": "mysql",
-  "listen": "0.0.0.0:3306",
+  "listen": "0.0.0.0:3307",
   "upstream": "mysql:3306",
   "enabled": true
 }
@@ -35,6 +35,7 @@ $ http-request method=POST url=http://toxiproxy:8474/proxies/mysql/toxics conten
 > CREATE SECRET mysql_pass AS '${arg.mysql-root-password}';
 ! CREATE CONNECTION mysql_conn TO MYSQL (
     HOST "toxiproxy",
+    PORT 3307,
     USER root,
     PASSWORD SECRET mysql_pass
   );
@@ -47,6 +48,7 @@ ALTER SYSTEM SET mysql_source_connect_timeout = '30s';
 
 > CREATE CONNECTION mysql_conn TO MYSQL (
     HOST "toxiproxy",
+    PORT 3307,
     USER root,
     PASSWORD SECRET mysql_pass
   );

@@ -52,7 +52,11 @@ SERVICES = [
     Azurite(),
     Mc(),
     Materialized(default_replication_factor=2),
-    Materialized(name="materialized2", default_replication_factor=2),
+    Materialized(
+        name="materialized2",
+        default_replication_factor=2,
+        ports=[16875, 16876, 16877, 16878, 16879],
+    ),
     Service("sqlsmith", {"mzbuild": "sqlsmith"}),
     Service(
         name="persistcli",
@@ -89,10 +93,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             # TODO: Retry with toxiproxy on azurite
             external_blob_store=True,
             blob_store_is_azure=args.azurite,
-            external_metadata_store="toxiproxy",
-            ports=["6975:6875", "6976:6876", "6977:6877"],
-            sanity_restart=sanity_restart,
+            external_metadata_store="toxiproxy:26258",
             metadata_store="cockroach",
+            sanity_restart=sanity_restart,
             default_replication_factor=2,
         ),
         Toxiproxy(seed=random.randrange(2**63)),
@@ -154,7 +157,7 @@ def toxiproxy_start(c: Composition) -> None:
         f"http://localhost:{port}/proxies",
         json={
             "name": "cockroach",
-            "listen": "0.0.0.0:26257",
+            "listen": "0.0.0.0:26258",
             "upstream": "cockroach:26257",
             "enabled": True,
         },
@@ -164,7 +167,7 @@ def toxiproxy_start(c: Composition) -> None:
         f"http://localhost:{port}/proxies",
         json={
             "name": "minio",
-            "listen": "0.0.0.0:9000",
+            "listen": "0.0.0.0:9002",
             "upstream": "minio:9000",
             "enabled": True,
         },
@@ -174,7 +177,7 @@ def toxiproxy_start(c: Composition) -> None:
         f"http://localhost:{port}/proxies",
         json={
             "name": "azurite",
-            "listen": "0.0.0.0:10000",
+            "listen": "0.0.0.0:10001",
             "upstream": "azurite:10000",
             "enabled": True,
         },

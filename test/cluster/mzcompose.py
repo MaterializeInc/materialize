@@ -58,9 +58,9 @@ SERVICES = [
     SchemaRegistry(),
     Localstack(),
     Clusterd(name="clusterd1", workers=2),
-    Clusterd(name="clusterd2", workers=2),
-    Clusterd(name="clusterd3", workers=2),
-    Clusterd(name="clusterd4", workers=2),
+    Clusterd(name="clusterd2", workers=2, ports=[2104, 2105, 2106, 2107, 6882]),
+    Clusterd(name="clusterd3", workers=2, ports=[2108, 2109, 2110, 2111, 6883]),
+    Clusterd(name="clusterd4", workers=2, ports=[2112, 2113, 2114, 2115, 6884]),
     Mz(app_password=""),
     Minio(),
     Materialized(
@@ -102,7 +102,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             return
         with c.test_case(name):
             c.workflow(name)
-            c.down()
+            c.down(destroy_volumes=True)
 
     files = buildkite.shard_list(list(c.workflows.keys()), lambda workflow: workflow)
     c.test_parts(files, process)
@@ -123,22 +123,25 @@ def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
         Clusterd(
             name="clusterd1",
             workers=2,
-            process_names=["clusterd1", "clusterd2"],
+            processes=[("clusterd1", 2102, 2103), ("clusterd2", 2106, 2107)],
         ),
         Clusterd(
             name="clusterd2",
             workers=2,
-            process_names=["clusterd1", "clusterd2"],
+            processes=[("clusterd1", 2102, 2103), ("clusterd2", 2106, 2107)],
+            ports=[2104, 2105, 2106, 2107, 6882],
         ),
         Clusterd(
             name="clusterd3",
             workers=2,
-            process_names=["clusterd3", "clusterd4"],
+            processes=[("clusterd3", 2110, 2111), ("clusterd4", 2114, 2115)],
+            ports=[2108, 2109, 2110, 2111, 6883],
         ),
         Clusterd(
             name="clusterd4",
             workers=2,
-            process_names=["clusterd3", "clusterd4"],
+            processes=[("clusterd3", 2110, 2111), ("clusterd4", 2114, 2115)],
+            ports=[2112, 2113, 2114, 2115, 6884],
         ),
     ):
         c.up("zookeeper", "kafka", "schema-registry", "localstack")
@@ -155,10 +158,10 @@ def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
 
             CREATE CLUSTER cluster1 REPLICAS (
                 replica1 (
-                    STORAGECTL ADDRESSES ['clusterd1:2100', 'clusterd2:2100'],
-                    STORAGE ADDRESSES ['clusterd1:2103', 'clusterd2:2103'],
-                    COMPUTECTL ADDRESSES ['clusterd1:2101', 'clusterd2:2101'],
-                    COMPUTE ADDRESSES ['clusterd1:2102', 'clusterd2:2102'],
+                    STORAGECTL ADDRESSES ['clusterd1:2100', 'clusterd2:2104'],
+                    STORAGE ADDRESSES ['clusterd1:2103', 'clusterd2:2107'],
+                    COMPUTECTL ADDRESSES ['clusterd1:2101', 'clusterd2:2105'],
+                    COMPUTE ADDRESSES ['clusterd1:2102', 'clusterd2:2106'],
                     WORKERS 2
                 )
             );
@@ -180,10 +183,10 @@ def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
             ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;
 
             CREATE CLUSTER REPLICA cluster1.replica2
-                STORAGECTL ADDRESSES ['clusterd3:2100', 'clusterd4:2100'],
-                STORAGE ADDRESSES ['clusterd3:2103', 'clusterd4:2103'],
-                COMPUTECTL ADDRESSES ['clusterd3:2101', 'clusterd4:2101'],
-                COMPUTE ADDRESSES ['clusterd3:2102', 'clusterd4:2102'],
+                STORAGECTL ADDRESSES ['clusterd3:2108', 'clusterd4:2112'],
+                STORAGE ADDRESSES ['clusterd3:2111', 'clusterd4:2115'],
+                COMPUTECTL ADDRESSES ['clusterd3:2109', 'clusterd4:2113'],
+                COMPUTE ADDRESSES ['clusterd3:2110', 'clusterd4:2114'],
                 WORKERS 2;
         """,
             port=6877,
@@ -254,7 +257,7 @@ def workflow_test_github_4443(c: Composition) -> None:
                 "materialized", "curl", "localhost:6878/metrics", capture=True
             ).stdout
             replica_metrics = c.exec(
-                "clusterd1", "curl", "localhost:6878/metrics", capture=True
+                "clusterd1", "curl", "localhost:6881/metrics", capture=True
             ).stdout
             metrics = controller_metrics + replica_metrics
 
@@ -502,9 +505,9 @@ def workflow_test_github_4545(c: Composition) -> None:
                 WORKERS 2
             ),
             logging_off (
-                STORAGECTL ADDRESSES ['clusterd2:2100'],
+                STORAGECTL ADDRESSES ['clusterd2:2104'],
                 STORAGE ADDRESSES ['clusterd2:2103'],
-                COMPUTECTL ADDRESSES ['clusterd2:2101'],
+                COMPUTECTL ADDRESSES ['clusterd2:2105'],
                 COMPUTE ADDRESSES ['clusterd2:2102'],
                 WORKERS 2,
                 INTROSPECTION INTERVAL 0
@@ -1286,12 +1289,13 @@ def workflow_test_remote_storage(c: Composition) -> None:
         Clusterd(
             name="clusterd1",
             workers=4,
-            process_names=["clusterd1", "clusterd2"],
+            processes=[("clusterd1", 2102, 2103), ("clusterd2", 2106, 2107)],
         ),
         Clusterd(
             name="clusterd2",
             workers=4,
-            process_names=["clusterd1", "clusterd2"],
+            processes=[("clusterd1", 2102, 2103), ("clusterd2", 2106, 2107)],
+            ports=[2104, 2105, 2106, 2107, 6882],
         ),
     ):
         c.up(
@@ -1503,10 +1507,10 @@ def workflow_test_replica_targeted_subscribe_abort(c: Composition) -> None:
                 WORKERS 2
             ),
             replica2 (
-                STORAGECTL ADDRESSES ['clusterd2:2100'],
-                STORAGE ADDRESSES ['clusterd2:2103'],
-                COMPUTECTL ADDRESSES ['clusterd2:2101'],
-                COMPUTE ADDRESSES ['clusterd2:2102'],
+                STORAGECTL ADDRESSES ['clusterd2:2104'],
+                STORAGE ADDRESSES ['clusterd2:2107'],
+                COMPUTECTL ADDRESSES ['clusterd2:2105'],
+                COMPUTE ADDRESSES ['clusterd2:2106'],
                 WORKERS 2
             )
         );
@@ -1556,8 +1560,7 @@ def workflow_test_replica_targeted_subscribe_abort(c: Composition) -> None:
             BEGIN;
             DECLARE c CURSOR FOR SUBSCRIBE t;
             FETCH c WITH (timeout = '5s');
-            """,
-            reuse_connection=False,
+            """
         )
     except InternalError_ as e:
         assert (
@@ -1595,10 +1598,10 @@ def workflow_test_replica_targeted_select_abort(c: Composition) -> None:
                 WORKERS 2
             ),
             replica2 (
-                STORAGECTL ADDRESSES ['clusterd2:2100'],
-                STORAGE ADDRESSES ['clusterd2:2103'],
-                COMPUTECTL ADDRESSES ['clusterd2:2101'],
-                COMPUTE ADDRESSES ['clusterd2:2102'],
+                STORAGECTL ADDRESSES ['clusterd2:2104'],
+                STORAGE ADDRESSES ['clusterd2:2107'],
+                COMPUTECTL ADDRESSES ['clusterd2:2105'],
+                COMPUTE ADDRESSES ['clusterd2:2106'],
                 WORKERS 2
             )
         );
@@ -1664,7 +1667,7 @@ def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
 
     with c.override(
         Clusterd(name="clusterd1", workers=1),
-        Clusterd(name="clusterd2", workers=1),
+        Clusterd(name="clusterd2", workers=1, ports=[2104, 2105, 2106, 2107, 6882]),
     ):
         c.up("materialized", "clusterd1", "clusterd2")
 
@@ -1675,9 +1678,10 @@ def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
         )
 
         # Helper function to get reconciliation metrics for clusterd.
-        def fetch_reconciliation_metrics(process: str) -> tuple[int, int]:
+        def fetch_reconciliation_metrics(clusterd: str) -> tuple[int, int]:
+            port = 6882 if clusterd == "clusterd2" else 6881
             metrics = c.exec(
-                process, "curl", "localhost:6878/metrics", capture=True
+                clusterd, "curl", f"localhost:{port}/metrics", capture=True
             ).stdout
 
             reused = 0
@@ -1769,10 +1773,10 @@ def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
             ALTER CLUSTER mz_catalog_server SET (MANAGED = false);
             DROP CLUSTER REPLICA mz_catalog_server.r1;
             CREATE CLUSTER REPLICA mz_catalog_server.r1 (
-                STORAGECTL ADDRESSES ['clusterd2:2100'],
-                STORAGE ADDRESSES ['clusterd2:2103'],
-                COMPUTECTL ADDRESSES ['clusterd2:2101'],
-                COMPUTE ADDRESSES ['clusterd2:2102'],
+                STORAGECTL ADDRESSES ['clusterd2:2104'],
+                STORAGE ADDRESSES ['clusterd2:2107'],
+                COMPUTECTL ADDRESSES ['clusterd2:2105'],
+                COMPUTE ADDRESSES ['clusterd2:2106'],
                 WORKERS 1
             );
             """,
@@ -1824,9 +1828,9 @@ def workflow_test_compute_reconciliation_replace(c: Composition) -> None:
         )
 
         # Helper function to get reconciliation metrics for clusterd.
-        def fetch_reconciliation_metrics(process: str) -> tuple[int, int]:
+        def fetch_reconciliation_metrics() -> tuple[int, int]:
             metrics = c.exec(
-                process, "curl", "localhost:6878/metrics", capture=True
+                "clusterd1", "curl", "localhost:6881/metrics", capture=True
             ).stdout
 
             reused = 0
@@ -1888,7 +1892,7 @@ def workflow_test_compute_reconciliation_replace(c: Composition) -> None:
             """
         )
 
-        reused, replaced = fetch_reconciliation_metrics("clusterd1")
+        reused, replaced = fetch_reconciliation_metrics()
         assert reused == 0 and replaced == 4, f"{reused=}, {replaced=}"
 
 
@@ -2024,7 +2028,7 @@ def workflow_test_drop_during_reconciliation(c: Composition) -> None:
                     $ http-request method=POST url={toxi_url} content-type=application/json
                     {{
                       "name": "clusterd_{port}",
-                      "listen": "0.0.0.0:{port}",
+                      "listen": "0.0.0.0:{port-2}",
                       "upstream": "clusterd1:{port}"
                     }}
                     """
@@ -2036,9 +2040,9 @@ def workflow_test_drop_during_reconciliation(c: Composition) -> None:
         c.sql(
             """
             CREATE CLUSTER cluster1 REPLICAS (replica1 (
-                STORAGECTL ADDRESSES ['toxiproxy:2100'],
+                STORAGECTL ADDRESSES ['toxiproxy:2098'],
                 STORAGE ADDRESSES ['clusterd1:2103'],
-                COMPUTECTL ADDRESSES ['toxiproxy:2101'],
+                COMPUTECTL ADDRESSES ['toxiproxy:2099'],
                 COMPUTE ADDRESSES ['clusterd1:2102'],
                 WORKERS 1
             ));
@@ -2285,7 +2289,7 @@ def workflow_test_clusterd_death_detection(c: Composition) -> None:
                 $ http-request method=POST url=http://toxiproxy:8474/proxies content-type=application/json
                 {
                   "name": "clusterd1",
-                  "listen": "0.0.0.0:2100",
+                  "listen": "0.0.0.0:2098",
                   "upstream": "clusterd1:2100",
                   "enabled": true
                 }
@@ -2293,15 +2297,15 @@ def workflow_test_clusterd_death_detection(c: Composition) -> None:
                 $ http-request method=POST url=http://toxiproxy:8474/proxies content-type=application/json
                 {
                   "name": "clusterd2",
-                  "listen": "0.0.0.0:2101",
+                  "listen": "0.0.0.0:2099",
                   "upstream": "clusterd1:2101",
                   "enabled": true
                 }
 
                 > CREATE CLUSTER cluster1 REPLICAS (replica1 (
-                    STORAGECTL ADDRESSES ['toxiproxy:2100'],
+                    STORAGECTL ADDRESSES ['toxiproxy:2098'],
                     STORAGE ADDRESSES ['clusterd1:2103'],
-                    COMPUTECTL ADDRESSES ['toxiproxy:2101'],
+                    COMPUTECTL ADDRESSES ['toxiproxy:2099'],
                     COMPUTE ADDRESSES ['clusterd1:2102'],
                     WORKERS 1));
 
@@ -2473,7 +2477,7 @@ def workflow_test_replica_metrics(c: Composition) -> None:
 
         def fetch_metrics() -> Metrics:
             resp = c.exec(
-                "clusterd1", "curl", "localhost:6878/metrics", capture=True
+                "clusterd1", "curl", "localhost:6881/metrics", capture=True
             ).stdout
             return Metrics(resp)
 
@@ -3080,9 +3084,9 @@ def workflow_test_pgwire_metrics(c: Composition) -> None:
         c.sql(
             """
             BEGIN;
-            DECLARE c2 CURSOR FOR (SELECT * FROM t);
-            FETCH 1 c2;
-            FETCH 1 c2;
+            DECLARE c1 CURSOR FOR (SELECT * FROM t);
+            FETCH 1 c1;
+            FETCH 1 c1;
             """
         )
         metrics = fetch_metrics()
@@ -3095,10 +3099,10 @@ def workflow_test_pgwire_metrics(c: Composition) -> None:
         c.sql(
             """
             BEGIN;
-            DECLARE c3 CURSOR FOR (SELECT * FROM t);
-            FETCH 1 c3;
-            FETCH 1 c3;
-            FETCH 1 c3;
+            DECLARE c1 CURSOR FOR (SELECT * FROM t);
+            FETCH 1 c1;
+            FETCH 1 c1;
+            FETCH 1 c1;
             """
         )
         metrics = fetch_metrics()
@@ -3111,8 +3115,8 @@ def workflow_test_pgwire_metrics(c: Composition) -> None:
         c.sql(
             """
             BEGIN;
-            DECLARE c4 CURSOR FOR (SELECT * FROM t);
-            FETCH ALL c4;
+            DECLARE c1 CURSOR FOR (SELECT * FROM t);
+            FETCH ALL c1;
             """
         )
         metrics = fetch_metrics()
@@ -3128,11 +3132,10 @@ def workflow_test_pgwire_metrics(c: Composition) -> None:
             """
             CREATE VIEW v1 AS SELECT 3;
             BEGIN;
-            DECLARE c5 CURSOR FOR SUBSCRIBE (SELECT * FROM v1);
-            FETCH ALL c5;
-            FETCH ALL c5;
-            """,
-            reuse_connection=False,
+            DECLARE c1 CURSOR FOR SUBSCRIBE (SELECT * FROM v1);
+            FETCH ALL c1;
+            FETCH ALL c1;
+            """
         )
         metrics = fetch_metrics()
         rrftlbs_subscribe_1 = metrics.get_result_rows_first_to_last_byte_seconds(
@@ -3144,11 +3147,10 @@ def workflow_test_pgwire_metrics(c: Composition) -> None:
         c.sql(
             """
             BEGIN;
-            DECLARE c6 CURSOR FOR SUBSCRIBE (SELECT * FROM v1);
-            FETCH ALL c6;
-            FETCH ALL c6;
-            """,
-            reuse_connection=False,
+            DECLARE c1 CURSOR FOR SUBSCRIBE (SELECT * FROM v1);
+            FETCH ALL c1;
+            FETCH ALL c1;
+            """
         )
         metrics = fetch_metrics()
         rrftlbs_subscribe_2 = metrics.get_result_rows_first_to_last_byte_seconds(
@@ -3162,11 +3164,10 @@ def workflow_test_pgwire_metrics(c: Composition) -> None:
         c.sql(
             """
             BEGIN;
-            DECLARE c7 CURSOR FOR SUBSCRIBE (SELECT * FROM t);
-            FETCH ALL c7;
-            FETCH ALL c7 WITH (TIMEOUT = INTERVAL '1500 milliseconds');
-            """,
-            reuse_connection=False,
+            DECLARE c1 CURSOR FOR SUBSCRIBE (SELECT * FROM t);
+            FETCH ALL c1;
+            FETCH ALL c1 WITH (TIMEOUT = INTERVAL '1500 milliseconds');
+            """
         )
         metrics = fetch_metrics()
         rrftlbs_subscribe_3 = metrics.get_result_rows_first_to_last_byte_seconds(
@@ -3415,7 +3416,7 @@ def workflow_test_profile_fetch(c: Composition) -> None:
 
     envd_port = c.port("materialized", 6878)
     envd_url = f"http://localhost:{envd_port}/prof/"
-    clusterd_port = c.port("clusterd1", 6878)
+    clusterd_port = c.port("clusterd1", 6881)
     clusterd_url = f"http://localhost:{clusterd_port}/"
 
     def test_post(data: dict[str, str], check: Callable[[int, str], None]) -> None:
@@ -3760,12 +3761,14 @@ def workflow_blue_green_deployment(
         Clusterd(
             name="clusterd2",
             workers=2,
-            process_names=["clusterd2", "clusterd3"],
+            processes=[("clusterd2", 2106, 2107), ("clusterd3", 2110, 2111)],
+            ports=[2104, 2105, 2106, 2107, 6882],
         ),
         Clusterd(
             name="clusterd3",
             workers=2,
-            process_names=["clusterd2", "clusterd3"],
+            processes=[("clusterd2", 2106, 2107), ("clusterd3", 2110, 2111)],
+            ports=[2108, 2109, 2110, 2111, 6883],
         ),
         Materialized(
             additional_system_parameter_defaults={
@@ -4266,6 +4269,7 @@ def workflow_test_refresh_mv_restart(
             """
         )
 
+        c.down(destroy_volumes=True)
         c.up("materialized", {"name": "testdrive", "persistent": True})
 
         # 1. (quick restart)
@@ -4279,6 +4283,7 @@ def workflow_test_refresh_mv_restart(
         check_introspection()
 
         # Reset the testing context.
+        c.down(destroy_volumes=True)
         c.up("materialized", {"name": "testdrive", "persistent": True})
 
         # 2. (slow restart)
@@ -4293,6 +4298,7 @@ def workflow_test_refresh_mv_restart(
         check_introspection()
 
         # Reset the testing context.
+        c.down(destroy_volumes=True)
         c.up("materialized", {"name": "testdrive", "persistent": True})
 
         # 3.
@@ -5255,7 +5261,7 @@ def workflow_crash_on_replica_expiration_index(
 
     def fetch_metrics() -> Metrics:
         resp = c.exec(
-            "clusterd1", "curl", "localhost:6878/metrics", capture=True
+            "clusterd1", "curl", "localhost:6881/metrics", capture=True
         ).stdout
         return Metrics(resp)
 

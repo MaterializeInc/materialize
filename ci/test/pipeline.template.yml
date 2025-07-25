@@ -18,6 +18,7 @@ env:
   CI_BAZEL_BUILD: 0
   CI_BAZEL_REMOTE_CACHE: $BAZEL_REMOTE_CACHE
   CI_BAZEL_LTO: 0
+  CI_HOST_NETWORK: 1
   CARGO_BUILD_JOBS: "default"
 
 # When resources are constrained, run early since this might be blocking a PR from merging
@@ -425,7 +426,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: kafka-rtr
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          queue: hetzner-aarch64-8cpu-16gb
 
   - id: zippy-kafka-sources-short
     label: "Short Zippy"
@@ -494,6 +495,7 @@ steps:
     label: dbt-materialize tests
     depends_on: build-aarch64
     timeout_in_minutes: 30
+    parallelism: 2
     plugins:
       - ./ci/plugins/mzcompose:
           composition: dbt-materialize
@@ -527,6 +529,9 @@ steps:
         agents:
           # too slow to run emulated on aarch64, SQL Server's docker image is not yet available for aarch64 natively yet: https://github.com/microsoft/mssql-docker/issues/802
           queue: hetzner-x86-64-4cpu-8gb
+        env:
+          # TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/9514 is fixed
+          CI_HOST_NETWORK: 0
 
       - id: debezium-mysql
         label: "Debezium MySQL tests"

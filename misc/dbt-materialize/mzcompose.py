@@ -11,6 +11,7 @@
 Basic test for the Data build tool (dbt) integration of Materialize
 """
 
+import os
 from dataclasses import dataclass
 from textwrap import dedent
 from typing import Dict, List, Optional
@@ -136,6 +137,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     c.run(
                         "dbt",
                         "pytest",
+                        f"--splits={os.getenv('BUILDKITE_PARALLEL_JOB_COUNT', 1)}",
+                        f"--group={int(os.getenv('BUILDKITE_PARALLEL_JOB', 0)) + 1}",
                         *test_args,
                         env_extra={
                             "DBT_HOST": "materialized",

@@ -20,12 +20,7 @@ from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mz_debug import MzDebug
 
 SERVICES = [
-    Materialized(
-        ports=[
-            "6875:6875",
-            "6877:6877",
-        ]
-    ),
+    Materialized(supports_host_network_mode=False),
     MzDebug(),
 ]
 
@@ -80,6 +75,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             "--docker-container-id",
             container_id,
             "--mz-connection-url",
-            "postgres://mz_system@localhost:6877/materialize",
+            f"postgres://mz_system@localhost:{c.port('materialized', 6877)}/materialize",
         ]
     )

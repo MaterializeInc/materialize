@@ -13,6 +13,7 @@
 > CREATE SECRET pgpass AS 'materialize'
 > CREATE CONNECTION pg TO POSTGRES (
     HOST toxiproxy,
+    PORT 5433,
     DATABASE postgres,
     USER materialize,
     PASSWORD SECRET pgpass

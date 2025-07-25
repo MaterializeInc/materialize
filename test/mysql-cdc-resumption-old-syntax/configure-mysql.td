@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ mysql-connect name=mysql url=mysql://root@${arg.mysql-host} password=${arg.mysql-root-password}
+$ mysql-connect name=mysql url=mysql://root@${arg.mysql-host}:${arg.mysql-port} password=${arg.mysql-root-password}
 
 $ mysql-execute name=mysql
 DROP DATABASE IF EXISTS public;

@@ -160,7 +160,7 @@ running
 > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'text_data_ssh';
 stalled
 
-> ALTER CONNECTION testdrive_no_reset_connections.public.ssh RESET (PORT) WITH (VALIDATE = true);
+> ALTER CONNECTION testdrive_no_reset_connections.public.ssh SET (PORT = 23) WITH (VALIDATE = true);
 
 > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'text_data_ssh';
 running
@@ -195,7 +195,7 @@ stalled
 $ kafka-ingest topic=text-data format=bytes
 papaya
 
-> ALTER CONNECTION testdrive_no_reset_connections.public.ssh_backup RESET (PORT) WITH (VALIDATE = true);
+> ALTER CONNECTION testdrive_no_reset_connections.public.ssh_backup SET (PORT = 23) WITH (VALIDATE = true);
 
 > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'text_data_ssh';
 running

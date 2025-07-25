@@ -83,8 +83,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     args = test.parse_output_consistency_input_args(parser)
 
     port_mz_default_internal, port_mz_system_internal = 6875, 6877
-    port_mz_default_this, port_mz_system_this = 6875, 6877
-    port_mz_default_other, port_mz_system_other = 16875, 16877
     tag_mz_other = resolve_tag(args.other_tag)
 
     print(f"Using {tag_mz_other} as tag for other mz version")
@@ -93,19 +91,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         Materialized(
             name="mz_this",
             image=None,
-            ports=[
-                f"{port_mz_default_this}:{port_mz_default_internal}",
-                f"{port_mz_system_this}:{port_mz_system_internal}",
-            ],
             use_default_volumes=False,
         ),
         Materialized(
             name="mz_other",
             image=f"materialize/materialized:{tag_mz_other}",
-            ports=[
-                f"{port_mz_default_other}:{port_mz_default_internal}",
-                f"{port_mz_system_other}:{port_mz_system_internal}",
-            ],
+            ports=[16875, 16876, 16877, 16878, 16879],
             use_default_volumes=False,
         ),
     ):

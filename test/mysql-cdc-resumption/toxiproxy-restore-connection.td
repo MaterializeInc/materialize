@@ -10,7 +10,7 @@
 $ http-request method=POST url=http://toxiproxy:8474/proxies/mysql content-type=application/json
 {
   "name": "mysql",
-  "listen": "0.0.0.0:3306",
+  "listen": "0.0.0.0:3307",
   "upstream": "mysql:3306",
   "enabled": true
 }

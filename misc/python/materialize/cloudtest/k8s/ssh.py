@@ -68,7 +68,7 @@ class SshService(K8sService):
     def __init__(self, namespace: str) -> None:
         super().__init__(namespace)
         ports = [
-            V1ServicePort(name="ssh", port=22),
+            V1ServicePort(name="ssh", port=23, target_port=22),
         ]
 
         self.service = V1Service(

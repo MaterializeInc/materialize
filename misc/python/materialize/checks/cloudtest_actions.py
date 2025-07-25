@@ -69,7 +69,7 @@ class SetupSshTunnels(Action):
                         > CREATE CONNECTION IF NOT EXISTS ssh_tunnel_{i} TO SSH TUNNEL (
                             HOST 'ssh-bastion-host',
                             USER 'mz',
-                            PORT 22
+                            PORT 23
                             );
                         """
                     )

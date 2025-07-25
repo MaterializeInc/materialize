@@ -12,7 +12,7 @@ ReadyForQuery {"status":"I"}
 
 # Create aws connection to be used
 send
-Query {"query": "CREATE CONNECTION aws_conn TO AWS (ACCESS KEY ID = 'minioadmin', SECRET ACCESS KEY = SECRET aws_secret_access_key, REGION = 'us-east-1', ENDPOINT = 'http://localhost:40109')"}
+Query {"query": "CREATE CONNECTION aws_conn TO AWS (ACCESS KEY ID = 'minioadmin', SECRET ACCESS KEY = SECRET aws_secret_access_key, REGION = 'us-east-1', ENDPOINT = 'http://localhost:9000')"}
 ----
 
 until

@@ -127,7 +127,7 @@ def test_create_privatelink_connection(mz: MaterializeApplication) -> None:
             CREATE CONNECTION sshconn TO SSH TUNNEL (
                 HOST 'ssh-bastion-host',
                 USER 'mz',
-                PORT 22
+                PORT 23
             );
             """
         )

@@ -14,3 +14,7 @@ set -euo pipefail
 if [[ "${MAX_STARTUPS:-}" ]]; then
     augtool -s <<< "set /files/etc/ssh/sshd_config/MaxStartups $MAX_STARTUPS"
 fi
+
+if [[ "${SSH_PORT:-}" ]]; then
+    augtool -s <<< "set /files/etc/ssh/sshd_config/Port $SSH_PORT"
+fi

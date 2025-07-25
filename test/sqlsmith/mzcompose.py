@@ -38,12 +38,14 @@ SERVICES = [
     # Don't use default volumes so we can run multiple instances at once
     Materialized(
         name=mz_server,
+        ports=[port + 10000 * i for port in [6875, 6876, 6877, 6878, 6879]],
+        builtin_postgres_port=26257 + i,
         restart="on-failure",
         memory=f"{TOTAL_MEMORY / len(MZ_SERVERS)}GB",
         use_default_volumes=False,
         default_replication_factor=2,
     )
-    for mz_server in MZ_SERVERS
+    for i, mz_server in enumerate(MZ_SERVERS)
 ] + [
     Service(
         "sqlsmith",
@@ -94,7 +96,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     c.up(*MZ_SERVERS)
 
-    for mz_server in MZ_SERVERS:
+    for i, mz_server in enumerate(MZ_SERVERS):
         # Very simple data for our workload
         c.sql(
             """
@@ -139,6 +141,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             );
             """,
             service=mz_server,
+            port=6875 + i * 10000,
         )
         c.sql(
             """
@@ -146,7 +149,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             ALTER SYSTEM SET CLUSTER_REPLICA TO 'r1';
             """,
             service=mz_server,
-            port=6877,
+            port=6877 + i * 10000,
             user="mz_system",
         )
 
@@ -169,7 +172,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             f"--seed={seed + i}",
             "--log-json",
             # we use mz_system to have access to all tables, including ones with restricted permissions
-            f"--target=host={MZ_SERVERS[i % len(MZ_SERVERS)]} port=6877 dbname=materialize user=mz_system",
+            f"--target=host={MZ_SERVERS[i % len(MZ_SERVERS)]} port={6877 + 10000 * (i % len(MZ_SERVERS))} dbname=materialize user=mz_system",
         ]
         if args.exclude_catalog:
             cmd.append("--exclude-catalog")

@@ -52,6 +52,11 @@ def create_mzs(
     return [
         Materialized(
             name=mz_name,
+            ports=(
+                [16875, 16876, 16877, 16878, 16879]
+                if mz_name == "materialized2"
+                else [6875, 6876, 6877, 6878, 6879]
+            ),
             external_blob_store=True,
             blob_store_is_azure=azurite,
             external_metadata_store=True,
@@ -64,7 +69,7 @@ def create_mzs(
         for mz_name in ["materialized", "materialized2"]
     ] + [
         Testdrive(
-            materialize_url="postgres://materialize@balancerd:6875",
+            materialize_url="postgres://materialize@balancerd:6575",
             no_reset=True,
             seed=1,
             # Timeout increased since Large Zippy occasionally runs into them

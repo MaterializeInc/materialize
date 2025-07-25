@@ -32,7 +32,7 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 > CREATE CONNECTION pg_conn_1 TO POSTGRES (
     HOST toxiproxy,
-    PORT 5432,
+    PORT 5433,
     DATABASE postgres,
     USER postgres,
     PASSWORD SECRET pgpass
@@ -40,7 +40,7 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 > CREATE CONNECTION pg_conn_2 TO POSTGRES (
     HOST toxiproxy,
-    PORT 4432,
+    PORT 4433,
     DATABASE postgres,
     USER postgres,
     PASSWORD SECRET pgpass

@@ -17,8 +17,8 @@ $ kafka-create-topic topic=input_2
 $ kafka-ingest topic=input_2 format=bytes repeat=100
 A,B,0
 
-> CREATE CONNECTION IF NOT EXISTS kafka_conn_1 TO KAFKA (BROKER 'toxiproxy:9092', SECURITY PROTOCOL PLAINTEXT);
-> CREATE CONNECTION IF NOT EXISTS kafka_conn_2 TO KAFKA (BROKER 'toxiproxy:8092', SECURITY PROTOCOL PLAINTEXT);
+> CREATE CONNECTION IF NOT EXISTS kafka_conn_1 TO KAFKA (BROKER 'toxiproxy:9093', SECURITY PROTOCOL PLAINTEXT);
+> CREATE CONNECTION IF NOT EXISTS kafka_conn_2 TO KAFKA (BROKER 'toxiproxy:8093', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE SOURCE input_1
   FROM KAFKA CONNECTION kafka_conn_1 (TOPIC 'testdrive-input_1-${testdrive.seed}')

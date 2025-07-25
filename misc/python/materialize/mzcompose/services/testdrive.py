@@ -29,6 +29,8 @@ class Testdrive(Service):
         mzbuild: str = "testdrive",
         materialize_url: str = "postgres://materialize@materialized:6875",
         materialize_url_internal: str = "postgres://materialize@materialized:6877",
+        materialize_http_port: int = 6876,
+        materialize_internal_http_port: int = 6878,
         materialize_use_https: bool = False,
         materialize_params: dict[str, str] = {},
         kafka_url: str = "kafka:9092",
@@ -105,6 +107,8 @@ class Testdrive(Service):
                 f"--schema-registry-url={schema_registry_url}",
                 f"--materialize-url={materialize_url}",
                 f"--materialize-internal-url={materialize_url_internal}",
+                f"--materialize-http-port={materialize_http_port}",
+                f"--materialize-internal-http-port={materialize_internal_http_port}",
                 *(["--materialize-use-https"] if materialize_use_https else []),
                 # Faster retries
             ]

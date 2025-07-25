@@ -14,6 +14,7 @@ env:
   CI_BAZEL_BUILD: 1
   CI_BAZEL_REMOTE_CACHE: $BAZEL_REMOTE_CACHE
   CI_BAZEL_LTO: 1
+  CI_HOST_NETWORK: 1
 
 steps:
   - group: Builds
@@ -254,6 +255,9 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: kafka-multi-broker
+        env:
+          # TODO(def-) Investigate
+          CI_HOST_NETWORK: 0
 
       - id: redpanda-resumption
         label: ":panda_face: resumption tests"
@@ -931,6 +935,8 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
               args: [--scenario=UpgradeEntireMz, "--seed=$BUILDKITE_JOB_ID"]
+        env:
+          CI_HOST_NETWORK: 0
 
       - id: checks-self-managed-upgrade
         label: "Checks Self-Managed upgrade, whole-Mz restart"
@@ -943,6 +949,8 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
               args: [--scenario=UpgradeEntireMzFromLatestSelfManaged, "--seed=$BUILDKITE_JOB_ID"]
+        env:
+          CI_HOST_NETWORK: 0
 
       - id: checks-self-managed-upgrade-previous
         label: "Checks Self-Managed upgrade from previous, whole-Mz restart"
@@ -955,6 +963,8 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
               args: [--scenario=UpgradeEntireMzFromPreviousSelfManaged, "--seed=$BUILDKITE_JOB_ID"]
+        env:
+          CI_HOST_NETWORK: 0
 
       - id: checks-preflight-check-rollback
         label: "Checks preflight-check and roll back upgrade"
@@ -967,6 +977,8 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
               args: [--scenario=PreflightCheckRollback, "--seed=$BUILDKITE_JOB_ID"]
+        env:
+          CI_HOST_NETWORK: 0
 
       - id: checks-upgrade-entire-mz-two-versions
         label: "Checks upgrade across two versions"
@@ -979,6 +991,8 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
               args: [--scenario=UpgradeEntireMzTwoVersions, "--seed=$BUILDKITE_JOB_ID"]
+        env:
+          CI_HOST_NETWORK: 0
 
       - id: checks-upgrade-entire-mz-four-versions
         label: "Checks upgrade across four versions"
@@ -991,6 +1005,8 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
               args: [--scenario=UpgradeEntireMzFourVersions, "--seed=$BUILDKITE_JOB_ID"]
+        env:
+          CI_HOST_NETWORK: 0
 
       - id: checks-0dt-restart-entire-mz-forced-migrations
         label: "Checks 0dt restart of the entire Mz with forced migrations"
@@ -1003,6 +1019,8 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
               args: [--scenario=ZeroDowntimeRestartEntireMzForcedMigrations, "--seed=$BUILDKITE_JOB_ID"]
+        env:
+          CI_HOST_NETWORK: 0
 
       - id: checks-0dt-upgrade-entire-mz
         label: "Checks 0dt upgrade, whole-Mz restart"
@@ -1015,6 +1033,8 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
               args: [--scenario=ZeroDowntimeUpgradeEntireMz, "--seed=$BUILDKITE_JOB_ID"]
+        env:
+          CI_HOST_NETWORK: 0
 
       - id: checks-0dt-upgrade-entire-mz-two-versions
         label: "Checks 0dt upgrade across two versions"
@@ -1027,6 +1047,8 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
               args: [--scenario=ZeroDowntimeUpgradeEntireMzTwoVersions, "--seed=$BUILDKITE_JOB_ID"]
+        env:
+          CI_HOST_NETWORK: 0
 
       - id: checks-0dt-upgrade-entire-mz-four-versions
         label: "Checks 0dt upgrade across four versions"
@@ -1039,6 +1061,8 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
               args: [--scenario=ZeroDowntimeUpgradeEntireMzFourVersions, "--seed=$BUILDKITE_JOB_ID"]
+        env:
+          CI_HOST_NETWORK: 0
 
       - id: checks-0dt-bump-version
         label: "Checks 0dt upgrade to a bumped version"
@@ -1046,6 +1070,8 @@ steps:
         timeout_in_minutes: 240
         agents:
           queue: hetzner-x86-64-dedi-16cpu-64gb
+        env:
+          CI_HOST_NETWORK: 0
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -1059,6 +1085,7 @@ steps:
         parallelism: 3
         env:
           CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster.yaml"
+          CI_HOST_NETWORK: 0
         agents:
           # TODO(def-): Debezium DNS flakiness doesn't allow running on hetzner
           # queue: hetzner-aarch64-4cpu-8gb
@@ -1620,6 +1647,8 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
         env:
           CI_ALLOW_LOCAL_BUILD: true
+          # TODO(def-) Reenable when next version is released
+          CI_HOST_NETWORK: 0
         plugins:
           - ./ci/plugins/mzcompose:
               composition: rqg
@@ -1665,6 +1694,8 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: crdb-restarts
+    env:
+      CI_HOST_NETWORK: 0
 
   - id: pubsub-disruption
     label: "PubSub disruption"
@@ -1914,10 +1945,12 @@ steps:
               args: ["--versions-source=git"]
         agents:
           queue: hetzner-aarch64-4cpu-8gb
+        env:
+          # TODO(def-): Fix up when a new version has been released
+          CI_HOST_NETWORK: 0
 
       - id: legacy-upgrade-docs
         label: "Legacy upgrade tests (last version from docs)"
-        parallelism: 2
         depends_on: build-aarch64
         timeout_in_minutes: 60
         plugins:
@@ -1926,6 +1959,9 @@ steps:
               args: ["--versions-source=docs", "--self-managed-upgrade"]
         agents:
           queue: hetzner-aarch64-4cpu-8gb
+        env:
+          # TODO(def-): Fix up when a new version has been released
+          CI_HOST_NETWORK: 0
 
   - group: Cloud tests
     key: cloudtests

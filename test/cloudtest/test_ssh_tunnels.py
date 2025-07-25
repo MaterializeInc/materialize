@@ -20,7 +20,7 @@ def test_ssh_tunnels(mz: MaterializeApplication) -> None:
             > CREATE CONNECTION IF NOT EXISTS ssh_conn TO SSH TUNNEL (
                 HOST 'ssh-bastion-host',
                 USER 'mz',
-                PORT 22
+                PORT 23
               );
             """
         )

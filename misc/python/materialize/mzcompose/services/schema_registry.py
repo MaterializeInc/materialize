@@ -19,13 +19,15 @@ class SchemaRegistry(Service):
         aliases: list[str] = [],
         image: str = "confluentinc/cp-schema-registry",
         tag: str = DEFAULT_CONFLUENT_PLATFORM_VERSION,
-        port: int = 8081,
+        ports: list[int] | None = None,
         kafka_servers: list[tuple[str, str]] = [("kafka", "9092")],
         environment_extra: list[str] = [],
         depends_on_extra: list[str] = [],
         volumes: list[str] = [],
         platform: str | None = None,
     ) -> None:
+        if not ports:
+            ports = [8081]
         bootstrap_servers = ",".join(
             f"PLAINTEXT://{host}:{port}" for host, port in kafka_servers
         )
@@ -39,7 +41,7 @@ class SchemaRegistry(Service):
         ]
         config: ServiceConfig = {
             "image": f"{image}:{tag}",
-            "ports": [port],
+            "ports": ports,
             "networks": {"default": {"aliases": aliases}},
             "environment": environment,
             "depends_on": {
@@ -58,7 +60,7 @@ class SchemaRegistry(Service):
                     # configured to require them.
                     "-fu",
                     "materialize:sekurity",
-                    "localhost:8081",
+                    f"localhost:{ports[0]}",
                 ],
                 "interval": "1s",
                 "start_period": "120s",

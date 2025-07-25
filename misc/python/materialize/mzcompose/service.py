@@ -20,6 +20,8 @@ from typing import (
     TypedDict,
 )
 
+from materialize import ui
+
 
 class ServiceHealthcheck(TypedDict, total=False):
     """Configuration for a check to determine whether the containers for this
@@ -183,6 +185,10 @@ class Service:
         config: The definition of the service.
     """
 
-    def __init__(self, name: str, config: ServiceConfig) -> None:
+    def __init__(
+        self, name: str, config: ServiceConfig, supports_host_network_mode: bool = True
+    ) -> None:
         self.name = name
         self.config = config
+        if supports_host_network_mode and ui.env_is_truthy("CI_HOST_NETWORK"):
+            self.config["network_mode"] = "host"

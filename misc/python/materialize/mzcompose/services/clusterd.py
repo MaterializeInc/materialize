@@ -31,15 +31,21 @@ class Clusterd(Service):
         scratch_directory: str = "/scratch",
         volumes: list[str] = [],
         workers: int = 1,
-        process_names: list[str] = [],
-        mz_service: str = "materialized",
+        processes: list[tuple[str, int, int]] = [],
+        ports: list[int] | None = None,
+        mz_service: str = "materialized:6879",
     ) -> None:
+        if not ports:
+            ports = [2100, 2101, 2102, 2103, 6881]
         environment = [
             "CLUSTERD_LOG_FILTER",
             f"CLUSTERD_GRPC_HOST={name}",
             "MZ_SOFT_ASSERTIONS=1",
             "MZ_EAT_MY_DATA=1",
-            f"CLUSTERD_PERSIST_PUBSUB_URL=http://{mz_service}:6879",
+            f"CLUSTERD_STORAGE_CONTROLLER_LISTEN_ADDR=0.0.0.0:{ports[0]}",
+            f"CLUSTERD_COMPUTE_CONTROLLER_LISTEN_ADDR=0.0.0.0:{ports[1]}",
+            f"CLUSTERD_INTERNAL_HTTP_LISTEN_ADDR=0.0.0.0:{ports[4]}",
+            f"CLUSTERD_PERSIST_PUBSUB_URL=http://{mz_service}",
             *environment_extra,
         ]
 
@@ -48,10 +54,18 @@ class Clusterd(Service):
 
         environment += [f"CLUSTERD_ENVIRONMENT_ID={environment_id}"]
 
-        process_names = process_names if process_names else [name]
-        process_index = process_names.index(name)
-        compute_timely_config = timely_config(process_names, 2102, workers, 16)
-        storage_timely_config = timely_config(process_names, 2103, workers, 1337)
+        processes = processes or [(name, ports[2], ports[3])]
+        process_index = -1
+        for i, p in enumerate(processes):
+            if p[0] == name:
+                process_index = i
+        assert process_index >= 0, f"Couldn't find process name {name} in {processes}"
+        compute_timely_config = timely_config(
+            [(p[0], p[1]) for p in processes], workers, 16
+        )
+        storage_timely_config = timely_config(
+            [(p[0], p[2]) for p in processes], workers, 1337
+        )
 
         environment += [
             f"CLUSTERD_PROCESS={process_index}",
@@ -82,7 +96,7 @@ class Clusterd(Service):
         config.update(
             {
                 "command": options,
-                "ports": [2100, 2101, 6878],
+                "ports": ports,
                 "environment": environment,
                 "volumes": volumes or DEFAULT_MZ_VOLUMES,
                 "restart": restart,
@@ -94,15 +108,14 @@ class Clusterd(Service):
 
 
 def timely_config(
-    process_names: list[str],
-    port: int,
+    processes: list[tuple[str, int]],
     workers: int,
     arrangement_exert_proportionality: int,
 ) -> str:
     config = {
         "workers": workers,
         "process": 0,
-        "addresses": [f"{n}:{port}" for n in process_names],
+        "addresses": [f"{n}:{port}" for n, port in processes],
         "arrangement_exert_proportionality": arrangement_exert_proportionality,
         "enable_zero_copy": False,
         "enable_zero_copy_lgalloc": False,

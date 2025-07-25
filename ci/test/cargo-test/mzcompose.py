@@ -52,12 +52,12 @@ SERVICES = [
     Minio(
         # We need a stable port exposed to the host since we can't pass any arguments
         # to the .pt files used in the tests.
-        ports=["40109:9000", "40110:9001"],
+        ports=["9000:9000", "9001:9001"],
         allow_host_ports=True,
         additional_directories=["copytos3"],
     ),
     Azurite(
-        ports=["40111:10000"],
+        ports=["10000:10000"],
         allow_host_ports=True,
     ),
     Clusterd(),  # Only to attempt to download the binary

@@ -146,7 +146,7 @@ class Connections(Generator):
 
         for i in cls.all():
             print(
-                f"$ postgres-connect name=conn{i} url=postgres://{quote(ADMIN_USER)}:{app_password(ADMIN_USER)}@balancerd:6875?sslmode=require"
+                f"$ postgres-connect name=conn{i} url=postgres://{quote(ADMIN_USER)}:{app_password(ADMIN_USER)}@balancerd:6575?sslmode=require"
             )
         for i in cls.all():
             print(f"$ postgres-execute connection=conn{i}\nSELECT 1;\n")
@@ -186,7 +186,7 @@ class Subscribe(Generator):
 
         for i in cls.all():
             print(
-                f"$ postgres-connect name=conn{i} url=postgres://{quote(ADMIN_USER)}:{app_password(ADMIN_USER)}@balancerd:6875?sslmode=require"
+                f"$ postgres-connect name=conn{i} url=postgres://{quote(ADMIN_USER)}:{app_password(ADMIN_USER)}@balancerd:6575?sslmode=require"
             )
 
         for i in cls.all():
@@ -762,6 +762,7 @@ class SubqueriesExistWhereClause(Generator):
     COUNT = min(
         Generator.COUNT, 10
     )  # https://github.com/MaterializeInc/database-issues/issues/2626
+    MAX_COUNT = 320  # internal transform error: unexpected panic during query optimization: type error in transient query: exceeded recursion limit of 2048
 
     @classmethod
     def body(cls) -> None:
@@ -1735,7 +1736,7 @@ USERS = {
         "roles": [OTHER_ROLE, ADMIN_ROLE],
     }
 }
-FRONTEGG_URL = "http://frontegg-mock:6880"
+FRONTEGG_URL = "http://frontegg-mock:6782"
 
 
 def app_password(email: str) -> str:
@@ -1762,13 +1763,14 @@ SERVICES = [
     # The workflow_instance_size workflow is testing multi-process clusters
     Testdrive(
         default_timeout="60s",
-        materialize_url=f"postgres://{quote(ADMIN_USER)}:{app_password(ADMIN_USER)}@balancerd:6875?sslmode=require",
+        materialize_url=f"postgres://{quote(ADMIN_USER)}:{app_password(ADMIN_USER)}@balancerd:6575?sslmode=require",
         materialize_use_https=True,
         no_reset=True,
     ),
     TestCerts(),
     FronteggMock(
         issuer=FRONTEGG_URL,
+        port=6782,
         encoding_key_file="/secrets/frontegg-mock.key",
         decoding_key_file="/secrets/frontegg-mock.crt",
         users=json.dumps(list(USERS.values())),
@@ -1780,9 +1782,9 @@ SERVICES = [
     Balancerd(
         command=[
             "service",
-            "--pgwire-listen-addr=0.0.0.0:6875",
-            "--https-listen-addr=0.0.0.0:6876",
-            "--internal-http-listen-addr=0.0.0.0:6878",
+            "--pgwire-listen-addr=0.0.0.0:6575",
+            "--https-listen-addr=0.0.0.0:6576",
+            "--internal-http-listen-addr=0.0.0.0:6578",
             "--frontegg-resolver-template=materialized:6875",
             "--frontegg-jwk-file=/secrets/frontegg-mock.crt",
             f"--frontegg-api-token-url={FRONTEGG_URL}/identity/resources/auth/v1/api-token",
@@ -1827,12 +1829,25 @@ SERVICES = [
     Mz(app_password=""),
 ]
 
+i = 0
 for cluster_id in range(1, MAX_CLUSTERS + 1):
     for replica_id in range(1, MAX_REPLICAS + 1):
         for node_id in range(1, MAX_NODES + 1):
+
             SERVICES.append(
-                Clusterd(name=f"clusterd_{cluster_id}_{replica_id}_{node_id}", cpu="2")
+                Clusterd(
+                    name=f"clusterd_{cluster_id}_{replica_id}_{node_id}",
+                    cpu="2",
+                    ports=[
+                        2100 + i * 4,
+                        2101 + i * 4,
+                        2102 + i * 4,
+                        2103 + i * 4,
+                        6881 + i,
+                    ],
+                )
             )
+            i += 1
 
 
 service_names = [
@@ -1876,27 +1891,27 @@ def setup(c: Composition, workers: int) -> None:
         DROP CLUSTER quickstart cascade;
         CREATE CLUSTER quickstart REPLICAS (
             replica1 (
-                STORAGECTL ADDRESSES ['clusterd_1_1_1:2100', 'clusterd_1_1_2:2100'],
-                STORAGE ADDRESSES ['clusterd_1_1_1:2103', 'clusterd_1_1_2:2103'],
-                COMPUTECTL ADDRESSES ['clusterd_1_1_1:2101', 'clusterd_1_1_2:2101'],
-                COMPUTE ADDRESSES ['clusterd_1_1_1:2102', 'clusterd_1_1_2:2102'],
+                STORAGECTL ADDRESSES ['clusterd_1_1_1:2100', 'clusterd_1_1_2:2104'],
+                STORAGE ADDRESSES ['clusterd_1_1_1:2103', 'clusterd_1_1_2:2107'],
+                COMPUTECTL ADDRESSES ['clusterd_1_1_1:2101', 'clusterd_1_1_2:2105'],
+                COMPUTE ADDRESSES ['clusterd_1_1_1:2102', 'clusterd_1_1_2:2106'],
                 WORKERS {workers}
             ),
             replica2 (
-                STORAGECTL ADDRESSES ['clusterd_1_2_1:2100', 'clusterd_1_2_2:2100'],
-                STORAGE ADDRESSES ['clusterd_1_2_1:2103', 'clusterd_1_2_2:2103'],
-                COMPUTECTL ADDRESSES ['clusterd_1_2_1:2101', 'clusterd_1_2_2:2101'],
-                COMPUTE ADDRESSES ['clusterd_1_2_1:2102', 'clusterd_1_2_2:2102'],
+                STORAGECTL ADDRESSES ['clusterd_1_2_1:2108', 'clusterd_1_2_2:2112'],
+                STORAGE ADDRESSES ['clusterd_1_2_1:2111', 'clusterd_1_2_2:2115'],
+                COMPUTECTL ADDRESSES ['clusterd_1_2_1:2109', 'clusterd_1_2_2:2113'],
+                COMPUTE ADDRESSES ['clusterd_1_2_1:2110', 'clusterd_1_2_2:2114'],
                 WORKERS {workers}
             )
         );
         DROP CLUSTER IF EXISTS single_replica_cluster CASCADE;
         CREATE CLUSTER single_replica_cluster REPLICAS (
             replica1 (
-                STORAGECTL ADDRESSES ['clusterd_2_1_1:2100', 'clusterd_2_1_2:2100'],
-                STORAGE ADDRESSES ['clusterd_2_1_1:2103', 'clusterd_2_1_2:2103'],
-                COMPUTECTL ADDRESSES ['clusterd_2_1_1:2101', 'clusterd_2_1_2:2101'],
-                COMPUTE ADDRESSES ['clusterd_2_1_1:2102', 'clusterd_2_1_2:2102'],
+                STORAGECTL ADDRESSES ['clusterd_2_1_1:2116', 'clusterd_2_1_2:2120'],
+                STORAGE ADDRESSES ['clusterd_2_1_1:2119', 'clusterd_2_1_2:2123'],
+                COMPUTECTL ADDRESSES ['clusterd_2_1_1:2117', 'clusterd_2_1_2:2121'],
+                COMPUTE ADDRESSES ['clusterd_2_1_1:2118', 'clusterd_2_1_2:2122'],
                 WORKERS {workers}
             )
         );
@@ -1904,10 +1919,10 @@ def setup(c: Composition, workers: int) -> None:
         DROP CLUSTER IF EXISTS single_worker_cluster CASCADE;
         CREATE CLUSTER single_worker_cluster REPLICAS (
             replica1 (
-                STORAGECTL ADDRESSES ['clusterd_3_1_1:2100'],
-                STORAGE ADDRESSES ['clusterd_3_1_1:2103'],
-                COMPUTECTL ADDRESSES ['clusterd_3_1_1:2101'],
-                COMPUTE ADDRESSES ['clusterd_3_1_1:2102'],
+                STORAGECTL ADDRESSES ['clusterd_3_1_1:2124'],
+                STORAGE ADDRESSES ['clusterd_3_1_1:2127'],
+                COMPUTECTL ADDRESSES ['clusterd_3_1_1:2125'],
+                COMPUTE ADDRESSES ['clusterd_3_1_1:2126'],
                 WORKERS 1
             )
         );
@@ -2010,36 +2025,43 @@ def workflow_main(c: Composition, parser: WorkflowArgumentParser) -> None:
         Clusterd(
             name="clusterd_1_1_1",
             workers=args.workers,
-            process_names=["clusterd_1_1_1", "clusterd_1_1_2"],
+            processes=[("clusterd_1_1_1", 2102, 2103), ("clusterd_1_1_2", 2106, 2107)],
         ),
         Clusterd(
             name="clusterd_1_1_2",
             workers=args.workers,
-            process_names=["clusterd_1_1_1", "clusterd_1_1_2"],
+            processes=[("clusterd_1_1_1", 2102, 2103), ("clusterd_1_1_2", 2106, 2107)],
+            ports=[2104, 2105, 2106, 2107, 6882],
         ),
         Clusterd(
             name="clusterd_1_2_1",
             workers=args.workers,
-            process_names=["clusterd_1_2_1", "clusterd_1_2_2"],
+            processes=[("clusterd_1_2_1", 2110, 2111), ("clusterd_1_2_2", 2114, 2115)],
+            ports=[2108, 2109, 2110, 2111, 6883],
         ),
         Clusterd(
             name="clusterd_1_2_2",
             workers=args.workers,
-            process_names=["clusterd_1_2_1", "clusterd_1_2_2"],
+            processes=[("clusterd_1_2_1", 2110, 2111), ("clusterd_1_2_2", 2114, 2115)],
+            ports=[2112, 2113, 2114, 2115, 6884],
         ),
         Clusterd(
             name="clusterd_2_1_1",
             workers=args.workers,
-            process_names=["clusterd_2_1_1", "clusterd_2_1_2"],
+            processes=[("clusterd_2_1_1", 2118, 2119), ("clusterd_2_1_2", 2122, 2123)],
+            ports=[2116, 2117, 2118, 2119, 6885],
         ),
         Clusterd(
             name="clusterd_2_1_2",
             workers=args.workers,
-            process_names=["clusterd_2_1_1", "clusterd_2_1_2"],
+            processes=[("clusterd_2_1_1", 2118, 2119), ("clusterd_2_1_2", 2122, 2123)],
+            ports=[2120, 2121, 2122, 2123, 6886],
         ),
         Clusterd(
             name="clusterd_3_1_1",
             workers=1,
+            ports=[2124, 2125, 2126, 2127, 6887],
+            processes=[("clusterd_3_1_1", 2125, 2126)],
         ),
     ):
         run_scenarios(c, scenarios, args.find_limit, args.workers)
@@ -2222,26 +2244,40 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
     # Construct the requied Clusterd instances and peer them into clusters
     node_names = []
     node_overrides = []
+    j = 0
     for cluster_id in range(1, args.clusters + 1):
         for replica_id in range(1, args.replicas + 1):
-            names = [
-                f"clusterd_{cluster_id}_{replica_id}_{i}"
+            processes = [
+                (
+                    f"clusterd_{cluster_id}_{replica_id}_{i}",
+                    2102 + (j + i - 1) * 4,
+                    2103 + (j + i - 1) * 4,
+                )
                 for i in range(1, args.nodes + 1)
             ]
-            for node_name in names:
+            for p in processes:
+                node_name = p[0]
                 node_names.append(node_name)
                 node_overrides.append(
                     Clusterd(
                         name=node_name,
                         workers=args.workers,
-                        process_names=names,
+                        processes=processes,
+                        ports=[
+                            2100 + j * 4,
+                            2101 + j * 4,
+                            2102 + j * 4,
+                            2103 + j * 4,
+                            6881 + j,
+                        ],
                     )
                 )
+                j += 1
 
     with c.override(
         Testdrive(
             seed=1,
-            materialize_url=f"postgres://{quote(ADMIN_USER)}:{app_password(ADMIN_USER)}@balancerd:6875?sslmode=require",
+            materialize_url=f"postgres://{quote(ADMIN_USER)}:{app_password(ADMIN_USER)}@balancerd:6575?sslmode=require",
             materialize_use_https=True,
             no_reset=True,
         ),
@@ -2288,25 +2324,27 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
         )
 
         # Construct the required CREATE CLUSTER statements
+        i = 0
         for cluster_id in range(1, args.clusters + 1):
             replica_definitions = []
             for replica_id in range(1, args.replicas + 1):
                 nodes = []
                 for node_id in range(1, args.nodes + 1):
-                    node_name = f"clusterd_{cluster_id}_{replica_id}_{node_id}"
-                    nodes.append(node_name)
+                    node = (f"clusterd_{cluster_id}_{replica_id}_{node_id}", i)
+                    nodes.append(node)
+                    i += 1
 
                 replica_name = f"replica_u{cluster_id}_{replica_id}"
 
                 replica_definitions.append(
                     f"{replica_name} (STORAGECTL ADDRESSES ["
-                    + ", ".join(f"'{n}:2100'" for n in nodes)
+                    + ", ".join(f"'{n}:{2100 + j * 4}'" for n, j in nodes)
                     + "], STORAGE ADDRESSES ["
-                    + ", ".join(f"'{n}:2103'" for n in nodes)
+                    + ", ".join(f"'{n}:{2103 + j * 4}'" for n, j in nodes)
                     + "], COMPUTECTL ADDRESSES ["
-                    + ", ".join(f"'{n}:2101'" for n in nodes)
+                    + ", ".join(f"'{n}:{2101 + j * 4}'" for n, j in nodes)
                     + "], COMPUTE ADDRESSES ["
-                    + ", ".join(f"'{n}:2102'" for n in nodes)
+                    + ", ".join(f"'{n}:{2102 + j * 4}'" for n, j in nodes)
                     + f"], WORKERS {args.workers})"
                 )
 

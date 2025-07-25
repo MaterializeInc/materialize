@@ -22,7 +22,10 @@ class Zookeeper(Service):
         tag: str = DEFAULT_CONFLUENT_PLATFORM_VERSION,
         port: int = 2181,
         volumes: list[str] = [],
-        environment: list[str] = ["ZOOKEEPER_CLIENT_PORT=2181"],
+        environment: list[str] = [
+            "ZOOKEEPER_CLIENT_PORT=2181",
+            "ZOOKEEPER_ADMIN_SERVER_PORT=18080",
+        ],
         platform: str | None = None,
     ) -> None:
         config: ServiceConfig = {

@@ -39,11 +39,12 @@ class SshBastionHost(Service):
             config={
                 "mzbuild": "ssh-bastion-host",
                 "init": True,
-                "ports": ["22"],
+                "ports": ["23"],
                 "environment": [
                     "SSH_USERS=mz:1000:1000",
                     "TCP_FORWARDING=true",
                     *([f"MAX_STARTUPS={max_startups}"] if max_startups else []),
+                    "SSH_PORT=23",
                 ],
                 "volumes": [f"{setup_path}:/etc/entrypoint.d/setup.sh"],
                 "networks": {"default": {"aliases": aliases}},
@@ -65,7 +66,7 @@ def setup_default_ssh_test_connection(
             CREATE CONNECTION IF NOT EXISTS {ssh_tunnel_name} TO SSH TUNNEL (
             HOST 'ssh-bastion-host',
             USER 'mz',
-            PORT 22)
+            PORT 23)
         """,
         service=mz_service,
     )

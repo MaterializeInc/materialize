@@ -10,14 +10,14 @@
 $ http-request method=POST url=http://toxiproxy:8474/proxies content-type=application/json
 {
   "name": "kafka_1",
-  "listen": "0.0.0.0:9092",
+  "listen": "0.0.0.0:9093",
   "upstream": "kafka:9092"
 }
 
 $ http-request method=POST url=http://toxiproxy:8474/proxies content-type=application/json
 {
   "name": "kafka_2",
-  "listen": "0.0.0.0:8092",
+  "listen": "0.0.0.0:8093",
   "upstream": "kafka:9092"
 }
 

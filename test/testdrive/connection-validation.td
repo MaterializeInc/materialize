@@ -34,7 +34,7 @@ ALTER SYSTEM SET enable_connection_validation_syntax = true
 
 > DROP CONNECTION kafka_conn
 
-> CREATE CONNECTION invalid_tunnel TO SSH TUNNEL (HOST 'invalid', USER 'invalid', PORT 22)
+> CREATE CONNECTION invalid_tunnel TO SSH TUNNEL (HOST 'invalid', USER 'invalid', PORT 23)
 
 ! CREATE CONNECTION invalid_kafka_conn TO KAFKA (BROKERS ('${testdrive.kafka-addr}' USING SSH TUNNEL invalid_tunnel), SECURITY PROTOCOL PLAINTEXT)
 contains:failed to lookup address information

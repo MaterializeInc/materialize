@@ -49,9 +49,11 @@ fi
 
 # Start PostgreSQL, unless suppressed.
 if [ -z "${MZ_NO_BUILTIN_POSTGRES:-}" ]; then
-  (trap 'pg_ctlcluster 16 main stop --mode=fast --force' SIGTERM SIGINT
-  rm -f /var/run/postgresql/.s.PGSQL.26257.lock
-  pg_ctlcluster 16 main start
+  export MZ_BUILTIN_POSTGRES_PORT=${MZ_BUILTIN_POSTGRES_PORT:-26257}
+  sed -i "s/port = .*/port = $MZ_BUILTIN_POSTGRES_PORT/" /etc/postgresql/16/main/postgresql.conf
+  trap 'pg_ctlcluster 16 main stop --mode=fast --force' SIGTERM SIGINT
+  rm -f "/var/run/postgresql/.s.PGSQL.${MZ_BUILTIN_POSTGRES_PORT}.lock"
+  (pg_ctlcluster 16 main start
   psql -U postgres -c "CREATE ROLE root WITH LOGIN PASSWORD 'root'" || true
   psql -U postgres -c "CREATE DATABASE root OWNER root" || true
   psql -U root -c "CREATE SCHEMA IF NOT EXISTS consensus; CREATE SCHEMA IF NOT EXISTS storage; CREATE SCHEMA IF NOT EXISTS adapter; CREATE SCHEMA IF NOT EXISTS tsoracle") &
@@ -71,20 +73,15 @@ fi
 # arguments when running the container via either environment variables or
 # command-line arguments.
 export MZ_ENVIRONMENT_ID=${MZ_ENVIRONMENT_ID:-$(</mzdata/environment-id)}
-export MZ_SQL_LISTEN_ADDR=${MZ_SQL_LISTEN_ADDR:-0.0.0.0:6875}
-export MZ_HTTP_LISTEN_ADDR=${MZ_HTTP_LISTEN_ADDR:-0.0.0.0:6876}
-export MZ_INTERNAL_SQL_LISTEN_ADDR=${MZ_INTERNAL_SQL_LISTEN_ADDR:-0.0.0.0:6877}
-export MZ_INTERNAL_HTTP_LISTEN_ADDR=${MZ_INTERNAL_HTTP_LISTEN_ADDR:-0.0.0.0:6878}
-export MZ_BALANCER_SQL_LISTEN_ADDR=${MZ_BALANCER_SQL_LISTEN_ADDR:-0.0.0.0:6880}
-export MZ_BALANCER_HTTP_LISTEN_ADDR=${MZ_BALANCER_HTTP_LISTEN_ADDR:-0.0.0.0:6881}
+export MZ_INTERNAL_PERSIST_PUBSUB_LISTEN_ADDR=${MZ_INTERNAL_PERSIST_PUBSUB_LISTEN_ADDR:-0.0.0.0:6879}
 if [ -z "${MZ_NO_EXTERNAL_CLUSTERD:-}" ]; then
-  export MZ_PERSIST_CONSENSUS_URL=${MZ_PERSIST_CONSENSUS_URL:-postgresql://root@$(hostname):26257/?options=--search_path=consensus}
+  export MZ_PERSIST_CONSENSUS_URL=${MZ_PERSIST_CONSENSUS_URL:-postgresql://root@$(hostname):$MZ_BUILTIN_POSTGRES_PORT/?options=--search_path=consensus}
 else
-  export MZ_PERSIST_CONSENSUS_URL=${MZ_PERSIST_CONSENSUS_URL:-postgresql://root@%2Fvar%2Frun%2Fpostgresql:26257/?options=--search_path=consensus}
+  export MZ_PERSIST_CONSENSUS_URL=${MZ_PERSIST_CONSENSUS_URL:-postgresql://root@%2Fvar%2Frun%2Fpostgresql:$MZ_BUILTIN_POSTGRES_PORT/?options=--search_path=consensus}
 fi
 export MZ_PERSIST_BLOB_URL=${MZ_PERSIST_BLOB_URL:-file:///mzdata/persist/blob}
-export MZ_ADAPTER_STASH_URL=${MZ_ADAPTER_STASH_URL:-postgresql://root@%2Fvar%2Frun%2Fpostgresql:26257/?options=--search_path=adapter}
-export MZ_TIMESTAMP_ORACLE_URL=${MZ_TIMESTAMP_ORACLE_URL:-postgresql://root@%2Fvar%2Frun%2Fpostgresql:26257/?options=--search_path=tsoracle}
+export MZ_ADAPTER_STASH_URL=${MZ_ADAPTER_STASH_URL:-postgresql://root@%2Fvar%2Frun%2Fpostgresql:$MZ_BUILTIN_POSTGRES_PORT/?options=--search_path=adapter}
+export MZ_TIMESTAMP_ORACLE_URL=${MZ_TIMESTAMP_ORACLE_URL:-postgresql://root@%2Fvar%2Frun%2Fpostgresql:$MZ_BUILTIN_POSTGRES_PORT/?options=--search_path=tsoracle}
 export MZ_ORCHESTRATOR=${MZ_ORCHESTRATOR:-process}
 export MZ_ORCHESTRATOR_PROCESS_SECRETS_DIRECTORY=${MZ_ORCHESTRATOR_PROCESS_SECRETS_DIRECTORY:-/mzdata/secrets}
 export MZ_ORCHESTRATOR_PROCESS_SCRATCH_DIRECTORY=${MZ_ORCHESTRATOR_PROCESS_SCRATCH_DIRECTORY:-/scratch}
@@ -197,7 +194,10 @@ EOF
 )}
 
 
-if [ -z "${MZ_LISTENERS_CONFIG_PATH:-}" ]; then
+if [ -n "${MZ_LISTENERS_CONFIG:-}" ]; then
+    echo "$MZ_LISTENERS_CONFIG" > /mzdata/custom-listeners-config.json
+    export MZ_LISTENERS_CONFIG_PATH="/mzdata/custom-listeners-config.json"
+elif [ -z "${MZ_LISTENERS_CONFIG_PATH:-}" ]; then
     if [ -z "${MZ_EXTERNAL_LOGIN_PASSWORD_MZ_SYSTEM:-}" ]; then
         export MZ_LISTENERS_CONFIG_PATH="/listener_configs/no_auth.json"
     else

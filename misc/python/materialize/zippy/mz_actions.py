@@ -10,9 +10,9 @@
 
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.materialized import (
-    LEADER_STATUS_HEALTHCHECK,
     DeploymentStatus,
     Materialized,
+    leader_status_healthcheck,
 )
 from materialize.zippy.balancerd_capabilities import BalancerdIsRunning
 from materialize.zippy.blob_store_capabilities import BlobStoreIsRunning
@@ -81,6 +81,11 @@ class MzStart(Action):
         with c.override(
             Materialized(
                 name=state.mz_service,
+                ports=(
+                    [16875, 16876, 16877, 16878, 16879]
+                    if state.mz_service == "materialized2"
+                    else [6875, 6876, 6877, 6878, 6879]
+                ),
                 external_blob_store=True,
                 blob_store_is_azure=c.blob_store() == "azurite",
                 external_metadata_store=True,
@@ -105,7 +110,7 @@ class MzStart(Action):
             c.sql(
                 f"ALTER SYSTEM SET {config_param} TO 1000",
                 user="mz_system",
-                port=6877,
+                port=6877 if state.mz_service == "materialized" else 16877,
                 print_statement=False,
                 service=state.mz_service,
             )
@@ -115,7 +120,7 @@ class MzStart(Action):
             ALTER CLUSTER quickstart SET (MANAGED = false);
             """,
             user="mz_system",
-            port=6877,
+            port=6877 if state.mz_service == "materialized" else 16877,
             service=state.mz_service,
         )
 
@@ -123,7 +128,7 @@ class MzStart(Action):
         c.sql(
             "ALTER SYSTEM SET persist_fast_path_limit = 1000000000",
             user="mz_system",
-            port=6877,
+            port=6877 if state.mz_service == "materialized" else 16877,
             service=state.mz_service,
         )
 
@@ -160,6 +165,11 @@ class MzRestart(Action):
         with c.override(
             Materialized(
                 name=state.mz_service,
+                ports=(
+                    [16875, 16876, 16877, 16878, 16879]
+                    if state.mz_service == "materialized2"
+                    else [6875, 6876, 6877, 6878, 6879]
+                ),
                 external_blob_store=True,
                 blob_store_is_azure=c.blob_store() == "azurite",
                 external_metadata_store=True,
@@ -191,9 +201,15 @@ class Mz0dtDeploy(Mz0dtDeployBaseAction):
 
         print(f"Deploying generation {state.deploy_generation} on {state.mz_service}")
 
+        ports = (
+            [16875, 16876, 16877, 16878, 16879]
+            if state.mz_service == "materialized2"
+            else [6875, 6876, 6877, 6878, 6879]
+        )
         with c.override(
             Materialized(
                 name=state.mz_service,
+                ports=ports,
                 external_blob_store=True,
                 blob_store_is_azure=c.blob_store() == "azurite",
                 external_metadata_store=True,
@@ -201,7 +217,7 @@ class Mz0dtDeploy(Mz0dtDeployBaseAction):
                 system_parameter_defaults=state.system_parameter_defaults,
                 sanity_restart=False,
                 restart="on-failure",
-                healthcheck=LEADER_STATUS_HEALTHCHECK,
+                healthcheck=leader_status_healthcheck(ports[3]),
                 metadata_store="cockroach",
                 default_replication_factor=2,
             ),

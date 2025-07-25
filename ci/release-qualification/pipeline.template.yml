@@ -14,6 +14,7 @@ env:
   CI_BAZEL_BUILD: 1
   CI_BAZEL_REMOTE_CACHE: $BAZEL_REMOTE_CACHE
   CI_BAZEL_LTO: 1
+  CI_HOST_NETWORK: 1
 
 steps:
   - group: Builds
@@ -225,6 +226,7 @@ steps:
       env:
         CI_FINAL_PREFLIGHT_CHECK_VERSION: "${BUILDKITE_TAG}"
         CI_FINAL_PREFLIGHT_CHECK_ROLLBACK: 1
+        CI_HOST_NETWORK: 0
 
   - id: nightly-preflight-check-rollback
     label: Nightly with preflight check and rollback
@@ -264,6 +266,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: mysql-cdc
               args: [ "--mysql-version=8.0.40" ]
+        skip: "Syntax changed"
 
   - group: "Postgres: other versions"
     key: postgres-versions
@@ -279,6 +282,8 @@ steps:
               args: [ "--pg-version=16.6" ]
         agents:
           queue: hetzner-aarch64-4cpu-8gb
+        env:
+          CI_HOST_NETWORK: 0
       - id: pg-cdc-15
         label: "Postgres CDC w/ 15"
         depends_on: build-aarch64
@@ -290,6 +295,8 @@ steps:
               args: [ "--pg-version=15.10" ]
         agents:
           queue: hetzner-aarch64-4cpu-8gb
+        env:
+          CI_HOST_NETWORK: 0
       - id: pg-cdc-14
         label: "Postgres CDC w/ 14"
         depends_on: build-aarch64
@@ -301,6 +308,8 @@ steps:
               args: [ "--pg-version=14.15" ]
         agents:
           queue: hetzner-aarch64-4cpu-8gb
+        env:
+          CI_HOST_NETWORK: 0
       - id: pg-cdc-13
         label: "Postgres CDC w/ 13"
         depends_on: build-aarch64
@@ -312,6 +321,8 @@ steps:
               args: [ "--pg-version=13.18" ]
         agents:
           queue: hetzner-aarch64-4cpu-8gb
+        env:
+          CI_HOST_NETWORK: 0
 
   - group: "Platform checks"
     key: platform-checks
@@ -385,6 +396,8 @@ steps:
         parallelism: 3
         agents:
           queue: hetzner-aarch64-8cpu-16gb
+        env:
+          CI_HOST_NETWORK: 0
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -397,6 +410,8 @@ steps:
         parallelism: 3
         agents:
           queue: hetzner-aarch64-8cpu-16gb
+        env:
+          CI_HOST_NETWORK: 0
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -457,6 +472,8 @@ steps:
         parallelism: 3
         agents:
           queue: hetzner-aarch64-16cpu-32gb
+        env:
+          CI_HOST_NETWORK: 0
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks

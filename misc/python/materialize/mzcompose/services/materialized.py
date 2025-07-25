@@ -15,7 +15,7 @@ import tempfile
 from enum import Enum
 from typing import Any
 
-from materialize import MZ_ROOT, docker
+from materialize import docker
 from materialize.mz_version import MzVersion
 from materialize.mzcompose import (
     DEFAULT_CRDB_ENVIRONMENT,
@@ -43,7 +43,7 @@ class MaterializeEmulator(Service):
 
         config: ServiceConfig = {
             "mzbuild": name,
-            "ports": [6875, 6876, 6877, 6878, 26257],
+            "ports": [6875, 6876, 6877, 6878, 6879],
             "healthcheck": {
                 "test": ["CMD", "curl", "-f", "localhost:6878/api/readyz"],
                 "interval": "1s",
@@ -79,7 +79,8 @@ class Materialized(Service):
         unsafe_mode: bool = True,
         restart: str | None = None,
         use_default_volumes: bool = True,
-        ports: list[str] | None = None,
+        ports: list[str] | list[int] | None = None,
+        builtin_postgres_port: int = 26257,
         system_parameter_defaults: dict[str, str] | None = None,
         additional_system_parameter_defaults: dict[str, str] | None = None,
         system_parameter_version: MzVersion | None = None,
@@ -95,14 +96,12 @@ class Materialized(Service):
         cluster_replica_size: dict[str, dict[str, Any]] | None = None,
         bootstrap_replica_size: str | None = None,
         default_replication_factor: int = 1,
-        listeners_config_path: str = f"{MZ_ROOT}/src/materialized/ci/listener_configs/no_auth.json",
+        listeners_config_path: str | None = None,
         support_external_clusterd: bool = False,
+        supports_host_network_mode: bool = True,
     ) -> None:
         if name is None:
             name = "materialized"
-
-        if healthcheck is None:
-            healthcheck = ["CMD", "curl", "-f", "localhost:6878/api/readyz"]
 
         depends_graph: dict[str, ServiceDependency] = {
             s: {"condition": "service_started"} for s in depends_on
@@ -124,9 +123,6 @@ class Materialized(Service):
             "MZ_ORCHESTRATOR_PROCESS_TCP_PROXY_LISTEN_ADDR=0.0.0.0",
             "MZ_ORCHESTRATOR_PROCESS_PROMETHEUS_SERVICE_DISCOVERY_DIRECTORY=/mzdata/prometheus",
             "MZ_BOOTSTRAP_ROLE=materialize",
-            # TODO move this to the listener config?
-            "MZ_INTERNAL_PERSIST_PUBSUB_LISTEN_ADDR=0.0.0.0:6879",
-            "MZ_PERSIST_PUBSUB_URL=http://127.0.0.1:6879",
             "MZ_AWS_CONNECTION_ROLE_ARN=arn:aws:iam::123456789000:role/MaterializeConnection",
             "MZ_AWS_EXTERNAL_ID_PREFIX=eb5cb59b-e2fe-41f3-87ca-d2176a495345",
             # Always use the persist catalog if the version has multiple implementations.
@@ -151,6 +147,7 @@ class Materialized(Service):
             f"MZ_BOOTSTRAP_BUILTIN_SYSTEM_CLUSTER_REPLICATION_FACTOR={default_replication_factor}",
             f"MZ_BOOTSTRAP_BUILTIN_PROBE_CLUSTER_REPLICATION_FACTOR={default_replication_factor}",
             f"MZ_BOOTSTRAP_DEFAULT_CLUSTER_REPLICATION_FACTOR={default_replication_factor}",
+            f"MZ_BUILTIN_POSTGRES_PORT={builtin_postgres_port}",
             *environment_extra,
             *DEFAULT_CRDB_ENVIRONMENT,
         ]
@@ -238,18 +235,20 @@ class Materialized(Service):
                 if external_metadata_store == True
                 else external_metadata_store
             )
+            if ":" not in address:
+                address += ":26257"
             depends_graph[metadata_store] = {"condition": "service_healthy"}
             command += [
-                f"--persist-consensus-url=postgres://root@{address}:26257?options=--search_path=consensus",
+                f"--persist-consensus-url=postgres://root@{address}?options=--search_path=consensus",
             ]
             environment += [
-                f"MZ_TIMESTAMP_ORACLE_URL=postgres://root@{address}:26257?options=--search_path=tsoracle",
+                f"MZ_TIMESTAMP_ORACLE_URL=postgres://root@{address}?options=--search_path=tsoracle",
                 "MZ_NO_BUILTIN_POSTGRES=1",
                 # For older Materialize versions
                 "MZ_NO_BUILTIN_COCKROACH=1",
                 # Set the adapter stash URL for older environments that need it (versions before
                 # v0.92.0).
-                f"MZ_ADAPTER_STASH_URL=postgres://root@{address}:26257?options=--search_path=adapter",
+                f"MZ_ADAPTER_STASH_URL=postgres://root@{address}?options=--search_path=adapter",
             ]
 
         command += [
@@ -312,10 +311,64 @@ class Materialized(Service):
 
         volumes = []
 
+        if not ports:
+            ports = [6875, 6876, 6877, 6878, 6879]
+        ports_int = [
+            port if isinstance(port, int) else int(port.split(":")[-1])
+            for port in ports
+        ]
+
         if image_version is None or image_version >= "v0.147.0-dev":
-            assert os.path.exists(listeners_config_path)
-            volumes.append(f"{listeners_config_path}:/listeners_config")
-            environment.append("MZ_LISTENERS_CONFIG_PATH=/listeners_config")
+            if listeners_config_path:
+                assert os.path.exists(listeners_config_path)
+                volumes.append(f"{listeners_config_path}:/listeners_config")
+                environment.append("MZ_LISTENERS_CONFIG_PATH=/listeners_config")
+            else:
+                listeners = {
+                    "sql": {
+                        "external": {
+                            "addr": f"0.0.0.0:{ports_int[0]}",
+                            "authenticator_kind": "None",
+                            "allowed_roles": "Normal",
+                            "enable_tls": False,
+                        },
+                        "internal": {
+                            "addr": f"0.0.0.0:{ports_int[2]}",
+                            "authenticator_kind": "None",
+                            "allowed_roles": "Internal",
+                            "enable_tls": False,
+                        },
+                    },
+                    "http": {
+                        "external": {
+                            "addr": f"0.0.0.0:{ports_int[1]}",
+                            "authenticator_kind": "None",
+                            "allowed_roles": "NormalAndInternal",
+                            "enable_tls": False,
+                            "routes": {
+                                "base": True,
+                                "webhook": True,
+                                "internal": False,
+                                "metrics": False,
+                                "profiling": False,
+                            },
+                        },
+                        "internal": {
+                            "addr": f"0.0.0.0:{ports_int[3]}",
+                            "authenticator_kind": "None",
+                            "allowed_roles": "NormalAndInternal",
+                            "enable_tls": False,
+                            "routes": {
+                                "base": True,
+                                "webhook": True,
+                                "internal": True,
+                                "metrics": True,
+                                "profiling": True,
+                            },
+                        },
+                    },
+                }
+                environment.append(f"MZ_LISTENERS_CONFIG={json.dumps(listeners)}")
 
         if image_version is None or image_version >= "v0.140.0-dev":
             if "MZ_CI_LICENSE_KEY" in os.environ:
@@ -336,11 +389,22 @@ class Materialized(Service):
             volumes += DEFAULT_MZ_VOLUMES
         volumes += volumes_extra
 
+        config["ports"] = [str(port) for port in ports]
+        environment.extend(
+            [
+                f"MZ_INTERNAL_PERSIST_PUBSUB_LISTEN_ADDR=0.0.0.0:{ports_int[4]}",
+                f"MZ_PERSIST_PUBSUB_URL=http://127.0.0.1:{ports_int[4]}",
+            ]
+        )
+
+        if healthcheck is None:
+            healthcheck = ["CMD", "curl", "-f", f"localhost:{ports_int[3]}/api/readyz"]
+
         config.update(
             {
                 "depends_on": depends_graph,
                 "command": command,
-                "ports": [6875, 6876, 6877, 6878, 26257],
+                "ports": ports_int,
                 "environment": environment,
                 "volumes": volumes,
                 "tmpfs": ["/tmp"],
@@ -354,15 +418,11 @@ class Materialized(Service):
             }
         )
 
-        if ports:
-            config.update(
-                {
-                    "allow_host_ports": True,
-                    "ports": ports,
-                }
-            )
-
-        super().__init__(name=name, config=config)
+        super().__init__(
+            name=name,
+            config=config,
+            supports_host_network_mode=supports_host_network_mode,
+        )
 
 
 class DeploymentStatus(Enum):
@@ -374,9 +434,10 @@ class DeploymentStatus(Enum):
     IS_LEADER = "IsLeader"
 
 
-LEADER_STATUS_HEALTHCHECK: list[str] = [
-    "CMD",
-    "curl",
-    "-f",
-    "localhost:6878/api/leader/status",
-]
+def leader_status_healthcheck(port: int = 6878) -> list[str]:
+    return [
+        "CMD",
+        "curl",
+        "-f",
+        f"localhost:{port}/api/leader/status",
+    ]

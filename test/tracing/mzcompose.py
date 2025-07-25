@@ -155,7 +155,7 @@ def workflow_basic(c: Composition) -> None:
 
 def workflow_clusterd(c: Composition) -> None:
     c.up("materialized", "clusterd")
-    port = c.port("clusterd", 6878)
+    port = c.port("clusterd", 6881)
 
     c.sql(
         "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",

@@ -78,9 +78,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     args = test.parse_output_consistency_input_args(parser)
 
     port_mz_default_internal, port_mz_system_internal = 6875, 6877
-    port_mz_default_this, port_mz_system_this = 6875, 6877
-    port_mz_default_other, port_mz_system_other = 16875, 16877
-
     configurations = args.configuration
 
     if len(configurations) == 0:
@@ -98,19 +95,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         with c.override(
             Materialized(
                 name="mz_this",
-                ports=[
-                    f"{port_mz_default_this}:{port_mz_default_internal}",
-                    f"{port_mz_system_this}:{port_mz_system_internal}",
-                ],
                 additional_system_parameter_defaults=test.flag_configuration_pair.config1.to_system_params(),
                 use_default_volumes=False,
             ),
             Materialized(
                 name="mz_other",
-                ports=[
-                    f"{port_mz_default_other}:{port_mz_default_internal}",
-                    f"{port_mz_system_other}:{port_mz_system_internal}",
-                ],
+                ports=[16875, 16876, 16877, 16878, 16879],
                 additional_system_parameter_defaults=test.flag_configuration_pair.config2.to_system_params(),
                 use_default_volumes=False,
             ),

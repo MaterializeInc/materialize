@@ -10,21 +10,21 @@
 ! CREATE CONNECTION IF NOT EXISTS invalid_host TO SSH TUNNEL (
     HOST 'invalid-ssh-bastion-host',
     USER 'mz',
-    PORT 22
+    PORT 23
   ) WITH (VALIDATE);
 contains:failed to lookup address information
 
 ! CREATE CONNECTION IF NOT EXISTS invalid_port TO SSH TUNNEL (
     HOST 'ssh-bastion-host',
     USER 'mz',
-    PORT 23
+    PORT 24
   ) WITH (VALIDATE);
-regex:failed to connect to the remote host: connect to host .* port 23: Connection refused
+regex:failed to connect to the remote host: connect to host .* port 24: Connection refused
 
 > CREATE CONNECTION IF NOT EXISTS invalid_user TO SSH TUNNEL (
     HOST 'ssh-bastion-host',
     USER 'invalid',
-    PORT 22
+    PORT 23
   );
 
 ! VALIDATE CONNECTION invalid_user;

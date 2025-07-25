@@ -30,9 +30,9 @@ from materialize.data_ingest.row import Operation
 from materialize.mzcompose import get_default_system_parameters
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.materialized import (
-    LEADER_STATUS_HEALTHCHECK,
     DeploymentStatus,
     Materialized,
+    leader_status_healthcheck,
 )
 from materialize.mzcompose.services.minio import minio_blob_uri
 from materialize.parallel_workload.database import (
@@ -1863,8 +1863,7 @@ class KillAction(Action):
                 # TODO: Retry with toxiproxy on azurite
                 external_blob_store=True,
                 blob_store_is_azure=self.azurite,
-                external_metadata_store="toxiproxy",
-                ports=["6975:6875", "6976:6876", "6977:6877"],
+                external_metadata_store="toxiproxy:26258",
                 sanity_restart=self.sanity_restart,
                 additional_system_parameter_defaults=self.system_parameters,
                 metadata_store="cockroach",
@@ -1896,10 +1895,10 @@ class ZeroDowntimeDeployAction(Action):
 
         if self.deploy_generation % 2 == 0:
             mz_service = "materialized"
-            ports = ["6975:6875", "6976:6876", "6977:6877"]
+            ports = [6975, 6976, 6977, 6978, 6979]
         else:
             mz_service = "materialized2"
-            ports = ["7075:6875", "7076:6876", "7077:6877"]
+            ports = [16875, 16876, 16877, 16878, 16879]
 
         print(f"Deploying generation {self.deploy_generation} on {mz_service}")
 
@@ -1909,7 +1908,7 @@ class ZeroDowntimeDeployAction(Action):
                 # TODO: Retry with toxiproxy on azurite
                 external_blob_store=True,
                 blob_store_is_azure=self.azurite,
-                external_metadata_store="toxiproxy",
+                external_metadata_store="toxiproxy:26258",
                 ports=ports,
                 sanity_restart=self.sanity_restart,
                 deploy_generation=self.deploy_generation,
@@ -1917,7 +1916,7 @@ class ZeroDowntimeDeployAction(Action):
                     zero_downtime=True
                 ),
                 restart="on-failure",
-                healthcheck=LEADER_STATUS_HEALTHCHECK,
+                healthcheck=leader_status_healthcheck(ports[3]),
                 metadata_store="cockroach",
                 default_replication_factor=2,
             ),

@@ -10,7 +10,7 @@
 $ http-request method=POST url=http://toxiproxy:8474/proxies content-type=application/json
 {
   "name": "postgres",
-  "listen": "0.0.0.0:5432",
+  "listen": "0.0.0.0:5433",
   "upstream": "postgres:5432",
   "enabled": true
 }

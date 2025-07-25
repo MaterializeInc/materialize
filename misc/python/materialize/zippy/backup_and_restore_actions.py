@@ -32,6 +32,11 @@ class BackupAndRestore(Action):
         with c.override(
             Materialized(
                 name=state.mz_service,
+                ports=(
+                    [16875, 16876, 16877, 16878, 16879]
+                    if state.mz_service == "materialized2"
+                    else [6875, 6876, 6877, 6878, 6879]
+                ),
                 external_blob_store=True,
                 blob_store_is_azure=c.blob_store() == "azurite",
                 external_metadata_store=True,

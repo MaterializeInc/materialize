@@ -27,14 +27,14 @@ INSERT INTO table_b SELECT 1,2 FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT
 
 > CREATE CONNECTION mysql_conn_1 TO MYSQL (
     HOST toxiproxy,
-    PORT 3306,
+    PORT 3307,
     USER root,
     PASSWORD SECRET mysqlpass
   )
 
 > CREATE CONNECTION mysql_conn_2 TO MYSQL (
     HOST toxiproxy,
-    PORT 2306,
+    PORT 2307,
     USER root,
     PASSWORD SECRET mysqlpass
   )

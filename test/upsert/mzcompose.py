@@ -15,6 +15,7 @@ Test Kafka Upsert sources using Testdrive.
 """
 
 import os
+import time
 from textwrap import dedent
 
 from materialize import ci_util
@@ -676,10 +677,12 @@ def workflow_large_scale(c: Composition, parser: WorkflowArgumentParser) -> None
             )
 
         num_rows = 100_000  # out of disk with 200_000 rows
-        batch_size = 10_000
+        batch_size = 1_000
         for i in range(0, num_rows, batch_size):
             batch_num = min(batch_size, num_rows - i)
             make_inserts(c, i, batch_num)
+            # Kafka is too slow, queue full
+            time.sleep(10)
 
         c.testdrive(
             args=["--no-reset"],

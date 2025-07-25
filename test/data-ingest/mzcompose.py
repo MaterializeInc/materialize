@@ -113,7 +113,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     with c.override(
         # Fixed port so that we keep the same port after restarting Mz in disruptions
         Materialized(
-            ports=["16875:6875", "16877:6877"],
+            ports=[6875, 6876, 6877, 6878, 6879],
             external_blob_store=True,
             blob_store_is_azure=args.azurite,
             external_metadata_store=True,
@@ -124,7 +124,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         ),
         Materialized(
             name="materialized2",
-            ports=["26875:6875", "26877:6877"],
+            ports=[16875, 16876, 16877, 16878, 16879],
             external_blob_store=True,
             blob_store_is_azure=args.azurite,
             external_metadata_store=True,
@@ -178,7 +178,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         conn.close()
 
         ports = {s: c.default_port(s) for s in services}
-        ports["materialized2"] = 26875
+        ports["materialized2"] = 16875
         mz_service = "materialized"
         deploy_generation = 0
 

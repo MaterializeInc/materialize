@@ -20,9 +20,9 @@ from materialize.data_ingest.transaction import Transaction
 from materialize.mzcompose import get_default_system_parameters
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.materialized import (
-    LEADER_STATUS_HEALTHCHECK,
     DeploymentStatus,
     Materialized,
+    leader_status_healthcheck,
 )
 
 if TYPE_CHECKING:
@@ -78,11 +78,10 @@ class RestartMz(TransactionDef):
     def generate(self, fields: list[Field]) -> Iterator[Transaction | None]:
         if random.random() < self.probability:
             ports = (
-                ["16875:6875"]
+                [6875, 6876, 6877, 6878, 6879]
                 if self.workload.mz_service == "materialized"
-                else ["26875:6875"]
+                else [16875, 16876, 16877, 16878, 16879]
             )
-
             with self.composition.override(
                 Materialized(
                     name=self.workload.mz_service,
@@ -129,10 +128,10 @@ class ZeroDowntimeDeploy(TransactionDef):
 
             if self.workload.deploy_generation % 2 == 0:
                 self.workload.mz_service = "materialized"
-                ports = ["16875:6875"]
+                ports = [6875, 6876, 6877, 6878, 6879]
             else:
                 self.workload.mz_service = "materialized2"
-                ports = ["26875:6875"]
+                ports = [16875, 16876, 16877, 16878, 16879]
 
             print(
                 f"Deploying generation {self.workload.deploy_generation} on {self.workload.mz_service}"
@@ -153,7 +152,7 @@ class ZeroDowntimeDeploy(TransactionDef):
                     },
                     deploy_generation=self.workload.deploy_generation,
                     restart="on-failure",
-                    healthcheck=LEADER_STATUS_HEALTHCHECK,
+                    healthcheck=leader_status_healthcheck(ports[3]),
                     sanity_restart=False,
                 ),
             ):

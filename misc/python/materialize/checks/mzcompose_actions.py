@@ -47,14 +47,17 @@ class StartMz(MzcomposeAction):
         force_migrations: str | None = None,
         publish: bool | None = None,
     ) -> None:
-        if healthcheck is None:
-            healthcheck = ["CMD", "curl", "-f", "localhost:6878/api/readyz"]
+        self.healthcheck = healthcheck or [
+            "CMD",
+            "curl",
+            "-f",
+            "localhost:6878/api/readyz",
+        ]
         self.tag = tag
         self.environment_extra = environment_extra
         self.system_parameter_defaults = system_parameter_defaults
         self.additional_system_parameter_defaults = additional_system_parameter_defaults
         self.system_parameter_version = system_parameter_version or tag
-        self.healthcheck = healthcheck
         self.mz_service = mz_service
         self.platform = platform
         self.deploy_generation = deploy_generation

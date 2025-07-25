@@ -19,7 +19,7 @@ id public_key_1 public_key_2
 ! CREATE CONNECTION louisoix TO SSH TUNNEL (
     HOST 'chaos.example.com',
     USER 'louisoix',
-    PORT 22,
+    PORT 23,
     PUBLIC KEY 1 = 'bad'
   );
 contains:the PUBLIC KEY 1 option cannot be explicitly specified
@@ -27,7 +27,7 @@ contains:the PUBLIC KEY 1 option cannot be explicitly specified
 ! CREATE CONNECTION louisoix TO SSH TUNNEL (
     HOST 'chaos.example.com',
     USER 'louisoix',
-    PORT 22,
+    PORT 23,
     PUBLIC KEY 2 = 'bad'
   );
 contains:the PUBLIC KEY 2 option cannot be explicitly specified
@@ -35,7 +35,7 @@ contains:the PUBLIC KEY 2 option cannot be explicitly specified
 > CREATE CONNECTION louisoix TO SSH TUNNEL (
     HOST 'chaos.example.com',
     USER 'louisoix',
-    PORT 22
+    PORT 23
   );
 
 # mz_ssh_tunnel_connections is properly populated, and SSH public keys look like keys
@@ -49,7 +49,7 @@ louisoix true  true
 > CREATE CONNECTION omega TO SSH TUNNEL (
     HOST 'chaos.example.com',
     USER 'omega',
-    PORT 22
+    PORT 23
   );
 
 > SELECT name, public_key_1 LIKE 'ssh-ed25519%' pkey1, public_key_2 LIKE 'ssh-ed25519%' pkey2
@@ -92,7 +92,7 @@ name     pkey1 pkey2
 > CREATE CONNECTION phoenix TO SSH TUNNEL (
     HOST 'light.example.com',
     USER 'phoenix',
-    PORT 22
+    PORT 23
   );
 
 > CREATE CONNECTION yshtola TO POSTGRES (
@@ -143,7 +143,7 @@ ALTER SYSTEM SET storage_enforce_external_addresses = true
 > CREATE CONNECTION omega TO SSH TUNNEL (
     HOST 'chaos.example.com',
     USER 'omega',
-    PORT 22
+    PORT 23
   );
 
 # error is not consistent
@@ -153,7 +153,7 @@ contains:failed to
 > CREATE CONNECTION local TO SSH TUNNEL (
     HOST 'ssh-bastion-host',
     USER 'omega',
-    PORT 22
+    PORT 23
   );
 
 ! VALIDATE CONNECTION local;

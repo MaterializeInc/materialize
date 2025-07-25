@@ -17,7 +17,7 @@ ALTER SYSTEM SET enable_connection_validation_syntax = true
 > CREATE CONNECTION IF NOT EXISTS thancred TO SSH TUNNEL (
     HOST 'ssh-bastion-host',
     USER 'mz',
-    PORT 22
+    PORT 23
   );
 
 # We don't authorize this connection's keys, so we
@@ -25,5 +25,5 @@ ALTER SYSTEM SET enable_connection_validation_syntax = true
 > CREATE CONNECTION IF NOT EXISTS keyless TO SSH TUNNEL (
     HOST 'ssh-bastion-host',
     USER 'mz',
-    PORT 22
+    PORT 23
   );

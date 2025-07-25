@@ -54,7 +54,7 @@ source          subsource
 > CREATE CONNECTION ssh_conn TO SSH TUNNEL (
     HOST 'unused',
     USER 'mz',
-    PORT 22
+    PORT 23
   );
 > CREATE CONNECTION pg_conn TO POSTGRES (
     HOST unused,

@@ -10,14 +10,14 @@
 $ http-request method=POST url=http://toxiproxy:8474/proxies content-type=application/json
 {
   "name": "mysql_1",
-  "listen": "0.0.0.0:3306",
+  "listen": "0.0.0.0:3307",
   "upstream": "mysql:3306"
 }
 
 $ http-request method=POST url=http://toxiproxy:8474/proxies content-type=application/json
 {
   "name": "mysql_2",
-  "listen": "0.0.0.0:2306",
+  "listen": "0.0.0.0:2307",
   "upstream": "mysql:3306"
 }
 

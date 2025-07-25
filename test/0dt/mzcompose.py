@@ -24,9 +24,9 @@ from materialize.mzcompose import get_default_system_parameters
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import (
-    LEADER_STATUS_HEALTHCHECK,
     DeploymentStatus,
     Materialized,
+    leader_status_healthcheck,
 )
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.mz import Mz
@@ -61,6 +61,7 @@ SERVICES = [
     ),
     Materialized(
         name="mz_new",
+        ports=[16875, 16876, 16877, 16878, 16879],
         sanity_restart=False,
         deploy_generation=1,
         system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
@@ -548,8 +549,10 @@ def workflow_basic(c: Composition) -> None:
     # Verify against new Materialize that it is in read-only mode
     with c.override(
         Testdrive(
-            materialize_url="postgres://materialize@mz_new:6875",
-            materialize_url_internal="postgres://materialize@mz_new:6877",
+            materialize_url="postgres://materialize@mz_new:16875",
+            materialize_url_internal="postgres://materialize@mz_new:16877",
+            materialize_http_port=16876,
+            materialize_internal_http_port=16878,
             mz_service="mz_new",
             materialize_params={"cluster": "cluster"},
             no_reset=True,
@@ -710,8 +713,10 @@ def workflow_basic(c: Composition) -> None:
 
     with c.override(
         Testdrive(
-            materialize_url="postgres://materialize@mz_new:6875",
-            materialize_url_internal="postgres://materialize@mz_new:6877",
+            materialize_url="postgres://materialize@mz_new:16875",
+            materialize_url_internal="postgres://materialize@mz_new:16877",
+            materialize_http_port=16876,
+            materialize_internal_http_port=16878,
             mz_service="mz_new",
             materialize_params={"cluster": "cluster"},
             no_reset=True,
@@ -785,6 +790,7 @@ def workflow_basic(c: Composition) -> None:
                     or "Can't create a connection to host" in str(e)
                     or "Connection refused" in str(e)
                 ), f"Unexpected error: {e}"
+                break
             except CommandFailureCausedUIError as e:
                 # service "mz_old" is not running
                 assert "running docker compose failed" in str(
@@ -972,6 +978,7 @@ def workflow_kafka_source_rehydration(c: Composition) -> None:
     with c.override(
         Materialized(
             name="mz_new",
+            ports=[16875, 16876, 16877, 16878, 16879],
             sanity_restart=False,
             deploy_generation=1,
             system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
@@ -980,8 +987,10 @@ def workflow_kafka_source_rehydration(c: Composition) -> None:
             default_replication_factor=2,
         ),
         Testdrive(
-            materialize_url="postgres://materialize@mz_new:6875",
-            materialize_url_internal="postgres://materialize@mz_new:6877",
+            materialize_url="postgres://materialize@mz_new:16875",
+            materialize_url_internal="postgres://materialize@mz_new:16877",
+            materialize_http_port=16876,
+            materialize_internal_http_port=16878,
             mz_service="mz_new",
             materialize_params={"cluster": "cluster"},
             no_reset=True,
@@ -1122,6 +1131,7 @@ def workflow_kafka_source_rehydration_large_initial(c: Composition) -> None:
     with c.override(
         Materialized(
             name="mz_new",
+            ports=[16875, 16876, 16877, 16878, 16879],
             sanity_restart=False,
             deploy_generation=1,
             system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
@@ -1130,8 +1140,10 @@ def workflow_kafka_source_rehydration_large_initial(c: Composition) -> None:
             default_replication_factor=2,
         ),
         Testdrive(
-            materialize_url="postgres://materialize@mz_new:6875",
-            materialize_url_internal="postgres://materialize@mz_new:6877",
+            materialize_url="postgres://materialize@mz_new:16875",
+            materialize_url_internal="postgres://materialize@mz_new:16877",
+            materialize_http_port=16876,
+            materialize_internal_http_port=16878,
             mz_service="mz_new",
             materialize_params={"cluster": "cluster"},
             no_reset=True,
@@ -1278,6 +1290,7 @@ def workflow_pg_source_rehydration(c: Composition) -> None:
     with c.override(
         Materialized(
             name="mz_new",
+            ports=[16875, 16876, 16877, 16878, 16879],
             sanity_restart=False,
             deploy_generation=1,
             system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
@@ -1286,8 +1299,10 @@ def workflow_pg_source_rehydration(c: Composition) -> None:
             default_replication_factor=2,
         ),
         Testdrive(
-            materialize_url="postgres://materialize@mz_new:6875",
-            materialize_url_internal="postgres://materialize@mz_new:6877",
+            materialize_url="postgres://materialize@mz_new:16875",
+            materialize_url_internal="postgres://materialize@mz_new:16877",
+            materialize_http_port=16876,
+            materialize_internal_http_port=16878,
             mz_service="mz_new",
             materialize_params={"cluster": "cluster"},
             no_reset=True,
@@ -1430,6 +1445,7 @@ def workflow_mysql_source_rehydration(c: Composition) -> None:
     with c.override(
         Materialized(
             name="mz_new",
+            ports=[16875, 16876, 16877, 16878, 16879],
             sanity_restart=False,
             deploy_generation=1,
             system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
@@ -1438,8 +1454,10 @@ def workflow_mysql_source_rehydration(c: Composition) -> None:
             default_replication_factor=2,
         ),
         Testdrive(
-            materialize_url="postgres://materialize@mz_new:6875",
-            materialize_url_internal="postgres://materialize@mz_new:6877",
+            materialize_url="postgres://materialize@mz_new:16875",
+            materialize_url_internal="postgres://materialize@mz_new:16877",
+            materialize_http_port=16876,
+            materialize_internal_http_port=16878,
             mz_service="mz_new",
             materialize_params={"cluster": "cluster"},
             no_reset=True,
@@ -1577,6 +1595,7 @@ def workflow_kafka_source_failpoint(c: Composition) -> None:
     with c.override(
         Materialized(
             name="mz_new",
+            ports=[16875, 16876, 16877, 16878, 16879],
             sanity_restart=False,
             deploy_generation=1,
             system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
@@ -1585,8 +1604,10 @@ def workflow_kafka_source_failpoint(c: Composition) -> None:
             default_replication_factor=2,
         ),
         Testdrive(
-            materialize_url="postgres://materialize@mz_new:6875",
-            materialize_url_internal="postgres://materialize@mz_new:6877",
+            materialize_url="postgres://materialize@mz_new:16875",
+            materialize_url_internal="postgres://materialize@mz_new:16877",
+            materialize_http_port=16876,
+            materialize_internal_http_port=16878,
             mz_service="mz_new",
             materialize_params={"cluster": "cluster"},
             no_reset=True,
@@ -1676,13 +1697,14 @@ def workflow_builtin_item_migrations(c: Composition) -> None:
     with c.override(
         Materialized(
             name="mz_new",
+            ports=[16875, 16876, 16877, 16878, 16879],
             sanity_restart=False,
             deploy_generation=1,
             system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
             restart="on-failure",
             external_metadata_store=True,
             force_migrations="all",
-            healthcheck=LEADER_STATUS_HEALTHCHECK,
+            healthcheck=leader_status_healthcheck(16878),
             default_replication_factor=2,
         ),
     ):
@@ -1707,24 +1729,20 @@ def workflow_builtin_item_migrations(c: Composition) -> None:
         new_mz_tables_gid = c.sql_query(
             "SELECT id FROM mz_tables WHERE name = 'mz_tables'",
             service="mz_new",
-            reuse_connection=False,
         )[0][0]
         new_mv_gid = c.sql_query(
             "SELECT id FROM mz_materialized_views WHERE name = 'mv'",
             service="mz_new",
-            reuse_connection=False,
         )[0][0]
         assert new_mz_tables_gid == mz_tables_gid
         assert new_mv_gid == mv_gid
         new_mz_tables_shard_id = c.sql_query(
             f"SELECT shard_id FROM mz_internal.mz_storage_shards WHERE object_id = '{mz_tables_gid}'",
             service="mz_new",
-            reuse_connection=False,
         )[0][0]
         new_mv_shard_id = c.sql_query(
             f"SELECT shard_id FROM mz_internal.mz_storage_shards WHERE object_id = '{mv_gid}'",
             service="mz_new",
-            reuse_connection=False,
         )[0][0]
         assert new_mz_tables_shard_id != mz_tables_shard_id
         assert new_mv_shard_id == mv_shard_id
@@ -1903,6 +1921,11 @@ def workflow_upsert_sources(c: Composition) -> None:
         with c.override(
             Materialized(
                 name=mz2,
+                ports=(
+                    [16875, 16876, 16877, 16878, 16879]
+                    if mz1 == "mz_new"
+                    else [6875, 6876, 6877, 6878, 6879]
+                ),
                 sanity_restart=False,
                 deploy_generation=i,
                 system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
@@ -1911,8 +1934,10 @@ def workflow_upsert_sources(c: Composition) -> None:
                 default_replication_factor=2,
             ),
             Testdrive(
-                materialize_url=f"postgres://materialize@{mz1}:6875",
-                materialize_url_internal=f"postgres://materialize@{mz1}:6877",
+                materialize_url=f"postgres://materialize@{mz1}:{16875 if mz1 == 'mz_new' else 6875}",
+                materialize_url_internal=f"postgres://materialize@{mz1}:{16877 if mz1 == 'mz_new' else 6877}",
+                materialize_http_port=16876 if mz1 == "mz_new" else 6876,
+                materialize_internal_http_port=16878 if mz1 == "mz_new" else 6878,
                 mz_service=mz1,
                 materialize_params={"cluster": "cluster"},
                 no_consistency_checks=True,
@@ -2089,8 +2114,10 @@ def workflow_ddl(c: Composition) -> None:
     # Verify against new Materialize that it is in read-only mode
     with c.override(
         Testdrive(
-            materialize_url="postgres://materialize@mz_new:6875",
-            materialize_url_internal="postgres://materialize@mz_new:6877",
+            materialize_url="postgres://materialize@mz_new:16875",
+            materialize_url_internal="postgres://materialize@mz_new:16877",
+            materialize_http_port=16876,
+            materialize_internal_http_port=16878,
             mz_service="mz_new",
             materialize_params={"cluster": "cluster"},
             no_reset=True,
@@ -2259,8 +2286,10 @@ def workflow_ddl(c: Composition) -> None:
 
     with c.override(
         Testdrive(
-            materialize_url="postgres://materialize@mz_new:6875",
-            materialize_url_internal="postgres://materialize@mz_new:6877",
+            materialize_url="postgres://materialize@mz_new:16875",
+            materialize_url_internal="postgres://materialize@mz_new:16877",
+            materialize_http_port=16876,
+            materialize_internal_http_port=16878,
             mz_service="mz_new",
             materialize_params={"cluster": "cluster"},
             no_reset=True,
@@ -2334,6 +2363,7 @@ def workflow_ddl(c: Composition) -> None:
                     or "Can't create a connection to host" in str(e)
                     or "Connection refused" in str(e)
                 ), f"Unexpected error: {e}"
+                break
             except CommandFailureCausedUIError as e:
                 # service "mz_old" is not running
                 assert "running docker compose failed" in str(

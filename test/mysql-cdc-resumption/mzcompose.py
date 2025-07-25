@@ -35,11 +35,13 @@ SERVICES = [
     MySql(),
     MySql(
         name="mysql-replica-1",
+        port=3308,
         version=MySql.DEFAULT_VERSION,
         additional_args=create_mysql_server_args(server_id="2", is_master=False),
     ),
     MySql(
         name="mysql-replica-2",
+        port=3309,
         version=MySql.DEFAULT_VERSION,
         additional_args=create_mysql_server_args(server_id="3", is_master=False),
     ),
@@ -189,11 +191,13 @@ def workflow_master_changes(c: Composition) -> None:
         Materialized(sanity_restart=False, default_replication_factor=2),
         MySql(
             name="mysql-replica-1",
+            port=3308,
             version=MySql.DEFAULT_VERSION,
             additional_args=create_mysql_server_args(server_id="2", is_master=False),
         ),
         MySql(
             name="mysql-replica-2",
+            port=3309,
             version=MySql.DEFAULT_VERSION,
             additional_args=create_mysql_server_args(server_id="3", is_master=False),
         ),
@@ -201,7 +205,9 @@ def workflow_master_changes(c: Composition) -> None:
         initialize(c, create_source=False)
 
         host_data_master = "mysql"
+        port_data_master = 3306
         host_for_mz_source = "mysql-replica-2"
+        port_for_mz_source = 3309
 
         c.up("mysql-replica-1", "mysql-replica-2")
 
@@ -209,27 +215,33 @@ def workflow_master_changes(c: Composition) -> None:
         run_testdrive_files(
             c,
             f"--var=mysql-replication-master-host={host_data_master}",
+            f"--var=mysql-replication-master-port={port_data_master}",
             "configure-replica.td",
             mysql_host="mysql-replica-1",
+            mysql_port=3308,
         )
         # configure mysql-replica-2 to replicate mysql
         run_testdrive_files(
             c,
             f"--var=mysql-replication-master-host={host_data_master}",
+            f"--var=mysql-replication-master-port={port_data_master}",
             "configure-replica.td",
             mysql_host="mysql-replica-2",
+            mysql_port=3309,
         )
         # wait for mysql-replica-2 to replicate the current state
         time.sleep(15)
         run_testdrive_files(
             c,
             f"--var=mysql-source-host={host_for_mz_source}",
+            f"--var=mysql-source-port={port_for_mz_source}",
             "verify-mysql-source-select-all.td",
         )
         # create source pointing to mysql-replica-2
         run_testdrive_files(
             c,
             f"--var=mysql-source-host={host_for_mz_source}",
+            f"--var=mysql-source-port={port_for_mz_source}",
             "create-source.td",
         )
 
@@ -240,13 +252,16 @@ def workflow_master_changes(c: Composition) -> None:
 
         c.kill("mysql")
         host_data_master = "mysql-replica-1"
+        port_data_master = 3308
 
         # let mysql-replica-2 replicate from mysql-replica-1
         run_testdrive_files(
             c,
             f"--var=mysql-replication-master-host={host_data_master}",
+            f"--var=mysql-replication-master-port={port_data_master}",
             "configure-replica.td",
             mysql_host=host_for_mz_source,
+            mysql_port=port_for_mz_source,
         )
 
         run_testdrive_files(
@@ -255,7 +270,12 @@ def workflow_master_changes(c: Composition) -> None:
         )
 
         # delete rows in mysql-replica-1
-        run_testdrive_files(c, "delete-rows-t1.td", mysql_host=host_data_master)
+        run_testdrive_files(
+            c,
+            "delete-rows-t1.td",
+            mysql_host=host_data_master,
+            mysql_port=port_data_master,
+        )
 
         # It may take some time until mysql-replica-2 catches up.
         time.sleep(15)
@@ -276,6 +296,7 @@ def workflow_switch_to_replica_and_kill_master(c: Composition) -> None:
         Materialized(sanity_restart=False, default_replication_factor=2),
         MySql(
             name="mysql-replica-1",
+            port=3308,
             version=MySql.DEFAULT_VERSION,
             additional_args=create_mysql_server_args(server_id="2", is_master=False),
         ),
@@ -283,7 +304,9 @@ def workflow_switch_to_replica_and_kill_master(c: Composition) -> None:
         initialize(c)
 
         host_data_master = "mysql"
+        port_data_master = 3306
         host_for_mz_source = "mysql"
+        port_for_mz_source = 3306
 
         c.up("mysql-replica-1")
 
@@ -291,8 +314,10 @@ def workflow_switch_to_replica_and_kill_master(c: Composition) -> None:
         run_testdrive_files(
             c,
             f"--var=mysql-replication-master-host={host_data_master}",
+            f"--var=mysql-replication-master-port={port_data_master}",
             "configure-replica.td",
             mysql_host="mysql-replica-1",
+            mysql_port=3308,
         )
 
         # give the replica some time to replicate the current state
@@ -306,9 +331,11 @@ def workflow_switch_to_replica_and_kill_master(c: Composition) -> None:
 
         # change connection to replica
         host_for_mz_source = "mysql-replica-1"
+        port_for_mz_source = 3308
         run_testdrive_files(
             c,
             f"--var=mysql-source-host={host_for_mz_source}",
+            f"--var=mysql-source-port={port_for_mz_source}",
             "alter-source-connection.td",
         )
 
@@ -342,6 +369,7 @@ def initialize(c: Composition, create_source: bool = True) -> None:
         run_testdrive_files(
             c,
             "--var=mysql-source-host=toxiproxy",
+            "--var=mysql-source-port=3307",
             "create-source.td",
         )
 
@@ -644,6 +672,7 @@ def create_source_after_logs_expiration(
     run_testdrive_files(
         c,
         "--var=mysql-source-host=toxiproxy",
+        "--var=mysql-source-port=3307",
         "create-source.td",
     )
 
@@ -658,6 +687,7 @@ def logs_expiration_while_mz_down(
     run_testdrive_files(
         c,
         "--var=mysql-source-host=toxiproxy",
+        "--var=mysql-source-port=3307",
         "create-source.td",
     )
 
@@ -687,10 +717,13 @@ def logs_expiration_while_mz_down(
     run_testdrive_files(c, "verify-source-stalled.td")
 
 
-def run_testdrive_files(c: Composition, *files: str, mysql_host: str = "mysql") -> None:
+def run_testdrive_files(
+    c: Composition, *files: str, mysql_host: str = "mysql", mysql_port: int = 3306
+) -> None:
     c.run_testdrive_files(
         f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
         f"--var=mysql-host={mysql_host}",
+        f"--var=mysql-port={mysql_port}",
         *files,
     )
 

@@ -23,7 +23,7 @@ from materialize.mzcompose.services.toxiproxy import Toxiproxy
 from materialize.util import selected_by_name
 
 SERVICES = [
-    Materialized(options=["--persist-pubsub-url=http://toxiproxy:6879"]),
+    Materialized(options=["--persist-pubsub-url=http://toxiproxy:6880"]),
     Redpanda(),
     Toxiproxy(),
     Testdrive(no_reset=True, seed=1, default_timeout="60s"),
@@ -191,7 +191,7 @@ def toxiproxy_start(c: Composition) -> None:
                 $ http-request method=POST url=http://toxiproxy:8474/proxies content-type=application/json
                 {
                    "name": "pubsub",
-                   "listen": "0.0.0.0:6879",
+                   "listen": "0.0.0.0:6880",
                    "upstream": "materialized:6879",
                    "enabled": true
                 }

@@ -183,7 +183,7 @@ impl AzureBlobConfig {
             container_name.clone(),
             prefix,
             metrics,
-            Url::parse(&format!("http://localhost:40111/{}", container_name)).expect("valid url"),
+            Url::parse(&format!("http://localhost:10000/{}", container_name)).expect("valid url"),
             Box::new(TestBlobKnobs),
             Arc::new(ConfigSet::default()),
         )?;

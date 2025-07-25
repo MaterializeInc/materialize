@@ -71,7 +71,7 @@ USERS = {
         "roles": [OTHER_ROLE],
     },
 }
-FRONTEGG_URL = "http://frontegg-mock:6880"
+FRONTEGG_URL = "http://frontegg-mock:6882"
 
 
 def app_password(email: str) -> str:
@@ -83,16 +83,16 @@ def app_password(email: str) -> str:
 SERVICES = [
     TestCerts(),
     Testdrive(
-        materialize_url=f"postgres://{quote(ADMIN_USER)}:{app_password(ADMIN_USER)}@balancerd:6875?sslmode=require",
+        materialize_url=f"postgres://{quote(ADMIN_USER)}:{app_password(ADMIN_USER)}@balancerd:6575?sslmode=require",
         materialize_use_https=True,
         no_reset=True,
     ),
     Balancerd(
         command=[
             "service",
-            "--pgwire-listen-addr=0.0.0.0:6875",
-            "--https-listen-addr=0.0.0.0:6876",
-            "--internal-http-listen-addr=0.0.0.0:6878",
+            "--pgwire-listen-addr=0.0.0.0:6575",
+            "--https-listen-addr=0.0.0.0:6576",
+            "--internal-http-listen-addr=0.0.0.0:6578",
             "--frontegg-resolver-template=materialized:6875",
             "--frontegg-jwk-file=/secrets/frontegg-mock.crt",
             f"--frontegg-api-token-url={FRONTEGG_URL}/identity/resources/auth/v1/api-token",
@@ -162,7 +162,7 @@ def assert_metrics(c: Composition, contains: str):
     result = c.exec(
         "materialized",
         "curl",
-        "http://balancerd:6878/metrics",
+        "http://balancerd:6578/metrics",
         "-s",
         capture=True,
     )
@@ -238,9 +238,9 @@ def workflow_plaintext(c: Composition) -> None:
         Balancerd(
             command=[
                 "service",
-                "--pgwire-listen-addr=0.0.0.0:6875",
-                "--https-listen-addr=0.0.0.0:6876",
-                "--internal-http-listen-addr=0.0.0.0:6878",
+                "--pgwire-listen-addr=0.0.0.0:6575",
+                "--https-listen-addr=0.0.0.0:6576",
+                "--internal-http-listen-addr=0.0.0.0:6578",
                 "--frontegg-resolver-template=materialized:6875",
                 "--frontegg-jwk-file=/secrets/frontegg-mock.crt",
                 f"--frontegg-api-token-url={FRONTEGG_URL}/identity/resources/auth/v1/api-token",
@@ -270,7 +270,7 @@ def workflow_http(c: Composition) -> None:
     result = c.exec(
         "materialized",
         "curl",
-        "https://balancerd:6876/api/sql",
+        "https://balancerd:6576/api/sql",
         "-k",
         "-s",
         "--header",
@@ -294,7 +294,7 @@ def workflow_ip_forwarding(c: Composition) -> None:
     # via the balancer come from the current ip
     # and that we can use proxy_protocol when talking to
     # envd directly.
-    balancer_port = c.port("balancerd", 6876)
+    balancer_port = c.port("balancerd", 6576)
     # mz internal (unencrypted port)
     materialize_port = c.port("materialized", 6878)
 
@@ -590,6 +590,7 @@ def workflow_mz_not_running(c: Composition) -> None:
                 "failure in name resolution",
                 "failed to lookup address information",
                 "Name or service not known",
+                "EOF detected",
             ]
         )
     except:

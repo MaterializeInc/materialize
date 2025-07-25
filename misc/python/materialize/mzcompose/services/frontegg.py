@@ -20,6 +20,7 @@ class FronteggMock(Service):
         self,
         users: str,
         issuer: str,
+        port: int = 6882,
         encoding_key: str | None = None,
         encoding_key_file: str | None = None,
         decoding_key: str | None = None,
@@ -30,7 +31,7 @@ class FronteggMock(Service):
         depends_on: list[str] = [],
     ) -> None:
         command = [
-            "--listen-addr=0.0.0.0:6880",
+            f"--listen-addr=0.0.0.0:{port}",
             "--users",
             users,
             "--issuer",
@@ -59,7 +60,7 @@ class FronteggMock(Service):
             config={
                 "mzbuild": mzbuild,
                 "command": command,
-                "ports": [6880],
+                "ports": [port],
                 "volumes": volumes,
                 "depends_on": depends_graph,
             },

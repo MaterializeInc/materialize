@@ -185,6 +185,11 @@ def run_workload(c: Composition, workload: Workload, args: argparse.Namespace) -
         *[
             Materialized(
                 name=mz_name,
+                ports=(
+                    [6875, 6876, 6877, 6878, 6879]
+                    if mz_name == "mz_first"
+                    else [16875, 16876, 16877, 16878, 16879]
+                ),
                 external_metadata_store=True,
                 external_blob_store=True,
                 blob_store_is_azure=args.azurite,
@@ -253,7 +258,7 @@ def run_workload(c: Composition, workload: Workload, args: argparse.Namespace) -
         )
 
         print("+++ Verifying committed transactions ...")
-        cursor = c.sql_cursor(service="mz_second")
+        cursor = c.sql_cursor(port=16875, service="mz_second")
         for commit in commits:
             if commit is None:
                 continue
