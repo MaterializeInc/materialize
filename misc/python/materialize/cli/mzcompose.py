@@ -40,7 +40,7 @@ from semver.version import Version
 
 from materialize import MZ_ROOT, ci_util, mzbuild, spawn, ui
 from materialize.mzcompose.composition import (
-    SECRETS,
+    FILTERED_ARGS,
     Composition,
     UnknownCompositionError,
 )
@@ -831,7 +831,10 @@ To see the available workflows, run:
                             [
                                 (
                                     "[REDACTED]"
-                                    if any(secret in word for secret in SECRETS)
+                                    if any(
+                                        filtered_arg in word
+                                        for filtered_arg in FILTERED_ARGS
+                                    )
                                     else word
                                 )
                                 for word in obj[typ].split(" ")
