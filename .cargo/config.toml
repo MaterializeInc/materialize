@@ -17,6 +17,8 @@ rustflags = [
     "-Clink-arg=-Wl,-O3",
     "-Clink-arg=-fuse-ld=lld",
     "-Csymbol-mangling-version=v0",
+    "-Ctarget-cpu=x86-64-v3",
+    "-Ctarget-feature=+aes,+pclmulqdq",
     "--cfg=tokio_unstable",
 ]
 
@@ -34,6 +36,8 @@ rustflags = [
     "-Clink-arg=-Wl,-O3",
     "-Clink-arg=-fuse-ld=lld",
     "-Csymbol-mangling-version=v0",
+    "-Ctarget-cpu=neoverse-n1",
+    "-Ctarget-feature=+aes,+sha2",
     "--cfg=tokio_unstable",
 ]
 
