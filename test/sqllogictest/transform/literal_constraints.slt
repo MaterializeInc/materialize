@@ -1414,3 +1414,33 @@ LIMIT 3 OFFSET 1;
 2  l2
 1  a
 1  l1
+
+# Should get fast path after view inlining. (No `fast_path_optimizer` though.)
+statement ok
+CREATE VIEW v1 AS
+SELECT *, a*a FROM t1;
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
+SELECT *
+FROM v1
+WHERE a = 3;
+----
+Explained Query (fast path):
+  Project (#0{a}, #1{b}, #3)
+    Map (9)
+      ReadIndex on=materialize.public.t1 idx_t1_a=[lookup value=(3)]
+
+Used Indexes:
+  - materialize.public.idx_t1_a (lookup)
+
+Target cluster: quickstart
+
+EOF
+
+query ITI
+SELECT *
+FROM v1
+WHERE a = 3;
+----
+3  l3  9
