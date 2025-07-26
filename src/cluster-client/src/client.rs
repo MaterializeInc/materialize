@@ -34,8 +34,6 @@ pub struct TimelyConfig {
     pub arrangement_exert_proportionality: u32,
     /// Whether to use the zero copy allocator.
     pub enable_zero_copy: bool,
-    /// Whether to use lgalloc to back the zero copy allocator.
-    pub enable_zero_copy_lgalloc: bool,
     /// Optional limit on the number of empty buffers retained by the zero copy allocator.
     pub zero_copy_limit: Option<usize>,
 }

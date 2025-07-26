@@ -275,53 +275,7 @@ impl ComputeState {
 
         self.linear_join_spec = LinearJoinSpec::from_config(config);
 
-        if ENABLE_LGALLOC.get(config) {
-            if let Some(path) = &self.context.scratch_directory {
-                let clear_bytes = LGALLOC_SLOW_CLEAR_BYTES.get(config);
-                let eager_return = ENABLE_LGALLOC_EAGER_RECLAMATION.get(config);
-                let file_growth_dampener = LGALLOC_FILE_GROWTH_DAMPENER.get(config);
-                let interval = LGALLOC_BACKGROUND_INTERVAL.get(config);
-                let local_buffer_bytes = LGALLOC_LOCAL_BUFFER_BYTES.get(config);
-                info!(
-                    ?path,
-                    backgrund_interval=?interval,
-                    clear_bytes,
-                    eager_return,
-                    file_growth_dampener,
-                    local_buffer_bytes,
-                    "enabling lgalloc"
-                );
-                let background_worker_config = lgalloc::BackgroundWorkerConfig {
-                    interval,
-                    clear_bytes,
-                };
-                lgalloc::lgalloc_set_config(
-                    lgalloc::LgAlloc::new()
-                        .enable()
-                        .with_path(path.clone())
-                        .with_background_config(background_worker_config)
-                        .eager_return(eager_return)
-                        .file_growth_dampener(file_growth_dampener)
-                        .local_buffer_bytes(local_buffer_bytes),
-                );
-                crate::lgalloc::apply_limiter_config(config);
-            } else {
-                debug!("not enabling lgalloc, scratch directory not specified");
-            }
-        } else {
-            info!("disabling lgalloc");
-            lgalloc::lgalloc_set_config(lgalloc::LgAlloc::new().disable());
-        }
-
         crate::memory_limiter::apply_limiter_config(config);
-
-        mz_ore::region::ENABLE_LGALLOC_REGION.store(
-            ENABLE_COLUMNATION_LGALLOC.get(config),
-            std::sync::atomic::Ordering::Relaxed,
-        );
-
-        let enable_columnar_lgalloc = ENABLE_COLUMNAR_LGALLOC.get(config);
-        mz_timely_util::containers::set_enable_columnar_lgalloc(enable_columnar_lgalloc);
 
         // Remember the maintenance interval locally to avoid reading it from the config set on
         // every server iteration.
@@ -371,15 +325,9 @@ impl ComputeState {
     /// Returns the cc or non-cc version of "dataflow_max_inflight_bytes", as
     /// appropriate to this replica.
     pub fn dataflow_max_inflight_bytes(&self) -> Option<usize> {
-        use mz_compute_types::dyncfgs::{
-            DATAFLOW_MAX_INFLIGHT_BYTES, DATAFLOW_MAX_INFLIGHT_BYTES_CC,
-        };
+        use mz_compute_types::dyncfgs::DATAFLOW_MAX_INFLIGHT_BYTES_CC;
 
-        if self.persist_clients.cfg.is_cc_active {
-            DATAFLOW_MAX_INFLIGHT_BYTES_CC.get(&self.worker_config)
-        } else {
-            DATAFLOW_MAX_INFLIGHT_BYTES.get(&self.worker_config)
-        }
+        DATAFLOW_MAX_INFLIGHT_BYTES_CC.get(&self.worker_config)
     }
 }
 

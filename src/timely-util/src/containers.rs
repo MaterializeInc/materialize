@@ -24,41 +24,9 @@ use differential_dataflow::trace::implementations::merge_batcher::{ColMerger, Me
 
 pub mod stack;
 
-pub(crate) use alloc::alloc_aligned_zeroed;
-pub use alloc::{enable_columnar_lgalloc, set_enable_columnar_lgalloc};
 pub use builder::ColumnBuilder;
 pub use container::Column;
 pub use provided_builder::ProvidedBuilder;
-
-mod alloc {
-    use mz_ore::region::Region;
-
-    /// Allocate a region of memory with a capacity of at least `len` that is properly aligned
-    /// and zeroed. The memory in Regions is always aligned to its content type.
-    #[inline]
-    pub(crate) fn alloc_aligned_zeroed<T: bytemuck::AnyBitPattern>(len: usize) -> Region<T> {
-        if enable_columnar_lgalloc() {
-            Region::new_auto_zeroed(len)
-        } else {
-            Region::new_heap_zeroed(len)
-        }
-    }
-
-    thread_local! {
-        static ENABLE_COLUMNAR_LGALLOC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    }
-
-    /// Returns `true` if columnar allocations should come from lgalloc.
-    #[inline]
-    pub fn enable_columnar_lgalloc() -> bool {
-        ENABLE_COLUMNAR_LGALLOC.get()
-    }
-
-    /// Set whether columnar allocations should come from lgalloc. Applies to future allocations.
-    pub fn set_enable_columnar_lgalloc(enabled: bool) {
-        ENABLE_COLUMNAR_LGALLOC.set(enabled);
-    }
-}
 
 mod container {
     use columnar::Columnar;
@@ -66,7 +34,6 @@ mod container {
     use columnar::bytes::{EncodeDecode, Sequence};
     use columnar::common::IterOwn;
     use columnar::{Clear, FromBytes, Index, Len};
-    use mz_ore::region::Region;
     use timely::Container;
     use timely::bytes::arc::Bytes;
     use timely::container::PushInto;
@@ -86,7 +53,7 @@ mod container {
         ///
         /// Reasons could include misalignment, cloning of data, or wanting
         /// to release the `Bytes` as a scarce resource.
-        Align(Region<u64>),
+        Align(Vec<u64>),
     }
 
     impl<C: Columnar> Column<C> {
@@ -125,14 +92,14 @@ mod container {
                 Column::Typed(t) => Column::Typed(t.clone()),
                 Column::Bytes(b) => {
                     assert_eq!(b.len() % 8, 0);
-                    let mut alloc: Region<u64> = super::alloc_aligned_zeroed(b.len() / 8);
+                    let mut alloc: Vec<u64> = vec![0; b.len() / 8];
                     let alloc_bytes = bytemuck::cast_slice_mut(&mut alloc);
                     alloc_bytes[..b.len()].copy_from_slice(b);
                     Self::Align(alloc)
                 }
                 Column::Align(a) => {
-                    let mut alloc = super::alloc_aligned_zeroed(a.len());
-                    alloc[..a.len()].copy_from_slice(a);
+                    let mut alloc = Vec::with_capacity(a.len());
+                    alloc.extend_from_slice(a);
                     Column::Align(alloc)
                 }
             }
@@ -198,7 +165,7 @@ mod container {
                 Self::Bytes(bytes)
             } else {
                 // We failed to cast the slice, so we'll reallocate.
-                let mut alloc: Region<u64> = super::alloc_aligned_zeroed(bytes.len() / 8);
+                let mut alloc: Vec<u64> = vec![0; bytes.len() / 8];
                 let alloc_bytes = bytemuck::cast_slice_mut(&mut alloc);
                 alloc_bytes[..bytes.len()].copy_from_slice(&bytes);
                 Self::Align(alloc)
@@ -268,7 +235,7 @@ mod builder {
                 ) where
                     C: Columnar,
                 {
-                    let mut alloc = super::alloc_aligned_zeroed(round);
+                    let mut alloc = vec![0; round];
                     let writer = std::io::Cursor::new(bytemuck::cast_slice_mut(&mut alloc[..]));
                     Sequence::write(writer, &current.borrow()).unwrap();
                     pending.push_back(Column::Align(alloc));
@@ -479,7 +446,6 @@ mod provided_builder {
 
 #[cfg(test)]
 mod tests {
-    use mz_ore::region::Region;
     use timely::Container;
     use timely::bytes::arc::BytesMut;
     use timely::dataflow::channels::ContainerBytes;
@@ -512,7 +478,7 @@ mod tests {
         assert_eq!(column_bytes2.iter().collect::<Vec<_>>(), vec![&1, &2, &3]);
 
         let raw = raw_columnar_bytes();
-        let mut region: Region<u64> = alloc_aligned_zeroed(raw.len() / 8);
+        let mut region: Vec<u64> = vec![0; raw.len() / 8];
         let region_bytes = bytemuck::cast_slice_mut(&mut region);
         region_bytes[..raw.len()].copy_from_slice(&raw);
         let column_align: Column<i32> = Column::Align(region);

@@ -33,7 +33,6 @@ either = "1.15.0"
 futures = { version = "0.3.31", optional = true }
 hibitset = { version = "0.6.4", optional = true }
 itertools = "0.14.0"
-lgalloc = { version = "0.6", optional = true }
 libc = { version = "0.2.174", optional = true }
 mz-ore-proc = { path = "../ore-proc", default-features = false }
 num = "0.4.3"
@@ -118,11 +117,10 @@ async = [
     "tokio",
     "dep:tracing",
 ]
-bytes = ["dep:bytes", "compact_bytes", "smallvec", "smallvec/const_generics", "region", "tracing"]
+bytes = ["dep:bytes", "compact_bytes", "smallvec", "smallvec/const_generics", "tracing"]
 network = ["async", "dep:bytes", "smallvec", "tonic", "dep:tracing"]
 panic = ["sentry-panic"]
 process = ["libc"]
-region = ["dep:lgalloc", "dep:bytemuck"]
 tracing = [
     "anyhow",
     "dep:tracing",
@@ -174,7 +172,7 @@ harness = false
 [[bench]]
 name = "bytes"
 harness = false
-required-features = ["bytes", "region", "tracing"]
+required-features = ["bytes", "tracing"]
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

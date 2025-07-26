@@ -50,12 +50,6 @@ pub const ENABLE_TIMELY_ZERO_COPY: Config<bool> = Config::new(
     "Enable the zero copy allocator (timely dataflow).",
 );
 
-pub const ENABLE_TIMELY_ZERO_COPY_LGALLOC: Config<bool> = Config::new(
-    "enable_timely_zero_copy_lgalloc",
-    false,
-    "Enable backing the zero copy allocator with lgalloc (timely dataflow).",
-);
-
 pub const TIMELY_ZERO_COPY_LIMIT: Config<Option<usize>> = Config::new(
     "timely_zero_copy_limit",
     None,
@@ -77,7 +71,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_WALLCLOCK_LAG_HISTOGRAM_COLLECTION)
         .add(&WALLCLOCK_LAG_HISTOGRAM_PERIOD_INTERVAL)
         .add(&ENABLE_TIMELY_ZERO_COPY)
-        .add(&ENABLE_TIMELY_ZERO_COPY_LGALLOC)
         .add(&TIMELY_ZERO_COPY_LIMIT)
         .add(&ARRANGEMENT_EXERT_PROPORTIONALITY)
 }

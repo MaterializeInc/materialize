@@ -629,7 +629,6 @@ impl Service for TransactorService {
                     blob_uri,
                     Box::new(config.clone()),
                     metrics.s3_blob.clone(),
-                    Arc::clone(&config.configs),
                 )
                 .await
                 .expect("blob_uri should be valid");

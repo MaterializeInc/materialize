@@ -59,44 +59,6 @@ pub const LINEAR_JOIN_YIELDING: Config<&str> = Config::new(
      work, respectively, rather than falling back to some default.",
 );
 
-/// Enable lgalloc.
-pub const ENABLE_LGALLOC: Config<bool> = Config::new("enable_lgalloc", true, "Enable lgalloc.");
-
-/// Enable lgalloc's eager memory return/reclamation feature.
-pub const ENABLE_LGALLOC_EAGER_RECLAMATION: Config<bool> = Config::new(
-    "enable_lgalloc_eager_reclamation",
-    true,
-    "Enable lgalloc's eager return behavior.",
-);
-
-/// The interval at which the background thread wakes.
-pub const LGALLOC_BACKGROUND_INTERVAL: Config<Duration> = Config::new(
-    "lgalloc_background_interval",
-    Duration::from_secs(1),
-    "Scheduling interval for lgalloc's background worker.",
-);
-
-/// Enable lgalloc's eager memory return/reclamation feature.
-pub const LGALLOC_FILE_GROWTH_DAMPENER: Config<usize> = Config::new(
-    "lgalloc_file_growth_dampener",
-    2,
-    "Lgalloc's file growth dampener parameter.",
-);
-
-/// Enable lgalloc's eager memory return/reclamation feature.
-pub const LGALLOC_LOCAL_BUFFER_BYTES: Config<usize> = Config::new(
-    "lgalloc_local_buffer_bytes",
-    64 << 20,
-    "Lgalloc's local buffer bytes parameter.",
-);
-
-/// The bytes to reclaim (slow path) per size class, for each background thread activation.
-pub const LGALLOC_SLOW_CLEAR_BYTES: Config<usize> = Config::new(
-    "lgalloc_slow_clear_bytes",
-    128 << 20,
-    "Clear byte size per size class for every invocation",
-);
-
 /// Interval to run the memory limiter. A zero duration disables the limiter.
 pub const MEMORY_LIMITER_INTERVAL: Config<Duration> = Config::new(
     "memory_limiter_interval",
@@ -125,61 +87,11 @@ pub const MEMORY_LIMITER_BURST_FACTOR: Config<f64> = Config::new(
     "Multiplicative burst factor to memory limit.",
 );
 
-/// Interval to run the lgalloc limiter. A zero duration disables the limiter.
-pub const LGALLOC_LIMITER_INTERVAL: Config<Duration> = Config::new(
-    "lgalloc_limiter_interval",
-    Duration::from_secs(10),
-    "Interval to run the lgalloc limiter. A zero duration disables the limiter.",
-);
-
-/// Factor of the memory limit that lgalloc will be permitted to use before terminating the process.
-pub const LGALLOC_LIMITER_USAGE_FACTOR: Config<f64> = Config::new(
-    "lgalloc_limiter_usage_factor",
-    2.,
-    "Factor of the memory limit that lgalloc will use before terminating the process.",
-);
-
-/// Bias to the lgalloc limiter usage factor.
-pub const LGALLOC_LIMITER_USAGE_BIAS: Config<f64> = Config::new(
-    "lgalloc_limiter_usage_bias",
-    1.,
-    "Multiplicative bias to lgalloc_limiter_usage_factor.",
-);
-
-/// Burst factor to disk limit.
-pub const LGALLOC_LIMITER_BURST_FACTOR: Config<f64> = Config::new(
-    "lgalloc_limiter_burst_factor",
-    0.,
-    "Multiplicative burst factor to disk limit.",
-);
-
-/// Enable lgalloc for columnation.
-pub const ENABLE_COLUMNATION_LGALLOC: Config<bool> = Config::new(
-    "enable_columnation_lgalloc",
-    true,
-    "Enable allocating regions from lgalloc.",
-);
-
-/// Enable lgalloc for columnar.
-pub const ENABLE_COLUMNAR_LGALLOC: Config<bool> = Config::new(
-    "enable_columnar_lgalloc",
-    true,
-    "Enable allocating aligned regions in columnar from lgalloc.",
-);
-
 /// The interval at which the compute server performs maintenance tasks.
 pub const COMPUTE_SERVER_MAINTENANCE_INTERVAL: Config<Duration> = Config::new(
     "compute_server_maintenance_interval",
     Duration::from_millis(10),
     "The interval at which the compute server performs maintenance tasks. Zero enables maintenance on every iteration.",
-);
-
-/// Maximum number of in-flight bytes emitted by persist_sources feeding dataflows.
-pub const DATAFLOW_MAX_INFLIGHT_BYTES: Config<Option<usize>> = Config::new(
-    "compute_dataflow_max_inflight_bytes",
-    None,
-    "The maximum number of in-flight bytes emitted by persist_sources feeding \
-     compute dataflows in non-cc clusters.",
 );
 
 /// The "physical backpressure" of `compute_dataflow_max_inflight_bytes_cc` has
@@ -385,24 +297,11 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_TEMPORAL_BUCKETING)
         .add(&TEMPORAL_BUCKETING_SUMMARY)
         .add(&LINEAR_JOIN_YIELDING)
-        .add(&ENABLE_LGALLOC)
-        .add(&LGALLOC_BACKGROUND_INTERVAL)
-        .add(&LGALLOC_FILE_GROWTH_DAMPENER)
-        .add(&LGALLOC_LOCAL_BUFFER_BYTES)
-        .add(&LGALLOC_SLOW_CLEAR_BYTES)
         .add(&MEMORY_LIMITER_INTERVAL)
         .add(&MEMORY_LIMITER_USAGE_FACTOR)
         .add(&MEMORY_LIMITER_USAGE_BIAS)
         .add(&MEMORY_LIMITER_BURST_FACTOR)
-        .add(&LGALLOC_LIMITER_INTERVAL)
-        .add(&LGALLOC_LIMITER_USAGE_FACTOR)
-        .add(&LGALLOC_LIMITER_USAGE_BIAS)
-        .add(&LGALLOC_LIMITER_BURST_FACTOR)
-        .add(&ENABLE_LGALLOC_EAGER_RECLAMATION)
-        .add(&ENABLE_COLUMNATION_LGALLOC)
-        .add(&ENABLE_COLUMNAR_LGALLOC)
         .add(&COMPUTE_SERVER_MAINTENANCE_INTERVAL)
-        .add(&DATAFLOW_MAX_INFLIGHT_BYTES)
         .add(&DATAFLOW_MAX_INFLIGHT_BYTES_CC)
         .add(&HYDRATION_CONCURRENCY)
         .add(&COPY_TO_S3_PARQUET_ROW_GROUP_FILE_RATIO)

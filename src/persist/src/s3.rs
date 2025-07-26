@@ -30,10 +30,8 @@ use aws_types::region::Region;
 use bytes::Bytes;
 use futures_util::stream::FuturesOrdered;
 use futures_util::{FutureExt, StreamExt};
-use mz_dyncfg::{Config, ConfigSet};
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
-use mz_ore::lgbytes::MetricsRegion;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::task::RuntimeExt;
 use tokio::runtime::Handle as AsyncHandle;
@@ -52,8 +50,6 @@ pub struct S3BlobConfig {
     client: S3Client,
     bucket: String,
     prefix: String,
-    cfg: Arc<ConfigSet>,
-    is_cc_active: bool,
 }
 
 // There is no simple way to hook into the S3 client to capture when its various timeouts
@@ -123,9 +119,7 @@ impl S3BlobConfig {
         credentials: Option<(String, String)>,
         knobs: Box<dyn BlobKnobs>,
         metrics: S3BlobMetrics,
-        cfg: Arc<ConfigSet>,
     ) -> Result<Self, Error> {
-        let is_cc_active = knobs.is_cc_active();
         let mut loader = mz_aws_util::defaults();
 
         if let Some(region) = region {
@@ -178,8 +172,6 @@ impl S3BlobConfig {
             client,
             bucket,
             prefix,
-            cfg,
-            is_cc_active,
         })
     }
 
@@ -252,10 +244,6 @@ impl S3BlobConfig {
             fn read_timeout(&self) -> Duration {
                 READ_TIMEOUT_MARKER
             }
-
-            fn is_cc_active(&self) -> bool {
-                false
-            }
         }
 
         // Give each test a unique prefix so they don't conflict. We don't have
@@ -273,11 +261,6 @@ impl S3BlobConfig {
             None,
             Box::new(TestBlobKnobs),
             metrics,
-            Arc::new(
-                ConfigSet::default()
-                    .add(&ENABLE_S3_LGALLOC_CC_SIZES)
-                    .add(&ENABLE_S3_LGALLOC_NONCC_SIZES),
-            ),
         )
         .await?;
         Ok(Some(config))
@@ -303,8 +286,6 @@ pub struct S3Blob {
     // Defaults to 1000 which is the current AWS max.
     max_keys: i32,
     multipart_config: MultipartConfig,
-    cfg: Arc<ConfigSet>,
-    is_cc_active: bool,
 }
 
 impl S3Blob {
@@ -317,8 +298,6 @@ impl S3Blob {
             prefix: config.prefix,
             max_keys: 1_000,
             multipart_config: MultipartConfig::default(),
-            cfg: config.cfg,
-            is_cc_active: config.is_cc_active,
         };
         // Connect before returning success. We don't particularly care about
         // what's stored in this blob (nothing writes to it, so presumably it's
@@ -331,18 +310,6 @@ impl S3Blob {
         format!("{}/{}", self.prefix, key)
     }
 }
-
-pub(crate) const ENABLE_S3_LGALLOC_CC_SIZES: Config<bool> = Config::new(
-    "persist_enable_s3_lgalloc_cc_sizes",
-    true,
-    "An incident flag to disable copying fetched s3 data into lgalloc on cc sized clusters.",
-);
-
-pub(crate) const ENABLE_S3_LGALLOC_NONCC_SIZES: Config<bool> = Config::new(
-    "persist_enable_s3_lgalloc_noncc_sizes",
-    false,
-    "A feature flag to enable copying fetched s3 data into lgalloc on non-cc sized clusters.",
-);
 
 #[async_trait]
 impl Blob for S3Blob {
@@ -474,27 +441,9 @@ impl Blob for S3Blob {
                 let body_start = Instant::now();
                 let mut body_parts: Vec<Bytes> = Vec::new();
 
-                // Get the data into lgalloc at the absolute earliest possible
-                // point without (yet) having to fork the s3 client library.
-                let enable_s3_lgalloc = if self.is_cc_active {
-                    ENABLE_S3_LGALLOC_CC_SIZES.get(&self.cfg)
-                } else {
-                    ENABLE_S3_LGALLOC_NONCC_SIZES.get(&self.cfg)
-                };
-
                 // Copy all of the bytes off the network and into a single allocation.
                 let mut buffer = match object.content_length() {
-                    Some(len @ 1..) => {
-                        let len: u64 = len.try_into().expect("positive integer");
-                        // N.B. `lgalloc` cannot reallocate so we need to make sure the initial
-                        // allocation is large enough to fit then entire blob.
-                        let buf: MetricsRegion<u8> = self
-                            .metrics
-                            .lgbytes
-                            .persist_s3
-                            .new_region(usize::cast_from(len));
-                        Some(buf)
-                    }
+                    Some(1..) => Some(Vec::new()),
                     // content-length of 0 isn't necessarily invalid.
                     Some(len @ ..=-1) => {
                         tracing::trace!(?len, "found invalid content-length, falling back");
@@ -509,10 +458,6 @@ impl Blob for S3Blob {
                     match &mut buffer {
                         // Write to our single allocation, if it's enabled.
                         Some(buf) => buf.extend_from_slice(&data[..]),
-                        // Fallback to spilling into lgalloc is quick as possible.
-                        None if enable_s3_lgalloc => {
-                            body_parts.push(self.metrics.lgbytes.persist_s3.try_mmap_bytes(data));
-                        }
                         // If all else false just heap allocate.
                         None => {
                             // In the CYA fallback case, make sure we skip the
@@ -1174,12 +1119,6 @@ mod tests {
                     client: config.client.clone(),
                     bucket: config.bucket.clone(),
                     prefix: format!("{}/s3_blob_impl_test/{}", config.prefix, path),
-                    cfg: Arc::new(
-                        ConfigSet::default()
-                            .add(&ENABLE_S3_LGALLOC_CC_SIZES)
-                            .add(&ENABLE_S3_LGALLOC_NONCC_SIZES),
-                    ),
-                    is_cc_active: true,
                 };
                 let mut blob = S3Blob::open(config).await?;
                 blob.max_keys = 2;

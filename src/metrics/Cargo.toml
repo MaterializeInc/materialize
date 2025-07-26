@@ -10,7 +10,6 @@ publish = false
 workspace = true
 
 [dependencies]
-lgalloc = "0.6"
 libc = "0.2.174"
 mz-dyncfg = { path = "../dyncfg" }
 mz-ore = { path = "../ore", features = ["metrics"] }
