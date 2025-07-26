@@ -144,6 +144,8 @@ def cargo(
     """
     _target = target(arch)
     _target_env = _target.upper().replace("-", "_")
+    _target_cpu = target_cpu(arch)
+    _target_features = ",".join(target_features(arch))
 
     env = {
         **extra_env,
@@ -153,6 +155,8 @@ def cargo(
         "-Clink-arg=-Wl,--compress-debug-sections=zlib",
         "-Clink-arg=-Wl,-O3",
         "-Csymbol-mangling-version=v0",
+        f"-Ctarget-cpu={_target_cpu}",
+        f"-Ctarget-feature={_target_features}",
         "--cfg=tokio_unstable",
     ]
 
