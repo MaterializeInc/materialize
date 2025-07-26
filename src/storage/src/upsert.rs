@@ -47,7 +47,6 @@ use crate::metrics::upsert::UpsertMetrics;
 use crate::storage_state::StorageInstanceContext;
 use crate::upsert_continual_feedback;
 use autospill::AutoSpillBackend;
-use memory::InMemoryHashMap;
 use types::{
     BincodeOpts, StateValue, UpsertState, UpsertStateBackend, Value, consolidating_merge_function,
     upsert_bincode_opts,
@@ -254,119 +253,89 @@ where
 
     let thin_input = upsert_thinning(input);
 
-    if let Some(scratch_directory) = instance_context.scratch_directory.as_ref() {
-        let tuning = dataflow_paramters.upsert_rocksdb_tuning_config.clone();
+    let tuning = dataflow_paramters.upsert_rocksdb_tuning_config.clone();
 
-        let allow_auto_spill = storage_configuration
-            .parameters
-            .upsert_auto_spill_config
-            .allow_spilling_to_disk;
-        let spill_threshold = storage_configuration
-            .parameters
-            .upsert_auto_spill_config
-            .spill_to_disk_threshold_bytes;
+    let allow_auto_spill = storage_configuration
+        .parameters
+        .upsert_auto_spill_config
+        .allow_spilling_to_disk;
+    let spill_threshold = storage_configuration
+        .parameters
+        .upsert_auto_spill_config
+        .spill_to_disk_threshold_bytes;
 
-        tracing::info!(
-            worker_id = %source_config.worker_id,
-            source_id = %source_config.id,
-            ?tuning,
-            ?storage_configuration.parameters.upsert_auto_spill_config,
-            ?rocksdb_use_native_merge_operator,
-            "rendering upsert source with rocksdb-backed upsert state"
-        );
-        let rocksdb_shared_metrics = Arc::clone(&upsert_metrics.rocksdb_shared);
-        let rocksdb_instance_metrics = Arc::clone(&upsert_metrics.rocksdb_instance_metrics);
-        let rocksdb_dir = scratch_directory
+    let rocksdb_dir = match &instance_context.scratch_directory {
+        Some(root) => root
             .join("storage")
             .join("upsert")
             .join(source_config.id.to_string())
-            .join(source_config.worker_id.to_string());
-
-        let env = instance_context.rocksdb_env.clone();
-
-        let rocksdb_in_use_metric = Arc::clone(&upsert_metrics.rocksdb_autospill_in_use);
-
-        // A closure that will initialize and return a configured RocksDB instance
-        let rocksdb_init_fn = move || async move {
-            let merge_operator =
-                if rocksdb_use_native_merge_operator {
-                    Some((
-                        "upsert_state_snapshot_merge_v1".to_string(),
-                        |a: &[u8],
-                         b: ValueIterator<
-                            BincodeOpts,
-                            StateValue<G::Timestamp, Option<FromTime>>,
-                        >| {
-                            consolidating_merge_function::<G::Timestamp, Option<FromTime>>(
-                                a.into(),
-                                b,
-                            )
-                        },
-                    ))
-                } else {
-                    None
-                };
-            rocksdb::RocksDB::new(
-                mz_rocksdb::RocksDBInstance::new(
-                    &rocksdb_dir,
-                    mz_rocksdb::InstanceOptions::new(
-                        env,
-                        rocksdb_cleanup_tries,
-                        merge_operator,
-                        // For now, just use the same config as the one used for
-                        // merging snapshots.
-                        upsert_bincode_opts(),
-                    ),
-                    tuning,
-                    rocksdb_shared_metrics,
-                    rocksdb_instance_metrics,
-                )
-                .unwrap(),
-            )
-        };
-
-        // TODO(aljoscha): I don't like how we have basically the same call
-        // three times here, but it's hard working around those impl Futures
-        // that return an impl Trait. Oh well...
-        if allow_auto_spill {
-            upsert_operator(
-                &thin_input,
-                upsert_envelope.key_indices,
-                resume_upper,
-                previous,
-                previous_token,
-                upsert_metrics,
-                source_config,
-                move || async move {
-                    AutoSpillBackend::new(rocksdb_init_fn, spill_threshold, rocksdb_in_use_metric)
-                },
-                upsert_config,
-                storage_configuration,
-                prevent_snapshot_buffering,
-                snapshot_buffering_max,
-            )
-        } else {
-            upsert_operator(
-                &thin_input,
-                upsert_envelope.key_indices,
-                resume_upper,
-                previous,
-                previous_token,
-                upsert_metrics,
-                source_config,
-                rocksdb_init_fn,
-                upsert_config,
-                storage_configuration,
-                prevent_snapshot_buffering,
-                snapshot_buffering_max,
-            )
+            .join(source_config.worker_id.to_string()),
+        None => {
+            // When running RocksDB in memory, the file system is emulated, so the path doesn't
+            // matter. However, we still need to pick one that exists on the host because of
+            // https://github.com/rust-rocksdb/rust-rocksdb/issues/1015.
+            "/tmp".into()
         }
-    } else {
-        tracing::info!(
-            worker_id = %source_config.worker_id,
-            source_id = %source_config.id,
-            "rendering upsert source with memory-backed upsert state",
-        );
+    };
+
+    tracing::info!(
+        worker_id = %source_config.worker_id,
+        source_id = %source_config.id,
+        ?rocksdb_dir,
+        ?tuning,
+        ?storage_configuration.parameters.upsert_auto_spill_config,
+        ?rocksdb_use_native_merge_operator,
+        "rendering upsert source",
+    );
+
+    let rocksdb_shared_metrics = Arc::clone(&upsert_metrics.rocksdb_shared);
+    let rocksdb_instance_metrics = Arc::clone(&upsert_metrics.rocksdb_instance_metrics);
+    let rocksdb_in_use_metric = Arc::clone(&upsert_metrics.rocksdb_autospill_in_use);
+
+    let env = instance_context.rocksdb_env.clone();
+
+    // A closure that will initialize and return a configured RocksDB instance
+    let rocksdb_init_fn = move || async move {
+        let merge_operator = if rocksdb_use_native_merge_operator {
+            Some((
+                    "upsert_state_snapshot_merge_v1".to_string(),
+                    |a: &[u8],
+                     b: ValueIterator<
+                        BincodeOpts,
+                        StateValue<G::Timestamp, Option<FromTime>>,
+                    >| {
+                        consolidating_merge_function::<G::Timestamp, Option<FromTime>>(
+                            a.into(),
+                            b,
+                        )
+                    },
+                ))
+        } else {
+            None
+        };
+        rocksdb::RocksDB::new(
+            mz_rocksdb::RocksDBInstance::new(
+                &rocksdb_dir,
+                mz_rocksdb::InstanceOptions::new(
+                    env,
+                    rocksdb_cleanup_tries,
+                    merge_operator,
+                    // For now, just use the same config as the one used for
+                    // merging snapshots.
+                    upsert_bincode_opts(),
+                ),
+                tuning,
+                rocksdb_shared_metrics,
+                rocksdb_instance_metrics,
+            )
+            .unwrap(),
+        )
+    };
+
+    // TODO(aljoscha): I don't like how we have basically the same call
+    // two times here, but it's hard working around those impl Futures
+    // that return an impl Trait. Oh well...
+    if allow_auto_spill {
         upsert_operator(
             &thin_input,
             upsert_envelope.key_indices,
@@ -375,7 +344,24 @@ where
             previous_token,
             upsert_metrics,
             source_config,
-            || async { InMemoryHashMap::default() },
+            move || async move {
+                AutoSpillBackend::new(rocksdb_init_fn, spill_threshold, rocksdb_in_use_metric)
+            },
+            upsert_config,
+            storage_configuration,
+            prevent_snapshot_buffering,
+            snapshot_buffering_max,
+        )
+    } else {
+        upsert_operator(
+            &thin_input,
+            upsert_envelope.key_indices,
+            resume_upper,
+            previous,
+            previous_token,
+            upsert_metrics,
+            source_config,
+            rocksdb_init_fn,
             upsert_config,
             storage_configuration,
             prevent_snapshot_buffering,
