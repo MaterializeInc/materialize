@@ -5589,6 +5589,9 @@ def workflow_test_lgalloc_limiter(c: Composition) -> None:
     with c.override(
         Materialized(
             additional_system_parameter_defaults={
+                "enable_lgalloc": "true",
+                "enable_columnar_lgalloc": "true",
+                "enable_columnation_lgalloc": "true",
                 "unsafe_enable_unorchestrated_cluster_replicas": "true",
                 "enable_compute_correction_v2": "true",
                 "lgalloc_limiter_interval": "100ms",
