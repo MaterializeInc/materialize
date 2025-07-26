@@ -157,10 +157,7 @@ def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
             CREATE CLUSTER cluster1 REPLICAS (
                 replica1 (
                     STORAGECTL ADDRESSES ['clusterd1:2100', 'clusterd2:2100'],
-                    STORAGE ADDRESSES ['clusterd1:2103', 'clusterd2:2103'],
-                    COMPUTECTL ADDRESSES ['clusterd1:2101', 'clusterd2:2101'],
-                    COMPUTE ADDRESSES ['clusterd1:2102', 'clusterd2:2102'],
-                    WORKERS 2
+                    COMPUTECTL ADDRESSES ['clusterd1:2101', 'clusterd2:2101']
                 )
             );
 
@@ -182,10 +179,7 @@ def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
 
             CREATE CLUSTER REPLICA cluster1.replica2
                 STORAGECTL ADDRESSES ['clusterd3:2100', 'clusterd4:2100'],
-                STORAGE ADDRESSES ['clusterd3:2103', 'clusterd4:2103'],
-                COMPUTECTL ADDRESSES ['clusterd3:2101', 'clusterd4:2101'],
-                COMPUTE ADDRESSES ['clusterd3:2102', 'clusterd4:2102'],
-                WORKERS 2;
+                COMPUTECTL ADDRESSES ['clusterd3:2101', 'clusterd4:2101']
         """,
             port=6877,
             user="mz_system",
@@ -317,10 +311,7 @@ def workflow_test_github_4443(c: Composition) -> None:
             """
             CREATE CLUSTER cluster1 REPLICAS (replica1 (
                 STORAGECTL ADDRESSES ['clusterd1:2100'],
-                STORAGE ADDRESSES ['clusterd1:2103'],
-                COMPUTECTL ADDRESSES ['clusterd1:2101'],
-                COMPUTE ADDRESSES ['clusterd1:2102'],
-                WORKERS 1
+                COMPUTECTL ADDRESSES ['clusterd1:2101']
             ));
             SET cluster = cluster1;
             -- table for fast-path peeks
@@ -443,10 +434,7 @@ def workflow_test_github_4444(c: Composition) -> None:
         """
         CREATE CLUSTER cluster1 REPLICAS (replica1 (
             STORAGECTL ADDRESSES ['clusterd1:2100'],
-            STORAGE ADDRESSES ['clusterd1:2103'],
-            COMPUTECTL ADDRESSES ['clusterd1:2101'],
-            COMPUTE ADDRESSES ['clusterd1:2102'],
-            WORKERS 2
+            COMPUTECTL ADDRESSES ['clusterd1:2101']
         ));
         SET cluster = cluster1;
         CREATE TABLE t (a int);
@@ -505,17 +493,11 @@ def workflow_test_github_4545(c: Composition) -> None:
         CREATE CLUSTER cluster1 REPLICAS (
             logging_on (
                 STORAGECTL ADDRESSES ['clusterd1:2100'],
-                STORAGE ADDRESSES ['clusterd1:2103'],
-                COMPUTECTL ADDRESSES ['clusterd1:2101'],
-                COMPUTE ADDRESSES ['clusterd1:2102'],
-                WORKERS 2
+                COMPUTECTL ADDRESSES ['clusterd1:2101']
             ),
             logging_off (
                 STORAGECTL ADDRESSES ['clusterd2:2100'],
-                STORAGE ADDRESSES ['clusterd2:2103'],
                 COMPUTECTL ADDRESSES ['clusterd2:2101'],
-                COMPUTE ADDRESSES ['clusterd2:2102'],
-                WORKERS 2,
                 INTROSPECTION INTERVAL 0
             )
         );
@@ -557,10 +539,7 @@ def workflow_test_github_4587(c: Composition) -> None:
             CREATE CLUSTER cluster1 REPLICAS (
                 logging_on (
                     STORAGECTL ADDRESSES ['clusterd1:2100'],
-                    STORAGE ADDRESSES ['clusterd1:2103'],
-                    COMPUTECTL ADDRESSES ['clusterd1:2101'],
-                    COMPUTE ADDRESSES ['clusterd1:2102'],
-                    WORKERS 2
+                    COMPUTECTL ADDRESSES ['clusterd1:2101']
                 )
             );
             """
@@ -668,10 +647,7 @@ def workflow_test_github_4433(c: Composition) -> None:
             CREATE CLUSTER cluster1 REPLICAS (
                 r1 (
                     STORAGECTL ADDRESSES ['clusterd1:2100'],
-                    STORAGE ADDRESSES ['clusterd1:2103'],
-                    COMPUTECTL ADDRESSES ['clusterd1:2101'],
-                    COMPUTE ADDRESSES ['clusterd1:2102'],
-                    WORKERS 2
+                    COMPUTECTL ADDRESSES ['clusterd1:2101']
                 )
             );
             -- Set data for test up.
@@ -733,10 +709,7 @@ def workflow_test_github_4966(c: Composition) -> None:
             CREATE CLUSTER cluster1 REPLICAS (
                 r1 (
                     STORAGECTL ADDRESSES ['clusterd1:2100'],
-                    STORAGE ADDRESSES ['clusterd1:2103'],
-                    COMPUTECTL ADDRESSES ['clusterd1:2101'],
-                    COMPUTE ADDRESSES ['clusterd1:2102'],
-                    WORKERS 2
+                    COMPUTECTL ADDRESSES ['clusterd1:2101']
                 )
             );
             """
@@ -816,10 +789,7 @@ def workflow_test_github_5087(c: Composition) -> None:
             CREATE CLUSTER cluster1 REPLICAS (
                 r1 (
                     STORAGECTL ADDRESSES ['clusterd1:2100'],
-                    STORAGE ADDRESSES ['clusterd1:2103'],
-                    COMPUTECTL ADDRESSES ['clusterd1:2101'],
-                    COMPUTE ADDRESSES ['clusterd1:2102'],
-                    WORKERS 2
+                    COMPUTECTL ADDRESSES ['clusterd1:2101']
                 )
             );
             -- Set data for test up
@@ -976,10 +946,7 @@ def workflow_test_github_5086(c: Composition) -> None:
             CREATE CLUSTER cluster1 REPLICAS (
                 r1 (
                     STORAGECTL ADDRESSES ['clusterd1:2100'],
-                    STORAGE ADDRESSES ['clusterd1:2103'],
-                    COMPUTECTL ADDRESSES ['clusterd1:2101'],
-                    COMPUTE ADDRESSES ['clusterd1:2102'],
-                    WORKERS 2
+                    COMPUTECTL ADDRESSES ['clusterd1:2101']
                 )
             );
             -- Set data for test up.
@@ -1069,10 +1036,7 @@ def workflow_test_github_5831(c: Composition) -> None:
             CREATE CLUSTER cluster1 REPLICAS (
                 r1 (
                     STORAGECTL ADDRESSES ['clusterd1:2100'],
-                    STORAGE ADDRESSES ['clusterd1:2103'],
-                    COMPUTECTL ADDRESSES ['clusterd1:2101'],
-                    COMPUTE ADDRESSES ['clusterd1:2102'],
-                    WORKERS 4
+                    COMPUTECTL ADDRESSES ['clusterd1:2101']
                 )
             );
             -- Set data for test up.
@@ -1176,10 +1140,7 @@ def workflow_test_single_time_monotonicity_enforcers(c: Composition) -> None:
             CREATE CLUSTER cluster1 REPLICAS (
                 r1 (
                     STORAGECTL ADDRESSES ['clusterd1:2100'],
-                    STORAGE ADDRESSES ['clusterd1:2103'],
-                    COMPUTECTL ADDRESSES ['clusterd1:2101'],
-                    COMPUTE ADDRESSES ['clusterd1:2102'],
-                    WORKERS 4
+                    COMPUTECTL ADDRESSES ['clusterd1:2101']
                 )
             );
             -- Set data for test up.
@@ -1535,17 +1496,11 @@ def workflow_test_replica_targeted_subscribe_abort(c: Composition) -> None:
         CREATE CLUSTER cluster1 REPLICAS (
             replica1 (
                 STORAGECTL ADDRESSES ['clusterd1:2100'],
-                STORAGE ADDRESSES ['clusterd1:2103'],
-                COMPUTECTL ADDRESSES ['clusterd1:2101'],
-                COMPUTE ADDRESSES ['clusterd1:2102'],
-                WORKERS 2
+                COMPUTECTL ADDRESSES ['clusterd1:2101']
             ),
             replica2 (
                 STORAGECTL ADDRESSES ['clusterd2:2100'],
-                STORAGE ADDRESSES ['clusterd2:2103'],
-                COMPUTECTL ADDRESSES ['clusterd2:2101'],
-                COMPUTE ADDRESSES ['clusterd2:2102'],
-                WORKERS 2
+                COMPUTECTL ADDRESSES ['clusterd2:2101']
             )
         );
         CREATE TABLE t (a int);
@@ -1630,17 +1585,11 @@ def workflow_test_replica_targeted_select_abort(c: Composition) -> None:
         CREATE CLUSTER cluster1 REPLICAS (
             replica1 (
                 STORAGECTL ADDRESSES ['clusterd1:2100'],
-                STORAGE ADDRESSES ['clusterd1:2103'],
-                COMPUTECTL ADDRESSES ['clusterd1:2101'],
-                COMPUTE ADDRESSES ['clusterd1:2102'],
-                WORKERS 2
+                COMPUTECTL ADDRESSES ['clusterd1:2101']
             ),
             replica2 (
                 STORAGECTL ADDRESSES ['clusterd2:2100'],
-                STORAGE ADDRESSES ['clusterd2:2103'],
-                COMPUTECTL ADDRESSES ['clusterd2:2101'],
-                COMPUTE ADDRESSES ['clusterd2:2102'],
-                WORKERS 2
+                COMPUTECTL ADDRESSES ['clusterd2:2101']
             )
         );
         CREATE TABLE t (a int);
@@ -1747,10 +1696,7 @@ def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
             """
             CREATE CLUSTER cluster1 REPLICAS (replica1 (
                 STORAGECTL ADDRESSES ['clusterd1:2100'],
-                STORAGE ADDRESSES ['clusterd1:2103'],
-                COMPUTECTL ADDRESSES ['clusterd1:2101'],
-                COMPUTE ADDRESSES ['clusterd1:2102'],
-                WORKERS 1
+                COMPUTECTL ADDRESSES ['clusterd1:2101']
             ));
             SET cluster = cluster1;
 
@@ -1813,10 +1759,7 @@ def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
             DROP CLUSTER REPLICA mz_catalog_server.r1;
             CREATE CLUSTER REPLICA mz_catalog_server.r1 (
                 STORAGECTL ADDRESSES ['clusterd2:2100'],
-                STORAGE ADDRESSES ['clusterd2:2103'],
-                COMPUTECTL ADDRESSES ['clusterd2:2101'],
-                COMPUTE ADDRESSES ['clusterd2:2102'],
-                WORKERS 1
+                COMPUTECTL ADDRESSES ['clusterd2:2101']
             );
             """,
             port=6877,
@@ -1893,10 +1836,7 @@ def workflow_test_compute_reconciliation_replace(c: Composition) -> None:
             """
             CREATE CLUSTER cluster1 REPLICAS (replica1 (
                 STORAGECTL ADDRESSES ['clusterd1:2100'],
-                STORAGE ADDRESSES ['clusterd1:2103'],
-                COMPUTECTL ADDRESSES ['clusterd1:2101'],
-                COMPUTE ADDRESSES ['clusterd1:2102'],
-                WORKERS 1
+                COMPUTECTL ADDRESSES ['clusterd1:2101']
             ));
             SET cluster = cluster1;
 
@@ -1963,10 +1903,7 @@ def workflow_test_compute_reconciliation_no_errors(c: Composition) -> None:
         """
         CREATE CLUSTER cluster1 REPLICAS (replica1 (
             STORAGECTL ADDRESSES ['clusterd1:2100'],
-            STORAGE ADDRESSES ['clusterd1:2103'],
-            COMPUTECTL ADDRESSES ['clusterd1:2101'],
-            COMPUTE ADDRESSES ['clusterd1:2102'],
-            WORKERS 2
+            COMPUTECTL ADDRESSES ['clusterd1:2101']
         ));
         SET cluster = cluster1;
 
@@ -2086,10 +2023,7 @@ def workflow_test_drop_during_reconciliation(c: Composition) -> None:
             """
             CREATE CLUSTER cluster1 REPLICAS (replica1 (
                 STORAGECTL ADDRESSES ['toxiproxy:2100'],
-                STORAGE ADDRESSES ['clusterd1:2103'],
-                COMPUTECTL ADDRESSES ['toxiproxy:2101'],
-                COMPUTE ADDRESSES ['clusterd1:2102'],
-                WORKERS 1
+                COMPUTECTL ADDRESSES ['toxiproxy:2101']
             ));
             SET cluster = cluster1;
 
@@ -2160,10 +2094,7 @@ def workflow_test_mz_subscriptions(c: Composition) -> None:
         """
         CREATE CLUSTER cluster1 REPLICAS (r (
             STORAGECTL ADDRESSES ['clusterd1:2100'],
-            STORAGE ADDRESSES ['clusterd1:2103'],
-            COMPUTECTL ADDRESSES ['clusterd1:2101'],
-            COMPUTE ADDRESSES ['clusterd1:2102'],
-            WORKERS 2
+            COMPUTECTL ADDRESSES ['clusterd1:2101']
         ));
 
         CREATE TABLE t1 (a int);
@@ -2260,10 +2191,7 @@ def workflow_test_mv_source_sink(c: Composition) -> None:
         """
         CREATE CLUSTER cluster1 REPLICAS (replica1 (
             STORAGECTL ADDRESSES ['clusterd1:2100'],
-            STORAGE ADDRESSES ['clusterd1:2103'],
-            COMPUTECTL ADDRESSES ['clusterd1:2101'],
-            COMPUTE ADDRESSES ['clusterd1:2102'],
-            WORKERS 2
+            COMPUTECTL ADDRESSES ['clusterd1:2101']
         ));
         SET cluster = cluster1;
         """
@@ -2356,10 +2284,8 @@ def workflow_test_clusterd_death_detection(c: Composition) -> None:
 
                 > CREATE CLUSTER cluster1 REPLICAS (replica1 (
                     STORAGECTL ADDRESSES ['toxiproxy:2100'],
-                    STORAGE ADDRESSES ['clusterd1:2103'],
-                    COMPUTECTL ADDRESSES ['toxiproxy:2101'],
-                    COMPUTE ADDRESSES ['clusterd1:2102'],
-                    WORKERS 1));
+                    COMPUTECTL ADDRESSES ['toxiproxy:2101']
+                  ));
 
                 $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="1s"
 
@@ -2555,10 +2481,7 @@ def workflow_test_replica_metrics(c: Composition) -> None:
             """
             CREATE CLUSTER cluster1 REPLICAS (replica1 (
                 STORAGECTL ADDRESSES ['clusterd1:2100'],
-                STORAGE ADDRESSES ['clusterd1:2103'],
-                COMPUTECTL ADDRESSES ['clusterd1:2101'],
-                COMPUTE ADDRESSES ['clusterd1:2102'],
-                WORKERS 1
+                COMPUTECTL ADDRESSES ['clusterd1:2101']
             ));
             SET cluster = cluster1;
 
@@ -4644,10 +4567,7 @@ def workflow_test_github_7798(c: Composition, parser: WorkflowArgumentParser) ->
             CREATE CLUSTER source REPLICAS (
                 replica1 (
                     STORAGECTL ADDRESSES ['clusterd1:2100'],
-                    STORAGE ADDRESSES ['clusterd1:2103'],
-                    COMPUTECTL ADDRESSES ['clusterd1:2101'],
-                    COMPUTE ADDRESSES ['clusterd1:2102'],
-                    WORKERS 2
+                    COMPUTECTL ADDRESSES ['clusterd1:2101']
                 )
             );
 
@@ -5052,10 +4972,7 @@ def workflow_test_unified_introspection_during_replica_disconnect(c: Composition
             CREATE CLUSTER test REPLICAS (
                 test (
                     STORAGECTL ADDRESSES ['clusterd1:2100'],
-                    STORAGE ADDRESSES ['clusterd1:2103'],
-                    COMPUTECTL ADDRESSES ['clusterd1:2101'],
-                    COMPUTE ADDRESSES ['clusterd1:2102'],
-                    WORKERS 2
+                    COMPUTECTL ADDRESSES ['clusterd1:2101']
                 )
             );
             SET cluster = test;
@@ -5311,10 +5228,7 @@ def workflow_crash_on_replica_expiration_mv(
             CREATE CLUSTER test REPLICAS (
                 test (
                     STORAGECTL ADDRESSES ['clusterd1:2100'],
-                    STORAGE ADDRESSES ['clusterd1:2103'],
-                    COMPUTECTL ADDRESSES ['clusterd1:2101'],
-                    COMPUTE ADDRESSES ['clusterd1:2102'],
-                    WORKERS 1
+                    COMPUTECTL ADDRESSES ['clusterd1:2101']
                 )
             );
             SET CLUSTER TO test;
@@ -5376,10 +5290,7 @@ def workflow_crash_on_replica_expiration_index(
             CREATE CLUSTER test REPLICAS (
                 test (
                     STORAGECTL ADDRESSES ['clusterd1:2100'],
-                    STORAGE ADDRESSES ['clusterd1:2103'],
-                    COMPUTECTL ADDRESSES ['clusterd1:2101'],
-                    COMPUTE ADDRESSES ['clusterd1:2102'],
-                    WORKERS 1
+                    COMPUTECTL ADDRESSES ['clusterd1:2101']
                 )
             );
             SET CLUSTER TO test;
@@ -5463,10 +5374,7 @@ def workflow_replica_expiration_creates_retraction_diffs_after_panic(
             > CREATE CLUSTER test REPLICAS (
                 test (
                     STORAGECTL ADDRESSES ['clusterd1:2100'],
-                    STORAGE ADDRESSES ['clusterd1:2103'],
-                    COMPUTECTL ADDRESSES ['clusterd1:2101'],
-                    COMPUTE ADDRESSES ['clusterd1:2102'],
-                    WORKERS 1
+                    COMPUTECTL ADDRESSES ['clusterd1:2101']
                 )
               );
             > SET CLUSTER TO test;
@@ -5609,10 +5517,7 @@ def workflow_test_lgalloc_limiter(c: Composition) -> None:
             CREATE CLUSTER test REPLICAS (
                 r1 (
                     STORAGECTL ADDRESSES ['clusterd1:2100'],
-                    STORAGE ADDRESSES ['clusterd1:2103'],
-                    COMPUTECTL ADDRESSES ['clusterd1:2101'],
-                    COMPUTE ADDRESSES ['clusterd1:2102'],
-                    WORKERS 1
+                    COMPUTECTL ADDRESSES ['clusterd1:2101']
                 )
             )
             """
@@ -5728,10 +5633,7 @@ def workflow_test_memory_limiter(c: Composition) -> None:
             CREATE CLUSTER test REPLICAS (
                 r1 (
                     STORAGECTL ADDRESSES ['clusterd1:2100'],
-                    STORAGE ADDRESSES ['clusterd1:2103'],
-                    COMPUTECTL ADDRESSES ['clusterd1:2101'],
-                    COMPUTE ADDRESSES ['clusterd1:2102'],
-                    WORKERS 1
+                    COMPUTECTL ADDRESSES ['clusterd1:2101']
                 )
             )
             """

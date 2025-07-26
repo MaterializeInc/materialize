@@ -16,9 +16,6 @@ ALTER SYSTEM SET storage_statistics_interval = 2000
 > CREATE CLUSTER storage_cluster REPLICAS (
     r1 (
       STORAGECTL ADDRESSES ['clusterd1:2100'],
-      STORAGE ADDRESSES ['clusterd1:2103'],
-      COMPUTECTL ADDRESSES ['clusterd1:2101'],
-      COMPUTE ADDRESSES ['clusterd1:2102'],
-      WORKERS 1
+      COMPUTECTL ADDRESSES ['clusterd1:2101']
     )
   )

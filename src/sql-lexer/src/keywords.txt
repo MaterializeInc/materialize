@@ -97,7 +97,6 @@ Committed
 Compaction
 Compatibility
 Compression
-Compute
 Computectl
 Config
 Confluent
@@ -436,7 +435,6 @@ Ssl
 Start
 Stdin
 Stdout
-Storage
 Storagectl
 Strategy
 Strict
@@ -519,7 +517,6 @@ With
 Within
 Without
 Work
-Workers
 Workload
 Write
 Year

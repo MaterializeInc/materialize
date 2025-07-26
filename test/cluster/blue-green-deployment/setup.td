@@ -14,16 +14,10 @@ ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;
 > DROP CLUSTER IF EXISTS prod_deploy CASCADE
 > CREATE CLUSTER prod REPLICAS (replica1 (
   STORAGECTL ADDRESSES ['clusterd1:2100'],
-  STORAGE ADDRESSES ['clusterd1:2103'],
-  COMPUTECTL ADDRESSES ['clusterd1:2101'],
-  COMPUTE ADDRESSES ['clusterd1:2102'],
-  WORKERS 1))
+  COMPUTECTL ADDRESSES ['clusterd1:2101']))
 > CREATE CLUSTER prod_deploy REPLICAS (replica1 (
   STORAGECTL ADDRESSES ['clusterd2:2100', 'clusterd3:2100'],
-  STORAGE ADDRESSES ['clusterd2:2103', 'clusterd3:2103'],
-  COMPUTECTL ADDRESSES ['clusterd2:2101', 'clusterd3:2101'],
-  COMPUTE ADDRESSES ['clusterd2:2102', 'clusterd3:2102'],
-  WORKERS 2))
+  COMPUTECTL ADDRESSES ['clusterd2:2101', 'clusterd3:2101']))
 > DROP SCHEMA IF EXISTS prod CASCADE
 > DROP SCHEMA IF EXISTS prod_deploy CASCADE
 

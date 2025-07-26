@@ -4484,15 +4484,12 @@ impl<'a> Parser<'a> {
         let name = match self.expect_one_of_keywords(&[
             AVAILABILITY,
             BILLED,
-            COMPUTE,
             COMPUTECTL,
             DISK,
             INTERNAL,
             INTROSPECTION,
             SIZE,
-            STORAGE,
             STORAGECTL,
-            WORKERS,
         ])? {
             AVAILABILITY => {
                 self.expect_keyword(ZONE)?;
@@ -4501,10 +4498,6 @@ impl<'a> Parser<'a> {
             BILLED => {
                 self.expect_keyword(AS)?;
                 ReplicaOptionName::BilledAs
-            }
-            COMPUTE => {
-                self.expect_keyword(ADDRESSES)?;
-                ReplicaOptionName::ComputeAddresses
             }
             COMPUTECTL => {
                 self.expect_keyword(ADDRESSES)?;
@@ -4518,15 +4511,10 @@ impl<'a> Parser<'a> {
                 _ => unreachable!(),
             },
             SIZE => ReplicaOptionName::Size,
-            STORAGE => {
-                self.expect_keyword(ADDRESSES)?;
-                ReplicaOptionName::StorageAddresses
-            }
             STORAGECTL => {
                 self.expect_keyword(ADDRESSES)?;
                 ReplicaOptionName::StoragectlAddresses
             }
-            WORKERS => ReplicaOptionName::Workers,
             _ => unreachable!(),
         };
         let value = self.parse_optional_option_value()?;

@@ -2503,16 +2503,10 @@ pub enum ReplicaOptionName {
     Size,
     /// The `AVAILABILITY ZONE [[=] <id>]` option.
     AvailabilityZone,
-    /// The `STORAGE ADDRESSES` option.
-    StorageAddresses,
     /// The `STORAGECTL ADDRESSES` option.
     StoragectlAddresses,
     /// The `COMPUTECTL ADDRESSES` option.
     ComputectlAddresses,
-    /// The `COMPUTE ADDRESSES` option.
-    ComputeAddresses,
-    /// The `WORKERS` option.
-    Workers,
     /// The `INTERNAL` option.
     Internal,
     /// The `INTROSPECTION INTERVAL [[=] <interval>]` option.
@@ -2529,11 +2523,8 @@ impl AstDisplay for ReplicaOptionName {
             ReplicaOptionName::BilledAs => f.write_str("BILLED AS"),
             ReplicaOptionName::Size => f.write_str("SIZE"),
             ReplicaOptionName::AvailabilityZone => f.write_str("AVAILABILITY ZONE"),
-            ReplicaOptionName::StorageAddresses => f.write_str("STORAGE ADDRESSES"),
             ReplicaOptionName::StoragectlAddresses => f.write_str("STORAGECTL ADDRESSES"),
             ReplicaOptionName::ComputectlAddresses => f.write_str("COMPUTECTL ADDRESSES"),
-            ReplicaOptionName::ComputeAddresses => f.write_str("COMPUTE ADDRESSES"),
-            ReplicaOptionName::Workers => f.write_str("WORKERS"),
             ReplicaOptionName::Internal => f.write_str("INTERNAL"),
             ReplicaOptionName::IntrospectionInterval => f.write_str("INTROSPECTION INTERVAL"),
             ReplicaOptionName::IntrospectionDebugging => f.write_str("INTROSPECTION DEBUGGING"),
@@ -2553,11 +2544,8 @@ impl WithOptionName for ReplicaOptionName {
             ReplicaOptionName::BilledAs
             | ReplicaOptionName::Size
             | ReplicaOptionName::AvailabilityZone
-            | ReplicaOptionName::StorageAddresses
             | ReplicaOptionName::StoragectlAddresses
             | ReplicaOptionName::ComputectlAddresses
-            | ReplicaOptionName::ComputeAddresses
-            | ReplicaOptionName::Workers
             | ReplicaOptionName::Internal
             | ReplicaOptionName::IntrospectionInterval
             | ReplicaOptionName::IntrospectionDebugging
