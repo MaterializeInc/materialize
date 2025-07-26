@@ -372,6 +372,8 @@ def get_default_system_parameters(
         version = MzVersion.parse_cargo()
 
     params = get_minimal_system_parameters(version, zero_downtime)
+    for param, value in ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS.items():
+        params[param] = value
 
     system_param_setting = os.getenv("CI_SYSTEM_PARAMETERS", "")
     variable_params = get_variable_system_parameters(
