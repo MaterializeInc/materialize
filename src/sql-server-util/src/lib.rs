@@ -84,12 +84,21 @@ impl Client {
 
                 (tcp, Some(Box::new(tunnel)))
             }
-            TunnelConfig::AwsPrivatelink { connection_id: _ } => {
-                // TODO(sql_server2): Getting this right is tricky because
-                // there is some subtle logic with hostname validation.
-                return Err(SqlServerError::Generic(anyhow::anyhow!(
-                    "Support PrivateLink connections"
-                )));
+            TunnelConfig::AwsPrivatelink { connection_id } => {
+                let privatelink_host = mz_cloud_resources::vpc_endpoint_name(*connection_id);
+                let mut privatelink_addrs =
+                    tokio::net::lookup_host((privatelink_host.clone(), 11111)).await?;
+
+                let Some(addr) = privatelink_addrs.next() else {
+                    return Err(SqlServerError::InvariantViolated(format!(
+                        "aws privatelink: no addresses found for host {:?}",
+                        privatelink_host
+                    )));
+                };
+
+                let tcp = TcpStream::connect(addr).await.context("aws privatelink")?;
+
+                (tcp, None)
             }
         };
 
