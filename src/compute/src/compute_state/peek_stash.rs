@@ -22,7 +22,6 @@ use mz_persist_types::{PersistLocation, ShardId};
 use mz_repr::{Diff, RelationDesc, Row, Timestamp};
 use mz_storage_types::sources::SourceData;
 use timely::progress::Antichain;
-
 use tokio::sync::oneshot;
 use tracing::debug;
 use uuid::Uuid;
@@ -35,8 +34,8 @@ use crate::typedefs::RowRowAgent;
 /// An async task that stashes a peek response in persist and yields a handle to
 /// the batch in a [PeekResponse::Stashed].
 ///
-/// Note that `PeekResponseTask` intentionally does not implement or derive
-/// `Clone`, as each `PeekResponseTask` is meant to be dropped after it's
+/// Note that `StashingPeek` intentionally does not implement or derive
+/// `Clone`, as each `StashingPeek` is meant to be dropped after it's
 /// done or no longer needed.
 pub struct StashingPeek {
     pub peek: Peek,
@@ -83,6 +82,8 @@ impl StashingPeek {
             oks_handle,
         );
 
+        let rows_needed_by_finishing = peek.finishing.num_rows_needed();
+
         let task_handle = mz_ore::task::spawn(
             || format!("peek_stash::stash_peek_response({peek_uuid})"),
             async move {
@@ -94,6 +95,7 @@ impl StashingPeek {
                     batch_max_runs,
                     peek.uuid,
                     relation_desc,
+                    rows_needed_by_finishing,
                     rows_rx,
                 )
                 .await;
@@ -127,6 +129,7 @@ impl StashingPeek {
         batch_max_runs: usize,
         peek_uuid: Uuid,
         relation_desc: RelationDesc,
+        max_rows: Option<usize>, // The number of rows needed by the RowSetFinishing's offset + limit
         mut rows_rx: tokio::sync::mpsc::Receiver<Result<Vec<(Row, NonZeroI64)>, String>>,
     ) -> Result<PeekResponse, String> {
         let client = persist_clients
@@ -176,6 +179,13 @@ impl StashingPeek {
                             .add(&SourceData(Ok(row)), &(), &Timestamp::default(), &diff)
                             .await
                             .expect("invalid usage");
+
+                        // Stop if we have enough rows to satisfy the RowSetFinishing's offset + limit.
+                        if let Some(max_rows) = max_rows {
+                            if num_rows >= u64::cast_from(max_rows) {
+                                break;
+                            }
+                        }
                     }
                 }
                 Some(Err(err)) => return Ok(PeekResponse::Error(err)),

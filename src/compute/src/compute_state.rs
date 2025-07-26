@@ -1543,10 +1543,7 @@ impl IndexPeek {
         // `order_by` field. Further limiting will happen when the results
         // are collected, so we don't need to have exactly this many results,
         // just at least those results that would have been returned.
-        let max_results = peek
-            .finishing
-            .limit
-            .map(|l| usize::cast_from(u64::from(l)) + peek.finishing.offset);
+        let max_results = peek.finishing.num_rows_needed();
 
         let mut l_datum_vec = DatumVec::new();
         let mut r_datum_vec = DatumVec::new();
