@@ -15,10 +15,10 @@ workspace = true
 [dependencies]
 anyhow = "1.0.98"
 camino = "1"
-cargo_toml = "0.22.1"
+cargo_toml = "0.22.3"
 clap = { version = "4.5.23", features = ["derive", "env"] }
 convert_case = "0.8"
-guppy = "0.17.19"
+guppy = "0.17.20"
 md-5 = "0.10.6"
 proc-macro2 = "1.0.95"
 protobuf-parse = "3.7.2"
