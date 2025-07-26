@@ -16,6 +16,7 @@ use std::sync::{Arc, atomic};
 use std::time::{Duration, Instant};
 
 use anyhow::bail;
+use async_trait::async_trait;
 use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
 use mz_build_info::BuildInfo;
@@ -29,6 +30,7 @@ use mz_ore::task::AbortOnDropHandle;
 use mz_repr::GlobalId;
 use mz_service::client::{GenericClient, Partitioned};
 use mz_service::params::GrpcClientParameters;
+use mz_service::transport;
 use mz_storage_client::client::{
     RunIngestionCommand, RunSinkCommand, Status, StatusUpdate, StorageClient, StorageCommand,
     StorageGrpcClient, StorageResponse,
@@ -106,7 +108,7 @@ struct ActiveExport {
 
 impl<T> Instance<T>
 where
-    T: Timestamp + Lattice + TotalOrder,
+    T: Timestamp + Lattice + TotalOrder + Sync,
     StorageGrpcClient: StorageClient<T>,
 {
     /// Creates a new [`Instance`].
@@ -745,6 +747,7 @@ pub(super) struct ReplicaConfig {
     pub build_info: &'static BuildInfo,
     pub location: ClusterReplicaLocation,
     pub grpc_client: GrpcClientParameters,
+    pub enable_ctp: bool,
 }
 
 /// State maintained about individual replicas.
@@ -765,7 +768,7 @@ pub struct Replica<T> {
 
 impl<T> Replica<T>
 where
-    T: Timestamp + Lattice,
+    T: Timestamp + Lattice + Sync,
     StorageGrpcClient: StorageClient<T>,
 {
     /// Creates a new [`Replica`].
@@ -817,7 +820,41 @@ where
     }
 }
 
-type ReplicaClient<T> = Partitioned<StorageGrpcClient, StorageCommand<T>, StorageResponse<T>>;
+type StorageCtpClient<T> = transport::Client<StorageCommand<T>, StorageResponse<T>>;
+
+#[derive(Debug)]
+enum ReplicaClient<T: Timestamp + Lattice> {
+    Grpc(Partitioned<StorageGrpcClient, StorageCommand<T>, StorageResponse<T>>),
+    Ctp(Partitioned<StorageCtpClient<T>, StorageCommand<T>, StorageResponse<T>>),
+}
+
+#[async_trait]
+impl<T> GenericClient<StorageCommand<T>, StorageResponse<T>> for ReplicaClient<T>
+where
+    T: Timestamp + Lattice + Sync,
+    StorageGrpcClient: StorageClient<T>,
+{
+    async fn send(&mut self, cmd: StorageCommand<T>) -> anyhow::Result<()> {
+        match self {
+            Self::Grpc(client) => client.send(cmd).await,
+            Self::Ctp(client) => client.send(cmd).await,
+        }
+    }
+
+    /// # Cancel safety
+    ///
+    /// This method is cancel safe. If `recv` is used as the event in a [`tokio::select!`]
+    /// statement and some other branch completes first, it is guaranteed that no messages were
+    /// received by this client.
+    async fn recv(&mut self) -> anyhow::Result<Option<StorageResponse<T>>> {
+        match self {
+            // `Partitioned::recv` is documented as cancel safe.
+            Self::Grpc(client) => client.recv().await,
+            // `Partitioned::recv` is documented as cancel safe.
+            Self::Ctp(client) => client.recv().await,
+        }
+    }
+}
 
 /// A task handling communication with a replica.
 struct ReplicaTask<T> {
@@ -837,7 +874,7 @@ struct ReplicaTask<T> {
 
 impl<T> ReplicaTask<T>
 where
-    T: Timestamp + Lattice,
+    T: Timestamp + Lattice + Sync,
     StorageGrpcClient: StorageClient<T>,
 {
     /// Runs the replica task.
@@ -857,36 +894,53 @@ where
     /// The connection is retried forever (with backoff) and this method returns only after
     /// a connection was successfully established.
     async fn connect(&self) -> ReplicaClient<T> {
-        let try_connect = |retry: RetryState| {
-            let addrs = &self.config.location.ctl_addrs;
-            let dests = addrs
-                .iter()
-                .map(|addr| (addr.clone(), self.metrics.clone()))
-                .collect();
+        let try_connect = async move |retry: RetryState| {
             let version = self.config.build_info.semver_version();
             let client_params = &self.config.grpc_client;
 
-            async move {
-                let connect_start = Instant::now();
-                let connect_result =
-                    StorageGrpcClient::connect_partitioned(dests, version, client_params).await;
-                self.metrics.observe_connect_time(connect_start.elapsed());
+            let connect_start = Instant::now();
+            let connect_result = if self.config.enable_ctp {
+                let connect_timeout = client_params.connect_timeout.unwrap_or(Duration::MAX);
+                let keepalive_timeout = client_params
+                    .http2_keep_alive_timeout
+                    .unwrap_or(Duration::MAX);
 
-                connect_result.inspect_err(|error| {
-                    let next_backoff = retry.next_backoff.unwrap();
-                    if retry.i >= mz_service::retry::INFO_MIN_RETRIES {
-                        info!(
-                            replica_id = %self.replica_id, ?next_backoff,
-                            "error connecting to replica: {error:#}",
-                        );
-                    } else {
-                        debug!(
-                            replica_id = %self.replica_id, ?next_backoff,
-                            "error connecting to replica: {error:#}",
-                        );
-                    }
-                })
-            }
+                StorageCtpClient::<T>::connect_partitioned(
+                    self.config.location.ctl_addrs.clone(),
+                    version,
+                    connect_timeout,
+                    keepalive_timeout,
+                    self.metrics.clone(),
+                )
+                .await
+                .map(ReplicaClient::Ctp)
+            } else {
+                let addrs = &self.config.location.ctl_addrs;
+                let dests = addrs
+                    .iter()
+                    .map(|addr| (addr.clone(), self.metrics.clone()))
+                    .collect();
+                StorageGrpcClient::connect_partitioned(dests, version, client_params)
+                    .await
+                    .map(ReplicaClient::Grpc)
+            };
+
+            self.metrics.observe_connect_time(connect_start.elapsed());
+
+            connect_result.inspect_err(|error| {
+                let next_backoff = retry.next_backoff.unwrap();
+                if retry.i >= mz_service::retry::INFO_MIN_RETRIES {
+                    info!(
+                        replica_id = %self.replica_id, ?next_backoff,
+                        "error connecting to replica: {error:#}",
+                    );
+                } else {
+                    debug!(
+                        replica_id = %self.replica_id, ?next_backoff,
+                        "error connecting to replica: {error:#}",
+                    );
+                }
+            })
         };
 
         let client = Retry::default()
