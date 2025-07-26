@@ -1707,20 +1707,24 @@ def workflow_builtin_item_migrations(c: Composition) -> None:
         new_mz_tables_gid = c.sql_query(
             "SELECT id FROM mz_tables WHERE name = 'mz_tables'",
             service="mz_new",
+            reuse_connection=False,
         )[0][0]
         new_mv_gid = c.sql_query(
             "SELECT id FROM mz_materialized_views WHERE name = 'mv'",
             service="mz_new",
+            reuse_connection=False,
         )[0][0]
         assert new_mz_tables_gid == mz_tables_gid
         assert new_mv_gid == mv_gid
         new_mz_tables_shard_id = c.sql_query(
             f"SELECT shard_id FROM mz_internal.mz_storage_shards WHERE object_id = '{mz_tables_gid}'",
             service="mz_new",
+            reuse_connection=False,
         )[0][0]
         new_mv_shard_id = c.sql_query(
             f"SELECT shard_id FROM mz_internal.mz_storage_shards WHERE object_id = '{mv_gid}'",
             service="mz_new",
+            reuse_connection=False,
         )[0][0]
         assert new_mz_tables_shard_id != mz_tables_shard_id
         assert new_mv_shard_id == mv_shard_id
