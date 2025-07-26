@@ -508,27 +508,51 @@ impl<'a, T: TimestampManipulation> Context<'a, T> {
     /// hydrate immediately, but it will be able to hydrate once its inputs have sufficiently
     /// advanced.
     fn apply_warmup_constraints(&self) {
-        // Apply direct constraints from storage inputs.
+        // Collect write frontiers from storage inputs.
+        let mut write_frontiers = BTreeMap::new();
         for (id, collection) in &self.collections {
-            for input_id in &collection.storage_inputs {
-                let frontiers = self
-                    .storage_collections
-                    .collection_frontiers(*input_id)
-                    .expect("storage collection exists");
-                let upper = step_back_frontier(&frontiers.write_frontier);
-                let constraint = Constraint {
-                    type_: ConstraintType::Soft,
-                    bound_type: BoundType::Upper,
-                    frontier: &upper,
-                    reason: &format!("storage input {input_id} warmup frontier"),
-                };
-                self.apply_constraint(*id, constraint);
+            let storage_frontiers = self
+                .storage_collections
+                .collections_frontiers(collection.storage_inputs.clone())
+                .expect("storage collections exist");
+
+            let mut write_frontier = Antichain::new();
+            for frontiers in storage_frontiers {
+                write_frontier.extend(frontiers.write_frontier);
             }
+
+            write_frontiers.insert(*id, write_frontier);
         }
 
-        // Propagate constraints downstream. This transparently restores any violations of
-        // `AsOfBounds` invariant (2) that might be introduced by the propagation.
-        self.propagate_bounds_downstream(BoundType::Upper);
+        // Propagate write frontiers through compute inputs.
+        fixpoint(|changed| {
+            for (id, collection) in &self.collections {
+                let mut write_frontier = write_frontiers.remove(id).expect("inserted above");
+                for input_id in &collection.compute_inputs {
+                    let frontier = &write_frontiers[input_id];
+                    *changed |= write_frontier.extend(frontier.iter().cloned());
+                }
+                write_frontiers.insert(*id, write_frontier);
+            }
+        });
+
+        // Apply the warmup constraint.
+        for (id, write_frontier) in write_frontiers {
+            let upper = step_back_frontier(&write_frontier);
+            let constraint = Constraint {
+                type_: ConstraintType::Soft,
+                bound_type: BoundType::Upper,
+                frontier: &upper,
+                reason: &format!(
+                    "warmup frontier derived from storage write frontier {:?}",
+                    write_frontier.elements()
+                ),
+            };
+            self.apply_constraint(id, constraint);
+        }
+
+        // Restore `AsOfBounds` invariant (2).
+        self.propagate_bounds_upstream(BoundType::Upper);
     }
 
     /// Apply as-of constraints to ensure indexes contain historical data as requested by their
@@ -565,12 +589,12 @@ impl<'a, T: TimestampManipulation> Context<'a, T> {
         // Propagate write frontiers through compute inputs.
         fixpoint(|changed| {
             for (id, collection) in &self.collections {
-                let write_frontier = write_frontiers.get_mut(id).expect("inserted above");
+                let mut write_frontier = write_frontiers.remove(id).expect("inserted above");
                 for input_id in &collection.compute_inputs {
-                    let input_collection = self.expect_collection(*input_id);
-                    let bounds = input_collection.bounds.borrow();
-                    *changed |= write_frontier.extend(bounds.upper.iter().cloned());
+                    let frontier = &write_frontiers[input_id];
+                    *changed |= write_frontier.extend(frontier.iter().cloned());
                 }
+                write_frontiers.insert(*id, write_frontier);
             }
         });
 
@@ -1242,7 +1266,7 @@ mod tests {
         dataflows: [
             "u1" <- ["s1"] => 19,
             "u2" <- ["s1"] => 12,
-            "u3" <- ["u2"] => 12,
+            "u3" <- ["u2"] => 14,
             "u4" <- ["u2"] => 12,
         ],
         current_time: 100,
@@ -1333,5 +1357,23 @@ mod tests {
         ],
         current_time: 15,
         read_only: true,
+    });
+
+    // Regression test for database-issues#9273.
+    testcase!(github_9273, {
+        storage: {
+            "s1": (10, 20),
+            "u3": (14, 15),
+        },
+        dataflows: [
+            "u1" <- ["s1"] => 14,
+            "u2" <- ["u1"] => 19,
+            "u3" <- ["u1"] => 14,
+        ],
+        current_time: 100,
+        read_policies: {
+            "u1": ReadPolicy::lag_writes_by(1.into(), 1.into()),
+            "u2": ReadPolicy::lag_writes_by(1.into(), 1.into()),
+        },
     });
 }
