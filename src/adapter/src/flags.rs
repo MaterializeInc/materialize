@@ -16,7 +16,7 @@ use mz_ore::error::ErrorExt;
 use mz_service::params::GrpcClientParameters;
 use mz_sql::session::vars::SystemVars;
 use mz_storage_types::parameters::{
-    PgSourceSnapshotConfig, StorageMaxInflightBytesConfig, StorageParameters, UpsertAutoSpillConfig,
+    PgSourceSnapshotConfig, StorageMaxInflightBytesConfig, StorageParameters,
 };
 use mz_tracing::params::TracingParameters;
 
@@ -100,10 +100,6 @@ pub fn storage_config(config: &SystemVars) -> StorageParameters {
         },
         finalize_shards: config.enable_storage_shard_finalization(),
         tracing: tracing_config(config),
-        upsert_auto_spill_config: UpsertAutoSpillConfig {
-            allow_spilling_to_disk: config.upsert_rocksdb_auto_spill_to_disk(),
-            spill_to_disk_threshold_bytes: config.upsert_rocksdb_auto_spill_threshold_bytes(),
-        },
         storage_dataflow_max_inflight_bytes_config: StorageMaxInflightBytesConfig {
             max_inflight_bytes_default: config.storage_dataflow_max_inflight_bytes(),
             // Interpret the `Numeric` as a float here, we don't need perfect

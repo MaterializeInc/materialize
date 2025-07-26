@@ -1163,9 +1163,6 @@ where
         }
 
         // Depending on if the backend supports multi_merge, call the appropriate method.
-        // This can change during the lifetime of the `UpsertState` instance (e.g.
-        // the Autospill backend will switch from in-memory to rocksdb after a certain
-        // number of updates have been processed and begin supporting multi_merge).
         let stats = if self.inner.supports_merge() {
             self.consolidate_merge_inner(updates).await?
         } else {

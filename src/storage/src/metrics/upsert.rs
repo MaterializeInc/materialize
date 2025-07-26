@@ -30,10 +30,6 @@ pub(crate) struct UpsertMetricDefs {
     pub(crate) rehydration_total: UIntGaugeVec,
     pub(crate) rehydration_updates: UIntGaugeVec,
 
-    // Metric will contain either 0 to denote in-memory state usage,
-    // and 1 to denote auto spill to rocksdb
-    pub(crate) rocksdb_autospill_in_use: UIntGaugeVec,
-
     // These are used by `shared`.
     pub(crate) merge_snapshot_latency: HistogramVec,
     pub(crate) merge_snapshot_updates: IntCounterVec,
@@ -93,12 +89,6 @@ impl UpsertMetricDefs {
                 help: "The number of updates (both negative and positive), \
                     per-worker, rehydrated into the upsert state for \
                     this source",
-                var_labels: ["source_id", "worker_id"],
-            )),
-            rocksdb_autospill_in_use: registry.register(metric!(
-                name: "mz_storage_upsert_state_rocksdb_autospill_in_use",
-                help: "Flag to denote whether upsert state has spilled to rocksdb \
-                    or using in-memory state",
                 var_labels: ["source_id", "worker_id"],
             )),
             // Choose a relatively low number of representative buckets.
@@ -369,7 +359,6 @@ pub struct UpsertMetrics {
     pub(crate) rehydration_latency: DeleteOnDropGauge<AtomicF64, Vec<String>>,
     pub(crate) rehydration_total: DeleteOnDropGauge<AtomicU64, Vec<String>>,
     pub(crate) rehydration_updates: DeleteOnDropGauge<AtomicU64, Vec<String>>,
-    pub(crate) rocksdb_autospill_in_use: Arc<DeleteOnDropGauge<AtomicU64, Vec<String>>>,
 
     pub(crate) merge_snapshot_updates: DeleteOnDropCounter<AtomicU64, Vec<String>>,
     pub(crate) merge_snapshot_inserts: DeleteOnDropCounter<AtomicU64, Vec<String>>,
@@ -410,10 +399,6 @@ impl UpsertMetrics {
             rehydration_updates: defs
                 .rehydration_updates
                 .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
-            rocksdb_autospill_in_use: Arc::new(
-                defs.rocksdb_autospill_in_use
-                    .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
-            ),
             merge_snapshot_updates: defs
                 .merge_snapshot_updates
                 .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),

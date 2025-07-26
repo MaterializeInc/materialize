@@ -782,23 +782,6 @@ pub mod upsert_rocksdb {
         false,
     );
 
-    /// Controls whether automatic spill to disk should be turned on when using `DISK`.
-    pub static UPSERT_ROCKSDB_AUTO_SPILL_TO_DISK: VarDefinition = VarDefinition::new(
-        "upsert_rocksdb_auto_spill_to_disk",
-        value!(bool; true),
-        "Controls whether automatic spill to disk should be turned on when using `DISK`",
-        false,
-    );
-
-    /// The upsert in memory state size threshold after which it will spill to disk.
-    /// The default is 85 MiB = 89128960 bytes
-    pub static UPSERT_ROCKSDB_AUTO_SPILL_THRESHOLD_BYTES: VarDefinition = VarDefinition::new(
-        "upsert_rocksdb_auto_spill_threshold_bytes",
-        value!(usize; mz_rocksdb_types::defaults::DEFAULT_AUTO_SPILL_MEMORY_THRESHOLD),
-        "The upsert in-memory state size threshold in bytes after which it will spill to disk",
-        false,
-    );
-
     pub static UPSERT_ROCKSDB_STATS_LOG_INTERVAL_SECONDS: VarDefinition = VarDefinition::new(
         "upsert_rocksdb_stats_log_interval_seconds",
         value!(u32; mz_rocksdb_types::defaults::DEFAULT_STATS_LOG_INTERVAL_S),

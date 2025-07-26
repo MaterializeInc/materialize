@@ -357,8 +357,6 @@ class EnvironmentdStatefulSet(K8sStatefulSet):
         if self._meets_maximum_version("0.63.99"):
             system_parameter_defaults["enable_managed_clusters"] = "true"
 
-        system_parameter_defaults["upsert_rocksdb_auto_spill_to_disk"] = "false"
-
         value_from = V1EnvVarSource(
             field_ref=V1ObjectFieldSelector(field_path="metadata.name")
         )

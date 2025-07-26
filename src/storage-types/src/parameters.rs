@@ -73,8 +73,6 @@ pub struct StorageParameters {
     /// finalization.
     pub finalize_shards: bool,
     pub tracing: TracingParameters,
-    /// A set of parameters used to configure auto spill behaviour if disk is used.
-    pub upsert_auto_spill_config: UpsertAutoSpillConfig,
     /// A set of parameters used to configure the maximum number of in-flight bytes
     /// emitted by persist_sources feeding storage dataflows
     pub storage_dataflow_max_inflight_bytes_config: StorageMaxInflightBytesConfig,
@@ -138,7 +136,6 @@ impl Default for StorageParameters {
             upsert_rocksdb_tuning_config: Default::default(),
             finalize_shards: Default::default(),
             tracing: Default::default(),
-            upsert_auto_spill_config: Default::default(),
             storage_dataflow_max_inflight_bytes_config: Default::default(),
             grpc_client: Default::default(),
             shrink_upsert_unused_buffers_by_ratio: Default::default(),
@@ -195,30 +192,6 @@ impl RustType<ProtoStorageMaxInflightBytesConfig> for StorageMaxInflightBytesCon
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
-pub struct UpsertAutoSpillConfig {
-    /// A flag to whether allow automatically spilling to disk or not
-    pub allow_spilling_to_disk: bool,
-    /// The size in bytes of the upsert state after which rocksdb will be used
-    /// instead of in memory hashmap
-    pub spill_to_disk_threshold_bytes: usize,
-}
-
-impl RustType<ProtoUpsertAutoSpillConfig> for UpsertAutoSpillConfig {
-    fn into_proto(&self) -> ProtoUpsertAutoSpillConfig {
-        ProtoUpsertAutoSpillConfig {
-            allow_spilling_to_disk: self.allow_spilling_to_disk,
-            spill_to_disk_threshold_bytes: u64::cast_from(self.spill_to_disk_threshold_bytes),
-        }
-    }
-    fn from_proto(proto: ProtoUpsertAutoSpillConfig) -> Result<Self, TryFromProtoError> {
-        Ok(Self {
-            allow_spilling_to_disk: proto.allow_spilling_to_disk,
-            spill_to_disk_threshold_bytes: usize::cast_from(proto.spill_to_disk_threshold_bytes),
-        })
-    }
-}
-
 impl StorageParameters {
     /// Update the parameter values with the set ones from `other`.
     ///
@@ -243,7 +216,6 @@ impl StorageParameters {
             upsert_rocksdb_tuning_config,
             finalize_shards,
             tracing,
-            upsert_auto_spill_config,
             storage_dataflow_max_inflight_bytes_config,
             grpc_client,
             shrink_upsert_unused_buffers_by_ratio,
@@ -274,7 +246,6 @@ impl StorageParameters {
         self.finalize_shards = finalize_shards;
         self.tracing.update(tracing);
         self.finalize_shards = finalize_shards;
-        self.upsert_auto_spill_config = upsert_auto_spill_config;
         self.storage_dataflow_max_inflight_bytes_config =
             storage_dataflow_max_inflight_bytes_config;
         self.grpc_client.update(grpc_client);
@@ -326,7 +297,6 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
             upsert_rocksdb_tuning_config: Some(self.upsert_rocksdb_tuning_config.into_proto()),
             finalize_shards: self.finalize_shards,
             tracing: Some(self.tracing.into_proto()),
-            upsert_auto_spill_config: Some(self.upsert_auto_spill_config.into_proto()),
             storage_dataflow_max_inflight_bytes_config: Some(
                 self.storage_dataflow_max_inflight_bytes_config.into_proto(),
             ),
@@ -388,9 +358,6 @@ impl RustType<ProtoStorageParameters> for StorageParameters {
             tracing: proto
                 .tracing
                 .into_rust_if_some("ProtoStorageParameters::tracing")?,
-            upsert_auto_spill_config: proto
-                .upsert_auto_spill_config
-                .into_rust_if_some("ProtoStorageParameters::upsert_auto_spill_config")?,
             storage_dataflow_max_inflight_bytes_config: proto
                 .storage_dataflow_max_inflight_bytes_config
                 .into_rust_if_some(
