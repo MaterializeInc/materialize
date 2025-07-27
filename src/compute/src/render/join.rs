@@ -14,5 +14,6 @@
 mod delta_join;
 mod linear_join;
 mod mz_join_core;
+mod mz_join_core_v2;
 
 pub use linear_join::LinearJoinSpec;
