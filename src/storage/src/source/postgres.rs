@@ -88,6 +88,7 @@ use differential_dataflow::AsCollection;
 use itertools::Itertools as _;
 use mz_expr::{EvalError, MirScalarExpr};
 use mz_ore::cast::CastFrom;
+use mz_ore::columnar::Boxed;
 use mz_ore::error::ErrorExt;
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_postgres_util::{Client, PostgresError, simple_query_opt};
@@ -359,7 +360,7 @@ pub enum DefiniteError {
 impl From<DefiniteError> for DataflowError {
     fn from(err: DefiniteError) -> Self {
         let m = err.to_string().into();
-        DataflowError::SourceError(Box::new(SourceError {
+        DataflowError::SourceError(Boxed::new(SourceError {
             error: match &err {
                 DefiniteError::SlotCompactedPastResumePoint(_, _) => SourceErrorDetails::Other(m),
                 DefiniteError::TableTruncated => SourceErrorDetails::Other(m),

@@ -16,6 +16,7 @@ use std::rc::{Rc, Weak};
 use differential_dataflow::Collection;
 use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc};
 use mz_expr::{EvalError, MapFilterProject, permutation_for_arrangement};
+use mz_ore::columnar::Boxed;
 use mz_ore::soft_assert_or_log;
 use mz_ore::str::StrExt;
 use mz_ore::vec::PartialOrdVecExt;
@@ -131,7 +132,7 @@ where
                         let datum = iter.nth(skip).unwrap();
                         idx += skip + 1;
                         if datum.is_null() {
-                            return Err(DataflowError::EvalError(Box::new(
+                            return Err(DataflowError::EvalError(Boxed::new(
                                 EvalError::MustNotBeNull(
                                     format!("column {}", from_desc.get_name(i).quoted()).into(),
                                 ),
