@@ -4079,7 +4079,7 @@ dependencies = [
  "libc",
  "mappings",
  "once_cell",
- "pprof_util",
+ "pprof_util 0.7.0",
  "tempfile",
  "tikv-jemalloc-ctl",
  "tokio",
@@ -4674,7 +4674,7 @@ dependencies = [
  "anyhow",
  "libc",
  "once_cell",
- "pprof_util",
+ "pprof_util 0.7.0",
  "tracing",
 ]
 
@@ -6961,7 +6961,7 @@ dependencies = [
  "mz-build-tools",
  "mz-ore",
  "pprof",
- "pprof_util",
+ "pprof_util 0.8.0",
  "prost",
  "prost-build",
  "tikv-jemalloc-ctl",
@@ -6991,7 +6991,7 @@ dependencies = [
  "mz-npm",
  "mz-ore",
  "mz-prof",
- "pprof_util",
+ "pprof_util 0.8.0",
  "serde",
  "tokio",
  "tracing",
@@ -9068,6 +9068,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "pprof_util"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f9aba4251d95ac86f14c33e688d57a9344bfcff29e9b0c5a063fc66b5facc8a1"
+dependencies = [
+ "anyhow",
+ "flate2",
+ "num",
+ "paste",
+ "prost",
+]
+
+[[package]]
 name = "ppv-lite86"
 version = "0.2.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9270,7 +9283,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be769465445e8c1474e9c5dac2018218498557af32d9ed057325ec9a41ae81bf"
 dependencies = [
  "heck",
- "itertools 0.10.5",
+ "itertools 0.14.0",
  "log",
  "multimap",
  "once_cell",
@@ -9290,7 +9303,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
 dependencies = [
  "anyhow",
- "itertools 0.10.5",
+ "itertools 0.14.0",
  "proc-macro2",
  "quote",
  "syn 2.0.104",
