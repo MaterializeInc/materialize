@@ -23,10 +23,11 @@ use mz_ore::metrics::{
 use mz_ore::stats::HISTOGRAM_BYTE_BUCKETS;
 use mz_repr::GlobalId;
 use mz_service::codec::StatsCollector;
+use mz_service::transport;
 use mz_storage_types::instances::StorageInstanceId;
 use prometheus::core::{AtomicF64, AtomicU64};
 
-use crate::client::{ProtoStorageCommand, ProtoStorageResponse};
+use crate::client::{ProtoStorageCommand, ProtoStorageResponse, StorageCommand, StorageResponse};
 
 pub type UIntGauge = DeleteOnDropGauge<AtomicU64, Vec<String>>;
 
@@ -226,6 +227,29 @@ impl StatsCollector<ProtoStorageCommand, ProtoStorageResponse> for ReplicaMetric
             ),
         }
     }
+}
+
+impl<T> transport::Metrics<StorageCommand<T>, StorageResponse<T>> for ReplicaMetrics {
+    fn bytes_sent(&mut self, len: usize) {
+        match f64::try_cast_from(u64::cast_from(len)) {
+            Some(x) => self.inner.messages_sent_bytes.observe(x),
+            None => {
+                tracing::warn!("{len} has no precise representation as f64, ignoring message");
+            }
+        }
+    }
+
+    fn bytes_received(&mut self, len: usize) {
+        match f64::try_cast_from(u64::cast_from(len)) {
+            Some(x) => self.inner.messages_received_bytes.observe(x),
+            None => {
+                tracing::warn!("{len} has no precise representation as f64, ignoring message");
+            }
+        }
+    }
+
+    fn message_sent(&mut self, _msg: &StorageCommand<T>) {}
+    fn message_received(&mut self, _msg: &StorageResponse<T>) {}
 }
 
 /// Metrics tracked by the command history.
