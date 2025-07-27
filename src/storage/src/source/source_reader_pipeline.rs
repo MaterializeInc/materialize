@@ -551,20 +551,17 @@ where
             // record the ingested frontier.
             let mut new_probe = None;
             if reclock_to_latest {
-                new_probe = probed_upper
+                let probe = probed_upper
                     .wait_for(|new_probe| match (prev_probe_ts, new_probe) {
                         (None, Some(_)) => true,
                         (Some(prev_ts), Some(new)) => prev_ts < new.probe_ts,
                         _ => false,
                     })
-                    .await
-                    .map(|probe| (*probe).clone())
-                    .unwrap_or_else(|_| {
-                        Some(Probe {
-                            probe_ts: now_fn().into(),
-                            upstream_frontier: Antichain::new(),
-                        })
-                    });
+                    .await;
+                new_probe = match probe {
+                    Ok(probe) => (*probe).clone(),
+                    Err(_) => break,
+                };
             } else {
                 while prev_probe_ts >= new_probe.as_ref().map(|p| p.probe_ts) {
                     ticker.tick().await;
