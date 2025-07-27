@@ -30,7 +30,6 @@ use crate::source::types::SourceMessage;
 mod probe;
 pub(crate) mod reclock;
 mod source_reader_pipeline;
-mod statistics;
 pub mod types;
 
 pub mod generator;
