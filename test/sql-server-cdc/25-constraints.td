@@ -32,6 +32,10 @@ EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 't25_pk2', @
 
 INSERT INTO t25_pk2 VALUES ('i am an ID', '1000', 'uhhmmmm');
 
+CREATE TABLE dummy (data int);
+EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'dummy', @role_name = 'SA', @supports_net_changes = 0;
+
+
 # Exercise Materialize.
 
 > CREATE SECRET IF NOT EXISTS sql_server_pass AS '${arg.default-sql-server-password}'
@@ -60,7 +64,20 @@ key_col false "character varying" ""
 val_col false "character varying" ""
 extra true "character varying" ""
 
+# Wait until snapshot has emitted stats and then insert a new row
+# to force LSN in MS SQL to progress.
+> SELECT s.name, ss.snapshot_records_known = ss.snapshot_records_staged
+  FROM mz_internal.mz_source_statistics ss JOIN mz_sources s using (id)
+  WHERE s.name = 't25_pk_sql_server' AND ss.snapshot_records_staged > 0;
+t25_pk_sql_server true
+
+$ sql-server-execute name=sql-server
+INSERT INTO dummy VALUES (1);
+
+
 > SELECT * FROM t25_pk;
 a "hello world" <null>
 b foobar apple
 c "anotha one" orange
+
+> DROP SOURCE t25_pk_sql_server CASCADE;

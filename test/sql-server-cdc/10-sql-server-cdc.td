@@ -32,6 +32,9 @@ CREATE TABLE t2_no_cdc (key_col VARCHAR(20) PRIMARY KEY, val_col VARCHAR(1024));
 CREATE TABLE t3_text (value VARCHAR(100));
 EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 't3_text', @role_name = 'SA', @supports_net_changes = 0;
 
+CREATE TABLE dummy (data int);
+EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'dummy', @role_name = 'SA', @supports_net_changes = 0;
+
 # Exercise Materialize.
 
 > CREATE SECRET IF NOT EXISTS sql_server_pass AS '${arg.default-sql-server-password}'
@@ -62,12 +65,14 @@ sql_server_test_connection   sql-server
   FOR ALL TABLES;
 
 > SHOW SOURCES
+dummy subsource quickstart ""
 t1_pk subsource quickstart ""
 t1_pk_sql_server sql-server quickstart ""
 t1_pk_sql_server_progress progress <null> ""
 t3_text subsource quickstart ""
 
 > SELECT schema_name, table_name FROM mz_internal.mz_sql_server_source_tables;
+dbo dummy
 dbo t1_pk
 dbo t3_text
 
@@ -76,6 +81,17 @@ SELECT id FROM mz_sources WHERE name = 't1_pk_sql_server';
 
 $ set-from-sql var=subsource-id
 SELECT id FROM mz_sources WHERE name = 't1_pk';
+
+# Wait until snapshot has emitted stats and then insert a new row
+# to force LSN in MS SQL to progress.
+> SELECT s.name, ss.snapshot_records_known = ss.snapshot_records_staged
+  FROM mz_internal.mz_source_statistics ss JOIN mz_sources s using (id)
+  WHERE s.name = 't1_pk_sql_server' AND ss.snapshot_records_staged > 0;
+t1_pk_sql_server true
+
+$ sql-server-execute name=sql-server
+INSERT INTO dummy VALUES (1);
+
 
 > SELECT snapshot_records_known, snapshot_records_staged, snapshot_committed FROM mz_internal.mz_source_statistics WHERE id = '${source-id}';
 3 3 true
@@ -89,7 +105,7 @@ $ sql-server-execute name=sql-server
 UPDATE t1_pk SET val_col = 'I am an updated value' WHERE key_col = 'a';
 
 > SELECT messages_received FROM mz_internal.mz_source_statistics WHERE id = '${source-id}';
-5
+6
 
 > SELECT updates_staged, updates_committed FROM mz_internal.mz_source_statistics WHERE id = '${subsource-id}';
 5 5
@@ -136,3 +152,5 @@ INSERT INTO t3_text (value) SELECT value FROM t3_text;
 
 > SELECT COUNT(*) FROM t3_text;
 32000
+
+> DROP SOURCE t1_pk_sql_server CASCADE;

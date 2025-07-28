@@ -45,6 +45,10 @@ CREATE TABLE table_varchar_max (good int, bad varchar(max));
 EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'table_varchar_max', @role_name = 'SA', @supports_net_changes = 0;
 INSERT INTO table_varchar_max VALUES (42, NULL);
 
+CREATE TABLE dummy (data int);
+EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'dummy', @role_name = 'SA', @supports_net_changes = 0;
+
+
 # Exercise Materialize.
 
 > CREATE SECRET IF NOT EXISTS sql_server_pass AS '${arg.default-sql-server-password}'
@@ -73,6 +77,16 @@ contains: SQL SERVER source validation: column dbo.table_text.bad of type text i
 
 > SHOW COLUMNS FROM table_text;
 good true "character varying" ""
+
+# Wait until snapshot has emitted stats and then insert a new row
+# to force LSN in MS SQL to progress.
+> SELECT s.name, ss.snapshot_records_known = ss.snapshot_records_staged
+  FROM mz_internal.mz_source_statistics ss JOIN mz_sources s using (id)
+  WHERE s.name = 'table_text_source' AND ss.snapshot_records_staged > 0;
+table_text_source true
+
+$ sql-server-execute name=sql-server
+INSERT INTO dummy VALUES (1);
 
 > SELECT * FROM table_text;
 "i work"
@@ -116,6 +130,16 @@ contains: SQL SERVER source validation: column dbo.table_text.bad of type text i
   WITH (
     EXCLUDE COLUMNS (bad)
   );
+
+# Wait until snapshot has emitted stats and then insert a new row
+# to force LSN in MS SQL to progress.
+> SELECT s.name, ss.snapshot_records_known = ss.snapshot_records_staged
+  FROM mz_internal.mz_source_statistics ss JOIN mz_sources s using (id)
+  WHERE s.name = 'ms_src' AND ss.snapshot_records_staged > 0;
+ms_src true
+
+$ sql-server-execute name=sql-server
+INSERT INTO dummy VALUES (1);
 
 > SHOW COLUMNS FROM table_text;
 good true "character varying" ""
