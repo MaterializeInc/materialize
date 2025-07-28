@@ -30,7 +30,7 @@ rpassword = "7.4.0"
 semver = "1.0.26"
 serde = { version = "1.0.219", features = ["derive"] }
 serde-aux = "4.7.0"
-serde_json = "1.0.127"
+serde_json = "1.0.141"
 tabled = "0.19.0"
 time = "0.3.17"
 tokio = { version = "1.44.1", features = ["full"] }

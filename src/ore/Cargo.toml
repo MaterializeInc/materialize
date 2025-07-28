@@ -101,7 +101,7 @@ criterion = { version = "0.6.0", features = ["async_tokio"] }
 mz-ore = { path = "../ore", features = ["id_gen", "chrono"] }
 proptest = { version = "1.7.0", default-features = false, features = ["std"] }
 scopeguard = "1.2.0"
-serde_json = "1.0.127"
+serde_json = "1.0.141"
 tokio = { version = "1.44.1", features = ["macros", "rt-multi-thread"] }
 tokio-test = "0.4.4"
 tracing-subscriber = "0.3.19"

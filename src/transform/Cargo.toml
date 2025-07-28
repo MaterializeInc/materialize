@@ -34,7 +34,7 @@ mz-expr-test-util = { path = "../expr-test-util" }
 mz-lowertest = { path = "../lowertest" }
 mz-ore = { path = "../ore", features = ["test"] }
 proc-macro2 = "1.0.95"
-serde_json = "1.0.127"
+serde_json = "1.0.141"
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
