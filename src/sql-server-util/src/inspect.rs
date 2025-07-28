@@ -17,8 +17,8 @@ use smallvec::SmallVec;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
-use tiberius::numeric::Numeric;
 use std::time::Duration;
+use tiberius::numeric::Numeric;
 
 use crate::cdc::{Lsn, RowFilterOption};
 use crate::desc::{SqlServerColumnRaw, SqlServerTableRaw};

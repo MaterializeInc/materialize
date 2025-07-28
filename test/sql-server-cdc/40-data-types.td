@@ -118,7 +118,7 @@ ALTER SYSTEM SET log_filter = 'mz_storage::source::sql_server=debug,mz_sql_serve
     PASSWORD = SECRET sql_server_pass
   );
 
-# TODO - SQL server delay because it's terrible and the initial_lsn selection
+# TODO - SQL server delay because it's terrible for testing and the initial_lsn selection
 # may happen faster than CDC manages to process the above updates
 $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=5s
 

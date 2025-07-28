@@ -474,7 +474,7 @@ pub enum CdcEvent {
 #[derive(Debug, thiserror::Error)]
 pub enum CdcError {
     #[error(
-        "the requested LSN '{requested:?}' is less then the minimum '{minimum:?}' for `{capture_instance}'"
+        "the requested LSN '{requested:?}' is less than the minimum '{minimum:?}' for `{capture_instance}'"
     )]
     LsnNotAvailable {
         capture_instance: Arc<str>,
