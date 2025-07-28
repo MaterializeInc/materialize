@@ -32,6 +32,9 @@ EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 't2_add_subs
 
 INSERT INTO t2_add_subsource VALUES ('100'), ('200'), (NULL), ('300');
 
+CREATE TABLE dummy (data int);
+EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'dummy', @role_name = 'SA', @supports_net_changes = 0;
+
 
 # Exercise Materialize.
 
@@ -58,6 +61,16 @@ ALTER SYSTEM SET log_filter = 'mz_sql=debug,info';
   FROM SQL SERVER CONNECTION sql_server_test_add_subsource_conn
   FOR TABLES (dbo.t1_add_subsource);
 
+# Wait until snapshot has emitted stats and then insert a new row
+# to force LSN in MS SQL to progress.
+> SELECT s.name, ss.snapshot_records_known = ss.snapshot_records_staged
+  FROM mz_internal.mz_source_statistics ss JOIN mz_sources s using (id)
+  WHERE s.name = 'my_source_add_subsources' AND ss.snapshot_records_staged > 0;
+my_source_add_subsources true
+
+$ sql-server-execute name=sql-server
+INSERT INTO dummy VALUES (1);
+
 
 > SELECT * FROM t1_add_subsource;
 a
@@ -66,6 +79,16 @@ c
 <null>
 
 > ALTER SOURCE my_source_add_subsources ADD SUBSOURCE dbo.t2_add_subsource;
+
+# Wait until snapshot has emitted stats and then insert a new row
+# to force LSN in MS SQL to progress.
+> SELECT s.name, ss.snapshot_records_known = ss.snapshot_records_staged
+  FROM mz_internal.mz_source_statistics ss JOIN mz_sources s using (id)
+  WHERE s.name = 'my_source_add_subsources' AND ss.snapshot_records_staged > 0;
+my_source_add_subsources true
+
+$ sql-server-execute name=sql-server
+INSERT INTO dummy VALUES (1);
 
 > SELECT * FROM t2_add_subsource;
 100
@@ -109,6 +132,17 @@ INSERT INTO t2_add_subsource VALUES ('500');
 
 > ALTER SOURCE my_source_add_subsources ADD SUBSOURCE dbo.t1_add_subsource;
 
+# Wait until snapshot has emitted stats and then insert a new row
+# to force LSN in MS SQL to progress.
+> SELECT s.name, ss.snapshot_records_known = ss.snapshot_records_staged
+  FROM mz_internal.mz_source_statistics ss JOIN mz_sources s using (id)
+  WHERE s.name = 'my_source_add_subsources' AND ss.snapshot_records_staged > 0;
+my_source_add_subsources true
+
+$ sql-server-execute name=sql-server
+INSERT INTO dummy VALUES (1);
+
+
 > SELECT * FROM t1_add_subsource;
 a
 b
@@ -128,3 +162,5 @@ d
 e
 f
 <null>
+
+> DROP SOURCE my_source_add_subsources CASCADE;

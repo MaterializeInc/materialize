@@ -1629,9 +1629,11 @@ pub fn plan_create_subsource(
             SourceExportStatementDetails::SqlServer {
                 table,
                 capture_instance,
+                initial_lsn,
             } => SourceExportDetails::SqlServer(SqlServerSourceExportDetails {
                 capture_instance,
                 table,
+                initial_lsn,
                 text_columns: text_columns.into_iter().map(|c| c.into_string()).collect(),
                 exclude_columns: exclude_columns
                     .into_iter()
@@ -1781,9 +1783,11 @@ pub fn plan_create_table_from_source(
         SourceExportStatementDetails::SqlServer {
             table,
             capture_instance,
+            initial_lsn,
         } => SourceExportDetails::SqlServer(SqlServerSourceExportDetails {
             table,
             capture_instance,
+            initial_lsn,
             text_columns: text_columns.into_iter().map(|c| c.into_string()).collect(),
             exclude_columns: exclude_columns
                 .into_iter()

@@ -35,6 +35,10 @@ EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 't2_columns'
 
 INSERT INTO t2_columns VALUES ('invisible');
 
+CREATE TABLE dummy (data int);
+EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'dummy', @role_name = 'SA', @supports_net_changes = 0;
+
+
 > CREATE SECRET IF NOT EXISTS sql_server_pass AS '${arg.default-sql-server-password}'
 
 > CREATE CONNECTION sql_server_columns_connection TO SQL SERVER (
@@ -60,6 +64,16 @@ c1 true text ""
 c2 true text ""
 c4 true text ""
 
+# Wait until snapshot has emitted stats and then insert a new row
+# to force LSN in MS SQL to progress.
+> SELECT s.name, ss.snapshot_records_known = ss.snapshot_records_staged
+  FROM mz_internal.mz_source_statistics ss JOIN mz_sources s using (id)
+  WHERE s.name = 't1_columns_sql_server' AND ss.snapshot_records_staged > 0;
+t1_columns_sql_server true
+
+$ sql-server-execute name=sql-server
+INSERT INTO dummy VALUES (1);
+
 > SELECT c1, c2, c4 FROM t1_columns;
 1.4448890000 12:00:00 EQCr
 
@@ -77,3 +91,5 @@ INSERT INTO t1_columns VALUES (2.000001, '01:59:32.99901', '$0.89', 0x1122AABBCC
   )
   FOR TABLES (dbo.t2_columns);
 contains:Table t2_columns had all columns excluded
+
+> DROP SOURCE t1_columns_sql_server CASCADE;

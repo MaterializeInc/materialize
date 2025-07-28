@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use mz_dyncfg::Config;
 use mz_ore::future::InTask;
-use mz_proto::{IntoRustIfSome, RustType};
+use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
 use mz_repr::{CatalogItemId, Datum, GlobalId, RelationDesc, Row, ScalarType};
 use mz_sql_server_util::cdc::Lsn;
 use proptest_derive::Arbitrary;
@@ -34,11 +34,11 @@ include!(concat!(
     "/mz_storage_types.sources.sql_server.rs"
 ));
 
-pub const SNAPSHOT_MAX_LSN_WAIT: Config<Duration> = Config::new(
-    "sql_server_snapshot_max_lsn_wait",
+pub const MAX_LSN_WAIT: Config<Duration> = Config::new(
+    "sql_server_max_lsn_wait",
     Duration::from_secs(30),
     "Maximum amount of time we'll wait for SQL Server to report an LSN (in other words for \
-    CDC to be fully enabled) before taking an initial snapshot.",
+    CDC to be fully enabled)",
 );
 
 pub const SNAPSHOT_PROGRESS_REPORT_INTERVAL: Config<Duration> = Config::new(
@@ -274,6 +274,10 @@ pub struct SqlServerSourceExportDetails {
     pub text_columns: Vec<String>,
     /// Columns from the upstream source that should be excluded.
     pub exclude_columns: Vec<String>,
+    /// The initial 'LSN' for this export.
+    /// This is used as a consistent snapshot point for this export to ensure
+    /// correctness in the case of multiple replicas.
+    pub initial_lsn: mz_sql_server_util::cdc::Lsn,
 }
 
 impl RustType<ProtoSqlServerSourceExportDetails> for SqlServerSourceExportDetails {
@@ -283,6 +287,7 @@ impl RustType<ProtoSqlServerSourceExportDetails> for SqlServerSourceExportDetail
             table: Some(self.table.into_proto()),
             text_columns: self.text_columns.clone(),
             exclude_columns: self.exclude_columns.clone(),
+            initial_lsn: self.initial_lsn.as_bytes().to_vec(),
         }
     }
 
@@ -296,6 +301,8 @@ impl RustType<ProtoSqlServerSourceExportDetails> for SqlServerSourceExportDetail
                 .into_rust_if_some("ProtoSqlServerSourceExportDetails::table")?,
             text_columns: proto.text_columns,
             exclude_columns: proto.exclude_columns,
+            initial_lsn: mz_sql_server_util::cdc::Lsn::try_from(proto.initial_lsn.as_ref())
+                .map_err(|e| TryFromProtoError::InvalidFieldError(e.to_string()))?,
         })
     }
 }

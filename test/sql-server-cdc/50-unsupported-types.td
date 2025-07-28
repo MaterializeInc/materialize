@@ -45,6 +45,10 @@ CREATE TABLE table_varchar_max (good int, bad varchar(max));
 EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'table_varchar_max', @role_name = 'SA', @supports_net_changes = 0;
 INSERT INTO table_varchar_max VALUES (42, NULL);
 
+CREATE TABLE dummy (data int);
+EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'dummy', @role_name = 'SA', @supports_net_changes = 0;
+
+
 # Exercise Materialize.
 
 > CREATE SECRET IF NOT EXISTS sql_server_pass AS '${arg.default-sql-server-password}'
@@ -74,9 +78,21 @@ contains: SQL SERVER source validation: column dbo.table_text.bad of type text i
 > SHOW COLUMNS FROM table_text;
 good true "character varying" ""
 
+# Wait until snapshot has emitted stats and then insert a new row
+# to force LSN in MS SQL to progress.
+> SELECT s.name, ss.snapshot_records_known = ss.snapshot_records_staged
+  FROM mz_internal.mz_source_statistics ss JOIN mz_sources s using (id)
+  WHERE s.name = 'table_text_source' AND ss.snapshot_records_staged > 0;
+table_text_source true
+
+$ sql-server-execute name=sql-server
+INSERT INTO dummy VALUES (1);
+
 > SELECT * FROM table_text;
 "i work"
 "maybe me"
+
+> DROP SOURCE table_text_source CASCADE;
 
 ! CREATE SOURCE table_image_source
   FROM SQL SERVER CONNECTION sql_server_test_50_connection
@@ -97,3 +113,55 @@ contains: SQL SERVER source validation: column dbo.table_geometry.bad of type ge
   FROM SQL SERVER CONNECTION sql_server_test_50_connection
   FOR TABLES (dbo.table_varchar_max);
 contains: SQL SERVER source validation: column dbo.table_varchar_max.bad of type varchar is not supported
+
+
+## same tests for source tables
+
+# Creating a source with no subsources should succeed
+> CREATE SOURCE ms_src
+  FROM SQL SERVER CONNECTION sql_server_test_50_connection;
+
+! CREATE TABLE table_text
+  FROM SOURCE ms_src (REFERENCE dbo.table_text);
+contains: SQL SERVER source validation: column dbo.table_text.bad of type text is not supported
+
+> CREATE TABLE table_text
+  FROM SOURCE ms_src (REFERENCE dbo.table_text)
+  WITH (
+    EXCLUDE COLUMNS (bad)
+  );
+
+# Wait until snapshot has emitted stats and then insert a new row
+# to force LSN in MS SQL to progress.
+> SELECT s.name, ss.snapshot_records_known = ss.snapshot_records_staged
+  FROM mz_internal.mz_source_statistics ss JOIN mz_sources s using (id)
+  WHERE s.name = 'ms_src' AND ss.snapshot_records_staged > 0;
+ms_src true
+
+$ sql-server-execute name=sql-server
+INSERT INTO dummy VALUES (1);
+
+> SHOW COLUMNS FROM table_text;
+good true "character varying" ""
+
+> SELECT * FROM table_text;
+"i work"
+"maybe me"
+
+! CREATE TABLE table_image
+  FROM SOURCE ms_src (REFERENCE dbo.table_image);
+contains: SQL SERVER source validation: column dbo.table_image.bad of type image is not supported
+
+! CREATE TABLE table_geography
+  FROM SOURCE ms_src (REFERENCE dbo.table_geography);
+contains: SQL SERVER source validation: column dbo.table_geography.bad of type geography is not supported
+
+! CREATE TABLE table_geometry
+  FROM SOURCE ms_src (REFERENCE dbo.table_geometry);
+contains: SQL SERVER source validation: column dbo.table_geometry.bad of type geometry is not supported
+
+! CREATE TABLE table_varchar_max
+  FROM SOURCE ms_src (REFERENCE dbo.table_varchar_max);
+contains: SQL SERVER source validation: column dbo.table_varchar_max.bad of type varchar is not supported
+
+> DROP SOURCE ms_src CASCADE;
