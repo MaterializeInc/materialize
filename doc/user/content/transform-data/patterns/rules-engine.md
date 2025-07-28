@@ -98,7 +98,7 @@ LATERAL (
 
    {{< tip >}}
    If running this example in a client, use `COPY(SUBSCRIBE...) TO STDOUT;`.
-   {{</ tip> }}
+   {{</ tip >}}
 
     ```nofmt
     mz_timestamp  | mz_diff | rule_id |   name   |      colors         | wingspan_cm
