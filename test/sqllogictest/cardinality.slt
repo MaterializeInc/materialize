@@ -15,8 +15,9 @@ ALTER SYSTEM SET enable_cardinality_estimates = true
 COMPLETE 0
 
 # avoid flakes in CI
+# Was flaky with 100ms. Look into this when starting to use cardinality for real!
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET optimizer_oneshot_stats_timeout TO '100ms'
+ALTER SYSTEM SET optimizer_oneshot_stats_timeout TO '500ms'
 ----
 COMPLETE 0
 
