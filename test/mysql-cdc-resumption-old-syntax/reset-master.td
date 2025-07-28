@@ -10,4 +10,4 @@
 $ mysql-connect name=mysql url=mysql://root@${arg.mysql-host} password=${arg.mysql-root-password}
 
 $ mysql-execute name=mysql
-RESET MASTER;
+RESET BINARY LOGS AND GTIDS;
