@@ -72,6 +72,13 @@ static V147_DEV0: LazyLock<Version> = LazyLock::new(|| Version {
     pre: Prerelease::new("dev.0").expect("dev.0 is valid prerelease"),
     build: BuildMetadata::new("").expect("empty string is valid buildmetadata"),
 });
+static V153_DEV0: LazyLock<Version> = LazyLock::new(|| Version {
+    major: 0,
+    minor: 153,
+    patch: 0,
+    pre: Prerelease::new("dev.0").expect("dev.0 is valid prerelease"),
+    build: BuildMetadata::new("").expect("empty string is valid buildmetadata"),
+});
 
 /// Describes the status of a deployment.
 ///
@@ -1174,40 +1181,40 @@ fn create_environmentd_statefulset_object(
         args.push("--tls-mode=disable".to_string());
     }
     if let Some(ephemeral_volume_class) = &config.ephemeral_volume_class {
-        args.extend([
-            format!(
-                "--orchestrator-kubernetes-ephemeral-volume-class={}",
-                ephemeral_volume_class
-            ),
-            "--scratch-directory=/scratch".to_string(),
-        ]);
-        volumes.push(Volume {
-            name: "scratch".to_string(),
-            ephemeral: Some(EphemeralVolumeSource {
-                volume_claim_template: Some(PersistentVolumeClaimTemplate {
-                    spec: PersistentVolumeClaimSpec {
-                        access_modes: Some(vec!["ReadWriteOnce".to_string()]),
-                        storage_class_name: Some(ephemeral_volume_class.to_string()),
-                        resources: Some(VolumeResourceRequirements {
-                            requests: Some(BTreeMap::from([(
-                                "storage".to_string(),
-                                mz.environmentd_scratch_volume_storage_requirement(),
-                            )])),
+        args.push(format!(
+            "--orchestrator-kubernetes-ephemeral-volume-class={}",
+            ephemeral_volume_class
+        ));
+        if !mz.meets_minimum_version(&V153_DEV0) {
+            args.push("--scratch-directory=/scratch".to_string());
+            volumes.push(Volume {
+                name: "scratch".to_string(),
+                ephemeral: Some(EphemeralVolumeSource {
+                    volume_claim_template: Some(PersistentVolumeClaimTemplate {
+                        spec: PersistentVolumeClaimSpec {
+                            access_modes: Some(vec!["ReadWriteOnce".to_string()]),
+                            storage_class_name: Some(ephemeral_volume_class.to_string()),
+                            resources: Some(VolumeResourceRequirements {
+                                requests: Some(BTreeMap::from([(
+                                    "storage".to_string(),
+                                    mz.environmentd_scratch_volume_storage_requirement(),
+                                )])),
+                                ..Default::default()
+                            }),
                             ..Default::default()
-                        }),
+                        },
                         ..Default::default()
-                    },
+                    }),
                     ..Default::default()
                 }),
                 ..Default::default()
-            }),
-            ..Default::default()
-        });
-        volume_mounts.push(VolumeMount {
-            name: "scratch".to_string(),
-            mount_path: "/scratch".to_string(),
-            ..Default::default()
-        });
+            });
+            volume_mounts.push(VolumeMount {
+                name: "scratch".to_string(),
+                mount_path: "/scratch".to_string(),
+                ..Default::default()
+            });
+        }
     }
     // The `materialize` user used by clusterd always has gid 999.
     args.push("--orchestrator-kubernetes-service-fs-group=999".to_string());
