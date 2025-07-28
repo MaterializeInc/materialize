@@ -61,8 +61,12 @@ pub async fn get_min_lsn_retry(
 }
 
 /// Returns the maximum log sequence number for the entire database.
+/// This implementation relies on CDC, which is asynchronous, so may
+/// return an LSN that is less than the maximum LSN of SQL server.
 ///
-/// See: <https://learn.microsoft.com/en-us/sql/relational-databases/system-functions/sys-fn-cdc-get-max-lsn-transact-sql?view=sql-server-ver16>
+/// See:
+/// - <https://learn.microsoft.com/en-us/sql/relational-databases/system-functions/sys-fn-cdc-get-max-lsn-transact-sql?view=sql-server-ver16>
+/// - <https://groups.google.com/g/debezium/c/47Yg2r166KM/m/lHqtRF2xAQAJ?pli=1>
 pub async fn get_max_lsn(client: &mut Client) -> Result<Lsn, SqlServerError> {
     static MAX_LSN_QUERY: &str = "SELECT sys.fn_cdc_get_max_lsn();";
     let result = client.simple_query(MAX_LSN_QUERY).await?;
@@ -72,9 +76,13 @@ pub async fn get_max_lsn(client: &mut Client) -> Result<Lsn, SqlServerError> {
 }
 
 /// Returns the maximum log sequence number for the entire database, retrying
-/// if the log sequence number is not available.
+/// if the log sequence number is not available. This implementation relies on
+/// CDC, which is asynchronous, so may return an LSN that is less than the
+/// maximum LSN of SQL server.
 ///
-/// See: <https://learn.microsoft.com/en-us/sql/relational-databases/system-functions/sys-fn-cdc-get-max-lsn-transact-sql?view=sql-server-ver16>
+/// See:
+/// - <https://learn.microsoft.com/en-us/sql/relational-databases/system-functions/sys-fn-cdc-get-max-lsn-transact-sql?view=sql-server-ver16>
+/// - <https://groups.google.com/g/debezium/c/47Yg2r166KM/m/lHqtRF2xAQAJ?pli=1>
 pub async fn get_max_lsn_retry(
     client: &mut Client,
     max_retry_duration: Duration,
