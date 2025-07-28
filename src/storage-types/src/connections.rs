@@ -2180,6 +2180,7 @@ impl SqlServerConnectionDetails<InlinedConnection> {
                 assert_none!(private_link_connection.port);
                 mz_sql_server_util::config::TunnelConfig::AwsPrivatelink {
                     connection_id: private_link_connection.connection_id,
+                    port: self.port,
                 }
             }
         };
