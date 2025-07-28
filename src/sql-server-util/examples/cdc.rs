@@ -70,7 +70,9 @@ async fn main() -> Result<(), anyhow::Error> {
     tracing::info!("connection 2 successful!");
 
     // Get an initial snapshot of the table.
-    let (lsn, stats, snapshot) = cdc_handle.snapshot(None).await?;
+    let (lsn, stats, snapshot) = cdc_handle
+        .snapshot(None, 1, mz_repr::GlobalId::User(1))
+        .await?;
     tracing::info!("snapshot stats: {stats:?}");
     {
         let mut snapshot = std::pin::pin!(snapshot);
