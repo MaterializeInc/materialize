@@ -18,6 +18,7 @@ mz-adapter-types = { path = "../adapter-types" }
 mz-build-info = { path = "../build-info" }
 mz-catalog = { path = "../catalog" }
 mz-cloud-resources = { path = "../cloud-resources" }
+mz-license-keys = { path = "../license-keys" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
 mz-ore = { path = "../ore" }
 mz-storage-types = { path = "../storage-types" }

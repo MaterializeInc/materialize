@@ -5462,6 +5462,46 @@ pub static MZ_HISTORY_RETENTION_STRATEGIES: LazyLock<BuiltinTable> = LazyLock::n
     }
 });
 
+pub static MZ_LICENSE_KEYS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
+    name: "mz_license_keys",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::TABLE_MZ_LICENSE_KEYS_OID,
+    desc: RelationDesc::builder()
+        .with_column("id", ScalarType::String.nullable(false))
+        .with_column("organization", ScalarType::String.nullable(false))
+        .with_column("environment_id", ScalarType::String.nullable(false))
+        .with_column(
+            "expiration",
+            ScalarType::TimestampTz { precision: None }.nullable(false),
+        )
+        .with_column(
+            "not_before",
+            ScalarType::TimestampTz { precision: None }.nullable(false),
+        )
+        .finish(),
+    column_comments: BTreeMap::from_iter([
+        ("id", "The identifier of the license key."),
+        (
+            "organization",
+            "The name of the organization that this license key was issued to.",
+        ),
+        (
+            "environment_id",
+            "The environment ID that this license key was issued for.",
+        ),
+        (
+            "expiration",
+            "The date and time when this license key expires.",
+        ),
+        (
+            "not_before",
+            "The start of the validity period for this license key.",
+        ),
+    ]),
+    is_retained_metrics_object: false,
+    access: vec![PUBLIC_SELECT],
+});
+
 // These will be replaced with per-replica tables once source/sink multiplexing on
 // a single cluster is supported.
 pub static MZ_SOURCE_STATISTICS_RAW: LazyLock<BuiltinSource> = LazyLock::new(|| BuiltinSource {
@@ -13627,6 +13667,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Table(&MZ_CONTINUAL_TASKS),
         Builtin::Table(&MZ_NETWORK_POLICIES),
         Builtin::Table(&MZ_NETWORK_POLICY_RULES),
+        Builtin::Table(&MZ_LICENSE_KEYS),
         Builtin::View(&MZ_RELATIONS),
         Builtin::View(&MZ_OBJECT_OID_ALIAS),
         Builtin::View(&MZ_OBJECTS),

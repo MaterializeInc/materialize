@@ -47,6 +47,7 @@ use mz_compute_types::dataflows::DataflowDescription;
 use mz_controller::clusters::ReplicaLocation;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::OptimizedMirRelationExpr;
+use mz_license_keys::ValidatedLicenseKey;
 use mz_ore::collections::HashSet;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn, SYSTEM_TIME};
@@ -742,6 +743,7 @@ impl Catalog {
                 enable_0dt_deployment: true,
                 helm_chart_version: None,
                 external_login_password_mz_system: None,
+                license_key: ValidatedLicenseKey::for_tests(),
             },
         })
         .await?;
