@@ -93,8 +93,13 @@ LATERAL (
 
 1. Subscribe to the changes of `birds_filtered`.
     ```mzsql
-    COPY(SUBSCRIBE birds_filtered) TO STDOUT;
+    SUBSCRIBE TO birds_filtered;
     ```
+
+   {{< tip >}}
+   If running this example in a client, use `COPY(SUBSCRIBE...) TO STDOUT;`.
+   {{</ tip> }}
+
     ```nofmt
     mz_timestamp  | mz_diff | rule_id |   name   |      colors         | wingspan_cm
     --------------|---------|---------|----------|---------------------|------------
