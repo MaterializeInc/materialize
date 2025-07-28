@@ -35,16 +35,15 @@ uv run mcp-materialize
 
 You can configure it using CLI flags or environment variables:
 
-| Flag              | Env Var             | Default                                               | Description                           |
-| ----------------- | ------------------- | ----------------------------------------------------- | ------------------------------------- |
-| `--mz-dsn`        | `MZ_DSN`            | `postgres://materialize@localhost:6875/materialize`   | Materialize connection string         |
-| `--transport`     | `MCP_TRANSPORT`     | `stdio`                                               | Communication mode (`stdio` or `sse`) |
-| `--host`          | `MCP_HOST`          | `0.0.0.0`                                             | Host for `sse` mode                   |
-| `--port`          | `MCP_PORT`          | `3001`                                                | Port for `sse` mode                   |
-| `--pool-min-size` | `MCP_POOL_MIN_SIZE` | `1`                                                   | Minimum DB pool size                  |
-| `--pool-max-size` | `MCP_POOL_MAX_SIZE` | `10`                                                  | Maximum DB pool size                  |
-| `--log-level`     | `MCP_LOG_LEVEL`     | `INFO`                                                | Logging verbosity                     |
-
+| Flag              | Env Var             | Default                                               | Description                                   |
+| ----------------- | ------------------- | ----------------------------------------------------- | --------------------------------------------- |
+| `--mz-dsn`        | `MZ_DSN`            | `postgres://materialize@localhost:6875/materialize`   | Materialize connection string                 |
+| `--transport`     | `MCP_TRANSPORT`     | `stdio`                                               | Communication mode (`stdio`, `sse`, or `http`) |
+| `--host`          | `MCP_HOST`          | `0.0.0.0`                                             | Host for `sse` and `http` modes               |
+| `--port`          | `MCP_PORT`          | `3001` (sse), `8001` (http)                           | Port for `sse` and `http` modes               |
+| `--pool-min-size` | `MCP_POOL_MIN_SIZE` | `1`                                                   | Minimum DB pool size                          |
+| `--pool-max-size` | `MCP_POOL_MAX_SIZE` | `10`                                                  | Maximum DB pool size                          |
+| `--log-level`     | `MCP_LOG_LEVEL`     | `INFO`                                                | Logging verbosity                             |
 
 
 ## Define Tools
