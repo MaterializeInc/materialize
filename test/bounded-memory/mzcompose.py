@@ -428,7 +428,8 @@ SCENARIOS = [
             """
         ),
         materialized_memory="4.5Gb",
-        clusterd_memory="1Gb",
+        # TODO: Reduce to 1Gb when https://github.com/MaterializeInc/database-issues/issues/9515 is fixed
+        clusterd_memory="2Gb",
     ),
     MySqlCdcScenario(
         name="mysql-cdc-snapshot",
