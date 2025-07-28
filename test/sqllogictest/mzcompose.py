@@ -661,6 +661,8 @@ def compileSlowSltConfig() -> SltRunConfig:
         "test/sqllogictest/map.slt",
         # pg_typeof contains public schema name in views
         "test/sqllogictest/typeof.slt",
+        # https://github.com/MaterializeInc/database-issues/issues/9513#issuecomment-3128051157
+        "test/sqllogictest/temporal.slt",
     }
 
     tests = file_util.resolve_paths_with_wildcard(tests)
