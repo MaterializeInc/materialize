@@ -9,8 +9,9 @@
 
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, anyhow};
+use anyhow::anyhow;
 use mz_ore::str::StrExt;
+use mz_sql_server_util::SqlServerError;
 
 use crate::action::{ControlFlow, State};
 use crate::parser::BuiltinCommand;
@@ -31,6 +32,8 @@ pub async fn stop_capture_jobs(
     let max_duration = std::cmp::max(state.default_timeout, Duration::from_secs(10));
     let timer = Instant::now();
 
+    // It's very error prone to try and catch this when it is running to stop it.
+    // We need to retry here as the stored procedure errors if the job is not running.
     loop {
         let Err(error) = client.execute(STOP_CDC_JOBS, &[]).await else {
             break;
@@ -41,7 +44,6 @@ pub async fn stop_capture_jobs(
             return Err(anyhow!("ERROR: sp_cdc_stop_job failed {error}"));
         }
     }
-
     Ok(ControlFlow::Continue)
 }
 
@@ -64,13 +66,17 @@ pub async fn run_cdc_scan(
         let Err(error) = client.execute(CDC_SCAN, &[]).await else {
             break;
         };
-        if timer.elapsed() < max_duration {
+
+        // retry if there is another CDC scan going on
+        // 22903 = another connection is already running sp_replcmds
+        // see https://learn.microsoft.com/en-us/sql/relational-databases/errors-events/database-engine-events-and-errors-22000-to-22999?view=sql-server-ver17#errors-and-events-22000-to-22999
+        if matches!(error, SqlServerError::SqlServer(tiberius::error::Error::Server(ref token_err)) if token_err.code() == 22903)
+            && timer.elapsed() < max_duration
+        {
             tokio::time::sleep(Duration::from_millis(100)).await;
         } else {
             return Err(anyhow!("ERROR: sp_cdc_scan failed {error}"));
         }
     }
-    // now we wait until it's done
-
     Ok(ControlFlow::Continue)
 }
