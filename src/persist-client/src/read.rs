@@ -677,12 +677,6 @@ where
     /// `as_of` that would have been accepted.
     #[instrument(level = "debug", fields(shard = %self.machine.shard_id()))]
     pub async fn listen(self, as_of: Antichain<T>) -> Result<Listen<K, V, T, D>, Since<T>> {
-        soft_assert_or_log!(
-            PartialOrder::less_equal(self.since(), &as_of),
-            "attempted listen at {:?}, but the since of our read handle is merely {:?}... we may not hold the since back far enough",
-            as_of.elements(),
-            self.since().elements()
-        );
         let () = self.machine.verify_listen(&as_of)?;
         Ok(Listen::new(self, as_of).await)
     }
