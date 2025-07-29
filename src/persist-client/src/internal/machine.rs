@@ -908,18 +908,7 @@ where
 
     // NB: Unlike the other methods here, this one is read-only.
     pub fn verify_listen(&self, as_of: &Antichain<T>) -> Result<(), Since<T>> {
-        match self.applier.verify_listen(as_of) {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(Upper(_))) => {
-                // The upper may not be ready yet (maybe it would be ready if we
-                // re-fetched state), but that's okay! One way to think of
-                // Listen is as an async stream where creating the stream at any
-                // legal as_of does not block but then updates trickle in once
-                // they are available.
-                Ok(())
-            }
-            Err(Since(since)) => Err(Since(since)),
-        }
+        self.applier.verify_listen(as_of)
     }
 
     pub async fn next_listen_batch(
