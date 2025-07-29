@@ -660,63 +660,65 @@ impl Coordinator {
             .collect::<Vec<_>>();
 
         let transact_result = self
-            .catalog_transact_with_side_effects(Some(ctx), ops, async move |coord, ctx| {
-                let output_desc = global_lir_plan.desc().clone();
-                let (mut df_desc, df_meta) = global_lir_plan.unapply();
+            .catalog_transact_with_side_effects(Some(ctx), ops, move |coord, ctx| {
+                Box::pin(async move {
+                    let output_desc = global_lir_plan.desc().clone();
+                    let (mut df_desc, df_meta) = global_lir_plan.unapply();
 
-                // Save plan structures.
-                coord
-                    .catalog_mut()
-                    .set_optimized_plan(global_id, global_mir_plan.df_desc().clone());
-                coord
-                    .catalog_mut()
-                    .set_physical_plan(global_id, df_desc.clone());
+                    // Save plan structures.
+                    coord
+                        .catalog_mut()
+                        .set_optimized_plan(global_id, global_mir_plan.df_desc().clone());
+                    coord
+                        .catalog_mut()
+                        .set_physical_plan(global_id, df_desc.clone());
 
-                let notice_builtin_updates_fut = coord
-                    .process_dataflow_metainfo(df_meta, global_id, ctx, notice_ids)
-                    .await;
+                    let notice_builtin_updates_fut = coord
+                        .process_dataflow_metainfo(df_meta, global_id, ctx, notice_ids)
+                        .await;
 
-                df_desc.set_as_of(dataflow_as_of.clone());
-                df_desc.set_initial_as_of(initial_as_of);
-                df_desc.until = until;
+                    df_desc.set_as_of(dataflow_as_of.clone());
+                    df_desc.set_initial_as_of(initial_as_of);
+                    df_desc.until = until;
 
-                let storage_metadata = coord.catalog.state().storage_metadata();
+                    let storage_metadata = coord.catalog.state().storage_metadata();
 
-                // Announce the creation of the materialized view source.
-                coord
-                    .controller
-                    .storage
-                    .create_collections(
-                        storage_metadata,
-                        None,
-                        vec![(
-                            global_id,
-                            CollectionDescription {
-                                desc: output_desc,
-                                data_source: DataSource::Other,
-                                since: Some(storage_as_of),
-                                status_collection_id: None,
-                                timeline: None,
-                            },
-                        )],
-                    )
-                    .await
-                    .unwrap_or_terminate("cannot fail to append");
+                    // Announce the creation of the materialized view source.
+                    coord
+                        .controller
+                        .storage
+                        .create_collections(
+                            storage_metadata,
+                            None,
+                            vec![(
+                                global_id,
+                                CollectionDescription {
+                                    desc: output_desc,
+                                    data_source: DataSource::Other,
+                                    since: Some(storage_as_of),
+                                    status_collection_id: None,
+                                    timeline: None,
+                                },
+                            )],
+                        )
+                        .await
+                        .unwrap_or_terminate("cannot fail to append");
 
-                coord
-                    .initialize_storage_read_policies(
-                        btreeset![item_id],
-                        compaction_window.unwrap_or(CompactionWindow::Default),
-                    )
-                    .await;
+                    coord
+                        .initialize_storage_read_policies(
+                            btreeset![item_id],
+                            compaction_window.unwrap_or(CompactionWindow::Default),
+                        )
+                        .await;
 
-                coord
-                    .ship_dataflow_and_notice_builtin_table_updates(
-                        df_desc,
-                        cluster_id,
-                        notice_builtin_updates_fut,
-                    )
-                    .await;
+                    coord
+                        .ship_dataflow_and_notice_builtin_table_updates(
+                            df_desc,
+                            cluster_id,
+                            notice_builtin_updates_fut,
+                        )
+                        .await;
+                })
             })
             .await;
 

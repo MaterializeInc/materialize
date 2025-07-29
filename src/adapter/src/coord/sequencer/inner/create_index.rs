@@ -460,49 +460,51 @@ impl Coordinator {
             .collect::<Vec<_>>();
 
         let transact_result = self
-            .catalog_transact_with_side_effects(Some(ctx), ops, async move |coord, ctx| {
-                let (mut df_desc, df_meta) = global_lir_plan.unapply();
+            .catalog_transact_with_side_effects(Some(ctx), ops, move |coord, ctx| {
+                Box::pin(async move {
+                    let (mut df_desc, df_meta) = global_lir_plan.unapply();
 
-                // Save plan structures.
-                coord
-                    .catalog_mut()
-                    .set_optimized_plan(global_id, global_mir_plan.df_desc().clone());
-                coord
-                    .catalog_mut()
-                    .set_physical_plan(global_id, df_desc.clone());
+                    // Save plan structures.
+                    coord
+                        .catalog_mut()
+                        .set_optimized_plan(global_id, global_mir_plan.df_desc().clone());
+                    coord
+                        .catalog_mut()
+                        .set_physical_plan(global_id, df_desc.clone());
 
-                let notice_builtin_updates_fut = coord
-                    .process_dataflow_metainfo(df_meta, global_id, ctx, notice_ids)
-                    .await;
+                    let notice_builtin_updates_fut = coord
+                        .process_dataflow_metainfo(df_meta, global_id, ctx, notice_ids)
+                        .await;
 
-                // We're putting in place read holds, such that ship_dataflow,
-                // below, which calls update_read_capabilities, can successfully
-                // do so. Otherwise, the since of dependencies might move along
-                // concurrently, pulling the rug from under us!
-                //
-                // TODO: Maybe in the future, pass those holds on to compute, to
-                // hold on to them and downgrade when possible?
-                let read_holds = coord.acquire_read_holds(&id_bundle);
-                let since = coord.least_valid_read(&read_holds);
-                df_desc.set_as_of(since);
+                    // We're putting in place read holds, such that ship_dataflow,
+                    // below, which calls update_read_capabilities, can successfully
+                    // do so. Otherwise, the since of dependencies might move along
+                    // concurrently, pulling the rug from under us!
+                    //
+                    // TODO: Maybe in the future, pass those holds on to compute, to
+                    // hold on to them and downgrade when possible?
+                    let read_holds = coord.acquire_read_holds(&id_bundle);
+                    let since = coord.least_valid_read(&read_holds);
+                    df_desc.set_as_of(since);
 
-                coord
-                    .ship_dataflow_and_notice_builtin_table_updates(
-                        df_desc,
+                    coord
+                        .ship_dataflow_and_notice_builtin_table_updates(
+                            df_desc,
+                            cluster_id,
+                            notice_builtin_updates_fut,
+                        )
+                        .await;
+
+                    // Drop read holds after the dataflow has been shipped, at which
+                    // point compute will have put in its own read holds.
+                    drop(read_holds);
+
+                    coord.update_compute_read_policy(
                         cluster_id,
-                        notice_builtin_updates_fut,
-                    )
-                    .await;
-
-                // Drop read holds after the dataflow has been shipped, at which
-                // point compute will have put in its own read holds.
-                drop(read_holds);
-
-                coord.update_compute_read_policy(
-                    cluster_id,
-                    item_id,
-                    compaction_window.unwrap_or_default().into(),
-                );
+                        item_id,
+                        compaction_window.unwrap_or_default().into(),
+                    );
+                })
             })
             .await;
 

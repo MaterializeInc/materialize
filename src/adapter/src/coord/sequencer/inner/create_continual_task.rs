@@ -133,33 +133,35 @@ impl Coordinator {
         }];
 
         let () = self
-            .catalog_transact_with_side_effects(Some(ctx), ops, async move |coord, _ctx| {
-                let catalog = coord.catalog_mut();
-                catalog.set_optimized_plan(global_id, optimized_plan);
-                catalog.set_physical_plan(global_id, physical_plan.clone());
-                catalog.set_dataflow_metainfo(global_id, metainfo);
+            .catalog_transact_with_side_effects(Some(ctx), ops, move |coord, _ctx| {
+                Box::pin(async move {
+                    let catalog = coord.catalog_mut();
+                    catalog.set_optimized_plan(global_id, optimized_plan);
+                    catalog.set_physical_plan(global_id, physical_plan.clone());
+                    catalog.set_dataflow_metainfo(global_id, metainfo);
 
-                coord
-                    .controller
-                    .storage
-                    .create_collections(
-                        coord.catalog.state().storage_metadata(),
-                        None,
-                        vec![(
-                            global_id,
-                            CollectionDescription {
-                                desc,
-                                data_source: DataSource::Other,
-                                since: Some(as_of),
-                                status_collection_id: None,
-                                timeline: None,
-                            },
-                        )],
-                    )
-                    .await
-                    .unwrap_or_terminate("cannot fail to append");
+                    coord
+                        .controller
+                        .storage
+                        .create_collections(
+                            coord.catalog.state().storage_metadata(),
+                            None,
+                            vec![(
+                                global_id,
+                                CollectionDescription {
+                                    desc,
+                                    data_source: DataSource::Other,
+                                    since: Some(as_of),
+                                    status_collection_id: None,
+                                    timeline: None,
+                                },
+                            )],
+                        )
+                        .await
+                        .unwrap_or_terminate("cannot fail to append");
 
-                coord.ship_dataflow(physical_plan, cluster_id, None).await;
+                    coord.ship_dataflow(physical_plan, cluster_id, None).await;
+                })
             })
             .await?;
         Ok(ExecuteResponse::CreatedContinualTask)
