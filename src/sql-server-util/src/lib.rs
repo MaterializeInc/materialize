@@ -17,6 +17,7 @@ use anyhow::Context;
 use derivative::Derivative;
 use futures::future::BoxFuture;
 use futures::{FutureExt, Stream, StreamExt, TryStreamExt};
+use mz_ore::netio::DUMMY_DNS_PORT;
 use mz_ore::result::ResultExt;
 use mz_repr::ScalarType;
 use smallvec::{SmallVec, smallvec};
@@ -90,7 +91,7 @@ impl Client {
             } => {
                 let privatelink_host = mz_cloud_resources::vpc_endpoint_name(*connection_id);
                 let mut privatelink_addrs =
-                    tokio::net::lookup_host((privatelink_host.clone(), 11111)).await?;
+                    tokio::net::lookup_host((privatelink_host.clone(), DUMMY_DNS_PORT)).await?;
 
                 let Some(mut addr) = privatelink_addrs.next() else {
                     return Err(SqlServerError::InvariantViolated(format!(
@@ -100,7 +101,10 @@ impl Client {
                 };
 
                 addr.set_port(port.clone());
-                let tcp = TcpStream::connect(addr).await.context("aws privatelink")?;
+
+                let tcp = TcpStream::connect(addr)
+                    .await
+                    .context(format!("aws privatelink {:?}", addr))?;
 
                 (tcp, None)
             }

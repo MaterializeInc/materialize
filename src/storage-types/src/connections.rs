@@ -25,6 +25,7 @@ use mz_kafka_util::client::{
 use mz_ore::assert_none;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::{InTask, OreFutureExt};
+use mz_ore::netio::DUMMY_DNS_PORT;
 use mz_ore::netio::resolve_address;
 use mz_ore::num::NonNeg;
 use mz_postgres_util::tunnel::PostgresFlavor;
@@ -1101,12 +1102,6 @@ impl CsrConnection {
             client_config = client_config.auth(username, password);
         }
 
-        // `net::lookup_host` requires a port but the port will be ignored when
-        // passed to `resolve_to_addrs`. We use a dummy port that will be easy
-        // to spot in the logs to make it obvious if some component downstream
-        // incorrectly starts using this port.
-        const DUMMY_PORT: u16 = 11111;
-
         // TODO: use types to enforce that the URL has a string hostname.
         let host = self
             .url
@@ -1124,7 +1119,7 @@ impl CsrConnection {
                     host,
                     &resolved
                         .iter()
-                        .map(|addr| SocketAddr::new(*addr, DUMMY_PORT))
+                        .map(|addr| SocketAddr::new(*addr, DUMMY_DNS_PORT))
                         .collect::<Vec<_>>(),
                 )
             }
@@ -1154,7 +1149,10 @@ impl CsrConnection {
                     // Unfortunately the port here is ignored...
                     .resolve_to_addrs(
                         host,
-                        &[SocketAddr::new(ssh_tunnel.local_addr().ip(), DUMMY_PORT)],
+                        &[SocketAddr::new(
+                            ssh_tunnel.local_addr().ip(),
+                            DUMMY_DNS_PORT,
+                        )],
                     )
                     // ...so we also dynamically rewrite the URL to use the
                     // current port for the SSH tunnel.
@@ -1183,7 +1181,7 @@ impl CsrConnection {
                     connection.connection_id,
                     connection.availability_zone.as_deref(),
                 );
-                let addrs: Vec<_> = net::lookup_host((privatelink_host, DUMMY_PORT))
+                let addrs: Vec<_> = net::lookup_host((privatelink_host, DUMMY_DNS_PORT))
                     .await
                     .context("resolving PrivateLink host")?
                     .collect();
