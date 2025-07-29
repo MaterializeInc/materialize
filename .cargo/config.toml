@@ -41,7 +41,3 @@ rustflags = [
 # Always reserve at least one core so Cargo doesn't pin our CPU
 jobs = -1
 rustflags = ["--cfg=tokio_unstable"]
-
-[profile.ci]
-inherits = "dev"
-debug = "line-tables-only"

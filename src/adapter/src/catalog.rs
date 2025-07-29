@@ -3257,6 +3257,8 @@ mod tests {
                 "avg_internal_v1",
                 "bool_and",
                 "bool_or",
+                "has_table_privilege", // > 3 s each
+                "has_type_privilege",  // > 3 s each
                 "mod",
                 "mz_panic",
                 "mz_sleep",
