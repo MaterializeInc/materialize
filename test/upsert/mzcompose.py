@@ -43,7 +43,6 @@ SERVICES = [
             "disk_cluster_replicas_default": "true",
             "unsafe_enable_unorchestrated_cluster_replicas": "true",
             "storage_dataflow_delay_sources_past_rehydration": "true",
-            "upsert_rocksdb_auto_spill_to_disk": "false",
         },
         environment_extra=materialized_environment_extra,
         default_replication_factor=2,
@@ -470,88 +469,6 @@ def workflow_rocksdb_cleanup(c: Composition) -> None:
         )
 
 
-def workflow_autospill(c: Composition) -> None:
-    """Testing auto spill to disk"""
-    dependencies = [
-        "zookeeper",
-        "kafka",
-        "materialized",
-        "schema-registry",
-        "clusterd1",
-    ]
-
-    # Helper function to get worker 0 autospill metrics for clusterd.
-    def fetch_auto_spill_metric() -> int | None:
-        metrics = c.exec(
-            "clusterd1", "curl", "localhost:6878/metrics", capture=True
-        ).stdout
-
-        value = None
-        for metric in metrics.splitlines():
-            if metric.startswith("mz_storage_upsert_state_rocksdb_autospill_in_use"):
-                if value:
-                    value += int(metric.split()[1])
-                else:
-                    value = int(metric.split()[1])
-
-        return value
-
-    for style, mz in [
-        (
-            "with DISK",
-            Materialized(
-                options=[
-                    "--orchestrator-process-scratch-directory=/mzdata/source_data",
-                ],
-                additional_system_parameter_defaults={
-                    "disk_cluster_replicas_default": "true",
-                    "upsert_rocksdb_auto_spill_to_disk": "true",
-                    "upsert_rocksdb_auto_spill_threshold_bytes": "290",
-                    "unsafe_enable_unorchestrated_cluster_replicas": "true",
-                    "storage_dataflow_delay_sources_past_rehydration": "true",
-                },
-                default_replication_factor=2,
-            ),
-        ),
-        (
-            "with DISK and RocksDB Merge Operator",
-            Materialized(
-                options=[
-                    "--orchestrator-process-scratch-directory=/mzdata/source_data",
-                ],
-                additional_system_parameter_defaults={
-                    "disk_cluster_replicas_default": "true",
-                    "upsert_rocksdb_auto_spill_to_disk": "true",
-                    "upsert_rocksdb_auto_spill_threshold_bytes": "290",
-                    "unsafe_enable_unorchestrated_cluster_replicas": "true",
-                    "storage_dataflow_delay_sources_past_rehydration": "true",
-                    # Enable the RocksDB merge operator
-                    "storage_rocksdb_use_merge_operator": "true",
-                },
-                default_replication_factor=2,
-            ),
-        ),
-    ]:
-        with c.override(
-            mz,
-            Clusterd(
-                name="clusterd1",
-            ),
-            Testdrive(no_reset=True, consistent_seed=True),
-        ):
-            c.rm("testdrive")
-            c.down(destroy_volumes=True)
-            print(f"Running autospill workflow {style}")
-            c.up(*dependencies)
-            c.run_testdrive_files("autospill/01-setup.td")
-
-            c.run_testdrive_files("autospill/02-memory.td")
-            assert fetch_auto_spill_metric() == 0
-
-            c.run_testdrive_files("autospill/03-rocksdb.td")
-            assert fetch_auto_spill_metric() == 1
-
-
 # This should not be run on ci and is not added to workflow_default above!
 # This test is there to compare rehydration metrics with different configs.
 # Can be run locally with the command ./mzcompose run load-test
@@ -577,7 +494,6 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
             additional_system_parameter_defaults={
                 "disk_cluster_replicas_default": "true",
                 "enable_disk_cluster_replicas": "true",
-                "upsert_rocksdb_auto_spill_threshold_bytes": "250",
                 # Force backpressure to be enabled.
                 "storage_dataflow_max_inflight_bytes": f"{backpressure_bytes}",
                 "storage_dataflow_max_inflight_bytes_disk_only": "true",
@@ -632,7 +548,6 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
                 {
                     "disk_cluster_replicas_default": "true",
                     "enable_disk_cluster_replicas": "true",
-                    "upsert_rocksdb_auto_spill_threshold_bytes": "250",
                     # Force backpressure to be enabled.
                     "storage_dataflow_max_inflight_bytes": f"{backpressure_bytes}",
                     "storage_dataflow_max_inflight_bytes_disk_only": "true",
@@ -644,7 +559,6 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
                     "storage_rocksdb_use_merge_operator": "true",
                     "disk_cluster_replicas_default": "true",
                     "enable_disk_cluster_replicas": "true",
-                    "upsert_rocksdb_auto_spill_threshold_bytes": "250",
                     # Force backpressure to be enabled.
                     "storage_dataflow_max_inflight_bytes": f"{backpressure_bytes}",
                     "storage_dataflow_max_inflight_bytes_disk_only": "true",
@@ -655,7 +569,6 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
                 {
                     "disk_cluster_replicas_default": "true",
                     "enable_disk_cluster_replicas": "true",
-                    "upsert_rocksdb_auto_spill_threshold_bytes": "250",
                     # Force backpressure to be enabled.
                     "storage_dataflow_max_inflight_bytes": f"{backpressure_bytes}",
                     "storage_dataflow_max_inflight_bytes_disk_only": "true",
@@ -668,7 +581,6 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
                 {
                     "disk_cluster_replicas_default": "true",
                     "enable_disk_cluster_replicas": "true",
-                    "upsert_rocksdb_auto_spill_threshold_bytes": "250",
                     # Force backpressure to be enabled.
                     "storage_dataflow_max_inflight_bytes": f"{backpressure_bytes}",
                     "storage_dataflow_max_inflight_bytes_disk_only": "true",
