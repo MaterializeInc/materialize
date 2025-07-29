@@ -8,8 +8,7 @@ menu:
     weight: 20
 ---
 
-Materialize's support for PostgreSQL Foreign Data Wrappers (FDWs) allows users
-to query remote data as if it were local.
+{{< include-md file="shared-content/fdw-setup-intro.md" >}}
 
 ## Prerequisite
 
