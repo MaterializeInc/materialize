@@ -35,11 +35,9 @@ EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 't3_text', @
 CREATE TABLE dummy (data int);
 EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'dummy', @role_name = 'SA', @supports_net_changes = 0;
 
-EXEC sys.sp_cdc_change_job @pollinginterval = 1;
+$ sql-server-stop-capture-jobs name=sql-server
 
-# SQL server delay because it's terrible for testing and the initial_lsn selection
-# may happen faster than CDC manages to process the above updates
-$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=5s
+$ sql-server-run-cdc-scan name=sql-server
 
 # Exercise Materialize.
 
@@ -98,6 +96,8 @@ t1_pk_sql_server true
 $ sql-server-execute name=sql-server
 INSERT INTO dummy VALUES (1);
 
+$ sql-server-run-cdc-scan name=sql-server
+
 
 > SELECT snapshot_records_known, snapshot_records_staged, snapshot_committed FROM mz_internal.mz_source_statistics WHERE id = '${source-id}';
 3 3 true
@@ -109,6 +109,8 @@ c "anotha one"
 
 $ sql-server-execute name=sql-server
 UPDATE t1_pk SET val_col = 'I am an updated value' WHERE key_col = 'a';
+
+$ sql-server-run-cdc-scan name=sql-server
 
 > SELECT messages_received FROM mz_internal.mz_source_statistics WHERE id = '${source-id}';
 6
@@ -127,12 +129,17 @@ c "anotha one"
 $ sql-server-execute name=sql-server
 DELETE t1_pk WHERE key_col = 'a';
 
+$ sql-server-run-cdc-scan name=sql-server
+
+
 > SELECT * FROM t1_pk;
 b "foobar"
 c "anotha one"
 
 $ sql-server-execute name=sql-server
 INSERT INTO t1_pk VALUES ('😊', 'lets see what happens');
+
+$ sql-server-run-cdc-scan name=sql-server
 
 # Note: VARCHAR columns in SQL Server do not support emojis, hence the '??'.
 > SELECT * FROM t1_pk;
@@ -146,6 +153,8 @@ c "anotha one"
 $ sql-server-execute name=sql-server
 WITH Tally(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM Tally WHERE n < 1000) INSERT INTO t3_text (value) SELECT 'a longer string that will be a bit of data, cool ' + CAST(n AS VARCHAR) FROM Tally OPTION (MAXRECURSION 1000);
 
+$ sql-server-run-cdc-scan name=sql-server
+
 > SELECT COUNT(*) FROM t3_text;
 1000
 
@@ -155,6 +164,8 @@ INSERT INTO t3_text (value) SELECT value FROM t3_text;
 INSERT INTO t3_text (value) SELECT value FROM t3_text;
 INSERT INTO t3_text (value) SELECT value FROM t3_text;
 INSERT INTO t3_text (value) SELECT value FROM t3_text;
+
+$ sql-server-run-cdc-scan name=sql-server
 
 > SELECT COUNT(*) FROM t3_text;
 32000

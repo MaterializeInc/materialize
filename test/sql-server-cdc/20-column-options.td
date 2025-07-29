@@ -38,11 +38,9 @@ INSERT INTO t2_columns VALUES ('invisible');
 CREATE TABLE dummy (data int);
 EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'dummy', @role_name = 'SA', @supports_net_changes = 0;
 
-EXEC sys.sp_cdc_change_job @pollinginterval = 1;
+$ sql-server-stop-capture-jobs name=sql-server
 
-# SQL server delay because it's terrible for testing and the initial_lsn selection
-# may happen faster than CDC manages to process the above updates
-$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=5s
+$ sql-server-run-cdc-scan name=sql-server
 
 > CREATE SECRET IF NOT EXISTS sql_server_pass AS '${arg.default-sql-server-password}'
 
@@ -79,11 +77,15 @@ t1_columns_sql_server true
 $ sql-server-execute name=sql-server
 INSERT INTO dummy VALUES (1);
 
+$ sql-server-run-cdc-scan name=sql-server
+
 > SELECT c1, c2, c4 FROM t1_columns;
 1.4448890000 12:00:00 EQCr
 
 $ sql-server-execute name=sql-server
 INSERT INTO t1_columns VALUES (2.000001, '01:59:32.99901', '$0.89', 0x1122AABBCC00DD), (NULL, NULL, '$99.99', NULL);
+
+$ sql-server-run-cdc-scan name=sql-server
 
 > SELECT c1, c2, c4 FROM t1_columns;
 1.4448890000 12:00:00 EQCr

@@ -815,6 +815,11 @@ impl Run for PosCommand {
                     "skip-end" => skip_end::run_skip_end(),
                     "sql-server-connect" => sql_server::run_connect(builtin, state).await,
                     "sql-server-execute" => sql_server::run_execute(builtin, state).await,
+                    "sql-server-stop-capture-jobs" => {
+                        sql_server::stop_capture_jobs(builtin, state).await
+                    }
+                    "sql-server-run-cdc-scan" => sql_server::run_cdc_scan(builtin, state).await,
+
                     "persist-force-compaction" => {
                         persist::run_force_compaction(builtin, state).await
                     }

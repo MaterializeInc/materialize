@@ -7,8 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+mod cdc;
 mod connect;
 mod execute;
 
+pub use cdc::{stop_capture_jobs, run_cdc_scan};
 pub use connect::run_connect;
 pub use execute::run_execute;

@@ -40,11 +40,9 @@ INSERT INTO text_cols VALUES (1.444889, '12:00:00', '$100.99', 0x1100AB);
 CREATE TABLE dummy (data int);
 EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'dummy', @role_name = 'SA', @supports_net_changes = 0;
 
-EXEC sys.sp_cdc_change_job @pollinginterval = 1;
+$ sql-server-stop-capture-jobs name=sql-server
 
-# SQL server delay because it's terrible for testing and the initial_lsn selection
-# may happen faster than CDC manages to process the above updates
-$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=5s
+$ sql-server-run-cdc-scan name=sql-server
 
 # Exercise Materialize.
 
@@ -87,6 +85,8 @@ ms_src true
 $ sql-server-execute name=sql-server
 INSERT INTO dummy VALUES (1);
 
+$ sql-server-run-cdc-scan name=sql-server
+
 > SELECT * FROM t1;
 a "hello world"
 b "foobar"
@@ -105,8 +105,8 @@ ms_src true
 $ sql-server-execute name=sql-server
 INSERT INTO dummy VALUES (1);
 
-$ sql-server-execute name=sql-server
-INSERT INTO dummy VALUES (1);
+$ sql-server-run-cdc-scan name=sql-server
+
 > SELECT * FROM t2;
 a "hello world"
 b "foobar"
@@ -118,6 +118,8 @@ DELETE FROM t1_pk WHERE key_col = 'a';
 INSERT INTO t1_pk VALUES ('😊', 'lets see what happens');
 UPDATE t1_pk SET val_col = 'beer' WHERE key_col = 'b';
 INSERT INTO t2_no_cdc VALUES ('ignored', 'update');
+
+$ sql-server-run-cdc-scan name=sql-server
 
 > SELECT * FROM t1;
 b "beer"
@@ -145,6 +147,7 @@ ms_src true
 $ sql-server-execute name=sql-server
 INSERT INTO dummy VALUES (1);
 
+$ sql-server-run-cdc-scan name=sql-server
 
 > SELECT * FROM t1;
 b "beer"
@@ -167,6 +170,8 @@ ms_src true
 $ sql-server-execute name=sql-server
 INSERT INTO dummy VALUES (1);
 
+$ sql-server-run-cdc-scan name=sql-server
+
 > SHOW COLUMNS FROM text_cols;
 c1 true text ""
 c2 true text ""
@@ -178,6 +183,8 @@ c4 true text ""
 
 $ sql-server-execute name=sql-server
 INSERT INTO text_cols VALUES (2.000001, '01:59:32.99901', '$0.89', 0x1122AABBCC00DD), (NULL, NULL, '$99.99', NULL);
+
+$ sql-server-run-cdc-scan name=sql-server
 
 > SELECT * FROM text_cols;
 1.4448890000 12:00:00 100.9900 EQCr
@@ -199,6 +206,8 @@ ms_src true
 $ sql-server-execute name=sql-server
 INSERT INTO dummy VALUES (1);
 
+$ sql-server-run-cdc-scan name=sql-server
+
 > SHOW COLUMNS FROM exclude_cols;
 val_col true "character varying" ""
 
@@ -209,6 +218,9 @@ val_col true "character varying" ""
 
 $ sql-server-execute name=sql-server
 INSERT INTO t1_pk(key_col, val_col) VALUES ('d', 'dogs'), ('e', 'elephant');
+
+$ sql-server-run-cdc-scan name=sql-server
+
 
 > SELECT * FROM exclude_cols;
 "beer"
@@ -232,6 +244,8 @@ ms_src true
 $ sql-server-execute name=sql-server
 INSERT INTO dummy VALUES (1);
 
+$ sql-server-run-cdc-scan name=sql-server
+
 > SELECT * FROM t1;
 b "beer"
 c "anotha one"
@@ -243,6 +257,8 @@ e "elephant"
 
 $ sql-server-execute name=sql-server
 INSERT INTO t1_pk VALUES ('x', 'xeon'), ('y', 'yellow'), ('z', 'zion');
+
+# hold off on running cdc scan until after snapshot
 
 > CREATE TABLE t2 FROM SOURCE ms_src (REFERENCE t1_pk);
 
@@ -257,6 +273,8 @@ ms_src true
 
 $ sql-server-execute name=sql-server
 INSERT INTO dummy VALUES (1);
+
+$ sql-server-run-cdc-scan name=sql-server
 
 > SELECT * FROM t1;
 b "beer"

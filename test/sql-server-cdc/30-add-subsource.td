@@ -35,11 +35,9 @@ INSERT INTO t2_add_subsource VALUES ('100'), ('200'), (NULL), ('300');
 CREATE TABLE dummy (data int);
 EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'dummy', @role_name = 'SA', @supports_net_changes = 0;
 
-EXEC sys.sp_cdc_change_job @pollinginterval = 1;
+$ sql-server-stop-capture-jobs name=sql-server
 
-# SQL server delay because it's terrible for testing and the initial_lsn selection
-# may happen faster than CDC manages to process the above updates
-$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=5s
+$ sql-server-run-cdc-scan name=sql-server
 
 # Exercise Materialize.
 
@@ -76,6 +74,7 @@ my_source_add_subsources true
 $ sql-server-execute name=sql-server
 INSERT INTO dummy VALUES (1);
 
+$ sql-server-run-cdc-scan name=sql-server
 
 > SELECT * FROM t1_add_subsource;
 a
@@ -95,6 +94,8 @@ my_source_add_subsources true
 $ sql-server-execute name=sql-server
 INSERT INTO dummy VALUES (1);
 
+$ sql-server-run-cdc-scan name=sql-server
+
 > SELECT * FROM t2_add_subsource;
 100
 200
@@ -106,6 +107,9 @@ INSERT INTO dummy VALUES (1);
 $ sql-server-execute name=sql-server
 INSERT INTO t1_add_subsource VALUES ('d');
 INSERT INTO t2_add_subsource VALUES ('400');
+
+$ sql-server-run-cdc-scan name=sql-server
+
 
 > SELECT * FROM t1_add_subsource;
 a
@@ -124,6 +128,9 @@ d
 $ sql-server-execute name=sql-server
 INSERT INTO t1_add_subsource VALUES ('e');
 INSERT INTO t2_add_subsource VALUES ('500');
+
+$ sql-server-run-cdc-scan name=sql-server
+
 
 > DROP SOURCE t1_add_subsource;
 
@@ -147,6 +154,7 @@ my_source_add_subsources true
 $ sql-server-execute name=sql-server
 INSERT INTO dummy VALUES (1);
 
+$ sql-server-run-cdc-scan name=sql-server
 
 > SELECT * FROM t1_add_subsource;
 a
@@ -158,6 +166,8 @@ e
 
 $ sql-server-execute name=sql-server
 INSERT INTO t1_add_subsource VALUES ('f');
+
+$ sql-server-run-cdc-scan name=sql-server
 
 > SELECT * FROM t1_add_subsource;
 a

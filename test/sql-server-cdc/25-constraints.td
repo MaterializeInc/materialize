@@ -35,11 +35,9 @@ INSERT INTO t25_pk2 VALUES ('i am an ID', '1000', 'uhhmmmm');
 CREATE TABLE dummy (data int);
 EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'dummy', @role_name = 'SA', @supports_net_changes = 0;
 
-EXEC sys.sp_cdc_change_job @pollinginterval = 1;
+$ sql-server-stop-capture-jobs name=sql-server
 
-# SQL server delay because it's terrible for testing and the initial_lsn selection
-# may happen faster than CDC manages to process the above updates
-$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=5s
+$ sql-server-run-cdc-scan name=sql-server
 
 # Exercise Materialize.
 
@@ -78,6 +76,8 @@ t25_pk_sql_server true
 
 $ sql-server-execute name=sql-server
 INSERT INTO dummy VALUES (1);
+
+$ sql-server-run-cdc-scan name=sql-server
 
 
 > SELECT * FROM t25_pk;

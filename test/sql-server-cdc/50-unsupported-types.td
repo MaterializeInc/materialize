@@ -48,11 +48,9 @@ INSERT INTO table_varchar_max VALUES (42, NULL);
 CREATE TABLE dummy (data int);
 EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'dummy', @role_name = 'SA', @supports_net_changes = 0;
 
-EXEC sys.sp_cdc_change_job @pollinginterval = 1;
+$ sql-server-stop-capture-jobs name=sql-server
 
-# SQL server delay because it's terrible for testing and the initial_lsn selection
-# may happen faster than CDC manages to process the above updates
-$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=5s
+$ sql-server-run-cdc-scan name=sql-server
 
 # Exercise Materialize.
 
@@ -92,6 +90,8 @@ table_text_source true
 
 $ sql-server-execute name=sql-server
 INSERT INTO dummy VALUES (1);
+
+$ sql-server-run-cdc-scan name=sql-server
 
 > SELECT * FROM table_text;
 "i work"
@@ -145,6 +145,8 @@ ms_src true
 
 $ sql-server-execute name=sql-server
 INSERT INTO dummy VALUES (1);
+
+$ sql-server-run-cdc-scan name=sql-server
 
 > SHOW COLUMNS FROM table_text;
 good true "character varying" ""
