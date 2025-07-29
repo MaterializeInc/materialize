@@ -20,11 +20,10 @@ use k8s_openapi::{
         apps::v1::{StatefulSet, StatefulSetSpec, StatefulSetUpdateStrategy},
         core::v1::{
             Capabilities, ConfigMap, ConfigMapVolumeSource, Container, ContainerPort, EnvVar,
-            EnvVarSource, EphemeralVolumeSource, KeyToPath, PersistentVolumeClaimSpec,
-            PersistentVolumeClaimTemplate, Pod, PodSecurityContext, PodSpec, PodTemplateSpec,
-            Probe, SeccompProfile, Secret, SecretKeySelector, SecretVolumeSource, SecurityContext,
+            EnvVarSource, KeyToPath, Pod, PodSecurityContext, PodSpec, PodTemplateSpec, Probe,
+            SeccompProfile, Secret, SecretKeySelector, SecretVolumeSource, SecurityContext,
             Service, ServiceAccount, ServicePort, ServiceSpec, TCPSocketAction, Toleration, Volume,
-            VolumeMount, VolumeResourceRequirements,
+            VolumeMount,
         },
         networking::v1::{
             IPBlock, NetworkPolicy, NetworkPolicyEgressRule, NetworkPolicyIngressRule,
@@ -1174,40 +1173,10 @@ fn create_environmentd_statefulset_object(
         args.push("--tls-mode=disable".to_string());
     }
     if let Some(ephemeral_volume_class) = &config.ephemeral_volume_class {
-        args.extend([
-            format!(
-                "--orchestrator-kubernetes-ephemeral-volume-class={}",
-                ephemeral_volume_class
-            ),
-            "--scratch-directory=/scratch".to_string(),
-        ]);
-        volumes.push(Volume {
-            name: "scratch".to_string(),
-            ephemeral: Some(EphemeralVolumeSource {
-                volume_claim_template: Some(PersistentVolumeClaimTemplate {
-                    spec: PersistentVolumeClaimSpec {
-                        access_modes: Some(vec!["ReadWriteOnce".to_string()]),
-                        storage_class_name: Some(ephemeral_volume_class.to_string()),
-                        resources: Some(VolumeResourceRequirements {
-                            requests: Some(BTreeMap::from([(
-                                "storage".to_string(),
-                                mz.environmentd_scratch_volume_storage_requirement(),
-                            )])),
-                            ..Default::default()
-                        }),
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                }),
-                ..Default::default()
-            }),
-            ..Default::default()
-        });
-        volume_mounts.push(VolumeMount {
-            name: "scratch".to_string(),
-            mount_path: "/scratch".to_string(),
-            ..Default::default()
-        });
+        args.push(format!(
+            "--orchestrator-kubernetes-ephemeral-volume-class={}",
+            ephemeral_volume_class
+        ));
     }
     // The `materialize` user used by clusterd always has gid 999.
     args.push("--orchestrator-kubernetes-service-fs-group=999".to_string());

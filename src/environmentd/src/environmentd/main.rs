@@ -464,13 +464,6 @@ pub struct Args {
     /// If specified, this file will be used instead of LaunchDarkly for configuration.
     #[clap(long, env = "CONFIG_SYNC_FILE_PATH", value_name = "PATH")]
     config_sync_file_path: Option<PathBuf>,
-    /// A scratch directory that can be used for ephemeral storage.
-    //
-    // NOTE(jkosh44): this argument is intentionally unused at present. It is
-    // future proofing for a world where `environmentd` needs to spill
-    // ephemeral state to disk.
-    #[clap(long, env = "SCRATCH_DIRECTORY", value_name = "PATH")]
-    scratch_directory: Option<PathBuf>,
 
     // === Bootstrap options. ===
     #[clap(
