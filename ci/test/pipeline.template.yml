@@ -363,6 +363,7 @@ steps:
       #
       # See: <https://github.com/microsoft/mssql-docker/issues/864>
       queue: hetzner-x86-64-4cpu-8gb
+    skip: "database-issues#9519 and database-issues#9514"
 
   - group: "Connection tests"
     key: connection-tests
