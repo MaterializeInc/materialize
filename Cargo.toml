@@ -304,6 +304,11 @@ lto = "off"
 debug = 1
 incremental = true
 
+[profile.ci]
+inherits = "optimized"
+debug = "line-tables-only"
+debug-assertions = true
+
 # IMPORTANT: when patching a dependency, you should only depend on "main",
 # "master", or an upstream release branch (e.g., "v7.x"). Do *not* depend on a
 # feature/patch branch (e.g., "fix-thing" or "pr-1234"). Feature/patch branches
