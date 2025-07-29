@@ -27,6 +27,12 @@ EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 't15_pk', @r
 
 INSERT INTO t15_pk VALUES ('a', 'hello world'), ('b', 'foobar'), ('c', 'anotha one');
 
+EXEC sys.sp_cdc_change_job @pollinginterval = 1;
+
+# SQL server delay because it's terrible for testing and the initial_lsn selection
+# may happen faster than CDC manages to process the above updates
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=5s
+
 # Exercise Materialize.
 
 > CREATE SECRET IF NOT EXISTS sql_server_pass AS '${arg.default-sql-server-password}'

@@ -39,6 +39,12 @@ CREATE TABLE t2_no_cdc (key_col VARCHAR(20) PRIMARY KEY, val_col VARCHAR(1024));
 CREATE TABLE t3_text (value VARCHAR(100));
 EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 't3_text', @role_name = 'SA', @supports_net_changes = 0;
 
+EXEC sys.sp_cdc_change_job @pollinginterval = 1;
+
+# SQL server delay because it's terrible for testing and the initial_lsn selection
+# may happen faster than CDC manages to process the above updates
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=5s
+
 # Exercise Materialize.
 
 # Test SSL MODE disabled.

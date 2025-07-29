@@ -100,6 +100,12 @@ EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'table_nvarc
 CREATE TABLE dummy (data int);
 EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'dummy', @role_name = 'SA', @supports_net_changes = 0;
 
+EXEC sys.sp_cdc_change_job @pollinginterval = 1;
+
+# SQL server delay because it's terrible for testing and the initial_lsn selection
+# may happen faster than CDC manages to process the above updates
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=5s
+
 # Exercise Materialize.
 
 > CREATE SECRET IF NOT EXISTS sql_server_pass AS '${arg.default-sql-server-password}'
@@ -118,9 +124,7 @@ ALTER SYSTEM SET log_filter = 'mz_storage::source::sql_server=debug,mz_sql_serve
     PASSWORD = SECRET sql_server_pass
   );
 
-# TODO - SQL server delay because it's terrible for testing and the initial_lsn selection
-# may happen faster than CDC manages to process the above updates
-$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=5s
+
 
 > CREATE SOURCE test_40_data_types
   FROM SQL SERVER CONNECTION sql_server_test_40_connection
