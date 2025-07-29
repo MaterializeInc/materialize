@@ -629,7 +629,7 @@ impl Coordinator {
         } = self.create_source_inner(ctx.session(), plans).await?;
 
         let transact_result = self
-            .catalog_transact_with_side_effects(Some(ctx), ops, |coord, ctx| {
+            .catalog_transact_with_ddl_transaction(ctx, ops, |coord, ctx| {
                 Box::pin(async move {
                     // TODO(roshan): This will be unnecessary when we drop support for
                     // automatically created subsources.
@@ -1160,7 +1160,7 @@ impl Coordinator {
         }];
 
         let catalog_result = self
-            .catalog_transact_with_side_effects(Some(ctx), ops, move |coord, ctx| {
+            .catalog_transact_with_ddl_transaction(ctx, ops, move |coord, ctx| {
                 Box::pin(async move {
                     // The table data_source determines whether this table will be written to
                     // by environmentd (e.g. with INSERT INTO statements) or by the storage layer
