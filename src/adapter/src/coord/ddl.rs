@@ -11,6 +11,7 @@
 //! and altering objects.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -88,7 +89,11 @@ impl Coordinator {
         side_effect: F,
     ) -> Result<(), AdapterError>
     where
-        F: AsyncFnOnce(&mut Coordinator, Option<&mut ExecuteContext>) -> () + 'static,
+        F: for<'a> FnOnce(
+                &'a mut Coordinator,
+                Option<&'a mut ExecuteContext>,
+            ) -> Pin<Box<dyn Future<Output = ()> + 'a>>
+            + 'static,
     {
         let table_updates = self
             .catalog_transact_inner(ctx.as_ref().map(|ctx| ctx.session().conn_id()), ops)
