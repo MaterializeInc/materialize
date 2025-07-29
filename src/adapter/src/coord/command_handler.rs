@@ -743,6 +743,7 @@ impl Coordinator {
                             ops: vec![],
                             state,
                             revision,
+                            side_effects: vec![],
                         }) {
                             return ctx.retire(Err(err));
                         }

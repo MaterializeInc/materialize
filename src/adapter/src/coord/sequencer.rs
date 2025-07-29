@@ -441,15 +441,11 @@ impl Coordinator {
                     self.sequence_alter_cluster_staged(ctx, plan).await;
                 }
                 Plan::AlterClusterRename(plan) => {
-                    let result = self
-                        .sequence_alter_cluster_rename(ctx.session_mut(), plan)
-                        .await;
+                    let result = self.sequence_alter_cluster_rename(&mut ctx, plan).await;
                     ctx.retire(result);
                 }
                 Plan::AlterClusterSwap(plan) => {
-                    let result = self
-                        .sequence_alter_cluster_swap(ctx.session_mut(), plan)
-                        .await;
+                    let result = self.sequence_alter_cluster_swap(&mut ctx, plan).await;
                     ctx.retire(result);
                 }
                 Plan::AlterClusterReplicaRename(plan) => {
@@ -470,21 +466,15 @@ impl Coordinator {
                     ctx.retire(result);
                 }
                 Plan::AlterItemRename(plan) => {
-                    let result = self
-                        .sequence_alter_item_rename(ctx.session_mut(), plan)
-                        .await;
+                    let result = self.sequence_alter_item_rename(&mut ctx, plan).await;
                     ctx.retire(result);
                 }
                 Plan::AlterSchemaRename(plan) => {
-                    let result = self
-                        .sequence_alter_schema_rename(ctx.session_mut(), plan)
-                        .await;
+                    let result = self.sequence_alter_schema_rename(&mut ctx, plan).await;
                     ctx.retire(result);
                 }
                 Plan::AlterSchemaSwap(plan) => {
-                    let result = self
-                        .sequence_alter_schema_swap(ctx.session_mut(), plan)
-                        .await;
+                    let result = self.sequence_alter_schema_swap(&mut ctx, plan).await;
                     ctx.retire(result);
                 }
                 Plan::AlterRole(plan) => {

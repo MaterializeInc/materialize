@@ -647,7 +647,7 @@ impl Coordinator {
         } = self.create_source_inner(ctx.session(), plans).await?;
 
         let transact_result = self
-            .catalog_transact_with_side_effects(Some(ctx), ops, |coord, ctx| {
+            .catalog_transact_with_ddl_transaction(ctx, ops, |coord, ctx| {
                 Box::pin(async move {
                     // TODO(roshan): This will be unnecessary when we drop support for
                     // automatically created subsources.
@@ -1178,7 +1178,7 @@ impl Coordinator {
         }];
 
         let catalog_result = self
-            .catalog_transact_with_side_effects(Some(ctx), ops, move |coord, ctx| {
+            .catalog_transact_with_ddl_transaction(ctx, ops, move |coord, ctx| {
                 Box::pin(async move {
                     // The table data_source determines whether this table will be written to
                     // by environmentd (e.g. with INSERT INTO statements) or by the storage layer
@@ -2317,9 +2317,7 @@ impl Coordinator {
             }),
         };
 
-        let result = self
-            .sequence_end_transaction_inner(ctx.session_mut(), action)
-            .await;
+        let result = self.sequence_end_transaction_inner(&mut ctx, action).await;
 
         let (response, action) = match result {
             Ok((Some(TransactionOps::Writes(writes)), _)) if writes.is_empty() => {
@@ -2431,10 +2429,10 @@ impl Coordinator {
     #[instrument]
     async fn sequence_end_transaction_inner(
         &mut self,
-        session: &mut Session,
+        ctx: &mut ExecuteContext,
         action: EndTransactionAction,
     ) -> Result<(Option<TransactionOps<Timestamp>>, Option<WriteLocks>), AdapterError> {
-        let txn = self.clear_transaction(session).await;
+        let txn = self.clear_transaction(ctx.session_mut()).await;
 
         if let EndTransactionAction::Commit = action {
             if let (Some(mut ops), write_lock_guards) = txn.into_ops_and_lock_guard() {
@@ -2457,6 +2455,7 @@ impl Coordinator {
                     TransactionOps::DDL {
                         ops,
                         state: _,
+                        side_effects,
                         revision,
                     } => {
                         // Make sure our catalog hasn't changed.
@@ -2464,8 +2463,20 @@ impl Coordinator {
                             return Err(AdapterError::DDLTransactionRace);
                         }
                         // Commit all of our queued ops.
-                        self.catalog_transact(Some(session), std::mem::take(ops))
-                            .await?;
+                        let ops = std::mem::take(ops);
+                        let side_effects = std::mem::take(side_effects);
+                        self.catalog_transact_with_side_effects(
+                            Some(ctx),
+                            ops,
+                            move |a, mut ctx| {
+                                Box::pin(async move {
+                                    for side_effect in side_effects {
+                                        side_effect(a, ctx.as_mut().map(|ctx| &mut **ctx)).await;
+                                    }
+                                })
+                            },
+                        )
+                        .await?;
                     }
                     _ => (),
                 }
@@ -3345,7 +3356,7 @@ impl Coordinator {
     #[instrument]
     pub(super) async fn sequence_alter_item_rename(
         &mut self,
-        session: &mut Session,
+        ctx: &mut ExecuteContext,
         plan: plan::AlterItemRenamePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let op = catalog::Op::RenameItem {
@@ -3354,7 +3365,7 @@ impl Coordinator {
             to_name: plan.to_name,
         };
         match self
-            .catalog_transact_with_ddl_transaction(session, vec![op])
+            .catalog_transact_with_ddl_transaction(ctx, vec![op], |_, _| Box::pin(async {}))
             .await
         {
             Ok(()) => Ok(ExecuteResponse::AlteredObject(plan.object_type)),
@@ -3407,7 +3418,7 @@ impl Coordinator {
     #[instrument]
     pub(super) async fn sequence_alter_schema_rename(
         &mut self,
-        session: &mut Session,
+        ctx: &mut ExecuteContext,
         plan: plan::AlterSchemaRenamePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let (database_spec, schema_spec) = plan.cur_schema_spec;
@@ -3418,7 +3429,7 @@ impl Coordinator {
             check_reserved_names: true,
         };
         match self
-            .catalog_transact_with_ddl_transaction(session, vec![op])
+            .catalog_transact_with_ddl_transaction(ctx, vec![op], |_, _| Box::pin(async {}))
             .await
         {
             Ok(()) => Ok(ExecuteResponse::AlteredObject(ObjectType::Schema)),
@@ -3429,7 +3440,7 @@ impl Coordinator {
     #[instrument]
     pub(super) async fn sequence_alter_schema_swap(
         &mut self,
-        session: &mut Session,
+        ctx: &mut ExecuteContext,
         plan: plan::AlterSchemaSwapPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let plan::AlterSchemaSwapPlan {
@@ -3460,7 +3471,9 @@ impl Coordinator {
         };
 
         match self
-            .catalog_transact_with_ddl_transaction(session, vec![op_a, op_b, op_c])
+            .catalog_transact_with_ddl_transaction(ctx, vec![op_a, op_b, op_c], |_, _| {
+                Box::pin(async {})
+            })
             .await
         {
             Ok(()) => Ok(ExecuteResponse::AlteredObject(ObjectType::Schema)),
