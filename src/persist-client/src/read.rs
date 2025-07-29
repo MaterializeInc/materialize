@@ -244,21 +244,31 @@ where
     T: Timestamp + TotalOrder + Lattice + Codec64 + Sync,
     D: Semigroup + Codec64 + Send + Sync,
 {
-    async fn new(mut handle: ReadHandle<K, V, T, D>, as_of: Antichain<T>) -> Self {
+    async fn new(
+        mut handle: ReadHandle<K, V, T, D>,
+        as_of: Antichain<T>,
+    ) -> Result<Self, Since<T>> {
+        let () = handle.machine.verify_listen(&as_of)?;
+
         let since = as_of.clone();
+        if !PartialOrder::less_equal(handle.since(), &since) {
+            // We can't guarantee that the as-of will be available by the time we start reading,
+            // since our handle is already downgraded too far.
+            return Err(Since(handle.since().clone()));
+        }
         // This listen only needs to distinguish things after its frontier
         // (initially as_of although the frontier is inclusive and the as_of
         // isn't). Be a good citizen and downgrade early.
         handle.downgrade_since(&since).await;
 
         let watch = handle.machine.applier.watch();
-        Listen {
+        Ok(Listen {
             handle,
             watch,
             since,
             frontier: as_of.clone(),
             as_of,
-        }
+        })
     }
 
     /// An exclusive upper bound on the progress of this Listen.
@@ -677,8 +687,7 @@ where
     /// `as_of` that would have been accepted.
     #[instrument(level = "debug", fields(shard = %self.machine.shard_id()))]
     pub async fn listen(self, as_of: Antichain<T>) -> Result<Listen<K, V, T, D>, Since<T>> {
-        let () = self.machine.verify_listen(&as_of)?;
-        Ok(Listen::new(self, as_of).await)
+        Listen::new(self, as_of).await
     }
 
     /// Returns all of the contents of the shard TVC at `as_of` broken up into
