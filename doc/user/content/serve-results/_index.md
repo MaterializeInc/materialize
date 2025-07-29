@@ -20,9 +20,12 @@ To serve results, you can:
 
 - [Sink results to to external systems](/serve-results/sink/)
 
+- [Use Foreign Data Wrapper (FDW)](/serve-results/fdw/)
+
 {{< multilinkbox >}}
 {{< linkbox title="SELECT/SUBSCRIBE statements" >}}
 - [Query using `SELECT` and `SUBSCRIBE`](/serve-results/query-results/)
+- [Use Foreign Data Wrapper (FDW)](/serve-results/fdw/)
 {{</ linkbox >}}
 {{< linkbox title="External BI tools" >}}
 - [Deepnote](/serve-results/bi-tools/deepnote/)
