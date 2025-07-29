@@ -125,6 +125,7 @@ class Materialized(Service):
             "MZ_BOOTSTRAP_ROLE=materialize",
             # TODO move this to the listener config?
             "MZ_INTERNAL_PERSIST_PUBSUB_LISTEN_ADDR=0.0.0.0:6879",
+            "MZ_PERSIST_PUBSUB_URL=http://127.0.0.1:6879",
             "MZ_AWS_CONNECTION_ROLE_ARN=arn:aws:iam::123456789000:role/MaterializeConnection",
             "MZ_AWS_EXTERNAL_ID_PREFIX=eb5cb59b-e2fe-41f3-87ca-d2176a495345",
             # Always use the persist catalog if the version has multiple implementations.
