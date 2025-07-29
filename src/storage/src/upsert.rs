@@ -46,7 +46,6 @@ use crate::healthcheck::HealthStatusUpdate;
 use crate::metrics::upsert::UpsertMetrics;
 use crate::storage_state::StorageInstanceContext;
 use crate::upsert_continual_feedback;
-use memory::InMemoryHashMap;
 use types::{
     BincodeOpts, StateValue, UpsertState, UpsertStateBackend, Value, consolidating_merge_function,
     upsert_bincode_opts,
@@ -252,31 +251,40 @@ where
 
     let thin_input = upsert_thinning(input);
 
-    if let Some(scratch_directory) = instance_context.scratch_directory.as_ref() {
-        let tuning = dataflow_paramters.upsert_rocksdb_tuning_config.clone();
+    let tuning = dataflow_paramters.upsert_rocksdb_tuning_config.clone();
 
-        tracing::info!(
-            worker_id = %source_config.worker_id,
-            source_id = %source_config.id,
-            ?tuning,
-            ?rocksdb_use_native_merge_operator,
-            "rendering upsert source with rocksdb-backed upsert state"
-        );
-        let rocksdb_shared_metrics = Arc::clone(&upsert_metrics.rocksdb_shared);
-        let rocksdb_instance_metrics = Arc::clone(&upsert_metrics.rocksdb_instance_metrics);
-        let rocksdb_dir = scratch_directory
+    let rocksdb_dir = match &instance_context.scratch_directory {
+        Some(root) => root
             .join("storage")
             .join("upsert")
             .join(source_config.id.to_string())
-            .join(source_config.worker_id.to_string());
+            .join(source_config.worker_id.to_string()),
+        None => {
+            // When running RocksDB in memory, the file system is emulated, so the path doesn't
+            // matter. However, we still need to pick one that exists on the host because of
+            // https://github.com/rust-rocksdb/rust-rocksdb/issues/1015.
+            "/tmp".into()
+        }
+    };
 
-        let env = instance_context.rocksdb_env.clone();
+    tracing::info!(
+        worker_id = %source_config.worker_id,
+        source_id = %source_config.id,
+        ?rocksdb_dir,
+        ?tuning,
+        ?rocksdb_use_native_merge_operator,
+        "rendering upsert source"
+    );
 
-        // A closure that will initialize and return a configured RocksDB instance
-        let rocksdb_init_fn = move || async move {
-            let merge_operator =
-                if rocksdb_use_native_merge_operator {
-                    Some((
+    let rocksdb_shared_metrics = Arc::clone(&upsert_metrics.rocksdb_shared);
+    let rocksdb_instance_metrics = Arc::clone(&upsert_metrics.rocksdb_instance_metrics);
+
+    let env = instance_context.rocksdb_env.clone();
+
+    // A closure that will initialize and return a configured RocksDB instance
+    let rocksdb_init_fn = move || async move {
+        let merge_operator = if rocksdb_use_native_merge_operator {
+            Some((
                         "upsert_state_snapshot_merge_v1".to_string(),
                         |a: &[u8],
                          b: ValueIterator<
@@ -289,63 +297,42 @@ where
                             )
                         },
                     ))
-                } else {
-                    None
-                };
-            rocksdb::RocksDB::new(
-                mz_rocksdb::RocksDBInstance::new(
-                    &rocksdb_dir,
-                    mz_rocksdb::InstanceOptions::new(
-                        env,
-                        rocksdb_cleanup_tries,
-                        merge_operator,
-                        // For now, just use the same config as the one used for
-                        // merging snapshots.
-                        upsert_bincode_opts(),
-                    ),
-                    tuning,
-                    rocksdb_shared_metrics,
-                    rocksdb_instance_metrics,
-                )
-                .unwrap(),
-            )
+        } else {
+            None
         };
+        rocksdb::RocksDB::new(
+            mz_rocksdb::RocksDBInstance::new(
+                &rocksdb_dir,
+                mz_rocksdb::InstanceOptions::new(
+                    env,
+                    rocksdb_cleanup_tries,
+                    merge_operator,
+                    // For now, just use the same config as the one used for
+                    // merging snapshots.
+                    upsert_bincode_opts(),
+                ),
+                tuning,
+                rocksdb_shared_metrics,
+                rocksdb_instance_metrics,
+            )
+            .unwrap(),
+        )
+    };
 
-        upsert_operator(
-            &thin_input,
-            upsert_envelope.key_indices,
-            resume_upper,
-            previous,
-            previous_token,
-            upsert_metrics,
-            source_config,
-            rocksdb_init_fn,
-            upsert_config,
-            storage_configuration,
-            prevent_snapshot_buffering,
-            snapshot_buffering_max,
-        )
-    } else {
-        tracing::info!(
-            worker_id = %source_config.worker_id,
-            source_id = %source_config.id,
-            "rendering upsert source with memory-backed upsert state",
-        );
-        upsert_operator(
-            &thin_input,
-            upsert_envelope.key_indices,
-            resume_upper,
-            previous,
-            previous_token,
-            upsert_metrics,
-            source_config,
-            || async { InMemoryHashMap::default() },
-            upsert_config,
-            storage_configuration,
-            prevent_snapshot_buffering,
-            snapshot_buffering_max,
-        )
-    }
+    upsert_operator(
+        &thin_input,
+        upsert_envelope.key_indices,
+        resume_upper,
+        previous,
+        previous_token,
+        upsert_metrics,
+        source_config,
+        rocksdb_init_fn,
+        upsert_config,
+        storage_configuration,
+        prevent_snapshot_buffering,
+        snapshot_buffering_max,
+    )
 }
 
 // A shim so we can dispatch based on the dyncfg that tells us which upsert
