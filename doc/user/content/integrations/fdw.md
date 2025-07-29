@@ -7,8 +7,7 @@ menu:
     weight: 30
 ---
 
-Materialize's support for PostgreSQL Foreign Data Wrappers (FDWs) allows users
-to query remote data as if it were local.
+Materialize can be used as a remote server in a PostgreSQL foreign data wrapper (FDW). This allows you to query any object in Materialize as foreign tables from a PostgreSQL-compatible database. These objects appear as part of the local schema, making them accessible over an existing Postgres connection without requiring changes to application logic or tooling.
 
 ## Prerequisite
 
