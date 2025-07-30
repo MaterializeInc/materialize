@@ -34,10 +34,7 @@ pub async fn stop_capture_jobs(
 
     // It's very error prone to try and catch this when it is running to stop it.
     // We need to retry here as the stored procedure errors if the job is not running.
-    loop {
-        let Err(error) = client.execute(STOP_CDC_JOBS, &[]).await else {
-            break;
-        };
+    while let Err(error) = client.execute(STOP_CDC_JOBS, &[]).await {
         if timer.elapsed() < max_duration {
             tokio::time::sleep(Duration::from_millis(100)).await;
         } else {
@@ -62,9 +59,7 @@ pub async fn run_cdc_scan(
     let max_duration = std::cmp::max(state.default_timeout, Duration::from_secs(10));
     let timer = Instant::now();
     static CDC_SCAN: &str = "EXEC sys.sp_cdc_scan @continuous = 0, @maxscans = 1;";
-    loop {
-        let Err(error) = client.execute(CDC_SCAN, &[]).await else {
-            break;
+    while let Err(error) = client.execute(CDC_SCAN, &[]).await {
         };
 
         // retry if there is another CDC scan going on
