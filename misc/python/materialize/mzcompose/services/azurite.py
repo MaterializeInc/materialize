@@ -21,7 +21,7 @@ class Azurite(Service):
         name: str = "azurite",
         aliases: list[str] = ["azurite", "devstoreaccount1.azurite"],
         command: list[str] | None = None,
-        in_memory: bool = False,
+        in_memory: bool = True,
         healthcheck: ServiceHealthcheck | None = None,
         stop_grace_period: str = "120s",
         ports: list[int | str] = [10000],

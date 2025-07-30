@@ -40,10 +40,10 @@ SERVICES = [
     MySql(),
     Azurite(),
     Mz(app_password=""),
-    Minio(setup_materialize=True, additional_directories=["copytos3"]),
-    Materialized(external_blob_store=True),
+    Minio(additional_directories=["copytos3"], in_memory=None),
+    Materialized(),
     FivetranDestination(volumes_extra=["tmp:/share/tmp"]),
-    Testdrive(external_blob_store=True),
+    Testdrive(),
 ]
 
 
@@ -129,7 +129,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     materialized = Materialized(
         default_size=args.default_size,
-        external_blob_store=True,
         blob_store_is_azure=args.azurite,
         additional_system_parameter_defaults=additional_system_parameter_defaults,
         default_replication_factor=1,
@@ -141,7 +140,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         validate_catalog_store=True,
         default_timeout=args.default_timeout,
         volumes_extra=["mzdata:/mzdata"],
-        external_blob_store=True,
         blob_store_is_azure=args.azurite,
         fivetran_destination=True,
         fivetran_destination_files_path="/share/tmp",

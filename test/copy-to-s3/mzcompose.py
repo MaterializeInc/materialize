@@ -33,6 +33,7 @@ SERVICES = [
         additional_directories=["copytos3"],
         ports=["9000:9000", "9001:9001"],
         allow_host_ports=True,
+        in_memory=None,
     ),
     Mz(app_password=""),
     Materialized(

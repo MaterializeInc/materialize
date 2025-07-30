@@ -26,6 +26,7 @@ class Minio(Service):
         additional_directories: list[str] = [],
         ports: list[int | str] = [9000, 9001],
         allow_host_ports: bool = False,
+        in_memory: str | None = "1g",
     ) -> None:
         # We can pre-create buckets in minio by creating subdirectories in
         # /data. A bit gross to do this via a shell command, but it's net
@@ -35,6 +36,7 @@ class Minio(Service):
             command = f"mkdir -p /data/persist && {command}"
         for dir in additional_directories:
             command = f"mkdir -p /data/{dir} && {command}"
+        tmpfs = [f"/data:size={in_memory}"] if in_memory else []
         super().__init__(
             name=name,
             config={
@@ -43,6 +45,7 @@ class Minio(Service):
                 "image": image,
                 "ports": ports,
                 "allow_host_ports": allow_host_ports,
+                "tmpfs": tmpfs,
                 "environment": [
                     "MINIO_STORAGE_CLASS_STANDARD=EC:0",
                     "MINIO_HEAL_DISABLE=on",

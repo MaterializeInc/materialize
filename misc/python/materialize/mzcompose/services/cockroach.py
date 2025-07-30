@@ -31,7 +31,7 @@ class Cockroach(Service):
         image: str | None = None,
         command: list[str] | None = None,
         setup_materialize: bool = True,
-        in_memory: bool = False,
+        in_memory: bool = True,
         healthcheck: ServiceHealthcheck | None = None,
         # Workaround for database-issues#5898, should be "no" otherwise
         restart: str = "on-failure:5",

@@ -91,7 +91,7 @@ SERVICES = [
         # Workaround for database-issues#5899
         restart="on-failure:5",
     ),
-    Minio(setup_materialize=True, additional_directories=["copytos3"]),
+    Minio(setup_materialize=True, additional_directories=["copytos3"], in_memory="2g"),
     Azurite(),
     Mc(),
     Postgres(),

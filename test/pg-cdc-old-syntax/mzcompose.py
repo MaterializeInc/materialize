@@ -100,7 +100,7 @@ SERVICES = [
         additional_system_parameter_defaults={
             "log_filter": "mz_storage::source::postgres=trace,debug,info,warn,error"
         },
-        external_blob_store=True,
+        external_blob_store=False,
         default_replication_factor=2,
     ),
     Testdrive(),

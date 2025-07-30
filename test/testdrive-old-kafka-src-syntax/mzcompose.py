@@ -49,7 +49,7 @@ SERVICES = [
     Minio(setup_materialize=True, additional_directories=["copytos3"]),
     Azurite(),
     Mz(app_password=""),
-    Materialized(external_blob_store=True),
+    Materialized(external_blob_store=False),
     CockroachOrPostgresMetadata(),
     FivetranDestination(volumes_extra=["tmp:/share/tmp"]),
     Testdrive(external_blob_store=True),
@@ -139,7 +139,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     materialized = Materialized(
         default_size=args.default_size,
-        external_blob_store=True,
+        external_blob_store=False,
         blob_store_is_azure=args.azurite,
         additional_system_parameter_defaults=additional_system_parameter_defaults,
         default_replication_factor=1,

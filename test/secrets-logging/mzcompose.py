@@ -19,7 +19,6 @@ from materialize.mzcompose.services.azurite import Azurite
 from materialize.mzcompose.services.fivetran_destination import FivetranDestination
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
-from materialize.mzcompose.services.minio import Minio
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.postgres import Postgres
@@ -37,7 +36,6 @@ SERVICES = [
     MySql(),
     Azurite(),
     Mz(app_password=""),
-    Minio(setup_materialize=True, additional_directories=["copytos3"]),
     Materialized(),
     FivetranDestination(volumes_extra=["tmp:/share/tmp"]),
     Testdrive(),
@@ -59,7 +57,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "materialized",
         "postgres",
         "mysql",
-        "minio",
         "zookeeper",
         "kafka",
         "schema-registry",

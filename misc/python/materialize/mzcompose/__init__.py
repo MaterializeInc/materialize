@@ -117,6 +117,7 @@ def get_minimal_system_parameters(
         "grpc_client_http2_keep_alive_timeout": "5s",
         "ore_overflowing_behavior": "panic",
         "persist_stats_audit_percent": "100",
+        "persist_use_postgres_tuned_queries": "true",
         "unsafe_enable_table_keys": "true",
         "with_0dt_deployment_max_wait": "1800s",
         # End of list (ordered by name)

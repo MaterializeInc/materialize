@@ -58,7 +58,7 @@ def create_mysql_replica(mysql_version: str) -> MySql:
 SERVICES = [
     Mz(app_password=""),
     Materialized(
-        external_blob_store=True,
+        external_blob_store=False,
         additional_system_parameter_defaults={
             "log_filter": "mz_storage::source::mysql=trace,info"
         },

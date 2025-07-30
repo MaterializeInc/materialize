@@ -55,6 +55,7 @@ SERVICES = [
         ports=["40109:9000", "40110:9001"],
         allow_host_ports=True,
         additional_directories=["copytos3"],
+        in_memory=None,
     ),
     Azurite(
         ports=["40111:10000"],

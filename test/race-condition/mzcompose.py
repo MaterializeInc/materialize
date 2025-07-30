@@ -20,7 +20,7 @@ from uuid import uuid4
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
-from materialize.mzcompose.services.minio import Mc, Minio
+from materialize.mzcompose.services.minio import Mc
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
@@ -42,7 +42,6 @@ SERVICES = [
         ],
     ),
     SchemaRegistry(),
-    Minio(setup_materialize=True, additional_directories=["copytos3"]),
     Testdrive(no_reset=True, consistent_seed=True, default_timeout="600s"),
     Mc(),
     Materialized(default_replication_factor=2),
@@ -54,8 +53,6 @@ SERVICE_NAMES = [
     "zookeeper",
     "kafka",
     "schema-registry",
-    # Still required for backups/s3 testing even when we use Azurite as blob store
-    "minio",
     "materialized",
 ]
 

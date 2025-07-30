@@ -48,7 +48,7 @@ SERVICES = [
         ],
     ),
     SchemaRegistry(),
-    Minio(setup_materialize=True, additional_directories=["copytos3"]),
+    Minio(setup_materialize=True, additional_directories=["copytos3"], in_memory=None),
     Azurite(),
     Mc(),
     Materialized(default_replication_factor=2),
