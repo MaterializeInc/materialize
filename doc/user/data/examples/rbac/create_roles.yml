@@ -1,0 +1,26 @@
+- name: "create-role-view-manager"
+  description: |
+
+    Create a role for users who need to perform compute/transform operations in
+    the compute/transform cluster(s). This role will handle creating views,
+    materialized views, and other transformation objects.
+
+  code: |
+    CREATE ROLE view_manager;
+
+- name: "create-role-serving-index-manager"
+  description: |
+
+    Create a role for users who need to manage indexes on the serving
+    cluster(s). This role will handle creating indexes to serve results.
+
+  code: |
+    CREATE ROLE serving_index_manager;
+
+- name: "create-role-data-reader"
+  description: |
+
+    Create a role for users who need to read results from the serving cluster.
+
+  code: |
+    CREATE ROLE data_reader;

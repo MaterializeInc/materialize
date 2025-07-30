@@ -1,0 +1,21 @@
+- name: "all-roles"
+  description: |
+
+    For example, to show all roles:
+  code: |
+    SHOW ROLES;
+
+  results: |
+
+    The results should list all roles:
+
+    ```none
+             name          | comment
+    -----------------------+---------
+    blue.berry@example.com |
+    data_reader            |
+    lemon@example.com      |
+    sales_report_app       |
+    serving_index_manager  |
+    view_manager           |
+    ```

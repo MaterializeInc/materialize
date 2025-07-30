@@ -1,0 +1,22 @@
+{{- $pathArray := split (lower (.Get "file")) "/" -}}
+{{- $data := .Site.Data -}}
+{{- range $pathArray }}
+  {{- $data = index $data . -}}
+{{- end }}
+{{- $example := .Get "example" -}}
+{{- range $data }}
+{{- if eq .name $example }}
+{{ .description | markdownify }}
+
+{{- if .code }}
+
+```mzsql
+{{ .code | safeHTML }}
+```
+{{- end }}
+
+{{- if .results }}
+{{ .results | markdownify }}
+{{- end }}
+{{- end }}
+{{- end }}
