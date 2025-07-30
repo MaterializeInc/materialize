@@ -18,9 +18,9 @@ Server](/ingest-data/sql-server/).
 
 ### Basic Authentication for HTTP interface
 
-v25.2.3 bumps the `environmentd` version 0.147.4 which supports TLS connections
-for SQL Server. For more information, see [Integrations HTTP
-API](/integrations/http-api).
+v25.2.3 bumps the `environmentd` version 0.147.4 which supports basic
+authentication for the HTTP interface. For more information, see [Integrations
+HTTP API](/integrations/http-api).
 
 ## v25.2.0
 
@@ -59,7 +59,7 @@ Self-managed v25.2 also includes various improvements to the Console:
 - Copy button for queries
 - Syntax error highlighting
 
-## Improved `EXPLAIN`
+### Improved `EXPLAIN`
 
 The following improvements to `EXPLAIN` are now available in v25.2:
 
