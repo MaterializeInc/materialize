@@ -70,9 +70,9 @@ Materialize can also optionally be built with [Bazel](https://bazel.build/). To
 learn more about Bazel and how it's setup at Materialize, checkout our
 [Bazel documentation](/doc/developer/bazel.md).
 
-### CockroachDB
+### Metadata store
 
-Running Materialize locally requires a running CockroachDB server.
+Running Materialize locally requires a running Postgres / CockroachDB server.
 
 On macOS, when using Homebrew, CockroachDB can be installed and started via:
 
@@ -94,6 +94,48 @@ docker run --name=cockroach -d -p 127.0.0.1:26257:26257 -p 127.0.0.1:26258:8080 
 If you can successfully connect to CockroachDB with either
 `psql postgres://root@localhost:26257` or `cockroach sql --insecure`, you're
 all set.
+
+### Eatmydata
+
+If you are just testing Materialize locally and don't care about data loss you can run environmentd with `eatmydata environmentd`, which will disable fsync calls.
+
+Similarly postgres as the metadata store can be instructed to eat your data using `echo LD_PRELOAD=libeatmydata.so > /etc/postgresql/16/main/environment`, and then restarting it.
+
+On my Linux system without `eatmydata` for both Materialize and Postgres, running with `bin/environmentd --reset --optimized --no-default-features --postgres=postgres://deen@%2Fvar%2Frun%2Fpostgresql`:
+```
+DROP TABLE
+Time: 105.810 ms
+CREATE TABLE
+Time: 163.484 ms
+```
+
+After enabling `eatmydata` in Materialize and Postgres:
+```
+DROP TABLE
+Time: 7.951 ms
+CREATE TABLE
+Time: 10.459 ms
+```
+
+Or in mzcompose:
+```bash
+docker run --env MZ_EAT_MY_DATA=1 -p 127.0.0.1:6875:6875 materialize/materialized:latest
+```
+
+Before:
+```
+DROP TABLE
+Time: 133.021 ms
+CREATE TABLE
+Time: 111.492 ms
+```
+After:
+```
+DROP TABLE
+Time: 6.504 ms
+CREATE TABLE
+Time: 8.773 ms
+```
 
 ### Python
 
