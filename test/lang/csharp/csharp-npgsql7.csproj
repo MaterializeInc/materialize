@@ -15,7 +15,7 @@ the Business Source License, use of this software will be governed
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="npgsql" Version="5.0.18" />
+    <PackageReference Include="npgsql" Version="7.0.10" />
     <PackageReference Include="NUnit" Version="3.12.0" />
     <PackageReference Include="NUnit3TestAdapter" Version="3.16.1" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="16.5.0" />
