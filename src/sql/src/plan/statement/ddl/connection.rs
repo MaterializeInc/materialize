@@ -360,7 +360,7 @@ impl ConnectionOptionExtracted {
                 if let Some(privatelink) = self.aws_privatelink.as_ref() {
                     if privatelink.port.is_some() {
                         sql_bail!(
-                            "invalid CONNECTION: PORT in AWS PRIVATELINK is only supported for kafka"
+                            "invalid CONNECTION: CONFLUENT SCHEMA REGISTRY does not support PORT for AWS PRIVATELINK"
                         )
                     }
                 }
@@ -406,7 +406,7 @@ impl ConnectionOptionExtracted {
                 if let Some(privatelink) = self.aws_privatelink.as_ref() {
                     if privatelink.port.is_some() {
                         sql_bail!(
-                            "invalid CONNECTION: PORT in AWS PRIVATELINK is only supported for kafka"
+                            "invalid CONNECTION: POSTGRES does not support PORT for AWS PRIVATELINK"
                         )
                     }
                 }
@@ -512,7 +512,7 @@ impl ConnectionOptionExtracted {
                 if let Some(privatelink) = self.aws_privatelink.as_ref() {
                     if privatelink.port.is_some() {
                         sql_bail!(
-                            "invalid CONNECTION: PORT in AWS PRIVATELINK is only supported for kafka"
+                            "invalid CONNECTION: MYSQL does not support PORT for AWS PRIVATELINK"
                         )
                     }
                 }
@@ -538,13 +538,10 @@ impl ConnectionOptionExtracted {
                 scx.require_feature_flag(&vars::ENABLE_SQL_SERVER_SOURCE)?;
 
                 let aws_connection = get_aws_connection_reference(scx, &self)?;
-                // TODO(sql_server2): Support AWS connections for SQL Server. Nothing fundamental
-                // prevents this, just need to wire it up.
-                if aws_connection.is_some() {
-                    return Err(PlanError::Unsupported {
-                        feature: "AWS CONNECTION with SQL Server".to_string(),
-                        discussion_no: None,
-                    });
+                if aws_connection.is_some() && self.password.is_some() {
+                    sql_bail!(
+                        "invalid CONNECTION: AWS IAM authentication is not supported with password"
+                    );
                 }
 
                 let (encryption, certificate_validation_policy) = match self
@@ -580,6 +577,14 @@ impl ConnectionOptionExtracted {
                         sql_bail!("invalid CONNECTION: unknown SSL MODE {}", mode.quoted())
                     }
                 };
+
+                if let Some(privatelink) = self.aws_privatelink.as_ref() {
+                    if privatelink.port.is_some() {
+                        sql_bail!(
+                            "invalid CONNECTION: SQL SERVER does not support PORT for AWS PRIVATELINK"
+                        )
+                    }
+                }
 
                 // 1433 is the default port for SQL Server instances running over TCP.
                 //

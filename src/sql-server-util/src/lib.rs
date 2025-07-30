@@ -17,6 +17,7 @@ use anyhow::Context;
 use derivative::Derivative;
 use futures::future::BoxFuture;
 use futures::{FutureExt, Stream, StreamExt, TryStreamExt};
+use mz_ore::netio::DUMMY_DNS_PORT;
 use mz_ore::result::ResultExt;
 use mz_repr::ScalarType;
 use smallvec::{SmallVec, smallvec};
@@ -87,12 +88,28 @@ impl Client {
 
                 (tcp, Some(Box::new(tunnel)))
             }
-            TunnelConfig::AwsPrivatelink { connection_id: _ } => {
-                // TODO(sql_server2): Getting this right is tricky because
-                // there is some subtle logic with hostname validation.
-                return Err(SqlServerError::Generic(anyhow::anyhow!(
-                    "Support PrivateLink connections"
-                )));
+            TunnelConfig::AwsPrivatelink {
+                connection_id,
+                port,
+            } => {
+                let privatelink_host = mz_cloud_resources::vpc_endpoint_name(*connection_id);
+                let mut privatelink_addrs =
+                    tokio::net::lookup_host((privatelink_host.clone(), DUMMY_DNS_PORT)).await?;
+
+                let Some(mut addr) = privatelink_addrs.next() else {
+                    return Err(SqlServerError::InvariantViolated(format!(
+                        "aws privatelink: no addresses found for host {:?}",
+                        privatelink_host
+                    )));
+                };
+
+                addr.set_port(port.clone());
+
+                let tcp = TcpStream::connect(addr)
+                    .await
+                    .context(format!("aws privatelink {:?}", addr))?;
+
+                (tcp, None)
             }
         };
 

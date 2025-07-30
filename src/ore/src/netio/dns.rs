@@ -19,7 +19,10 @@ use std::net::IpAddr;
 
 use tokio::net::lookup_host;
 
-const DUMMY_PORT: u16 = 11111;
+/// We must provide a port for dns resolution but
+/// dns resolution ignores the port so we use a port
+/// that is easy to spot in logs.
+pub const DUMMY_DNS_PORT: u16 = 11111;
 
 /// An error returned by `resolve_address`.
 #[derive(thiserror::Error, Debug)]
@@ -44,7 +47,7 @@ pub async fn resolve_address(
     enforce_global: bool,
 ) -> Result<BTreeSet<IpAddr>, DnsResolutionError> {
     // `net::lookup_host` requires a port to be specified, but we don't care about the port.
-    let mut port = DUMMY_PORT;
+    let mut port = DUMMY_DNS_PORT;
     // If a port is already specified, use it and remove it from the host.
     if let Some(idx) = host.find(':') {
         if let Ok(p) = host[idx + 1..].parse() {

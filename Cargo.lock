@@ -7411,6 +7411,7 @@ dependencies = [
  "hex",
  "itertools 0.14.0",
  "mz-build-tools",
+ "mz-cloud-resources",
  "mz-ore",
  "mz-proto",
  "mz-repr",

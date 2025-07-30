@@ -80,6 +80,7 @@ pub enum TunnelConfig {
     AwsPrivatelink {
         /// The ID of the AWS PrivateLink service.
         connection_id: CatalogItemId,
+        port: u16,
     },
 }
 

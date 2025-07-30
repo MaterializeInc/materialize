@@ -23,7 +23,7 @@ mod socket;
 mod timeout;
 
 pub use crate::netio::async_ready::AsyncReady;
-pub use crate::netio::dns::{DnsResolutionError, resolve_address};
+pub use crate::netio::dns::{DUMMY_DNS_PORT, DnsResolutionError, resolve_address};
 pub use crate::netio::framed::{FrameTooBig, MAX_FRAME_SIZE};
 pub use crate::netio::read_exact::{ReadExactOrEof, read_exact_or_eof};
 pub use crate::netio::socket::{Listener, SocketAddr, SocketAddrType, Stream, UnixSocketAddr};
