@@ -87,7 +87,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     postgres_url = (
         f"postgres://postgres:postgres@localhost:{c.default_port('postgres')}"
     )
-    cockroach_url = f"postgres://root@localhost:{c.default_port(c.metadata_store())}"
+    metadata_backend_url = (
+        f"postgres://root@localhost:{c.default_port(c.metadata_store())}"
+    )
 
     env = dict(
         os.environ,
@@ -95,12 +97,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         KAFKA_ADDRS="localhost:30123",
         SCHEMA_REGISTRY_URL=f"http://localhost:{c.default_port('schema-registry')}",
         POSTGRES_URL=postgres_url,
-        COCKROACH_URL=cockroach_url,
+        METADATA_BACKEND_URL=metadata_backend_url,
         MZ_SOFT_ASSERTIONS="1",
         MZ_PERSIST_EXTERNAL_STORAGE_TEST_S3_BUCKET="mz-test-persist-1d-lifecycle-delete",
         MZ_S3_UPLOADER_TEST_S3_BUCKET="mz-test-1d-lifecycle-delete",
         MZ_PERSIST_EXTERNAL_STORAGE_TEST_AZURE_CONTAINER="mz-test-azure",
-        MZ_PERSIST_EXTERNAL_STORAGE_TEST_POSTGRES_URL=cockroach_url,
+        MZ_PERSIST_EXTERNAL_STORAGE_TEST_POSTGRES_URL=metadata_backend_url,
     )
 
     coverage = ui.env_is_truthy("CI_COVERAGE_ENABLED")

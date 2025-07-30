@@ -106,7 +106,7 @@ impl From<PostgresTimestampOracleConfig> for PostgresClientConfig {
 }
 
 impl PostgresTimestampOracleConfig {
-    pub(crate) const EXTERNAL_TESTS_POSTGRES_URL: &'static str = "COCKROACH_URL";
+    pub(crate) const EXTERNAL_TESTS_POSTGRES_URL: &'static str = "METADATA_BACKEND_URL";
 
     /// Returns a new instance of [`PostgresTimestampOracleConfig`] with default tuning.
     pub fn new(url: &SensitiveUrl, metrics_registry: &MetricsRegistry) -> Self {
@@ -125,7 +125,7 @@ impl PostgresTimestampOracleConfig {
     ///
     /// By default, postgres oracle tests are no-ops so that `cargo test` works
     /// on new environments without any configuration. To activate the tests for
-    /// [`PostgresTimestampOracle`] set the `COCKROACH_URL` environment variable
+    /// [`PostgresTimestampOracle`] set the `METADATA_BACKEND_URL` environment variable
     /// with a valid connection url [1].
     ///
     /// [1]: https://docs.rs/tokio-postgres/latest/tokio_postgres/config/struct.Config.html#url

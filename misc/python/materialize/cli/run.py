@@ -11,7 +11,6 @@
 
 import argparse
 import atexit
-import getpass
 import json
 import os
 import pathlib
@@ -24,11 +23,10 @@ import tempfile
 import time
 import uuid
 from datetime import datetime, timedelta
-from urllib.parse import parse_qsl, urlparse
+from urllib.parse import urlparse
 
-import pg8000.exceptions
-import pg8000.native
 import psutil
+import psycopg
 
 from materialize import MZ_ROOT, rustc_flags, spawn, ui
 from materialize.bazel import remote_cache_arg
@@ -241,7 +239,6 @@ def main() -> int:
         if args.program == "environmentd":
             _handle_lingering_services(kill=args.reset)
             scratch = MZ_ROOT / "scratch"
-            urlparse(args.postgres).path.removeprefix("/")
             dbconn = _connect_sql(args.postgres)
             for schema in ["consensus", "tsoracle", "storage"]:
                 if args.reset:
@@ -336,7 +333,7 @@ def main() -> int:
         for test in args.test:
             command += ["--test", test]
         command += args.args
-        env["COCKROACH_URL"] = args.postgres
+        env["METADATA_BACKEND_URL"] = args.postgres
         # some tests run into stack overflows
         env["RUST_MIN_STACK"] = "4194304"
         dbconn = _connect_sql(args.postgres)
@@ -552,7 +549,7 @@ def _macos_codesign(path: str) -> None:
     spawn.runv(command, env=env)
 
 
-def _connect_sql(urlstr: str) -> pg8000.native.Connection:
+def _connect_sql(urlstr: str) -> psycopg.Connection:
     hint = """Have you correctly configured CockroachDB or PostgreSQL?
 
 For CockroachDB:
@@ -562,23 +559,15 @@ For PostgreSQL:
     1. Install PostgreSQL
     2. Create a database: `createdb materialize`
     3. Set the MZDEV_POSTGRES environment variable accordingly: `export MZDEV_POSTGRES=postgres://localhost/materialize`"""
-    url = urlparse(urlstr)
-    database = url.path.removeprefix("/")
     try:
-        dbconn = pg8000.native.Connection(
-            host=url.hostname or "localhost",
-            port=url.port or 5432,
-            user=url.username or getpass.getuser(),
-            password=url.password,
-            database=database,
-            startup_params={key: value for key, value in parse_qsl(url.query)},
-        )
-    except pg8000.exceptions.DatabaseError as e:
+        dbconn = psycopg.connect(urlstr)
+        dbconn.autocommit = True
+    except psycopg.DatabaseError as e:
         raise UIError(
-            f"unable to connect to metadata database: {e.args[0]['M']}",
+            f"unable to connect to metadata database: {e}",
             hint=hint,
         )
-    except pg8000.exceptions.InterfaceError as e:
+    except psycopg.InterfaceError as e:
         raise UIError(
             f"unable to connect to metadata database: {e}",
             hint=hint,
@@ -587,20 +576,27 @@ For PostgreSQL:
     # For CockroachDB, after connecting, we can ensure the database exists. For
     # PostgreSQL, the database must exist for us to connect to it at all--we
     # declare it to be the user's problem to create this database.
-    if "crdb_version" in dbconn.parameter_statuses:
-        if not database:
-            raise UIError(
-                f"database name is missing in the postgres URL: {urlstr}",
-                hint="When connecting to CockroachDB, the database name is required.",
-            )
-        _run_sql(dbconn, f"CREATE DATABASE IF NOT EXISTS {database}")
+    url = urlparse(urlstr)
+    database = url.path.removeprefix("/")
+    with dbconn.cursor() as cur:
+        try:
+            cur.execute("SHOW crdb_version")
+            if not database:
+                raise UIError(
+                    f"database name is missing in the postgres URL: {urlstr}",
+                    hint="When connecting to CockroachDB, the database name is required.",
+                )
+        except psycopg.errors.UndefinedObject:
+            return dbconn
 
+    _run_sql(dbconn, f"CREATE DATABASE IF NOT EXISTS {database}")
     return dbconn
 
 
-def _run_sql(conn: pg8000.native.Connection, sql: str) -> None:
+def _run_sql(conn: psycopg.Connection, sql: str) -> None:
     print(f"> {sql}")
-    conn.run(sql)
+    with conn.cursor() as cur:
+        cur.execute(sql.encode("utf-8"))
 
 
 def _handle_lingering_services(kill: bool = False) -> None:

@@ -47,7 +47,7 @@ build --test_output=all
 #
 # TODO(parkmycar): Switch over to using `env_inherit` on `rust_test` once that's stable.
 # <https://github.com/bazelbuild/rules_rust/pull/2809>
-build --test_env=COCKROACH_URL
+build --test_env=METADATA_BACKEND_URL
 
 # Allows spaces to in filenames, without this Rust Doc tests fail to build.
 build:macos --experimental_inprocess_symlink_creation
