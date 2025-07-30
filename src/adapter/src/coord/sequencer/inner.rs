@@ -761,8 +761,11 @@ impl Coordinator {
                     // ever called with, hedge our bets a bit and collect the compaction windows for
                     // each id in the bundle (these should all be identical). This is some extra work
                     // but seems safer.
-                    let read_policies = coord.catalog().state().source_compaction_windows(item_ids);
-                    for (compaction_window, storage_policies) in read_policies {
+                    let read_policies = coord
+                        .catalog()
+                        .state()
+                        .source_compaction_windows(dbg!(item_ids));
+                    for (compaction_window, storage_policies) in dbg!(read_policies) {
                         coord
                             .initialize_storage_read_policies(storage_policies, compaction_window)
                             .await;

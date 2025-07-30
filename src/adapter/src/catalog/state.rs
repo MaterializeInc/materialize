@@ -2497,9 +2497,8 @@ impl CatalogState {
         ids: impl IntoIterator<Item = CatalogItemId>,
     ) -> BTreeMap<CompactionWindow, BTreeSet<CatalogItemId>> {
         let mut cws: BTreeMap<CompactionWindow, BTreeSet<CatalogItemId>> = BTreeMap::new();
-        let mut ids = VecDeque::from_iter(ids);
         let mut seen = BTreeSet::new();
-        while let Some(item_id) = ids.pop_front() {
+        for item_id in ids {
             if !seen.insert(item_id) {
                 continue;
             }
@@ -2511,7 +2510,7 @@ impl CatalogState {
                         DataSourceDesc::Ingestion { .. } => {
                             // For sources, look up each dependent source export and propagate.
                             cws.entry(source_cw).or_default().insert(item_id);
-                            ids.extend(entry.used_by());
+                            // ids.extend(entry.used_by());
                         }
                         DataSourceDesc::IngestionExport { ingestion_id, .. } => {
                             // For subsources, look up the parent source and propagate the compaction
