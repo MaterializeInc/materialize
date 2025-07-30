@@ -547,8 +547,8 @@ impl Listeners {
         let scratch_dir = tempfile::tempdir()?;
         let (consensus_uri, timestamp_oracle_url) = {
             let seed = config.seed;
-            let cockroach_url = env::var("COCKROACH_URL")
-                .map_err(|_| anyhow!("COCKROACH_URL environment variable is not set"))?;
+            let cockroach_url = env::var("METADATA_BACKEND_URL")
+                .map_err(|_| anyhow!("METADATA_BACKEND_URL environment variable is not set"))?;
             let (client, conn) = tokio_postgres::connect(&cockroach_url, NoTls).await?;
             mz_ore::task::spawn(|| "startup-postgres-conn", async move {
                 if let Err(err) = conn.await {

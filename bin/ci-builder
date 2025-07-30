@@ -219,7 +219,7 @@ case "$cmd" in
             --env SCHEMA_REGISTRY_URL
             --env STEP_START_TIMESTAMP_WITH_TZ
             --env POSTGRES_URL
-            --env COCKROACH_URL
+            --env METADATA_BACKEND_URL
             # For ci-closed-issues-detect
             --env GITHUB_CI_ISSUE_REFERENCE_CHECKER_TOKEN
             # For auto_cut_release

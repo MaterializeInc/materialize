@@ -507,7 +507,7 @@ impl Catalog {
     }
 
     /// Creates a debug catalog from the current
-    /// `COCKROACH_URL` with parameters set appropriately for debug contexts,
+    /// `METADATA_BACKEND_URL` with parameters set appropriately for debug contexts,
     /// like in tests.
     ///
     /// WARNING! This function can arbitrarily fail because it does not make any
