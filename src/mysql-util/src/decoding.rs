@@ -149,17 +149,26 @@ fn pack_val_as_datum(
                                 packer.push(Datum::String(data));
                             }
                             Value::Int(val) => {
-                                // Enum types are provided as 1-indexed integers in the replication
-                                // stream, so we need to find the string value from the enum meta
-                                let enum_val =
-                                    e.values.get(usize::try_from(val)? - 1).ok_or_else(|| {
+                                let enum_int = usize::try_from(val)?;
+
+                                // If mysql strict mode is disabled when an invalid entry is inserted
+                                // then the entry will be replicated as a 0. Outside the 1 indexed enum.
+                                // https://dev.mysql.com/doc/refman/8.4/en/enum.html#enum-indexes
+                                if enum_int == 0 {
+                                    packer.push(Datum::String(""));
+                                } else {
+                                    // Enum types are provided as 1-indexed integers in the replication
+                                    // stream, so we need to find the string value from the enum meta
+                                    let enum_val = e.values.get(enum_int - 1).ok_or_else(|| {
                                         anyhow::anyhow!(
                                             "received invalid enum value: {} for column {}",
                                             val,
                                             col_desc.name
                                         )
                                     })?;
-                                packer.push(Datum::String(enum_val));
+
+                                    packer.push(Datum::String(enum_val));
+                                }
                             }
                             _ => Err(anyhow::anyhow!(
                                 "received unexpected value for enum type: {:?}",
