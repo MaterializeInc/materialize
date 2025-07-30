@@ -458,15 +458,15 @@ pub async fn dump_self_managed_http_resources(
                 "Dumping heap profile for service {}",
                 service_info.service_name
             );
-            dump_task
+            if let Err(e) = dump_task
                 .dump_heap_profile(&profiling_endpoint, &service_info.service_name)
                 .await
-                .with_context(|| {
-                    format!(
-                        "Failed to dump heap profile for service {}",
-                        service_info.service_name
-                    )
-                })?;
+            {
+                warn!(
+                    "Failed to dump heap profile for service {}: {:#}",
+                    service_info.service_name, e
+                );
+            }
         }
 
         if context.dump_prometheus_metrics {
@@ -480,15 +480,15 @@ pub async fn dump_self_managed_http_resources(
                 "Dumping prometheus metrics for service {}",
                 service_info.service_name
             );
-            dump_task
+            if let Err(e) = dump_task
                 .dump_prometheus_metrics(&prom_metrics_endpoint, &service_info.service_name)
                 .await
-                .with_context(|| {
-                    format!(
-                        "Failed to dump prometheus metrics for service {}",
-                        service_info.service_name
-                    )
-                })?;
+            {
+                warn!(
+                    "Failed to dump prometheus metrics for service {}: {:#}",
+                    service_info.service_name, e
+                );
+            }
         }
     }
 
