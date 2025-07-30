@@ -360,7 +360,7 @@ impl ConnectionOptionExtracted {
                 if let Some(privatelink) = self.aws_privatelink.as_ref() {
                     if privatelink.port.is_some() {
                         sql_bail!(
-                            "invalid CONNECTION: PORT in AWS PRIVATELINK is only supported for kafka"
+                            "invalid CONNECTION: CONFLUENT SCHEMA REGISTRY does not support PORT for AWS PRIVATELINK"
                         )
                     }
                 }
@@ -406,7 +406,7 @@ impl ConnectionOptionExtracted {
                 if let Some(privatelink) = self.aws_privatelink.as_ref() {
                     if privatelink.port.is_some() {
                         sql_bail!(
-                            "invalid CONNECTION: PORT in AWS PRIVATELINK is only supported for kafka"
+                            "invalid CONNECTION: POSTGRES does not support PORT for AWS PRIVATELINK"
                         )
                     }
                 }
@@ -512,7 +512,7 @@ impl ConnectionOptionExtracted {
                 if let Some(privatelink) = self.aws_privatelink.as_ref() {
                     if privatelink.port.is_some() {
                         sql_bail!(
-                            "invalid CONNECTION: PORT in AWS PRIVATELINK is only supported for kafka"
+                            "invalid CONNECTION: MYSQL does not support PORT for AWS PRIVATELINK"
                         )
                     }
                 }
@@ -581,7 +581,7 @@ impl ConnectionOptionExtracted {
                 if let Some(privatelink) = self.aws_privatelink.as_ref() {
                     if privatelink.port.is_some() {
                         sql_bail!(
-                            "invalid CONNECTION: PORT in AWS PRIVATELINK is only supported for kafka"
+                            "invalid CONNECTION: SQL SERVER does not support PORT for AWS PRIVATELINK"
                         )
                     }
                 }
