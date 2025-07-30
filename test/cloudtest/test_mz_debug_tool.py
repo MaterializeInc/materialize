@@ -49,10 +49,6 @@ def test_successful_zip_creation(mz: MaterializeApplication) -> None:
             DEFAULT_K8S_CONTEXT_NAME,
             "--k8s-namespace",
             DEFAULT_K8S_NAMESPACE,
-            # We need to disable auto-port-forwarding because auto-portforward expects a balancerd service  we're not running the
-            # tool against our helm chart installation
-            "--auto-port-forward",
-            "false",
             "--mz-connection-url",
             "postgresql://mz_system@localhost:6877/materialize",
         ],
