@@ -2501,9 +2501,8 @@ impl CatalogState {
         ids: impl IntoIterator<Item = CatalogItemId>,
     ) -> BTreeMap<CompactionWindow, BTreeSet<CatalogItemId>> {
         let mut cws: BTreeMap<CompactionWindow, BTreeSet<CatalogItemId>> = BTreeMap::new();
-        let mut ids = VecDeque::from_iter(ids);
         let mut seen = BTreeSet::new();
-        while let Some(item_id) = ids.pop_front() {
+        for item_id in ids {
             if !seen.insert(item_id) {
                 continue;
             }
