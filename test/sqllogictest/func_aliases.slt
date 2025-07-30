@@ -7,19 +7,27 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-mode cockroach
-
 query T
-SELECT current_user()
-----
-materialize
-
-query T
-SELECT current_role() = current_user()
+SELECT current_user = current_user()
 ----
 true
 
 query T
-SELECT user() = current_user()
+SELECT current_role = current_role()
+----
+true
+
+query T
+SELECT current_schema = current_schema()
+----
+true
+
+query T
+SELECT current_catalog = current_catalog()
+----
+true
+
+query T
+SELECT session_user = session_user()
 ----
 true
