@@ -884,8 +884,8 @@ async fn init_ws(
     let authenticator = authenticator_rx.clone().await.expect("sender not dropped");
     // TODO: Add a timeout here to prevent resource leaks by clients that
     // connect then never send a message.
-    let init_msg = ws.recv().await.ok_or_else(|| anyhow::anyhow!("closed"))??;
     let ws_auth: WebSocketAuth = loop {
+        let init_msg = ws.recv().await.ok_or_else(|| anyhow::anyhow!("closed"))??;
         match init_msg {
             Message::Text(data) => break serde_json::from_str(&data)?,
             Message::Binary(data) => break serde_json::from_slice(&data)?,
