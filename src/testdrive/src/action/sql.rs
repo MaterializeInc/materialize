@@ -10,7 +10,6 @@
 use std::ascii;
 use std::error::Error;
 use std::fmt::{self, Display, Formatter, Write as _};
-use std::io::{self, Write};
 use std::time::SystemTime;
 
 use anyhow::{Context, bail};
@@ -83,6 +82,7 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
     print_query(query, Some(&stmt));
     let expected_output = &cmd.expected_output;
     state.error_line_count = 0;
+    state.error_string = "".to_string();
     let (state, res) = match should_retry {
         true => Retry::default()
             .initial_backoff(state.initial_backoff)
@@ -94,12 +94,6 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
     .retry_async_with_state(state, |retry_state, state| async move {
         let should_continue = retry_state.i + 1 < state.max_tries && should_retry;
         let start = SystemTime::now();
-        // Remove old status lines so as not to spam the output
-        for _ in 0..state.error_line_count {
-            print!("\x1B[1A\x1B[2K");
-        }
-        io::stdout().flush().unwrap();
-        state.error_line_count = 0;
         match try_run_sql(state, query, expected_output, should_continue).await {
             Ok(()) => {
                 let now = SystemTime::now();
@@ -113,22 +107,30 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
                 (state, Ok(()))
             }
             Err(e) => {
-                if retry_state.i == 0 && should_retry {
-                    print!("rows didn't match; sleeping to see if dataflow catches up");
-                    state.error_line_count = 1;
-                }
                 if let Some(backoff) = retry_state.next_backoff {
                     if !backoff.is_zero() {
                         let error_string = format!("{:?}", e);
-                        state.error_line_count = error_string.lines().count() + 1;
-                        // Contains a newline already, so don't print an additional one
-                        print!("{}", error_string);
-                        println!(
-                            "rows didn't match; sleeping to see if dataflow catches up 🕑 {:.0?}",
-                            retry_state.next_backoff.unwrap_or_default()
-                        );
-                        io::stdout().flush().unwrap();
+                        if error_string != state.error_string {
+                            // Remove old status lines so as not to spam the output
+                            for _ in 0..state.error_line_count {
+                                print!("\x1B[1A\x1B[2K");
+                            }
+                            state.error_line_count = 0;
+                            state.error_string = error_string;
+                            state.error_line_count = state.error_string.lines().count() + 1;
+                            // Contains a newline already, so don't print an additional one
+                            print!("{}", state.error_string);
+                            println!(
+                                "rows didn't match; sleeping to see if dataflow catches up 🕑 {:.0?}",
+                                retry_state.next_backoff.unwrap_or_default()
+                            );
+                        }
                     }
+                } else {
+                    for _ in 0..state.error_line_count {
+                        print!("\x1B[1A\x1B[2K");
+                    }
+                    state.error_line_count = 0;
                 }
                 (state, Err(e))
             }
@@ -414,6 +416,7 @@ pub async fn run_fail_sql(
     };
 
     state.error_line_count = 0;
+    state.error_string = "".to_string();
     let res = match should_retry {
         true => Retry::default()
             .initial_backoff(state.initial_backoff)
@@ -427,12 +430,6 @@ pub async fn run_fail_sql(
         let expected_detail = expected_detail.clone();
         let expected_hint = expected_hint.clone();
         async move {
-            // Remove old status lines so as not to spam the output
-            for _ in 0..state.error_line_count {
-                print!("\x1B[1A\x1B[2K");
-            }
-            io::stdout().flush().unwrap();
-            state.error_line_count = 0;
             match try_run_fail_sql(
                 state,
                 query,
@@ -450,21 +447,26 @@ pub async fn run_fail_sql(
                     (state, Ok(()))
                 }
                 Err(e) => {
-                    if retry_state.i == 0 && should_retry {
-                        print!(
-                            "query error didn't match; \
-                                sleeping to see if dataflow produces error shortly"
-                        );
-                        state.error_line_count = 1;
-                    }
                     if let Some(backoff) = retry_state.next_backoff {
                         if !backoff.is_zero() {
                             let error_string = format!("{:?}", e);
-                            state.error_line_count = error_string.lines().count() + 1;
-                            println!("{}", error_string);
-                            println!("query error didn't match; sleeping to see if dataflow produces error shortly 🕑 {:.0?}", retry_state.next_backoff.unwrap_or_default());
-                            io::stdout().flush().unwrap();
+                            if error_string != state.error_string {
+                                // Remove old status lines so as not to spam the output
+                                for _ in 0..state.error_line_count {
+                                    print!("\x1B[1A\x1B[2K");
+                                }
+                                state.error_line_count = 0;
+                                state.error_string = error_string;
+                                state.error_line_count = state.error_string.lines().count() + 1;
+                                println!("{}", state.error_string);
+                                println!("query error didn't match; sleeping to see if dataflow produces error shortly 🕑 {:.0?}", retry_state.next_backoff.unwrap_or_default());
+                            }
                         }
+                    } else {
+                        for _ in 0..state.error_line_count {
+                            print!("\x1B[1A\x1B[2K");
+                        }
+                        state.error_line_count = 0;
                     }
                     (state, Err(e))
                 }
