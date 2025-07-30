@@ -129,3 +129,42 @@ updates:
       update-types:
         - minor
         - patch
+- package-ecosystem: maven
+  directory: /test/lang/java
+  schedule:
+    interval: daily
+  open-pull-requests-limit: 50
+  labels: [A-dependencies]
+  allow:
+    - dependency-name: "org.postgresql:postgresql"
+- package-ecosystem: nuget
+  directory: /test/lang/csharp/csharp-npgsql.csproj
+  schedule:
+    interval: daily
+  open-pull-requests-limit: 50
+  labels: [A-dependencies]
+  allow:
+    - dependency-name: "npgsql"
+- package-ecosystem: npm
+  directory: /test/lang/js
+  schedule:
+    interval: daily
+  open-pull-requests-limit: 50
+  labels: [A-dependencies]
+  allow:
+    - dependency-name: "pg"
+    - dependency-name: "@types/pg"
+- package-ecosystem: pip
+  directory: /test/lang/python
+  schedule:
+    interval: daily
+  open-pull-requests-limit: 50
+  labels: [A-dependencies]
+- package-ecosystem: bundler
+  directory: /test/lang/ruby
+  schedule:
+    interval: daily
+  open-pull-requests-limit: 50
+  labels: [A-dependencies]
+  allow:
+    - dependency-name: "pg"
