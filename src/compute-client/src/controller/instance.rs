@@ -282,8 +282,6 @@ pub(super) struct Instance<T: ComputeControllerTimestamp> {
     response_tx: mpsc::UnboundedSender<ComputeControllerResponse<T>>,
     /// Sender for introspection updates to be recorded.
     introspection_tx: mpsc::UnboundedSender<IntrospectionUpdates>,
-    /// Numbers that increase with each restart of a replica.
-    replica_epochs: BTreeMap<ReplicaId, u64>,
     /// The registry the controller uses to report metrics.
     metrics: InstanceMetrics,
     /// Dynamic system configuration.
@@ -953,7 +951,6 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             command_rx: _,
             response_tx: _,
             introspection_tx: _,
-            replica_epochs,
             metrics: _,
             dyncfg: _,
             now: _,
@@ -989,10 +986,6 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             .map(|(id, subscribe)| (id.to_string(), format!("{subscribe:?}")))
             .collect();
         let copy_tos: Vec<_> = copy_tos.iter().map(|id| id.to_string()).collect();
-        let replica_epochs: BTreeMap<_, _> = replica_epochs
-            .iter()
-            .map(|(id, epoch)| (id.to_string(), epoch))
-            .collect();
         let wallclock_lag_last_recorded = format!("{wallclock_lag_last_recorded:?}");
 
         let map = serde_json::Map::from_iter([
@@ -1004,7 +997,6 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             field("peeks", peeks)?,
             field("subscribes", subscribes)?,
             field("copy_tos", copy_tos)?,
-            field("replica_epochs", replica_epochs)?,
             field("wallclock_lag_last_recorded", wallclock_lag_last_recorded)?,
         ]);
         Ok(serde_json::Value::Object(map))
@@ -1068,7 +1060,6 @@ where
             command_rx,
             response_tx,
             introspection_tx,
-            replica_epochs: Default::default(),
             metrics,
             dyncfg,
             now,
@@ -1210,6 +1201,7 @@ where
         &mut self,
         id: ReplicaId,
         mut config: ReplicaConfig,
+        epoch: Option<u64>,
     ) -> Result<(), ReplicaExists> {
         if self.replica_exists(id) {
             return Err(ReplicaExists(id));
@@ -1217,10 +1209,7 @@ where
 
         config.logging.index_logs = self.log_sources.clone();
 
-        let replica_epoch = self.replica_epochs.entry(id).or_default();
-        *replica_epoch += 1;
-        let epoch = *replica_epoch;
-
+        let epoch = epoch.unwrap_or(1);
         let metrics = self.metrics.for_replica(id);
         let client = ReplicaClient::spawn(
             id,
@@ -1308,8 +1297,10 @@ where
     /// Panics if the specified replica does not exist.
     fn rehydrate_replica(&mut self, id: ReplicaId) {
         let config = self.replicas[&id].config.clone();
+        let epoch = self.replicas[&id].epoch + 1;
+
         self.remove_replica(id).expect("replica must exist");
-        let result = self.add_replica(id, config);
+        let result = self.add_replica(id, config, Some(epoch));
 
         match result {
             Ok(()) => (),

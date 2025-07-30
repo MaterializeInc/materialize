@@ -753,7 +753,7 @@ where
         instance.replicas.insert(replica_id);
 
         instance.call(move |i| {
-            i.add_replica(replica_id, replica_config)
+            i.add_replica(replica_id, replica_config, None)
                 .expect("validated")
         });
 
