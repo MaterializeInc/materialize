@@ -1993,9 +1993,12 @@ def workflow_main(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     scenarios = buildkite.shard_list(
         sorted(
-            [globals()[args.scenario]]
-            if args.scenario
-            else list(all_subclasses(Generator))
+            (
+                [globals()[args.scenario]]
+                if args.scenario
+                else list(all_subclasses(Generator))
+            ),
+            key=lambda w: w.__name__,
         ),
         lambda s: s.__name__,
     )
