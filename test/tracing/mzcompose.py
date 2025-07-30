@@ -28,7 +28,8 @@ SERVICES = [
             "--opentelemetry-endpoint=whatever:7777",
             f"--sentry-dsn={SENTRY_DSN}",
             "--sentry-environment=development",
-        ]
+        ],
+        support_external_clusterd=True,
     ),
     Clusterd(name="clusterd"),
 ]

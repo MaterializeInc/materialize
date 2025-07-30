@@ -64,7 +64,8 @@ from materialize.ui import (
     UIError,
 )
 
-SECRETS = [
+FILTERED_ARGS = [
+    # Secrets
     "mzp_",
     "-----BEGIN PRIVATE KEY-----",
     "-----BEGIN CERTIFICATE-----",
@@ -72,6 +73,8 @@ SECRETS = [
     "confluent-api-secret=",
     "aws-access-key-id=",
     "aws-secret-access-key=",
+    # Not a secret, but too spammy, filter too
+    "CLUSTER_REPLICA_SIZES",
 ]
 
 
@@ -313,7 +316,11 @@ class Composition:
         if not self.silent and not silent:
             # Don't print out secrets in test logs
             filtered_args = [
-                "[REDACTED]" if any(secret in arg for secret in SECRETS) else arg
+                (
+                    "[REDACTED]"
+                    if any(filtered_arg in arg for filtered_arg in FILTERED_ARGS)
+                    else arg
+                )
                 for arg in args
             ]
             print(f"$ docker compose {' '.join(filtered_args)}", file=sys.stderr)
@@ -781,6 +788,7 @@ class Composition:
         stdin: str | None = None,
         entrypoint: str | None = None,
         check: bool = True,
+        silent: bool = False,
     ) -> subprocess.CompletedProcess:
         """Run a one-off command in a service.
 
@@ -815,6 +823,7 @@ class Composition:
             stdin=stdin,
             check=check,
             environment=os.environ | env_extra,
+            silent=silent,
         )
 
     def run_testdrive_files(
@@ -847,6 +856,7 @@ class Composition:
                 capture=quiet,
                 capture_stderr=quiet,
                 env_extra=environment,
+                silent=True,
             )
         else:
             return self.run(
@@ -857,6 +867,7 @@ class Composition:
                 capture=quiet,
                 capture_stderr=quiet,
                 env_extra=environment,
+                silent=True,
             )
 
     def exec(

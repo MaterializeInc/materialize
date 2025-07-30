@@ -38,7 +38,7 @@ def schema() -> str:
 
 SERVICES = [
     Redpanda(),
-    Materialized(),
+    Materialized(support_external_clusterd=True),
     Testdrive(),
     Clusterd(),
     Postgres(),

@@ -120,6 +120,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             system_parameter_defaults=get_default_system_parameters(zero_downtime=True),
             additional_system_parameter_defaults={"unsafe_enable_table_keys": "true"},
             sanity_restart=False,
+            support_external_clusterd=True,
         ),
         Materialized(
             name="materialized2",
@@ -130,6 +131,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             system_parameter_defaults=get_default_system_parameters(zero_downtime=True),
             additional_system_parameter_defaults={"unsafe_enable_table_keys": "true"},
             sanity_restart=False,
+            support_external_clusterd=True,
         ),
     ):
         c.up(*services)

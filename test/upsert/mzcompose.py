@@ -46,6 +46,7 @@ SERVICES = [
         },
         environment_extra=materialized_environment_extra,
         default_replication_factor=2,
+        support_external_clusterd=True,
     ),
     Testdrive(),
     Clusterd(name="clusterd1"),
@@ -118,6 +119,7 @@ def workflow_testdrive(c: Composition, parser: WorkflowArgumentParser) -> None:
         },
         environment_extra=materialized_environment_extra,
         default_replication_factor=2,
+        support_external_clusterd=True,
     )
 
     with c.override(testdrive, materialized):
@@ -189,6 +191,7 @@ def workflow_rehydration(c: Composition) -> None:
                 },
                 environment_extra=materialized_environment_extra,
                 default_replication_factor=2,
+                support_external_clusterd=True,
             ),
             Clusterd(
                 name="clusterd1",
@@ -223,6 +226,7 @@ def workflow_rehydration(c: Composition) -> None:
                 },
                 environment_extra=materialized_environment_extra,
                 default_replication_factor=2,
+                support_external_clusterd=True,
             ),
             Clusterd(
                 name="clusterd1",
@@ -250,6 +254,7 @@ def workflow_rehydration(c: Composition) -> None:
                 },
                 environment_extra=materialized_environment_extra,
                 default_replication_factor=2,
+                support_external_clusterd=True,
             ),
             Clusterd(
                 name="clusterd1",
@@ -500,6 +505,7 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
             },
             environment_extra=materialized_environment_extra,
             default_replication_factor=2,
+            support_external_clusterd=True,
         ),
         Clusterd(
             name="clusterd1",
@@ -599,6 +605,7 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
                     additional_system_parameter_defaults=mz_configs,
                     environment_extra=materialized_environment_extra,
                     default_replication_factor=2,
+                    support_external_clusterd=True,
                 ),
             ):
                 c.kill("materialized", "clusterd1")
