@@ -37,7 +37,7 @@ static DEFAULT_INTERNAL_HTTP_PORT: i32 = 6878;
 /// The label for the internal HTTP port.
 const INTERNAL_HTTP_PORT_LABEL: &str = "internal-http";
 /// The label for the external HTTP port.
-// TODO: Even when not using TLS, the external HTTP port is labeled as "https". Fix when fixed in orchestratord.
+// Even when not using TLS, the external HTTP port is labeled as "https".
 const EXTERNAL_HTTP_PORT_LABEL: &str = "https";
 
 enum ServiceType {
@@ -64,7 +64,6 @@ fn get_port_labels(auth_mode: &AuthMode, service_type: &ServiceType) -> HttpPort
         | (AuthMode::None, ServiceType::Environmentd)
         // Even if in the password listener config, the heap profile port is specified as external, clusterd will
         // still use the internal port.
-        // TODO: Once fixed in orchestratord, we can use the external port for the heap profile label.
         | (AuthMode::Password(_), ServiceType::Clusterd) => HttpPortLabels {
             heap_profile_port_label: INTERNAL_HTTP_PORT_LABEL,
             prom_metrics_port_label: INTERNAL_HTTP_PORT_LABEL,
@@ -339,83 +338,45 @@ pub async fn dump_self_managed_http_resources(
         )
         .prom_metrics_port_label;
 
-        let (heap_profile_http_connection, prom_metrics_http_connection) = match (
-            heap_profile_port_label,
-            prom_metrics_port_label,
-        ) {
-            (INTERNAL_HTTP_PORT_LABEL, INTERNAL_HTTP_PORT_LABEL)
-            | (EXTERNAL_HTTP_PORT_LABEL, EXTERNAL_HTTP_PORT_LABEL) => {
-                let maybe_http_port = service_info.service_ports.iter().find_map(|port_info| {
-                    find_http_port_by_label(port_info, heap_profile_port_label)
-                });
-
-                if let Some(internal_http_port) = maybe_http_port {
-                    let port_forwarder = KubectlPortForwarder {
-                        context: self_managed_context.k8s_context.clone(),
-                        namespace: service_info.namespace.clone(),
-                        service_name: service_info.service_name.clone(),
-                        target_port: internal_http_port.port,
-                    };
-
-                    let heap_profile_http_connection =
-                        Arc::new(port_forwarder.spawn_port_forward().await.with_context(|| {
+        let (heap_profile_http_connection, prom_metrics_http_connection) = {
+            let maybe_heap_profile_port = service_info
+                .service_ports
+                .iter()
+                .find_map(|port_info| find_http_port_by_label(port_info, heap_profile_port_label));
+            let maybe_prom_metrics_port = service_info
+                .service_ports
+                .iter()
+                .find_map(|port_info| find_http_port_by_label(port_info, prom_metrics_port_label));
+            if let (Some(heap_profile_port), Some(prom_metrics_port)) =
+                (maybe_heap_profile_port, maybe_prom_metrics_port)
+            {
+                let heap_profile_port_forwarder = KubectlPortForwarder {
+                    context: self_managed_context.k8s_context.clone(),
+                    namespace: service_info.namespace.clone(),
+                    service_name: service_info.service_name.clone(),
+                    target_port: heap_profile_port.port,
+                };
+                let heap_profile_http_connection = Arc::new(
+                    heap_profile_port_forwarder
+                        .spawn_port_forward()
+                        .await
+                        .with_context(|| {
                             format!(
                                 "Failed to spawn port forwarder for service {}",
                                 service_info.service_name
                             )
-                        })?);
-
-                    let prom_metrics_http_connection = Arc::clone(&heap_profile_http_connection);
-                    (heap_profile_http_connection, prom_metrics_http_connection)
+                        })?,
+                );
+                let prom_metrics_http_connection = if heap_profile_port == prom_metrics_port {
+                    Arc::clone(&heap_profile_http_connection)
                 } else {
-                    return Err(anyhow::anyhow!(
-                        "Failed to find HTTP ports for service {}",
-                        service_info.service_name
-                    ));
-                }
-            }
-            (INTERNAL_HTTP_PORT_LABEL, EXTERNAL_HTTP_PORT_LABEL)
-            | (EXTERNAL_HTTP_PORT_LABEL, INTERNAL_HTTP_PORT_LABEL) => {
-                let maybe_heap_profile_port =
-                    service_info.service_ports.iter().find_map(|port_info| {
-                        find_http_port_by_label(port_info, heap_profile_port_label)
-                    });
-
-                let maybe_prom_metrics_port =
-                    service_info.service_ports.iter().find_map(|port_info| {
-                        find_http_port_by_label(port_info, prom_metrics_port_label)
-                    });
-
-                if let (Some(heap_profile_port), Some(prom_metrics_port)) =
-                    (maybe_heap_profile_port, maybe_prom_metrics_port)
-                {
-                    let heap_profile_port_forwarder = KubectlPortForwarder {
-                        context: self_managed_context.k8s_context.clone(),
-                        namespace: service_info.namespace.clone(),
-                        service_name: service_info.service_name.clone(),
-                        target_port: heap_profile_port.port,
-                    };
-
                     let prom_metrics_port_forwarder = KubectlPortForwarder {
                         context: self_managed_context.k8s_context.clone(),
                         namespace: service_info.namespace.clone(),
                         service_name: service_info.service_name.clone(),
                         target_port: prom_metrics_port.port,
                     };
-
-                    let heap_profile_http_connection = Arc::new(
-                        heap_profile_port_forwarder
-                            .spawn_port_forward()
-                            .await
-                            .with_context(|| {
-                                format!(
-                                    "Failed to spawn port forwarder for service {}",
-                                    service_info.service_name
-                                )
-                            })?,
-                    );
-
-                    let prom_metrics_http_connection = Arc::new(
+                    Arc::new(
                         prom_metrics_port_forwarder
                             .spawn_port_forward()
                             .await
@@ -425,21 +386,14 @@ pub async fn dump_self_managed_http_resources(
                                     service_info.service_name
                                 )
                             })?,
-                    );
+                    )
+                };
 
-                    (heap_profile_http_connection, prom_metrics_http_connection)
-                } else {
-                    return Err(anyhow::anyhow!(
-                        "Failed to find HTTP port for service {}, heap_profile_port_label={}, prom_metrics_port_label={}",
-                        service_info.service_name,
-                        heap_profile_port_label,
-                        prom_metrics_port_label
-                    ));
-                }
-            }
-            (_, _) => {
+                (heap_profile_http_connection, prom_metrics_http_connection)
+            } else {
                 return Err(anyhow::anyhow!(
-                    "Invalid port label combination: heap_profile_port_label={}, prom_metrics_port_label={}",
+                    "Failed to find HTTP port for service {}, heap_profile_port_label={}, prom_metrics_port_label={}",
+                    service_info.service_name,
                     heap_profile_port_label,
                     prom_metrics_port_label
                 ));

@@ -80,8 +80,8 @@ pub async fn get_k8s_auth_mode(
     k8s_namespaces: &Vec<String>,
 ) -> Result<AuthMode, anyhow::Error> {
     for namespace in k8s_namespaces.iter() {
-        let materialize_cr = Api::<Materialize>::namespaced(k8s_client.clone(), namespace);
-        let object_list = materialize_cr
+        let materialize_api = Api::<Materialize>::namespaced(k8s_client.clone(), namespace);
+        let object_list = materialize_api
             .list(&ListParams::default())
             .await
             .with_context(|| format!("Failed to get Materialize CR in namespace: {}", namespace))?;
@@ -89,21 +89,31 @@ pub async fn get_k8s_auth_mode(
         if !object_list.items.is_empty() {
             let materialize_cr = &object_list.items[0];
             let authenticator_kind = materialize_cr.spec.authenticator_kind;
-            if authenticator_kind == AuthenticatorKind::None {
-                return Ok(AuthMode::None);
-            }
 
-            if let (Some(mz_username), Some(mz_password)) = (&mz_username, &mz_password) {
-                return Ok(AuthMode::Password(PasswordAuthCredentials {
-                    username: mz_username.clone(),
-                    password: mz_password.clone(),
-                }));
-            } else {
-                return Err(anyhow::anyhow!(
-                    "mz_username and mz_password are required for password authentication"
-                ));
+            match authenticator_kind {
+                AuthenticatorKind::None => return Ok(AuthMode::None),
+                AuthenticatorKind::Password => {
+                    if let (Some(mz_username), Some(mz_password)) = (&mz_username, &mz_password) {
+                        return Ok(AuthMode::Password(PasswordAuthCredentials {
+                            username: mz_username.clone(),
+                            password: mz_password.clone(),
+                        }));
+                    } else {
+                        return Err(anyhow::anyhow!(
+                            "mz_username and mz_password are required for password authentication"
+                        ));
+                    }
+                }
+                _ => {
+                    return Err(anyhow::anyhow!(
+                        "Unsupported authenticator kind: {:?}",
+                        authenticator_kind
+                    ));
+                }
             }
         }
     }
-    Ok(AuthMode::None)
+    Err(anyhow::anyhow!(
+        "Could not find AuthenticatorKind in Materialize CR"
+    ))
 }
