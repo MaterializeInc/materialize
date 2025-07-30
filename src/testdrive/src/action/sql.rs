@@ -113,12 +113,10 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
                 (state, Ok(()))
             }
             Err(e) => {
-                if retry_state.i == 0 && should_retry {
-                    print!("rows didn't match; sleeping to see if dataflow catches up");
-                    state.error_line_count = 1;
-                }
                 if let Some(backoff) = retry_state.next_backoff {
-                    if !backoff.is_zero() {
+                    if !backoff.is_zero()
+                        && (retry_state.i == 0 || !mz_ore::env::is_var_truthy("CI"))
+                    {
                         let error_string = format!("{:?}", e);
                         state.error_line_count = error_string.lines().count() + 1;
                         // Contains a newline already, so don't print an additional one
@@ -450,15 +448,8 @@ pub async fn run_fail_sql(
                     (state, Ok(()))
                 }
                 Err(e) => {
-                    if retry_state.i == 0 && should_retry {
-                        print!(
-                            "query error didn't match; \
-                                sleeping to see if dataflow produces error shortly"
-                        );
-                        state.error_line_count = 1;
-                    }
                     if let Some(backoff) = retry_state.next_backoff {
-                        if !backoff.is_zero() {
+                        if !backoff.is_zero() && (retry_state.i == 0 || !mz_ore::env::is_var_truthy("CI")) {
                             let error_string = format!("{:?}", e);
                             state.error_line_count = error_string.lines().count() + 1;
                             println!("{}", error_string);
