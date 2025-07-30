@@ -9,8 +9,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
+use std::time::Duration;
 
 use mz_ore::collections::CollectionExt;
+use mz_ore::str::StrExt;
 use mz_proto::RustType;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
@@ -51,13 +53,13 @@ pub(super) struct PurifiedSourceExports {
 #[allow(clippy::unused_async)]
 pub(super) async fn purify_source_exports(
     database: &str,
-    _client: &mut mz_sql_server_util::Client,
+    client: &mut mz_sql_server_util::Client,
     retrieved_references: &RetrievedSourceReferences,
     requested_references: &Option<ExternalReferences>,
     text_columns: &[UnresolvedItemName],
     excl_columns: &[UnresolvedItemName],
     unresolved_source_name: &UnresolvedItemName,
-    initial_lsn: mz_sql_server_util::cdc::Lsn,
+    timeout: Duration,
     reference_policy: &SourceReferencePolicy,
 ) -> Result<PurifiedSourceExports, PlanError> {
     let requested_exports = match requested_references.as_ref() {
@@ -163,6 +165,26 @@ pub(super) async fn purify_source_exports(
             (table.qualified_name(), Arc::clone(capture_instance))
         })
         .collect();
+
+    let min_lsns = mz_sql_server_util::inspect::get_min_lsns(
+        client,
+        capture_instances
+            .values()
+            .map(|instance| instance.as_ref())
+            .collect::<Vec<_>>(),
+    )
+    .await?;
+    let initial_lsn = mz_sql_server_util::inspect::get_max_lsn_retry(client, timeout).await?;
+    for (instance, min_lsn) in min_lsns.iter() {
+        // When reading LSNs from CDC, the range is inclusive, so cases where
+        // min_lsn = max_lsn still have a single record to read. See
+        // https://learn.microsoft.com/en-us/sql/relational-databases/system-functions/cdc-fn-cdc-get-all-changes-capture-instance-transact-sql?view=sql-server-ver17
+        if initial_lsn < *min_lsn {
+            Err(SqlServerSourcePurificationError::InvalidInitialLsn(
+                instance.quoted().to_string(),
+            ))?;
+        }
+    }
 
     let mut tables = vec![];
     for requested in requested_exports {

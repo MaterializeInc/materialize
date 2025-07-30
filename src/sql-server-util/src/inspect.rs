@@ -75,6 +75,51 @@ pub async fn get_max_lsn(client: &mut Client) -> Result<Lsn, SqlServerError> {
     parse_lsn(&result[..1])
 }
 
+/// Retrieves the minumum [`Lsn`] (start_lsn field) from `cdc.change_tables`.
+/// This is based on digging into `sys.fn_cdc_get_min_lsn` implementation, which has
+/// some additional checks that we want to bypass.
+///
+/// See: <https://learn.microsoft.com/en-us/sql/relational-databases/system-tables/cdc-change-tables-transact-sql?view=sql-server-ver16>
+pub async fn get_min_lsns(
+    client: &mut Client,
+    capture_instances: impl IntoIterator<Item = &str>,
+) -> Result<Vec<(String, Lsn)>, SqlServerError> {
+    let capture_instances: SmallVec<[_; 1]> = capture_instances.into_iter().collect();
+    #[allow(clippy::as_conversions)]
+    let values: SmallVec<[_; 1]> = capture_instances
+        .iter()
+        .map(|ci| ci as &dyn tiberius::ToSql)
+        .collect();
+    let args = capture_instances
+        .iter()
+        .enumerate()
+        .map(|(i, _)| format!("@P{}", i + 1))
+        .collect::<Vec<_>>()
+        .join(",");
+    let stmt = format!(
+        "SELECT capture_instance, start_lsn FROM cdc.change_tables WHERE capture_instance IN ({args});"
+    );
+    let result = client.query(stmt, &values).await?;
+    let min_lsns = result
+        .into_iter()
+        .map(|row| {
+            let capture_instance: &str = row.try_get("capture_instance")?.ok_or_else(|| {
+                SqlServerError::ProgrammingError("missing column 'capture_instance'".to_string())
+            })?;
+            let start_lsn: &[u8] = row.try_get("start_lsn")?.ok_or_else(|| {
+                SqlServerError::ProgrammingError("missing column 'start_lsn'".to_string())
+            })?;
+            let min_lsn = Lsn::try_from(start_lsn).map_err(|msg| SqlServerError::InvalidData {
+                column_name: "lsn".to_string(),
+                error: msg,
+            })?;
+            Ok::<_, SqlServerError>((capture_instance.into(), min_lsn))
+        })
+        .collect::<Result<_, _>>()?;
+
+    Ok(min_lsns)
+}
+
 /// Returns the maximum log sequence number for the entire database, retrying
 /// if the log sequence number is not available. This implementation relies on
 /// CDC, which is asynchronous, so may return an LSN that is less than the

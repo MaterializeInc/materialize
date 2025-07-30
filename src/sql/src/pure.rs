@@ -999,13 +999,6 @@ async fn purify_create_source(
                     replication_errors,
                 ))?;
             }
-            // If CDC is enabled for a table, there is a period where the max LSN will not be
-            // available.  Rather than return an error to the user, we retry to allow the CDC
-            // job a chance to run.
-            let timeout = mz_storage_types::sources::sql_server::MAX_LSN_WAIT
-                .get(storage_configuration.config_set());
-            let initial_lsn =
-                mz_sql_server_util::inspect::get_max_lsn_retry(&mut client, timeout).await?;
 
             // We've validated that CDC is configured for the system, now let's
             // purify the individual exports (i.e. subsources).
@@ -1017,6 +1010,9 @@ async fn purify_create_source(
             retrieved_source_references = reference_client.get_source_references().await?;
             tracing::debug!(?retrieved_source_references, "got source references");
 
+            let timeout = mz_storage_types::sources::sql_server::MAX_LSN_WAIT
+                .get(storage_configuration.config_set());
+
             let purified_source_exports = sql_server::purify_source_exports(
                 &*database,
                 &mut client,
@@ -1025,7 +1021,7 @@ async fn purify_create_source(
                 &text_columns,
                 &exclude_columns,
                 source_name,
-                initial_lsn,
+                timeout,
                 &reference_policy,
             )
             .await?;
@@ -1619,13 +1615,6 @@ async fn purify_alter_source_add_subsources(
                 )
                 .await?;
             let mut client = mz_sql_server_util::Client::connect(config).await?;
-            // If CDC is enabled for a table, there is a period where the max LSN will not be
-            // available.  Rather than return an error to the user, we retry to allow the CDC
-            // job a chance to run.
-            let timeout = mz_storage_types::sources::sql_server::MAX_LSN_WAIT
-                .get(storage_configuration.config_set());
-            let initial_lsn =
-                mz_sql_server_util::inspect::get_max_lsn_retry(&mut client, timeout).await?;
 
             // Query the upstream SQL Server instance for available tables to replicate.
             let database = sql_server_connection.database.clone().into();
@@ -1637,6 +1626,9 @@ async fn purify_alter_source_add_subsources(
             .await?;
             let requested_references = Some(ExternalReferences::SubsetTables(external_references));
 
+            let timeout = mz_storage_types::sources::sql_server::MAX_LSN_WAIT
+                .get(storage_configuration.config_set());
+
             let result = sql_server::purify_source_exports(
                 &*database,
                 &mut client,
@@ -1645,7 +1637,7 @@ async fn purify_alter_source_add_subsources(
                 &text_columns,
                 &exclude_columns,
                 &unresolved_source_name,
-                initial_lsn,
+                timeout,
                 &SourceReferencePolicy::Required,
             )
             .await;
@@ -1997,19 +1989,15 @@ async fn purify_create_table_from_source(
             let mut client = mz_sql_server_util::Client::connect(config).await?;
 
             let database: Arc<str> = connection.database.into();
-            // If CDC is enabled for a table, there is a period where the max LSN will not be
-            // available.  Rather than return an error to the user, we retry to allow the CDC
-            // job a chance to run.
-            let timeout = mz_storage_types::sources::sql_server::MAX_LSN_WAIT
-                .get(storage_configuration.config_set());
-            let initial_lsn =
-                mz_sql_server_util::inspect::get_max_lsn_retry(&mut client, timeout).await?;
             let reference_client = SourceReferenceClient::SqlServer {
                 client: &mut client,
                 database: Arc::clone(&database),
             };
             retrieved_source_references = reference_client.get_source_references().await?;
             tracing::debug!(?retrieved_source_references, "got source references");
+
+            let timeout = mz_storage_types::sources::sql_server::MAX_LSN_WAIT
+                .get(storage_configuration.config_set());
 
             let purified_source_exports = sql_server::purify_source_exports(
                 &*database,
@@ -2019,7 +2007,7 @@ async fn purify_create_table_from_source(
                 &qualified_text_columns,
                 &qualified_exclude_columns,
                 &unresolved_source_name,
-                initial_lsn,
+                timeout,
                 &SourceReferencePolicy::Required,
             )
             .await?;
