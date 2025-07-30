@@ -5709,6 +5709,7 @@ dependencies = [
  "mz-build-info",
  "mz-cloud-resources",
  "mz-ore",
+ "mz-server-core",
  "mz-tls-util",
  "postgres-openssl",
  "regex",
