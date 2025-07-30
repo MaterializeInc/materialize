@@ -154,6 +154,7 @@ struct SelfManagedContext {
     k8s_namespaces: Vec<String>,
     k8s_dump_secret_values: bool,
     mz_connection_info: SelfManagedMzConnectionInfo,
+    http_connection_auth_mode: AuthMode,
 }
 
 #[derive(Debug, Clone)]
@@ -175,6 +176,7 @@ struct EmulatorContext {
     docker_container_id: String,
     container_ip: String,
     mz_connection_info: EmulatorMzConnectionInfo,
+    http_connection_auth_mode: AuthMode,
 }
 
 enum DebugModeContext {
@@ -271,6 +273,22 @@ async fn initialize_context(
                 }
             };
 
+            let auth_mode = match get_k8s_auth_mode(
+                global_args.mz_username,
+                global_args.mz_password,
+                &k8s_client,
+                &args.k8s_namespaces,
+            )
+            .await
+            {
+                Ok(auth_mode) => auth_mode,
+                Err(e) => {
+                    warn!("Failed to get auth mode from k8s: {:#}", e);
+                    // By default, set auth mode to None.
+                    AuthMode::None
+                }
+            };
+
             let mz_connection_info = if let Some(mz_connection_url) = global_args.mz_connection_url
             {
                 // If the user provides a connection URL, don't bother port forwarding.
@@ -296,25 +314,9 @@ async fn initialize_context(
                     }
                 };
 
-                let auth_mode = match get_k8s_auth_mode(
-                    global_args.mz_username,
-                    global_args.mz_password,
-                    &k8s_client,
-                    &args.k8s_namespaces,
-                )
-                .await
-                {
-                    Ok(auth_mode) => auth_mode,
-                    Err(e) => {
-                        warn!("Failed to get auth mode from k8s: {:#}", e);
-                        // By default, set auth mode to None.
-                        AuthMode::None
-                    }
-                };
-
                 SelfManagedMzConnectionInfo::PortForward(PortForwardConnectionInfo {
                     connection: port_forward_connection,
-                    auth_mode,
+                    auth_mode: auth_mode.clone(),
                 })
             };
 
@@ -325,6 +327,7 @@ async fn initialize_context(
                 k8s_namespaces: args.k8s_namespaces.clone(),
                 k8s_dump_secret_values: args.k8s_dump_secret_values,
                 mz_connection_info,
+                http_connection_auth_mode: auth_mode,
             })
         }
         DebugModeArgs::Emulator(args) => {
@@ -337,31 +340,29 @@ async fn initialize_context(
                     )
                 })?;
 
+            // For the emulator, we assume if a user provides a username and password, they
+            // want to use password authentication.
+            // TODO (debug_tool3): Figure out the auth mode from arguments using docker inspect.
+            let auth_mode = if let (Some(mz_username), Some(mz_password)) =
+                (&global_args.mz_username, &global_args.mz_password)
+            {
+                AuthMode::Password(PasswordAuthCredentials {
+                    username: mz_username.clone(),
+                    password: mz_password.clone(),
+                })
+            } else {
+                AuthMode::None
+            };
+
             let mz_connection_info = if let Some(mz_connection_url) = global_args.mz_connection_url
             {
                 EmulatorMzConnectionInfo::ConnectionUrlOverride(mz_connection_url)
             } else {
-                // For the emulator, we assume if a user provides a username and password, they
-                // want to use password authentication.
-                // TODO (debug_tool3): Figure out the auth mode from arguments using docker inspect.
-                if let (Some(mz_username), Some(mz_password)) =
-                    (global_args.mz_username, global_args.mz_password)
-                {
-                    EmulatorMzConnectionInfo::ContainerIp(ContainerIpInfo {
-                        local_address: container_ip.clone(),
-                        local_port: DEFAULT_MZ_ENVIRONMENTD_PORT,
-                        auth_mode: AuthMode::Password(PasswordAuthCredentials {
-                            username: mz_username,
-                            password: mz_password,
-                        }),
-                    })
-                } else {
-                    EmulatorMzConnectionInfo::ContainerIp(ContainerIpInfo {
-                        local_address: container_ip.clone(),
-                        local_port: DEFAULT_MZ_ENVIRONMENTD_PORT,
-                        auth_mode: AuthMode::None,
-                    })
-                }
+                EmulatorMzConnectionInfo::ContainerIp(ContainerIpInfo {
+                    local_address: container_ip.clone(),
+                    local_port: DEFAULT_MZ_ENVIRONMENTD_PORT,
+                    auth_mode: auth_mode.clone(),
+                })
             };
 
             DebugModeContext::Emulator(EmulatorContext {
@@ -369,6 +370,7 @@ async fn initialize_context(
                 docker_container_id: args.docker_container_id.clone(),
                 container_ip,
                 mz_connection_info,
+                http_connection_auth_mode: auth_mode,
             })
         }
     };
