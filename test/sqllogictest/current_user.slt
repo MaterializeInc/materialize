@@ -28,3 +28,8 @@ query T
 SELECT user() = current_user()
 ----
 true
+
+query T
+SELECT user = user()
+----
+true

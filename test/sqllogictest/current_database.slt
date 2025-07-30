@@ -19,6 +19,11 @@ SELECT current_catalog() = current_database()
 ----
 true
 
+query T
+SELECT current_catalog = current_catalog()
+----
+true
+
 statement ok
 CREATE DATABASE otherdb
 

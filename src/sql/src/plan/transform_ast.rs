@@ -455,9 +455,8 @@ impl<'a> FuncRewriter<'a> {
                 let ident = normalize::ident(ident[0].clone());
                 let fn_ident = match ident.as_str() {
                     "current_role" => Some("current_user"),
-                    "current_schema" | "current_timestamp" | "current_user" | "session_user" => {
-                        Some(ident.as_str())
-                    }
+                    "current_schema" | "current_timestamp" | "current_user" | "session_user"
+                    | "current_catalog" | "user" => Some(ident.as_str()),
                     _ => None,
                 };
                 match fn_ident {
