@@ -153,6 +153,7 @@ fn pack_val_as_datum(
 
                                 // If mysql strict mode is disabled when an invalid entry is inserted
                                 // then the entry will be replicated as a 0. Outside the 1 indexed enum.
+                                // https://dev.mysql.com/doc/refman/8.4/en/enum.html#enum-indexes
                                 if enum_int == 0 {
                                     packer.push(Datum::String(""));
                                 } else {
