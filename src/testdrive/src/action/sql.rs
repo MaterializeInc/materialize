@@ -105,7 +105,9 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
             }
             Err(e) => {
                 if let Some(backoff) = retry_state.next_backoff {
-                    if !backoff.is_zero() {
+                    if !backoff.is_zero()
+                        && (retry_state.i == 0 || !mz_ore::env::is_var_truthy("CI"))
+                    {
                         let error_string = format!("{:?}", e);
                         if error_string != state.error_string {
                             // Remove old status lines so as not to spam the output
@@ -442,7 +444,7 @@ pub async fn run_fail_sql(
                 }
                 Err(e) => {
                     if let Some(backoff) = retry_state.next_backoff {
-                        if !backoff.is_zero() {
+                        if !backoff.is_zero() && (retry_state.i == 0 || !mz_ore::env::is_var_truthy("CI")) {
                             let error_string = format!("{:?}", e);
                             if error_string != state.error_string {
                                 // Remove old status lines so as not to spam the output
