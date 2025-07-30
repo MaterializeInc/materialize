@@ -232,7 +232,7 @@ pub(super) struct Instance<T: ComputeControllerTimestamp> {
     /// This is currently only used to annotate metrics.
     workload_class: Option<String>,
     /// The replicas of this compute instance.
-    replicas: BTreeMap<ReplicaId, ReplicaState<T>>,
+    replicas: BTreeMap<ReplicaId, Replica<T>>,
     /// Currently installed compute collections.
     ///
     /// New entries are added for all collections exported from dataflows created through
@@ -282,8 +282,6 @@ pub(super) struct Instance<T: ComputeControllerTimestamp> {
     response_tx: mpsc::UnboundedSender<ComputeControllerResponse<T>>,
     /// Sender for introspection updates to be recorded.
     introspection_tx: mpsc::UnboundedSender<IntrospectionUpdates>,
-    /// Numbers that increase with each restart of a replica.
-    replica_epochs: BTreeMap<ReplicaId, u64>,
     /// The registry the controller uses to report metrics.
     metrics: InstanceMetrics,
     /// Dynamic system configuration.
@@ -413,49 +411,6 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
 
         // Remove global collection state.
         self.collections.remove(&id);
-    }
-
-    fn add_replica_state(
-        &mut self,
-        id: ReplicaId,
-        client: ReplicaClient<T>,
-        config: ReplicaConfig,
-        epoch: u64,
-    ) {
-        let log_ids: BTreeSet<_> = config.logging.index_logs.values().copied().collect();
-
-        let metrics = self.metrics.for_replica(id);
-        let mut replica = ReplicaState::new(
-            id,
-            client,
-            config,
-            metrics,
-            self.introspection_tx.clone(),
-            epoch,
-        );
-
-        // Add per-replica collection state.
-        for (collection_id, collection) in &self.collections {
-            // Skip log collections not maintained by this replica.
-            if collection.log_collection && !log_ids.contains(collection_id) {
-                continue;
-            }
-
-            let as_of = if collection.log_collection {
-                // For log collections, we don't send a `CreateDataflow` command to the replica, so
-                // it doesn't know which as-of the controler chose and defaults to the minimum
-                // frontier instead. We need to initialize the controller-side tracking with the
-                // same frontier, to avoid observing regressions in the reported frontiers.
-                Antichain::from_elem(T::minimum())
-            } else {
-                collection.read_frontier().to_owned()
-            };
-
-            let input_read_holds = collection.storage_dependencies.values().cloned().collect();
-            replica.add_collection(*collection_id, as_of, input_read_holds);
-        }
-
-        self.replicas.insert(id, replica);
     }
 
     /// Enqueue the given response for delivery to the controller clients.
@@ -953,7 +908,6 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             command_rx: _,
             response_tx: _,
             introspection_tx: _,
-            replica_epochs,
             metrics: _,
             dyncfg: _,
             now: _,
@@ -989,10 +943,6 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             .map(|(id, subscribe)| (id.to_string(), format!("{subscribe:?}")))
             .collect();
         let copy_tos: Vec<_> = copy_tos.iter().map(|id| id.to_string()).collect();
-        let replica_epochs: BTreeMap<_, _> = replica_epochs
-            .iter()
-            .map(|(id, epoch)| (id.to_string(), epoch))
-            .collect();
         let wallclock_lag_last_recorded = format!("{wallclock_lag_last_recorded:?}");
 
         let map = serde_json::Map::from_iter([
@@ -1004,7 +954,6 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             field("peeks", peeks)?,
             field("subscribes", subscribes)?,
             field("copy_tos", copy_tos)?,
-            field("replica_epochs", replica_epochs)?,
             field("wallclock_lag_last_recorded", wallclock_lag_last_recorded)?,
         ]);
         Ok(serde_json::Value::Object(map))
@@ -1068,7 +1017,6 @@ where
             command_rx,
             response_tx,
             introspection_tx,
-            replica_epochs: Default::default(),
             metrics,
             dyncfg,
             now,
@@ -1191,16 +1139,18 @@ where
         );
     }
 
-    /// Sends a command to all replicas of this instance.
+    /// Sends a command to all initialized replicas of this instance.
     #[mz_ore::instrument(level = "debug")]
     fn send(&mut self, cmd: ComputeCommand<T>) {
         // Record the command so that new replicas can be brought up to speed.
         self.history.push(cmd.clone());
 
-        // Clone the command for each active replica.
+        // Clone the command for each initialized replica.
         for replica in self.replicas.values_mut() {
-            // Swallow error, we'll notice because the replica task has stopped.
-            let _ = replica.client.send(cmd.clone());
+            if replica.initialized {
+                // Swallow error, we'll notice because the replica task has stopped.
+                let _ = replica.client.send(cmd.clone());
+            }
         }
     }
 
@@ -1210,6 +1160,7 @@ where
         &mut self,
         id: ReplicaId,
         mut config: ReplicaConfig,
+        epoch: Option<u64>,
     ) -> Result<(), ReplicaExists> {
         if self.replica_exists(id) {
             return Err(ReplicaExists(id));
@@ -1217,10 +1168,7 @@ where
 
         config.logging.index_logs = self.log_sources.clone();
 
-        let replica_epoch = self.replica_epochs.entry(id).or_default();
-        *replica_epoch += 1;
-        let epoch = *replica_epoch;
-
+        let epoch = epoch.unwrap_or(1);
         let metrics = self.metrics.for_replica(id);
         let client = ReplicaClient::spawn(
             id,
@@ -1232,24 +1180,15 @@ where
             self.replica_tx.clone(),
         );
 
-        // Take this opportunity to clean up the history we should present.
-        self.history.reduce();
-
-        // Advance the uppers of source imports
-        self.history.update_source_uppers(&self.storage_collections);
-
-        // Replay the commands at the client, creating new dataflow identifiers.
-        for command in self.history.iter() {
-            if client.send(command.clone()).is_err() {
-                // We swallow the error here. On the next send, we will fail again, and
-                // restart the connection as well as this rehydration.
-                tracing::warn!("Replica {:?} connection terminated during hydration", id);
-                break;
-            }
-        }
-
-        // Add replica to tracked state.
-        self.add_replica_state(id, client, config, epoch);
+        let replica_state = Replica::new(
+            id,
+            client,
+            config,
+            self.metrics.for_replica(id),
+            self.introspection_tx.clone(),
+            epoch,
+        );
+        self.replicas.insert(id, replica_state);
 
         Ok(())
     }
@@ -1301,31 +1240,79 @@ where
         Ok(())
     }
 
-    /// Rehydrate the given instance replica.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the specified replica does not exist.
-    fn rehydrate_replica(&mut self, id: ReplicaId) {
-        let config = self.replicas[&id].config.clone();
-        self.remove_replica(id).expect("replica must exist");
-        let result = self.add_replica(id, config);
+    /// Reconnect to any failed replicas of this instance.
+    fn reconnect_failed_replicas(&mut self) {
+        let replicas = self.replicas.iter();
+        let todo: Vec<_> = replicas
+            .filter(|(_, replica)| replica.client.is_failed())
+            .map(|(id, replica)| (*id, replica.config.clone(), replica.epoch))
+            .collect();
 
-        match result {
-            Ok(()) => (),
-            Err(ReplicaExists(_)) => unreachable!("replica was removed"),
+        for (id, config, epoch) in todo {
+            self.remove_replica(id).expect("known to exist");
+            match self.add_replica(id, config, Some(epoch)) {
+                Ok(()) => (),
+                Err(ReplicaExists(_)) => unreachable!("replica was removed"),
+            }
         }
     }
 
-    /// Rehydrate any failed replicas of this instance.
-    fn rehydrate_failed_replicas(&mut self) {
-        let replicas = self.replicas.iter();
-        let failed_replicas: Vec<_> = replicas
-            .filter_map(|(id, replica)| replica.client.is_failed().then_some(*id))
-            .collect();
+    /// Initialize any newly connected replicas of this instance.
+    ///
+    /// Initializing a replica consists of sending it the initial set of commands. We could do this
+    /// immediately after starting the replica task, but we defer until a connection was
+    /// established. We do this to avoid commands piling up in the replica task's command channel,
+    /// if it takes a long time until the replica becomes ready. Piling up commands would cause
+    /// increased memory usage in the controller, but more importantly, the replica would have to
+    /// handle all these commands once it starts up, even ones that are not relevant anymore.
+    fn initialize_replicas(&mut self) {
+        for (id, replica) in self.replicas.iter_mut() {
+            if replica.initialized || !replica.client.is_connected() {
+                continue;
+            }
 
-        for replica_id in failed_replicas {
-            self.rehydrate_replica(replica_id);
+            // Reduce the command history here, to ensure we don't request unnecessary work from
+            // the replica.
+            if !self.history.is_reduced() {
+                self.history.reduce();
+                self.history.update_source_uppers(&self.storage_collections);
+            }
+
+            // Send the initialization commands.
+            for command in self.history.iter() {
+                if replica.client.send(command.clone()).is_err() {
+                    // We swallow the error here. On the next send, we will fail again, and
+                    // restart the replica task.
+                    tracing::warn!(%id, "replica connection terminated during initialization");
+                    break;
+                }
+            }
+
+            let logs = replica.config.logging.index_logs.values();
+            let log_ids: BTreeSet<_> = logs.copied().collect();
+
+            // Initialize per-replica collection state.
+            for (collection_id, collection) in &self.collections {
+                // Skip log collections not maintained by this replica.
+                if collection.log_collection && !log_ids.contains(collection_id) {
+                    continue;
+                }
+
+                let as_of = if collection.log_collection {
+                    // For log collections, we don't send a `CreateDataflow` command to the replica, so
+                    // it doesn't know which as-of the controller chose and defaults to the minimum
+                    // frontier instead. We need to initialize the controller-side tracking with the
+                    // same frontier, to avoid observing regressions in the reported frontiers.
+                    Antichain::from_elem(T::minimum())
+                } else {
+                    collection.read_frontier().to_owned()
+                };
+
+                let input_read_holds = collection.storage_dependencies.values().cloned().collect();
+                replica.add_collection(*collection_id, as_of, input_read_holds);
+            }
+
+            replica.initialized = true;
         }
     }
 
@@ -2247,7 +2234,8 @@ where
     /// changes and that cannot conveniently be handled synchronously with those state changes.
     #[mz_ore::instrument(level = "debug")]
     pub fn maintain(&mut self) {
-        self.rehydrate_failed_replicas();
+        self.reconnect_failed_replicas();
+        self.initialize_replicas();
         self.downgrade_warmup_capabilities();
         self.schedule_collections();
         self.cleanup_collections();
@@ -2818,7 +2806,7 @@ impl<T: ComputeControllerTimestamp> ActiveSubscribe<T> {
 
 /// State maintained about individual replicas.
 #[derive(Debug)]
-struct ReplicaState<T: ComputeControllerTimestamp> {
+struct Replica<T: ComputeControllerTimestamp> {
     /// The ID of the replica.
     id: ReplicaId,
     /// Client for the running replica task.
@@ -2833,9 +2821,11 @@ struct ReplicaState<T: ComputeControllerTimestamp> {
     collections: BTreeMap<GlobalId, ReplicaCollectionState<T>>,
     /// The epoch of the replica.
     epoch: u64,
+    /// Whether the replica has received its initialization commands.
+    initialized: bool,
 }
 
-impl<T: ComputeControllerTimestamp> ReplicaState<T> {
+impl<T: ComputeControllerTimestamp> Replica<T> {
     fn new(
         id: ReplicaId,
         client: ReplicaClient<T>,
@@ -2852,6 +2842,7 @@ impl<T: ComputeControllerTimestamp> ReplicaState<T> {
             introspection_tx,
             epoch,
             collections: Default::default(),
+            initialized: false,
         }
     }
 
@@ -2921,6 +2912,7 @@ impl<T: ComputeControllerTimestamp> ReplicaState<T> {
             introspection_tx: _,
             epoch,
             collections,
+            initialized,
         } = self;
 
         fn field(
@@ -2940,6 +2932,7 @@ impl<T: ComputeControllerTimestamp> ReplicaState<T> {
             field("id", id.to_string())?,
             field("collections", collections)?,
             field("epoch", epoch)?,
+            field("initialized", initialized)?,
         ]);
         Ok(serde_json::Value::Object(map))
     }
