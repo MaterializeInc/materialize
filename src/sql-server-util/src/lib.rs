@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use itertools::Itertools;
 use std::any::Any;
 use std::borrow::Cow;
 use std::future::IntoFuture;
@@ -351,6 +352,65 @@ impl Client {
             .map(|i| (i.into(), None))
             .collect();
         crate::cdc::CdcStream::new(self, instances)
+    }
+
+    /// Return a Result that is empty if all tables and capture instances
+    /// have the necessary permissions to and an error if any table
+    /// or capture instance does not have the necessary permissions
+    /// for tracking changes.
+    pub async fn validate_source_privileges(
+        &mut self,
+        params: Vec<Arc<str>>,
+    ) -> Result<(), SqlServerError> {
+        // If there are no tables to check for just return an empty list.
+        if params.is_empty() {
+            return Ok(());
+        }
+
+        let param_indexes = params
+            .iter()
+            .enumerate()
+            // Params are 1-based indexed.
+            .map(|(idx, _)| format!("@P{}", idx + 1))
+            .join(", ");
+
+        let capture_instance_query = format!(
+            "
+        SELECT
+            SCHEMA_NAME(o.schema_id) + '.' + o.name as qualified_table_name,
+            ct.capture_instance as capture_instance,
+            COALESCE(HAS_PERMS_BY_NAME(SCHEMA_NAME(o.schema_id) + '.' + o.name, 'OBJECT', 'SELECT'), 0) AS table_select,
+            COALESCE(HAS_PERMS_BY_NAME('cdc.' + ct.capture_instance + '_CT', 'OBJECT', 'SELECT'), 0) AS capture_table_select
+        FROM cdc.change_tables ct
+            JOIN sys.objects ON o.object_id = c.source_object_id
+        WHERE ct.capture_instance IN ({param_indexes});
+            "
+        );
+
+        let rows = self.simple_query(capture_instance_query).await?;
+
+        for row in rows {
+            let name: &str = row
+                .try_get(0)
+                .context("getting 0th column")?
+                .ok_or_else(|| anyhow::anyhow!("no 0th column?"))?;
+
+            let permitted_table: i16 = row
+                .try_get(2)
+                .context("getting 2nd column")?
+                .ok_or_else(|| anyhow::anyhow!("no 2nd column?"))?;
+
+            let permitted_capture_instance: i16 = row
+                .try_get(3)
+                .context("getting 3rd column")?
+                .ok_or_else(|| anyhow::anyhow!("no 3rd column?"))?;
+
+            if permitted_table == 0 || permitted_capture_instance == 0 {
+                return Err(SqlServerError::AuthorizationError(name.to_string()));
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -854,6 +914,11 @@ pub enum SqlServerError {
     Generic(#[from] anyhow::Error),
     #[error("programming error! {0}")]
     ProgrammingError(String),
+    #[error("insufficient permissions for table {table} or capture instance {capture_instance}")]
+    AuthorizationError {
+        table: String,
+        capture_instance: String,
+    },
 }
 
 /// Errors returned from decoding SQL Server rows.
