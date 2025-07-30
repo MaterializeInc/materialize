@@ -26,10 +26,11 @@ $ mysql-connect name=mysql url=mysql://root@mysql password=${arg.mysql-root-pass
 $ mysql-execute name=mysql
 DROP DATABASE IF EXISTS public;
 CREATE DATABASE public;
+SET SESSION sql_mode='';
 USE public;
 
 CREATE TABLE enum_type (f1 ENUM ('val1', 'val2'), f2 TEXT);
-INSERT INTO enum_type VALUES ('val1', 'val1'), ('val2', 'val2');
+INSERT INTO enum_type VALUES ('val1', 'val1'), ('val2', 'val2'), ('not-present', 'val2');
 
 > CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
 
@@ -42,6 +43,7 @@ contains:referenced tables use unsupported types
 > SELECT * FROM enum_type;
 val1 val1
 val2 val2
+"" val2
 
 # Add an additional enum value type
 $ mysql-execute name=mysql
@@ -51,6 +53,7 @@ INSERT INTO enum_type VALUES ('val1', 'val1');
 > SELECT * FROM enum_type;
 val1 val1
 val2 val2
+"" val2
 val1 val1
 
 $ mysql-execute name=mysql
@@ -65,7 +68,35 @@ DELETE FROM enum_type WHERE f1 = 'val3';
 > SELECT * FROM enum_type;
 val1 val1
 val2 val2
+"" val2
 val1 val1
+
+$ mysql-execute name=mysql
+USE public;
+INSERT INTO enum_type VALUES (NULL, 'val1');
+INSERT INTO enum_type VALUES ('not-present', 'val1');
+COMMIT;
+
+> SELECT * FROM enum_type;
+val1 val1
+val2 val2
+"" val2
+val1 val1
+<null> val1
+"" val1
+
+$ mysql-execute name=mysql
+USE public;
+UPDATE enum_type SET f1 = 'val2' WHERE f1 IS NULL OR f1 = '';
+COMMIT;
+
+> SELECT * FROM enum_type;
+val1 val1
+val2 val2
+val2 val2
+val1 val1
+val2 val1
+val2 val1
 
 # Add an additional enum value type and change the ordering
 $ mysql-execute name=mysql
