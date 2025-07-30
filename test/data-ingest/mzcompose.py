@@ -84,7 +84,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     args = parser.parse_args()
 
     workloads = buildkite.shard_list(
-        (
+        sorted(
             [globals()[workload] for workload in args.workload]
             if args.workload
             else list(WORKLOADS)
