@@ -23,6 +23,7 @@ import tempfile
 import time
 import uuid
 from datetime import datetime, timedelta
+from typing import Any
 from urllib.parse import urlparse
 
 import psutil
@@ -289,7 +290,7 @@ def main() -> int:
                 f"--timestamp-oracle-url={args.postgres}?options=--search_path=tsoracle",
                 f"--environment-id={environment_id}",
                 "--bootstrap-role=materialize",
-                f"--cluster-replica-sizes={json.dumps(cluster_replica_size_map())}",
+                f"--cluster-replica-sizes={json.dumps(_cluster_replica_sizes())}",
                 f"--bootstrap-default-cluster-replica-size={bootstrap_cluster_replica_size()}",
                 *args.args,
             ]
@@ -617,6 +618,22 @@ def _handle_lingering_services(kill: bool = False) -> None:
                     )
         except psutil.NoSuchProcess:
             continue
+
+
+def _cluster_replica_sizes() -> dict[str, dict[str, Any]]:
+    """
+    Return the default cluster replica sizes for running `environmentd`.
+
+    We don't want to require an unlimited license key, so we need to make sure
+    that each replica size specifies some memory limit.
+    """
+
+    size_map = cluster_replica_size_map()
+    for size in size_map.values():
+        if size.get("memory_limit") is None:
+            size["memory_limit"] = "4Gi"
+
+    return size_map
 
 
 if __name__ == "__main__":
