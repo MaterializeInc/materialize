@@ -12,7 +12,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use mz_ore::collections::CollectionExt;
-use mz_ore::str::StrExt;
 use mz_proto::RustType;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
@@ -181,7 +180,7 @@ pub(super) async fn purify_source_exports(
     let initial_lsn = possible_lsns
         .iter()
         .max()
-        .ok_or_else(|| SqlServerSourcePurificationError::NoInitialLsn())?;
+        .ok_or_else(SqlServerSourcePurificationError::NoInitialLsn)?;
 
     let mut tables = vec![];
     for requested in requested_exports {
