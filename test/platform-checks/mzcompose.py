@@ -13,6 +13,7 @@ and then execute them in upgrade, 0dt-upgrade, restart, recovery and failure
 contexts.
 """
 
+import argparse
 import os
 from enum import Enum
 
@@ -58,12 +59,14 @@ def create_mzs(
     azurite: bool,
     default_replication_factor: int,
     additional_system_parameter_defaults: dict[str, str] | None = None,
+    external_metadata_store: bool = True,
+    external_blob_store: bool = True,
 ) -> list[TestdriveService | Materialized]:
     return [
         Materialized(
             name=mz_name,
-            external_metadata_store=True,
-            external_blob_store=True,
+            external_metadata_store=external_metadata_store,
+            external_blob_store=external_blob_store,
             blob_store_is_azure=azurite,
             sanity_restart=False,
             volumes_extra=["secrets:/share/secrets"],
@@ -76,7 +79,7 @@ def create_mzs(
         TestdriveService(
             default_timeout=TESTDRIVE_DEFAULT_TIMEOUT,
             materialize_params={"statement_timeout": f"'{TESTDRIVE_DEFAULT_TIMEOUT}'"},
-            external_blob_store=True,
+            external_blob_store=external_blob_store,
             blob_store_is_azure=azurite,
             no_reset=True,
             seed=1,
@@ -158,8 +161,8 @@ class ExecutionMode(Enum):
         return self.value
 
 
-def setup(c: Composition) -> None:
-    c.up(
+def setup(c: Composition, external_blob_store: bool) -> None:
+    dependencies = [
         "test-certs",
         "zookeeper",
         "kafka",
@@ -168,12 +171,21 @@ def setup(c: Composition) -> None:
         "mysql",
         "debezium",
         "ssh-bastion-host",
-        "minio",
-        Service("mc", idle=True),
         Service("testdrive", idle=True),
-    )
+    ]
 
-    c.enable_minio_versioning()
+    if external_blob_store:
+        dependencies.extend(
+            [
+                "minio",
+                Service("mc", idle=True),
+            ]
+        )
+
+    c.up(*dependencies)
+
+    if external_blob_store:
+        c.enable_minio_versioning()
 
     # Add `materialize` SCRAM user to Kafka.
     c.exec(
@@ -237,6 +249,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         help="Default replication factor for clusters",
     )
 
+    parser.add_argument(
+        "--external-metadata-store", action=argparse.BooleanOptionalAction, default=True
+    )
+    parser.add_argument(
+        "--external-blob-store", action=argparse.BooleanOptionalAction, default=True
+    )
+
     args = parser.parse_args()
     features = Features(args.features)
 
@@ -276,6 +295,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             features.azurite_enabled(),
             args.default_replication_factor,
             additional_system_parameter_defaults,
+            external_blob_store=args.external_blob_store,
+            external_metadata_store=args.external_metadata_store,
         )
     ):
         executor = MzcomposeExecutor(composition=c)
@@ -296,7 +317,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             execution_mode = args.execution_mode
 
             if execution_mode in [ExecutionMode.SEQUENTIAL, ExecutionMode.PARALLEL]:
-                setup(c)
+                setup(c, args.external_blob_store)
                 scenario = scenario_class(
                     checks=checks,
                     executor=executor,
@@ -312,7 +333,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     c.override_current_testcase_name(
                         f"Check '{check}' with scenario '{scenario_class}'"
                     )
-                    setup(c)
+                    setup(c, args.external_blob_store)
                     scenario = scenario_class(
                         checks=[check],
                         executor=executor,
