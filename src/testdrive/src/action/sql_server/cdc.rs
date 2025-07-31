@@ -60,7 +60,6 @@ pub async fn run_cdc_scan(
     let timer = Instant::now();
     static CDC_SCAN: &str = "EXEC sys.sp_cdc_scan @continuous = 0, @maxscans = 1;";
     while let Err(error) = client.execute(CDC_SCAN, &[]).await {
-        };
 
         // retry if there is another CDC scan going on
         // 22903 = another connection is already running sp_replcmds
