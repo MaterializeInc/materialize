@@ -214,6 +214,7 @@ pub struct State {
     regex: Option<Regex>,
     regex_replacement: String,
     error_line_count: usize,
+    error_string: String,
 
     // === Materialize state. ===
     materialize: MaterializeState,
@@ -1039,6 +1040,7 @@ pub async fn create_state(
         regex_replacement: set::DEFAULT_REGEX_REPLACEMENT.into(),
         rewrite_results: config.rewrite_results,
         error_line_count: 0,
+        error_string: "".to_string(),
 
         // === Materialize state. ===
         materialize: materialize_state,
