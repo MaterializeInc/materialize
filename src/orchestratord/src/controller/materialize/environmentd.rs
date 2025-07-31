@@ -423,6 +423,7 @@ impl Resources {
         mz: &Materialize,
         generation: u64,
     ) -> Result<(), anyhow::Error> {
+        let configmap_api: Api<ConfigMap> = Api::namespaced(client.clone(), &mz.namespace());
         let service_api: Api<Service> = Api::namespaced(client.clone(), &mz.namespace());
         let statefulset_api: Api<StatefulSet> = Api::namespaced(client.clone(), &mz.namespace());
 
@@ -442,6 +443,9 @@ impl Resources {
             &mz.environmentd_generation_service_name(generation),
         )
         .await?;
+
+        trace!("deleting listeners configmap for generation {generation}");
+        delete_resource(&configmap_api, &mz.listeners_configmap_name(generation)).await?;
 
         Ok(())
     }
