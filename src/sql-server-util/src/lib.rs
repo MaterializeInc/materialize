@@ -18,7 +18,6 @@ use anyhow::Context;
 use derivative::Derivative;
 use futures::future::BoxFuture;
 use futures::{FutureExt, Stream, StreamExt, TryStreamExt};
-use mz_ore::cast::CastFrom;
 use mz_ore::netio::DUMMY_DNS_PORT;
 use mz_ore::result::ResultExt;
 use mz_repr::ScalarType;
@@ -388,38 +387,44 @@ impl Client {
         let capture_instance_query = format!(
             "
         SELECT
-            SCHEMA_NAME(o.schema_id) + '.' + o.name as qualified_table_name,
-            ct.capture_instance as capture_instance,
+            SCHEMA_NAME(o.schema_id) + '.' + o.name AS qualified_table_name,
+            ct.capture_instance AS capture_instance,
             COALESCE(HAS_PERMS_BY_NAME(SCHEMA_NAME(o.schema_id) + '.' + o.name, 'OBJECT', 'SELECT'), 0) AS table_select,
             COALESCE(HAS_PERMS_BY_NAME('cdc.' + ct.capture_instance + '_CT', 'OBJECT', 'SELECT'), 0) AS capture_table_select
         FROM cdc.change_tables ct
-            JOIN sys.objects ON o.object_id = c.source_object_id
+            JOIN sys.objects o ON o.object_id = ct.source_object_id
         WHERE ct.capture_instance IN ({param_indexes});
             "
         );
 
         let rows = self.query(capture_instance_query, &params_dyn[..]).await?;
+        let num_rows = rows.len();
+
+        tracing::info!(?num_rows, "found rows");
 
         for row in rows {
+            let cols: Vec<&str> = row.columns().iter().map(|c| c.name()).collect();
+            tracing::info!(?row, ?cols, "found row");
+
             let table: &str = row
-                .try_get(0)
-                .context("getting 0th column")?
-                .ok_or_else(|| anyhow::anyhow!("no 0th column?"))?;
+                .try_get("qualified_table_name")
+                .context("getting table column")?
+                .ok_or_else(|| anyhow::anyhow!("no table column?"))?;
 
             let capture_instance: &str = row
-                .try_get(1)
-                .context("getting 1st column")?
-                .ok_or_else(|| anyhow::anyhow!("no 1st column?"))?;
+                .try_get("capture_instance")
+                .context("getting capture_instance column")?
+                .ok_or_else(|| anyhow::anyhow!("no capture_instance column?"))?;
 
-            let permitted_table: i16 = row
-                .try_get(2)
-                .context("getting 2nd column")?
-                .ok_or_else(|| anyhow::anyhow!("no 2nd column?"))?;
+            let permitted_table: i32 = row
+                .try_get("table_select")
+                .context("getting table_select column")?
+                .ok_or_else(|| anyhow::anyhow!("no table_select column?"))?;
 
-            let permitted_capture_instance: i16 = row
-                .try_get(3)
-                .context("getting 3rd column")?
-                .ok_or_else(|| anyhow::anyhow!("no 3rd column?"))?;
+            let permitted_capture_instance: i32 = row
+                .try_get("capture_table_select")
+                .context("getting capture_table_select column")?
+                .ok_or_else(|| anyhow::anyhow!("no capture_table_select column?"))?;
 
             if permitted_table == 0 || permitted_capture_instance == 0 {
                 return Err(SqlServerError::AuthorizationError {
