@@ -47,7 +47,7 @@ impl Coordinator {
         mut ctx: Option<&mut ExecuteContext>,
         updates: Vec<CatalogSideEffect>,
     ) -> Result<(), AdapterError> {
-        let mut tables_to_drop = Vec::new();
+        let mut tables_to_drop = BTreeSet::new();
         let mut sources_to_drop = vec![];
         let mut replication_slots_to_drop: Vec<(PostgresConnection, String)> = vec![];
         let mut storage_sink_gids_to_drop = vec![];
@@ -67,10 +67,16 @@ impl Coordinator {
         let mut storage_policies_to_initialize = BTreeMap::new();
         let mut execution_timestamps_to_set = BTreeSet::new();
 
+        let dropped_items = Self::collect_dropped_items(&updates);
+
         for update in updates {
             tracing::info!(?update, "have to apply!");
             match update {
                 CatalogSideEffect::CreateTable(id, global_id, table) => {
+                    if dropped_items.contains(&id) {
+                        continue;
+                    }
+
                     self.handle_create_table(
                         &mut ctx,
                         &mut storage_collections_to_create,
@@ -83,7 +89,10 @@ impl Coordinator {
                     .await?
                 }
                 CatalogSideEffect::DropTable(id, global_id) => {
-                    tables_to_drop.push((id, global_id));
+                    if !dropped_items.contains(&id) {
+                        continue;
+                    }
+                    tables_to_drop.insert((id, global_id));
                 }
                 CatalogSideEffect::DropSource(id, gid, _source) => {
                     sources_to_drop.push((id, gid));
@@ -310,7 +319,7 @@ impl Coordinator {
             // occur.
             if !tables_to_drop.is_empty() {
                 let ts = self.get_local_write_ts().await;
-                self.drop_tables(tables_to_drop, ts.timestamp);
+                self.drop_tables(tables_to_drop.into_iter().collect_vec(), ts.timestamp);
             }
 
             if !sources_to_drop.is_empty() {
@@ -459,6 +468,47 @@ impl Coordinator {
         .await;
 
         Ok(())
+    }
+
+    fn collect_dropped_items(side_effects: &[CatalogSideEffect]) -> BTreeSet<CatalogItemId> {
+        let mut liveness_counts = BTreeMap::new();
+
+        for side_effect in side_effects {
+            match side_effect {
+                CatalogSideEffect::CreateTable(catalog_item_id, _global_id, _table) => {
+                    liveness_counts
+                        .entry(*catalog_item_id)
+                        .and_modify(|count| *count += 1)
+                        .or_insert_with(|| 1);
+                }
+                CatalogSideEffect::DropTable(catalog_item_id, ..)
+                | CatalogSideEffect::DropSource(catalog_item_id, ..)
+                | CatalogSideEffect::DropView(catalog_item_id, ..)
+                | CatalogSideEffect::DropMaterializedView(catalog_item_id, ..)
+                | CatalogSideEffect::DropContinualTask(catalog_item_id, ..)
+                | CatalogSideEffect::DropSink(catalog_item_id, ..)
+                | CatalogSideEffect::DropIndex(catalog_item_id, ..)
+                | CatalogSideEffect::DropSecret(catalog_item_id, ..)
+                | CatalogSideEffect::DropConnection(catalog_item_id, ..) => {
+                    liveness_counts
+                        .entry(*catalog_item_id)
+                        .and_modify(|count| *count -= 1)
+                        .or_insert_with(|| -1);
+                }
+                CatalogSideEffect::DropReplicationSlot(_pg_conn, ..) => (),
+                CatalogSideEffect::DropCluster(_storage_instance_id) => (),
+                CatalogSideEffect::DropClusterReplica {
+                    cluster_id: _,
+                    replica_id: _,
+                } => (),
+            }
+        }
+
+        liveness_counts
+            .into_iter()
+            .filter(|(_item, count)| *count < 0)
+            .map(|(item, _count)| item)
+            .collect()
     }
 
     #[instrument(level = "debug")]
