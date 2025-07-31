@@ -168,6 +168,8 @@ def setup(c: Composition) -> None:
         "mysql",
         "debezium",
         "ssh-bastion-host",
+        "minio",
+        Service("mc", idle=True),
         Service("testdrive", idle=True),
     )
 

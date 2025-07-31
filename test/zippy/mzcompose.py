@@ -192,16 +192,24 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     args = parser.parse_args()
     scenario_class = globals()[args.scenario]
 
-    c.up("zookeeper", "redpanda", "ssh-bastion-host")
+    dependencies = [
+        "zookeeper",
+        "redpanda",
+        "ssh-bastion-host",
+        "minio",
+        Service("mc", idle=True),
+    ]
     if args.azurite:
-        c.up("azurite")
+        dependencies.append("azurite")
     else:
         del c.compose["services"]["azurite"]
-    # Required for backups, even with azurite
-    c.enable_minio_versioning()
 
     if args.observability:
-        c.up("prometheus", "grafana")
+        dependencies.extend(["prometheus", "grafana"])
+
+    c.up(*dependencies)
+    # Required for backups, even with azurite
+    c.enable_minio_versioning()
 
     print(f"Using seed {args.seed}")
     random.seed(args.seed)
