@@ -390,10 +390,15 @@ impl Client {
         let rows = self.simple_query(capture_instance_query).await?;
 
         for row in rows {
-            let name: &str = row
+            let table: &str = row
                 .try_get(0)
                 .context("getting 0th column")?
                 .ok_or_else(|| anyhow::anyhow!("no 0th column?"))?;
+
+            let capture_instance: &str = row
+                .try_get(1)
+                .context("getting 1st column")?
+                .ok_or_else(|| anyhow::anyhow!("no 1st column?"))?;
 
             let permitted_table: i16 = row
                 .try_get(2)
@@ -406,7 +411,10 @@ impl Client {
                 .ok_or_else(|| anyhow::anyhow!("no 3rd column?"))?;
 
             if permitted_table == 0 || permitted_capture_instance == 0 {
-                return Err(SqlServerError::AuthorizationError(name.to_string()));
+                return Err(SqlServerError::AuthorizationError {
+                    table: table.to_string(),
+                    capture_instance: capture_instance.to_string(),
+                });
             }
         }
 
