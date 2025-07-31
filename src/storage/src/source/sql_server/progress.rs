@@ -118,7 +118,8 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
             loop {
                 tokio::select! {
                     probe_ts = probe_ticker.tick() => {
-                        let known_lsn: Lsn = mz_sql_server_util::inspect::get_max_lsn(&mut client).await?;
+                        let max_lsn: Lsn = mz_sql_server_util::inspect::get_max_lsn(&mut client).await?;
+                        let known_lsn = max_lsn.increment();
 
                         // The DB should never go backwards, but it's good to know if it does.
                         let prev_known_lsn = match prev_offset_known {
