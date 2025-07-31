@@ -494,6 +494,7 @@ steps:
     label: dbt-materialize tests
     depends_on: build-aarch64
     timeout_in_minutes: 30
+    parallelism: 2
     plugins:
       - ./ci/plugins/mzcompose:
           composition: dbt-materialize
