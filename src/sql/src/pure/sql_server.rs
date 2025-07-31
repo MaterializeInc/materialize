@@ -148,8 +148,6 @@ pub(super) async fn purify_source_exports(
         }
     }
 
-    let initial_lsn = mz_sql_server_util::inspect::get_max_lsn_retry(client, timeout).await?;
-
     // TODO(sql_server2): Validate permissions on upstream tables.
 
     let capture_instances: BTreeMap<_, _> = requested_exports
@@ -168,24 +166,22 @@ pub(super) async fn purify_source_exports(
         })
         .collect();
 
-    let min_lsns = mz_sql_server_util::inspect::get_min_lsns(
+    // If CDC is freshly enabled for a table, it has been obsered that
+    // the `start_lsn`` from `cdc.change_tables` can be ahead of the LSN
+    // returned by `sys.fn_cdc_get_max_lsn`.  Eventually, the LSN returned
+    // by `sys.fn_cdc_get_max_lsn` will surpass `start_lsn`. For this
+    // reason, we choose the initial_lsn to be
+    // `max(start_lsns, sys.fn_cdc_get_max_lsn())``.
+    let mut possible_lsns = mz_sql_server_util::inspect::get_min_lsns(
         client,
-        capture_instances
-            .values()
-            .map(|instance| instance.as_ref())
-            .collect::<Vec<_>>(),
+        capture_instances.values().map(|instance| instance.as_ref()),
     )
     .await?;
-    for (instance, min_lsn) in min_lsns.iter() {
-        // When reading LSNs from CDC, the range is inclusive, so cases where
-        // min_lsn = max_lsn still have a single record to read. See
-        // https://learn.microsoft.com/en-us/sql/relational-databases/system-functions/cdc-fn-cdc-get-all-changes-capture-instance-transact-sql?view=sql-server-ver17
-        if initial_lsn < *min_lsn {
-            Err(SqlServerSourcePurificationError::InvalidInitialLsn(
-                instance.quoted().to_string(),
-            ))?;
-        }
-    }
+    possible_lsns.push(mz_sql_server_util::inspect::get_max_lsn_retry(client, timeout).await?);
+    let initial_lsn = possible_lsns
+        .iter()
+        .max()
+        .ok_or_else(|| SqlServerSourcePurificationError::NoInitialLsn())?;
 
     let mut tables = vec![];
     for requested in requested_exports {

@@ -75,15 +75,19 @@ pub async fn get_max_lsn(client: &mut Client) -> Result<Lsn, SqlServerError> {
     parse_lsn(&result[..1])
 }
 
-/// Retrieves the minumum [`Lsn`] (start_lsn field) from `cdc.change_tables`.
-/// This is based on digging into `sys.fn_cdc_get_min_lsn` implementation, which has
-/// some additional checks that we want to bypass.
+/// Retrieves the minumum [`Lsn`] (start_lsn field) from `cdc.change_tables`
+/// for the specified capture instances.
+///
+/// This is based on the `sys.fn_cdc_get_min_lsn` implementation, which has logic
+/// that we want to bypass. Specifically, `sys.fn_cdc_get_min_lsn` returns NULL
+/// if the `start_lsn` in `cdc.change_tables` is less than or equal to the LSN
+/// returned by `sys.fn_cdc_get_max_lsn`.
 ///
 /// See: <https://learn.microsoft.com/en-us/sql/relational-databases/system-tables/cdc-change-tables-transact-sql?view=sql-server-ver16>
 pub async fn get_min_lsns(
     client: &mut Client,
     capture_instances: impl IntoIterator<Item = &str>,
-) -> Result<Vec<(String, Lsn)>, SqlServerError> {
+) -> Result<Vec<Lsn>, SqlServerError> {
     let capture_instances: SmallVec<[_; 1]> = capture_instances.into_iter().collect();
     #[allow(clippy::as_conversions)]
     let values: SmallVec<[_; 1]> = capture_instances
@@ -111,9 +115,9 @@ pub async fn get_min_lsns(
             })?;
             let min_lsn = Lsn::try_from(start_lsn).map_err(|msg| SqlServerError::InvalidData {
                 column_name: "lsn".to_string(),
-                error: msg,
+                error: format!("Error parsing LSN for {capture_instance}: {msg}"),
             })?;
-            Ok::<_, SqlServerError>((capture_instance.into(), min_lsn))
+            Ok::<_, SqlServerError>(min_lsn)
         })
         .collect::<Result<_, _>>()?;
 
