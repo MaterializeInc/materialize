@@ -19,7 +19,11 @@ import time
 from datetime import timedelta
 from enum import Enum
 
-from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.composition import (
+    Composition,
+    Service,
+    WorkflowArgumentParser,
+)
 from materialize.mzcompose.services.azurite import Azurite
 from materialize.mzcompose.services.balancerd import Balancerd
 from materialize.mzcompose.services.clusterd import Clusterd
@@ -261,7 +265,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         c.rm("materialized")
 
-        c.up({"name": "testdrive", "persistent": True})
+        c.up(Service("testdrive", idle=True))
 
         print("Generating test...")
         test = Test(

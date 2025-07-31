@@ -20,7 +20,7 @@ from textwrap import dedent
 from psycopg import Cursor
 
 from materialize import buildkite
-from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.composition import Composition, Service
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mz import Mz
@@ -158,7 +158,7 @@ def workflow_multithreaded(c: Composition) -> None:
         "kafka",
         "schema-registry",
         "materialized",
-        {"name": "testdrive", "persistent": True},
+        Service("testdrive", idle=True),
     )
 
     value = [201]

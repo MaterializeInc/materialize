@@ -11,9 +11,9 @@ import requests
 
 from materialize.mzcompose.composition import (
     Composition,
-    Service,
     WorkflowArgumentParser,
 )
+from materialize.mzcompose.service import Service
 from materialize.mzcompose.services.debezium import Debezium
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized

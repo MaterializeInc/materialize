@@ -24,7 +24,11 @@ from textwrap import dedent
 from urllib.parse import quote
 
 from materialize import MZ_ROOT, buildkite
-from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.composition import (
+    Composition,
+    Service,
+    WorkflowArgumentParser,
+)
 from materialize.mzcompose.services.balancerd import Balancerd
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.cockroach import Cockroach
@@ -2051,7 +2055,7 @@ def workflow_main(c: Composition, parser: WorkflowArgumentParser) -> None:
 def run_scenarios(
     c: Composition, scenarios: list[type[Generator]], find_limit: bool, workers: int
 ):
-    c.up({"name": "testdrive", "persistent": True})
+    c.up(Service("testdrive", idle=True))
 
     setup(c, workers)
 
@@ -2219,7 +2223,7 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
         "materialized",
         "balancerd",
         "frontegg-mock",
-        {"name": "testdrive", "persistent": True},
+        Service("testdrive", idle=True),
     )
 
     # Construct the requied Clusterd instances and peer them into clusters

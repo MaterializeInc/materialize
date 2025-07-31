@@ -22,9 +22,9 @@ from typing import Any
 
 from materialize.mzcompose.composition import (
     Composition,
-    Service,
     WorkflowArgumentParser,
 )
+from materialize.mzcompose.service import Service
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.sqlsmith import known_errors
 

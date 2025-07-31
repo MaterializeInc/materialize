@@ -20,7 +20,11 @@ from typing import Protocol
 
 from materialize import buildkite
 from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
-from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.composition import (
+    Composition,
+    Service,
+    WorkflowArgumentParser,
+)
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
@@ -73,7 +77,7 @@ class KafkaTransactionLogGreaterThan1:
         print(f"+++ Running disruption scenario {self.name}")
         seed = random.randint(0, 256**4)
 
-        c.up({"name": "testdrive", "persistent": True})
+        c.up(Service("testdrive", idle=True))
 
         with c.override(
             Testdrive(
@@ -148,7 +152,7 @@ class KafkaDisruption:
             "redpanda",
             "materialized",
             "clusterd",
-            {"name": "testdrive", "persistent": True},
+            Service("testdrive", idle=True),
         )
 
         with c.override(
@@ -263,7 +267,7 @@ class KafkaSinkDisruption:
             "redpanda",
             "materialized",
             "clusterd",
-            {"name": "testdrive", "persistent": True},
+            Service("testdrive", idle=True),
         )
 
         with c.override(
@@ -372,7 +376,7 @@ class PgDisruption:
             "postgres",
             "materialized",
             "clusterd",
-            {"name": "testdrive", "persistent": True},
+            Service("testdrive", idle=True),
         )
 
         with c.override(

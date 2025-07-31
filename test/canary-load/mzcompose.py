@@ -22,7 +22,11 @@ from requests.exceptions import ConnectionError, ReadTimeout
 
 from materialize.cloudtest.util.jwt_key import fetch_jwt
 from materialize.mz_env_util import get_cloud_hostname
-from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.composition import (
+    Composition,
+    Service,
+    WorkflowArgumentParser,
+)
 from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.test_result import (
@@ -63,7 +67,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             default_timeout="1200s",
         ),
     ):
-        c.up({"name": "testdrive", "persistent": True})
+        c.up(Service("testdrive", idle=True))
 
         failures: list[TestFailureDetails] = []
 

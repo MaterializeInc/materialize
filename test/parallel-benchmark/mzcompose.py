@@ -24,7 +24,11 @@ from matplotlib.markers import MarkerStyle
 from materialize import MZ_ROOT, buildkite
 from materialize.mz_env_util import get_cloud_hostname
 from materialize.mzcompose import ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS
-from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.composition import (
+    Composition,
+    Service,
+    WorkflowArgumentParser,
+)
 from materialize.mzcompose.services.azurite import Azurite
 from materialize.mzcompose.services.balancerd import Balancerd
 from materialize.mzcompose.services.cockroach import Cockroach
@@ -464,7 +468,7 @@ def run_once(
     with c.override(*overrides):
         for scenario_class in scenarios:
             if target:
-                c.up({"name": "testdrive", "persistent": True})
+                c.up(Service("testdrive", idle=True))
                 conn_infos = {"materialized": target}
                 conn = target.connect()
                 with conn.cursor() as cur:
@@ -478,7 +482,7 @@ def run_once(
                 mz_string = f"{mz_version} ({target.host})"
             else:
                 print("~~~ Starting up services")
-                c.up(*service_names, {"name": "testdrive", "persistent": True})
+                c.up(*service_names, Service("testdrive", idle=True))
 
                 mz_version = c.query_mz_version()
                 mz_string = f"{mz_version} (docker)"

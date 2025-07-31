@@ -21,7 +21,11 @@ from io import BytesIO, StringIO
 import pyarrow.parquet  #
 from minio import Minio
 
-from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.composition import (
+    Composition,
+    Service,
+    WorkflowArgumentParser,
+)
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Mc
 from materialize.mzcompose.services.minio import Minio as MinioService
@@ -182,8 +186,7 @@ def workflow_ci(c: Composition, _parser: WorkflowArgumentParser) -> None:
 
 
 def workflow_auth(c: Composition) -> None:
-    c.up({"name": "mc", "persistent": True})
-    c.up("materialized", "minio")
+    c.up(Service("mc", idle=True), "materialized", "minio")
 
     # Set up IAM credentials for 3 users with different permissions levels to S3:
     # User 'readwritedelete': PutObject, ListBucket, DeleteObject

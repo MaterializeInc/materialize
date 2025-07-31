@@ -17,7 +17,11 @@ import threading
 from textwrap import dedent
 
 from materialize import MZ_ROOT
-from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.composition import (
+    Composition,
+    Service,
+    WorkflowArgumentParser,
+)
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.sql_server import SqlServer
@@ -124,7 +128,7 @@ def workflow_snapshot_consistency(
 
     initial_rows = 100
     with c.override(SqlServer()):
-        c.up("materialized", "sql-server", {"name": "testdrive", "persistent": True})
+        c.up("materialized", "sql-server", Service("testdrive", idle=True))
 
         # Setup MS SQL server and materialize
         c.testdrive(

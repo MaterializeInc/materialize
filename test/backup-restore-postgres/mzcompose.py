@@ -13,7 +13,7 @@ Basic Backup & Restore test with a table
 
 from textwrap import dedent
 
-from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.composition import Composition, Service
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Mc, Minio
 from materialize.mzcompose.services.persistcli import Persistcli
@@ -42,7 +42,7 @@ def workflow_default(c: Composition) -> None:
     c.enable_minio_versioning()
 
     # Start Materialize, and set up some basic state in it
-    c.up("materialized", {"name": "testdrive", "persistent": True})
+    c.up("materialized", Service("testdrive", idle=True))
     c.testdrive(
         dedent(
             """

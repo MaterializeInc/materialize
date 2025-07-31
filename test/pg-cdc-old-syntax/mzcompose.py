@@ -18,8 +18,13 @@ import pg8000
 from pg8000 import Connection
 
 from materialize import MZ_ROOT, buildkite
-from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
-from materialize.mzcompose.service import Service, ServiceConfig
+from materialize.mzcompose.composition import (
+    Composition,
+    Service,
+    WorkflowArgumentParser,
+)
+from materialize.mzcompose.service import Service as MzComposeService
+from materialize.mzcompose.service import ServiceConfig
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Minio
 from materialize.mzcompose.services.mz import Mz
@@ -41,7 +46,7 @@ from materialize.source_table_migration import (
 DEFAULT_PG_EXTRA_COMMAND = ["-c", "max_slot_wal_keep_size=10"]
 
 
-class PostgresRecvlogical(Service):
+class PostgresRecvlogical(MzComposeService):
     """
     Command to start a replication.
     """
@@ -314,7 +319,7 @@ def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     print(f"Files: {sharded_files}")
 
-    c.up({"name": "test-certs", "persistent": True})
+    c.up(Service("test-certs", idle=True))
     ssl_ca = c.run("test-certs", "cat", "/secrets/ca.crt", capture=True).stdout
     ssl_cert = c.run("test-certs", "cat", "/secrets/certuser.crt", capture=True).stdout
     ssl_key = c.run("test-certs", "cat", "/secrets/certuser.key", capture=True).stdout
@@ -397,7 +402,7 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     print(f"Files: {sharded_files}")
 
-    c.up({"name": "test-certs", "persistent": True})
+    c.up(Service("test-certs", idle=True))
     ssl_ca = c.run("test-certs", "cat", "/secrets/ca.crt", capture=True).stdout
     ssl_cert = c.run("test-certs", "cat", "/secrets/certuser.crt", capture=True).stdout
     ssl_key = c.run("test-certs", "cat", "/secrets/certuser.key", capture=True).stdout

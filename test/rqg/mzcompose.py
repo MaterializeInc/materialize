@@ -19,6 +19,7 @@ from enum import Enum
 
 from materialize.mzcompose.composition import (
     Composition,
+    MzComposeService,
     Service,
     WorkflowArgumentParser,
 )
@@ -222,7 +223,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     args = parser.parse_args()
 
-    c.up({"name": "rqg", "persistent": True})
+    c.up(Service("rqg", idle=True))
 
     if args.workloads is not None and len(args.workloads) > 0:
         workloads_to_run = [w for w in WORKLOADS if w.name in args.workloads]
@@ -243,7 +244,7 @@ def run_workload(c: Composition, args: argparse.Namespace, workload: Workload) -
         return f"materialize/materialized:{tag}" if tag else None
 
     # A list of psql-compatible services participating in the test
-    participants: list[Service] = [
+    participants: list[MzComposeService] = [
         Materialized(
             name="mz_this",
             ports=["16875:6875", "16876:6876", "16877:6877", "16878:6878"],

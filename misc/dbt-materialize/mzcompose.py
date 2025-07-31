@@ -15,7 +15,11 @@ from dataclasses import dataclass
 from textwrap import dedent
 from typing import Dict, List, Optional
 
-from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.composition import (
+    Composition,
+    Service,
+    WorkflowArgumentParser,
+)
 from materialize.mzcompose.services.dbt import Dbt
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.redpanda import Redpanda
@@ -56,7 +60,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument("-s", action="store_true", help="don't suppress output")
     args = parser.parse_args()
 
-    c.up({"name": "dbt", "persistent": True})
+    c.up(Service("dbt", idle=True))
 
     for test_case in test_cases:
         if args.filter in test_case.name:
@@ -82,7 +86,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     c.up(
                         "redpanda",
                         "materialized",
-                        {"name": "testdrive", "persistent": True},
+                        Service("testdrive", idle=True),
                     )
 
                     # Create a topic that some tests rely on

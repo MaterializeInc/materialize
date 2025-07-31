@@ -19,9 +19,9 @@ from threading import Thread
 from materialize import spawn
 from materialize.mzcompose.composition import (
     Composition,
-    Service,
     WorkflowArgumentParser,
 )
+from materialize.mzcompose.service import Service
 from materialize.mzcompose.services.materialized import Materialized
 
 SERVICES = [

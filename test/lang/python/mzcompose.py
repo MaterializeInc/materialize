@@ -11,7 +11,8 @@
 Basic test for Postgres-compatible connections from Python programming language.
 """
 
-from materialize.mzcompose.composition import Composition, Service
+from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.service import Service
 from materialize.mzcompose.services.materialized import Materialized
 
 SERVICES = [

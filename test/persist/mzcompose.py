@@ -15,9 +15,9 @@ import argparse
 
 from materialize.mzcompose.composition import (
     Composition,
-    Service,
     WorkflowArgumentParser,
 )
+from materialize.mzcompose.service import Service
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.postgres import PostgresMetadata
 

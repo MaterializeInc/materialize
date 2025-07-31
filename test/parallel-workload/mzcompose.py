@@ -18,8 +18,12 @@ import random
 
 import requests
 
-from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
-from materialize.mzcompose.service import Service
+from materialize.mzcompose.composition import (
+    Composition,
+    Service,
+    WorkflowArgumentParser,
+)
+from materialize.mzcompose.service import Service as MzComposeService
 from materialize.mzcompose.services.azurite import Azurite
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.kafka import Kafka
@@ -53,8 +57,8 @@ SERVICES = [
     Mc(),
     Materialized(default_replication_factor=2),
     Materialized(name="materialized2", default_replication_factor=2),
-    Service("sqlsmith", {"mzbuild": "sqlsmith"}),
-    Service(
+    MzComposeService("sqlsmith", {"mzbuild": "sqlsmith"}),
+    MzComposeService(
         name="persistcli",
         config={"mzbuild": "jobs"},
     ),
@@ -100,7 +104,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         toxiproxy_start(c)
         c.up(*service_names)
 
-        c.up({"name": "mc", "persistent": True})
+        c.up(Service("mc", idle=True))
         c.exec(
             "mc",
             "mc",
