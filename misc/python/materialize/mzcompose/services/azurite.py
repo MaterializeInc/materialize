@@ -29,6 +29,7 @@ class Azurite(Service):
     ):
         if command is None:
             command = [
+                "eatmydata",
                 "azurite-blob",
                 "--blobHost",
                 "0.0.0.0",
