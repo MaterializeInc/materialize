@@ -4289,6 +4289,7 @@ def workflow_test_refresh_mv_restart(
         check_introspection()
 
         # Reset the testing context.
+        c.down(destroy_volumes=True)
         c.up("materialized", Service("testdrive", idle=True))
 
         # 2. (slow restart)
@@ -4303,6 +4304,7 @@ def workflow_test_refresh_mv_restart(
         check_introspection()
 
         # Reset the testing context.
+        c.down(destroy_volumes=True)
         c.up("materialized", Service("testdrive", idle=True))
 
         # 3.
