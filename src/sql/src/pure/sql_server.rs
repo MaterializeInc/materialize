@@ -146,17 +146,13 @@ pub(super) async fn purify_source_exports(
         }
     }
 
-    let capture_instances = requested_exports
-        .iter()
-        .map(|export| {
-            Arc::clone(
-                export
-                    .meta
-                    .sql_server_capture_instance()
-                    .expect("sql server source"),
-            )
-        })
-        .collect();
+    let capture_instances = requested_exports.iter().map(|export| {
+        export
+            .meta
+            .sql_server_capture_instance()
+            .expect("sql server source")
+            .as_ref()
+    });
 
     client.validate_source_privileges(capture_instances).await?;
 

@@ -18,6 +18,7 @@ use anyhow::Context;
 use derivative::Derivative;
 use futures::future::BoxFuture;
 use futures::{FutureExt, Stream, StreamExt, TryStreamExt};
+use mz_ore::cast::CastFrom;
 use mz_ore::netio::DUMMY_DNS_PORT;
 use mz_ore::result::ResultExt;
 use mz_repr::ScalarType;
@@ -360,12 +361,22 @@ impl Client {
     /// for tracking changes.
     pub async fn validate_source_privileges(
         &mut self,
-        params: Vec<Arc<str>>,
+        capture_instances: impl IntoIterator<Item = &str>,
     ) -> Result<(), SqlServerError> {
+        // SQL Server does not have support for array types, so we need to manually construct
+        // the parameterized query.
+        let params: SmallVec<[_; 1]> = capture_instances.into_iter().collect();
         // If there are no tables to check for just return an empty list.
         if params.is_empty() {
             return Ok(());
         }
+
+        // TODO(sql_server3): Remove this redundant collection.
+        #[allow(clippy::as_conversions)]
+        let params_dyn: SmallVec<[_; 1]> = params
+            .iter()
+            .map(|instance| instance as &dyn tiberius::ToSql)
+            .collect();
 
         let param_indexes = params
             .iter()
@@ -387,7 +398,7 @@ impl Client {
             "
         );
 
-        let rows = self.simple_query(capture_instance_query).await?;
+        let rows = self.query(capture_instance_query, &params_dyn[..]).await?;
 
         for row in rows {
             let table: &str = row
