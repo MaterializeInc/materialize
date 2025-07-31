@@ -34,7 +34,21 @@ export RUSTDOCFLAGS
 
 target=${CARGO_TARGET_DIR:-target}
 
-cargo doc --all-features "$@"
+CARGO_DOC_OUTPUT=$(mktemp)
+if ! cargo doc --all-features "$@" 2> "$CARGO_DOC_OUTPUT"; then
+  if grep -q "invalid template" "$CARGO_DOC_OUTPUT"; then
+    echo "Failed due to invalid template, nuking doc directory and retrying from scratch"
+    rm -f "$CARGO_DOC_OUTPUT"
+    rm -rf "$target"/doc
+    cargo doc --all-features "$@"
+  else
+    echo "cargo doc failed:"
+    cat "$CARGO_DOC_OUTPUT"
+    rm -f "$CARGO_DOC_OUTPUT"
+    exit 1
+  fi
+fi
+rm -f "$CARGO_DOC_OUTPUT"
 
 crates=$(cargo metadata --format-version=1 \
   | jq -r -f misc/doc/crates.jq --arg pwd "$(pwd)")
