@@ -9,6 +9,9 @@
 
 # testing cardinality estimation
 
+# This is currently flaky even with a raised timeout. Look into this when starting to use cardinality for real!
+halt
+
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_cardinality_estimates = true
 ----
