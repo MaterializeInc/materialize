@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use fail::fail_point;
-use maplit::btreeset;
+use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_catalog::memory::objects::{DataSourceDesc, Table, TableDataSource};
 use mz_compute_client::protocol::response::PeekResponse;
@@ -35,6 +35,7 @@ use tracing::{Instrument, info_span, warn};
 use crate::active_compute_sink::ActiveComputeSinkRetireReason;
 use crate::catalog::side_effects::CatalogSideEffect;
 use crate::coord::Coordinator;
+use crate::coord::statement_logging::StatementLoggingId;
 use crate::coord::timeline::TimelineState;
 use crate::statement_logging::StatementEndedExecutionReason;
 use crate::{AdapterError, CollectionIdBundle, ExecuteContext, ResultExt};
@@ -62,12 +63,24 @@ impl Coordinator {
         let mut peeks_to_drop = vec![];
         let mut copies_to_drop = vec![];
 
+        let mut storage_collections_to_create = BTreeMap::new();
+        let mut storage_policies_to_initialize = BTreeMap::new();
+        let mut execution_timestamps_to_set = BTreeSet::new();
+
         for update in updates {
             tracing::info!(?update, "have to apply!");
             match update {
                 CatalogSideEffect::CreateTable(id, global_id, table) => {
-                    self.controller_create_table(&mut ctx, id, global_id, table)
-                        .await?
+                    self.handle_create_table(
+                        &mut ctx,
+                        &mut storage_collections_to_create,
+                        &mut storage_policies_to_initialize,
+                        &mut execution_timestamps_to_set,
+                        id,
+                        global_id,
+                        table,
+                    )
+                    .await?
                 }
                 CatalogSideEffect::DropTable(id, global_id) => {
                     tables_to_drop.push((id, global_id));
@@ -122,6 +135,13 @@ impl Coordinator {
                 }
             }
         }
+
+        self.create_storage_collections(
+            storage_collections_to_create,
+            storage_policies_to_initialize,
+            execution_timestamps_to_set,
+        )
+        .await?;
 
         let collections_to_drop: BTreeSet<_> = sources_to_drop
             .iter()
@@ -442,9 +462,59 @@ impl Coordinator {
     }
 
     #[instrument(level = "debug")]
-    async fn controller_create_table(
+    async fn create_storage_collections(
+        &mut self,
+        storage_collections_to_create: BTreeMap<GlobalId, CollectionDescription<Timestamp>>,
+        storage_policies_to_initialize: BTreeMap<CompactionWindow, BTreeSet<CatalogItemId>>,
+        execution_timestamps_to_set: BTreeSet<StatementLoggingId>,
+    ) -> Result<(), AdapterError> {
+        // If we have tables, determine the initial validity for the table.
+        let register_ts = self.get_local_write_ts().await.timestamp;
+
+        // After acquiring `register_ts` but before using it, we need to
+        // be sure we're still the leader. Otherwise a new generation
+        // may also be trying to use `register_ts` for a different
+        // purpose.
+        //
+        // See #28216.
+        self.catalog
+            .confirm_leadership()
+            .await
+            .unwrap_or_terminate("unable to confirm leadership");
+
+        for id in execution_timestamps_to_set {
+            self.set_statement_execution_timestamp(id, register_ts);
+        }
+
+        let storage_metadata = self.catalog.state().storage_metadata();
+
+        self.controller
+            .storage
+            .create_collections(
+                storage_metadata,
+                Some(register_ts),
+                storage_collections_to_create.into_iter().collect_vec(),
+            )
+            .await
+            .unwrap_or_terminate("cannot fail to create collections");
+
+        self.apply_local_write(register_ts).await;
+
+        for (compaction_window, global_ids) in storage_policies_to_initialize {
+            self.initialize_storage_read_policies(global_ids, compaction_window)
+                .await;
+        }
+
+        Ok(())
+    }
+
+    #[instrument(level = "debug")]
+    async fn handle_create_table(
         &mut self,
         ctx: &mut Option<&mut ExecuteContext>,
+        storage_collections_to_create: &mut BTreeMap<GlobalId, CollectionDescription<Timestamp>>,
+        storage_policies_to_initialize: &mut BTreeMap<CompactionWindow, BTreeSet<CatalogItemId>>,
+        execution_timestamps_to_set: &mut BTreeSet<StatementLoggingId>,
         table_id: CatalogItemId,
         global_id: GlobalId,
         table: Table,
@@ -454,44 +524,20 @@ impl Coordinator {
         // (e.g. a source-fed table).
         match table.data_source {
             TableDataSource::TableWrites { defaults: _ } => {
-                // Determine the initial validity for the table.
-                let register_ts = self.get_local_write_ts().await.timestamp;
+                let collection_desc = CollectionDescription::for_table(table.desc.latest(), None);
 
-                // After acquiring `register_ts` but before using it, we need to
-                // be sure we're still the leader. Otherwise a new generation
-                // may also be trying to use `register_ts` for a different
-                // purpose.
-                //
-                // See #28216.
-                self.catalog
-                    .confirm_leadership()
-                    .await
-                    .unwrap_or_terminate("unable to confirm leadership");
-
+                storage_collections_to_create.insert(global_id, collection_desc);
                 if let Some(id) = ctx.as_ref().and_then(|ctx| ctx.extra().contents()) {
-                    self.set_statement_execution_timestamp(id, register_ts);
+                    execution_timestamps_to_set.insert(id);
                 }
 
-                let collection_desc = CollectionDescription::for_table(table.desc.latest(), None);
-                let storage_metadata = self.catalog.state().storage_metadata();
-                self.controller
-                    .storage
-                    .create_collections(
-                        storage_metadata,
-                        Some(register_ts),
-                        vec![(global_id, collection_desc)],
-                    )
-                    .await
-                    .unwrap_or_terminate("cannot fail to create collections");
-                self.apply_local_write(register_ts).await;
-
-                self.initialize_storage_read_policies(
-                    btreeset![table_id],
-                    table
-                        .custom_logical_compaction_window
-                        .unwrap_or(CompactionWindow::Default),
-                )
-                .await;
+                let compaction_window = table
+                    .custom_logical_compaction_window
+                    .unwrap_or(CompactionWindow::Default);
+                let ids = storage_policies_to_initialize
+                    .entry(compaction_window)
+                    .or_default();
+                ids.insert(table_id);
             }
             TableDataSource::DataSource {
                 desc: data_source_desc,
@@ -531,33 +577,26 @@ impl Coordinator {
                             status_collection_id: Some(global_status_collection_id),
                             timeline: Some(timeline),
                         };
-                        let storage_metadata = self.catalog.state().storage_metadata();
-                        self.controller
-                            .storage
-                            .create_collections(
-                                storage_metadata,
-                                None,
-                                vec![(global_id, collection_desc)],
-                            )
-                            .await
-                            .unwrap_or_terminate("cannot fail to create collections");
+
+                        storage_collections_to_create.insert(global_id, collection_desc);
 
                         let read_policies = self
                             .catalog()
                             .state()
                             .source_compaction_windows(vec![table_id]);
-                        for (compaction_window, storage_policies) in read_policies {
-                            self.initialize_storage_read_policies(
-                                storage_policies,
-                                compaction_window,
-                            )
-                            .await;
+                        for (compaction_window, global_ids) in read_policies {
+                            let compaction_ids = storage_policies_to_initialize
+                                .entry(compaction_window)
+                                .or_default();
+
+                            compaction_ids.extend(global_ids.into_iter());
                         }
                     }
                     _ => unreachable!("CREATE TABLE data source got {:?}", data_source_desc),
                 }
             }
         }
+
         Ok(())
     }
 
