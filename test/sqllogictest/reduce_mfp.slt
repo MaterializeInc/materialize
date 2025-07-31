@@ -47,10 +47,10 @@ materialize.public.mv_fusable_mfp_accumulable:
   Reduce::Accumulable
     simple_aggrs[0]=(0, 0, sum(#1{b}))
     simple_aggrs[1]=(1, 1, count(#1{b}))
-    val_plan
-      project=(#1, #1)
     key_plan
       project=(#0)
+    val_plan
+      project=(#1, #1)
     mfp_after
       project=(#0, #1)
       filter=(((#3 - integer_to_bigint(#0{a})) > 2) AND ((#3 / integer_to_bigint((1 + #0{a}))) >= 1))
@@ -90,10 +90,10 @@ materialize.public.mv_complex_mfp_accumulable:
     Reduce::Accumulable
       simple_aggrs[0]=(0, 0, sum(#1{b}))
       simple_aggrs[1]=(1, 1, count(#1{b}))
-      val_plan
-        project=(#1, #1)
       key_plan
         project=(#0)
+      val_plan
+        project=(#1, #1)
       mfp_after
         filter=(((#3 - integer_to_bigint(#0{a})) > 2) AND ((#3 / integer_to_bigint((1 + #0{a}))) >= 1))
         map=((#2{"?column?"} + 1))

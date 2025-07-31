@@ -587,9 +587,9 @@ Explained Query:
           input_key=[#0, #1]
           raw=true
           Reduce::Distinct
+            key_plan=id
             val_plan
               project=()
-            key_plan=id
             Union
               Join::Linear
                 linear_stage[0]

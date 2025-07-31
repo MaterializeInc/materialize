@@ -80,11 +80,11 @@ pub trait Interpreter<T = mz_repr::Timestamp> {
     fn flat_map(
         &self,
         ctx: &Context<Self::Domain>,
-        input: Self::Domain,
-        func: &TableFunc,
-        exprs: &Vec<MirScalarExpr>,
-        mfp: &MapFilterProject,
         input_key: &Option<Vec<MirScalarExpr>>,
+        input: Self::Domain,
+        exprs: &Vec<MirScalarExpr>,
+        func: &TableFunc,
+        mfp: &MapFilterProject,
     ) -> Self::Domain;
 
     /// TODO(database-issues#7533): Add documentation.
@@ -99,10 +99,10 @@ pub trait Interpreter<T = mz_repr::Timestamp> {
     fn reduce(
         &self,
         ctx: &Context<Self::Domain>,
+        input_key: &Option<Vec<MirScalarExpr>>,
         input: Self::Domain,
         key_val_plan: &KeyValPlan,
         plan: &ReducePlan,
-        input_key: &Option<Vec<MirScalarExpr>>,
         mfp_after: &MapFilterProject,
     ) -> Self::Domain;
 
@@ -365,18 +365,18 @@ where
                     Ok(self.interpret.mfp(&self.ctx, input, mfp, input_key_val))
                 }
                 FlatMap {
-                    input,
-                    func,
-                    exprs,
-                    mfp_after: mfp,
                     input_key,
+                    input,
+                    exprs,
+                    func,
+                    mfp_after: mfp,
                 } => {
                     // Descend recursively into all children.
                     let input = self.apply_rec(input, rg)?;
                     // Interpret the current node.
                     Ok(self
                         .interpret
-                        .flat_map(&self.ctx, input, func, exprs, mfp, input_key))
+                        .flat_map(&self.ctx, input_key, input, exprs, func, mfp))
                 }
                 Join { inputs, plan } => {
                     // Descend recursively into all children.
@@ -388,10 +388,10 @@ where
                     Ok(self.interpret.join(&self.ctx, inputs, plan))
                 }
                 Reduce {
+                    input_key,
                     input,
                     key_val_plan,
                     plan,
-                    input_key,
                     mfp_after,
                 } => {
                     // Descend recursively into all children.
@@ -399,10 +399,10 @@ where
                     // Interpret the current node.
                     Ok(self.interpret.reduce(
                         &self.ctx,
+                        input_key,
                         input,
                         key_val_plan,
                         plan,
-                        input_key,
                         mfp_after,
                     ))
                 }
@@ -440,10 +440,10 @@ where
                     Ok(self.interpret.union(&self.ctx, inputs, *consolidate_output))
                 }
                 ArrangeBy {
-                    input,
-                    forms,
                     input_key,
+                    input,
                     input_mfp,
+                    forms,
                 } => {
                     // Descend recursively into all children.
                     let input = self.apply_rec(input, rg)?;
@@ -634,22 +634,22 @@ where
                     Ok(result)
                 }
                 FlatMap {
-                    input,
-                    func,
-                    exprs,
-                    mfp_after: mfp,
                     input_key,
+                    input,
+                    exprs,
+                    func,
+                    mfp_after: mfp,
                 } => {
                     // Descend recursively into all children.
                     let input = self.apply_rec(input, rg)?;
                     // Interpret the current node.
                     let result = self.interpret.flat_map(
                         &self.ctx,
-                        input.clone(),
-                        func,
-                        exprs,
-                        mfp,
                         input_key,
+                        input.clone(),
+                        exprs,
+                        func,
+                        mfp,
                     );
                     // Mutate the current node using the given `action`.
                     (self.action)(expr, &result, &[input]);
@@ -670,10 +670,10 @@ where
                     Ok(result)
                 }
                 Reduce {
+                    input_key,
                     input,
                     key_val_plan,
                     plan,
-                    input_key,
                     mfp_after,
                 } => {
                     // Descend recursively into all children.
@@ -681,10 +681,10 @@ where
                     // Interpret the current node.
                     let result = self.interpret.reduce(
                         &self.ctx,
+                        input_key,
                         input.clone(),
                         key_val_plan,
                         plan,
-                        input_key,
                         mfp_after,
                     );
                     // Mutate the current node using the given `action`.
@@ -746,10 +746,10 @@ where
                     Ok(result)
                 }
                 ArrangeBy {
-                    input,
-                    forms,
                     input_key,
+                    input,
                     input_mfp,
+                    forms,
                 } => {
                     // Descend recursively into all children.
                     let input = self.apply_rec(input, rg)?;

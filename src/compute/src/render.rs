@@ -1212,14 +1212,14 @@ where
                 }
             }
             FlatMap {
-                input,
-                func,
-                exprs,
-                mfp_after: mfp,
                 input_key,
+                input,
+                exprs,
+                func,
+                mfp_after: mfp,
             } => {
                 let input = expect_input(input);
-                self.render_flat_map(input, func, exprs, mfp, input_key)
+                self.render_flat_map(input_key, input, exprs, func, mfp)
             }
             Join { inputs, plan } => {
                 let inputs = inputs.into_iter().map(expect_input).collect();
@@ -1233,15 +1233,15 @@ where
                 }
             }
             Reduce {
+                input_key,
                 input,
                 key_val_plan,
                 plan,
-                input_key,
                 mfp_after,
             } => {
                 let input = expect_input(input);
                 let mfp_option = (!mfp_after.is_identity()).then_some(mfp_after);
-                self.render_reduce(input, key_val_plan, plan, input_key, mfp_option)
+                self.render_reduce(input_key, input, key_val_plan, plan, mfp_option)
             }
             TopK { input, top_k_plan } => {
                 let input = expect_input(input);
@@ -1279,10 +1279,10 @@ where
                 CollectionBundle::from_collections(oks, errs)
             }
             ArrangeBy {
-                input,
-                forms: keys,
                 input_key,
+                input,
                 input_mfp,
+                forms: keys,
             } => {
                 let input = expect_input(input);
                 input.ensure_collections(

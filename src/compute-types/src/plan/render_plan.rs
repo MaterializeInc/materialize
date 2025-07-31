@@ -178,16 +178,16 @@ pub enum Expr<T = mz_repr::Timestamp> {
     /// potentially large records that are being unpacked, producing quadratic output in those
     /// cases. Instead, in these cases use a `mfp` member that projects away these large fields.
     FlatMap {
-        /// The input collection.
-        input: LirId,
-        /// The variable-record emitting function.
-        func: TableFunc,
-        /// Expressions that for each row prepare the arguments to `func`.
-        exprs: Vec<MirScalarExpr>,
-        /// Linear operator to apply to each record produced by `func`.
-        mfp_after: MapFilterProject,
         /// The particular arrangement of the input we expect to use, if any.
         input_key: Option<Vec<MirScalarExpr>>,
+        /// The input collection.
+        input: LirId,
+        /// Expressions that for each row prepare the arguments to `func`.
+        exprs: Vec<MirScalarExpr>,
+        /// The variable-record emitting function.
+        func: TableFunc,
+        /// Linear operator to apply to each record produced by `func`.
+        mfp_after: MapFilterProject,
     },
     /// A multiway relational equijoin, with fused map, filter, and projection.
     ///
@@ -206,6 +206,8 @@ pub enum Expr<T = mz_repr::Timestamp> {
     },
     /// Aggregation by key.
     Reduce {
+        /// The particular arrangement of the input we expect to use, if any.
+        input_key: Option<Vec<MirScalarExpr>>,
         /// The input collection.
         input: LirId,
         /// A plan for changing input records into key, value pairs.
@@ -216,8 +218,6 @@ pub enum Expr<T = mz_repr::Timestamp> {
         /// properties of the reduction, and the input itself. Please check out the documentation
         /// for this type for more detail.
         plan: ReducePlan,
-        /// The particular arrangement of the input we expect to use, if any.
-        input_key: Option<Vec<MirScalarExpr>>,
         /// An MFP that must be applied to results. The projection part of this MFP must preserve
         /// the key for the reduction; otherwise, the results become undefined. Additionally, the
         /// MFP must be free from temporal predicates so that it can be readily evaluated.
@@ -271,15 +271,15 @@ pub enum Expr<T = mz_repr::Timestamp> {
     /// `Join` stage which benefits from multiple arrangements or to cap a `Plan` so that indexes
     /// can be exported.
     ArrangeBy {
+        /// The key that must be used to access the input.
+        input_key: Option<Vec<MirScalarExpr>>,
         /// The input collection.
         input: LirId,
+        /// The MFP that must be applied to the input.
+        input_mfp: MapFilterProject,
         /// A list of arrangement keys, and possibly a raw collection, that will be added to those
         /// of the input. Does not include any other existing arrangements.
         forms: AvailableCollections,
-        /// The key that must be used to access the input.
-        input_key: Option<Vec<MirScalarExpr>>,
-        /// The MFP that must be applied to the input.
-        input_mfp: MapFilterProject,
     },
 }
 
@@ -407,18 +407,18 @@ impl<T> TryFrom<Plan<T>> for LetFreePlan<T> {
                     todo.push((*input, Some(lir_id), nesting.saturating_add(1)));
                 }
                 PlanNode::FlatMap {
-                    input,
-                    func,
-                    exprs,
-                    mfp_after,
                     input_key,
+                    input,
+                    exprs,
+                    func,
+                    mfp_after,
                 } => {
                     let expr = FlatMap {
-                        input: input.lir_id,
-                        func,
-                        exprs,
-                        mfp_after,
                         input_key,
+                        input: input.lir_id,
+                        exprs,
+                        func,
+                        mfp_after,
                     };
                     insert_node(lir_id, parent, expr, nesting);
 
@@ -438,17 +438,17 @@ impl<T> TryFrom<Plan<T>> for LetFreePlan<T> {
                     );
                 }
                 PlanNode::Reduce {
+                    input_key,
                     input,
                     key_val_plan,
                     plan,
-                    input_key,
                     mfp_after,
                 } => {
                     let expr = Reduce {
+                        input_key,
                         input: input.lir_id,
                         key_val_plan,
                         plan,
-                        input_key,
                         mfp_after,
                     };
                     insert_node(lir_id, parent, expr, nesting);
@@ -501,16 +501,16 @@ impl<T> TryFrom<Plan<T>> for LetFreePlan<T> {
                     );
                 }
                 PlanNode::ArrangeBy {
-                    input,
-                    forms,
                     input_key,
+                    input,
                     input_mfp,
+                    forms,
                 } => {
                     let expr = ArrangeBy {
-                        input: input.lir_id,
-                        forms,
                         input_key,
+                        input: input.lir_id,
                         input_mfp,
+                        forms,
                     };
                     insert_node(lir_id, parent, expr, nesting);
 
@@ -862,11 +862,11 @@ impl<'a, T> std::fmt::Display for RenderPlanExprHumanizer<'a, T> {
                 write!(f, "Map/Filter/Project")
             }
             FlatMap {
-                input: _,
-                func,
-                exprs,
-                mfp_after: _,
                 input_key: _,
+                input: _,
+                exprs,
+                func,
+                mfp_after: _,
             } => {
                 let mode = HumanizedExplain::new(false);
                 let exprs = CompactScalars(mode.seq(exprs, None));
@@ -909,10 +909,10 @@ impl<'a, T> std::fmt::Display for RenderPlanExprHumanizer<'a, T> {
                 }
             },
             Reduce {
+                input_key: _input_key,
                 input: _,
                 key_val_plan: _key_val_plan,
                 plan,
-                input_key: _input_key,
                 mfp_after: _mfp_after,
             } => match plan {
                 ReducePlan::Distinct => write!(f, "Distinct GroupAggregate"),
@@ -979,10 +979,10 @@ impl<'a, T> std::fmt::Display for RenderPlanExprHumanizer<'a, T> {
                 Ok(())
             }
             ArrangeBy {
-                input: _,
-                forms,
                 input_key: _,
+                input: _,
                 input_mfp: _,
+                forms,
             } => {
                 if forms.arranged.is_empty() {
                     soft_assert_or_log!(forms.raw, "raw stream with no arrangements");
@@ -1178,11 +1178,11 @@ impl RustType<ProtoExpr> for Expr {
                 input_key_val: input_kv_into(input_key_val),
             }),
             Self::FlatMap {
-                input,
-                func,
-                exprs,
-                mfp_after,
                 input_key,
+                input,
+                exprs,
+                func,
+                mfp_after,
             } => Kind::FlatMap(ProtoFlatMap {
                 input: input.into_proto(),
                 func: Some(func.into_proto()),
@@ -1195,10 +1195,10 @@ impl RustType<ProtoExpr> for Expr {
                 plan: Some(plan.into_proto()),
             }),
             Self::Reduce {
+                input_key,
                 input,
                 key_val_plan,
                 plan,
-                input_key,
                 mfp_after,
             } => Kind::Reduce(ProtoReduce {
                 input: input.into_proto(),
@@ -1229,15 +1229,15 @@ impl RustType<ProtoExpr> for Expr {
                 consolidate_output: *consolidate_output,
             }),
             Self::ArrangeBy {
-                input,
-                forms,
                 input_key,
+                input,
                 input_mfp,
+                forms,
             } => Kind::ArrangeBy(ProtoArrangeBy {
-                input: input.into_proto(),
-                forms: Some(forms.into_proto()),
                 input_key: input_k_into(input_key),
+                input: input.into_proto(),
                 input_mfp: Some(input_mfp.into_proto()),
+                forms: Some(forms.into_proto()),
             }),
         };
 
@@ -1286,25 +1286,25 @@ impl RustType<ProtoExpr> for Expr {
                 input_key_val: input_kv_try_into(proto.input_key_val)?,
             },
             Kind::FlatMap(proto) => Self::FlatMap {
+                input_key: input_k_try_into(proto.input_key)?,
                 input: LirId::from_proto(proto.input)?,
-                func: proto.func.into_rust_if_some("ProtoFlatMap::func")?,
                 exprs: proto.exprs.into_rust()?,
+                func: proto.func.into_rust_if_some("ProtoFlatMap::func")?,
                 mfp_after: proto
                     .mfp_after
                     .into_rust_if_some("ProtoFlatMap::mfp_after")?,
-                input_key: input_k_try_into(proto.input_key)?,
             },
             Kind::Join(proto) => Self::Join {
                 inputs: proto.inputs.into_rust()?,
                 plan: proto.plan.into_rust_if_some("ProtoJoin::plan")?,
             },
             Kind::Reduce(proto) => Self::Reduce {
+                input_key: input_k_try_into(proto.input_key)?,
                 input: LirId::from_proto(proto.input)?,
                 key_val_plan: proto
                     .key_val_plan
                     .into_rust_if_some("ProtoReduce::key_val_plan")?,
                 plan: proto.plan.into_rust_if_some("ProtoReduce::plan")?,
-                input_key: input_k_try_into(proto.input_key)?,
                 mfp_after: proto.mfp_after.into_rust_if_some("Proto::mfp_after")?,
             },
             Kind::TopK(proto) => Self::TopK {
@@ -1327,12 +1327,12 @@ impl RustType<ProtoExpr> for Expr {
                 consolidate_output: proto.consolidate_output,
             },
             Kind::ArrangeBy(proto) => Self::ArrangeBy {
-                input: LirId::from_proto(proto.input)?,
-                forms: proto.forms.into_rust_if_some("ProtoArrangeBy::forms")?,
                 input_key: input_k_try_into(proto.input_key)?,
+                input: LirId::from_proto(proto.input)?,
                 input_mfp: proto
                     .input_mfp
                     .into_rust_if_some("ProtoArrangeBy::input_mfp")?,
+                forms: proto.forms.into_rust_if_some("ProtoArrangeBy::forms")?,
             },
         };
 

@@ -67,10 +67,10 @@ where
     /// minimize worst-case incremental update times and memory footprint.
     pub fn render_reduce(
         &self,
+        input_key: Option<Vec<MirScalarExpr>>,
         input: CollectionBundle<G, T>,
         key_val_plan: KeyValPlan,
         reduce_plan: ReducePlan,
-        input_key: Option<Vec<MirScalarExpr>>,
         mfp_after: Option<MapFilterProject>,
     ) -> CollectionBundle<G, T> {
         // Convert `mfp_after` to an actionable plan.
