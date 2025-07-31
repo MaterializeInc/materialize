@@ -216,7 +216,7 @@ def test_create_privatelink_connection(mz: MaterializeApplication) -> None:
         )
     with pytest.raises(
         ProgrammingError,
-        match="invalid CONNECTION: PORT in AWS PRIVATELINK is only supported for kafka",
+        match="invalid CONNECTION: POSTGRES does not support PORT for AWS PRIVATELINK",
     ):
         mz.environmentd.sql(
             dedent(
