@@ -148,6 +148,8 @@ pub(super) async fn purify_source_exports(
         }
     }
 
+    let initial_lsn = mz_sql_server_util::inspect::get_max_lsn_retry(client, timeout).await?;
+
     // TODO(sql_server2): Validate permissions on upstream tables.
 
     let capture_instances: BTreeMap<_, _> = requested_exports
@@ -174,7 +176,6 @@ pub(super) async fn purify_source_exports(
             .collect::<Vec<_>>(),
     )
     .await?;
-    let initial_lsn = mz_sql_server_util::inspect::get_max_lsn_retry(client, timeout).await?;
     for (instance, min_lsn) in min_lsns.iter() {
         // When reading LSNs from CDC, the range is inclusive, so cases where
         // min_lsn = max_lsn still have a single record to read. See
