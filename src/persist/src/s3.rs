@@ -37,7 +37,7 @@ use mz_ore::lgbytes::MetricsRegion;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::task::RuntimeExt;
 use tokio::runtime::Handle as AsyncHandle;
-use tracing::{Instrument, debug, debug_span, trace, trace_span};
+use tracing::{Instrument, debug, debug_span, trace, trace_span, warn};
 use uuid::Uuid;
 
 use crate::cfg::BlobKnobs;
@@ -347,6 +347,7 @@ pub(crate) const ENABLE_S3_LGALLOC_NONCC_SIZES: Config<bool> = Config::new(
 #[async_trait]
 impl Blob for S3Blob {
     async fn get(&self, key: &str) -> Result<Option<SegmentedBytes>, ExternalError> {
+        warn!("PERSIST BLOB: get({key})");
         let start_overall = Instant::now();
         let path = self.get_path(key);
 
@@ -574,6 +575,7 @@ impl Blob for S3Blob {
         key_prefix: &str,
         f: &mut (dyn FnMut(BlobMetadata) + Send + Sync),
     ) -> Result<(), ExternalError> {
+        warn!("PERSIST BLOB: list_keys_and_metadata({key_prefix})");
         let mut continuation_token = None;
         // we only want to return keys that match the specified blob key prefix
         let blob_key_prefix = self.get_path(key_prefix);
@@ -630,6 +632,7 @@ impl Blob for S3Blob {
     }
 
     async fn set(&self, key: &str, value: Bytes) -> Result<(), ExternalError> {
+        warn!("PERSIST BLOB: set({key}, {value:?})");
         let value_len = value.len();
         if self
             .multipart_config
@@ -645,6 +648,7 @@ impl Blob for S3Blob {
     }
 
     async fn delete(&self, key: &str) -> Result<Option<usize>, ExternalError> {
+        warn!("PERSIST BLOB: delete({key})");
         // There is a race condition here where, if two delete calls for the
         // same key occur simultaneously, both might think they did the actual
         // deletion. This return value is only used for metrics, so it's
@@ -691,6 +695,7 @@ impl Blob for S3Blob {
     }
 
     async fn restore(&self, key: &str) -> Result<(), ExternalError> {
+        warn!("PERSIST BLOB: restore({key})");
         let path = self.get_path(key);
         // Fetch the latest version of the object. If it's a normal version, return true;
         // if it's a delete marker, delete it and loop; if there is no such version,
@@ -758,6 +763,7 @@ impl Blob for S3Blob {
 
 impl S3Blob {
     async fn set_single_part(&self, key: &str, value: Bytes) -> Result<(), ExternalError> {
+        warn!("PERSIST BLOB: set_single_part({key}, {value:?})");
         let start_overall = Instant::now();
         let path = self.get_path(key);
 
@@ -786,6 +792,7 @@ impl S3Blob {
     // potentially dangerous `as` conversions.
     #[allow(clippy::as_conversions)]
     async fn set_multi_part(&self, key: &str, value: Bytes) -> Result<(), ExternalError> {
+        warn!("PERSIST BLOB: set_multi_part({key}, {value:?})");
         let start_overall = Instant::now();
         let path = self.get_path(key);
 
