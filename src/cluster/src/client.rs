@@ -72,12 +72,6 @@ impl<C: ClusterSpec> TimelyContainer<C> {
     }
 }
 
-impl<C: ClusterSpec> Drop for TimelyContainer<C> {
-    fn drop(&mut self) {
-        panic!("Timely container must never drop");
-    }
-}
-
 impl<C> ClusterClient<C>
 where
     C: ClusterSpec,
