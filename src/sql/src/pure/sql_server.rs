@@ -165,7 +165,7 @@ pub(super) async fn purify_source_exports(
         })
         .collect();
 
-    // If CDC is freshly enabled for a table, it has been obsered that
+    // If CDC is freshly enabled for a table, it has been observed that
     // the `start_lsn`` from `cdc.change_tables` can be ahead of the LSN
     // returned by `sys.fn_cdc_get_max_lsn`.  Eventually, the LSN returned
     // by `sys.fn_cdc_get_max_lsn` will surpass `start_lsn`. For this
