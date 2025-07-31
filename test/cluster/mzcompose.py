@@ -34,7 +34,11 @@ from psycopg.errors import (
 )
 
 from materialize import buildkite, ui
-from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.composition import (
+    Composition,
+    Service,
+    WorkflowArgumentParser,
+)
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.localstack import Localstack
@@ -534,7 +538,7 @@ def workflow_test_github_4587(c: Composition) -> None:
     with c.override(
         Testdrive(no_reset=True),
     ):
-        c.up("materialized", "clusterd1", {"name": "testdrive", "persistent": True})
+        c.up("materialized", "clusterd1", Service("testdrive", idle=True))
 
         c.sql(
             "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
@@ -636,7 +640,7 @@ def workflow_test_github_4433(c: Composition) -> None:
         ),
         Testdrive(no_reset=True),
     ):
-        c.up("materialized", "clusterd1", {"name": "testdrive", "persistent": True})
+        c.up("materialized", "clusterd1", Service("testdrive", idle=True))
 
         c.sql(
             "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
@@ -706,7 +710,7 @@ def workflow_test_github_4966(c: Composition) -> None:
     with c.override(
         Testdrive(no_reset=True),
     ):
-        c.up("materialized", "clusterd1", {"name": "testdrive", "persistent": True})
+        c.up("materialized", "clusterd1", Service("testdrive", idle=True))
 
         c.sql(
             "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
@@ -782,7 +786,7 @@ def workflow_test_github_5087(c: Composition) -> None:
     with c.override(
         Testdrive(no_reset=True),
     ):
-        c.up("materialized", "clusterd1", {"name": "testdrive", "persistent": True})
+        c.up("materialized", "clusterd1", Service("testdrive", idle=True))
 
         c.sql(
             "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
@@ -941,7 +945,7 @@ def workflow_test_github_5086(c: Composition) -> None:
         ),
         Testdrive(no_reset=True),
     ):
-        c.up("materialized", "clusterd1", {"name": "testdrive", "persistent": True})
+        c.up("materialized", "clusterd1", Service("testdrive", idle=True))
 
         c.sql(
             "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
@@ -1033,7 +1037,7 @@ def workflow_test_github_5831(c: Composition) -> None:
         ),
         Testdrive(no_reset=True),
     ):
-        c.up("materialized", "clusterd1", {"name": "testdrive", "persistent": True})
+        c.up("materialized", "clusterd1", Service("testdrive", idle=True))
 
         c.sql(
             "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
@@ -1139,7 +1143,7 @@ def workflow_test_single_time_monotonicity_enforcers(c: Composition) -> None:
         ),
         Testdrive(no_reset=True),
     ):
-        c.up("materialized", "clusterd1", {"name": "testdrive", "persistent": True})
+        c.up("materialized", "clusterd1", Service("testdrive", idle=True))
 
         c.sql(
             "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
@@ -1436,7 +1440,7 @@ def workflow_test_system_table_indexes(c: Composition) -> None:
         Testdrive(),
         Materialized(),
     ):
-        c.up("materialized", {"name": "testdrive", "persistent": True})
+        c.up("materialized", Service("testdrive", idle=True))
         c.testdrive(
             input=dedent(
                 """
@@ -1467,7 +1471,7 @@ def workflow_test_system_table_indexes(c: Composition) -> None:
         Testdrive(no_reset=True),
         Materialized(),
     ):
-        c.up("materialized", {"name": "testdrive", "persistent": True})
+        c.up("materialized", Service("testdrive", idle=True))
         c.testdrive(
             input=dedent(
                 """
@@ -2018,7 +2022,7 @@ def workflow_test_drop_during_reconciliation(c: Composition) -> None:
             "materialized",
             "clusterd1",
             "toxiproxy",
-            {"name": "testdrive", "persistent": True},
+            Service("testdrive", idle=True),
         )
 
         # Set up toxi-proxies for clusterd GRPC endpoints.
@@ -2279,7 +2283,7 @@ def workflow_test_clusterd_death_detection(c: Composition) -> None:
             "materialized",
             "clusterd1",
             "toxiproxy",
-            {"name": "testdrive", "persistent": True},
+            Service("testdrive", idle=True),
         )
 
         c.testdrive(
@@ -2607,7 +2611,7 @@ def workflow_test_replica_metrics(c: Composition) -> None:
 def workflow_test_compute_controller_metrics(c: Composition) -> None:
     """Test metrics exposed by the compute controller."""
 
-    c.up("materialized", {"name": "testdrive", "persistent": True})
+    c.up("materialized", Service("testdrive", idle=True))
 
     def fetch_metrics() -> Metrics:
         resp = c.exec(
@@ -2795,7 +2799,7 @@ def workflow_test_storage_controller_metrics(c: Composition) -> None:
         "materialized",
         "kafka",
         "schema-registry",
-        {"name": "testdrive", "persistent": True},
+        Service("testdrive", idle=True),
     )
 
     def fetch_metrics() -> Metrics:
@@ -2993,7 +2997,7 @@ def workflow_test_pgwire_metrics(c: Composition) -> None:
     with c.override(
         Testdrive(no_reset=True),
     ):
-        c.up("materialized", {"name": "testdrive", "persistent": True})
+        c.up("materialized", Service("testdrive", idle=True))
 
         c.sql(
             """
@@ -3634,7 +3638,7 @@ def workflow_test_github_7000(c: Composition, parser: WorkflowArgumentParser) ->
     with c.override(
         Testdrive(no_reset=True),
     ):
-        c.up("materialized", {"name": "testdrive", "persistent": True})
+        c.up("materialized", Service("testdrive", idle=True))
 
         # Create an MV reading from an index. Make sure it doesn't produce its
         # snapshot by installing it in a cluster without replicas.
@@ -3801,7 +3805,7 @@ def workflow_test_subscribe_hydration_status(
 ) -> None:
     """Test that hydration status tracking works for subscribe dataflows."""
 
-    c.up("materialized", {"name": "testdrive", "persistent": True})
+    c.up("materialized", Service("testdrive", idle=True))
 
     # Start a subscribe.
     cursor = c.sql_cursor()
@@ -3919,7 +3923,7 @@ def workflow_test_refresh_mv_warmup(
         ),
         Testdrive(no_reset=True),
     ):
-        c.up("materialized", {"name": "testdrive", "persistent": True})
+        c.up("materialized", Service("testdrive", idle=True))
 
         c.testdrive(
             input=dedent(
@@ -4272,7 +4276,7 @@ def workflow_test_refresh_mv_restart(
             """
         )
 
-        c.up("materialized", {"name": "testdrive", "persistent": True})
+        c.up("materialized", Service("testdrive", idle=True))
 
         # 1. (quick restart)
         c.testdrive(input=before_restart)
@@ -4285,7 +4289,7 @@ def workflow_test_refresh_mv_restart(
         check_introspection()
 
         # Reset the testing context.
-        c.up("materialized", {"name": "testdrive", "persistent": True})
+        c.up("materialized", Service("testdrive", idle=True))
 
         # 2. (slow restart)
         c.testdrive(input=before_restart)
@@ -4299,7 +4303,7 @@ def workflow_test_refresh_mv_restart(
         check_introspection()
 
         # Reset the testing context.
-        c.up("materialized", {"name": "testdrive", "persistent": True})
+        c.up("materialized", Service("testdrive", idle=True))
 
         # 3.
         c.testdrive(
@@ -4478,7 +4482,7 @@ def workflow_test_github_8734(c: Composition) -> None:
         ),
         Testdrive(no_reset=True),
     ):
-        c.up("materialized", {"name": "testdrive", "persistent": True})
+        c.up("materialized", Service("testdrive", idle=True))
 
         # Create a REFRESH MV and wait for it to refresh once, then take down
         # its cluster.
@@ -4559,7 +4563,7 @@ def workflow_test_github_7798(c: Composition, parser: WorkflowArgumentParser) ->
                 )
             )
 
-        c.up("materialized", "clusterd1", {"name": "testdrive", "persistent": True})
+        c.up("materialized", "clusterd1", Service("testdrive", idle=True))
 
         # Create an unmanaged cluster that isn't restarted together with materialized,
         # and therein a source with subsources.
@@ -4860,7 +4864,7 @@ def workflow_test_mz_introspection_cluster_compat(
     with c.override(
         Testdrive(no_reset=True),
     ):
-        c.up("materialized", {"name": "testdrive", "persistent": True})
+        c.up("materialized", Service("testdrive", idle=True))
 
         # Setting variables through `SET <variable>`.
         c.testdrive(
@@ -4963,7 +4967,7 @@ def workflow_test_unified_introspection_during_replica_disconnect(c: Composition
             default_timeout="10s",
         ),
     ):
-        c.up("materialized", "clusterd1", {"name": "testdrive", "persistent": True})
+        c.up("materialized", "clusterd1", Service("testdrive", idle=True))
 
         # Set up an unorchestrated replica with a couple dataflows.
         c.sql(
@@ -5063,7 +5067,7 @@ def workflow_test_zero_downtime_reconfigure(
             "zookeeper",
             "kafka",
             "schema-registry",
-            {"name": "testdrive", "persistent": True},
+            Service("testdrive", idle=True),
         )
         c.testdrive(
             dedent(
@@ -5354,7 +5358,7 @@ def workflow_replica_expiration_creates_retraction_diffs_after_panic(
         Clusterd(name="clusterd1", restart="on-failure"),
     ):
 
-        c.up("materialized", "clusterd1", {"name": "testdrive", "persistent": True})
+        c.up("materialized", "clusterd1", Service("testdrive", idle=True))
         c.testdrive(
             dedent(
                 """
@@ -5417,7 +5421,7 @@ def workflow_test_constant_sink(c: Composition) -> None:
             "zookeeper",
             "kafka",
             "schema-registry",
-            {"name": "testdrive", "persistent": True},
+            Service("testdrive", idle=True),
         )
 
         c.testdrive(
@@ -5502,7 +5506,7 @@ def workflow_test_lgalloc_limiter(c: Composition) -> None:
         ),
         Testdrive(no_reset=True),
     ):
-        c.up("materialized", {"name": "testdrive", "persistent": True})
+        c.up("materialized", Service("testdrive", idle=True))
 
         c.sql(
             """
@@ -5620,7 +5624,7 @@ def workflow_test_memory_limiter(c: Composition) -> None:
         ),
         Testdrive(no_reset=True),
     ):
-        c.up("materialized", {"name": "testdrive", "persistent": True})
+        c.up("materialized", Service("testdrive", idle=True))
 
         c.sql(
             """

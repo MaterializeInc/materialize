@@ -17,7 +17,11 @@ import time
 from textwrap import dedent
 from uuid import uuid4
 
-from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.composition import (
+    Composition,
+    Service,
+    WorkflowArgumentParser,
+)
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Mc, Minio
@@ -613,7 +617,7 @@ class Concurrent(Scenario):
         for i in range(num_executions):
             # Clean up old state
             self.c.down(destroy_volumes=True)
-            self.c.up(*SERVICE_NAMES, {"name": "testdrive", "persistent": True})
+            self.c.up(*SERVICE_NAMES, Service("testdrive", idle=True))
 
             for obj in self.objs:
                 self.run_fragment(obj.prepare())
@@ -726,7 +730,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         datetime.datetime.now() + datetime.timedelta(seconds=args.runtime)
     ).timestamp()
 
-    c.up(*SERVICE_NAMES, {"name": "testdrive", "persistent": True})
+    c.up(*SERVICE_NAMES, Service("testdrive", idle=True))
 
     seed = args.seed
 

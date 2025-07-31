@@ -14,7 +14,11 @@ Test that setting feature flags works
 import argparse
 from textwrap import dedent, indent
 
-from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.composition import (
+    Composition,
+    Service,
+    WorkflowArgumentParser,
+)
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.testdrive import Testdrive
@@ -230,7 +234,7 @@ class FeatureTestScenario:
 
 
 def run_test(c: Composition, args: argparse.Namespace) -> None:
-    c.up("redpanda", "materialized", {"name": "testdrive", "persistent": True})
+    c.up("redpanda", "materialized", Service("testdrive", idle=True))
 
     scenarios = (
         [globals()[args.scenario]]

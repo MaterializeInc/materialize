@@ -15,7 +15,11 @@ then making sure that cluster2 continues to operate properly
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.composition import (
+    Composition,
+    Service,
+    WorkflowArgumentParser,
+)
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
@@ -266,7 +270,7 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
             "clusterd_1_2",
             "clusterd_2_1",
             "clusterd_2_2",
-            {"name": "testdrive", "persistent": True},
+            Service("testdrive", idle=True),
         )
 
         c.sql(

@@ -45,7 +45,7 @@ from psycopg import Connection, Cursor
 
 from materialize import MZ_ROOT, buildkite, mzbuild, spawn, ui
 from materialize.mzcompose import cluster_replica_size_map, loader
-from materialize.mzcompose.service import Service
+from materialize.mzcompose.service import Service as MzComposeService
 from materialize.mzcompose.services.materialized import (
     LEADER_STATUS_HEALTHCHECK,
     DeploymentStatus,
@@ -76,6 +76,12 @@ FILTERED_ARGS = [
     # Not a secret, but too spammy, filter too
     "CLUSTER_REPLICA_SIZES",
 ]
+
+
+class Service:
+    def __init__(self, name: str, idle: bool = False):
+        self.name = name
+        self.idle = idle
 
 
 class UnknownCompositionError(UIError):
@@ -513,7 +519,7 @@ class Composition:
 
     @contextmanager
     def override(
-        self, *services: "Service", fail_on_new_service: bool = True
+        self, *services: "MzComposeService", fail_on_new_service: bool = True
     ) -> Iterator[None]:
         """Temporarily update the composition with the specified services.
 
@@ -846,7 +852,7 @@ class Composition:
 
         if persistent:
             if not self.is_running(service):
-                self.up({"name": service, "persistent": True})
+                self.up(Service(service, idle=True))
 
             return self.exec(
                 service,
@@ -936,7 +942,9 @@ class Composition:
     ) -> None:
         self.invoke("pull", service_name, max_tries=max_tries)
 
-    def try_pull_service_image(self, service: Service, max_tries: int = 2) -> bool:
+    def try_pull_service_image(
+        self, service: MzComposeService, max_tries: int = 2
+    ) -> bool:
         """Tries to pull the specified image and returns if this was successful."""
         try:
             with self.override(service):
@@ -949,7 +957,7 @@ class Composition:
 
     def up(
         self,
-        *services: str | dict[str, Any],
+        *services: str | Service,
         detach: bool = True,
         wait: bool = True,
         max_tries: int = 5,  # increased since quay.io returns 502 sometimes
@@ -965,23 +973,23 @@ class Composition:
                 Implies `detach` mode.
             max_tries: Number of tries on failure.
         """
-        persistent = set(
+        idle = set(
             [
-                service["name"]
+                service.name
                 for service in services
-                if isinstance(service, dict) and service.get("persistent")
+                if isinstance(service, Service) and service.idle
             ]
         )
-        if persistent:
+        if idle:
             old_compose = copy.deepcopy(self.compose)
             for service_name, service in self.compose["services"].items():
-                if service_name in persistent:
+                if service_name in idle:
                     service["entrypoint"] = ["sleep", "infinity"]
                     service["command"] = []
             self.files = {}
 
         service_names = [
-            service["name"] if isinstance(service, dict) else service
+            service.name if isinstance(service, Service) else service
             for service in services
         ]
 
@@ -996,7 +1004,7 @@ class Composition:
             build=os.getenv("CI_WAITING_FOR_BUILD"),
         )
 
-        if persistent:
+        if idle:
             self.compose = old_compose  # type: ignore
             self.files = {}
 
@@ -1432,7 +1440,7 @@ class Composition:
             ]
 
         if not self.is_running(service):
-            self.up({"name": service, "persistent": True})
+            self.up(Service(service, idle=True))
 
         return self.exec(
             service,
@@ -1444,8 +1452,7 @@ class Composition:
         )
 
     def enable_minio_versioning(self) -> None:
-        self.up("minio")
-        self.up({"name": "mc", "persistent": True})
+        self.up("minio", Service("mc", idle=True))
         self.exec(
             "mc",
             "mc",
@@ -1460,7 +1467,7 @@ class Composition:
         self.exec("mc", "mc", "version", "enable", "persist/persist")
 
     def backup_cockroach(self) -> None:
-        self.up({"name": "mc", "persistent": True})
+        self.up(Service("mc", idle=True))
         self.exec("mc", "mc", "mb", "--ignore-existing", "persist/crdb-backup")
         self.exec(
             "cockroach",
@@ -1493,7 +1500,7 @@ class Composition:
                 DROP EXTERNAL CONNECTION backup_bucket;
             """,
         )
-        self.up({"name": "persistcli", "persistent": True})
+        self.up(Service("persistcli", idle=True))
         self.exec(
             "persistcli",
             "persistcli",
@@ -1532,7 +1539,7 @@ class Composition:
             "-",
             stdin=backup,
         )
-        self.up({"name": "persistcli", "persistent": True})
+        self.up(Service("persistcli", idle=True))
         self.exec(
             "persistcli",
             "persistcli",

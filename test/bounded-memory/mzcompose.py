@@ -19,7 +19,11 @@ from textwrap import dedent
 
 from materialize import buildkite
 from materialize.buildkite import shard_list
-from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.composition import (
+    Composition,
+    Service,
+    WorkflowArgumentParser,
+)
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mysql import MySql
@@ -1498,7 +1502,7 @@ def run_scenario(
             "postgres",
             "mysql",
             "clusterd",
-            {"name": "testdrive", "persistent": True},
+            Service("testdrive", idle=True),
         )
 
         c.sql(

@@ -13,7 +13,7 @@ import time
 from datetime import datetime
 from textwrap import dedent
 
-from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.composition import Composition, Service
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.postgres import CockroachOrPostgresMetadata
 from materialize.mzcompose.services.testdrive import Testdrive
@@ -38,7 +38,7 @@ def workflow_default(c: Composition) -> None:
 
 
 def setup(c: Composition) -> None:
-    c.up("materialized", {"name": "testdrive", "persistent": True})
+    c.up("materialized", Service("testdrive", idle=True))
 
 
 # Test that the catalog is consistent for the three types of retain histories (disabled, default,

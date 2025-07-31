@@ -11,7 +11,8 @@
 Smoketest that Metabase can connect to Materialize
 """
 
-from materialize.mzcompose.composition import Composition, Service
+from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.service import Service
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.metabase import Metabase
 

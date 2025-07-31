@@ -15,7 +15,11 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from textwrap import dedent
 
-from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.composition import (
+    Composition,
+    Service,
+    WorkflowArgumentParser,
+)
 from materialize.mzcompose.service import ServiceHealthcheck
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.materialized import Materialized
@@ -171,7 +175,7 @@ def run_disruption(c: Composition, d: CrdbDisruption) -> None:
     ]:
         c.exec("cockroach0", "cockroach", "sql", "--insecure", "-e", query)
 
-    c.up("materialized", {"name": "testdrive", "persistent": True})
+    c.up("materialized", Service("testdrive", idle=True))
 
     # We expect the testdrive fragment to complete within Testdrive's default_timeout
     # This will indicate that Mz has not hung for a prolonged period of time

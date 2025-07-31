@@ -26,7 +26,11 @@ from materialize.checks.scenarios import Scenario, SystemVarChange
 from materialize.checks.scenarios_backup_restore import *  # noqa: F401 F403
 from materialize.checks.scenarios_upgrade import *  # noqa: F401 F403
 from materialize.checks.scenarios_zero_downtime import *  # noqa: F401 F403
-from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.composition import (
+    Composition,
+    Service,
+    WorkflowArgumentParser,
+)
 from materialize.mzcompose.services.azurite import Azurite
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.debezium import Debezium
@@ -164,7 +168,7 @@ def setup(c: Composition) -> None:
         "mysql",
         "debezium",
         "ssh-bastion-host",
-        {"name": "testdrive", "persistent": True},
+        Service("testdrive", idle=True),
     )
 
     c.enable_minio_versioning()

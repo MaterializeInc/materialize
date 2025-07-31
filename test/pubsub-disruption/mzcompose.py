@@ -15,7 +15,11 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from textwrap import dedent
 
-from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.composition import (
+    Composition,
+    Service,
+    WorkflowArgumentParser,
+)
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.testdrive import Testdrive
@@ -80,7 +84,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     for disruption in selected_by_name(args.disruptions, disruptions):
         c.down(destroy_volumes=True)
-        c.up("redpanda", "materialized", {"name": "testdrive", "persistent": True})
+        c.up("redpanda", "materialized", Service("testdrive", idle=True))
 
         toxiproxy_start(c)
 

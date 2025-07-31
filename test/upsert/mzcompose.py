@@ -18,7 +18,11 @@ import os
 from textwrap import dedent
 
 from materialize import ci_util
-from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.composition import (
+    Composition,
+    Service,
+    WorkflowArgumentParser,
+)
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
@@ -443,7 +447,7 @@ def workflow_rocksdb_cleanup(c: Composition) -> None:
             Testdrive(no_reset=True),
         ):
             c.rm("testdrive")
-            c.up({"name": "testdrive", "persistent": True})
+            c.up(Service("testdrive", idle=True))
             c.exec("testdrive", f"rocksdb-cleanup/{testdrive_file}")
 
             (_, kept_source_path) = rocksdb_path("kept_upsert_tbl")
@@ -512,7 +516,7 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
         ),
     ):
         c.rm("testdrive")
-        c.up({"name": "testdrive", "persistent": True})
+        c.up(Service("testdrive", idle=True))
         c.exec("testdrive", "load-test/setup.td")
         c.testdrive(
             dedent(
@@ -651,7 +655,7 @@ def workflow_large_scale(c: Composition, parser: WorkflowArgumentParser) -> None
         Testdrive(no_reset=True, consistent_seed=True),
     ):
         c.rm("testdrive")
-        c.up({"name": "testdrive", "persistent": True})
+        c.up(Service("testdrive", idle=True))
 
         c.testdrive(
             dedent(

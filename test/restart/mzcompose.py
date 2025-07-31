@@ -24,7 +24,7 @@ from psycopg.errors import (
 )
 
 from materialize import buildkite
-from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.composition import Composition, Service
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mz import Mz
@@ -114,7 +114,7 @@ def workflow_github_2454(c: Composition) -> None:
 
 # Test that `mz_internal.mz_object_dependencies` re-populates.
 def workflow_github_5108(c: Composition) -> None:
-    c.up("materialized", {"name": "testdrive_no_reset", "persistent": True})
+    c.up("materialized", Service("testdrive_no_reset", idle=True))
 
     c.testdrive(
         service="testdrive_no_reset",
@@ -279,7 +279,7 @@ def workflow_storage_managed_collections(c: Composition) -> None:
 
 
 def workflow_allowed_cluster_replica_sizes(c: Composition) -> None:
-    c.up("materialized", {"name": "testdrive_no_reset", "persistent": True})
+    c.up("materialized", Service("testdrive_no_reset", idle=True))
 
     c.testdrive(
         service="testdrive_no_reset",
@@ -581,7 +581,7 @@ def workflow_bound_size_mz_status_history(c: Composition) -> None:
         "kafka",
         "schema-registry",
         "materialized",
-        {"name": "testdrive_no_reset", "persistent": True},
+        Service("testdrive_no_reset", idle=True),
     )
 
     c.testdrive(
@@ -667,7 +667,7 @@ def workflow_bound_size_mz_cluster_replica_metrics_history(c: Composition) -> No
     """
 
     c.down(destroy_volumes=True)
-    c.up("materialized", {"name": "testdrive_no_reset", "persistent": True})
+    c.up("materialized", Service("testdrive_no_reset", idle=True))
 
     # The replica metrics are updated once per minute and on envd startup. We
     # can thus restart envd to generate metrics rows without having to block
@@ -769,7 +769,7 @@ def workflow_index_compute_dependencies(c: Composition) -> None:
     This test should codify this assumption so we can get an early signal if
     this is broken for some reason in the future.
     """
-    c.up("materialized", {"name": "testdrive_no_reset", "persistent": True})
+    c.up("materialized", Service("testdrive_no_reset", idle=True))
 
     def depends_on(c: Composition, obj_name: str, dep_name: str, expected: bool):
         """Check whether `(obj_name, dep_name)` is a compute dependency or not."""

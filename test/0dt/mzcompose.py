@@ -21,7 +21,7 @@ from psycopg.errors import OperationalError
 
 from materialize import buildkite
 from materialize.mzcompose import get_default_system_parameters
-from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.composition import Composition, Service
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import (
     LEADER_STATUS_HEALTHCHECK,
@@ -103,7 +103,7 @@ def workflow_read_only(c: Composition) -> None:
         "postgres",
         "mysql",
         "mz_old",
-        {"name": "testdrive", "persistent": True},
+        Service("testdrive", idle=True),
     )
 
     # Make sure cluster is owned by the system so it doesn't get dropped
@@ -402,7 +402,7 @@ def workflow_basic(c: Composition) -> None:
         "postgres",
         "mysql",
         "mz_old",
-        {"name": "testdrive", "persistent": True},
+        Service("testdrive", idle=True),
     )
 
     # Make sure cluster is owned by the system so it doesn't get dropped
@@ -557,7 +557,7 @@ def workflow_basic(c: Composition) -> None:
             default_timeout=DEFAULT_TIMEOUT,
         )
     ):
-        c.up({"name": "testdrive", "persistent": True})
+        c.up(Service("testdrive", idle=True))
         c.testdrive(
             dedent(
                 f"""
@@ -634,7 +634,7 @@ def workflow_basic(c: Composition) -> None:
         )
 
     # But the old Materialize can still run writes
-    c.up({"name": "testdrive", "persistent": True})
+    c.up(Service("testdrive", idle=True))
     c.testdrive(
         dedent(
             f"""
@@ -719,7 +719,7 @@ def workflow_basic(c: Composition) -> None:
             default_timeout=DEFAULT_TIMEOUT,
         )
     ):
-        c.up({"name": "testdrive", "persistent": True})
+        c.up(Service("testdrive", idle=True))
         c.testdrive(
             dedent(
                 """
@@ -904,7 +904,7 @@ def workflow_kafka_source_rehydration(c: Composition) -> None:
         "kafka",
         "schema-registry",
         "mz_old",
-        {"name": "testdrive", "persistent": True},
+        Service("testdrive", idle=True),
     )
 
     count = 1000000
@@ -1051,7 +1051,7 @@ def workflow_kafka_source_rehydration_large_initial(c: Composition) -> None:
         "kafka",
         "schema-registry",
         "mz_old",
-        {"name": "testdrive", "persistent": True},
+        Service("testdrive", idle=True),
     )
 
     count = 1000000
@@ -1196,7 +1196,7 @@ def workflow_kafka_source_rehydration_large_initial(c: Composition) -> None:
 def workflow_pg_source_rehydration(c: Composition) -> None:
     """Verify Postgres source rehydration in 0dt deployment"""
     c.down(destroy_volumes=True)
-    c.up("postgres", "mz_old", {"name": "testdrive", "persistent": True})
+    c.up("postgres", "mz_old", Service("testdrive", idle=True))
 
     count = 1000000
     repeats = 100
@@ -1347,7 +1347,7 @@ def workflow_pg_source_rehydration(c: Composition) -> None:
 def workflow_mysql_source_rehydration(c: Composition) -> None:
     """Verify Postgres source rehydration in 0dt deployment"""
     c.down(destroy_volumes=True)
-    c.up("mysql", "mz_old", {"name": "testdrive", "persistent": True})
+    c.up("mysql", "mz_old", Service("testdrive", idle=True))
 
     count = 1000000
     repeats = 100
@@ -1513,7 +1513,7 @@ def workflow_kafka_source_failpoint(c: Composition) -> None:
         "zookeeper",
         "kafka",
         "schema-registry",
-        {"name": "testdrive", "persistent": True},
+        Service("testdrive", idle=True),
     )
 
     # Start the original Materialized instance with the failpoint enabled.
@@ -1822,7 +1822,7 @@ def workflow_upsert_sources(c: Composition) -> None:
         "postgres",
         "mysql",
         "mz_old",
-        {"name": "testdrive", "persistent": True},
+        Service("testdrive", idle=True),
     )
     num_threads = 50
 
@@ -1943,7 +1943,7 @@ def workflow_ddl(c: Composition) -> None:
         "postgres",
         "mysql",
         "mz_old",
-        {"name": "testdrive", "persistent": True},
+        Service("testdrive", idle=True),
     )
 
     # Make sure cluster is owned by the system so it doesn't get dropped
@@ -2098,7 +2098,7 @@ def workflow_ddl(c: Composition) -> None:
             default_timeout=DEFAULT_TIMEOUT,
         )
     ):
-        c.up({"name": "testdrive", "persistent": True})
+        c.up(Service("testdrive", idle=True))
         c.testdrive(
             dedent(
                 f"""
@@ -2175,7 +2175,7 @@ def workflow_ddl(c: Composition) -> None:
         )
 
     # Run DDLs against the old Materialize, which should restart the new one
-    c.up({"name": "testdrive", "persistent": True})
+    c.up(Service("testdrive", idle=True))
     c.testdrive(
         dedent(
             f"""
@@ -2268,7 +2268,7 @@ def workflow_ddl(c: Composition) -> None:
             default_timeout=DEFAULT_TIMEOUT,
         )
     ):
-        c.up({"name": "testdrive", "persistent": True})
+        c.up(Service("testdrive", idle=True))
         c.testdrive(
             dedent(
                 """

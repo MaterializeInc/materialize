@@ -17,7 +17,11 @@ import glob
 import os
 
 from materialize import MZ_ROOT, buildkite, ci_util
-from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.composition import (
+    Composition,
+    Service,
+    WorkflowArgumentParser,
+)
 from materialize.mzcompose.services.azurite import Azurite
 from materialize.mzcompose.services.fivetran_destination import FivetranDestination
 from materialize.mzcompose.services.kafka import Kafka
@@ -151,7 +155,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     with c.override(testdrive, materialized):
-        c.up(*dependencies, {"name": "testdrive", "persistent": True})
+        c.up(*dependencies, Service("testdrive", idle=True))
 
         c.sql(
             "ALTER SYSTEM SET max_clusters = 50;",

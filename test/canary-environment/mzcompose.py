@@ -13,7 +13,11 @@ from urllib.parse import quote
 
 import psycopg
 
-from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.composition import (
+    Composition,
+    Service,
+    WorkflowArgumentParser,
+)
 from materialize.mzcompose.services.dbt import Dbt
 from materialize.mzcompose.services.testdrive import Testdrive
 
@@ -80,7 +84,7 @@ MYSQL_RANGE_FUNCTION = (
 
 
 def workflow_create(c: Composition, parser: WorkflowArgumentParser) -> None:
-    c.up({"name": "dbt", "persistent": True}, {"name": "testdrive", "persistent": True})
+    c.up(Service("dbt", idle=True), Service("testdrive", idle=True))
 
     assert MATERIALIZE_PROD_SANDBOX_USERNAME is not None
     assert MATERIALIZE_PROD_SANDBOX_APP_PASSWORD is not None
@@ -215,7 +219,7 @@ def workflow_create(c: Composition, parser: WorkflowArgumentParser) -> None:
 
 
 def workflow_test(c: Composition, parser: WorkflowArgumentParser) -> None:
-    c.up({"name": "dbt", "persistent": True})
+    c.up(Service("dbt", idle=True))
 
     con = psycopg.connect(
         host=MATERIALIZE_PROD_SANDBOX_RDS_HOSTNAME,

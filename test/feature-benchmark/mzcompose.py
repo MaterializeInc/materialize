@@ -83,7 +83,11 @@ from materialize.feature_benchmark.termination import (
     RunAtMost,
     TerminationCondition,
 )
-from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.composition import (
+    Composition,
+    Service,
+    WorkflowArgumentParser,
+)
 from materialize.mzcompose.services.azurite import Azurite
 from materialize.mzcompose.services.balancerd import Balancerd
 from materialize.mzcompose.services.clusterd import Clusterd
@@ -183,7 +187,7 @@ def run_one_scenario(
 
         entrypoint_host = "balancerd" if balancerd else "materialized"
 
-        c.up({"name": "testdrive", "persistent": True})
+        c.up(Service("testdrive", idle=True))
 
         additional_system_parameter_defaults = (
             ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS

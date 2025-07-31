@@ -24,7 +24,11 @@ from pathlib import Path
 from queue import Queue
 
 from materialize import buildkite, ci_util, file_util
-from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.composition import (
+    Composition,
+    Service,
+    WorkflowArgumentParser,
+)
 from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.postgres import CockroachOrPostgresMetadata
 from materialize.mzcompose.services.sql_logic_test import SqlLogicTest
@@ -108,7 +112,7 @@ def run_sqllogictest(
             work_queue.put((step, file))
 
     # Hacky way to make sure we have downloaded the image
-    c.up({"name": "slt_1", "persistent": True})
+    c.up(Service("slt_1", idle=True))
 
     def worker(container_name: str):
         exception: Exception | None = None

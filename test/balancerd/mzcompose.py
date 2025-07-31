@@ -30,7 +30,7 @@ from psycopg import Cursor
 from psycopg.errors import OperationalError, ProgramLimitExceeded, ProgrammingError
 
 from materialize import MZ_ROOT
-from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.composition import Composition, Service
 from materialize.mzcompose.services.balancerd import Balancerd
 from materialize.mzcompose.services.frontegg import FronteggMock
 from materialize.mzcompose.services.materialized import Materialized
@@ -647,7 +647,7 @@ def workflow_webhook(c: Composition) -> None:
         "balancerd",
         "frontegg-mock",
         "materialized",
-        {"name": "testdrive", "persistent": True},
+        Service("testdrive", idle=True),
     )
 
     grant_all_admin_user(c)
