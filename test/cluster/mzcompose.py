@@ -5510,20 +5510,6 @@ def workflow_test_lgalloc_limiter(c: Composition) -> None:
     ):
         c.up("materialized", Service("testdrive", idle=True))
 
-        c.sql(
-            """
-            CREATE CLUSTER test REPLICAS (
-                r1 (
-                    STORAGECTL ADDRESSES ['clusterd1:2100'],
-                    STORAGE ADDRESSES ['clusterd1:2103'],
-                    COMPUTECTL ADDRESSES ['clusterd1:2101'],
-                    COMPUTE ADDRESSES ['clusterd1:2102'],
-                    WORKERS 1
-                )
-            )
-            """
-        )
-
         def setup_workload():
             """
             For our workload we use a large MV, which we obtain by performing a cross
@@ -5531,6 +5517,17 @@ def workflow_test_lgalloc_limiter(c: Composition) -> None:
             """
             c.sql(
                 """
+                DROP CLUSTER IF EXISTS test CASCADE;
+                CREATE CLUSTER test REPLICAS (
+                    r1 (
+                        STORAGECTL ADDRESSES ['clusterd1:2100'],
+                        STORAGE ADDRESSES ['clusterd1:2103'],
+                        COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                        COMPUTE ADDRESSES ['clusterd1:2102'],
+                        WORKERS 1
+                    )
+                );
+
                 DROP TABLE IF EXISTS t CASCADE;
                 CREATE TABLE t (i int, x text);
                 INSERT INTO t
@@ -5587,13 +5584,6 @@ def workflow_test_lgalloc_limiter(c: Composition) -> None:
             user="mz_system",
         )
         setup_workload()
-
-        # Force a reconnect to make sure the replica gets the new config immediately.
-        # TODO(database-issues#9483): make this workaround unnecessary
-        c.up("clusterd1")
-        time.sleep(1)
-        c.kill("clusterd1")
-
         c.up("clusterd1")
 
         c.testdrive("> SELECT count(*) FROM mv\n1000000")
@@ -5628,27 +5618,24 @@ def workflow_test_memory_limiter(c: Composition) -> None:
     ):
         c.up("materialized", Service("testdrive", idle=True))
 
-        c.sql(
-            """
-            CREATE CLUSTER test REPLICAS (
-                r1 (
-                    STORAGECTL ADDRESSES ['clusterd1:2100'],
-                    STORAGE ADDRESSES ['clusterd1:2103'],
-                    COMPUTECTL ADDRESSES ['clusterd1:2101'],
-                    COMPUTE ADDRESSES ['clusterd1:2102'],
-                    WORKERS 1
-                )
-            )
-            """
-        )
-
         def setup_workload():
             """
             For our workload we use a large MV, which we obtain by performing a cross
-            join. We make sure that the rows are large, so consume some memory.
+            join. We make sure that the rows are large, so they consume some memory.
             """
             c.sql(
                 """
+                DROP CLUSTER IF EXISTS test CASCADE;
+                CREATE CLUSTER test REPLICAS (
+                    r1 (
+                        STORAGECTL ADDRESSES ['clusterd1:2100'],
+                        STORAGE ADDRESSES ['clusterd1:2103'],
+                        COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                        COMPUTE ADDRESSES ['clusterd1:2102'],
+                        WORKERS 1
+                    )
+                );
+
                 DROP TABLE IF EXISTS t CASCADE;
                 CREATE TABLE t (i int, x text);
                 INSERT INTO t
@@ -5705,13 +5692,6 @@ def workflow_test_memory_limiter(c: Composition) -> None:
             user="mz_system",
         )
         setup_workload()
-
-        # Force a reconnect to make sure the replica gets the new config immediately.
-        # TODO(database-issues#9483): make this workaround unnecessary
-        c.up("clusterd1")
-        time.sleep(1)
-        c.kill("clusterd1")
-
         c.up("clusterd1")
 
         c.testdrive("> SELECT count(*) FROM mv\n1000000")
