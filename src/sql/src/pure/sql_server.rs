@@ -171,13 +171,15 @@ pub(super) async fn purify_source_exports(
     // by `sys.fn_cdc_get_max_lsn` will surpass `start_lsn`. For this
     // reason, we choose the initial_lsn to be
     // `max(start_lsns, sys.fn_cdc_get_max_lsn())``.
-    let mut possible_lsns = mz_sql_server_util::inspect::get_min_lsns(
+    let mut initial_lsns = mz_sql_server_util::inspect::get_min_lsns(
         client,
         capture_instances.values().map(|instance| instance.as_ref()),
     )
     .await?;
-    possible_lsns.push(mz_sql_server_util::inspect::get_max_lsn_retry(client, timeout).await?);
-    let initial_lsn = possible_lsns.iter().max().expect("single LSN must exist");
+    let max_lsn = mz_sql_server_util::inspect::get_max_lsn_retry(client, timeout).await?;
+    for lsn in initial_lsns.values_mut() {
+        *lsn = std::cmp::max(*lsn, max_lsn);
+    }
 
     let mut tables = vec![];
     for requested in requested_exports {
@@ -248,6 +250,10 @@ pub(super) async fn purify_source_exports(
                 .get(&reference.meta.qualified_name())
                 .expect("capture instance should exist");
 
+            let initial_lsn = *initial_lsns.get(capture_instance).ok_or_else(|| {
+                SqlServerSourcePurificationError::NoStartLsn(capture_instance.to_string())
+            })?;
+
             let export = PurifiedSourceExport {
                 external_reference: reference.external_reference,
                 details: PurifiedExportDetails::SqlServer {
@@ -255,13 +261,13 @@ pub(super) async fn purify_source_exports(
                     text_columns,
                     excl_columns,
                     capture_instance: Arc::clone(capture_instance),
-                    initial_lsn: initial_lsn.clone(),
+                    initial_lsn,
                 },
             };
 
-            (reference.name, export)
+            Ok::<_, SqlServerSourcePurificationError>((reference.name, export))
         })
-        .collect();
+        .collect::<Result<_, _>>()?;
 
     Ok(PurifiedSourceExports {
         source_exports: exports,

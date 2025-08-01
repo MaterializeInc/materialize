@@ -87,7 +87,7 @@ pub async fn get_max_lsn(client: &mut Client) -> Result<Lsn, SqlServerError> {
 pub async fn get_min_lsns(
     client: &mut Client,
     capture_instances: impl IntoIterator<Item = &str>,
-) -> Result<Vec<Lsn>, SqlServerError> {
+) -> Result<BTreeMap<Arc<str>, Lsn>, SqlServerError> {
     let capture_instances: SmallVec<[_; 1]> = capture_instances.into_iter().collect();
     let values: Vec<_> = capture_instances
         .iter()
@@ -107,9 +107,14 @@ pub async fn get_min_lsns(
     let min_lsns = result
         .into_iter()
         .map(|row| {
-            let capture_instance: &str = row.try_get("capture_instance")?.ok_or_else(|| {
-                SqlServerError::ProgrammingError("missing column 'capture_instance'".to_string())
-            })?;
+            let capture_instance: Arc<str> = row
+                .try_get::<&str, _>("capture_instance")?
+                .ok_or_else(|| {
+                    SqlServerError::ProgrammingError(
+                        "missing column 'capture_instance'".to_string(),
+                    )
+                })?
+                .into();
             let start_lsn: &[u8] = row.try_get("start_lsn")?.ok_or_else(|| {
                 SqlServerError::ProgrammingError("missing column 'start_lsn'".to_string())
             })?;
@@ -117,7 +122,7 @@ pub async fn get_min_lsns(
                 column_name: "lsn".to_string(),
                 error: format!("Error parsing LSN for {capture_instance}: {msg}"),
             })?;
-            Ok::<_, SqlServerError>(min_lsn)
+            Ok::<_, SqlServerError>((capture_instance, min_lsn))
         })
         .collect::<Result<_, _>>()?;
 
