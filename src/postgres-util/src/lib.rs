@@ -21,7 +21,7 @@ pub mod desc;
 #[cfg(feature = "schemas")]
 pub mod schemas;
 #[cfg(feature = "schemas")]
-pub use schemas::{get_schemas, publication_info};
+pub use schemas::publication_info;
 #[cfg(feature = "tunnel")]
 pub mod tunnel;
 #[cfg(feature = "tunnel")]

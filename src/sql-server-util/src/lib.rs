@@ -370,18 +370,16 @@ impl Client {
             return Ok(());
         }
 
-        // TODO(sql_server3): Remove this redundant collection.
-        #[allow(clippy::as_conversions)]
         let params_dyn: SmallVec<[_; 1]> = params
             .iter()
-            .map(|instance| instance as &dyn tiberius::ToSql)
+            .map(|instance| {
+                let instance: &dyn tiberius::ToSql = instance;
+                instance
+            })
             .collect();
 
-        let param_indexes = params
-            .iter()
-            .enumerate()
-            // Params are 1-based indexed.
-            .map(|(idx, _)| format!("@P{}", idx + 1))
+        let param_indexes = (1..params.len() + 1)
+            .map(|idx| format!("@P{}", idx))
             .join(", ");
 
         let capture_instance_query = format!(
