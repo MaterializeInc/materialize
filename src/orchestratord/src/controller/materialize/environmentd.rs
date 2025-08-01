@@ -71,6 +71,7 @@ static V147_DEV0: LazyLock<Version> = LazyLock::new(|| Version {
     pre: Prerelease::new("dev.0").expect("dev.0 is valid prerelease"),
     build: BuildMetadata::new("").expect("empty string is valid buildmetadata"),
 });
+const V153: Version = Version::new(0, 153, 0);
 
 /// Describes the status of a deployment.
 ///
@@ -1216,7 +1217,10 @@ fn create_environmentd_statefulset_object(
         args.push("--orchestrator-kubernetes-enable-prometheus-scrape-annotations".into());
     }
 
-    if mz.meets_minimum_version(&V143) && config.disable_license_key_checks {
+    if mz.meets_minimum_version(&V143)
+        && !mz.meets_minimum_version(&V153)
+        && config.disable_license_key_checks
+    {
         args.push("--disable-license-key-checks".into());
     } else if mz.meets_minimum_version(&V140_DEV0) {
         volume_mounts.push(VolumeMount {

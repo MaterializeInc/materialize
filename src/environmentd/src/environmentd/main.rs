@@ -583,9 +583,6 @@ pub struct Args {
     /// File containing a valid Materialize license key.
     #[clap(long, env = "LICENSE_KEY")]
     license_key: Option<String>,
-    // TODO: temporary until we get the rest of the infrastructure in place
-    #[clap(long, hide = true)]
-    disable_license_key_checks: bool,
 
     // === AWS options. ===
     /// The AWS account ID, which will be used to generate ARNs for
@@ -669,9 +666,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     sys::enable_sigusr2_coverage_dump()?;
     sys::enable_termination_signal_cleanup()?;
 
-    let license_key = if args.disable_license_key_checks {
-        ValidatedLicenseKey::disabled()
-    } else if let Some(license_key_file) = args.license_key {
+    let license_key = if let Some(license_key_file) = args.license_key {
         let license_key_text = std::fs::read_to_string(&license_key_file)
             .context("failed to open license key file")?;
         let license_key = mz_license_keys::validate(
