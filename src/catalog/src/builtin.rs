@@ -6993,7 +6993,8 @@ pub static PG_INDEX: LazyLock<BuiltinView> = LazyLock::new(|| {
         (
             SELECT count(*)::pg_catalog.int2
             FROM mz_catalog.mz_columns
-            WHERE mz_columns.id = mz_relations.id
+            JOIN mz_catalog.mz_relations mri ON mz_columns.id = mri.id
+            WHERE mri.oid = mz_catalog.mz_relations.oid
         ),
         0::pg_catalog.int2
     ) AS indnatts,
@@ -7025,7 +7026,7 @@ JOIN mz_catalog.mz_index_columns ON mz_index_columns.index_id = mz_indexes.id
 JOIN mz_catalog.mz_schemas ON mz_schemas.id = mz_relations.schema_id
 LEFT JOIN mz_catalog.mz_databases d ON d.id = mz_schemas.database_id
 WHERE mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()
-GROUP BY mz_indexes.oid, mz_relations.oid, mz_relations.id",
+GROUP BY mz_indexes.oid, mz_relations.oid",
         access: vec![PUBLIC_SELECT],
     }
 });
