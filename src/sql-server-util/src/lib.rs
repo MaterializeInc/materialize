@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use itertools::Itertools;
 use std::any::Any;
 use std::borrow::Cow;
 use std::future::IntoFuture;
@@ -351,6 +352,90 @@ impl Client {
             .map(|i| (i.into(), None))
             .collect();
         crate::cdc::CdcStream::new(self, instances)
+    }
+
+    /// Return a Result that is empty if all tables and capture instances
+    /// have the necessary permissions to and an error if any table
+    /// or capture instance does not have the necessary permissions
+    /// for tracking changes.
+    pub async fn validate_source_privileges(
+        &mut self,
+        capture_instances: impl IntoIterator<Item = &str>,
+    ) -> Result<(), SqlServerError> {
+        let params: SmallVec<[_; 1]> = capture_instances.into_iter().collect();
+
+        if params.is_empty() {
+            return Ok(());
+        }
+
+        let params_dyn: SmallVec<[_; 1]> = params
+            .iter()
+            .map(|instance| {
+                let instance: &dyn tiberius::ToSql = instance;
+                instance
+            })
+            .collect();
+
+        let param_indexes = (1..params.len() + 1)
+            .map(|idx| format!("@P{}", idx))
+            .join(", ");
+
+        let capture_instance_query = format!(
+            "
+        SELECT
+            SCHEMA_NAME(o.schema_id) + '.' + o.name AS qualified_table_name,
+            ct.capture_instance AS capture_instance,
+            COALESCE(HAS_PERMS_BY_NAME(SCHEMA_NAME(o.schema_id) + '.' + o.name, 'OBJECT', 'SELECT'), 0) AS table_select,
+            COALESCE(HAS_PERMS_BY_NAME('cdc.' + ct.capture_instance + '_CT', 'OBJECT', 'SELECT'), 0) AS capture_table_select
+        FROM cdc.change_tables ct
+            JOIN sys.objects o ON o.object_id = ct.source_object_id
+        WHERE ct.capture_instance IN ({param_indexes});
+            "
+        );
+
+        let rows = self.query(capture_instance_query, &params_dyn[..]).await?;
+
+        let mut capture_instances_without_perms = vec![];
+        let mut tables_without_perms = vec![];
+
+        for row in rows {
+            let table: &str = row
+                .try_get("qualified_table_name")
+                .context("getting table column")?
+                .ok_or_else(|| anyhow::anyhow!("no table column?"))?;
+
+            let capture_instance: &str = row
+                .try_get("capture_instance")
+                .context("getting capture_instance column")?
+                .ok_or_else(|| anyhow::anyhow!("no capture_instance column?"))?;
+
+            let permitted_table: i32 = row
+                .try_get("table_select")
+                .context("getting table_select column")?
+                .ok_or_else(|| anyhow::anyhow!("no table_select column?"))?;
+
+            let permitted_capture_instance: i32 = row
+                .try_get("capture_table_select")
+                .context("getting capture_table_select column")?
+                .ok_or_else(|| anyhow::anyhow!("no capture_table_select column?"))?;
+
+            if permitted_table == 0 {
+                tables_without_perms.push(table.to_string());
+            }
+
+            if permitted_capture_instance == 0 {
+                capture_instances_without_perms.push(capture_instance.to_string());
+            }
+        }
+
+        if !capture_instances_without_perms.is_empty() || !tables_without_perms.is_empty() {
+            return Err(SqlServerError::AuthorizationError {
+                tables: tables_without_perms.join(", "),
+                capture_instances: capture_instances_without_perms.join(", "),
+            });
+        }
+
+        Ok(())
     }
 }
 
@@ -854,6 +939,13 @@ pub enum SqlServerError {
     Generic(#[from] anyhow::Error),
     #[error("programming error! {0}")]
     ProgrammingError(String),
+    #[error(
+        "insufficient permissions for tables {tables} or capture instances {capture_instances}"
+    )]
+    AuthorizationError {
+        tables: String,
+        capture_instances: String,
+    },
 }
 
 /// Errors returned from decoding SQL Server rows.

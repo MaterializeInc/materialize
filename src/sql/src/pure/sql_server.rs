@@ -51,7 +51,7 @@ pub(super) struct PurifiedSourceExports {
 #[allow(clippy::unused_async)]
 pub(super) async fn purify_source_exports(
     database: &str,
-    _client: &mut mz_sql_server_util::Client,
+    client: &mut mz_sql_server_util::Client,
     retrieved_references: &RetrievedSourceReferences,
     requested_references: &Option<ExternalReferences>,
     text_columns: &[UnresolvedItemName],
@@ -146,7 +146,15 @@ pub(super) async fn purify_source_exports(
         }
     }
 
-    // TODO(sql_server2): Validate permissions on upstream tables.
+    let capture_instances = requested_exports.iter().map(|export| {
+        export
+            .meta
+            .sql_server_capture_instance()
+            .expect("sql server source")
+            .as_ref()
+    });
+
+    client.validate_source_privileges(capture_instances).await?;
 
     let capture_instances: BTreeMap<_, _> = requested_exports
         .iter()

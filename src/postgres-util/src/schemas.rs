@@ -16,21 +16,7 @@ use tokio_postgres::Client;
 use tokio_postgres::types::Oid;
 
 use crate::PostgresError;
-use crate::desc::{PostgresColumnDesc, PostgresKeyDesc, PostgresSchemaDesc, PostgresTableDesc};
-
-pub async fn get_schemas(client: &Client) -> Result<Vec<PostgresSchemaDesc>, PostgresError> {
-    Ok(client
-        .query("SELECT oid, nspname, nspowner FROM pg_namespace", &[])
-        .await?
-        .into_iter()
-        .map(|row| {
-            let oid: Oid = row.get("oid");
-            let name: String = row.get("nspname");
-            let owner: Oid = row.get("nspowner");
-            PostgresSchemaDesc { oid, name, owner }
-        })
-        .collect::<Vec<_>>())
-}
+use crate::desc::{PostgresColumnDesc, PostgresKeyDesc, PostgresTableDesc};
 
 /// Fetches table schema information from an upstream Postgres source for tables
 /// that are part of a publication, given a connection string and the
