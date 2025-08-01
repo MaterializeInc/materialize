@@ -89,15 +89,15 @@ pub async fn get_min_lsns(
     capture_instances: impl IntoIterator<Item = &str>,
 ) -> Result<Vec<Lsn>, SqlServerError> {
     let capture_instances: SmallVec<[_; 1]> = capture_instances.into_iter().collect();
-    #[allow(clippy::as_conversions)]
-    let values: SmallVec<[_; 1]> = capture_instances
+    let values: Vec<_> = capture_instances
         .iter()
-        .map(|ci| ci as &dyn tiberius::ToSql)
+        .map(|ci| {
+            let ci: &dyn tiberius::ToSql = ci;
+            ci
+        })
         .collect();
-    let args = capture_instances
-        .iter()
-        .enumerate()
-        .map(|(i, _)| format!("@P{}", i + 1))
+    let args = (0..capture_instances.len())
+        .map(|i| format!("@P{}", i + 1))
         .collect::<Vec<_>>()
         .join(",");
     let stmt = format!(

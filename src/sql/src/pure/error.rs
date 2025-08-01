@@ -388,8 +388,6 @@ pub enum SqlServerSourcePurificationError {
     NoTables,
     #[error("programming error: {0}")]
     ProgrammingError(String),
-    #[error("Unable to determine an initial LSN")]
-    NoInitialLsn(),
 }
 
 impl SqlServerSourcePurificationError {

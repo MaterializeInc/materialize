@@ -177,10 +177,7 @@ pub(super) async fn purify_source_exports(
     )
     .await?;
     possible_lsns.push(mz_sql_server_util::inspect::get_max_lsn_retry(client, timeout).await?);
-    let initial_lsn = possible_lsns
-        .iter()
-        .max()
-        .ok_or_else(SqlServerSourcePurificationError::NoInitialLsn)?;
+    let initial_lsn = possible_lsns.iter().max().expect("single LSN must exist");
 
     let mut tables = vec![];
     for requested in requested_exports {
