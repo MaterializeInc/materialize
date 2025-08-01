@@ -856,6 +856,7 @@ pg_class_all_databases  relispartition
 pg_class_all_databases  relkind
 pg_class_all_databases  relname
 pg_class_all_databases  relnamespace
+pg_class_all_databases  relnatts
 pg_class_all_databases  reloftype
 pg_class_all_databases  reloptions
 pg_class_all_databases  relowner
