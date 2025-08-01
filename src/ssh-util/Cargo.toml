@@ -20,7 +20,7 @@ futures = "0.3.31"
 itertools = "0.14.0"
 scopeguard = "1.2.0"
 serde = { version = "1.0.219", features = ["derive"] }
-serde_json = { version = "1.0.127" }
+serde_json = { version = "1.0.142" }
 ssh-key = { version = "0.4.3" }
 tempfile = "3.20.0"
 thiserror = { version = "2.0.12" }

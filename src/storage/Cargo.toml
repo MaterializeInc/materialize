@@ -75,10 +75,10 @@ regex = { version = "1.11.1" }
 rocksdb = { version = "0.22.0", default-features = false, features = ["snappy", "zstd", "lz4"] }
 seahash = "4"
 serde = { version = "1.0.219", features = ["derive"] }
-serde_json = { version = "1.0.127" }
+serde_json = { version = "1.0.142" }
 serde_bytes = { version = "0.11.17" }
 sha2 = "0.10.9"
-timely = "0.21.3"
+timely = "0.21.4"
 tokio = { version = "1.44.1", features = ["fs", "rt", "sync", "test-util"] }
 tokio-postgres = { version = "0.7.8", features = ["serde"] }
 tokio-stream = "0.1.17"
