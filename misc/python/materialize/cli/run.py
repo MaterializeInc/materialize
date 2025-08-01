@@ -64,6 +64,34 @@ MACOS_ENTITLEMENTS_DATA = """
 """
 
 
+def update_sqlite_repo() -> None:
+    """Since the SQLite SLT repository is >2x the size of the entire Materialize repository we don't want it as a submodule for everyone to have to fetch, especially in CI. Instead only clone it when we run the tests."""
+    path = pathlib.Path(MZ_ROOT / "test" / "sqllogictest" / "sqlite")
+    if (path / ".git").is_dir():
+        if ui.env_is_truthy("CI"):
+            spawn.runv(["git", "-C", str(path), "pull"])
+        else:
+            spawn.runv(["git", "-C", str(path), "fetch"])
+            local = spawn.capture(["git", "rev-parse", "@"])
+            remote = spawn.capture(["git", "rev-parse", "@{upstream}"])
+            if local != remote:
+                raise ValueError(
+                    f"The test/sqllogictest/sqlite repository should be on the latest state ({remote}), but is on {local}"
+                )
+    else:
+        path.mkdir(exist_ok=True)
+        spawn.runv(
+            [
+                "git",
+                "clone",
+                # This is currently way slower, I guess GitHub doesn't have it cached:
+                # "--depth=1",
+                "https://github.com/MaterializeInc/sqllogictest",
+                str(path),
+            ]
+        )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="run",
@@ -296,12 +324,18 @@ def main() -> int:
             if args.monitoring:
                 command += ["--opentelemetry-endpoint=http://localhost:4317"]
         elif args.program == "sqllogictest":
-            # sqllogictest creates the scratch directory in a tmpfs mount, which doesn't work well with lgalloc
-            # https://github.com/MaterializeInc/database-issues/issues/8989
+            for arg in args.args:
+                if arg.startswith("test/sqllogictest/sqlite/") or arg.startswith(
+                    "./test/sqllogictest/sqlite/"
+                ):
+                    update_sqlite_repo()
+                    break
+
             formatted_params = [
                 f"{key}={value}"
                 for key, value in get_default_system_parameters().items()
-            ] + ["enable_lgalloc=false"]
+            ]
+
             system_parameter_default = ";".join(formatted_params)
             # Connect to the database to ensure it exists.
             _connect_sql(args.postgres)

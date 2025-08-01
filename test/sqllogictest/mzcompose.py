@@ -24,6 +24,7 @@ from pathlib import Path
 from queue import Queue
 
 from materialize import buildkite, ci_util, file_util
+from materialize.cli.run import update_sqlite_repo
 from materialize.mzcompose.composition import (
     Composition,
     Service,
@@ -57,11 +58,13 @@ def workflow_default(c: Composition) -> None:
 
 def workflow_fast_tests(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Run fast SQL logic tests"""
+    update_sqlite_repo()
     run_sqllogictest(c, parser, compileFastSltConfig())
 
 
 def workflow_slow_tests(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Run slow SQL logic tests"""
+    update_sqlite_repo()
     run_sqllogictest(
         c,
         parser,
@@ -71,6 +74,7 @@ def workflow_slow_tests(c: Composition, parser: WorkflowArgumentParser) -> None:
 
 def workflow_selection(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Run specific SQL logic tests using pattern"""
+    update_sqlite_repo()
     parser.add_argument(
         "--pattern",
         type=str,
