@@ -33,30 +33,6 @@ rows:
 
       Defaults to `false`.
 
-  - Option: "`--auto-port-forward`"
-    Description: |
-
-      <a name="auto-port-forward"></a>If `true`, automatically port-forward the
-      external SQL port.
-
-      Defaults to `true`.
-
-  - Option: "`--port-forward-local-address <IP address>`"
-    Description: |
-
-      <a name="port-forward-local-address"></a> The address to listen on for
-      port-forwarding.
-
-      Defaults to `127.0.0.1`.
-
-  - Option: "`--port-forward-local-port <PORT>`"
-    Description: |
-
-      <a name="port-forward-local-port"></a> The port to listen on for
-      port-forwarding.
-
-      Defaults to `6875`.
-
   - Option: "`-h`, `--help`"
     Description: |
 

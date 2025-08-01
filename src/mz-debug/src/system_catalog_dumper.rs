@@ -494,10 +494,22 @@ pub async fn create_postgres_connection(
     let mut pg_config = PgConfig::from_str(connection_string)?;
     pg_config.connect_timeout(PG_CONNECTION_TIMEOUT);
     let tls = make_tls(&pg_config)?;
+
+    let host_addr = pg_config.get_hosts().first();
+    let port = pg_config.get_ports().first();
+
+    // The original connection string can contain the username and password, so we only print the host and port.
+    let redacted_connection_string = if let (Some(host_addr), Some(port)) = (host_addr, port) {
+        format!(" at {:?} on port {}", host_addr, port)
+    } else {
+        "".to_string()
+    };
+
     info!(
-        "Connecting to PostgreSQL server at {}...",
-        connection_string
+        "Connecting to PostgreSQL server{}",
+        redacted_connection_string
     );
+
     let (pg_client, pg_conn) = retry::Retry::default()
         .max_duration(PG_CONNECTION_TIMEOUT)
         .retry_async_canceling(|_| {
@@ -506,6 +518,11 @@ pub async fn create_postgres_connection(
             async move { pg_config.connect(tls).await.map_err(|e| anyhow::anyhow!(e)) }
         })
         .await?;
+
+    info!(
+        "Connected to PostgreSQL server{}",
+        redacted_connection_string
+    );
 
     Ok((pg_client, pg_conn, tls))
 }
@@ -684,8 +701,6 @@ pub async fn query_relation(
 impl SystemCatalogDumper {
     pub async fn new(connection_url: &str, base_path: PathBuf) -> Result<Self, anyhow::Error> {
         let (pg_client, pg_conn, pg_tls) = create_postgres_connection(connection_url).await?;
-
-        info!("Connected to PostgreSQL server at {}", connection_url);
 
         let handle = task::spawn(|| "postgres-connection", pg_conn);
 
