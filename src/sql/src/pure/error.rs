@@ -388,6 +388,8 @@ pub enum SqlServerSourcePurificationError {
     NoTables,
     #[error("programming error: {0}")]
     ProgrammingError(String),
+    #[error("No start_lsn found for capture instance {0}")]
+    NoStartLsn(String),
 }
 
 impl SqlServerSourcePurificationError {

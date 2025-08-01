@@ -261,15 +261,15 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
             export_ids_to_snapshot.clear();
 
 
-            // Resumption point is the minimum LSN that has been observed.
-            let resume_lsn = outputs
+            // Resumption point is the minimum LSN that has been observed per capture instance.
+            let resume_lsns:BTreeMap<_, _> = outputs
                 .values()
-                .flat_map(|src_info| {
+                .map(|src_info| {
                     // initial_lsn is the max lsn observed, but the resume lsn
                     // is the next lsn that should be read.  After a snapshot, initial_lsn
                     // has been read, so replication will start at the next available lsn.
                     let start_lsn = src_info.initial_lsn.increment();
-                    src_info.resume_upper
+                    let resume_lsn = src_info.resume_upper
                         .elements()
                         .iter()
                         .map(move |lsn| {
@@ -279,23 +279,29 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                                 *lsn
                             }
                         })
+                        .min()
+                        .expect("resume_upper has at least one value");
+                    (Arc::clone(&src_info.capture_instance), resume_lsn)
                 })
-                .min();
+                .collect();
 
             // If a source is created with no subsources, there will be no inputs
             // as each capture instance collects data for a table. Without a cdc stream
             // to consume, this source will have no outputs either.
-            let Some(resume_lsn) = resume_lsn else {
+            if resume_lsns.is_empty() {
                 // TODO: this is only in place until we implement RLU
                 // https://github.com/MaterializeInc/database-issues/issues/9212
                 tracing::warn!(%config.id, "timely-{} no resume_lsn, waiting", config.worker_id);
                 std::future::pending::<()>().await;
                 unreachable!();
             };
-            tracing::info!(%config.id, "timely-{} replication starting with resume_lsn = {}", config.worker_id, resume_lsn);
 
+            tracing::info!(%config.id, ?resume_lsns, "timely-{} replication starting", config.worker_id);
             for instance in capture_instances.keys() {
-                cdc_handle = cdc_handle.start_lsn(instance, resume_lsn);
+                let resume_lsn = resume_lsns
+                    .get(instance)
+                    .expect("resume_lsn exists for capture instance");
+                cdc_handle = cdc_handle.start_lsn(instance, *resume_lsn);
             }
 
             // Off to the races! Replicate data from SQL Server.
