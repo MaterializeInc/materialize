@@ -6724,6 +6724,7 @@ pub static PG_CLASS_ALL_DATABASES: LazyLock<BuiltinView> = LazyLock::new(|| {
             .with_column("relhasindex", ScalarType::Bool.nullable(false))
             .with_column("relpersistence", ScalarType::PgLegacyChar.nullable(false))
             .with_column("relkind", ScalarType::String.nullable(true))
+            .with_column("relnatts", ScalarType::Int16.nullable(false))
             .with_column("relchecks", ScalarType::Int16.nullable(false))
             .with_column("relhasrules", ScalarType::Bool.nullable(false))
             .with_column("relhastriggers", ScalarType::Bool.nullable(false))
@@ -6765,6 +6766,14 @@ SELECT
         WHEN class_objects.type = 'view' THEN 'v'
         WHEN class_objects.type = 'materialized-view' THEN 'm'
     END relkind,
+    COALESCE(
+        (
+            SELECT count(*)::pg_catalog.int2
+            FROM mz_catalog.mz_columns
+            WHERE mz_columns.id = class_objects.id
+        ),
+        0::pg_catalog.int2
+    ) AS relnatts,
     -- MZ doesn't support CHECK constraints so relchecks is filled with 0
     0::pg_catalog.int2 AS relchecks,
     -- MZ doesn't support creating rules so relhasrules is filled with false
@@ -6809,7 +6818,8 @@ ON mz_internal.pg_class_all_databases (relname)",
     is_retained_metrics_object: false,
 };
 
-pub static PG_CLASS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+pub static PG_CLASS: LazyLock<BuiltinView> = LazyLock::new(|| {
+    BuiltinView {
     name: "pg_class",
     schema: PG_CATALOG_SCHEMA,
     oid: oid::VIEW_PG_CLASS_OID,
@@ -6826,6 +6836,7 @@ pub static PG_CLASS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
         .with_column("relhasindex", ScalarType::Bool.nullable(false))
         .with_column("relpersistence", ScalarType::PgLegacyChar.nullable(false))
         .with_column("relkind", ScalarType::String.nullable(true))
+        .with_column("relnatts", ScalarType::Int16.nullable(false))
         .with_column("relchecks", ScalarType::Int16.nullable(false))
         .with_column("relhasrules", ScalarType::Bool.nullable(false))
         .with_column("relhastriggers", ScalarType::Bool.nullable(false))
@@ -6844,12 +6855,13 @@ pub static PG_CLASS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     sql: "
 SELECT
     oid, relname, relnamespace, reloftype, relowner, relam, reltablespace, reltuples, reltoastrelid,
-    relhasindex, relpersistence, relkind, relchecks, relhasrules, relhastriggers, relhassubclass,
+    relhasindex, relpersistence, relkind, relnatts, relchecks, relhasrules, relhastriggers, relhassubclass,
     relrowsecurity, relforcerowsecurity, relreplident, relispartition, relhasoids, reloptions
 FROM mz_internal.pg_class_all_databases
 WHERE database_name IS NULL OR database_name = pg_catalog.current_database();
 ",
     access: vec![PUBLIC_SELECT],
+}
 });
 
 pub static PG_DEPEND: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
@@ -6960,6 +6972,7 @@ pub static PG_INDEX: LazyLock<BuiltinView> = LazyLock::new(|| {
         desc: RelationDesc::builder()
             .with_column("indexrelid", ScalarType::Oid.nullable(false))
             .with_column("indrelid", ScalarType::Oid.nullable(false))
+            .with_column("indnatts", ScalarType::Int16.nullable(false))
             .with_column("indisunique", ScalarType::Bool.nullable(false))
             .with_column("indisprimary", ScalarType::Bool.nullable(false))
             .with_column("indimmediate", ScalarType::Bool.nullable(false))
@@ -6976,6 +6989,14 @@ pub static PG_INDEX: LazyLock<BuiltinView> = LazyLock::new(|| {
         sql: "SELECT
     mz_indexes.oid AS indexrelid,
     mz_relations.oid AS indrelid,
+    COALESCE(
+        (
+            SELECT count(*)::pg_catalog.int2
+            FROM mz_catalog.mz_columns
+            WHERE mz_columns.id = mz_relations.id
+        ),
+        0::pg_catalog.int2
+    ) AS indnatts,
     -- MZ doesn't support creating unique indexes so indisunique is filled with false
     false::pg_catalog.bool AS indisunique,
     false::pg_catalog.bool AS indisprimary,
@@ -7004,7 +7025,7 @@ JOIN mz_catalog.mz_index_columns ON mz_index_columns.index_id = mz_indexes.id
 JOIN mz_catalog.mz_schemas ON mz_schemas.id = mz_relations.schema_id
 LEFT JOIN mz_catalog.mz_databases d ON d.id = mz_schemas.database_id
 WHERE mz_schemas.database_id IS NULL OR d.name = pg_catalog.current_database()
-GROUP BY mz_indexes.oid, mz_relations.oid",
+GROUP BY mz_indexes.oid, mz_relations.oid, mz_relations.id",
         access: vec![PUBLIC_SELECT],
     }
 });

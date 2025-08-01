@@ -984,20 +984,21 @@ WHERE mdod.dataflow_name NOT LIKE '%introspection-subscribe%'
 GROUP BY mdod.name
 ORDER BY mdod.name;
 ----
-AccumulableErrorCheck  10
+AccumulableErrorCheck  11
 Arrange␠ReduceCollation  1
 Arrange␠ReduceMinsMaxes  3
 Arrange␠export␠iterative  2
 Arrange␠export␠iterative␠err  2
 Arrange␠recursive␠err  3
-ArrangeAccumulable␠[val:␠empty]  10
+ArrangeAccumulable␠[val:␠empty]  11
 ArrangeBy[[CallBinary(JsonbGetStringStringify,␠Column(1,␠"details"),␠Literal(Ok(Row{[String("id")]}),␠ColumnType␠{␠scalar_type:␠String,␠nullable:␠false␠}))]]  2
 ArrangeBy[[CallBinary(JsonbGetStringStringify,␠Column(2,␠"details"),␠Literal(Ok(Row{[String("id")]}),␠ColumnType␠{␠scalar_type:␠String,␠nullable:␠false␠}))]]  1
 ArrangeBy[[CallVariadic(Coalesce,␠[Column(2,␠"parent"),␠Column(3,␠"parent")])]]  2
 ArrangeBy[[Column(0),␠Column(1),␠Column(2),␠Column(3),␠Column(4),␠Column(5),␠Column(6),␠Column(7),␠Column(8),␠Column(9),␠Column(10),␠Column(11),␠Column(12),␠Column(13),␠Column(14),␠Column(15),␠Column(16),␠Column(17),␠Column(18),␠Column(19),␠Column(20),␠Column(21),␠Column(22),␠Column(23),␠Column(24),␠Column(25),␠Column(26),␠Column(27)]]  2
+ArrangeBy[[Column(0),␠Column(1),␠Column(2),␠Column(3),␠Column(4),␠Column(5),␠Column(6),␠Column(7),␠Column(8),␠Column(9),␠Column(10),␠Column(11),␠Column(12),␠Column(13),␠Column(14),␠Column(15),␠Column(16),␠Column(17),␠Column(18),␠Column(19)]]  2
 ArrangeBy[[Column(0),␠Column(1)]]  1
 ArrangeBy[[Column(0),␠Column(3)]]  1
-ArrangeBy[[Column(0)]]  34
+ArrangeBy[[Column(0)]]  35
 ArrangeBy[[Column(0,␠"attrelid"),␠Column(1,␠"attname"),␠Column(2,␠"atttypid"),␠Column(3,␠"attlen"),␠Column(4,␠"attnum"),␠Column(5,␠"atttypmod"),␠Column(6,␠"attnotnull"),␠Column(7,␠"atthasdef"),␠Column(8,␠"attidentity"),␠Column(9,␠"attgenerated"),␠Column(10,␠"attisdropped"),␠Column(11,␠"attcollation"),␠Column(12,␠"database_name"),␠Column(13,␠"pg_type_database_name")]]  1
 ArrangeBy[[Column(0,␠"attrelid"),␠Column(1,␠"attname"),␠Column(2,␠"atttypid"),␠Column(3,␠"attlen"),␠Column(4,␠"attnum"),␠Column(5,␠"atttypmod"),␠Column(6,␠"attnotnull"),␠Column(7,␠"atthasdef"),␠Column(8,␠"attidentity"),␠Column(9,␠"attgenerated"),␠Column(10,␠"attisdropped"),␠Column(11,␠"attcollation"),␠Column(12,␠"database_name"),␠Column(13,␠"pg_type_database_name")]]-errors  1
 ArrangeBy[[Column(0,␠"cluster")]]  1
@@ -1013,7 +1014,7 @@ ArrangeBy[[Column(0,␠"id"),␠Column(1,␠"replica_id")]]  3
 ArrangeBy[[Column(0,␠"id"),␠Column(1,␠"replica_id")]]-errors  3
 ArrangeBy[[Column(0,␠"id"),␠Column(2,␠"id")]]  1
 ArrangeBy[[Column(0,␠"id"),␠Column(2,␠"position")]]  1
-ArrangeBy[[Column(0,␠"id")]]  81
+ArrangeBy[[Column(0,␠"id")]]  82
 ArrangeBy[[Column(0,␠"id")]]-errors  17
 ArrangeBy[[Column(0,␠"index_id")]]  1
 ArrangeBy[[Column(0,␠"name")]]  3
@@ -1098,26 +1099,25 @@ ArrangeBy[[Column(3,␠"schema_id")]]  1
 ArrangeBy[[Column(3,␠"schema_id")]]-errors  1
 ArrangeBy[[Column(4)]]  1
 ArrangeBy[[Column(4,␠"cluster_id")]]  1
-ArrangeBy[[Column(4,␠"owner_id")]]  1
 ArrangeBy[[Column(4,␠"schema_id")]]  2
 ArrangeBy[[Column(4,␠"schema_id")]]-errors  2
-ArrangeBy[[Column(5,␠"owner_id")]]  1
+ArrangeBy[[Column(5,␠"owner_id")]]  2
 ArrangeBy[[Column(5,␠"type_oid")]]  1
-ArrangeBy[[Column(6,␠"database_id")]]  1
 ArrangeBy[[Column(6,␠"dropped_at")]]  1
 ArrangeBy[[Column(6,␠"dropped_at")]]-errors  1
 ArrangeBy[[Column(6,␠"schema_id")]]  1
 ArrangeBy[[Column(6,␠"schema_id")]]-errors  1
+ArrangeBy[[Column(7,␠"database_id")]]  1
 ArrangeBy[[Column(9,␠"database_id")]]  1
 ArrangeBy[[]]  11
-Arranged␠DistinctBy  47
+Arranged␠DistinctBy  49
 Arranged␠MinsMaxesHierarchical␠input  14
 Arranged␠ReduceInaccumulable  3
 Arranged␠TopK␠input  108
 Distinct␠recursive␠err  3
-DistinctBy  47
-DistinctByErrorCheck  47
-ReduceAccumulable  10
+DistinctBy  49
+DistinctByErrorCheck  49
+ReduceAccumulable  11
 ReduceCollation  1
 ReduceCollation␠Errors  1
 ReduceInaccumulable  3
