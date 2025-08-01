@@ -1,6 +1,3 @@
-[submodule "sqllogictest"]
-	path = test/sqllogictest/sqlite
-	url = https://github.com/MaterializeInc/sqllogictest.git
 [submodule "fivetran-sdk"]
 	path = misc/fivetran-sdk
 	url = https://github.com/fivetran/fivetran_sdk.git

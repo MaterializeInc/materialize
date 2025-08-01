@@ -296,12 +296,28 @@ def main() -> int:
             if args.monitoring:
                 command += ["--opentelemetry-endpoint=http://localhost:4317"]
         elif args.program == "sqllogictest":
-            # sqllogictest creates the scratch directory in a tmpfs mount, which doesn't work well with lgalloc
-            # https://github.com/MaterializeInc/database-issues/issues/8989
             formatted_params = [
                 f"{key}={value}"
                 for key, value in get_default_system_parameters().items()
-            ] + ["enable_lgalloc=false"]
+            ]
+            for arg in args.args:
+                if arg.startswith("test/sqllogictest/sqlite/") or arg.startswith(
+                    "./test/sqllogictest/sqlite/"
+                ):
+                    path = pathlib.Path(MZ_ROOT / "test" / "sqllogictest" / "sqlite")
+                    if not (path / ".git").is_dir():
+                        path.mkdir(exist_ok=True)
+                        spawn.runv(
+                            [
+                                "git",
+                                "clone",
+                                # This is currently way slower, I guess GitHub doesn't have it cached:
+                                # "--depth=1",
+                                "https://github.com/MaterializeInc/sqllogictest",
+                                str(path),
+                            ]
+                        )
+
             system_parameter_default = ";".join(formatted_params)
             # Connect to the database to ensure it exists.
             _connect_sql(args.postgres)
