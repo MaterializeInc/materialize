@@ -362,10 +362,8 @@ impl Client {
         &mut self,
         capture_instances: impl IntoIterator<Item = &str>,
     ) -> Result<(), SqlServerError> {
-        // SQL Server does not have support for array types, so we need to manually construct
-        // the parameterized query.
         let params: SmallVec<[_; 1]> = capture_instances.into_iter().collect();
-        // If there are no tables to check for just return an empty list.
+
         if params.is_empty() {
             return Ok(());
         }
