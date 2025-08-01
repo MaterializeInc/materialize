@@ -395,6 +395,9 @@ impl Client {
 
         let rows = self.query(capture_instance_query, &params_dyn[..]).await?;
 
+        let mut capture_instances_without_perms = vec![];
+        let mut tables_without_perms = vec![];
+
         for row in rows {
             let table: &str = row
                 .try_get("qualified_table_name")
@@ -416,12 +419,20 @@ impl Client {
                 .context("getting capture_table_select column")?
                 .ok_or_else(|| anyhow::anyhow!("no capture_table_select column?"))?;
 
-            if permitted_table == 0 || permitted_capture_instance == 0 {
-                return Err(SqlServerError::AuthorizationError {
-                    table: table.to_string(),
-                    capture_instance: capture_instance.to_string(),
-                });
+            if permitted_table == 0 {
+                tables_without_perms.push(table.to_string());
             }
+
+            if permitted_capture_instance == 0 {
+                capture_instances_without_perms.push(capture_instance.to_string());
+            }
+        }
+
+        if !capture_instances_without_perms.is_empty() || !tables_without_perms.is_empty() {
+            return Err(SqlServerError::AuthorizationError {
+                tables: tables_without_perms.join(", "),
+                capture_instances: capture_instances_without_perms.join(", "),
+            });
         }
 
         Ok(())
@@ -928,10 +939,12 @@ pub enum SqlServerError {
     Generic(#[from] anyhow::Error),
     #[error("programming error! {0}")]
     ProgrammingError(String),
-    #[error("insufficient permissions for table {table} or capture instance {capture_instance}")]
+    #[error(
+        "insufficient permissions for tables {tables} or capture instances {capture_instances}"
+    )]
     AuthorizationError {
-        table: String,
-        capture_instance: String,
+        tables: String,
+        capture_instances: String,
     },
 }
 
