@@ -623,7 +623,10 @@ SELECT generate_series(a, b) from t
                   }
                 }
               },
-              "func": "GenerateSeriesInt32",
+              "func": {
+                "func": "GenerateSeriesInt32",
+                "with_ordinality": false
+              },
               "exprs": [
                 {
                   "Column": [

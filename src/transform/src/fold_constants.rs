@@ -16,7 +16,8 @@ use std::iter;
 
 use mz_expr::visit::Visit;
 use mz_expr::{
-    AggregateExpr, ColumnOrder, EvalError, MirRelationExpr, MirScalarExpr, TableFunc, UnaryFunc,
+    AggregateExpr, ColumnOrder, EvalError, MirRelationExpr, MirScalarExpr,
+    TableFuncMaybeWithOrdinality, UnaryFunc,
 };
 use mz_repr::{Datum, Diff, RelationType, Row, RowArena};
 
@@ -598,7 +599,7 @@ impl FoldConstants {
     }
 
     fn fold_flat_map_constant(
-        func: &TableFunc,
+        func: &TableFuncMaybeWithOrdinality,
         exprs: &[MirScalarExpr],
         rows: &[(Row, Diff)],
         limit: Option<usize>,

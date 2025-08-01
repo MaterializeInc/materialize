@@ -187,7 +187,7 @@ impl ProjectionLifting {
 
                         *relation = inner
                             .take_dangerous()
-                            .flat_map(func.clone(), exprs.clone())
+                            .flat_map_maybe_with_ordinality(func.clone(), exprs.clone())
                             .project(new_outputs);
                     }
                     Ok(())

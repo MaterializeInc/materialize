@@ -168,7 +168,7 @@ Project (#1)
 # Query not using the columns newly created by FlatMap
 
 build apply=ProjectionPushdown
-(project (flat_map (get x) generate_series_int32 [#0 #2 1]) [#1])
+(project (flat_map (get x) (generate_series_int32 false) [#0 #2 1]) [#1])
 ----
 Project (#1)
   FlatMap generate_series(#0, #2, 1)
@@ -177,7 +177,7 @@ Project (#1)
 #Query using the columns newly created by FlatMap
 
 build apply=ProjectionPushdown
-(project (flat_map (get x) generate_series_int32 [#0 #2 1]) [#3])
+(project (flat_map (get x) (generate_series_int32 false) [#0 #2 1]) [#3])
 ----
 Project (#2)
   FlatMap generate_series(#0, #1, 1)

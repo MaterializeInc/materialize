@@ -146,7 +146,7 @@ build apply=PredicatePushdown
 (filter
   (flat_map
     (get x)
-    generate_series_int32
+    (generate_series_int32 false)
     [#0]
   )
   [(call_binary eq #0 #1)]
@@ -160,7 +160,7 @@ build apply=PredicatePushdown
 (filter
   (flat_map
     (get x)
-    generate_series_int32
+    (generate_series_int32 false)
     [#0]
   )
   [(call_binary eq #0 #2)]
@@ -174,7 +174,7 @@ build apply=PredicatePushdown
 (filter
   (flat_map
     (get x)
-    generate_series_int32
+    (generate_series_int32 false)
     [#0]
   )
   [(call_binary gt #0 #1) (call_binary lt #1 #2)]

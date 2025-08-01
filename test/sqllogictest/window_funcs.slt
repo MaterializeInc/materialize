@@ -7679,11 +7679,11 @@ Explained Query:
     input_key=
     Reduce::Basic
       aggr=(0, lead[order_by=[#0 asc nulls_last]](row(row(row(#0, #1), row(#0{x}, (#1{y} - 2), 120)), #0{x})), fused_unnest_list=true)
+      key_plan
+        project=()
       val_plan
         project=(#2)
         map=(row(row(row(#0, #1), row(#0{x}, (#1{y} - 2), 120)), #0{x}))
-      key_plan
-        project=()
       Get::PassArrangements materialize.public.t9
         raw=true
 
@@ -7707,12 +7707,12 @@ Explained Query:
     input_key=#0
     Reduce::Basic
       aggr=(0, lead[order_by=[#0 asc nulls_last]](row(row(row(#0, #1), row(#0{x}, (#1{y} - 2), 120)), #0{x})), fused_unnest_list=true)
-      val_plan
-        project=(#2)
-        map=(row(row(row(#0, #1), row(#0{x}, (#1{y} - 2), 120)), #0{x}))
       key_plan
         project=(#2)
         map=((#0{x} / 2))
+      val_plan
+        project=(#2)
+        map=(row(row(row(#0, #1), row(#0{x}, (#1{y} - 2), 120)), #0{x}))
       Get::PassArrangements materialize.public.t9
         raw=true
 
@@ -7736,12 +7736,12 @@ Explained Query:
     input_key=#0, #1
     Reduce::Basic
       aggr=(0, lead[order_by=[#0 asc nulls_last]](row(row(row(#0, #1), row(#0{x}, (#1{y} - 2), 120)), #0{x})), fused_unnest_list=true)
-      val_plan
-        project=(#2)
-        map=(row(row(row(#0, #1), row(#0{x}, (#1{y} - 2), 120)), #0{x}))
       key_plan
         project=(#2, #1)
         map=((#0{x} / 2))
+      val_plan
+        project=(#2)
+        map=(row(row(row(#0, #1), row(#0{x}, (#1{y} - 2), 120)), #0{x}))
       Get::PassArrangements materialize.public.t9
         raw=true
 
@@ -7768,11 +7768,11 @@ Explained Query:
       input_key=
       Reduce::Basic
         aggr=(0, row_number[order_by=[#0 asc nulls_last]](row(list[row(#0, #1)], #0{x})), fused_unnest_list=true)
+        key_plan
+          project=()
         val_plan
           project=(#2)
           map=(row(list[row(#0, #1)], #0{x}))
-        key_plan
-          project=()
         Get::PassArrangements materialize.public.t7
           raw=true
 
@@ -7801,11 +7801,11 @@ Explained Query:
       input_key=
       Reduce::Basic
         aggr=(0, lag[order_by=[#0 asc nulls_last]](row(row(row(#0, #1), row(#0{x}, 1, null)), #0{x})), fused_unnest_list=true)
+        key_plan
+          project=()
         val_plan
           project=(#2)
           map=(row(row(row(#0, #1), row(#0{x}, 1, null)), #0{x}))
-        key_plan
-          project=()
         mfp_after
           filter=((record_get[0](#0) < 14))
         Get::PassArrangements materialize.public.t7
@@ -7835,11 +7835,11 @@ Explained Query:
       input_key=
       Reduce::Basic
         aggr=(0, fused_value_window_func[lag[order_by=[]], lag[order_by=[]] order_by=[]](row(row(row(#0, #1), row(row(#1{y}, 1, null), row(#0{x}, 1, null))))), fused_unnest_list=true)
+        key_plan
+          project=()
         val_plan
           project=(#2)
           map=(row(row(row(#0, #1), row(row(#1{y}, 1, null), row(#0{x}, 1, null)))))
-        key_plan
-          project=()
         Get::PassArrangements materialize.public.t7
           raw=true
 

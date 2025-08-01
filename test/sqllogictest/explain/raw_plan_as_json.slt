@@ -163,7 +163,10 @@ SELECT * FROM generate_series(1, 7)
 ----
 {
   "CallTable": {
-    "func": "GenerateSeriesInt32",
+    "func": {
+      "func": "GenerateSeriesInt32",
+      "with_ordinality": false
+    },
     "exprs": [
       {
         "Literal": [

@@ -518,7 +518,7 @@ impl HirRelationExpr {
 
                     let new_arity = input.arity();
                     let output_arity = func.output_arity();
-                    input = input.flat_map(func, exprs);
+                    input = input.flat_map_maybe_with_ordinality(func, exprs);
                     if old_arity != new_arity {
                         // this means we added some columns to handle subqueries, and now we need to get rid of them
                         input = input.project(

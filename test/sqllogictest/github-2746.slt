@@ -98,9 +98,9 @@ Explained Query:
         Get::PassArrangements l0
           raw=true
       Reduce::Distinct
+        key_plan=id
         val_plan
           project=()
-        key_plan=id
         Join::Delta
           plan_path[0]
             delta_stage[1]
@@ -148,9 +148,9 @@ Explained Query:
             arrangements[0]={ key=[], permutation=id, thinning=(#0) }
             types=[integer]
             Reduce::Distinct
+              key_plan=id
               val_plan
                 project=()
-              key_plan=id
               Get::PassArrangements l0
                 raw=true
           ArrangeBy

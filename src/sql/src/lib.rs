@@ -126,6 +126,8 @@ pub const DEFAULT_SCHEMA: &str = "public";
 /// The number of concurrent requests we allow at once for webhook sources.
 pub const WEBHOOK_CONCURRENCY_LIMIT: usize = 500;
 
+pub static ORDINALITY_COL_NAME: &str = "ordinality";
+
 pub mod ast;
 pub mod catalog;
 pub mod func;
