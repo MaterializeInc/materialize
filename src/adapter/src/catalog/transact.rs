@@ -62,6 +62,7 @@ use mz_storage_client::storage_collections::StorageCollections;
 use tracing::{info, trace};
 
 use crate::AdapterError;
+use crate::catalog::side_effects::CatalogSideEffect;
 use crate::catalog::{
     BuiltinTableUpdate, Catalog, CatalogState, UpdatePrivilegeVariant,
     catalog_type_to_audit_object_type, comment_id_to_audit_object_type, is_reserved_name,
@@ -325,6 +326,7 @@ impl ReplicaCreateDropReason {
 
 pub struct TransactionResult {
     pub builtin_table_updates: Vec<BuiltinTableUpdate>,
+    pub side_effects: Vec<CatalogSideEffect>,
     pub audit_events: Vec<VersionedEvent>,
 }
 
@@ -419,6 +421,7 @@ impl Catalog {
 
         let temporary_ids = self.temporary_ids(&ops, temporary_drops)?;
         let mut builtin_table_updates = vec![];
+        let mut side_effects = vec![];
         let mut audit_events = vec![];
         let mut storage = self.storage().await;
         let mut tx = storage
@@ -435,6 +438,7 @@ impl Catalog {
             ops,
             temporary_ids,
             &mut builtin_table_updates,
+            &mut side_effects,
             &mut audit_events,
             &mut tx,
             &mut state,
@@ -468,6 +472,7 @@ impl Catalog {
 
         Ok(TransactionResult {
             builtin_table_updates,
+            side_effects,
             audit_events,
         })
     }
@@ -488,6 +493,7 @@ impl Catalog {
         mut ops: Vec<Op>,
         temporary_ids: BTreeSet<CatalogItemId>,
         builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
+        side_effects: &mut Vec<CatalogSideEffect>,
         audit_events: &mut Vec<VersionedEvent>,
         tx: &mut Transaction<'_>,
         state: &mut CatalogState,
@@ -550,10 +556,12 @@ impl Catalog {
 
             let mut updates: Vec<_> = tx.get_and_commit_op_updates();
             updates.extend(temporary_item_updates);
-            let op_builtin_table_updates = state.apply_updates(updates)?;
+            let (op_builtin_table_updates, op_side_effects) =
+                state.apply_updates(updates.clone())?;
             let op_builtin_table_updates =
                 state.resolve_builtin_table_updates(op_builtin_table_updates);
             builtin_table_updates.extend(op_builtin_table_updates);
+            side_effects.extend(op_side_effects);
         }
 
         if dry_run_ops.is_empty() {
@@ -569,10 +577,12 @@ impl Catalog {
             }
 
             let updates = tx.get_and_commit_op_updates();
-            let op_builtin_table_updates = state.apply_updates(updates)?;
+            let (op_builtin_table_updates, op_side_effects) =
+                state.apply_updates(updates.clone())?;
             let op_builtin_table_updates =
                 state.resolve_builtin_table_updates(op_builtin_table_updates);
             builtin_table_updates.extend(op_builtin_table_updates);
+            side_effects.extend(op_side_effects);
 
             Ok(())
         } else {

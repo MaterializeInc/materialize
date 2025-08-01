@@ -283,7 +283,12 @@ impl Coordinator {
             .collect();
 
         match self.catalog_transact_inner(None, ops).await {
-            Ok(table_updates) => {
+            Ok((table_updates, derived_side_effects)) => {
+                assert!(
+                    derived_side_effects.is_empty(),
+                    "applying builtin table updates does not produce side effects"
+                );
+
                 let internal_cmd_tx = self.internal_cmd_tx.clone();
                 let task_span =
                     info_span!(parent: None, "coord::storage_usage_update::table_updates");
