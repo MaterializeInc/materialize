@@ -20,7 +20,7 @@ SERVICES = [
     Service(
         name="csharp",
         config={
-            "image": "mcr.microsoft.com/dotnet/sdk:5.0-focal",
+            "image": "mcr.microsoft.com/dotnet/sdk:8.0",
             "volumes": [
                 "../../../:/workdir",
             ],
