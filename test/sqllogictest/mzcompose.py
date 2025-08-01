@@ -23,7 +23,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from queue import Queue
 
-from materialize import buildkite, ci_util, file_util
+from materialize import MZ_ROOT, buildkite, ci_util, file_util, spawn
 from materialize.mzcompose.composition import (
     Composition,
     Service,
@@ -57,11 +57,13 @@ def workflow_default(c: Composition) -> None:
 
 def workflow_fast_tests(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Run fast SQL logic tests"""
+    clone_sqlite()
     run_sqllogictest(c, parser, compileFastSltConfig())
 
 
 def workflow_slow_tests(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Run slow SQL logic tests"""
+    clone_sqlite()
     run_sqllogictest(
         c,
         parser,
@@ -71,6 +73,7 @@ def workflow_slow_tests(c: Composition, parser: WorkflowArgumentParser) -> None:
 
 def workflow_selection(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Run specific SQL logic tests using pattern"""
+    clone_sqlite()
     parser.add_argument(
         "--pattern",
         type=str,
@@ -90,6 +93,25 @@ def workflow_selection(c: Composition, parser: WorkflowArgumentParser) -> None:
         parser,
         InputBasedSltRunConfig(),
     )
+
+
+def clone_sqlite() -> None:
+    """Since the SQLite SLT repository is >2x the size of the entire Materialize repository we don't want it as a submodule for everyone to have to fetch, especially in CI. Instead only clone it when we run the tests."""
+    path = Path(MZ_ROOT / "test" / "sqllogictest" / "sqlite")
+    if (path / ".git").is_dir():
+        spawn.runv(["git", "-C", str(path), "pull"])
+    else:
+        path.mkdir(exist_ok=True)
+        spawn.runv(
+            [
+                "git",
+                "clone",
+                # This is currently way slower, I guess GitHub doesn't have it cached:
+                # "--depth=1",
+                "https://github.com/MaterializeInc/sqllogictest",
+                str(path),
+            ]
+        )
 
 
 def run_sqllogictest(
