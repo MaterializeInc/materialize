@@ -17,6 +17,11 @@ set -euo pipefail
 . misc/shlib/shlib.bash
 . misc/buildkite/git.bash
 
+if git rev-parse --is-shallow-repository | grep -q true; then
+  git fetch --unshallow origin "$BUILDKITE_PIPELINE_DEFAULT_BRANCH"
+else
+  git fetch origin "$BUILDKITE_PIPELINE_DEFAULT_BRANCH"
+fi
 fetch_pr_target_branch
 merge_pr_target_branch
 

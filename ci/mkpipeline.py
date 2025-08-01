@@ -1015,7 +1015,10 @@ def have_paths_changed(globs: Iterable[str]) -> bool:
         print(f"Failed to get changed files from Github, running locally: {e}")
 
         # Make sure we have an up to date view of main.
-        spawn.runv(["git", "fetch", "origin", "main"])
+        command = ["git", "fetch"]
+        if spawn.capture(["git rev-parse", "--is-shallow-repository"]) == "true":
+            command.append("--unshallow")
+        spawn.runv(command + ["origin", "main"])
 
         diff = subprocess.run(
             ["git", "diff", "--no-patch", "--quiet", "origin/main...", "--", *globs]
