@@ -1,5 +1,3 @@
-#!/usr/bin/env bash
-
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -8,20 +6,28 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-#
-# test.sh — run .NET language tests.
 
-set -euo pipefail
+query T
+SELECT current_user = current_user()
+----
+true
 
-cd "$(dirname "$0")/../../.."
+query T
+SELECT current_role = current_role()
+----
+true
 
-. misc/shlib/shlib.bash
+query T
+SELECT current_schema = current_schema()
+----
+true
 
-cd test/lang/csharp
+query T
+SELECT current_catalog = current_catalog()
+----
+true
 
-# TODO: Reenable when database-issues#9531 is fixed
-# dotnet test csharp-npgsql.csproj
-# dotnet test csharp-npgsql8.csproj
-dotnet test csharp-npgsql7.csproj
-dotnet test csharp-npgsql6.csproj
-dotnet test csharp-npgsql5.csproj
+query T
+SELECT session_user = session_user()
+----
+true

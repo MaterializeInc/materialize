@@ -984,13 +984,13 @@ WHERE mdod.dataflow_name NOT LIKE '%introspection-subscribe%'
 GROUP BY mdod.name
 ORDER BY mdod.name;
 ----
-AccumulableErrorCheck  10
+AccumulableErrorCheck  11
 Arrange␠ReduceCollation  1
 Arrange␠ReduceMinsMaxes  3
 Arrange␠export␠iterative  2
 Arrange␠export␠iterative␠err  2
 Arrange␠recursive␠err  3
-ArrangeAccumulable␠[val:␠empty]  10
+ArrangeAccumulable␠[val:␠empty]  11
 ArrangeBy[[CallBinary(JsonbGetStringStringify,␠Column(1),␠Literal(Ok(Row{[String("id")]}),␠ColumnType␠{␠scalar_type:␠String,␠nullable:␠false␠}))]]  2
 ArrangeBy[[CallBinary(JsonbGetStringStringify,␠Column(2),␠Literal(Ok(Row{[String("id")]}),␠ColumnType␠{␠scalar_type:␠String,␠nullable:␠false␠}))]]  1
 ArrangeBy[[CallVariadic(Coalesce,␠[Column(2),␠Column(3)])]]  2
@@ -1032,14 +1032,14 @@ ArrangeBy[[Column(6)]]  3
 ArrangeBy[[Column(6)]]-errors  2
 ArrangeBy[[Column(9)]]  1
 ArrangeBy[[]]  11
-Arranged␠DistinctBy  47
+Arranged␠DistinctBy  49
 Arranged␠MinsMaxesHierarchical␠input  14
 Arranged␠ReduceInaccumulable  3
 Arranged␠TopK␠input  92
 Distinct␠recursive␠err  3
-DistinctBy  47
-DistinctByErrorCheck  47
-ReduceAccumulable  10
+DistinctBy  49
+DistinctByErrorCheck  49
+ReduceAccumulable  11
 ReduceCollation  1
 ReduceCollation␠Errors  1
 ReduceInaccumulable  3
