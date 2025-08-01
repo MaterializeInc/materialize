@@ -398,14 +398,8 @@ impl Client {
         );
 
         let rows = self.query(capture_instance_query, &params_dyn[..]).await?;
-        let num_rows = rows.len();
-
-        tracing::info!(?num_rows, "found rows");
 
         for row in rows {
-            let cols: Vec<&str> = row.columns().iter().map(|c| c.name()).collect();
-            tracing::info!(?row, ?cols, "found row");
-
             let table: &str = row
                 .try_get("qualified_table_name")
                 .context("getting table column")?
