@@ -176,7 +176,9 @@ pub(super) async fn purify_source_exports(
         capture_instances.values().map(|instance| instance.as_ref()),
     )
     .await?;
+
     let max_lsn = mz_sql_server_util::inspect::get_max_lsn_retry(client, timeout).await?;
+    tracing::debug!(?initial_lsns, %max_lsn, "retrieved start LSNs");
     for lsn in initial_lsns.values_mut() {
         *lsn = std::cmp::max(*lsn, max_lsn);
     }
