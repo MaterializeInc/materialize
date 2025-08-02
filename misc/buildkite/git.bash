@@ -42,5 +42,11 @@ merge_pr_target_branch() {
 }
 
 get_common_ancestor_commit_of_pr_and_target() {
+  # Make sure we have an up to date view of main
+  if git rev-parse --is-shallow-repository | grep -q true; then
+    run git fetch --unshallow "$MZ_REPO_REF" "$MZ_REPO_PULL_REQUEST_BASE_BRANCH"
+  else
+    run git fetch "$MZ_REPO_REF" "$MZ_REPO_PULL_REQUEST_BASE_BRANCH"
+  fi
   run git merge-base HEAD "$MZ_REPO_REF"/"$MZ_REPO_PULL_REQUEST_BASE_BRANCH"
 }
