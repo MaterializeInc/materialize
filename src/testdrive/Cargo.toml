@@ -65,7 +65,7 @@ regex = "1.11.1"
 reqwest = { version = "0.11.13", features = ["native-tls-vendored"] }
 semver = "1.0.26"
 serde = "1.0.219"
-serde_json = { version = "1.0.127", features = ["raw_value"] }
+serde_json = { version = "1.0.142", features = ["raw_value"] }
 similar = "2.7.0"
 tempfile = "3.20.0"
 termcolor = "1.4.1"
