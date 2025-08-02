@@ -224,6 +224,7 @@ impl PostgresConsensus {
     /// Open a Postgres [Consensus] instance with `config`, for the collection
     /// named `shard`.
     pub async fn open(config: PostgresConsensusConfig) -> Result<Self, ExternalError> {
+        warn!("PERSIST CONSENSUS: open()");
         // don't need to unredact here because we just want to pull out the username
         let pg_config: Config = config.url.to_string().parse()?;
         let role = pg_config.get_user().unwrap();
@@ -327,6 +328,7 @@ impl PostgresConsensus {
 #[async_trait]
 impl Consensus for PostgresConsensus {
     fn list_keys(&self) -> ResultStream<String> {
+        warn!("PERSIST CONSENSUS: list_keys()");
         let q = "SELECT DISTINCT shard FROM consensus";
 
         Box::pin(try_stream! {
@@ -344,6 +346,7 @@ impl Consensus for PostgresConsensus {
     }
 
     async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {
+        warn!("PERSIST CONSENSUS: head({key})");
         let q = "SELECT sequence_number, data FROM consensus
              WHERE shard = $1 ORDER BY sequence_number DESC LIMIT 1";
         let row = {
@@ -371,6 +374,7 @@ impl Consensus for PostgresConsensus {
         expected: Option<SeqNo>,
         new: VersionedData,
     ) -> Result<CaSResult, ExternalError> {
+        warn!("PERSIST CONSENSUS: compare_and_set({key}, {expected:?}, {new:?})");
         if let Some(expected) = expected {
             if new.seqno <= expected {
                 return Err(Error::from(
@@ -454,6 +458,7 @@ impl Consensus for PostgresConsensus {
         from: SeqNo,
         limit: usize,
     ) -> Result<Vec<VersionedData>, ExternalError> {
+        warn!("PERSIST CONSENSUS: scan({key}, {from}, {limit})");
         let q = "SELECT sequence_number, data FROM consensus
              WHERE shard = $1 AND sequence_number >= $2
              ORDER BY sequence_number ASC LIMIT $3";
@@ -482,6 +487,7 @@ impl Consensus for PostgresConsensus {
     }
 
     async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError> {
+        warn!("PERSIST CONSENSUS: truncate({key}, {seqno})");
         static CRDB_TRUNCATE_QUERY: &str = "
         DELETE FROM consensus
         WHERE shard = $1 AND sequence_number < $2 AND

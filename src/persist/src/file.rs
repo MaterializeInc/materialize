@@ -20,6 +20,7 @@ use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
 use tokio::fs::{self, File};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tracing::warn;
 
 use crate::error::Error;
 use crate::location::{Blob, BlobMetadata, Determinate, ExternalError};
@@ -86,6 +87,7 @@ impl FileBlob {
 #[async_trait]
 impl Blob for FileBlob {
     async fn get(&self, key: &str) -> Result<Option<SegmentedBytes>, ExternalError> {
+        warn!("PERSIST BLOB: get({key})");
         let file_path = self.blob_path(&FileBlob::replace_forward_slashes(key));
         let mut file = match File::open(file_path).await {
             Ok(file) => file,
@@ -102,6 +104,7 @@ impl Blob for FileBlob {
         key_prefix: &str,
         f: &mut (dyn FnMut(BlobMetadata) + Send + Sync),
     ) -> Result<(), ExternalError> {
+        warn!("PERSIST BLOB: list_keys_and_metadata({key_prefix})");
         let base_dir = self.base_dir.canonicalize()?;
 
         let mut entries = fs::read_dir(&base_dir).await?;
@@ -155,6 +158,7 @@ impl Blob for FileBlob {
     }
 
     async fn set(&self, key: &str, value: Bytes) -> Result<(), ExternalError> {
+        warn!("PERSIST BLOB: set({key}, {value:?})");
         let file_path = self.blob_path(&FileBlob::replace_forward_slashes(key));
 
         // To implement atomic set, write to a temp file and rename it into
@@ -193,6 +197,7 @@ impl Blob for FileBlob {
     }
 
     async fn delete(&self, key: &str) -> Result<Option<usize>, ExternalError> {
+        warn!("PERSIST BLOB: delete({key})");
         let file_path = self.blob_path(&FileBlob::replace_forward_slashes(key));
         // TODO: strict correctness requires that we fsync the parent directory
         // as well after file removal.
@@ -250,6 +255,7 @@ impl Blob for FileBlob {
     }
 
     async fn restore(&self, key: &str) -> Result<(), ExternalError> {
+        warn!("PERSIST BLOB: restore({key})");
         let file_path = self.blob_path(&FileBlob::replace_forward_slashes(key));
 
         if fs::try_exists(&file_path).await? {
