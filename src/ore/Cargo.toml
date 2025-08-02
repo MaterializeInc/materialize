@@ -26,7 +26,7 @@ clap = { version = "4.5.23", features = ["env", "string"], optional = true }
 columnation = { version = "0.1.0", optional = true }
 columnar = { version = "0.6.0", optional = true }
 compact_bytes = { version = "0.2.1", optional = true }
-ctor = { version = "0.4.2", optional = true }
+ctor = { version = "0.4.3", optional = true }
 differential-dataflow = { version = "0.15.3", optional = true }
 derivative = { version = "2.2.0" }
 either = "1.15.0"
@@ -86,7 +86,7 @@ tonic = { version = "0.12.1", features = ["transport"], optional = true }
 tokio-native-tls = { version = "0.3.1", optional = true }
 native-tls = { version = "0.2.14", features = ["alpn"], optional = true }
 hyper-tls = { version = "0.6.0", optional = true }
-hyper-util = { version = "0.1.15", optional = true }
+hyper-util = { version = "0.1.16", optional = true }
 opentelemetry = { version = "0.24.0", features = ["trace"], optional = true }
 opentelemetry-otlp = { version = "0.17.0", optional = true }
 opentelemetry_sdk = { version = "0.24.1", features = ["rt-tokio"], optional = true }
