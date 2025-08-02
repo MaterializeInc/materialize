@@ -22,7 +22,7 @@ files=$(git_files "$@")
 # Only binary files are permitted to omit a trailing newline. If you're here to
 # exclude a text file that is missing its trailing newline, like an SVG, add
 # a trailing newline to the text file instead.
-newline_files=$(grep -vE '(_scratch|\.(png|jpe?g|pb|avro|ico|so))$' <<< "$files")
+newline_files=$(grep -vE '(_scratch|\.(png|jpe?g|pb|avro|ico|so|patch))$' <<< "$files")
 
 try xargs misc/lint/trailing-newline.sh <<< "$newline_files"
 try xargs git --no-pager diff --check "$(git_empty_tree)" <<< "$newline_files"

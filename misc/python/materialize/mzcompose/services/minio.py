@@ -21,7 +21,6 @@ class Minio(Service):
     def __init__(
         self,
         name: str = "minio",
-        image: str = "minio/minio:RELEASE.2023-07-07T07-13-57Z",
         setup_materialize: bool = False,
         additional_directories: list[str] = [],
         ports: list[int | str] = [9000, 9001],
@@ -40,7 +39,7 @@ class Minio(Service):
             config={
                 "entrypoint": ["sh", "-c"],
                 "command": [command],
-                "image": image,
+                "mzbuild": "minio",
                 "ports": ports,
                 "allow_host_ports": allow_host_ports,
                 "environment": [

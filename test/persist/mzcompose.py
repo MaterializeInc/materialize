@@ -22,7 +22,7 @@ from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.postgres import PostgresMetadata
 
 SERVICES = [
-    Cockroach(setup_materialize=True),
+    Cockroach(setup_materialize=True, in_memory=True),
     PostgresMetadata(),
     Service(
         "maelstrom-persist",

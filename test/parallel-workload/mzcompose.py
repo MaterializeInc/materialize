@@ -38,7 +38,7 @@ from materialize.parallel_workload.parallel_workload import parse_common_args, r
 from materialize.parallel_workload.settings import Complexity, Scenario
 
 SERVICES = [
-    Cockroach(setup_materialize=True),
+    Cockroach(setup_materialize=True, in_memory=True),
     Postgres(),
     MySql(),
     Zookeeper(),

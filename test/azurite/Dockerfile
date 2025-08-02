@@ -7,5 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# We mirror this so it stays available on DockerHub when mcr.microsoft.com is down
-FROM mcr.microsoft.com/azure-storage/azurite:3.33.0
+FROM node:20-slim
+
+RUN apt-get update && \
+    apt-get install -y eatmydata netcat-openbsd && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN npm install -g azurite@3.33.0

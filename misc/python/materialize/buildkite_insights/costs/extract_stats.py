@@ -132,32 +132,33 @@ def main() -> None:
             if not build["state"] in ("passed", "failed"):
                 continue
             pipeline = build["pipeline"]["slug"]
-            if pipeline not in ("test", "nightly", "release-qualification"):
-                continue
-            if "CI_SANITIZER" in build["env"]:
-                continue
-            if "CI_COVERAGE_ENABLED" in build["env"]:
-                continue
-            if any(job.get("retries_count") for job in build["jobs"]):
-                continue
-            year_month_day = f"{created.year}-{created.month:02}-{created.day:02}"
-            start = datetime.fromisoformat(build["started_at"])
-            finished = datetime.fromisoformat(build["finished_at"])
-            duration = (finished - start).total_seconds()
-            is_main = build["branch"] == "main"
-            with_build = any(
-                job.get("step_key")
-                in (
-                    "build-x86_64",
-                    "build-aarch64",
-                    "build-x86_64-lto",
-                    "build-aarch64-lto",
+            if pipeline in ("test", "nightly", "release-qualification"):
+                if "CI_SANITIZER" in build["env"]:
+                    continue
+                if "CI_COVERAGE_ENABLED" in build["env"]:
+                    continue
+                if any(job.get("retries_count") for job in build["jobs"]):
+                    continue
+                year_month_day = f"{created.year}-{created.month:02}-{created.day:02}"
+                start = datetime.fromisoformat(build["started_at"])
+                finished = datetime.fromisoformat(build["finished_at"])
+                duration = (finished - start).total_seconds()
+                is_main = build["branch"] == "main"
+                with_build = any(
+                    job.get("step_key")
+                    in (
+                        "build-x86_64",
+                        "build-aarch64",
+                        "build-x86_64-lto",
+                        "build-aarch64-lto",
+                    )
+                    and job["state"] == "passed"
+                    for job in build["jobs"]
                 )
-                and job["state"] == "passed"
-                for job in build["jobs"]
-            )
-            build_durations[(pipeline, is_main, with_build)][year_month_day] += duration
-            build_counts[(pipeline, is_main, with_build)][year_month_day] += 1
+                build_durations[(pipeline, is_main, with_build)][
+                    year_month_day
+                ] += duration
+                build_counts[(pipeline, is_main, with_build)][year_month_day] += 1
 
         for job in build["jobs"]:
             if (

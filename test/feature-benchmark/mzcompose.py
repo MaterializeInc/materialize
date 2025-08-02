@@ -139,7 +139,7 @@ SERVICES = [
     KafkaService(),
     SchemaRegistry(),
     Redpanda(),
-    Cockroach(setup_materialize=True),
+    Cockroach(setup_materialize=True, in_memory=True),
     Minio(setup_materialize=True),
     Azurite(),
     KgenService(),

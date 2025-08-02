@@ -149,7 +149,7 @@ cleanup() {
   fi
 
   echo "Downing docker containers"
-  mzcompose down --volumes || true  # Ignore failures, we still want the rest of the cleanup
+  mzcompose down --timeout=0 --volumes || true  # Ignore failures, we still want the rest of the cleanup
 
   echo "Finding core files"
   find cores -name 'core.*' | while read -r core; do
