@@ -5,11 +5,11 @@
 # wheels for a wide variety of platforms, including M1 Macs.
 
 black==24.4.2
-boto3-stubs[ec2,iam,kinesis,s3,sqs,ssm,sts]==1.39.9
-boto3==1.39.9
+boto3-stubs[ec2,iam,kinesis,s3,sqs,ssm,sts]==1.40.1
+boto3==1.40.1
 click==8.1.3
 cryptography==45.0.5
-colored==2.3.0
+colored==2.3.1
 docker==7.1.0
 ec2instanceconnectcli==1.0.3
 python-frontmatter==1.1.0
@@ -24,7 +24,7 @@ kubernetes==25.3.0
 kubernetes-stubs==22.6.0.post1
 launchdarkly-api==17.2.0
 matplotlib==3.10.1
-matplotlib-stubs==0.2.0
+matplotlib-stubs==0.3.0
 networkx==3.4.2
 networkx-stubs==0.0.1
 numpy==1.26.4
@@ -70,12 +70,12 @@ typing-extensions==4.14.1
 xxhash==3.5.0
 yamllint==1.37.1
 confluent-kafka==2.6.1
-fastavro==1.11.1
+fastavro==1.12.0
 websocket-client==1.8.0
 pyarrow-stubs==19.4
 # macOS x86-64 agent doesn't support pyarrow 20.0 currently, only upgrade once fixed or we get rid of it
 pyarrow==19.0.1
-minio==7.2.15
+minio==7.2.16
 zstandard==0.23.0
-build==1.2.2.post1
+build==1.3.0
 hatchling==1.27.0
