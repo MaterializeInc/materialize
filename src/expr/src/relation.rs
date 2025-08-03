@@ -1677,6 +1677,7 @@ impl MirRelationExpr {
     }
 
     /// Pretty-print this [MirRelationExpr] to a string.
+    /// This can be used in prod logs, because it automatically redacts in prod.
     pub fn pretty(&self) -> String {
         let config = ExplainConfig::default();
         self.explain(&config, None)
