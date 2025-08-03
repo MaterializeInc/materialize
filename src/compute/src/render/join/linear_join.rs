@@ -18,7 +18,9 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arranged;
 use differential_dataflow::trace::TraceReader;
 use differential_dataflow::{AsCollection, Collection, Data};
-use mz_compute_types::dyncfgs::{ENABLE_MZ_JOIN_CORE, LINEAR_JOIN_YIELDING};
+use mz_compute_types::dyncfgs::{
+    ENABLE_MZ_JOIN_CORE, ENABLE_MZ_JOIN_CORE_V2, LINEAR_JOIN_YIELDING,
+};
 use mz_compute_types::plan::join::JoinClosure;
 use mz_compute_types::plan::join::linear_join::{LinearJoinPlan, LinearStagePlan};
 use mz_dyncfg::ConfigSet;
@@ -37,6 +39,7 @@ use crate::extensions::arrange::MzArrangeCore;
 use crate::render::RenderTimestamp;
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context, ShutdownProbe};
 use crate::render::join::mz_join_core::mz_join_core;
+use crate::render::join::mz_join_core_v2::mz_join_core as mz_join_core_v2;
 use crate::row_spine::{RowRowBuilder, RowRowSpine};
 use crate::typedefs::{MzTimestamp, RowRowAgent, RowRowEnter};
 
@@ -46,6 +49,7 @@ use crate::typedefs::{MzTimestamp, RowRowAgent, RowRowEnter};
 #[derive(Clone, Copy)]
 enum LinearJoinImpl {
     Materialize,
+    MaterializeV2,
     DifferentialDataflow,
 }
 
@@ -73,9 +77,12 @@ impl Default for LinearJoinSpec {
 impl LinearJoinSpec {
     /// Create a `LinearJoinSpec` based on the given config.
     pub fn from_config(config: &ConfigSet) -> Self {
-        let implementation = match ENABLE_MZ_JOIN_CORE.get(config) {
-            true => LinearJoinImpl::Materialize,
-            false => LinearJoinImpl::DifferentialDataflow,
+        let implementation = if ENABLE_MZ_JOIN_CORE_V2.get(config) {
+            LinearJoinImpl::MaterializeV2
+        } else if ENABLE_MZ_JOIN_CORE.get(config) {
+            LinearJoinImpl::Materialize
+        } else {
+            LinearJoinImpl::DifferentialDataflow
         };
 
         let yielding_raw = LINEAR_JOIN_YIELDING.get(config);
@@ -106,8 +113,7 @@ impl LinearJoinSpec {
             + Clone
             + 'static,
         L: FnMut(Tr1::Key<'_>, Tr1::Val<'_>, Tr2::Val<'_>) -> I + 'static,
-        I: IntoIterator,
-        I::Item: Data,
+        I: IntoIterator<Item: Data> + 'static,
     {
         use LinearJoinImpl::*;
 
@@ -133,6 +139,27 @@ impl LinearJoinSpec {
             (Materialize, None, None) => {
                 let yield_fn = |_start, _work| false;
                 mz_join_core(arranged1, arranged2, shutdown_probe, result, yield_fn).as_collection()
+            }
+            (MaterializeV2, Some(work_limit), Some(time_limit)) => {
+                let yield_fn =
+                    move |start: Instant, work| work >= work_limit || start.elapsed() >= time_limit;
+                mz_join_core_v2(arranged1, arranged2, shutdown_probe, result, yield_fn)
+                    .as_collection()
+            }
+            (MaterializeV2, Some(work_limit), None) => {
+                let yield_fn = move |_start, work| work >= work_limit;
+                mz_join_core_v2(arranged1, arranged2, shutdown_probe, result, yield_fn)
+                    .as_collection()
+            }
+            (MaterializeV2, None, Some(time_limit)) => {
+                let yield_fn = move |start: Instant, _work| start.elapsed() >= time_limit;
+                mz_join_core_v2(arranged1, arranged2, shutdown_probe, result, yield_fn)
+                    .as_collection()
+            }
+            (MaterializeV2, None, None) => {
+                let yield_fn = |_start, _work| false;
+                mz_join_core_v2(arranged1, arranged2, shutdown_probe, result, yield_fn)
+                    .as_collection()
             }
         }
     }
