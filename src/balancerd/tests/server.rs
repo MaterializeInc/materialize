@@ -19,7 +19,8 @@ use chrono::Utc;
 use futures::StreamExt;
 use jsonwebtoken::{DecodingKey, EncodingKey};
 use mz_balancerd::{
-    BUILD_INFO, BalancerConfig, BalancerService, CancellationResolver, FronteggResolver, Resolver,
+    BUILD_INFO, BackendResolverConfig, BalancerConfig, BalancerService, CancellationResolver,
+    FronteggResolverConfig,
 };
 use mz_environmentd::test_util::{self, Ca, make_pg_tls};
 use mz_frontegg_auth::{
@@ -136,16 +137,38 @@ async fn test_balancer() {
     )
     .unwrap();
 
-    let resolvers = vec![
+    let test_resolvers = vec![
         (
-            Resolver::Static(envd_server.sql_local_addr().to_string()),
+            BackendResolverConfig {
+                static_resolver: Some(envd_server.sql_local_addr().ip().to_string()),
+                sni_resolver: None,
+                frontegg_resolver: None,
+                https_backend_port: envd_server.http_local_addr().port(),
+                pgwire_backend_port: envd_server.sql_local_addr().port(),
+            },
             CancellationResolver::Static(envd_server.sql_local_addr().to_string()),
         ),
         (
-            Resolver::Frontegg(FronteggResolver {
-                auth: frontegg_auth,
-                addr_template: envd_server.sql_local_addr().to_string(),
-            }),
+            BackendResolverConfig {
+                static_resolver: None,
+                sni_resolver: None,
+                frontegg_resolver: Some(FronteggResolverConfig {
+                    auth: frontegg_auth,
+                    addr_template: envd_server.sql_local_addr().to_string(),
+                }),
+                https_backend_port: envd_server.http_local_addr().port(),
+                pgwire_backend_port: envd_server.sql_local_addr().port(),
+            },
+            CancellationResolver::Directory(cancel_dir.path().to_owned()),
+        ),
+        (
+            BackendResolverConfig {
+                static_resolver: None,
+                sni_resolver: Some("blncr-{}".to_string()),
+                frontegg_resolver: None,
+                https_backend_port: envd_server.http_local_addr().port(),
+                pgwire_backend_port: envd_server.sql_local_addr().port(),
+            },
             CancellationResolver::Directory(cancel_dir.path().to_owned()),
         ),
     ];
@@ -164,18 +187,19 @@ async fn test_balancer() {
         .build()
         .unwrap();
 
-    for (resolver, cancellation_resolver) in resolvers {
+    for (resolver_config, cancellation_resolver) in test_resolvers {
         let (mut reload_tx, reload_rx) = futures::channel::mpsc::channel(1);
         let ticker = Box::pin(reload_rx);
-        let is_frontegg_resolver = matches!(resolver, Resolver::Frontegg(_));
+        let is_frontegg_resolver = resolver_config.frontegg_resolver.is_some();
+
+        // Create ResolverConfig from the old resolver
         let balancer_cfg = BalancerConfig::new(
             &BUILD_INFO,
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             cancellation_resolver,
-            resolver,
-            envd_server.http_local_addr().to_string(),
+            resolver_config,
             cert_config.clone(),
             true,
             MetricsRegistry::new(),
