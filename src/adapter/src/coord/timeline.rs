@@ -23,7 +23,6 @@ use mz_expr::CollectionPlan;
 use mz_ore::collections::CollectionExt;
 use mz_ore::instrument;
 use mz_ore::now::{EpochMillis, NowFn, to_datetime};
-use mz_ore::vec::VecExt;
 use mz_repr::{CatalogItemId, GlobalId, Timestamp};
 use mz_sql::names::{ResolvedDatabaseSpecifier, SchemaSpecifier};
 use mz_storage_types::sources::Timeline;
@@ -417,7 +416,7 @@ impl Coordinator {
         // transaction counter number because those counters are unrelated to the
         // other.
         let timelines: Vec<_> = timeline_contexts
-            .drain_filter_swapping(|timeline_context| timeline_context.contains_timeline())
+            .extract_if(.., |timeline_context| timeline_context.contains_timeline())
             .collect();
 
         // A single or group of objects may contain multiple compatible timeline
