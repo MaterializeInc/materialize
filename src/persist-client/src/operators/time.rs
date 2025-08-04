@@ -64,15 +64,24 @@ impl<T: Timestamp + Lattice> Bounds<T> {
 /// - Blocking any requests for the final bounds until all the background timestamp-determination
 ///   activity is complete.
 #[derive(Debug)]
-pub struct AsyncBounds<T> {
+pub struct AsOfBounds<T> {
     error_handler: ErrorHandler,
+    static_bound: Option<Antichain<T>>,
     bounds: Arc<RwLock<Result<Bounds<T>, ()>>>,
     tx: tokio::sync::broadcast::Sender<Infallible>,
 }
-impl<T: Timestamp + Lattice + Sync> AsyncBounds<T> {
-    pub fn new(error_handler: ErrorHandler) -> Self {
+
+impl<T: Timestamp + Lattice + Sync> From<Option<Antichain<T>>> for AsOfBounds<T> {
+    fn from(value: Option<Antichain<T>>) -> Self {
+        Self::new(ErrorHandler::Halt("static as_of"), value)
+    }
+}
+
+impl<T: Timestamp + Lattice + Sync> AsOfBounds<T> {
+    pub fn new(error_handler: ErrorHandler, static_bound: Option<Antichain<T>>) -> Self {
         Self {
             error_handler,
+            static_bound,
             bounds: Arc::new(RwLock::new(Ok(Bounds::default()))),
             tx: tokio::sync::broadcast::channel(1).0,
         }
@@ -125,11 +134,20 @@ impl<T: Timestamp + Lattice + Sync> AsyncBounds<T> {
         let bounds = Arc::clone(&self.bounds);
         let mut bounds_rx = self.tx.subscribe();
         let error_handler = self.error_handler.clone();
+        let static_bound = self.static_bound.clone();
         async move {
             // There are never any sends on the broadcast channel, so this will only ever resolve when
             // all senders are gone, which happens once the dataflow builder is dropped and everyone
             // who was planning to has applied a bound.
             let _ = bounds_rx.recv().await;
+
+            if let Some(static_bound) = static_bound {
+                return Bounds {
+                    lower: static_bound.clone(),
+                    upper: static_bound,
+                };
+            }
+
             match &*bounds.read().unwrap() {
                 Ok(bounds) => bounds.clone(),
                 Err(_) => {
@@ -146,7 +164,7 @@ impl<T: Timestamp + Lattice + Sync> AsyncBounds<T> {
 #[cfg(test)]
 mod tests {
     use crate::operators::shard_source::ErrorHandler;
-    use crate::operators::time::{AsyncBounds, Bounds};
+    use crate::operators::time::{AsOfBounds, Bounds};
     use futures_util::poll;
     use std::task::Poll;
     use std::time::Duration;
@@ -157,7 +175,7 @@ mod tests {
     async fn test_bounds() {
         const TIMEOUT: Duration = Duration::from_secs(1);
 
-        let bounds: AsyncBounds<u64> = AsyncBounds::new(ErrorHandler::Halt("yikes"));
+        let bounds: AsOfBounds<u64> = AsOfBounds::new(ErrorHandler::Halt("yikes"), None);
 
         let mut as_of = bounds.bounds();
 

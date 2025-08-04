@@ -79,11 +79,6 @@ use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
-use crate::metrics::sink::kafka::KafkaSinkMetrics;
-use crate::render::sinks::SinkRender;
-use crate::statistics::SinkStatistics;
-use crate::storage_state::StorageState;
 use anyhow::{Context, anyhow, bail};
 use differential_dataflow::{AsCollection, Collection, Hashable};
 use futures::StreamExt;
@@ -106,9 +101,10 @@ use mz_ore::future::InTask;
 use mz_ore::task::{self, AbortOnDropHandle};
 use mz_ore::vec::VecExt;
 use mz_persist_client::Diagnostics;
+use mz_persist_client::operators::time::{AsOfBounds, Bounds};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_types::codec_impls::UnitSchema;
-use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row, RowArena, Timestamp};
+use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row, RowArena, Timestamp, TimestampManipulation};
 use mz_storage_client::sink::progress_key::ProgressKey;
 use mz_storage_types::StorageDiff;
 use mz_storage_types::configuration::StorageConfiguration;
@@ -136,10 +132,17 @@ use timely::PartialOrder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::{CapabilitySet, Concatenate, Map, ToStream};
 use timely::dataflow::{Scope, Stream};
+use timely::progress::frontier::AntichainRef;
 use timely::progress::{Antichain, Timestamp as _};
 use tokio::sync::watch;
 use tokio::time::{self, MissedTickBehavior};
 use tracing::{debug, error, info, warn};
+
+use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
+use crate::metrics::sink::kafka::KafkaSinkMetrics;
+use crate::render::sinks::SinkRender;
+use crate::statistics::SinkStatistics;
+use crate::storage_state::StorageState;
 
 impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for KafkaSinkConnection {
     fn get_key_indices(&self) -> Option<&[usize]> {
@@ -154,6 +157,7 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for KafkaSinkConnection {
 
     fn render_sink(
         &self,
+        bounds: &AsOfBounds<Timestamp>,
         storage_state: &mut StorageState,
         sink: &StorageSinkDesc<CollectionMetadata, Timestamp>,
         sink_id: GlobalId,
@@ -164,7 +168,7 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for KafkaSinkConnection {
     ) -> (Stream<G, HealthStatusMessage>, Vec<PressOnDropButton>) {
         let mut scope = input.scope();
 
-        let write_handle = {
+        let write_handle = bounds.run({
             let persist = Arc::clone(&storage_state.persist_clients);
             let shard_meta = sink.to_storage_metadata.clone();
             async move {
@@ -177,9 +181,22 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for KafkaSinkConnection {
                         Diagnostics::from_purpose("sink handle"),
                     )
                     .await?;
-                Ok(handle)
+                let bounds =
+                    if handle.upper().borrow() == AntichainRef::new(&[Timestamp::minimum()]) {
+                        Bounds::default()
+                    } else {
+                        Bounds::new_upper(
+                            handle
+                                .upper()
+                                .as_option()
+                                .and_then(TimestampManipulation::step_back)
+                                .into_iter()
+                                .collect(),
+                        )
+                    };
+                Ok((bounds, handle))
             }
-        };
+        });
 
         let write_frontier = Rc::new(RefCell::new(Antichain::from_elem(Timestamp::minimum())));
         storage_state
@@ -634,9 +651,7 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
     sink: &StorageSinkDesc<CollectionMetadata, Timestamp>,
     metrics: KafkaSinkMetrics,
     statistics: SinkStatistics,
-    write_handle: impl Future<
-        Output = anyhow::Result<WriteHandle<SourceData, (), Timestamp, StorageDiff>>,
-    > + 'static,
+    write_handle: impl Future<Output = WriteHandle<SourceData, (), Timestamp, StorageDiff>> + 'static,
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
 ) -> (Stream<G, HealthStatusMessage>, PressOnDropButton) {
     let scope = input.scope();
@@ -663,7 +678,7 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
                 ContextCreationError::Other(anyhow::anyhow!("synthetic error"))
             ));
 
-            let mut write_handle = write_handle.await?;
+            let mut write_handle = write_handle.await;
 
             let metrics = Arc::new(metrics);
 

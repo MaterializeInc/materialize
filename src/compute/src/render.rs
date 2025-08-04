@@ -176,6 +176,7 @@ mod top_k;
 
 pub use context::CollectionBundle;
 pub use join::LinearJoinSpec;
+use mz_persist_client::operators::time::AsOfBounds;
 
 /// Assemble the "compute"  side of a dataflow, i.e. all but the sources.
 ///
@@ -277,7 +278,10 @@ pub fn build_compute_dataflow<A: Allocate>(
                         &compute_state.worker_config,
                         source.storage_metadata.clone(),
                         read_schema,
-                        dataflow.as_of.clone(),
+                        &AsOfBounds::new(
+                            ErrorHandler::Halt("compute_import"),
+                            dataflow.as_of.clone(),
+                        ),
                         snapshot_mode,
                         until.clone(),
                         mfp.as_mut(),

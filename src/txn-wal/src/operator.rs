@@ -16,6 +16,9 @@ use std::sync::mpsc::TryRecvError;
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
+use crate::TxnsCodecDefault;
+use crate::txn_cache::TxnsCache;
+use crate::txn_read::{DataListenNext, DataRemapEntry, TxnsRead};
 use differential_dataflow::Hashable;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
@@ -27,6 +30,7 @@ use mz_persist_client::cfg::{RetryParameters, USE_GLOBAL_TXN_CACHE_SOURCE};
 use mz_persist_client::operators::shard_source::{
     ErrorHandler, FilterResult, SnapshotMode, shard_source,
 };
+use mz_persist_client::operators::time::AsOfBounds;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::{StringSchema, UnitSchema};
 use mz_persist_types::txn::TxnsCodec;
@@ -45,10 +49,6 @@ use timely::progress::{Antichain, Timestamp};
 use timely::worker::Worker;
 use timely::{Data, PartialOrder, WorkerConfig};
 use tracing::debug;
-
-use crate::TxnsCodecDefault;
-use crate::txn_cache::TxnsCache;
-use crate::txn_read::{DataListenNext, DataRemapEntry, TxnsRead};
 
 /// An operator for translating physical data shard frontiers into logical ones.
 ///
@@ -100,7 +100,7 @@ pub fn txns_progress<K, V, T, D, P, C, F, G>(
     client_fn: impl Fn() -> F,
     txns_id: ShardId,
     data_id: ShardId,
-    as_of: T,
+    as_of: &AsOfBounds<T>,
     until: Antichain<T>,
     data_key_schema: Arc<K::Schema>,
     data_val_schema: Arc<V::Schema>,
@@ -164,7 +164,7 @@ fn txns_progress_source_local<K, V, T, D, P, C, G>(
     client: impl Future<Output = PersistClient> + 'static,
     txns_id: ShardId,
     data_id: ShardId,
-    as_of: T,
+    as_of: &AsOfBounds<T>,
     data_key_schema: Arc<K::Schema>,
     data_val_schema: Arc<V::Schema>,
     unique_id: u64,
@@ -184,6 +184,7 @@ where
     let mut builder = AsyncOperatorBuilder::new(name.clone(), scope);
     let name = format!("{} [{}] {:.9}", name, unique_id, data_id.to_string());
     let (remap_output, remap_stream) = builder.new_output();
+    let as_of = as_of.bounds();
 
     let shutdown_button = builder.build(move |capabilities| async move {
         if worker_idx != chosen_worker {
@@ -194,6 +195,13 @@ where
         let client = client.await;
         let mut txns_cache = TxnsCache::<T, C>::open(&client, txns_id, Some(data_id)).await;
 
+        let bounds = as_of.await;
+        let as_of = if bounds.upper().is_empty() {
+            bounds.lower()
+        } else {
+            bounds.upper()
+        };
+        let as_of = as_of.as_option().cloned().expect("shard not closed!");
         let _ = txns_cache.update_gt(&as_of).await;
         let mut subscribe = txns_cache.data_subscribe(data_id, as_of.clone());
         let data_write = client
@@ -280,7 +288,7 @@ fn txns_progress_source_global<K, V, T, D, P, C, G>(
     client: impl Future<Output = PersistClient> + 'static,
     txns_id: ShardId,
     data_id: ShardId,
-    as_of: T,
+    as_of: &AsOfBounds<T>,
     data_key_schema: Arc<K::Schema>,
     data_val_schema: Arc<V::Schema>,
     unique_id: u64,
@@ -300,6 +308,7 @@ where
     let mut builder = AsyncOperatorBuilder::new(name.clone(), scope);
     let name = format!("{} [{}] {:.9}", name, unique_id, data_id.to_string());
     let (remap_output, remap_stream) = builder.new_output();
+    let as_of = as_of.bounds();
 
     let shutdown_button = builder.build(move |capabilities| async move {
         if worker_idx != chosen_worker {
@@ -310,6 +319,13 @@ where
         let client = client.await;
         let txns_read = ctx.get_or_init::<T, C>(&client, txns_id).await;
 
+        let bounds = as_of.await;
+        let as_of = if bounds.upper().is_empty() {
+            bounds.lower()
+        } else {
+            bounds.upper()
+        };
+        let as_of = as_of.as_option().cloned().expect("shard not closed!");
         let _ = txns_read.update_gt(as_of.clone()).await;
         let data_write = client
             .open_writer::<K, V, T, D>(
@@ -653,7 +669,7 @@ impl DataSubscribe {
                     name,
                     move || std::future::ready(client.clone()),
                     data_id,
-                    Some(Antichain::from_elem(as_of)),
+                    &Some(Antichain::from_elem(as_of)).into(),
                     SnapshotMode::Include,
                     until.clone(),
                     false.then_some(|_, _: &_, _| unreachable!()),
@@ -690,7 +706,7 @@ impl DataSubscribe {
                     || std::future::ready(client.clone()),
                     txns_id,
                     data_id,
-                    as_of,
+                    &Some(Antichain::from_elem(as_of)).into(),
                     until,
                     Arc::new(StringSchema),
                     Arc::new(UnitSchema),

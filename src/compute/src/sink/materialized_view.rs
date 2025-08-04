@@ -120,6 +120,11 @@ use std::pin::pin;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use crate::compute_state::ComputeState;
+use crate::render::StartSignal;
+use crate::render::sinks::SinkRender;
+use crate::sink::correction::Correction;
+use crate::sink::refresh::apply_refresh;
 use differential_dataflow::{AsCollection, Collection, Hashable};
 use futures::StreamExt;
 use mz_compute_types::dyncfgs::ENABLE_MV_APPEND_SMEARING;
@@ -130,6 +135,7 @@ use mz_persist_client::batch::{Batch, ProtoBatch};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::metrics::SinkMetrics;
 use mz_persist_client::operators::shard_source::{ErrorHandler, SnapshotMode};
+use mz_persist_client::operators::time::AsOfBounds;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient};
 use mz_persist_types::codec_impls::UnitSchema;
@@ -150,12 +156,6 @@ use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 use tokio::sync::watch;
 use tracing::trace;
-
-use crate::compute_state::ComputeState;
-use crate::render::StartSignal;
-use crate::render::sinks::SinkRender;
-use crate::sink::correction::Correction;
-use crate::sink::refresh::apply_refresh;
 
 impl<G> SinkRender<G> for MaterializedViewSinkConnection<CollectionMetadata>
 where
@@ -403,7 +403,7 @@ where
         &compute_state.worker_config,
         target,
         None,
-        as_of,
+        &AsOfBounds::new(ErrorHandler::Halt("compute persist sink"), as_of),
         SnapshotMode::Include,
         until,
         map_filter_project,
