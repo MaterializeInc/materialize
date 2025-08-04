@@ -11,7 +11,6 @@
 Basic test for mz-debug
 """
 
-import subprocess
 from dataclasses import dataclass
 
 from materialize import spawn
@@ -48,27 +47,8 @@ test_cases = [
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    c.up("materialized")
-
-    mz_debug = c.compose["services"]["mz-debug"]
-    subprocess.run(
-        ["docker", "pull", mz_debug["image"]],
-        check=True,
-        capture_output=True,
-    )
-    container_id = subprocess.check_output(
-        ["docker", "create", mz_debug["image"]], text=True
-    ).strip()
-    subprocess.run(
-        [
-            "docker",
-            "cp",
-            f"{container_id}:/usr/local/bin/mz-debug",
-            ".",
-        ],
-        check=True,
-    )
-
+    c.up("materialized", {"name": "mz-debug", "persistent": True})
+    c.invoke("cp", "mz-debug:/usr/local/bin/mz-debug", ".")
     container_id = c.container_id("materialized")
     if container_id is None:
         raise ValueError("Failed to get materialized container ID")
