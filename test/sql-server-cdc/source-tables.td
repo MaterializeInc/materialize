@@ -287,3 +287,5 @@ z "zion"
 #b "beer" <null>
 #c "anotha one" <null>
 #😊 "lets see what happens" <null>
+
+> DROP SOURCE ms_src CASCADE;
