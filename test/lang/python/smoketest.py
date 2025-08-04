@@ -77,7 +77,13 @@ class SmokeTest(unittest.TestCase):
 
     def test_sqlalchemy(self) -> None:
         engine = sqlalchemy.engine.create_engine(MATERIALIZED_URL)
-        results = [[c1, c2] for c1, c2 in engine.execute("VALUES (1, 2), (3, 4)")]
+        with engine.connect() as connection:
+            r = connection.execute(
+                sqlalchemy.text(
+                    "SELECT * FROM (VALUES (1, 2), (3, 4)) AS t(col1, col2)"
+                )
+            )
+            results = [[c1, c2] for c1, c2 in r]
         self.assertEqual(results, [[1, 2], [3, 4]])
 
     def test_psycopg2_subscribe(self) -> None:
