@@ -10,10 +10,13 @@
 """Git utilities."""
 
 import functools
+import os
 import subprocess
 import sys
 from pathlib import Path
 from typing import TypeVar
+
+import requests
 
 from materialize import spawn
 from materialize.mz_version import MzVersion, TypedVersionBase
@@ -158,10 +161,32 @@ def get_tags_of_current_commit(include_tags: YesNoOnce = YesNoOnce.ONCE) -> list
 def is_ancestor(earlier: str, later: str) -> bool:
     """True if earlier is in an ancestor of later"""
     try:
-        spawn.capture(["git", "merge-base", "--is-ancestor", earlier, later])
-    except subprocess.CalledProcessError:
-        return False
-    return True
+        headers = {"Accept": "application/vnd.github+json"}
+        if token := os.getenv("GITHUB_TOKEN"):
+            headers["Authorization"] = f"Bearer {token}"
+
+        resp = requests.get(
+            f"https://api.github.com/repos/materializeinc/materialize/compare/{earlier}...{later}",
+            headers=headers,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return data.get("status") in ("ahead", "identical")
+    except Exception as e:
+        # Try locally if Github is down or the change has not been pushed yet when running locally
+        print(f"Failed to get ancestor status from Github, running locally: {e}")
+
+        # Make sure we have an up to date view of main.
+        command = ["git", "fetch"]
+        if spawn.capture(["git rev-parse", "--is-shallow-repository"]) == "true":
+            command.append("--unshallow")
+        spawn.runv(command + [get_remote(), earlier, later])
+
+        try:
+            spawn.capture(["git", "merge-base", "--is-ancestor", earlier, later])
+        except subprocess.CalledProcessError:
+            return False
+        return True
 
 
 def is_dirty() -> bool:
@@ -207,6 +232,8 @@ def fetch(
         raise RuntimeError("branch must not be specified if only_tags is set")
 
     command = ["git", "fetch"]
+    if spawn.capture(["git rev-parse", "--is-shallow-repository"]) == "true":
+        command.append("--unshallow")
 
     if remote:
         command.append(remote)
@@ -281,12 +308,33 @@ def get_remote(
     return remote
 
 
-def get_common_ancestor_commit(remote: str, branch: str, fetch_branch: bool) -> str:
-    if fetch_branch:
-        fetch(remote=remote, branch=branch)
+def get_common_ancestor_commit(remote: str, branch: str) -> str:
+    try:
+        head = spawn.capture(["git", "rev-parse", "HEAD"]).strip()
+        headers = {"Accept": "application/vnd.github+json"}
+        if token := os.getenv("GITHUB_TOKEN"):
+            headers["Authorization"] = f"Bearer {token}"
 
-    command = ["git", "merge-base", "HEAD", f"{remote}/{branch}"]
-    return spawn.capture(command).strip()
+        resp = requests.get(
+            f"https://api.github.com/repos/materializeinc/materialize/compare/{head}...{branch}",
+            headers=headers,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return data["merge_base_commit"]["sha"]
+    except Exception as e:
+        # Try locally if Github is down or the change has not been pushed yet when running locally
+        print(f"Failed to get ancestor commit from Github, running locally: {e}")
+
+        # Make sure we have an up to date view
+        command = ["git", "fetch"]
+        if spawn.capture(["git rev-parse", "--is-shallow-repository"]) == "true":
+            command.append("--unshallow")
+        spawn.runv(command + [remote, branch])
+
+        return spawn.capture(
+            ["git", "merge-base", "--is-ancestor", "HEAD", f"{remote}/{branch}"]
+        ).strip()
 
 
 def is_on_release_version() -> bool:
@@ -302,11 +350,8 @@ def contains_commit(
 ) -> bool:
     if fetch:
         remote = get_remote(remote_url)
-        _fetch(remote=remote)
         target = f"{remote}/{target}"
-    command = ["git", "merge-base", "--is-ancestor", commit_sha, target]
-    return_code = spawn.run_and_get_return_code(command)
-    return return_code == 0
+    return is_ancestor(commit_sha, target)
 
 
 def get_tagged_release_version(version_type: type[VERSION_TYPE]) -> VERSION_TYPE | None:
