@@ -36,7 +36,7 @@ from materialize.output_consistency.output_consistency_test import (
 )
 
 SERVICES = [
-    Cockroach(setup_materialize=True),
+    Cockroach(setup_materialize=True, in_memory=True),
     Postgres(),
     Materialized(name="mz_this"),  # Overridden below
     Materialized(name="mz_other"),  # Overridden below

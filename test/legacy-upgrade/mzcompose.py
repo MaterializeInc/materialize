@@ -44,7 +44,7 @@ SERVICES = [
     SchemaRegistry(),
     Postgres(),
     MySql(),
-    Cockroach(setup_materialize=True),
+    Cockroach(setup_materialize=True, in_memory=True),
     # Overridden below
     Materialized(),
     Materialized(name="materialized2"),

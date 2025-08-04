@@ -439,7 +439,7 @@ steps:
           args: [--scenario=KafkaSources, --actions=80]
 
   - id: checks-no-restart-no-upgrade
-    label: "Checks without restart or upgrade"
+    label: "Checks parallel without restart or upgrade"
     depends_on: build-aarch64
     inputs: [misc/python/materialize/checks]
     timeout_in_minutes: 45
@@ -451,6 +451,9 @@ steps:
           composition: platform-checks
           args: [
               --scenario=NoRestartNoUpgrade,
+              --execution-mode=parallel,
+              --no-external-metadata-store,  # faster
+              --no-external-blob-store,  # faster
               --default-replication-factor=1, # faster
               "--seed=$BUILDKITE_JOB_ID"
           ]
@@ -493,6 +496,7 @@ steps:
     label: dbt-materialize tests
     depends_on: build-aarch64
     timeout_in_minutes: 30
+    parallelism: 2
     plugins:
       - ./ci/plugins/mzcompose:
           composition: dbt-materialize

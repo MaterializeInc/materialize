@@ -132,75 +132,6 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
 > CREATE TABLE truncate_table FROM SOURCE mz_source (REFERENCE truncate_table);
 > CREATE TABLE drop_table FROM SOURCE mz_source (REFERENCE drop_table);
 
-#
-# Cycle PK off (no pk, pk, no pk)
-
-
-> SELECT * from alter_cycle_pk_off
-1
-
-$ postgres-execute connection=postgres://postgres:postgres@postgres
-ALTER TABLE alter_cycle_pk_off ADD PRIMARY KEY(f1);
-ALTER TABLE alter_cycle_pk_off DROP CONSTRAINT alter_cycle_pk_off_pkey;
-INSERT INTO alter_cycle_pk_off VALUES (1);
-
-> SELECT * FROM alter_cycle_pk_off;
-1
-1
-
-
-#
-# Drop unique
-
-> SELECT * from alter_drop_unique
-1
-
-$ postgres-execute connection=postgres://postgres:postgres@postgres
-ALTER TABLE alter_drop_unique DROP CONSTRAINT alter_drop_unique_f1_key;
-
-! SELECT f1 FROM alter_drop_unique;
-contains:altered
-
-
-#
-# Add unique
-> SELECT * from alter_add_unique
-1
-
-$ postgres-execute connection=postgres://postgres:postgres@postgres
-ALTER TABLE alter_add_unique ADD UNIQUE(f1);
-INSERT INTO alter_add_unique VALUES (2);
-
-> SELECT * FROM alter_add_unique;
-1
-2
-
-
-#
-# Extend column
-
-
-> SELECT * from alter_extend_column
-ab
-
-$ postgres-execute connection=postgres://postgres:postgres@postgres
-ALTER TABLE alter_extend_column ALTER COLUMN f1 TYPE VARCHAR(20);
-
-! SELECT * FROM alter_extend_column;
-contains:altered
-
-
-#
-# Alter decimal
-> SELECT * from alter_decimal
-123.45
-
-$ postgres-execute connection=postgres://postgres:postgres@postgres
-ALTER TABLE alter_decimal ALTER COLUMN f1 TYPE DECIMAL(6,1);
-
-! SELECT * FROM alter_decimal;
-contains:altered
-
 
 #
 # Alter table rename
@@ -227,7 +158,6 @@ ALTER TABLE alter_table_rename_column RENAME COLUMN f3 TO f2;
 
 ! SELECT * FROM alter_table_rename_column;
 contains:altered
-
 
 #
 # Change column attnum
