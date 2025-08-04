@@ -150,6 +150,7 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.clusters.defaultSizes.probe` |  | ``"mz_probe"`` |
 | `operator.clusters.defaultSizes.support` |  | ``"25cc"`` |
 | `operator.clusters.defaultSizes.system` |  | ``"25cc"`` |
+| `operator.clusters.swap_enabled` |  | ``true`` |
 | `operator.image.pullPolicy` | Policy for pulling the image: "IfNotPresent" avoids unnecessary re-pulling of images | ``"IfNotPresent"`` |
 | `operator.image.repository` | The Docker repository for the operator image | ``"materialize/orchestratord"`` |
 | `operator.image.tag` | The tag/version of the operator image to be used | ``"v0.157.1"`` |
