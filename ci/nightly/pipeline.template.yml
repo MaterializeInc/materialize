@@ -11,16 +11,16 @@
 priority: 0
 
 env:
-  CI_BAZEL_BUILD: 1
+  CI_BAZEL_BUILD: 0
   CI_BAZEL_REMOTE_CACHE: $BAZEL_REMOTE_CACHE
-  CI_BAZEL_LTO: 1
+  CI_BAZEL_LTO: 0
 
 steps:
   - group: Builds
     key: builds
     steps:
       - id: build-x86_64
-        label: ":bazel: Build x86_64"
+        label: ":rust: Build x86_64"
         command: bin/ci-builder run min bin/pyactivate -m ci.test.build
         inputs:
           - "*"
@@ -28,10 +28,10 @@ steps:
         depends_on: []
         timeout_in_minutes: 60
         agents:
-          queue: builder-linux-x86_64
+          queue: l-builder-linux-x86_64
 
       - id: build-aarch64
-        label: ":bazel: Build aarch64"
+        label: ":rust: Build aarch64"
         command: bin/ci-builder run min bin/pyactivate -m ci.test.build
         inputs:
           - "*"
@@ -39,10 +39,10 @@ steps:
         depends_on: []
         timeout_in_minutes: 60
         agents:
-          queue: builder-linux-aarch64-mem
+          queue: l-builder-linux-aarch64
 
       - id: build-x86_64-asan
-        label: ":bazel: Build x86_64 (ASan)"
+        label: ":rust: Build x86_64 (ASan)"
         command: bin/ci-builder run min bin/pyactivate -m ci.test.build
         inputs:
           - "*"
@@ -57,7 +57,7 @@ steps:
         branches: "main"
 
       - id: build-aarch64-asan
-        label: ":bazel: Build aarch64 (ASan)"
+        label: ":rust: Build aarch64 (ASan)"
         command: bin/ci-builder run min bin/pyactivate -m ci.test.build
         inputs:
           - "*"
@@ -1556,7 +1556,7 @@ steps:
         label: "RQG dbt3-joins workload"
         depends_on: build-aarch64
         # Some queries run very slow on Postgres, set a higher timeout to give them a chance to finish
-        timeout_in_minutes: 120
+        timeout_in_minutes: 160
         agents:
           # Runs into timeout/OoM on small agents
           queue: hetzner-aarch64-8cpu-16gb

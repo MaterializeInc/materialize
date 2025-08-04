@@ -43,15 +43,18 @@ class CloudtestApplicationBase(Application):
         raise NotImplementedError
 
     def acquire_images(self) -> None:
+        bazel_lto = self.bazel_lto()
         repo = mzbuild.Repository(
             self.mz_root,
             profile=(
-                mzbuild.Profile.RELEASE if self.release_mode else mzbuild.Profile.DEV
+                (mzbuild.Profile.RELEASE if bazel_lto else mzbuild.Profile.OPTIMIZED)
+                if self.release_mode
+                else mzbuild.Profile.DEV
             ),
             coverage=self.coverage_mode(),
             bazel=self.bazel(),
             bazel_remote_cache=self.bazel_remote_cache(),
-            bazel_lto=self.bazel_lto(),
+            bazel_lto=bazel_lto,
         )
         for image in self.images:
             self._acquire_image(repo, image)

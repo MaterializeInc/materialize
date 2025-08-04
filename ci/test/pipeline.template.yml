@@ -51,6 +51,34 @@ steps:
         agents:
           queue: l-builder-linux-aarch64
 
+      - id: build-x86_64-no-lto
+        label: ":rust: Build x86_64 (no LTO)"
+        command: bin/ci-builder run min bin/pyactivate -m ci.test.build
+        inputs:
+          - "*"
+        artifact_paths: bazel-explain.log
+        depends_on: []
+        timeout_in_minutes: 60
+        agents:
+          queue: l-builder-linux-x86_64
+        env:
+          CI_BAZEL_LTO: 0
+        branches: "v*.*"
+
+      - id: build-aarch64-no-lto
+        label: ":rust: Build aarch64 (no LTO)"
+        command: bin/ci-builder run min bin/pyactivate -m ci.test.build
+        inputs:
+          - "*"
+        artifact_paths: bazel-explain.log
+        depends_on: []
+        timeout_in_minutes: 60
+        agents:
+          queue: l-builder-linux-aarch64
+        env:
+          CI_BAZEL_LTO: 0
+        branches: "v*.*"
+
       - id: upload-debug-symbols-x86_64
         label: "Upload debug symbols for x86_64"
         env:
