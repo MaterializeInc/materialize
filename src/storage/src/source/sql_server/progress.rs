@@ -119,6 +119,10 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                 tokio::select! {
                     probe_ts = probe_ticker.tick() => {
                         let max_lsn: Lsn = mz_sql_server_util::inspect::get_max_lsn(&mut client).await?;
+                        // We have to return max_lsn + 1 in the probe so that the downstream consumers of
+                        // the probe view the actual max lsn as fully committed and all data at that LSN
+                        // as no longer subject to change. If we don't increment the LSN before emitting
+                        // the probe then data will not be queryable in the tables produced by the Source.
                         let known_lsn = max_lsn.increment();
 
                         // The DB should never go backwards, but it's good to know if it does.
