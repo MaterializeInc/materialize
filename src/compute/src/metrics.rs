@@ -135,7 +135,7 @@ impl ComputeMetrics {
                 help: "The time spent in each compute step_or_park call",
                 const_labels: {"cluster" => "compute"},
                 var_labels: ["worker_id"],
-                buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 32.0),
+                buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 1024.0),
             )),
             shared_row_heap_capacity_bytes: registry.register(metric!(
                 name: "mz_dataflow_shared_row_heap_capacity_bytes",
@@ -144,15 +144,15 @@ impl ComputeMetrics {
             )),
             persist_peek_seconds: registry.register(metric!(
                 name: "mz_persist_peek_seconds",
-                help: "Time spent in (experimental) Persist fast-path peeks.",
+                help: "Time spent in Persist fast-path peeks.",
                 var_labels: ["worker_id"],
-                buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
+                buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8192.0),
             )),
             stashed_peek_seconds: registry.register(metric!(
                 name: "mz_stashed_peek_seconds",
                 help: "Time spent reading a peek result and stashing it in the peek result stash (aka. persist blob).",
                 var_labels: ["worker_id"],
-                buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
+                buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8192.0),
             )),
             handle_command_duration_seconds: registry.register(metric!(
                 name: "mz_cluster_handle_command_duration_seconds",
