@@ -75,6 +75,60 @@ pub async fn get_max_lsn(client: &mut Client) -> Result<Lsn, SqlServerError> {
     parse_lsn(&result[..1])
 }
 
+/// Retrieves the minumum [`Lsn`] (start_lsn field) from `cdc.change_tables`
+/// for the specified capture instances.
+///
+/// This is based on the `sys.fn_cdc_get_min_lsn` implementation, which has logic
+/// that we want to bypass. Specifically, `sys.fn_cdc_get_min_lsn` returns NULL
+/// if the `start_lsn` in `cdc.change_tables` is less than or equal to the LSN
+/// returned by `sys.fn_cdc_get_max_lsn`.
+///
+/// See: <https://learn.microsoft.com/en-us/sql/relational-databases/system-tables/cdc-change-tables-transact-sql?view=sql-server-ver16>
+pub async fn get_min_lsns(
+    client: &mut Client,
+    capture_instances: impl IntoIterator<Item = &str>,
+) -> Result<BTreeMap<Arc<str>, Lsn>, SqlServerError> {
+    let capture_instances: SmallVec<[_; 1]> = capture_instances.into_iter().collect();
+    let values: Vec<_> = capture_instances
+        .iter()
+        .map(|ci| {
+            let ci: &dyn tiberius::ToSql = ci;
+            ci
+        })
+        .collect();
+    let args = (0..capture_instances.len())
+        .map(|i| format!("@P{}", i + 1))
+        .collect::<Vec<_>>()
+        .join(",");
+    let stmt = format!(
+        "SELECT capture_instance, start_lsn FROM cdc.change_tables WHERE capture_instance IN ({args});"
+    );
+    let result = client.query(stmt, &values).await?;
+    let min_lsns = result
+        .into_iter()
+        .map(|row| {
+            let capture_instance: Arc<str> = row
+                .try_get::<&str, _>("capture_instance")?
+                .ok_or_else(|| {
+                    SqlServerError::ProgrammingError(
+                        "missing column 'capture_instance'".to_string(),
+                    )
+                })?
+                .into();
+            let start_lsn: &[u8] = row.try_get("start_lsn")?.ok_or_else(|| {
+                SqlServerError::ProgrammingError("missing column 'start_lsn'".to_string())
+            })?;
+            let min_lsn = Lsn::try_from(start_lsn).map_err(|msg| SqlServerError::InvalidData {
+                column_name: "lsn".to_string(),
+                error: format!("Error parsing LSN for {capture_instance}: {msg}"),
+            })?;
+            Ok::<_, SqlServerError>((capture_instance, min_lsn))
+        })
+        .collect::<Result<_, _>>()?;
+
+    Ok(min_lsns)
+}
+
 /// Returns the maximum log sequence number for the entire database, retrying
 /// if the log sequence number is not available. This implementation relies on
 /// CDC, which is asynchronous, so may return an LSN that is less than the

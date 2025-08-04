@@ -9,6 +9,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
+use std::time::Duration;
 
 use mz_ore::collections::CollectionExt;
 use mz_proto::RustType;
@@ -51,13 +52,13 @@ pub(super) struct PurifiedSourceExports {
 #[allow(clippy::unused_async)]
 pub(super) async fn purify_source_exports(
     database: &str,
-    _client: &mut mz_sql_server_util::Client,
+    client: &mut mz_sql_server_util::Client,
     retrieved_references: &RetrievedSourceReferences,
     requested_references: &Option<ExternalReferences>,
     text_columns: &[UnresolvedItemName],
     excl_columns: &[UnresolvedItemName],
     unresolved_source_name: &UnresolvedItemName,
-    initial_lsn: mz_sql_server_util::cdc::Lsn,
+    timeout: Duration,
     reference_policy: &SourceReferencePolicy,
 ) -> Result<PurifiedSourceExports, PlanError> {
     let requested_exports = match requested_references.as_ref() {
@@ -164,6 +165,24 @@ pub(super) async fn purify_source_exports(
         })
         .collect();
 
+    // If CDC is freshly enabled for a table, it has been observed that
+    // the `start_lsn`` from `cdc.change_tables` can be ahead of the LSN
+    // returned by `sys.fn_cdc_get_max_lsn`.  Eventually, the LSN returned
+    // by `sys.fn_cdc_get_max_lsn` will surpass `start_lsn`. For this
+    // reason, we choose the initial_lsn to be
+    // `max(start_lsns, sys.fn_cdc_get_max_lsn())``.
+    let mut initial_lsns = mz_sql_server_util::inspect::get_min_lsns(
+        client,
+        capture_instances.values().map(|instance| instance.as_ref()),
+    )
+    .await?;
+
+    let max_lsn = mz_sql_server_util::inspect::get_max_lsn_retry(client, timeout).await?;
+    tracing::debug!(?initial_lsns, %max_lsn, "retrieved start LSNs");
+    for lsn in initial_lsns.values_mut() {
+        *lsn = std::cmp::max(*lsn, max_lsn);
+    }
+
     let mut tables = vec![];
     for requested in requested_exports {
         let mut table = requested
@@ -233,6 +252,10 @@ pub(super) async fn purify_source_exports(
                 .get(&reference.meta.qualified_name())
                 .expect("capture instance should exist");
 
+            let initial_lsn = *initial_lsns.get(capture_instance).ok_or_else(|| {
+                SqlServerSourcePurificationError::NoStartLsn(capture_instance.to_string())
+            })?;
+
             let export = PurifiedSourceExport {
                 external_reference: reference.external_reference,
                 details: PurifiedExportDetails::SqlServer {
@@ -240,13 +263,13 @@ pub(super) async fn purify_source_exports(
                     text_columns,
                     excl_columns,
                     capture_instance: Arc::clone(capture_instance),
-                    initial_lsn: initial_lsn.clone(),
+                    initial_lsn,
                 },
             };
 
-            (reference.name, export)
+            Ok::<_, SqlServerSourcePurificationError>((reference.name, export))
         })
-        .collect();
+        .collect::<Result<_, _>>()?;
 
     Ok(PurifiedSourceExports {
         source_exports: exports,
