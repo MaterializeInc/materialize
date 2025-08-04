@@ -41,7 +41,7 @@ use timely::dataflow::{Scope, Stream as TimelyStream};
 use timely::progress::Antichain;
 
 use crate::source::sql_server::{ReplicationError, SourceOutputInfo, TransientError};
-use crate::source::types::ProgressStatisticsUpdate;
+use crate::source::types::{Probe, ProgressStatisticsUpdate};
 use crate::source::{RawSourceCreationConfig, probe};
 
 /// Used as a partition ID to determine the worker that is responsible for
@@ -57,16 +57,18 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
 ) -> (
     TimelyStream<G, ProgressStatisticsUpdate>,
     TimelyStream<G, ReplicationError>,
+    TimelyStream<G, Probe<Lsn>>,
     PressOnDropButton,
 ) {
     let op_name = format!("SqlServerProgress({})", config.id);
     let mut builder = AsyncOperatorBuilder::new(op_name, scope);
 
     let (stats_output, stats_stream) = builder.new_output();
+    let (probe_output, probe_stream) = builder.new_output();
 
     let (button, transient_errors) = builder.build_fallible::<TransientError, _>(move |caps| {
         Box::pin(async move {
-            let [stats_cap]: &mut [_; 1] = caps.try_into().unwrap();
+            let [stats_cap, probe_cap]: &mut [_; 2] = caps.try_into().unwrap();
 
             // Small helper closure.
             let emit_stats = |cap, known: u64, committed: u64| {
@@ -76,6 +78,10 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                 };
                 tracing::debug!(?config.id, %known, %committed, "steadystate progress");
                 stats_output.give(cap, update);
+            };
+
+            let emit_probe = |cap, probe: Probe<Lsn>| {
+                probe_output.give(cap, probe);
             };
 
             // Only a single worker is responsible for processing progress.
@@ -111,9 +117,13 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
 
             loop {
                 tokio::select! {
-                    // TODO(sql_server2): Emit probes here.
-                    _probe_ts = probe_ticker.tick() => {
-                        let known_lsn = mz_sql_server_util::inspect::get_max_lsn(&mut client).await?;
+                    probe_ts = probe_ticker.tick() => {
+                        let max_lsn: Lsn = mz_sql_server_util::inspect::get_max_lsn(&mut client).await?;
+                        // We have to return max_lsn + 1 in the probe so that the downstream consumers of
+                        // the probe view the actual max lsn as fully committed and all data at that LSN
+                        // as no longer subject to change. If we don't increment the LSN before emitting
+                        // the probe then data will not be queryable in the tables produced by the Source.
+                        let known_lsn = max_lsn.increment();
 
                         // The DB should never go backwards, but it's good to know if it does.
                         let prev_known_lsn = match prev_offset_known {
@@ -136,6 +146,10 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                             let commit_lsn_abrv = prev_commit_lsn.abbreviate();
                             emit_stats(&stats_cap[0], known_lsn_abrv, commit_lsn_abrv);
                         }
+
+                        let probe = Probe { probe_ts, upstream_frontier: Antichain::from_elem(known_lsn) };
+                        emit_probe(&probe_cap[0], probe);
+
                         prev_offset_known = Some(known_lsn);
                     },
                     Some(resume_upper) = resume_uppers.next() => {
@@ -180,5 +194,10 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
 
     let error_stream = transient_errors.map(ReplicationError::Transient);
 
-    (stats_stream, error_stream, button.press_on_drop())
+    (
+        stats_stream,
+        error_stream,
+        probe_stream,
+        button.press_on_drop(),
+    )
 }
