@@ -818,14 +818,6 @@ impl CatalogState {
         // Use initial lcw so that we can tell apart default from non-existent windows.
         if let Some(cw) = entry.item().initial_logical_compaction_window() {
             updates.push(self.pack_history_retention_strategy_update(id, cw, diff));
-            // Propagate source export changes.
-            for (cw, mut ids) in self.source_compaction_windows([id]) {
-                // Id already accounted for above.
-                ids.remove(&id);
-                for sub_id in ids {
-                    updates.push(self.pack_history_retention_strategy_update(sub_id, cw, diff));
-                }
-            }
         }
 
         updates

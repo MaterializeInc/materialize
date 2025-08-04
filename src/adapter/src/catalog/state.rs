@@ -2495,9 +2495,7 @@ impl CatalogState {
         &self.storage_metadata
     }
 
-    /// For the Sources ids in `ids`, return the compaction windows for all `ids` and additional ids
-    /// that propagate from them. Specifically, if `ids` contains a source, it and all of its
-    /// source exports will be added to the result.
+    /// For the Sources ids in `ids`, return their compaction windows.
     pub fn source_compaction_windows(
         &self,
         ids: impl IntoIterator<Item = CatalogItemId>,
@@ -2515,21 +2513,10 @@ impl CatalogState {
                     let source_cw = source.custom_logical_compaction_window.unwrap_or_default();
                     match source.data_source {
                         DataSourceDesc::Ingestion { .. } => {
-                            // For sources, look up each dependent source export and propagate.
                             cws.entry(source_cw).or_default().insert(item_id);
-                            ids.extend(entry.used_by());
                         }
-                        DataSourceDesc::IngestionExport { ingestion_id, .. } => {
-                            // For subsources, look up the parent source and propagate the compaction
-                            // window.
-                            let ingestion = self
-                                .get_entry(&ingestion_id)
-                                .source()
-                                .expect("must be source");
-                            let cw = ingestion
-                                .custom_logical_compaction_window
-                                .unwrap_or(source_cw);
-                            cws.entry(cw).or_default().insert(item_id);
+                        DataSourceDesc::IngestionExport { .. } => {
+                            cws.entry(source_cw).or_default().insert(item_id);
                         }
                         DataSourceDesc::Introspection(_)
                         | DataSourceDesc::Progress
@@ -2538,23 +2525,18 @@ impl CatalogState {
                         }
                     }
                 }
-                CatalogItem::Table(table) => match &table.data_source {
-                    TableDataSource::DataSource {
-                        desc: DataSourceDesc::IngestionExport { ingestion_id, .. },
-                        timeline: _,
-                    } => {
-                        let table_cw = table.custom_logical_compaction_window.unwrap_or_default();
-                        let ingestion = self
-                            .get_entry(ingestion_id)
-                            .source()
-                            .expect("must be source");
-                        let cw = ingestion
-                            .custom_logical_compaction_window
-                            .unwrap_or(table_cw);
-                        cws.entry(cw).or_default().insert(item_id);
+                CatalogItem::Table(table) => {
+                    let table_cw = table.custom_logical_compaction_window.unwrap_or_default();
+                    match &table.data_source {
+                        TableDataSource::DataSource {
+                            desc: DataSourceDesc::IngestionExport { .. },
+                            timeline: _,
+                        } => {
+                            cws.entry(table_cw).or_default().insert(item_id);
+                        }
+                        _ => {}
                     }
-                    _ => {}
-                },
+                }
                 _ => {
                     // Views could depend on sources, so ignore them if added by used_by above.
                     continue;
