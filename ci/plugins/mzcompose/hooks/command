@@ -226,11 +226,6 @@ cleanup() {
       fi
   fi
 
-  ci_unimportant_heading ":docker: Cleaning up after mzcompose"
-  # docker-compose kill may fail attempting to kill containers
-  # that have just exited on their own because of the
-  # "shared-fate" mechanism employed by Mz clusters
-  (sudo systemctl restart docker; docker ps --all --quiet | xargs --no-run-if-empty docker rm --force --volumes) &
   killall -9 clusterd || true # There might be remaining processes from a cargo-test run
 
   if [ "$BUILDKITE_STEP_KEY" = "terraform-aws" ]; then

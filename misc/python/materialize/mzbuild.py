@@ -22,6 +22,7 @@ import hashlib
 import json
 import multiprocessing
 import os
+import platform
 import re
 import shutil
 import stat
@@ -147,6 +148,15 @@ class RepositoryDetails:
         if self.bazel:
             return ["bazel", "run", f"@//misc/bazel/tools:{name}", "--"]
         else:
+            if platform.system() != "Linux":
+                # We can't use the local tools from macOS to build a Linux executable
+                return ["bin/ci-builder", "run", "stable", name]
+            # If we're on Linux, trust that the tools are installed instead of
+            # loading the slow ci-builder. If you don't have compilation tools
+            # installed you can still run `bin/ci-builder run stable
+            # bin/mzcompose ...`, and most likely the Cargo build will already
+            # fail earlier if you don't have compilation tools installed and
+            # run without the ci-builder.
             return [name]
 
     def cargo_target_dir(self) -> Path:
