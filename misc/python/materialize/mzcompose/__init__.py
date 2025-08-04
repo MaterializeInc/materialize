@@ -356,6 +356,9 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "storage_use_continual_feedback_upsert", "true", ["true", "false"]
         ),
+        VariableSystemParameter(
+            "sql_server_offset_known_interval", "1s", ["10ms", "100ms", "1s"]
+        ),
         # End of list (ordered by name)
     ]
 
@@ -541,7 +544,6 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "sql_server_cdc_poll_interval",
     "sql_server_cdc_cleanup_change_table",
     "sql_server_cdc_cleanup_change_table_max_deletes",
-    "sql_server_offset_known_interval",
     "allow_user_sessions",
     "with_0dt_deployment_ddl_check_interval",
     "enable_0dt_caught_up_check",

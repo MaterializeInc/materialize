@@ -16,7 +16,7 @@ import random
 import threading
 from textwrap import dedent
 
-from materialize import MZ_ROOT
+from materialize import MZ_ROOT, buildkite
 from materialize.mzcompose.composition import (
     Composition,
     Service,
@@ -52,12 +52,21 @@ SERVICES = [
 # Test that SQL Server ingestion works
 #
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    for name in c.workflows:
+    def process(name: str) -> None:
         if name == "default":
-            continue
-
+            return
         with c.test_case(name):
-            c.workflow(name)
+            c.workflow(name, *parser.args)
+
+    workflows_with_internal_sharding = ["cdc"]
+    sharded_workflows = workflows_with_internal_sharding + buildkite.shard_list(
+        [w for w in c.workflows if w not in workflows_with_internal_sharding],
+        lambda w: w,
+    )
+    print(
+        f"Workflows in shard with index {buildkite.get_parallelism_index()}: {sharded_workflows}"
+    )
+    c.test_parts(sharded_workflows, process)
 
 
 def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -69,13 +78,16 @@ def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     args = parser.parse_args()
 
-    matching_files = []
+    matching_files: list[str] = []
     for filter in args.filter:
         matching_files.extend(
             glob.glob(filter, root_dir=MZ_ROOT / "test" / "sql-server-cdc")
         )
     matching_files = sorted(matching_files)
-    print(f"Filter: {args.filter} Files: {matching_files}")
+    sharded_files: list[str] = buildkite.shard_list(
+        sorted(matching_files), lambda file: file
+    )
+    print(f"Filter: {args.filter} Files: {sharded_files}")
 
     # Start with a fresh state
     c.kill("sql-server")
@@ -96,7 +108,7 @@ def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
     ).stdout
 
     c.test_parts(
-        matching_files,
+        sharded_files,
         lambda file: c.run_testdrive_files(
             "--no-reset",
             "--max-errors=1",
