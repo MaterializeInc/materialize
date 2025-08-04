@@ -178,7 +178,7 @@ def is_ancestor(earlier: str, later: str) -> bool:
 
         # Make sure we have an up to date view of main.
         command = ["git", "fetch"]
-        if spawn.capture(["git rev-parse", "--is-shallow-repository"]) == "true":
+        if spawn.capture(["git", "rev-parse", "--is-shallow-repository"]) == "true":
             command.append("--unshallow")
         spawn.runv(command + [get_remote(), earlier, later])
 
@@ -232,7 +232,7 @@ def fetch(
         raise RuntimeError("branch must not be specified if only_tags is set")
 
     command = ["git", "fetch"]
-    if spawn.capture(["git rev-parse", "--is-shallow-repository"]) == "true":
+    if spawn.capture(["git", "rev-parse", "--is-shallow-repository"]) == "true":
         command.append("--unshallow")
 
     if remote:
@@ -328,7 +328,7 @@ def get_common_ancestor_commit(remote: str, branch: str) -> str:
 
         # Make sure we have an up to date view
         command = ["git", "fetch"]
-        if spawn.capture(["git rev-parse", "--is-shallow-repository"]) == "true":
+        if spawn.capture(["git", "rev-parse", "--is-shallow-repository"]) == "true":
             command.append("--unshallow")
         spawn.runv(command + [remote, branch])
 
