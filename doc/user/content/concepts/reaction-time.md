@@ -28,6 +28,16 @@ Together, these concepts form the basis for understanding how Materialize enable
 | Data Warehouse | Poor (stale) | Freshness is often poor due to scheduled batch ingestion. Changes may take minutes to hours to propagate.                  |
 | Materialize    | Excellent    | Freshness is low, typically within milliseconds to a few seconds, due to continuous ingestion and incremental view maintenance.                  |
 
+### Monitoring Freshness
+
+You can monitor data freshness in Materialize by querying wallclock lag measurements from the [`mz_internal.mz_wallclock_global_lag`](/sql/system-catalog/mz_internal/#mz_wallclock_global_lag) system catalog view.
+Wallclock lag indicates how far behind real-world wall-clock time your data objects are, helping you understand freshness across your materialized views, indexes, and sources.
+
+```sql
+SELECT object_id, lag
+FROM mz_internal.mz_wallclock_global_lag;
+```
+
 ---
 
 ## Query Latency
