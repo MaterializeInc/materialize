@@ -1,6 +1,6 @@
-- `CREATE` privileges on the containing schema.
-- `CREATE` privileges on the containing cluster if the source is created in an existing cluster.
-- `CREATECLUSTER` privileges on the system if the source is not created in an existing cluster.
-- `USAGE` privileges on all connections and secrets used in the source definition.
-- `USAGE` privileges on the schemas that all connections and secrets in the
-  statement are contained in.
+- `USAGE` privileges on the schemas that all relations in the query are contained in.
+- `SELECT` privileges on all relations in the query.
+ - NOTE: if any item is a view, then the view owner must also have the necessary privileges to
+   execute the view definition. Even if the view owner is a _superuser_, they still must explicitly be
+   granted the necessary privileges.
+- `USAGE` privileges on the active cluster.
