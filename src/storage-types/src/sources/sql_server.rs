@@ -75,7 +75,7 @@ pub const CDC_CLEANUP_CHANGE_TABLE_MAX_DELETES: Config<u32> = Config::new(
 
 pub const OFFSET_KNOWN_INTERVAL: Config<Duration> = Config::new(
     "sql_server_offset_known_interval",
-    Duration::from_secs(10),
+    Duration::from_secs(1),
     "Interval to fetch `offset_known`, from `sys.fn_cdc_get_max_lsn()`",
 );
 
