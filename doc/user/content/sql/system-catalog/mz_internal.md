@@ -1254,8 +1254,9 @@ operations in the system.
 
 ## `mz_wallclock_global_lag`
 
-The `mz_wallclock_global_lag` view contains the most recently recorded wallclock lag
-for each table, source, index, materialized view, and sink in the system.
+The `mz_wallclock_global_lag` view contains the most recent wallclock lag for tables, sources, indexes, materialized views, and sinks.
+Wallclock lag measures how far behind real-world wall-clock time each
+  object's data is, indicating the [freshness](/concepts/reaction-time/#freshness) of results when querying that object.
 
 <!-- RELATION_SPEC mz_internal.mz_wallclock_global_lag -->
 | Field         | Type         | Meaning
@@ -1266,8 +1267,7 @@ for each table, source, index, materialized view, and sink in the system.
 ## `mz_wallclock_lag_history`
 
 The `mz_wallclock_lag_history` table records the historical wallclock lag,
-i.e., the difference between the write frontier and the current wallclock time,
-for each table, source, index, materialized view, and sink in the system.
+i.e., the [freshness](/concepts/reaction-time/#freshness), for each table, source, index, materialized view, and sink in the system.
 
 <!-- RELATION_SPEC mz_internal.mz_wallclock_lag_history -->
 | Field         | Type         | Meaning
