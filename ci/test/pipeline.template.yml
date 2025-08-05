@@ -363,7 +363,7 @@ steps:
       # The SQL Server Docker image isn't available on ARM.
       #
       # See: <https://github.com/microsoft/mssql-docker/issues/864>
-      queue: hetzner-x86-64-4cpu-8gb
+      queue: hetzner-x86-64-8cpu-16gb
 
   - group: "Connection tests"
     key: connection-tests
