@@ -100,9 +100,6 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
                 let epoch = SystemTime::UNIX_EPOCH;
                 let ts = now.duration_since(epoch).unwrap().as_secs_f64();
                 let delay = now.duration_since(start).unwrap().as_secs_f64();
-                if retry_state.i != 0 {
-                    println!();
-                }
                 println!("rows match; continuing at ts {ts}, took {delay}s");
                 (state, Ok(()))
             }
@@ -440,9 +437,6 @@ pub async fn run_fail_sql(
             .await
             {
                 Ok(()) => {
-                    if retry_state.i != 0 {
-                        println!();
-                    }
                     println!("query error matches; continuing");
                     (state, Ok(()))
                 }

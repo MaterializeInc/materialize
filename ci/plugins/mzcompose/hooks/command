@@ -226,8 +226,6 @@ cleanup() {
       fi
   fi
 
-  killall -9 clusterd || true # There might be remaining processes from a cargo-test run
-
   if [ "$BUILDKITE_STEP_KEY" = "terraform-aws" ]; then
     mzcompose run aws-temporary --no-setup --no-test --no-run-mz-debug || CI_ANNOTATE_ERRORS_RESULT=1
   elif [ "$BUILDKITE_STEP_KEY" = "terraform-aws-upgrade" ]; then
@@ -238,6 +236,13 @@ cleanup() {
     mzcompose run azure-temporary --no-setup --no-test --no-run-mz-debug || CI_ANNOTATE_ERRORS_RESULT=1
   fi
   rm -rf ~/.kube # Remove potential state from E2E Terraform tests
+
+  ci_unimportant_heading ":docker: Cleaning up after mzcompose"
+  # docker-compose kill may fail attempting to kill containers
+  # that have just exited on their own because of the
+  # "shared-fate" mechanism employed by Mz clusters
+  (sudo systemctl restart docker; docker ps --all --quiet | xargs --no-run-if-empty docker rm --force --volumes) &
+  killall -9 clusterd || true # There might be remaining processes from a cargo-test run
 
   if [ ! -s services.log ] && [ "$BUILDKITE_LABEL" != "Maelstrom coverage of persist" ] && [ "$BUILDKITE_LABEL" != "Long single-node Maelstrom coverage of persist" ] && [ "$BUILDKITE_LABEL" != "Maelstrom coverage of txn-wal" ] && [ "$BUILDKITE_LABEL" != "Mz E2E Test" ] && [ "$BUILDKITE_LABEL" != "Output consistency (version for DFR)" ] && [ "$BUILDKITE_LABEL" != "Output consistency (version for CTF)" ] && [ "$BUILDKITE_LABEL" != "QA Canary Environment Base Load" ] && [ "$BUILDKITE_LABEL" != "Parallel Benchmark against QA Canary Environment" ] && [ "$BUILDKITE_LABEL" != "Parallel Benchmark against QA Benchmarking Staging Environment" ] && [[ ! "$BUILDKITE_LABEL" =~ Terraform\ .* ]]; then
       echo "+++ services.log is empty, failing"
