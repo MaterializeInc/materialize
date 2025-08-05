@@ -332,6 +332,15 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "persist_validate_part_bounds_on_write", "true", ["true", "false"]
         ),
+        VariableSystemParameter(
+            "persist_enable_incremental_compaction",
+            "true" if version > MzVersion.parse_mz("v0.152.0-dev") else "false",
+            (
+                ["true", "false"]
+                if version > MzVersion.parse_mz("v0.152.0-dev")
+                else ["false"]
+            ),
+        ),
         VariableSystemParameter("pg_offset_known_interval", "1s", ["100ms", "1s"]),
         VariableSystemParameter(
             "statement_logging_default_sample_rate", "0.01", ["0", "0.01"]
