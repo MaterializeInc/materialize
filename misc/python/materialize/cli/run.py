@@ -72,12 +72,10 @@ def update_sqlite_repo() -> None:
             spawn.runv(["git", "-C", str(path), "pull"])
         else:
             spawn.runv(["git", "-C", str(path), "fetch"])
-            local = spawn.capture(["git", "rev-parse", "@"])
-            remote = spawn.capture(["git", "rev-parse", "@{upstream}"])
+            local = spawn.capture(["git", "-C", str(path), "rev-parse", "@"])
+            remote = spawn.capture(["git", "-C", str(path), "rev-parse", "@{upstream}"])
             if local != remote:
-                raise ValueError(
-                    f"The test/sqllogictest/sqlite repository should be on the latest state ({remote}), but is on {local}"
-                )
+                spawn.runv(["git", "-C", str(path), "pull"])
     else:
         path.mkdir(exist_ok=True)
         spawn.runv(
