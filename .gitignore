@@ -60,3 +60,4 @@ flake.lock
 /src/testdrive/ci/protobuf-bin
 /src/testdrive/ci/protobuf-include
 /known-docker-images.txt
+/test/sqllogictest/sqlite
