@@ -943,8 +943,6 @@ def remove_dependencies_on_prs(
 
 
 def move_build_to_bazel_lto(pipeline: Any, pipeline_name: str) -> None:
-    if pipeline_name not in ("test", "nightly", "release-qualification"):
-        return
     if not os.environ["BUILDKITE_TAG"] and not ui.env_is_truthy("CI_RELEASE_LTO_BUILD"):
         return
     pipeline.setdefault("env", {})["CI_BAZEL_BUILD"] = 1
