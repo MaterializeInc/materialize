@@ -163,19 +163,19 @@ JOIN mz_objects o ON o.id = h.id
 WHERE o.id LIKE 'u%'
 ORDER BY o.name
 ----
-accounts  FOR  60000
+accounts  FOR  1000
 auction_house  FOR  60000
 auction_house_progress  FOR  1000
-auctions  FOR  60000
-bids  FOR  60000
+auctions  FOR  1000
+bids  FOR  1000
 counter  FOR  60000
 counter_progress  FOR  1000
 idx_a  FOR  420000
 idx_b  FOR  360000
 idx_c  FOR  240000
-organizations  FOR  60000
+organizations  FOR  1000
 tab_a  FOR  1000
-users  FOR  60000
+users  FOR  1000
 
 statement ok
 ALTER SOURCE counter RESET (RETAIN HISTORY)
