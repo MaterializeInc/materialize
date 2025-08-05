@@ -58,17 +58,8 @@ if ! mzcompose --mz-quiet list-workflows | grep "$service" > /dev/null; then
 fi
 
 if [ -n "${CI_COVERAGE_ENABLED:-}" ]; then
-    ci_uncollapsed_heading ":docker: Fetching binaries for coverage"
-    mzcompose create
     mkdir -p coverage/
     chmod 777 coverage/
-    # Not all tests contain all of these containers:
-    mzcompose --mz-quiet cp sqllogictest:/usr/local/bin/sqllogictest coverage/ || true
-    mzcompose --mz-quiet cp sqllogictest:/usr/local/bin/clusterd coverage/ || true
-    mzcompose --mz-quiet cp materialized:/usr/local/bin/environmentd coverage/ || true
-    mzcompose --mz-quiet cp materialized:/usr/local/bin/clusterd coverage/ || true
-    mzcompose --mz-quiet cp testdrive:/usr/local/bin/testdrive coverage/ || true
-    mzcompose --mz-quiet cp balancerd:/usr/local/bin/balancerd coverage/ || true
 fi
 
 if is_truthy "${CI_HEAP_PROFILES:-}"; then
