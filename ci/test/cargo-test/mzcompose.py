@@ -258,6 +258,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                             )
                         except subprocess.CalledProcessError as e:
                             print(f"Failed to get clusterd image: {e}")
+                            target_dir = os.getenv("CARGO_TARGET_DIR", "target")
+                            clusterd_target_dir = target_dir + "/ci-clusterd"
                             spawn.runv(
                                 [
                                     "cargo",
@@ -267,11 +269,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                                     "clusterd",
                                     "--profile=ci",
                                 ],
-                                env={**env, "CARGO_TARGET_DIR": "target/ci-clusterd"},
+                                env={**env, "CARGO_TARGET_DIR": clusterd_target_dir},
                             )
                             shutil.copy(
-                                "target/ci-clusterd/ci/clusterd",
-                                os.getenv("CARGO_TARGET_DIR", "target") + "/ci/",
+                                clusterd_target_dir + "/ci/clusterd",
+                                target_dir + "/ci/",
                             )
 
                     clusterd_thread = PropagatingThread(target=worker)
