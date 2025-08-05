@@ -82,7 +82,7 @@ mkpipeline creates a Buildkite pipeline based on a template file and uploads it
 so it is executed.""",
     )
 
-    parser.add_argument("--coverage", action="store_true")
+    parser.add_argument("--coverage", action="store_true", default=True)
     parser.add_argument(
         "--sanitizer",
         default=Sanitizer[os.getenv("CI_SANITIZER", "none")],
@@ -211,7 +211,7 @@ so it is executed.""",
         args.bazel_remote_cache,
         bazel_lto,
     )
-    remove_dependencies_on_prs(pipeline, args.pipeline, hash_check)
+    # remove_dependencies_on_prs(pipeline, args.pipeline, hash_check)
     remove_mz_specific_keys(pipeline)
 
     print("--- Uploading new pipeline:")
@@ -362,7 +362,6 @@ def increase_agents_timeouts(
                     visit(inner_step)
 
     if coverage:
-        pipeline["env"]["CI_BUILDER_SCCACHE"] = 1
         pipeline["env"]["CI_COVERAGE_ENABLED"] = 1
 
         for step in steps(pipeline):
@@ -374,8 +373,10 @@ def increase_agents_timeouts(
                 step["skip"] = True
             if step.get("id") == "build-x86_64":
                 step["name"] = "Build x86_64 with coverage"
-            if step.get("id") == "build-aarch":
+            if step.get("id") == "build-aarch64":
                 step["name"] = "Build aarch64 with coverage"
+            if step.get("id") == "cargo-test":
+                step["agents"]["queue"] = "hetzner-x86-64-dedi-32cpu-128gb"
     else:
         for step in steps(pipeline):
             if step.get("coverage") == "only":

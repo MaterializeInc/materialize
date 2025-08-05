@@ -11,4 +11,6 @@ MZFROM maelstrom-persist-base
 
 COPY persistcli /usr/local/bin/persistcli
 
+USER ubuntu
+
 ENTRYPOINT ["java", "-Djava.awt.headless=true", "-jar", "/usr/local/share/java/maelstrom.jar", "test", "-w", "txn-list-append", "--bin=/usr/local/bin/persistcli"]

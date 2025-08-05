@@ -62,6 +62,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     args = parser.parse_args()
 
+    (c.path / "maelstrom").mkdir(mode=0o777, exist_ok=True)
+
     if args.consensus == "mem":
         consensus_uri = "mem://consensus"
     elif args.consensus == "cockroach":
