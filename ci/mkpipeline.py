@@ -207,6 +207,7 @@ so it is executed.""",
         args.pipeline,
         args.coverage,
         args.sanitizer,
+        bazel,
         args.bazel_remote_cache,
         bazel_lto,
     )
@@ -876,6 +877,7 @@ def add_cargo_test_dependency(
     pipeline_name: str,
     coverage: bool,
     sanitizer: Sanitizer,
+    bazel: bool,
     bazel_remote_cache: str,
     bazel_lto: bool,
 ) -> None:
@@ -894,7 +896,7 @@ def add_cargo_test_dependency(
         profile=mzbuild.Profile.RELEASE if bazel_lto else mzbuild.Profile.OPTIMIZED,
         coverage=coverage,
         sanitizer=sanitizer,
-        bazel=True,
+        bazel=bazel,
         bazel_remote_cache=bazel_remote_cache,
         bazel_lto=bazel_lto,
     )
@@ -941,8 +943,6 @@ def remove_dependencies_on_prs(
 
 
 def move_build_to_bazel_lto(pipeline: Any, pipeline_name: str) -> None:
-    if pipeline_name != "test":
-        return
     if not os.environ["BUILDKITE_TAG"] and not ui.env_is_truthy("CI_RELEASE_LTO_BUILD"):
         return
     pipeline.setdefault("env", {})["CI_BAZEL_BUILD"] = 1

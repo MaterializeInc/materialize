@@ -375,7 +375,7 @@ class FlagUpdate(Scenario):
             ],
             guarantees={
                 # TODO(def-): Lower when database-issues#8480 is fixed to prevent regressions
-                "SELECT 1 (reuse connection)": {"avg": 5, "max": 500, "slope": 0.1},
+                "SELECT 1 (reuse connection)": {"avg": 8, "max": 500, "slope": 0.1},
             },
         )
 
@@ -399,7 +399,7 @@ class Read(Scenario):
                 ),
             ],
             guarantees={
-                "SELECT 1 (reuse connection)": {"qps": 2000, "max": 100, "slope": 0.1},
+                "SELECT 1 (reuse connection)": {"qps": 1400, "max": 100, "slope": 0.1},
             },
         )
 

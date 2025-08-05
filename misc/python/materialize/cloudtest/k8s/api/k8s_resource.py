@@ -95,7 +95,13 @@ class K8sResource:
             repo = mzbuild.Repository(
                 MZ_ROOT,
                 profile=(
-                    mzbuild.Profile.RELEASE if release_mode else mzbuild.Profile.DEV
+                    (
+                        mzbuild.Profile.RELEASE
+                        if bazel_lto
+                        else mzbuild.Profile.OPTIMIZED
+                    )
+                    if release_mode
+                    else mzbuild.Profile.DEV
                 ),
                 coverage=coverage,
                 sanitizer=sanitizer,
