@@ -48,7 +48,7 @@ weight = 30
 identifier = "network-security"
 name = "Network security"
 parent = 'ingest-data'
-weight = 35
+weight = 40
 
 #
 # Transform data

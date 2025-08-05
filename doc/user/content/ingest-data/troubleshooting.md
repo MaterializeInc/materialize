@@ -6,7 +6,7 @@ menu:
     name: "Troubleshooting"
     identifier: ingest-troubleshooting
     parent: ingest-data
-    weight: 40
+    weight: 50
 aliases:
   - /ops/diagnosing-using-sql/
   - /ops/troubleshooting/

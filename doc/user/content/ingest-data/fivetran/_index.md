@@ -3,6 +3,11 @@ title: "Fivetran"
 description: "How to use Fivetran to sync data into Materialize"
 aliases:
   - /integrations/fivetran/
+menu:
+  main:
+    parent: 'ingest-data'
+    identifier: 'fivetran'
+    weight: 35
 ---
 
 {{< private-preview />}}
