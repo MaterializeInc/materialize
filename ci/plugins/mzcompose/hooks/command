@@ -59,17 +59,8 @@ if ! mzcompose --mz-quiet list-workflows | grep "$service" > /dev/null; then
 fi
 
 if [ -n "${CI_COVERAGE_ENABLED:-}" ]; then
-    ci_uncollapsed_heading ":docker: Fetching binaries for coverage"
-    mzcompose create
     mkdir -p coverage/
     chmod 777 coverage/
-    # Not all tests contain all of these containers:
-    mzcompose --mz-quiet cp sqllogictest:/usr/local/bin/sqllogictest coverage/ || true
-    mzcompose --mz-quiet cp sqllogictest:/usr/local/bin/clusterd coverage/ || true
-    mzcompose --mz-quiet cp materialized:/usr/local/bin/environmentd coverage/ || true
-    mzcompose --mz-quiet cp materialized:/usr/local/bin/clusterd coverage/ || true
-    mzcompose --mz-quiet cp testdrive:/usr/local/bin/testdrive coverage/ || true
-    mzcompose --mz-quiet cp balancerd:/usr/local/bin/balancerd coverage/ || true
 fi
 
 if is_truthy "${CI_HEAP_PROFILES:-}"; then
@@ -148,8 +139,24 @@ cleanup() {
       mzcompose cp testdrive:/usr/local/bin/testdrive cores/ || true
   fi
 
+  if [ -n "${CI_COVERAGE_ENABLED:-}" ]; then
+      ci_uncollapsed_heading ":docker: Fetching binaries for coverage"
+      # Not all tests contain all of these containers:
+      mzcompose --mz-quiet cp sqllogictest:/usr/local/bin/sqllogictest coverage/ || true
+      mzcompose --mz-quiet cp sqllogictest:/usr/local/bin/clusterd coverage/ || true
+      mzcompose --mz-quiet cp materialized:/usr/local/bin/materialized coverage/ || true
+      mzcompose --mz-quiet cp mz_1:/usr/local/bin/materialized coverage/ || true
+      mzcompose --mz-quiet cp mz_this:/usr/local/bin/materialized coverage/ || true
+      mzcompose --mz-quiet cp testdrive:/usr/local/bin/testdrive coverage/ || true
+      mzcompose --mz-quiet cp balancerd:/usr/local/bin/balancerd coverage/ || true
+  fi
+
   echo "Downing docker containers"
-  mzcompose down --timeout=0 --volumes || true  # Ignore failures, we still want the rest of the cleanup
+  if [ -n "${CI_COVERAGE_ENABLED:-}" ]; then
+    mzcompose down --volumes || true
+  else
+    mzcompose down --timeout=0 --volumes || true  # Ignore failures, we still want the rest of the cleanup
+  fi
 
   echo "Finding core files"
   find cores -name 'core.*' | while read -r core; do
@@ -201,16 +208,20 @@ cleanup() {
           # Workaround for "invalid instrumentation profile data (file header is corrupt)"
           rm -rf profraws
           mkdir profraws
-          find . -name '*.profraw' | while read -r i; do
-              cp "$i" profraws
-              rm "$i"
-              bin/ci-builder run stable rust-profdata show profraws/"$(basename "$i")" > /dev/null || rm profraws/"$(basename "$i")"
+          # shellcheck disable=SC2044
+          for i in $(find . -name '*.profraw'); do
+              echo "$i"
+              cp "$i" profraws/
+              rm -f "$i" || true
+              if ! bin/ci-builder run stable rust-profdata merge -o /dev/null "profraws/$(basename "$i")"; then
+                  rm -f "profraws/$(basename "$i")"
+              fi
           done
           find profraws -name '*.profraw' -exec bin/ci-builder run stable rust-profdata merge -sparse -o coverage/"$BUILDKITE_JOB_ID".profdata {} +
           find . -name '*.profraw' -delete
 
           ARGS=()
-          for program in clusterd environmentd balancerd sqllogictest testdrive; do
+          for program in materialized balancerd sqllogictest testdrive; do
               if [ -f coverage/"$program" ]; then
                   export_cov coverage/"$program"
                   ARGS+=("-a" coverage/"$BUILDKITE_JOB_ID"-"$program".lcov)
