@@ -224,11 +224,11 @@ impl Plan {
                 ctx.indent.reset();
             }
             FlatMap {
-                input,
-                func,
-                exprs,
-                mfp_after,
                 input_key: _,
+                input,
+                exprs,
+                func,
+                mfp_after,
             } => {
                 ctx.indent.set();
                 if !mfp_after.expressions.is_empty() || !mfp_after.predicates.is_empty() {
@@ -286,10 +286,10 @@ impl Plan {
                 })?;
             }
             Reduce {
+                input_key: _,
                 input,
                 key_val_plan,
                 plan,
-                input_key: _,
                 mfp_after,
             } => {
                 ctx.indent.set();
@@ -489,10 +489,10 @@ impl Plan {
                 })?;
             }
             ArrangeBy {
-                input,
-                forms,
                 input_key: _,
+                input,
                 input_mfp,
+                forms,
             } => {
                 if forms.raw && forms.arranged.is_empty() {
                     soft_assert_or_log!(forms.raw, "raw stream with no arrangements");
@@ -690,11 +690,11 @@ impl Plan {
                 })?;
             }
             FlatMap {
-                input,
-                func,
-                exprs,
-                mfp_after,
                 input_key,
+                input,
+                exprs,
+                func,
+                mfp_after,
             } => {
                 let exprs = mode.seq(exprs, None);
                 let exprs = CompactScalars(exprs);
@@ -704,14 +704,14 @@ impl Plan {
                     ctx.indent, func, exprs, annotations
                 )?;
                 ctx.indented(|ctx| {
-                    if !mfp_after.is_identity() {
-                        writeln!(f, "{}mfp_after", ctx.indent)?;
-                        ctx.indented(|ctx| mode.expr(mfp_after, None).fmt_text(f, ctx))?;
-                    }
                     if let Some(key) = input_key {
                         let key = mode.seq(key, None);
                         let key = CompactScalars(key);
                         writeln!(f, "{}input_key={}", ctx.indent, key)?;
+                    }
+                    if !mfp_after.is_identity() {
+                        writeln!(f, "{}mfp_after", ctx.indent)?;
+                        ctx.indented(|ctx| mode.expr(mfp_after, None).fmt_text(f, ctx))?;
                     }
                     input.fmt_text(f, ctx)
                 })?;
@@ -736,10 +736,10 @@ impl Plan {
                 })?;
             }
             Reduce {
+                input_key,
                 input,
                 key_val_plan,
                 plan,
-                input_key,
                 mfp_after,
             } => {
                 use crate::plan::reduce::ReducePlan;
@@ -765,14 +765,10 @@ impl Plan {
                     }
                 }
                 ctx.indented(|ctx| {
-                    if key_val_plan.val_plan.deref().is_identity() {
-                        writeln!(f, "{}val_plan=id", ctx.indent)?;
-                    } else {
-                        writeln!(f, "{}val_plan", ctx.indent)?;
-                        ctx.indented(|ctx| {
-                            let val_plan = mode.expr(key_val_plan.val_plan.deref(), None);
-                            val_plan.fmt_text(f, ctx)
-                        })?;
+                    if let Some(key) = input_key {
+                        let key = mode.seq(key, None);
+                        let key = CompactScalars(key);
+                        writeln!(f, "{}input_key={}", ctx.indent, key)?;
                     }
                     if key_val_plan.key_plan.deref().is_identity() {
                         writeln!(f, "{}key_plan=id", ctx.indent)?;
@@ -783,10 +779,14 @@ impl Plan {
                             key_plan.fmt_text(f, ctx)
                         })?;
                     }
-                    if let Some(key) = input_key {
-                        let key = mode.seq(key, None);
-                        let key = CompactScalars(key);
-                        writeln!(f, "{}input_key={}", ctx.indent, key)?;
+                    if key_val_plan.val_plan.deref().is_identity() {
+                        writeln!(f, "{}val_plan=id", ctx.indent)?;
+                    } else {
+                        writeln!(f, "{}val_plan", ctx.indent)?;
+                        ctx.indented(|ctx| {
+                            let val_plan = mode.expr(key_val_plan.val_plan.deref(), None);
+                            val_plan.fmt_text(f, ctx)
+                        })?;
                     }
                     if !mfp_after.is_identity() {
                         writeln!(f, "{}mfp_after", ctx.indent)?;
@@ -900,10 +900,10 @@ impl Plan {
                 })?;
             }
             ArrangeBy {
-                input,
-                forms,
                 input_key,
+                input,
                 input_mfp,
+                forms,
             } => {
                 writeln!(f, "{}ArrangeBy{}", ctx.indent, annotations)?;
                 ctx.indented(|ctx| {

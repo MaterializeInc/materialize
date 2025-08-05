@@ -384,10 +384,10 @@ Explained Query:
         skips=[0, 0]
         monotonic
         must_consolidate
-        val_plan
-          project=(#0, #0)
         key_plan
           project=()
+        val_plan
+          project=(#0, #0)
         Get::Arrangement materialize.public.t
           project=(#0)
           key=#0{a}

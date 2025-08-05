@@ -113,9 +113,9 @@ Explained Query:
           raw=true
     cte l1 =
       Reduce::Distinct
+        key_plan=id
         val_plan
           project=()
-        key_plan=id
         Union
           Get::Collection materialize.public.left
             project=(#0)

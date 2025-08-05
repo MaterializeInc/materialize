@@ -48,10 +48,10 @@ Explained Query:
         skips=[0, 0]
         monotonic
         must_consolidate
-        val_plan
-          project=(#1, #0)
         key_plan
           project=()
+        val_plan
+          project=(#1, #0)
         Get::PassArrangements materialize.public.t
           raw=true
   Return
@@ -110,9 +110,9 @@ Explained Query:
         skips=[0, 0]
         monotonic
         must_consolidate
-        val_plan=id
         key_plan
           project=()
+        val_plan=id
         Get::Collection materialize.public.t
           raw=true
   Return
@@ -170,10 +170,10 @@ Explained Query:
         skips=[0, 0]
         monotonic
         must_consolidate
-        val_plan
-          project=(#1, #0)
         key_plan
           project=()
+        val_plan
+          project=(#1, #0)
         FlatMap generate_series(1, #0{a}, 1)
           mfp_after
             project=(#1, #2)
@@ -243,10 +243,10 @@ Explained Query:
         skips=[0, 0]
         monotonic
         must_consolidate
-        val_plan
-          project=(#1, #0)
         key_plan
           project=()
+        val_plan
+          project=(#1, #0)
         Union
           Get::Collection materialize.public.t
             project=(#0, #1)
@@ -321,11 +321,11 @@ Explained Query:
         aggr_funcs=[min, max]
         skips=[0, 0]
         monotonic
-        val_plan
-          project=(#1, #0)
+        input_key=#0, #1
         key_plan
           project=()
-        input_key=#0, #1
+        val_plan
+          project=(#1, #0)
         Threshold::Basic ensure_arrangement={ key=[#0, #1], permutation=id, thinning=() }
           ArrangeBy
             raw=false
@@ -421,9 +421,9 @@ Explained Query:
         skips=[0]
         monotonic
         must_consolidate
-        val_plan=id
         key_plan
           project=()
+        val_plan=id
         Join::Linear
           linear_stage[0]
             closure
@@ -521,9 +521,9 @@ Explained Query:
         skips=[0]
         monotonic
         must_consolidate
-        val_plan=id
         key_plan
           project=()
+        val_plan=id
         Join::Linear
           linear_stage[0]
             lookup={ relation=1, key=[#0{b}] }
@@ -600,16 +600,16 @@ Explained Query:
         aggr_funcs=[min, max]
         skips=[0, 0]
         monotonic
-        val_plan=id
+        input_key=#0
         key_plan
           project=()
-        input_key=#0
+        val_plan=id
         Reduce::Accumulable
           simple_aggrs[0]=(0, 0, sum(#0{a}))
-          val_plan
-            project=(#0)
           key_plan
             project=(#1)
+          val_plan
+            project=(#0)
           Get::PassArrangements materialize.public.t
             raw=true
   Return
@@ -663,16 +663,16 @@ Explained Query:
         aggr_funcs=[min, max]
         skips=[0, 0]
         monotonic
-        val_plan
-          project=(#1, #0)
+        input_key=#0, #1
         key_plan
           project=()
-        input_key=#0, #1
+        val_plan
+          project=(#1, #0)
         Reduce::Distinct
-          val_plan
-            project=()
           key_plan
             project=(#1, #0)
+          val_plan
+            project=()
           Get::PassArrangements materialize.public.t
             raw=true
   Return
@@ -763,11 +763,11 @@ Explained Query:
     cte l0 =
       Reduce::Accumulable
         simple_aggrs[0]=(0, 0, count(*))
+        key_plan
+          project=(#1, #0)
         val_plan
           project=(#2)
           map=(true)
-        key_plan
-          project=(#1, #0)
         mfp_after
           filter=((2 = (#2{c} + 1)))
         Get::Collection materialize.public.t
@@ -777,10 +777,10 @@ Explained Query:
         aggr_funcs=[min, max]
         skips=[0, 0]
         monotonic
-        val_plan
-          project=(#1, #0)
         key_plan
           project=()
+        val_plan
+          project=(#1, #0)
         FlatMap generate_series(1, #1{a}, 1)
           mfp_after
             project=(#0, #2)
@@ -853,10 +853,10 @@ Explained Query:
         aggr_funcs=[min, max]
         skips=[0, 0]
         monotonic
-        val_plan
-          project=(#1, #0)
         key_plan
           project=()
+        val_plan
+          project=(#1, #0)
         TopK::MonotonicTop1 group_by=[#0] order_by=[#1 desc nulls_first] must_consolidate
           Get::PassArrangements materialize.public.t
             raw=true
@@ -917,10 +917,10 @@ Explained Query:
         aggr_funcs=[min, max]
         skips=[0, 0]
         monotonic
-        val_plan
-          project=(#1, #0)
         key_plan
           project=()
+        val_plan
+          project=(#1, #0)
         TopK::MonotonicTopK order_by=[#1 desc nulls_first] limit=2 must_consolidate
           Get::PassArrangements materialize.public.t
             raw=true
@@ -989,10 +989,10 @@ Explained Query:
           skips=[0]
           monotonic
           must_consolidate
-          val_plan
-            project=(#0)
           key_plan
             project=(#1)
+          val_plan
+            project=(#0)
           Get::PassArrangements materialize.public.t
             raw=true
 
@@ -1041,9 +1041,9 @@ Explained Query:
         aggr_funcs=[max]
         skips=[0]
         monotonic
-        val_plan=id
         key_plan
           project=()
+        val_plan=id
         Mfp
           project=(#1)
           TopK::MonotonicTopK order_by=[#0 desc nulls_first] limit=2
@@ -1055,10 +1055,10 @@ Explained Query:
                 skips=[0]
                 monotonic
                 must_consolidate
-                val_plan
-                  project=(#0)
                 key_plan
                   project=(#1)
+                val_plan
+                  project=(#0)
                 Get::PassArrangements materialize.public.t
                   raw=true
   Return
@@ -1111,9 +1111,9 @@ Explained Query:
         aggr_funcs=[max]
         skips=[0]
         monotonic
-        val_plan=id
         key_plan
           project=()
+        val_plan=id
         FlatMap generate_series(1, 20000, 1)
           Constant
             - ()
@@ -1178,9 +1178,9 @@ Explained Query:
         input_key=[#0]
         raw=true
         Reduce::Distinct
+          key_plan=id
           val_plan
             project=()
-          key_plan=id
           Union
             FlatMap generate_series(1, 40000, 1)
               Constant
@@ -1197,9 +1197,9 @@ Explained Query:
           skips=[0]
           monotonic
           must_consolidate
-          val_plan=id
           key_plan
             project=()
+          val_plan=id
           Get::PassArrangements l0
             raw=true
     Return
