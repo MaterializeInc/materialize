@@ -75,3 +75,14 @@ SELECT * FROM my_timestamps;
 '2000-12-31 23:59:59.999999'
 '2001-01-01 00:00:00'
 ```
+
+### Snapshot latency for inactive databases
+
+When a new Source is created, Materialize performs a snapshotting operation to sync
+the data. However, for a new SQL Server source, if none of the replicating tables
+are receiving write queries, snapshotting may take up to an additional 5 minutes
+to complete. The 5 minute interval is due to a hardcoded interval in the SQL Server
+Change Data Capture (CDC) implementation which only notifies CDC consumers every
+5 minutes when no changes are made to replicating tables.
+
+See [Monitoring freshness status](/ingest-data/monitoring-data-ingestion/#monitoring-hydrationdata-freshness-status)
