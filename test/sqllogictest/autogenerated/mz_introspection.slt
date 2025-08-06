@@ -116,6 +116,7 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_introspection' AND o
 3  from_port  uint8
 4  to_index  uint8
 5  to_port  uint8
+6  type  text
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_dataflow_channel_operators' ORDER BY position
@@ -125,6 +126,7 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_introspection' AND o
 3  from_operator_address  list
 4  to_operator_id  uint8
 5  to_operator_address  list
+6  type  text
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_dataflow_global_ids' ORDER BY position

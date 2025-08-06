@@ -389,6 +389,7 @@ impl LogVariant {
                 .with_column("from_port", ScalarType::UInt64.nullable(false))
                 .with_column("to_index", ScalarType::UInt64.nullable(false))
                 .with_column("to_port", ScalarType::UInt64.nullable(false))
+                .with_column("type", ScalarType::String.nullable(false))
                 .with_key(vec![0, 1])
                 .finish(),
 
