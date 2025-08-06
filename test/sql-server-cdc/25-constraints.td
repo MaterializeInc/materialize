@@ -15,13 +15,7 @@ $ sql-server-connect name=sql-server
 server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID=${arg.default-sql-server-user};Password=${arg.default-sql-server-password}
 
 $ sql-server-execute name=sql-server
-DROP DATABASE IF EXISTS test_25;
-CREATE DATABASE test_25;
-USE test_25;
-
-EXEC sys.sp_cdc_enable_db;
-ALTER DATABASE test_25 SET ALLOW_SNAPSHOT_ISOLATION ON;
-
+USE test;
 CREATE TABLE t25_pk (key_col VARCHAR(20) PRIMARY KEY, val_col VARCHAR(1024) NOT NULL, extra VARCHAR(200));
 EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 't25_pk', @role_name = 'SA', @supports_net_changes = 0;
 
@@ -31,9 +25,6 @@ CREATE TABLE t25_pk2 (id VARCHAR(20), seq_no VARCHAR(1024), extra VARCHAR(200), 
 EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 't25_pk2', @role_name = 'SA', @supports_net_changes = 0;
 
 INSERT INTO t25_pk2 VALUES ('i am an ID', '1000', 'uhhmmmm');
-
-CREATE TABLE dummy (data int);
-EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'dummy', @role_name = 'SA', @supports_net_changes = 0;
 
 
 # Exercise Materialize.
@@ -46,7 +37,7 @@ ALTER SYSTEM SET enable_sql_server_source = true;
 > CREATE CONNECTION sql_server_test_25_connection TO SQL SERVER (
     HOST 'sql-server',
     PORT 1433,
-    DATABASE test_25,
+    DATABASE test,
     USER '${arg.default-sql-server-user}',
     PASSWORD = SECRET sql_server_pass
   );
@@ -56,8 +47,8 @@ ALTER SYSTEM SET enable_sql_server_source = true;
   FOR ALL TABLES;
 
 > SELECT name, regexp_replace(create_sql, '[us]\d+|__.*__[A-F0-9]+|DETAILS = ''[a-f0-9]+''', '<VAR>', 'g') as sql FROM mz_sources WHERE name IN ('t25_pk', 't25_pk2');
-t25_pk "CREATE SUBSOURCE \"materialize\".\"public\".\"t25_pk\" (\"key_col\" [<VAR> AS \"pg_catalog\".\"varchar\"](20) NOT NULL, \"val_col\" [<VAR> AS \"pg_catalog\".\"varchar\"](1024) NOT NULL, \"extra\" [<VAR> AS \"pg_catalog\".\"varchar\"](200), CONSTRAINT \"PK<VAR>\" PRIMARY KEY (\"key_col\")) OF SOURCE [<VAR> AS \"materialize\".\"public\".\"t25_pk_sql_server\"] WITH (EXTERNAL REFERENCE = \"test_25\".\"dbo\".\"t25_pk\", <VAR>)"
-t25_pk2 "CREATE SUBSOURCE \"materialize\".\"public\".\"t25_pk2\" (\"id\" [<VAR> AS \"pg_catalog\".\"varchar\"](20) NOT NULL, \"seq_no\" [<VAR> AS \"pg_catalog\".\"varchar\"](1024) NOT NULL, \"extra\" [<VAR> AS \"pg_catalog\".\"varchar\"](200), CONSTRAINT \"PK<VAR>\" PRIMARY KEY (\"id\", \"seq_no\")) OF SOURCE [<VAR> AS \"materialize\".\"public\".\"t25_pk_sql_server\"] WITH (EXTERNAL REFERENCE = \"test_25\".\"dbo\".\"t25_pk2\", <VAR>)"
+t25_pk "CREATE SUBSOURCE \"materialize\".\"public\".\"t25_pk\" (\"key_col\" [<VAR> AS \"pg_catalog\".\"varchar\"](20) NOT NULL, \"val_col\" [<VAR> AS \"pg_catalog\".\"varchar\"](1024) NOT NULL, \"extra\" [<VAR> AS \"pg_catalog\".\"varchar\"](200), CONSTRAINT \"PK<VAR>\" PRIMARY KEY (\"key_col\")) OF SOURCE [<VAR> AS \"materialize\".\"public\".\"t25_pk_sql_server\"] WITH (EXTERNAL REFERENCE = \"test\".\"dbo\".\"t25_pk\", <VAR>)"
+t25_pk2 "CREATE SUBSOURCE \"materialize\".\"public\".\"t25_pk2\" (\"id\" [<VAR> AS \"pg_catalog\".\"varchar\"](20) NOT NULL, \"seq_no\" [<VAR> AS \"pg_catalog\".\"varchar\"](1024) NOT NULL, \"extra\" [<VAR> AS \"pg_catalog\".\"varchar\"](200), CONSTRAINT \"PK<VAR>\" PRIMARY KEY (\"id\", \"seq_no\")) OF SOURCE [<VAR> AS \"materialize\".\"public\".\"t25_pk_sql_server\"] WITH (EXTERNAL REFERENCE = \"test\".\"dbo\".\"t25_pk2\", <VAR>)"
 
 > SHOW COLUMNS FROM t25_pk
 key_col false "character varying" ""
@@ -70,10 +61,6 @@ extra true "character varying" ""
   FROM mz_internal.mz_source_statistics ss JOIN mz_sources s using (id)
   WHERE s.name = 't25_pk_sql_server' AND ss.snapshot_records_staged > 0;
 t25_pk_sql_server true
-
-$ sql-server-execute name=sql-server
-INSERT INTO dummy VALUES (1);
-
 
 > SELECT * FROM t25_pk;
 a "hello world" <null>

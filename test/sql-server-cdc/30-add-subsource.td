@@ -15,13 +15,7 @@ $ sql-server-connect name=sql-server
 server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID=${arg.default-sql-server-user};Password=${arg.default-sql-server-password}
 
 $ sql-server-execute name=sql-server
-DROP DATABASE IF EXISTS test_30;
-CREATE DATABASE test_30;
-USE test_30;
-
-EXEC sys.sp_cdc_enable_db;
-ALTER DATABASE test_30 SET ALLOW_SNAPSHOT_ISOLATION ON;
-
+USE test;
 CREATE TABLE t1_add_subsource (val VARCHAR(1024));
 EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 't1_add_subsource', @role_name = 'SA', @supports_net_changes = 0;
 
@@ -31,9 +25,6 @@ CREATE TABLE t2_add_subsource (val VARCHAR(1024));
 EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 't2_add_subsource', @role_name = 'SA', @supports_net_changes = 0;
 
 INSERT INTO t2_add_subsource VALUES ('100'), ('200'), (NULL), ('300');
-
-CREATE TABLE dummy (data int);
-EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'dummy', @role_name = 'SA', @supports_net_changes = 0;
 
 
 # Exercise Materialize.
@@ -50,7 +41,7 @@ ALTER SYSTEM SET log_filter = 'mz_sql=debug,info';
 > CREATE CONNECTION IF NOT EXISTS sql_server_test_add_subsource_conn TO SQL SERVER (
     HOST 'sql-server',
     PORT 1433,
-    DATABASE test_30,
+    DATABASE test,
     USER '${arg.default-sql-server-user}',
     PASSWORD = SECRET sql_server_pass
   );
@@ -68,9 +59,6 @@ ALTER SYSTEM SET log_filter = 'mz_sql=debug,info';
   WHERE s.name = 'my_source_add_subsources' AND ss.snapshot_records_staged > 0;
 my_source_add_subsources true
 
-$ sql-server-execute name=sql-server
-INSERT INTO dummy VALUES (1);
-
 
 > SELECT * FROM t1_add_subsource;
 a
@@ -86,9 +74,6 @@ c
   FROM mz_internal.mz_source_statistics ss JOIN mz_sources s using (id)
   WHERE s.name = 'my_source_add_subsources' AND ss.snapshot_records_staged > 0;
 my_source_add_subsources true
-
-$ sql-server-execute name=sql-server
-INSERT INTO dummy VALUES (1);
 
 > SELECT * FROM t2_add_subsource;
 100
@@ -138,10 +123,6 @@ INSERT INTO t2_add_subsource VALUES ('500');
   FROM mz_internal.mz_source_statistics ss JOIN mz_sources s using (id)
   WHERE s.name = 'my_source_add_subsources' AND ss.snapshot_records_staged > 0;
 my_source_add_subsources true
-
-$ sql-server-execute name=sql-server
-INSERT INTO dummy VALUES (1);
-
 
 > SELECT * FROM t1_add_subsource;
 a

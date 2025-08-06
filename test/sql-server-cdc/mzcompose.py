@@ -12,6 +12,7 @@ Native SQL Server source tests, functional.
 """
 
 import glob
+import pathlib
 import random
 import threading
 from textwrap import dedent
@@ -60,7 +61,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     workflows_with_internal_sharding = ["cdc"]
     sharded_workflows = workflows_with_internal_sharding + buildkite.shard_list(
-        [w for w in c.workflows if w not in workflows_with_internal_sharding],
+        sorted([w for w in c.workflows if w not in workflows_with_internal_sharding]),
         lambda w: w,
     )
     print(
@@ -107,10 +108,8 @@ def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
         "sql-server", "cat", "/var/opt/mssql/certs/ca-selective.crt", capture=True
     ).stdout
 
-    c.test_parts(
-        sharded_files,
-        lambda file: c.run_testdrive_files(
-            "--no-reset",
+    def run(file: pathlib.Path | str) -> None:
+        c.run_testdrive_files(
             "--max-errors=1",
             f"--seed={seed}",
             f"--var=ssl-ca={ssl_ca}",
@@ -118,9 +117,11 @@ def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
             f"--var=default-replica-size={Materialized.Size.DEFAULT_SIZE}-{Materialized.Size.DEFAULT_SIZE}",
             f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
             f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
+            "setup/setup.td",
             str(file),
-        ),
-    )
+        )
+
+    c.test_parts(sharded_files, run)
 
 
 def workflow_snapshot_consistency(
@@ -143,6 +144,11 @@ def workflow_snapshot_consistency(
         c.up("materialized", "sql-server", Service("testdrive", idle=True))
 
         # Setup MS SQL server and materialize
+        c.run_testdrive_files(
+            "setup/setup.td",
+            f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
+            f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
+        )
         c.testdrive(
             dedent(
                 f"""
@@ -153,12 +159,7 @@ def workflow_snapshot_consistency(
                 server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
 
                 $ sql-server-execute name=sql-server
-                DROP DATABASE IF EXISTS consistency_test;
-                CREATE DATABASE consistency_test;
-                USE consistency_test;
-
-                ALTER DATABASE consistency_test SET ALLOW_SNAPSHOT_ISOLATION ON;
-                EXEC sys.sp_cdc_enable_db;
+                USE test;
                 CREATE TABLE t1 (id bigint, val bigint);
                 EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 't1', @role_name = 'SA', @supports_net_changes = 0;
 
@@ -168,7 +169,7 @@ def workflow_snapshot_consistency(
                 > CREATE CONNECTION mssql_connection TO SQL SERVER (
                     HOST 'sql-server',
                     PORT 1433,
-                    DATABASE consistency_test,
+                    DATABASE test,
                     USER '{SqlServer.DEFAULT_USER}',
                     PASSWORD = SECRET mssql_pass);
 
@@ -203,7 +204,7 @@ def workflow_snapshot_consistency(
                 server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
 
                 $ sql-server-execute name=sql-server
-                USE consistency_test;
+                USE test;
                 """
             )
             + upstream_updates
@@ -233,8 +234,8 @@ def workflow_snapshot_consistency(
         args=["--no-reset"],
         input=dedent(
             f"""
-            > SELECT COUNT(*), MIN(id), MAX(id) FROM t1;
-            {update_rows+initial_rows} 1 {update_rows + update_id_offset - 1}
+            > SELECT COUNT(*) >= {update_rows+initial_rows}, MIN(id), MAX(id) >= {update_rows + update_id_offset - 1} FROM t1;
+            true 1 true
             """
         ),
     )

@@ -15,13 +15,7 @@ $ sql-server-connect name=sql-server
 server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID=${arg.default-sql-server-user};Password=${arg.default-sql-server-password}
 
 $ sql-server-execute name=sql-server
-DROP DATABASE IF EXISTS test_source_tables;
-CREATE DATABASE test_source_tables COLLATE Latin1_General_100_CI_AI_SC_UTF8;
-USE test_source_tables;
-
-EXEC sys.sp_cdc_enable_db;
-ALTER DATABASE test_source_tables SET ALLOW_SNAPSHOT_ISOLATION ON;
-
+USE test;
 CREATE TABLE t1_pk (key_col VARCHAR(20) PRIMARY KEY, val_col VARCHAR(1024));
 EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 't1_pk', @role_name = 'SA', @capture_instance = N't1_pk_cdc1', @supports_net_changes = 0;
 
@@ -37,9 +31,6 @@ EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'text_cols',
 
 INSERT INTO text_cols VALUES (1.444889, '12:00:00', '$100.99', 0x1100AB);
 
-CREATE TABLE dummy (data int);
-EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'dummy', @role_name = 'SA', @supports_net_changes = 0;
-
 
 # Exercise Materialize.
 
@@ -51,7 +42,7 @@ ALTER SYSTEM SET enable_sql_server_source = true;
 > CREATE CONNECTION ms_conn TO SQL SERVER (
     HOST 'sql-server',
     PORT 1433,
-    DATABASE test_source_tables,
+    DATABASE test,
     USER '${arg.default-sql-server-user}',
     PASSWORD = SECRET sql_server_pass
   );
@@ -79,9 +70,6 @@ contains:not found in source
   WHERE s.name = 'ms_src' AND ss.snapshot_records_staged > 0;
 ms_src true
 
-$ sql-server-execute name=sql-server
-INSERT INTO dummy VALUES (1);
-
 > SELECT * FROM t1;
 a "hello world"
 b "foobar"
@@ -97,11 +85,6 @@ c "anotha one"
   WHERE s.name = 'ms_src' AND ss.snapshot_records_staged > 0;
 ms_src true
 
-$ sql-server-execute name=sql-server
-INSERT INTO dummy VALUES (1);
-
-$ sql-server-execute name=sql-server
-INSERT INTO dummy VALUES (1);
 > SELECT * FROM t2;
 a "hello world"
 b "foobar"
@@ -137,10 +120,6 @@ c "anotha one"
   WHERE s.name = 'ms_src' AND ss.snapshot_records_staged > 0;
 ms_src true
 
-$ sql-server-execute name=sql-server
-INSERT INTO dummy VALUES (1);
-
-
 > SELECT * FROM t1;
 b "beer"
 c "anotha one"
@@ -158,9 +137,6 @@ c "anotha one"
   FROM mz_internal.mz_source_statistics ss JOIN mz_sources s using (id)
   WHERE s.name = 'ms_src' AND ss.snapshot_records_staged > 0;
 ms_src true
-
-$ sql-server-execute name=sql-server
-INSERT INTO dummy VALUES (1);
 
 > SHOW COLUMNS FROM text_cols;
 c1 true text ""
@@ -190,9 +166,6 @@ INSERT INTO text_cols VALUES (2.000001, '01:59:32.99901', '$0.89', 0x1122AABBCC0
   FROM mz_internal.mz_source_statistics ss JOIN mz_sources s using (id)
   WHERE s.name = 'ms_src' AND ss.snapshot_records_staged > 0;
 ms_src true
-
-$ sql-server-execute name=sql-server
-INSERT INTO dummy VALUES (1);
 
 > SHOW COLUMNS FROM exclude_cols;
 val_col true "character varying" ""
@@ -224,9 +197,6 @@ INSERT INTO t1_pk(key_col, val_col) VALUES ('d', 'dogs'), ('e', 'elephant');
   WHERE s.name = 'ms_src' AND ss.snapshot_records_staged > 0;
 ms_src true
 
-$ sql-server-execute name=sql-server
-INSERT INTO dummy VALUES (1);
-
 > SELECT * FROM t1;
 b "beer"
 c "anotha one"
@@ -251,9 +221,6 @@ INSERT INTO t1_pk VALUES ('x', 'xeon'), ('y', 'yellow'), ('z', 'zion');
   WHERE s.name = 'ms_src' AND ss.snapshot_records_staged > 0;
 ms_src true
 ms_src true
-
-$ sql-server-execute name=sql-server
-INSERT INTO dummy VALUES (1);
 
 > SELECT * FROM t1;
 b "beer"
