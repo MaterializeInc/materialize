@@ -244,10 +244,12 @@ INSERT INTO t1_pk VALUES ('x', 'xeon'), ('y', 'yellow'), ('z', 'zion');
 > ALTER CLUSTER src_tables SET (REPLICATION FACTOR = 1);
 
 # Wait until snapshot has emitted stats and then insert a new row
-# to force LSN in MS SQL to progress.
+# to force LSN in MS SQL to progress inclusive of the table just
+# created for the existing SOURCE.
 > SELECT s.name, ss.snapshot_records_known = ss.snapshot_records_staged
   FROM mz_internal.mz_source_statistics ss JOIN mz_sources s using (id)
   WHERE s.name = 'ms_src' AND ss.snapshot_records_staged > 0;
+ms_src true
 ms_src true
 
 $ sql-server-execute name=sql-server
