@@ -120,6 +120,10 @@ so it is executed.""",
     bazel_lto = (
         pipeline.get("env", {}).get("CI_BAZEL_LTO", 0) == 1
         or bool(os.environ["BUILDKITE_TAG"])
+        or (
+            os.environ["BUILDKITE_BRANCH"] == "main"
+            and args.pipeline in ("nightly", "release-qualification")
+        )
         or ui.env_is_truthy("CI_RELEASE_LTO_BUILD")
     )
 
