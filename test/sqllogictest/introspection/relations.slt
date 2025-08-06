@@ -31,6 +31,10 @@ SELECT * FROM test;
 ----
 a  b
 
+# We need to wait for the introspection interval to pass before we can query the introspection relations.
+statement ok
+SELECT mz_unsafe.mz_sleep(2)
+
 query ITITT rowsort
 SELECT mdod_from.id AS from_id, mdod_from.name AS from_name,
        mdod_to.id AS to_id, mdod_to.name AS to_name,
