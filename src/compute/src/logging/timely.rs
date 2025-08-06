@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::Duration;
 
-use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
+use columnar::Columnar;
 use differential_dataflow::containers::{Columnation, CopyRegion};
 use mz_compute_client::logging::LoggingConfig;
 use mz_ore::cast::CastFrom;
@@ -26,8 +26,7 @@ use mz_timely_util::replay::MzReplay;
 use timely::Container;
 use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
-use timely::dataflow::channels::pushers::buffer::Session;
-use timely::dataflow::channels::pushers::{Counter, Tee};
+use timely::dataflow::operators::Operator;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::logging::{
     ChannelsEvent, MessagesEvent, OperatesEvent, ParkEvent, ScheduleEvent, ShutdownEvent,
@@ -37,7 +36,10 @@ use tracing::error;
 
 use crate::extensions::arrange::MzArrangeCore;
 use crate::logging::compute::{ComputeEvent, DataflowShutdown};
-use crate::logging::{EventQueue, LogVariant, TimelyLog};
+use crate::logging::{
+    EventQueue, LogVariant, OutputSessionColumnar, OutputSessionVec, PermutedRowPacker, TimelyLog,
+    Update,
+};
 use crate::logging::{LogCollection, SharedLoggingState, consolidate_and_pack};
 use crate::row_spine::RowRowBuilder;
 use crate::typedefs::{KeyBatcher, KeyValBatcher, RowRowSpine};
@@ -162,23 +164,30 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
             },
         );
 
-        let channels = consolidate_and_pack::<_, KeyValBatcher<_, _, _, _>, ColumnBuilder<_>, _, _>(
-            &channels,
-            TimelyLog::Channels,
-            move |((datum, ()), time, diff), packer, session| {
-                let (source_node, source_port) = datum.source;
-                let (target_node, target_port) = datum.target;
-                let data = packer.pack_slice(&[
-                    Datum::UInt64(u64::cast_from(datum.id)),
-                    Datum::UInt64(u64::cast_from(worker_id)),
-                    Datum::UInt64(u64::cast_from(source_node)),
-                    Datum::UInt64(u64::cast_from(source_port)),
-                    Datum::UInt64(u64::cast_from(target_node)),
-                    Datum::UInt64(u64::cast_from(target_port)),
-                ]);
-                session.give((data, time, diff));
-            },
-        );
+        // TODO: `consolidate_and_pack` requires columnation, which `ChannelDatum` does not
+        // implement. Consider consolidating here once we support columnar.
+        let channels = channels.unary::<ColumnBuilder<_>, _, _, _>(Pipeline, "ToRow Channels", |_cap, _info| {
+            let mut packer = PermutedRowPacker::new(TimelyLog::Channels);
+            move |input, output| {
+                while let Some((time, data)) = input.next() {
+                    let mut session = output.session_with_builder(&time);
+                    for ((datum, ()), time, diff) in data.iter() {
+                        let (source_node, source_port) = datum.source;
+                        let (target_node, target_port) = datum.target;
+                        let data = packer.pack_slice(&[
+                            Datum::UInt64(u64::cast_from(datum.id)),
+                            Datum::UInt64(u64::cast_from(worker_id)),
+                            Datum::UInt64(u64::cast_from(source_node)),
+                            Datum::UInt64(u64::cast_from(source_port)),
+                            Datum::UInt64(u64::cast_from(target_node)),
+                            Datum::UInt64(u64::cast_from(target_port)),
+                            Datum::String(datum.typ),
+                        ]);
+                        session.give((data, time, diff));
+                    }
+                }
+            }
+        });
 
         let addresses = consolidate_and_pack::<_, KeyValBatcher<_, _, _, _>, ColumnBuilder<_>, _, _>(
             &addresses,
@@ -365,38 +374,30 @@ struct MessageCount {
     records: Diff,
 }
 
-type Pusher<D> =
-    Counter<Timestamp, Vec<(D, Timestamp, Diff)>, Tee<Timestamp, Vec<(D, Timestamp, Diff)>>>;
-type OutputSession<'a, D> =
-    Session<'a, Timestamp, ConsolidatingContainerBuilder<Vec<(D, Timestamp, Diff)>>, Pusher<D>>;
-
 /// Bundled output buffers used by the demux operator.
 //
 // We use tuples rather than dedicated `*Datum` structs for `operates` and `addresses` to avoid
 // having to manually implement `Columnation`. If `Columnation` could be `#[derive]`ed, that
 // wouldn't be an issue.
 struct DemuxOutput<'a> {
-    operates: OutputSession<'a, (usize, String)>,
-    channels: OutputSession<'a, (ChannelDatum, ())>,
-    addresses: OutputSession<'a, (usize, Vec<usize>)>,
-    parks: OutputSession<'a, (ParkDatum, ())>,
-    batches_sent: OutputSession<'a, (MessageDatum, ())>,
-    batches_received: OutputSession<'a, (MessageDatum, ())>,
-    messages_sent: OutputSession<'a, (MessageDatum, ())>,
-    messages_received: OutputSession<'a, (MessageDatum, ())>,
-    schedules_duration: OutputSession<'a, (usize, ())>,
-    schedules_histogram: OutputSession<'a, (ScheduleHistogramDatum, ())>,
+    operates: OutputSessionVec<'a, Update<(usize, String)>>,
+    channels: OutputSessionColumnar<'a, Update<(ChannelDatum, ())>>,
+    addresses: OutputSessionVec<'a, Update<(usize, Vec<usize>)>>,
+    parks: OutputSessionVec<'a, Update<(ParkDatum, ())>>,
+    batches_sent: OutputSessionVec<'a, Update<(MessageDatum, ())>>,
+    batches_received: OutputSessionVec<'a, Update<(MessageDatum, ())>>,
+    messages_sent: OutputSessionVec<'a, Update<(MessageDatum, ())>>,
+    messages_received: OutputSessionVec<'a, Update<(MessageDatum, ())>>,
+    schedules_duration: OutputSessionVec<'a, Update<(usize, ())>>,
+    schedules_histogram: OutputSessionVec<'a, Update<(ScheduleHistogramDatum, ())>>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Columnar)]
 struct ChannelDatum {
     id: usize,
     source: (usize, usize),
     target: (usize, usize),
-}
-
-impl Columnation for ChannelDatum {
-    type InnerRegion = CopyRegion<Self>;
+    typ: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -483,10 +484,11 @@ impl DemuxHandler<'_, '_> {
 
     fn handle_channels(&mut self, event: ChannelsEvent) {
         let ts = self.ts();
-        let datum = ChannelDatum {
+        let datum = ChannelDatumReference {
             id: event.id,
             source: event.source,
             target: event.target,
+            typ: &event.typ,
         };
         self.output.channels.give(((datum, ()), ts, Diff::ONE));
 
@@ -561,10 +563,11 @@ impl DemuxHandler<'_, '_> {
         let ts = self.ts();
         for channel in channels {
             // Retract channel description.
-            let datum = ChannelDatum {
+            let datum = ChannelDatumReference {
                 id: channel.id,
                 source: channel.source,
                 target: channel.target,
+                typ: &channel.typ,
             };
             self.output
                 .channels

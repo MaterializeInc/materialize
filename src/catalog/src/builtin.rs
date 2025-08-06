@@ -6040,6 +6040,7 @@ pub static MZ_DATAFLOW_CHANNELS: LazyLock<BuiltinView> = LazyLock::new(|| Builti
         .with_column("from_port", ScalarType::UInt64.nullable(false))
         .with_column("to_index", ScalarType::UInt64.nullable(false))
         .with_column("to_port", ScalarType::UInt64.nullable(false))
+        .with_column("type", ScalarType::String.nullable(false))
         .finish(),
     column_comments: BTreeMap::from_iter([
         ("id", "The ID of the channel."),
@@ -6053,9 +6054,10 @@ pub static MZ_DATAFLOW_CHANNELS: LazyLock<BuiltinView> = LazyLock::new(|| Builti
             "The scope-local index of the target operator. Corresponds to `mz_dataflow_addresses.address`.",
         ),
         ("to_port", "The target operator's input port."),
+        ("type", "The container type of the channel."),
     ]),
     sql: "
-SELECT id, from_index, from_port, to_index, to_port
+SELECT id, from_index, from_port, to_index, to_port, type
 FROM mz_introspection.mz_dataflow_channels_per_worker
 WHERE worker_id = 0",
     access: vec![PUBLIC_SELECT],
@@ -6335,20 +6337,22 @@ pub static MZ_DATAFLOW_CHANNEL_OPERATORS_PER_WORKER: LazyLock<BuiltinView> =
                 }
                 .nullable(true),
             )
+            .with_column("type", ScalarType::String.nullable(false))
             .finish(),
         column_comments: BTreeMap::new(),
         sql: "
 WITH
-channel_addresses(id, worker_id, address, from_index, to_index) AS (
-     SELECT id, worker_id, address, from_index, to_index
+channel_addresses(id, worker_id, address, from_index, to_index, type) AS (
+     SELECT id, worker_id, address, from_index, to_index, type
      FROM mz_introspection.mz_dataflow_channels_per_worker mdc
      INNER JOIN mz_introspection.mz_dataflow_addresses_per_worker mda
      USING (id, worker_id)
 ),
-channel_operator_addresses(id, worker_id, from_address, to_address) AS (
+channel_operator_addresses(id, worker_id, from_address, to_address, type) AS (
      SELECT id, worker_id,
             address || from_index AS from_address,
-            address || to_index AS to_address
+            address || to_index AS to_address,
+            type
      FROM channel_addresses
 ),
 operator_addresses(id, worker_id, address) AS (
@@ -6362,7 +6366,8 @@ SELECT coa.id,
        from_ops.id AS from_operator_id,
        coa.from_address AS from_operator_address,
        to_ops.id AS to_operator_id,
-       coa.to_address AS to_operator_address
+       coa.to_address AS to_operator_address,
+       coa.type
 FROM channel_operator_addresses coa
      LEFT OUTER JOIN operator_addresses from_ops
           ON coa.from_address = from_ops.address AND
@@ -6398,6 +6403,7 @@ pub static MZ_DATAFLOW_CHANNEL_OPERATORS: LazyLock<BuiltinView> = LazyLock::new(
             }
             .nullable(true),
         )
+        .with_column("type", ScalarType::String.nullable(false))
         .finish(),
     column_comments: BTreeMap::from_iter([
         (
@@ -6420,9 +6426,10 @@ pub static MZ_DATAFLOW_CHANNEL_OPERATORS: LazyLock<BuiltinView> = LazyLock::new(
             "to_operator_address",
             "The address of the target of the channel. Corresponds to `mz_dataflow_addresses.address`.",
         ),
+        ("type", "The container type of the channel."),
     ]),
     sql: "
-SELECT id, from_operator_id, from_operator_address, to_operator_id, to_operator_address
+SELECT id, from_operator_id, from_operator_address, to_operator_id, to_operator_address, type
 FROM mz_introspection.mz_dataflow_channel_operators_per_worker
 WHERE worker_id = 0",
     access: vec![PUBLIC_SELECT],

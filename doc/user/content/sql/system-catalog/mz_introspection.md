@@ -204,6 +204,7 @@ A communication channel connects one of the outputs of a source operator to one 
 | `from_port`      | [`uint8`] | The source operator's output port.                                                                                      |
 | `to_index`       | [`uint8`] | The scope-local index of the target operator. Corresponds to [`mz_dataflow_addresses.address`](#mz_dataflow_addresses). |
 | `to_port`        | [`uint8`] | The target operator's input port.                                                                                       |
+| `type`           | [`text`]  | The container type of the channel.                                                                                      |
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_dataflow_channels_per_worker -->
 
@@ -219,6 +220,7 @@ The `mz_dataflow_channel_operators` view associates [dataflow] channels with the
 | `from_operator_address` | [`uint8 list`] | The address of the source of the channel. Corresponds to [`mz_dataflow_addresses.address`](#mz_dataflow_addresses). |
 | `to_operator_id`        | [`uint8`]      | The ID of the target of the channel. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).           |
 | `to_operator_address`   | [`uint8 list`] | The address of the target of the channel. Corresponds to [`mz_dataflow_addresses.address`](#mz_dataflow_addresses). |
+| `type`                  | [`text`]  | The container type of the channel.                                                                                       |
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_dataflow_channel_operators_per_worker -->
 
