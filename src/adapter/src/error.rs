@@ -428,6 +428,10 @@ impl AdapterError {
             AdapterError::AlterClusterTimeout => Some(
                 "Consider increasing the timeout duration in the alter cluster statement.".into(),
             ),
+            AdapterError::DDLTransactionRace => Some(
+                "Currently, DDL transactions fail when any other DDL happens concurrently, \
+                 even on unrelated schemas/clusters.".into()
+            ),
             _ => None,
         }
     }
@@ -752,9 +756,9 @@ impl fmt::Display for AdapterError {
             AdapterError::DDLOnlyTransaction => f.write_str(
                 "transactions which modify objects are restricted to just modifying objects",
             ),
-            AdapterError::DDLTransactionRace => {
-                f.write_str("object state changed while transaction was in progress")
-            }
+            AdapterError::DDLTransactionRace => f.write_str(
+                "another session modified the catalog while this DDL transaction was open",
+            ),
             AdapterError::TransactionDryRun { .. } => f.write_str("transaction dry run"),
             AdapterError::Storage(e) => e.fmt(f),
             AdapterError::Compute(e) => e.fmt(f),
