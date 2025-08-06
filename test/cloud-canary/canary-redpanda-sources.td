@@ -7,6 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+# TODO(def-) Reenable when Redpanda Cloud is working with Testdrive again
+$ skip-if
+SELECT true
+
 $ kafka-create-topic topic=bytes replication-factor=3
 
 $ kafka-ingest format=bytes key-terminator=: key-format=bytes topic=bytes repeat=100

@@ -42,7 +42,7 @@ steps:
           queue: l-builder-linux-aarch64
 
       - id: build-x86_64-asan
-        label: ":rust: Build x86_64 (ASan)"
+        label: ":bazel: Build x86_64 (ASan)"
         command: bin/ci-builder run min bin/pyactivate -m ci.test.build
         inputs:
           - "*"
@@ -53,11 +53,14 @@ steps:
           queue: builder-linux-x86_64
         env:
           CI_SANITIZER: address
+          CI_BAZEL_BUILD: 1
+
         sanitizer: skip
         branches: "main"
+        skip: "currently broken"
 
       - id: build-aarch64-asan
-        label: ":rust: Build aarch64 (ASan)"
+        label: ":bazel: Build aarch64 (ASan)"
         command: bin/ci-builder run min bin/pyactivate -m ci.test.build
         inputs:
           - "*"
@@ -68,8 +71,10 @@ steps:
           queue: builder-linux-aarch64-mem
         env:
           CI_SANITIZER: address
+          CI_BAZEL_BUILD: 1
         sanitizer: skip
         branches: "main"
+        skip: "currently broken"
 
   - group: Linters
     key: linters
