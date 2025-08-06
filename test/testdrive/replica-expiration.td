@@ -23,14 +23,12 @@ ALTER SYSTEM SET compute_replica_expiration_offset = '30d'
   FROM events
   WHERE mz_now() <= event_ts + INTERVAL '20 days';
 > CREATE DEFAULT INDEX ON events_view;
-> INSERT INTO events SELECT x::text, now() FROM generate_series(1, 1000) AS x;
-# TODO: The following query should return 2000, but it returns 1000 because the
-# arrangement sizes does not account for the temporal bucket. It is part of
-# a different operator, and we only reveal counts associated with arrangement
-# operators.
-> SELECT records FROM mz_introspection.mz_dataflow_arrangement_sizes
+> INSERT INTO events SELECT x::text, now() FROM generate_series(1, 1000000) AS x;
+# We expect to have at least 1 million records in the arrangement, and 1 million future retractions.
+# Some of the future retractions may still be buffered and don't show up in the arrangement size.
+> SELECT records BETWEEN 1000001 AND 2000000 FROM mz_introspection.mz_dataflow_arrangement_sizes
   WHERE name LIKE '%events_view_primary_idx';
-1000
+true
 > DROP TABLE events CASCADE;
 > DROP CLUSTER test;
 
@@ -48,10 +46,10 @@ ALTER SYSTEM SET compute_replica_expiration_offset = '20d'
   FROM events
   WHERE mz_now() <= event_ts + INTERVAL '30 days';
 > CREATE DEFAULT INDEX ON events_view;
-> INSERT INTO events SELECT x::text, now() FROM generate_series(1, 1000) AS x;
+> INSERT INTO events SELECT x::text, now() FROM generate_series(1, 1000000) AS x;
 > SELECT records FROM mz_introspection.mz_dataflow_arrangement_sizes
   WHERE name LIKE '%events_view_primary_idx';
-1000
+1000000
 > DROP TABLE events CASCADE;
 > DROP CLUSTER test;
 
@@ -215,13 +213,10 @@ ALTER SYSTEM SET compute_replica_expiration_offset = 0;
   FROM events
   WHERE mz_now() <= event_ts + INTERVAL '30 days';
 > CREATE DEFAULT INDEX ON events_view;
-> INSERT INTO events SELECT x::text, now() FROM generate_series(1, 1000) AS x;
-# TODO: The following query should return 2000, but it returns 1000 because the
-# arrangement sizes does not account for the temporal bucket. It is part of
-# a different operator.
-> SELECT records FROM mz_introspection.mz_dataflow_arrangement_sizes
+> INSERT INTO events SELECT x::text, now() FROM generate_series(1, 1000000) AS x;
+> SELECT records BETWEEN 1000001 AND 2000000 FROM mz_introspection.mz_dataflow_arrangement_sizes
   WHERE name LIKE '%events_view_primary_idx';
-1000
+true
 > DROP TABLE events CASCADE;
 > DROP CLUSTER test;
 
