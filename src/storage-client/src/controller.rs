@@ -405,6 +405,7 @@ pub trait StorageController: Debug {
         instance_id: StorageInstanceId,
         replica_id: ReplicaId,
         location: ClusterReplicaLocation,
+        enable_ctp: bool,
     );
 
     /// Disconnects the storage instance from the specified replica.

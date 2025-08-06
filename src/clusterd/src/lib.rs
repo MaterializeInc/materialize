@@ -10,6 +10,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::LazyLock;
+use std::time::Duration;
 
 use anyhow::Context;
 use axum::http::StatusCode;
@@ -35,6 +36,7 @@ use mz_persist_client::rpc::{GrpcPubSubClient, PersistPubSubClient, PersistPubSu
 use mz_service::emit_boot_diagnostics;
 use mz_service::grpc::{GrpcServer, GrpcServerMetrics, MAX_GRPC_MESSAGE_SIZE};
 use mz_service::secrets::SecretsReaderCliArgs;
+use mz_service::transport;
 use mz_storage::storage_state::StorageInstanceContext;
 use mz_storage_client::client::proto_storage_server::ProtoStorageServer;
 use mz_storage_types::connections::ConnectionContext;
@@ -86,6 +88,9 @@ struct Args {
     /// GRPC requests.
     #[clap(long, env = "GRPC_HOST", value_name = "NAME")]
     grpc_host: Option<String>,
+    /// Whether to use CTP for controller connections.
+    #[clap(long, env = "USE_CTP")]
+    use_ctp: bool,
 
     // === Timely cluster options. ===
     /// Configuration for the storage Timely cluster.
@@ -369,17 +374,26 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         "listening for storage controller connections on {}",
         args.storage_controller_listen_addr
     );
-    mz_ore::task::spawn(
-        || "storage_server",
-        GrpcServer::serve(
+    let storage_serve = if args.use_ctp {
+        future::Either::Left(transport::serve(
+            args.storage_controller_listen_addr,
+            BUILD_INFO.semver_version(),
+            grpc_host.clone(),
+            Duration::MAX,
+            storage_client_builder,
+            grpc_server_metrics.for_server("storage"),
+        ))
+    } else {
+        future::Either::Right(GrpcServer::serve(
             &grpc_server_metrics,
             args.storage_controller_listen_addr,
             BUILD_INFO.semver_version(),
             grpc_host.clone(),
             storage_client_builder,
             |svc| ProtoStorageServer::new(svc).max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE),
-        ),
-    );
+        ))
+    };
+    mz_ore::task::spawn(|| "storage_server", storage_serve);
 
     // Start compute server.
     let compute_client_builder = mz_compute::server::serve(
@@ -399,17 +413,26 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         "listening for compute controller connections on {}",
         args.compute_controller_listen_addr
     );
-    mz_ore::task::spawn(
-        || "compute_server",
-        GrpcServer::serve(
+    let compute_serve = if args.use_ctp {
+        future::Either::Left(transport::serve(
+            args.compute_controller_listen_addr,
+            BUILD_INFO.semver_version(),
+            grpc_host.clone(),
+            Duration::MAX,
+            compute_client_builder,
+            grpc_server_metrics.for_server("compute"),
+        ))
+    } else {
+        future::Either::Right(GrpcServer::serve(
             &grpc_server_metrics,
             args.compute_controller_listen_addr,
             BUILD_INFO.semver_version(),
             grpc_host,
             compute_client_builder,
             |svc| ProtoComputeServer::new(svc).max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE),
-        ),
-    );
+        ))
+    };
+    mz_ore::task::spawn(|| "compute_server", compute_serve);
 
     // TODO: unify storage and compute servers to use one timely cluster.
 

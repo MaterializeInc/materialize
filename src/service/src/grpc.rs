@@ -45,6 +45,7 @@ use tracing::{debug, error, info, warn};
 use crate::client::{GenericClient, Partitionable, Partitioned};
 use crate::codec::{StatCodec, StatsCollector};
 use crate::params::GrpcClientParameters;
+use crate::transport;
 
 include!(concat!(env!("OUT_DIR"), "/mz_service.params.rs"));
 
@@ -444,7 +445,7 @@ impl GrpcServerMetrics {
         }
     }
 
-    fn for_server(&self, name: &'static str) -> PerGrpcServerMetrics {
+    pub fn for_server(&self, name: &'static str) -> PerGrpcServerMetrics {
         PerGrpcServerMetrics {
             last_command_received: self
                 .last_command_received
@@ -453,9 +454,22 @@ impl GrpcServerMetrics {
     }
 }
 
-#[derive(Debug)]
-struct PerGrpcServerMetrics {
+#[derive(Clone, Debug)]
+pub struct PerGrpcServerMetrics {
     last_command_received: DeleteOnDropGauge<AtomicU64, Vec<&'static str>>,
+}
+
+impl<C, R> transport::Metrics<C, R> for PerGrpcServerMetrics {
+    fn bytes_sent(&mut self, _len: usize) {}
+    fn bytes_received(&mut self, _len: usize) {}
+    fn message_sent(&mut self, _msg: &C) {}
+
+    fn message_received(&mut self, _msg: &R) {
+        match UNIX_EPOCH.elapsed() {
+            Ok(ts) => self.last_command_received.set(ts.as_secs()),
+            Err(e) => error!("failed to get system time: {e}"),
+        }
+    }
 }
 
 const VERSION_HEADER_KEY: &str = "x-mz-version";
