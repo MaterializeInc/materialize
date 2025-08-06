@@ -212,12 +212,7 @@ impl SourceRender for SqlServerSource {
             data_collections,
             uppers,
             health,
-<<<<<<< HEAD
-            stats,
             Some(progress_probes),
-=======
-            None,
->>>>>>> f55ba60c7e (Adds snapshot statistics for exports)
             vec![repl_token, progress_token],
         )
     }

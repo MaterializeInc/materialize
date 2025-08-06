@@ -40,7 +40,7 @@ use timely::dataflow::{Scope, Stream as TimelyStream};
 use timely::progress::Antichain;
 
 use crate::source::sql_server::{ReplicationError, SourceOutputInfo, TransientError};
-use crate::source::types::{Probe, ProgressStatisticsUpdate};
+use crate::source::types::Probe;
 use crate::source::{RawSourceCreationConfig, probe};
 
 /// Used as a partition ID to determine the worker that is responsible for
@@ -166,9 +166,5 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
 
     let error_stream = transient_errors.map(ReplicationError::Transient);
 
-    (
-        error_stream,
-        probe_stream,
-        button.press_on_drop(),
-    )
+    (error_stream, probe_stream, button.press_on_drop())
 }
