@@ -164,7 +164,8 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
             },
         );
 
-        // TODO: Consider adding eager consolidation once we deprecate columnation
+        // TODO: `consolidate_and_pack` requires columnation, which `ChannelDatum` does not
+        // implement. Consider consolidating here once we support columnar.
         let channels = channels.unary::<ColumnBuilder<_>, _, _, _>(Pipeline, "ToRow Channels", |_cap, _info| {
             let mut packer = PermutedRowPacker::new(TimelyLog::Channels);
             move |input, output| {

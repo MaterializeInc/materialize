@@ -370,6 +370,7 @@ mz_dataflow_channels_per_worker  from_port
 mz_dataflow_channels_per_worker  id
 mz_dataflow_channels_per_worker  to_index
 mz_dataflow_channels_per_worker  to_port
+mz_dataflow_channels_per_worker  type
 mz_dataflow_channels_per_worker  worker_id
 mz_dataflow_operator_reachability_raw  id
 mz_dataflow_operator_reachability_raw  port
