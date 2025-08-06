@@ -107,9 +107,6 @@ pub struct StateVersions {
 pub struct RecentLiveDiffs(pub Vec<VersionedData>);
 
 #[derive(Debug, Clone)]
-pub struct AllLiveDiffs(pub Vec<VersionedData>);
-
-#[derive(Debug, Clone)]
 pub struct EncodedRollup {
     pub(crate) shard_id: ShardId,
     pub(crate) seqno: SeqNo,
@@ -489,16 +486,12 @@ impl StateVersions {
             .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream());
         let mut all_live_diffs = self.fetch_all_live_diffs(&shard_id).await;
         loop {
-            let earliest_live_diff = match all_live_diffs.0.first() {
+            let earliest_live_diff = match all_live_diffs.first() {
                 Some(x) => x,
                 None => return None,
             };
             let state = match self
-                .fetch_rollup_at_seqno(
-                    &shard_id,
-                    all_live_diffs.0.clone(),
-                    earliest_live_diff.seqno,
-                )
+                .fetch_rollup_at_seqno(&shard_id, all_live_diffs.clone(), earliest_live_diff.seqno)
                 .await
             {
                 Some(x) => x,
@@ -520,7 +513,6 @@ impl StateVersions {
                     // TODO: Make this an assert once we're 100% sure the above
                     // is always true.
                     let earliest_after_refetch = all_live_diffs
-                        .0
                         .first()
                         .expect("initialized shard should have at least one diff")
                         .seqno;
@@ -544,7 +536,7 @@ impl StateVersions {
                 cfg: self.cfg.clone(),
                 metrics: Arc::clone(&self.metrics),
                 state,
-                diffs: all_live_diffs.0,
+                diffs: all_live_diffs,
             });
         }
     }
@@ -554,14 +546,14 @@ impl StateVersions {
     /// the caller simply needs to fetch the latest state.
     ///
     /// Returns an empty Vec iff called on an uninitialized shard.
-    pub async fn fetch_all_live_diffs(&self, shard_id: &ShardId) -> AllLiveDiffs {
+    pub async fn fetch_all_live_diffs(&self, shard_id: &ShardId) -> Vec<VersionedData> {
         let path = shard_id.to_string();
         let diffs = retry_external(&self.metrics.retries.external.fetch_state_scan, || async {
             self.consensus.scan(&path, SeqNo::minimum(), SCAN_ALL).await
         })
         .instrument(debug_span!("fetch_state::scan"))
         .await;
-        AllLiveDiffs(diffs)
+        diffs
     }
 
     /// Fetches recent live_diffs for a shard. Intended for when a caller needs to fetch
