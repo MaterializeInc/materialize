@@ -28,6 +28,7 @@ $ kafka-ingest format=avro topic=resolution-maps schema=${map-int} timestamp=1
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE resolution_maps
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-resolution-maps-${testdrive.seed}')
@@ -35,6 +36,7 @@ $ kafka-ingest format=avro topic=resolution-maps schema=${map-int} timestamp=1
 > CREATE TABLE resolution_maps_tbl FROM SOURCE resolution_maps (REFERENCE "testdrive-resolution-maps-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
+> COMMIT
 
 $ kafka-ingest format=avro topic=resolution-maps schema=${map-double} timestamp=2
 {"f1": { "key1": 234.345 } }

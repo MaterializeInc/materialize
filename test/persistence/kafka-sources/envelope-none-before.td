@@ -31,6 +31,7 @@ $ kafka-ingest format=avro topic=envelope-none key-format=avro key-schema=${sche
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE envelope_none
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-envelope-none-${testdrive.seed}')
 
@@ -38,6 +39,7 @@ $ kafka-ingest format=avro topic=envelope-none key-format=avro key-schema=${sche
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   INCLUDE PARTITION AS kafka_partition, OFFSET AS mz_offset
   ENVELOPE NONE
+> COMMIT
 
 > SELECT COUNT(*) FROM envelope_none_tbl
 10000

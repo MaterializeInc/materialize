@@ -65,12 +65,14 @@ contains:server error 401: Unauthorized
     SSL CERTIFICATE AUTHORITY = '${ca-crt}'
   )
 
+> BEGIN
 > CREATE SOURCE avro_data FROM KAFKA CONNECTION kafka (
     TOPIC 'testdrive-avro-data-${testdrive.seed}'
   )
 
 > CREATE TABLE avro_data_tbl FROM SOURCE avro_data (REFERENCE "testdrive-avro-data-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION schema_registry
+> COMMIT
 
 > SELECT * FROM avro_data_tbl
 a
@@ -87,12 +89,14 @@ a
     SSH TUNNEL testdrive_no_reset_connections.public.ssh
   )
 
+> BEGIN
 > CREATE SOURCE avro_data_ssh FROM KAFKA CONNECTION kafka (
     TOPIC 'testdrive-avro-data-${testdrive.seed}'
   )
 
 > CREATE TABLE avro_data_ssh_tbl FROM SOURCE avro_data_ssh (REFERENCE "testdrive-avro-data-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION schema_registry
+> COMMIT
 
 > SELECT * FROM avro_data_ssh_tbl
 a
@@ -202,12 +206,14 @@ contains:failed to fetch schema subject
 
 > ALTER CONNECTION schema_registry SET (SSL CERTIFICATE AUTHORITY = '${ca-crt}') WITH (VALIDATE = true);
 
+> BEGIN
 > CREATE SOURCE kafka_broken_csr_connector_source_fixed FROM KAFKA CONNECTION kafka (
     TOPIC 'testdrive-avro-data-${testdrive.seed}'
   )
 
 > CREATE TABLE kafka_broken_csr_connector_source_fixed_tbl FROM SOURCE kafka_broken_csr_connector_source_fixed (REFERENCE "testdrive-avro-data-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION schema_registry
+> COMMIT
 
 > SELECT * FROM kafka_broken_csr_connector_source_fixed_tbl
 1

@@ -90,6 +90,7 @@ $ kafka-ingest format=avro key-format=avro topic=data schema=${schema} key-schem
 $ kafka-ingest format=avro key-format=avro topic=data schema=${schema} key-schema=${key-schema} partition=0
 {"a":1} {"before":null,"after":{"row":{"a":1,"b":1}},"source":{"file":"binlog","pos":1,"row":0,"snapshot":{"boolean":false}}, "op": "c"}
 
+> BEGIN
 > CREATE SOURCE multipartition
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
@@ -97,6 +98,7 @@ $ kafka-ingest format=avro key-format=avro topic=data schema=${schema} key-schem
 > CREATE TABLE multipartition_tbl FROM SOURCE multipartition (REFERENCE "testdrive-data-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > SELECT a, b FROM multipartition_tbl
 a b

@@ -38,9 +38,11 @@ INSERT INTO t2 VALUES (2);
 
 > CREATE SCHEMA schema1
 
+> BEGIN
 > CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
 > CREATE TABLE schema1.t1 FROM SOURCE mz_source (REFERENCE public.t1);
 > CREATE TABLE schema1.t2 FROM SOURCE mz_source (REFERENCE public.t2);
+> COMMIT
 
 # Wait for snapshot to be complete
 > SELECT COUNT(*) > 0 FROM schema1.t1;

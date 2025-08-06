@@ -43,6 +43,7 @@ $ kafka-ingest format=avro topic=non-dbz-data schema=${non-dbz-schema} timestamp
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE non_dbz_data
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-non-dbz-data-${testdrive.seed}')
@@ -50,6 +51,7 @@ $ kafka-ingest format=avro topic=non-dbz-data schema=${non-dbz-schema} timestamp
 > CREATE TABLE non_dbz_data_tbl FROM SOURCE non_dbz_data (REFERENCE "testdrive-non-dbz-data-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
   ENVELOPE NONE
+> COMMIT
 
 # Create a monotonic topk plan that has both a limit and a group to test that thinning works as expected
 > SELECT * FROM (SELECT DISTINCT a FROM non_dbz_data_tbl) grp, LATERAL (SELECT b FROM non_dbz_data_tbl WHERE a = grp.a ORDER BY b LIMIT 2);
@@ -219,6 +221,7 @@ $ kafka-ingest format=avro topic=other-non-dbz-data schema=${other-non-dbz-schem
 {"a": 38, "b": 42}
 {"a": 39, "b": 42}
 
+> BEGIN
 > CREATE SOURCE other_non_dbz_data
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-other-non-dbz-data-${testdrive.seed}')
@@ -226,6 +229,7 @@ $ kafka-ingest format=avro topic=other-non-dbz-data schema=${other-non-dbz-schem
 > CREATE TABLE other_non_dbz_data_tbl FROM SOURCE other_non_dbz_data (REFERENCE "testdrive-other-non-dbz-data-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${other-non-dbz-schema}'
   ENVELOPE NONE
+> COMMIT
 
 > SELECT sum(a) FROM (SELECT a FROM other_non_dbz_data_tbl ORDER BY b LIMIT 37);
 sum

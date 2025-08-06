@@ -61,12 +61,14 @@ $ kafka-ingest topic=import format=protobuf descriptor-file=import.pb message=Im
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE import
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-import-${testdrive.seed}')
 
 > CREATE TABLE import_tbl FROM SOURCE import (REFERENCE "testdrive-import-${testdrive.seed}")
   FORMAT PROTOBUF MESSAGE '.Importer' USING SCHEMA '${import-schema}'
+> COMMIT
 
 > SELECT importee1::text, importee2::text FROM import_tbl
 importee1  importee2
@@ -111,12 +113,14 @@ $ kafka-ingest topic=import-csr format=protobuf descriptor-file=import.pb messag
     URL '${testdrive.schema-registry-url}'
   );
 
+> BEGIN
 > CREATE SOURCE import_csr
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-import-csr-${testdrive.seed}')
 
 > CREATE TABLE import_csr_tbl FROM SOURCE import_csr (REFERENCE "testdrive-import-csr-${testdrive.seed}")
   FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+> COMMIT
 
 > SELECT importee1::text, importee2::text FROM import_csr_tbl
 importee1  importee2

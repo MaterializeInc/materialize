@@ -91,6 +91,7 @@ INSERT INTO truncate_table (f1, f2) VALUES (1, 1);
 CREATE TABLE drop_table (f1 int, f2 int);
 INSERT INTO drop_table (f1, f2) VALUES (1, 1);
 
+> BEGIN
 > CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
 
 > CREATE TABLE add_columns FROM SOURCE mz_source (REFERENCE public.add_columns);
@@ -113,6 +114,7 @@ INSERT INTO drop_table (f1, f2) VALUES (1, 1);
 > CREATE TABLE alter_table_supported FROM SOURCE mz_source (REFERENCE public.alter_table_supported);
 > CREATE TABLE truncate_table FROM SOURCE mz_source (REFERENCE public.truncate_table);
 > CREATE TABLE drop_table FROM SOURCE mz_source (REFERENCE public.drop_table);
+> COMMIT
 
 #
 # Add column

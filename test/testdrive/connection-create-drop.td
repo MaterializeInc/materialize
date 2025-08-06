@@ -191,6 +191,7 @@ contains:CONFLUENT SCHEMA REGISTRY connections do not support SESSION TOKEN valu
 contains:is not a KAFKA CONNECTION
 
 > CREATE CLUSTER csr_source_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE csr_source
     IN CLUSTER csr_source_cluster
     FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-csr_test-${testdrive.seed}')
@@ -199,6 +200,7 @@ contains:is not a KAFKA CONNECTION
     FORMAT AVRO
     USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
     ENVELOPE DEBEZIUM
+> COMMIT
 
 > SELECT * from csr_source_tbl
 id creature
@@ -208,6 +210,7 @@ id creature
 > CREATE CONNECTION broker_connection TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
 
 > CREATE CLUSTER two_connection_source_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE two_connection_source
   IN CLUSTER two_connection_source_cluster
   FROM KAFKA CONNECTION broker_connection (TOPIC 'testdrive-csr_test-${testdrive.seed}')
@@ -215,6 +218,7 @@ id creature
 > CREATE TABLE two_connection_source_tbl FROM SOURCE two_connection_source (REFERENCE "testdrive-csr_test-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > SELECT * from two_connection_source_tbl
 id creature
@@ -314,12 +318,14 @@ $ kafka-ingest topic=import-csr format=protobuf descriptor-file=import.pb messag
   )
 
 > CREATE CLUSTER import_connection_csr_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE import_connection_csr
   IN CLUSTER import_connection_csr_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-import-csr-${testdrive.seed}')
 
 > CREATE TABLE import_connection_csr_tbl FROM SOURCE import_connection_csr (REFERENCE "testdrive-import-csr-${testdrive.seed}")
   FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION proto_csr
+> COMMIT
 
 > SELECT importee1::text, importee2::text FROM import_connection_csr_tbl
 importee1  importee2

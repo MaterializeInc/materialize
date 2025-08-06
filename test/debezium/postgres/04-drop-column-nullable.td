@@ -23,12 +23,14 @@ $ schema-registry-wait topic=postgres.public.alter_drop_column
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE alter_drop_column
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.alter_drop_column');
 
 > CREATE TABLE alter_drop_column_tbl FROM SOURCE alter_drop_column (REFERENCE "postgres.public.alter_drop_column")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
+> COMMIT
 
 > SELECT * FROM alter_drop_column_tbl;
 123 234 345

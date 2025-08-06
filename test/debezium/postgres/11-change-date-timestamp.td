@@ -24,12 +24,14 @@ $ schema-registry-wait topic=postgres.public.alter_change_date_timestamp
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE alter_change_date_timestamp
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.alter_change_date_timestamp');
 
 > CREATE TABLE alter_change_date_timestamp_tbl FROM SOURCE alter_change_date_timestamp (REFERENCE "postgres.public.alter_change_date_timestamp")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
+> COMMIT
 
 > SELECT f1 FROM alter_change_date_timestamp_tbl;
 2011-11-11

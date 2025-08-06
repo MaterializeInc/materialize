@@ -31,9 +31,11 @@ INSERT INTO pk_table VALUES (1, 'one');
 ALTER TABLE pk_table REPLICA IDENTITY FULL;
 INSERT INTO pk_table VALUES (2, 'two');
 
+> BEGIN
 > CREATE SOURCE pg_source
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
 > CREATE TABLE "pk_table" FROM SOURCE pg_source (REFERENCE "pk_table");
+> COMMIT
 
 ! CREATE SOURCE pg_source_2
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');

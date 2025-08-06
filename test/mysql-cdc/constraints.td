@@ -33,11 +33,13 @@ INSERT INTO unique_not_null VALUES (1,1,null);
 CREATE TABLE unique_nullable (f1 INT, f2 INT, f3 INT, UNIQUE (f1, f2));
 INSERT INTO unique_nullable VALUES (1,1,null), (null,null,null), (null,null,null);
 
+> BEGIN
 > CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
 
 > CREATE TABLE pk FROM SOURCE mz_source (REFERENCE public.pk);
 > CREATE TABLE unique_not_null FROM SOURCE mz_source (REFERENCE public.unique_not_null);
 > CREATE TABLE unique_nullable FROM SOURCE mz_source (REFERENCE public.unique_nullable);
+> COMMIT
 
 > CREATE DEFAULT INDEX ON pk;
 > CREATE DEFAULT INDEX ON unique_not_null;

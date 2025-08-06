@@ -40,9 +40,11 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 > CREATE SCHEMA schema1
 
+> BEGIN
 > CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
 > CREATE TABLE schema1.t1 FROM SOURCE mz_source (REFERENCE t1);
 > CREATE TABLE schema1.t2 FROM SOURCE mz_source (REFERENCE t2);
+> COMMIT
 
 # Wait for snapshot to be complete
 > SELECT COUNT(*) > 0 FROM schema1.t1;

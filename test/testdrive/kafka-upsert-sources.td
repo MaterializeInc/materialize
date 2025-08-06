@@ -52,6 +52,7 @@ $ kafka-ingest format=avro topic=avroavro key-format=avro key-schema=${keyschema
 {"key": "mammalmore"} {"f1":"moose", "f2": 2}
 
 > CREATE CLUSTER avroavro_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE avroavro
   IN CLUSTER avroavro_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avroavro-${testdrive.seed}')
@@ -59,6 +60,7 @@ $ kafka-ingest format=avro topic=avroavro key-format=avro key-schema=${keyschema
 > CREATE TABLE avroavro_tbl FROM SOURCE avroavro (REFERENCE "testdrive-avroavro-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
+> COMMIT
 
 > SELECT * from avroavro_tbl
 key           f1       f2
@@ -76,6 +78,7 @@ birdmore: {"f1":"geese", "f2": 2}
 mammal1: {"f1": "moose", "f2": 1}
 
 > CREATE CLUSTER bytesavro_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE bytesavro
   IN CLUSTER bytesavro_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textavro-${testdrive.seed}')
@@ -84,8 +87,10 @@ mammal1: {"f1": "moose", "f2": 1}
   KEY FORMAT BYTES
   VALUE FORMAT AVRO USING SCHEMA  '${schema}'
   ENVELOPE UPSERT
+> COMMIT
 
 > CREATE CLUSTER textavro_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE textavro
   IN CLUSTER textavro_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textavro-${testdrive.seed}')
@@ -94,6 +99,7 @@ mammal1: {"f1": "moose", "f2": 1}
   KEY FORMAT TEXT
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE UPSERT
+> COMMIT
 
 > select * from bytesavro_tbl
 key           f1       f2
@@ -126,6 +132,7 @@ mammal1:moose
 bìrd1:
 
 > CREATE CLUSTER texttext_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE texttext
   IN CLUSTER texttext_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textbytes-${testdrive.seed}')
@@ -133,8 +140,10 @@ bìrd1:
 > CREATE TABLE texttext_tbl FROM SOURCE texttext (REFERENCE "testdrive-textbytes-${testdrive.seed}")
   KEY FORMAT TEXT VALUE FORMAT TEXT
   ENVELOPE UPSERT
+> COMMIT
 
 > CREATE CLUSTER textbytes_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE textbytes
   IN CLUSTER textbytes_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textbytes-${testdrive.seed}')
@@ -143,8 +152,10 @@ bìrd1:
   KEY FORMAT TEXT
   VALUE FORMAT BYTES
   ENVELOPE UPSERT
+> COMMIT
 
 > CREATE CLUSTER bytesbytes_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE bytesbytes
   IN CLUSTER bytesbytes_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textbytes-${testdrive.seed}')
@@ -153,8 +164,10 @@ bìrd1:
   KEY FORMAT BYTES
   VALUE FORMAT BYTES
   ENVELOPE UPSERT
+> COMMIT
 
 > CREATE CLUSTER bytestext_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE bytestext
   IN CLUSTER bytestext_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textbytes-${testdrive.seed}')
@@ -163,6 +176,7 @@ bìrd1:
   KEY FORMAT BYTES
   VALUE FORMAT TEXT
   ENVELOPE UPSERT
+> COMMIT
 
 > select * from texttext_tbl
 key           text
@@ -219,6 +233,7 @@ $ protobuf-compile-descriptors inputs=test.proto output=test.pb set-var=test-sch
 $ kafka-create-topic topic=textproto partitions=1
 
 > CREATE CLUSTER textproto_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE textproto
   IN CLUSTER textproto_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textproto-${testdrive.seed}')
@@ -227,8 +242,10 @@ $ kafka-create-topic topic=textproto partitions=1
   KEY FORMAT TEXT
   VALUE FORMAT PROTOBUF MESSAGE '.Test' USING SCHEMA '${test-schema}'
   ENVELOPE UPSERT
+> COMMIT
 
 > CREATE CLUSTER bytesproto_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE bytesproto
   IN CLUSTER bytesproto_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textproto-${testdrive.seed}')
@@ -237,6 +254,7 @@ $ kafka-create-topic topic=textproto partitions=1
   KEY FORMAT BYTES
   VALUE FORMAT PROTOBUF MESSAGE '.Test' USING SCHEMA '${test-schema}'
   ENVELOPE UPSERT
+> COMMIT
 
 $ kafka-ingest topic=textproto
   format=protobuf descriptor-file=test.pb message=Test
@@ -293,6 +311,7 @@ mammalmore:moose
 mammal1:
 
 > CREATE CLUSTER nullkey_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE nullkey
   IN CLUSTER nullkey_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-nullkey-${testdrive.seed}')
@@ -301,6 +320,7 @@ mammal1:
   KEY FORMAT TEXT
   VALUE FORMAT TEXT
   ENVELOPE UPSERT
+> COMMIT
 
 ! select * from nullkey_tbl
 contains: record with NULL key in UPSERT source
@@ -342,6 +362,7 @@ $ kafka-ingest format=avro topic=realtimeavroavro key-format=avro key-schema=${k
 {"f3": {"string": "earth"}, "f4":{"string": "dao"}}
 
 > CREATE CLUSTER realtimeavroavro_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE realtimeavroavro
   IN CLUSTER realtimeavroavro_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-realtimeavroavro-${testdrive.seed}')
@@ -350,6 +371,7 @@ $ kafka-ingest format=avro topic=realtimeavroavro key-format=avro key-schema=${k
   KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
+> COMMIT
 
 > CREATE MATERIALIZED VIEW realtimeavroavro_view as SELECT * from realtimeavroavro_tbl;
 
@@ -362,6 +384,7 @@ water     <null>  crocodile      7
 
 # Ensure that Upsert sources work with START OFFSET
 > CREATE CLUSTER realtimeavroavro_ff_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE realtimeavroavro_ff
   IN CLUSTER realtimeavroavro_ff_cluster
   FROM KAFKA CONNECTION kafka_conn (START OFFSET=[1], TOPIC 'testdrive-realtimeavroavro-${testdrive.seed}')
@@ -370,6 +393,7 @@ water     <null>  crocodile      7
   KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
+> COMMIT
 
 > SELECT * FROM realtimeavroavro_ff_tbl
 f3        f4        f1           f2
@@ -427,6 +451,7 @@ $ kafka-ingest format=avro topic=realtimefilteravro key-format=avro key-schema=$
 {"k1": {"string": "boucherie"}, "k2": {"long": 5}} {"f1": {"string": "apple"}, "f2": {"long": 3}}
 
 > CREATE CLUSTER realtimefilteravro_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE realtimefilteravro
   IN CLUSTER realtimefilteravro_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-realtimefilteravro-${testdrive.seed}')
@@ -435,6 +460,7 @@ $ kafka-ingest format=avro topic=realtimefilteravro key-format=avro key-schema=$
   KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
+> COMMIT
 
 # filter on key only
 > CREATE MATERIALIZED VIEW filterforkey AS
@@ -575,6 +601,7 @@ k1        k2
 librairie 10
 
 > CREATE CLUSTER include_metadata_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE include_metadata
   IN CLUSTER include_metadata_cluster
   FROM KAFKA CONNECTION kafka_conn (START OFFSET=[1], TOPIC 'testdrive-realtimeavroavro-${testdrive.seed}')
@@ -584,6 +611,7 @@ librairie 10
   VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   INCLUDE PARTITION, OFFSET
   ENVELOPE UPSERT
+> COMMIT
 
 > SELECT * FROM include_metadata_tbl
 f3        f4        f1           f2   partition  offset
@@ -593,6 +621,7 @@ air       qi        chicken      47    0         12
 earth     dao       rhinoceros   211   0         11
 
 > CREATE CLUSTER include_metadata_ts_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE include_metadata_ts
   IN CLUSTER include_metadata_ts_cluster
   FROM KAFKA CONNECTION kafka_conn (START OFFSET=[1], TOPIC 'testdrive-realtimeavroavro-${testdrive.seed}')
@@ -602,6 +631,7 @@ earth     dao       rhinoceros   211   0         11
   VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   INCLUDE PARTITION, OFFSET, TIMESTAMP as ts
   ENVELOPE UPSERT
+> COMMIT
 
 > SELECT "offset" FROM include_metadata_ts_tbl WHERE ts > '2021-01-01'
 offset
@@ -628,6 +658,7 @@ $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=format-json-
 "str":"hello"
 
 > CREATE CLUSTER format_json_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE format_json
   IN CLUSTER format_json_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-format-json-bytes-${testdrive.seed}');
@@ -636,6 +667,7 @@ $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=format-json-
   KEY FORMAT JSON
   VALUE FORMAT JSON
   ENVELOPE UPSERT;
+> COMMIT
 
 > SELECT * FROM format_json_tbl ORDER BY key
 "\"array\"" [1,2,3]
@@ -744,6 +776,7 @@ $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.mater
 ALTER SYSTEM SET enable_envelope_upsert_inline_errors = true
 
 # This source will inline errors and not propagate them
+> BEGIN
 > CREATE SOURCE value_decode_error_avro
   IN CLUSTER inline_error_cluster_avro
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-inline-value-errors-2-${testdrive.seed}');
@@ -751,6 +784,7 @@ ALTER SYSTEM SET enable_envelope_upsert_inline_errors = true
 > CREATE TABLE value_decode_error_avro_tbl FROM SOURCE value_decode_error_avro (REFERENCE "testdrive-inline-value-errors-2-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT (VALUE DECODING ERRORS = (INLINE AS decode_error));
+> COMMIT
 
 # there is now an additional 'error' column that should store the inline decoding errors, if any
 

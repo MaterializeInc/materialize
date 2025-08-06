@@ -27,9 +27,11 @@ CREATE TABLE table_a (pk INTEGER PRIMARY KEY, f2 TEXT);
 INSERT INTO table_a VALUES (1, 'one');
 INSERT INTO table_a VALUES (2, 'two');
 
+> BEGIN
 > CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
 
 > CREATE TABLE table_a FROM SOURCE mz_source (REFERENCE public.table_a);
+> COMMIT
 
 > SELECT * FROM table_a;
 1 one
@@ -86,6 +88,7 @@ CREATE TABLE table_g (pk INTEGER PRIMARY KEY, f2 TEXT);
 INSERT INTO table_g VALUES (1, 'one');
 INSERT INTO table_g VALUES (2, 'two');
 
+> BEGIN
 > CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
 
 > CREATE TABLE table_a FROM SOURCE mz_source (REFERENCE public.table_a);
@@ -95,6 +98,7 @@ INSERT INTO table_g VALUES (2, 'two');
 > CREATE TABLE table_e FROM SOURCE mz_source (REFERENCE public.table_e);
 > CREATE TABLE table_f FROM SOURCE mz_source (REFERENCE public.table_f) WITH (TEXT COLUMNS (f2));
 > CREATE TABLE table_g FROM SOURCE mz_source (REFERENCE public.table_g);
+> COMMIT
 
 > SHOW SUBSOURCES ON mz_source
 mz_source_progress    progress
@@ -125,9 +129,11 @@ materialize.public.table_a "CREATE TABLE materialize.public.table_a (pk pg_catal
 
 > DROP TABLE mz_table;
 
+> BEGIN
 > CREATE SOURCE "mz_source_too"
   FROM MYSQL CONNECTION mysql_conn;
 > CREATE TABLE t_a FROM SOURCE "mz_source_too" (REFERENCE public.table_a);
+> COMMIT
 
 > DROP SOURCE mz_source_too CASCADE;
 
@@ -360,9 +366,11 @@ contains:TEXT COLUMNS refers to table not currently being added
 
 # Test adding text cols w/o original text columns
 
+> BEGIN
 > CREATE SOURCE "mz_source_wo_init_text_cols"
   FROM MYSQL CONNECTION mysql_conn;
 > CREATE TABLE t_a FROM SOURCE "mz_source_wo_init_text_cols" (REFERENCE public.table_a);
+> COMMIT
 
 > SELECT regexp_match(create_sql, 'TEXT COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE TABLE t_a);
 <null>
@@ -405,9 +413,11 @@ contains:EXCLUDE COLUMNS refers to table not currently being added
 
 # Test adding exclude cols w/o original EXCLUDE COLUMNS
 
+> BEGIN
 > CREATE SOURCE "mz_source_wo_init_exclude_cols"
   FROM MYSQL CONNECTION mysql_conn;
 > CREATE TABLE t_a2 FROM SOURCE "mz_source_wo_init_exclude_cols" (REFERENCE public.table_a);
+> COMMIT
 
 > SELECT regexp_match(create_sql, 'EXCLUDE COLUMNS = \((.*?)\)')[1] FROM (SHOW CREATE TABLE t_a2);
 <null>

@@ -88,6 +88,7 @@ $ set-sql-timeout duration=2minutes
 # NOTE: We give this source a unique name because we want to query for it with
 # a `SUBSCRIBE ... AS OF AT LEAST 0` below and want to avoid receiving results
 # for sources created by previous tests.
+> BEGIN
 > CREATE SOURCE auction_house_in_source_statistics_td
   IN CLUSTER ${arg.single-replica-cluster}
   FROM LOAD GENERATOR AUCTION;
@@ -97,6 +98,7 @@ $ set-sql-timeout duration=2minutes
 > CREATE TABLE bids FROM SOURCE auction_house_in_source_statistics_td (REFERENCE bids);
 > CREATE TABLE organizations FROM SOURCE auction_house_in_source_statistics_td (REFERENCE organizations);
 > CREATE TABLE users FROM SOURCE auction_house_in_source_statistics_td (REFERENCE users);
+> COMMIT
 
 # NOTE: These queries are slow to succeed because the default metrics scraping
 # interval is 30 seconds.
