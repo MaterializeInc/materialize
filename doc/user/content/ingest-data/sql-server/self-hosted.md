@@ -70,6 +70,123 @@ Select the option that works best for you.
 
 {{< /tab >}}
 
+{{< tab "Use AWS PrivateLink">}}
+
+Materialize can connect to a SQL Server database through an [AWS PrivateLink](https://aws.amazon.com/privatelink/)
+service. Your SQL Server database must be running on AWS in order to use this
+option.
+
+1. #### Create a target group
+
+    Create a dedicated [target group](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/create-target-group.html)
+    for your SQL Server instance with the following details:
+
+    a. Target type as **IP address**.
+
+    b. Protocol as **TCP**.
+
+    c. Port as **1433**, or the port that you are using in case it is not 1433.
+
+    d. Make sure that the target group is in the same VPC as the SQL Server
+    instance.
+
+    e. Click next, and register the respective SQL Server instance to the target
+    group using its IP address.
+
+1. #### Create a Network Load Balancer (NLB)
+
+    Create a [Network Load Balancer](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/create-network-load-balancer.html)
+    that is **enabled for the same subnets** that the SQL Server instance is
+    in.
+
+1. #### Create TCP listener
+
+    Create a [TCP listener](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/create-listener.html)
+    for your SQL Server instance that forwards to the corresponding target
+    group you created.
+
+1. #### Verify security groups and health checks
+
+    Once the TCP listener has been created, make sure that the [health checks](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/target-group-health-checks.html)
+    are passing and that the target is reported as healthy.
+
+    If you have set up a security group for your SQL Server instance, you must
+    ensure that it allows traffic on the health check port.
+
+    **Remarks**:
+
+    a. Network Load Balancers do not have associated security groups. Therefore,
+    the security groups for your targets must use IP addresses to allow
+    traffic.
+
+    b. You can't use the security groups for the clients as a source in the
+    security groups for the targets. Therefore, the security groups for your
+    targets must use the IP addresses of the clients to allow traffic. For more
+    details, check the [AWS documentation](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/target-group-register-targets.html).
+
+1. #### Create a VPC endpoint service
+
+    Create a VPC [endpoint service](https://docs.aws.amazon.com/vpc/latest/privatelink/create-endpoint-service.html)
+    and associate it with the **Network Load Balancer** that you’ve just
+    created.
+
+    Note the **service name** that is generated for the endpoint service.
+
+    **Remarks**:
+
+    By disabling [Acceptance Required](https://docs.aws.amazon.com/vpc/latest/privatelink/configure-endpoint-service.html#accept-reject-connection-requests),
+    while still strictly managing who can view your endpoint via IAM,
+    Materialze will be able to seamlessly recreate and migrate endpoints as we
+    work to stabilize this feature.
+
+1. #### Create an AWS PrivateLink Connection
+
+     In Materialize, create a [`AWS PRIVATELINK`](/sql/create-connection/#aws-privatelink) connection that references the
+     endpoint service that you created in the previous step.
+
+     ```mzsql
+    CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
+        SERVICE NAME 'com.amazonaws.vpce.<region_id>.vpce-svc-<endpoint_service_id>',
+        AVAILABILITY ZONES ('use1-az1', 'use1-az2', 'use1-az3')
+    );
+    ```
+
+    Update the list of the availability zones to match the ones that you are
+    using in your AWS account.
+
+1. #### Configure the AWS PrivateLink service
+
+    Retrieve the AWS principal for the AWS PrivateLink connection you just
+    created:
+
+    ```mzsql
+    SELECT principal
+    FROM mz_aws_privatelink_connections plc
+    JOIN mz_connections c ON plc.id = c.id
+    WHERE c.name = 'privatelink_svc';
+    ```
+
+    ```
+                                     principal
+    ---------------------------------------------------------------------------
+     arn:aws:iam::664411391173:role/mz_20273b7c-2bbe-42b8-8c36-8cc179e9bbc3_u1
+    ```
+
+    Follow the instructions in the [AWS PrivateLink documentation](https://docs.aws.amazon.com/vpc/latest/privatelink/add-endpoint-service-permissions.html)
+    to configure your VPC endpoint service to accept connections from the
+    provided AWS principal.
+
+    If your AWS PrivateLink service is configured to require acceptance of
+    connection requests, you must manually approve the connection request from
+    Materialize after executing the `CREATE CONNECTION` statement. For more
+    details, check the [AWS PrivateLink documentation](https://docs.aws.amazon.com/vpc/latest/privatelink/configure-endpoint-service.html#accept-reject-connection-requests).
+
+    **Note:** It might take some time for the endpoint service connection to
+      show up, so you would need to wait for the endpoint service connection to
+      be ready before you create a source.
+
+{{< /tab >}}
+
 {{< tab "Use an SSH tunnel">}}
 
 To create an SSH tunnel from Materialize to your database, you launch an VM to
@@ -129,6 +246,10 @@ networking configuration, so start by selecting the relevant option.
 
 {{< tab "Allow Materialize IPs">}}
 {{% sql-server-direct/ingesting-data/allow-materialize-ips %}}
+{{< /tab >}}
+
+{{< tab "Use an AWS Privatelink">}}
+{{% sql-server-direct/ingesting-data/use-aws-privatelink %}}
 {{< /tab >}}
 
 {{< tab "Use an SSH tunnel">}}
