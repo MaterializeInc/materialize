@@ -24,12 +24,14 @@ $ schema-registry-wait topic=postgres.public.insert_delete
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE insert_delete
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.insert_delete');
 
 > CREATE TABLE insert_delete_tbl FROM SOURCE insert_delete (REFERENCE "postgres.public.insert_delete")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
+> COMMIT
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 BEGIN;

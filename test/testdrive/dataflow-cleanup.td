@@ -82,6 +82,7 @@ false
 
 > CREATE CLUSTER lgtpch_cluster_cleanup SIZE 'scale=1,workers=1';
 
+> BEGIN
 > CREATE SOURCE lgtpch IN CLUSTER lgtpch_cluster_cleanup FROM LOAD GENERATOR TPCH (SCALE FACTOR 0.1, UP TO 100);
 
 > CREATE TABLE customer FROM SOURCE lgtpch (REFERENCE customer);
@@ -92,6 +93,7 @@ false
 > CREATE TABLE partsupp FROM SOURCE lgtpch (REFERENCE partsupp);
 > CREATE TABLE region FROM SOURCE lgtpch (REFERENCE region);
 > CREATE TABLE supplier FROM SOURCE lgtpch (REFERENCE supplier);
+> COMMIT
 
 > CREATE MATERIALIZED VIEW q14 AS
   SELECT

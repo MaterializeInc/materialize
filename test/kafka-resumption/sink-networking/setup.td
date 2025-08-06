@@ -23,12 +23,14 @@ New York,NY,10004
 > CREATE CONNECTION IF NOT EXISTS kafka_conn2 TO KAFKA (BROKER 'toxiproxy:9093', SECURITY PROTOCOL PLAINTEXT);
 
 # The source intentionally does not go through toxiproxy.
+> BEGIN
 > CREATE SOURCE input
   FROM KAFKA CONNECTION kafka_conn1 (TOPIC 'testdrive-input-${testdrive.seed}')
 
 > CREATE TABLE input_tbl (city, state, zip) FROM SOURCE input (REFERENCE "testdrive-input-${testdrive.seed}")
   FORMAT CSV WITH 3 COLUMNS
   INCLUDE OFFSET
+> COMMIT
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'

@@ -170,12 +170,14 @@ $ kafka-ingest format=avro topic=avro-data schema=${reader-schema} timestamp=1
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CLUSTER avro_data_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE avro_data
   IN CLUSTER avro_data_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-${testdrive.seed}')
 
 > CREATE TABLE avro_data_tbl FROM SOURCE avro_data (REFERENCE "testdrive-avro-data-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+> COMMIT
 
 > SELECT f0::text, f11, f12, f13, f2, f51, f52
   FROM avro_data_tbl
@@ -197,12 +199,14 @@ $ kafka-ingest format=avro topic=avro-data-no-registry schema=${reader-schema} c
 { "f0": {"f0_0": 9999, "f0_1": null}, "f1": {"long": 3456}, "f2": "Jokers", "f5": {"extra_variant": [0,1,2,3,4,5,6,7,8,9]}, "f6": {"key": 8372} }
 
 > CREATE CLUSTER avro_data_no_registry_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE avro_data_no_registry
   IN CLUSTER avro_data_no_registry_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-no-registry-${testdrive.seed}')
 
 > CREATE TABLE avro_data_no_registry_tbl FROM SOURCE avro_data_no_registry (REFERENCE "testdrive-avro-data-no-registry-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${reader-schema}' (CONFLUENT WIRE FORMAT = false)
+> COMMIT
 
 > SELECT f2
   FROM avro_data_no_registry_tbl
@@ -215,12 +219,14 @@ $ kafka-ingest format=bytes topic=avro-corrupted-values timestamp=1
 garbage
 
 > CREATE CLUSTER avro_corrupted_values_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE avro_corrupted_values
   IN CLUSTER avro_corrupted_values_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-corrupted-values-${testdrive.seed}')
 
 > CREATE TABLE avro_corrupted_values_tbl FROM SOURCE avro_corrupted_values (REFERENCE "testdrive-avro-corrupted-values-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${reader-schema}'
+> COMMIT
 
 ! SELECT f2 FROM avro_corrupted_values_tbl
 contains:Decode error: avro deserialization error: wrong Confluent-style avro serialization magic: expected 0, got 103 (original text: garbage, original bytes: "67617262616765")
@@ -232,12 +238,14 @@ $ kafka-ingest format=bytes topic=avro-corrupted-values2 timestamp=1
 garbage
 
 > CREATE CLUSTER avro_corrupted_values2_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE avro_corrupted_values2
   IN CLUSTER avro_corrupted_values2_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-corrupted-values2-${testdrive.seed}')
 
 > CREATE TABLE avro_corrupted_values2_tbl FROM SOURCE avro_corrupted_values2 (REFERENCE "testdrive-avro-corrupted-values2-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${reader-schema}' (CONFLUENT WIRE FORMAT = false)
+> COMMIT
 
 ! SELECT f2 FROM avro_corrupted_values2_tbl
 contains:Decode error: Decoding error: Expected non-negative integer, got -49

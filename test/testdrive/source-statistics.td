@@ -57,6 +57,7 @@ goofus,gallant
     URL '${testdrive.schema-registry-url}'
   );
 
+> BEGIN
 > CREATE SOURCE metrics_test_source
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-metrics-test-${testdrive.seed}')
@@ -64,6 +65,7 @@ goofus,gallant
 > CREATE TABLE metrics_test_source_tbl (a, b) FROM SOURCE metrics_test_source (REFERENCE "testdrive-metrics-test-${testdrive.seed}")
   FORMAT CSV WITH 2 COLUMNS
   INCLUDE OFFSET
+> COMMIT
 
 > SELECT * FROM metrics_test_source_tbl
 jack   jill    0
@@ -93,6 +95,7 @@ metrics_test_source true true true true true true
 
 > DROP SOURCE metrics_test_source CASCADE
 
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC
@@ -103,6 +106,7 @@ metrics_test_source true true true true true true
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   INCLUDE OFFSET
   ENVELOPE UPSERT
+> COMMIT
 
 # Adding a select here so that the ingests after this
 # triggers lookup from the upsert state
@@ -117,6 +121,7 @@ mammalmore    moosemoose   2
 # NOTE: We give this source a unique name because we want to query for it with
 # a `SUBSCRIBE ... AS OF AT LEAST 0` below and want to avoid receiving results
 # for sources created by previous tests.
+> BEGIN
 > CREATE SOURCE auction_house_in_source_statistics_td
   IN CLUSTER ${arg.single-replica-cluster}
   FROM LOAD GENERATOR AUCTION;
@@ -126,6 +131,7 @@ mammalmore    moosemoose   2
 > CREATE TABLE bids FROM SOURCE auction_house_in_source_statistics_td (REFERENCE bids);
 > CREATE TABLE organizations FROM SOURCE auction_house_in_source_statistics_td (REFERENCE organizations);
 > CREATE TABLE users FROM SOURCE auction_house_in_source_statistics_td (REFERENCE users);
+> COMMIT
 
 # Note that only the base-source has `messages_received`, but the sub-sources have `messages_committed`.
 # Committed will usually, for auction sources, add up to received, but we don't test this (right now) because of

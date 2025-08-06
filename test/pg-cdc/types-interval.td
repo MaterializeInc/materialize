@@ -34,9 +34,11 @@ INSERT INTO t1 VALUES (interval '1 year 2 month 3 day 4 hour 5 minute 6.789123 s
 
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
+> BEGIN
 > CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
 
 > CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE t1);
+> COMMIT
 
 > SELECT COUNT(*) > 0 FROM t1;
 true

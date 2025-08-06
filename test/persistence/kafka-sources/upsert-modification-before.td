@@ -38,12 +38,14 @@ $ kafka-ingest format=avro topic=upsert-modification key-format=avro key-schema=
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE upsert_modification
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-modification-${testdrive.seed}')
 
 > CREATE TABLE upsert_modification_tbl FROM SOURCE upsert_modification (REFERENCE "testdrive-upsert-modification-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
+> COMMIT
 
 > SELECT COUNT(*) FROM upsert_modification_tbl;
 10000
@@ -57,6 +59,7 @@ bírdmore:geese
 mammal1:moose
 bìrd1:
 
+> BEGIN
 > CREATE SOURCE texttext
   FROM KAFKA CONNECTION kafka_conn (TOPIC
   'testdrive-textbytes-${testdrive.seed}')
@@ -65,7 +68,9 @@ bìrd1:
   KEY FORMAT TEXT VALUE FORMAT TEXT
   INCLUDE PARTITION AS kafka_partition, OFFSET AS mz_offset
   ENVELOPE UPSERT
+> COMMIT
 
+> BEGIN
 > CREATE SOURCE textbytes
   FROM KAFKA CONNECTION kafka_conn (TOPIC
   'testdrive-textbytes-${testdrive.seed}')
@@ -74,7 +79,9 @@ bìrd1:
   KEY FORMAT TEXT VALUE FORMAT BYTES
   INCLUDE PARTITION AS kafka_partition, OFFSET AS mz_offset
   ENVELOPE UPSERT
+> COMMIT
 
+> BEGIN
 > CREATE SOURCE bytesbytes
   FROM KAFKA CONNECTION kafka_conn (TOPIC
   'testdrive-textbytes-${testdrive.seed}')
@@ -83,7 +90,9 @@ bìrd1:
   KEY FORMAT BYTES VALUE FORMAT BYTES
   INCLUDE PARTITION AS kafka_partition, OFFSET AS mz_offset
   ENVELOPE UPSERT
+> COMMIT
 
+> BEGIN
 > CREATE SOURCE bytestext
   FROM KAFKA CONNECTION kafka_conn (TOPIC
   'testdrive-textbytes-${testdrive.seed}')
@@ -92,6 +101,7 @@ bìrd1:
   KEY FORMAT BYTES VALUE FORMAT TEXT
   INCLUDE PARTITION AS kafka_partition, OFFSET AS mz_offset
   ENVELOPE UPSERT
+> COMMIT
 
 > select * from texttext_tbl
 key           text  kafka_partition  mz_offset

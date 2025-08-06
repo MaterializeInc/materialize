@@ -32,12 +32,14 @@ garbage
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE total_garbage
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-total-garbage-${testdrive.seed}')
 
 > CREATE TABLE total_garbage_tbl FROM SOURCE total_garbage (REFERENCE "testdrive-total-garbage-${testdrive.seed}")
   FORMAT PROTOBUF MESSAGE '.OneInt' USING SCHEMA '${simple-schema}'
+> COMMIT
 
 ! SELECT * FROM total_garbage_tbl
 contains:Decode error: protobuf deserialization error: failed to decode Protobuf message: invalid wire type value: 7 (original text: garbage, original bytes: "67617262616765")
@@ -47,12 +49,14 @@ $ kafka-create-topic topic=wrong-message
 $ kafka-ingest topic=wrong-message format=protobuf descriptor-file=simple.pb message=OneInt
 {"f": 1}
 
+> BEGIN
 > CREATE SOURCE wrong_message
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-wrong-message-${testdrive.seed}')
 
 > CREATE TABLE wrong_message_tbl FROM SOURCE wrong_message (REFERENCE "testdrive-wrong-message-${testdrive.seed}")
   FORMAT PROTOBUF MESSAGE '.OneString' USING SCHEMA '${simple-schema}'
+> COMMIT
 
 ! SELECT * FROM wrong_message_tbl
 contains:Decode error: protobuf deserialization error: failed to decode Protobuf message: invalid wire type: Varint (expected LengthDelimited)

@@ -30,9 +30,11 @@ CREATE TABLE dummy (f1 INTEGER);
 INSERT INTO dummy VALUES (1), (2);
 COMMIT;
 
+> BEGIN
 > CREATE SOURCE mysql_source FROM MYSQL CONNECTION mysql;
 
 > CREATE TABLE dummy FROM SOURCE mysql_source (REFERENCE dummyschema.dummy);
+> COMMIT
 
 > SELECT COUNT(*) FROM dummy;
 2

@@ -28,6 +28,7 @@ $ kafka-ingest format=avro topic=resolution-union-concrete schema=${union-int} t
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE resolution_union_concrete
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-resolution-union-concrete-${testdrive.seed}')
@@ -35,6 +36,7 @@ $ kafka-ingest format=avro topic=resolution-union-concrete schema=${union-int} t
 > CREATE TABLE resolution_union_concrete_tbl FROM SOURCE resolution_union_concrete (REFERENCE "testdrive-resolution-union-concrete-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
+> COMMIT
 
 $ kafka-ingest format=avro topic=resolution-union-concrete schema=${concrete-double} timestamp=2
 {"f1": 123.456 }

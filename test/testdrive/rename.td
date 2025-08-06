@@ -33,12 +33,14 @@ $ kafka-ingest topic=data format=avro schema=${writer-schema}
     URL '${testdrive.schema-registry-url}'
   );
 
+> BEGIN
 > CREATE SOURCE mz_data
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
 
 > CREATE TABLE mz_data_tbl FROM SOURCE mz_data (REFERENCE "testdrive-data-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${writer-schema}'
+> COMMIT
 
 > CREATE DEFAULT INDEX ON mz_data_tbl
 
@@ -861,12 +863,14 @@ renamed_mz_data_tbl
 
 > SET SCHEMA TO to_be_renamed;
 
+> BEGIN
 > CREATE SOURCE mz_data
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION public.kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
 
 > CREATE TABLE mz_data_tbl FROM SOURCE mz_data (REFERENCE "testdrive-data-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${writer-schema}'
+> COMMIT
 
 > CREATE DEFAULT INDEX ON mz_data
 

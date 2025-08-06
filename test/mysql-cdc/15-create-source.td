@@ -31,9 +31,11 @@ COMMIT;
 # Validate CREATE SOURCE
 #
 
+> BEGIN
 > CREATE SOURCE da FROM MYSQL CONNECTION mysqc;
 > CREATE TABLE dummy FROM SOURCE da (REFERENCE public.dummy);
 
+> COMMIT
 
 > SELECT name, type FROM mz_sources WHERE type IN ('mysql', 'subsource') ORDER BY name DESC;
 name       type
@@ -59,17 +61,21 @@ COMMIT;
 
 > DROP SCHEMA IF EXISTS a;
 > CREATE SCHEMA a;
+> BEGIN
 > CREATE SOURCE a.mz_source FROM MYSQL CONNECTION mysqc;
 > CREATE TABLE a.t1 FROM SOURCE a.mz_source (REFERENCE public.t1);
+> COMMIT
 
 > SELECT * FROM a.t1;
 1
 
 > DROP SCHEMA IF EXISTS another;
 > CREATE SCHEMA another;
+> BEGIN
 > CREATE SOURCE another.mz_source FROM MYSQL CONNECTION mysqc;
 > CREATE TABLE another.t1 FROM SOURCE another.mz_source (REFERENCE public.t1);
 > CREATE TABLE another.t2 FROM SOURCE another.mz_source (REFERENCE public.t2);
+> COMMIT
 
 > SELECT * FROM another.t1;
 1
@@ -81,9 +87,11 @@ COMMIT;
 > DROP SCHEMA IF EXISTS bar;
 > CREATE SCHEMA foo;
 > CREATE SCHEMA bar;
+> BEGIN
 > CREATE SOURCE foo.mz_source FROM MYSQL CONNECTION mysqc;
 > CREATE TABLE table1 FROM SOURCE foo.mz_source (REFERENCE public.t1);
 > CREATE TABLE bar.table2 FROM SOURCE foo.mz_source (REFERENCE public.t2);
+> COMMIT
 
 > SELECT * FROM table1;
 1
@@ -97,9 +105,11 @@ contains: unknown
 
 > DROP SCHEMA IF EXISTS baz;
 > CREATE SCHEMA baz;
+> BEGIN
 > CREATE SOURCE baz.mz_source FROM MYSQL CONNECTION mysqc;
 > CREATE TABLE baz.t1 FROM SOURCE baz.mz_source (REFERENCE public.t1);
 > CREATE TABLE baz.t2 FROM SOURCE baz.mz_source (REFERENCE public.t2);
+> COMMIT
 
 > SELECT * FROM baz.t1;
 1

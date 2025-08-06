@@ -27,19 +27,23 @@ $ kafka-create-topic topic=data2 partitions=2
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE data_empty
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data2-${testdrive.seed}')
 
 > CREATE TABLE data_empty_tbl FROM SOURCE data_empty (REFERENCE "testdrive-data2-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}'
+> COMMIT
 
+> BEGIN
 > CREATE SOURCE data_rt
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
 
 > CREATE TABLE data_rt_tbl FROM SOURCE data_rt (REFERENCE "testdrive-data-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}'
+> COMMIT
 
 > CREATE MATERIALIZED VIEW view_rt AS SELECT b, sum(a) FROM data_rt_tbl GROUP BY b
 

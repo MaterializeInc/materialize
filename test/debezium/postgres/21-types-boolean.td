@@ -25,12 +25,14 @@ $ schema-registry-wait topic=postgres.public.boolean_type
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE boolean_type
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.boolean_type');
 
 > CREATE TABLE boolean_type_tbl FROM SOURCE boolean_type (REFERENCE "postgres.public.boolean_type")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
+> COMMIT
 
 > SELECT * FROM boolean_type_tbl;
 true true

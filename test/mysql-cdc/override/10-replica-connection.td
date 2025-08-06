@@ -71,5 +71,7 @@ START REPLICA;
 #
 # Validate we can now create a source to this replica
 #
+> BEGIN
 > CREATE SOURCE replica_source FROM MYSQL CONNECTION mysq_replica;
 > CREATE TABLE t1 FROM SOURCE replica_source (REFERENCE public.t1);
+> COMMIT

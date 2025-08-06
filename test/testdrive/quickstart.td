@@ -19,6 +19,7 @@ ALTER SYSTEM SET enable_create_table_from_source = true
 
 > SET CLUSTER = quickstart_tutorial
 
+> BEGIN
 > CREATE SOURCE auction_house
   IN CLUSTER quickstart_tutorial
   FROM LOAD GENERATOR AUCTION
@@ -29,6 +30,7 @@ ALTER SYSTEM SET enable_create_table_from_source = true
 > CREATE TABLE bids FROM SOURCE auction_house (REFERENCE bids);
 > CREATE TABLE organizations FROM SOURCE auction_house (REFERENCE organizations);
 > CREATE TABLE users FROM SOURCE auction_house (REFERENCE users);
+> COMMIT
 
 > SHOW SOURCES
 name                   type            cluster                comment

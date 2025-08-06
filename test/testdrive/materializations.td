@@ -31,12 +31,14 @@ $ kafka-create-topic topic=data
     URL '${testdrive.schema-registry-url}'
   );
 
+> BEGIN
 > CREATE SOURCE data
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
 
 > CREATE TABLE data_tbl FROM SOURCE data (REFERENCE "testdrive-data-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}'
+> COMMIT
 
 > SELECT * FROM data_tbl
 
@@ -335,12 +337,14 @@ b  c
 
 $ kafka-create-topic topic=mat
 
+> BEGIN
 > CREATE SOURCE mat_data
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-mat-${testdrive.seed}')
 
 > CREATE TABLE mat_data_tbl FROM SOURCE mat_data (REFERENCE "testdrive-mat-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}'
+> COMMIT
 
 > CREATE DEFAULT INDEX ON mat_data
 

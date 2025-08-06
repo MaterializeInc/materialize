@@ -28,6 +28,7 @@ one
 > CREATE CONNECTION kafka_conn_non_ssh
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE non_ssh IN CLUSTER sc
   FROM KAFKA CONNECTION kafka_conn_non_ssh (TOPIC 'testdrive-thetopic-${testdrive.seed}')
 
@@ -35,6 +36,7 @@ one
   FORMAT TEXT
   ENVELOPE NONE
 
+> COMMIT
 
 > CREATE CONNECTION kafka_conn_using
   TO KAFKA (BROKER '${testdrive.kafka-addr}' USING SSH TUNNEL thancred, SECURITY PROTOCOL PLAINTEXT);

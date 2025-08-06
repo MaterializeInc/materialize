@@ -12,6 +12,7 @@ $ kafka-create-topic topic=failpoint
 > CREATE CONNECTION conn
   FOR KAFKA BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT
 
+> BEGIN
 > CREATE SOURCE failpoint
   IN CLUSTER storage_cluster
   FROM KAFKA CONNECTION conn (TOPIC
@@ -21,6 +22,7 @@ $ kafka-create-topic topic=failpoint
 > CREATE TABLE failpoint_tbl FROM SOURCE failpoint (REFERENCE "testdrive-failpoint-${testdrive.seed}")
   KEY FORMAT TEXT VALUE FORMAT TEXT
   ENVELOPE UPSERT
+> COMMIT
 
 $ kafka-ingest format=bytes topic=failpoint key-format=bytes key-terminator=:
 fish:fish

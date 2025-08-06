@@ -46,6 +46,7 @@ $ kafka-ingest format=avro topic=correctness-data key-format=avro key-schema=${k
     URL '${testdrive.schema-registry-url}'
   );
 
+> BEGIN
 > CREATE SOURCE correctness_data
   IN CLUSTER storage
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-correctness-data-${testdrive.seed}')
@@ -54,6 +55,7 @@ $ kafka-ingest format=avro topic=correctness-data key-format=avro key-schema=${k
 > CREATE TABLE correctness_data_tbl FROM SOURCE correctness_data (REFERENCE "testdrive-correctness-data-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT;
+> COMMIT
 
 # Prime tokio-postgres with the missing OIDs.
 > SELECT mz_now(), * FROM correctness_data_tbl WHERE false AS OF AT LEAST 0

@@ -51,12 +51,14 @@ contains:source "materialize.public.s" already exists
 
 > DROP SOURCE s
 
+> BEGIN
 > CREATE SOURCE s
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-blah-${testdrive.seed}')
 
 > CREATE TABLE s_tbl FROM SOURCE s (REFERENCE "testdrive-data-blah-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}'
+> COMMIT
 
 > CREATE VIEW test1 AS SELECT 1;
 
@@ -122,12 +124,14 @@ contains:unknown catalog item 'test2'
 ! DROP VIEW test4;
 contains:unknown catalog item 'test4'
 
+> BEGIN
 > CREATE SOURCE s
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
 
 > CREATE TABLE s_tbl FROM SOURCE s (REFERENCE "testdrive-data-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}'
+> COMMIT
 
 > CREATE SINK s1
   IN CLUSTER ${arg.single-replica-cluster}
@@ -273,12 +277,14 @@ contains:unknown catalog item 'i4'
 
 # Materialized source tests
 
+> BEGIN
 > CREATE SOURCE s3
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
 
 > CREATE TABLE s3_tbl FROM SOURCE s3 (REFERENCE "testdrive-data-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}'
+> COMMIT
 
 # Test that dependent indexes do not prevent source deletion when restrict is specified
 > CREATE INDEX j1 on s3_tbl(ascii(y))
@@ -298,12 +304,14 @@ contains:unknown catalog item 'j1'
 
 # Test cascade deletes all indexes associated with cascaded sources and views
 
+> BEGIN
 > CREATE SOURCE s4
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
 
 > CREATE TABLE s4_tbl FROM SOURCE s4 (REFERENCE "testdrive-data-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}'
+> COMMIT
 
 > CREATE INDEX j2 on s4_tbl(x+2);
 
@@ -337,12 +345,14 @@ contains:unknown catalog item 'j2'
 
 # Test that dropping indexes even with cascade does not cause the underlying source to be dropped
 
+> BEGIN
 > CREATE SOURCE s5
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
 
 > CREATE TABLE s5_tbl FROM SOURCE s5 (REFERENCE "testdrive-data-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}'
+> COMMIT
 
 > CREATE DEFAULT INDEX ON s5_tbl;
 

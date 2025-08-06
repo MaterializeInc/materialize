@@ -21,6 +21,7 @@ $ kafka-ingest format=bytes topic=bytes timestamp=1
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CLUSTER data_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE data
   IN CLUSTER data_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-bytes-${testdrive.seed}')
@@ -28,6 +29,7 @@ $ kafka-ingest format=bytes topic=bytes timestamp=1
 > CREATE TABLE data_tbl FROM SOURCE data (REFERENCE "testdrive-bytes-${testdrive.seed}")
   FORMAT BYTES
   INCLUDE OFFSET
+> COMMIT
 
 > SHOW COLUMNS FROM data_tbl
 name       nullable  type    comment
@@ -44,12 +46,14 @@ data           offset
 # Test that CREATE SOURCE can specify a custom name for the column.
 
 > CREATE CLUSTER data_named_col_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE data_named_col
   IN CLUSTER data_named_col_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-bytes-${testdrive.seed}')
 
 > CREATE TABLE data_named_col_tbl (named_col) FROM SOURCE data_named_col (REFERENCE "testdrive-bytes-${testdrive.seed}")
   FORMAT BYTES
+> COMMIT
 
 > SHOW COLUMNS FROM data_named_col_tbl
 name       nullable  type   comment
@@ -57,6 +61,7 @@ name       nullable  type   comment
 named_col  false     bytea  ""
 
 > CREATE CLUSTER data_offset_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE data_offset
   IN CLUSTER data_offset_cluster
   FROM KAFKA CONNECTION kafka_conn (START OFFSET=[1], TOPIC 'testdrive-bytes-${testdrive.seed}')
@@ -64,6 +69,7 @@ named_col  false     bytea  ""
 > CREATE TABLE data_offset_tbl FROM SOURCE data_offset (REFERENCE "testdrive-bytes-${testdrive.seed}")
   FORMAT BYTES
   INCLUDE OFFSET
+> COMMIT
 
 > SELECT * FROM data_offset_tbl
 data           offset
@@ -79,6 +85,7 @@ $ kafka-ingest format=bytes topic=bytes-partitions timestamp=1 partition=1
 ©2
 
 > CREATE CLUSTER data_offset_2_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE data_offset_2
   IN CLUSTER data_offset_2_cluster
   FROM KAFKA CONNECTION kafka_conn (START OFFSET=[0,1], TOPIC 'testdrive-bytes-partitions-${testdrive.seed}')
@@ -86,6 +93,7 @@ $ kafka-ingest format=bytes topic=bytes-partitions timestamp=1 partition=1
 > CREATE TABLE data_offset_2_tbl FROM SOURCE data_offset_2 (REFERENCE "testdrive-bytes-partitions-${testdrive.seed}")
   FORMAT BYTES
   INCLUDE OFFSET
+> COMMIT
 
 > SELECT * FROM data_offset_2_tbl
 data           offset

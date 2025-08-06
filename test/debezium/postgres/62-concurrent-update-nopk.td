@@ -25,12 +25,14 @@ $ schema-registry-wait topic=postgres.public.concurrent_update
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE concurrent_update
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.concurrent_update');
 
 > CREATE TABLE concurrent_update_tbl FROM SOURCE concurrent_update (REFERENCE "postgres.public.concurrent_update")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
+> COMMIT
 
 $ postgres-connect name=conn1 url=postgres://postgres:postgres@postgres
 

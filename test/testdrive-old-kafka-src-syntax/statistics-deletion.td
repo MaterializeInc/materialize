@@ -64,6 +64,7 @@ one:two
 > CREATE SCHEMA subsources_cluster;
 > CREATE CLUSTER subsource_size_s_cluster SIZE 'scale=1,workers=2';
 > CREATE SOURCE subsources_size.s IN CLUSTER subsource_size_s_cluster FROM LOAD GENERATOR AUCTION (UP TO 100);
+> BEGIN
 > CREATE SOURCE subsources_cluster.s IN CLUSTER cluster1 FROM LOAD GENERATOR AUCTION (UP TO 100);
 
 > CREATE TABLE subsources_size.accounts FROM SOURCE subsources_size.s (REFERENCE accounts);
@@ -77,6 +78,7 @@ one:two
 > CREATE TABLE subsources_cluster.bids FROM SOURCE subsources_cluster.s (REFERENCE bids);
 > CREATE TABLE subsources_cluster.organizations FROM SOURCE subsources_cluster.s (REFERENCE organizations);
 > CREATE TABLE subsources_cluster.users FROM SOURCE subsources_cluster.s (REFERENCE users);
+> COMMIT
 
 # NOTE: These queries are slow to succeed because the default metrics scraping
 # interval is 30 seconds. Here we are just ensuring metrics were populated.

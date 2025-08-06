@@ -16,6 +16,7 @@ $ skip-consistency-checks reason="workflow uses SSH keys which we currently can'
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_connection_validation_syntax = true
 
+> BEGIN
 > CREATE SOURCE with_subsources
   IN CLUSTER ${arg.single-replica-cluster}
   FROM LOAD GENERATOR AUCTION (UP TO 100);
@@ -25,6 +26,7 @@ ALTER SYSTEM SET enable_connection_validation_syntax = true
 > CREATE TABLE bids FROM SOURCE with_subsources (REFERENCE bids);
 > CREATE TABLE organizations FROM SOURCE with_subsources (REFERENCE organizations);
 > CREATE TABLE users FROM SOURCE with_subsources (REFERENCE users);
+> COMMIT
 
 > SELECT
   top_level_s.name as source,

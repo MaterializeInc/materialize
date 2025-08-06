@@ -16,6 +16,7 @@ $ kafka-create-topic topic=upsert
 
 > CREATE CLUSTER c1 REPLICAS (replica1 (SIZE 'scale=1,workers=1'));
 
+> BEGIN
 > CREATE SOURCE kept_upsert
   IN CLUSTER c1
   FROM KAFKA CONNECTION conn (TOPIC
@@ -25,7 +26,9 @@ $ kafka-create-topic topic=upsert
 > CREATE TABLE kept_upsert_tbl FROM SOURCE kept_upsert (REFERENCE "testdrive-upsert-${testdrive.seed}")
   KEY FORMAT TEXT VALUE FORMAT TEXT
   ENVELOPE UPSERT
+> COMMIT
 
+> BEGIN
 > CREATE SOURCE dropped_upsert
   IN CLUSTER c1
   FROM KAFKA CONNECTION conn (TOPIC
@@ -35,6 +38,7 @@ $ kafka-create-topic topic=upsert
 > CREATE TABLE dropped_upsert_tbl FROM SOURCE dropped_upsert (REFERENCE "testdrive-upsert-${testdrive.seed}")
   KEY FORMAT TEXT VALUE FORMAT TEXT
   ENVELOPE UPSERT
+> COMMIT
 
 $ kafka-ingest format=bytes topic=upsert key-format=bytes key-terminator=:
 fish:fish

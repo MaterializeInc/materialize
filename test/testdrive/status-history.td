@@ -58,12 +58,14 @@ $ kafka-create-topic topic=status-history
 ## entries we expect.
 
 > CREATE CLUSTER kafka_source_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE kafka_source
   IN CLUSTER kafka_source_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-status-history-${testdrive.seed}')
 
 > CREATE TABLE kafka_source_tbl FROM SOURCE kafka_source (REFERENCE "testdrive-status-history-${testdrive.seed}")
   FORMAT TEXT
+> COMMIT
 
 > CREATE CLUSTER kafka_sink_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK kafka_sink
@@ -133,12 +135,14 @@ $ kafka-verify-data format=avro sink=materialize.public.kafka_sink sort-messages
 ## Confirm that the tables report statuses for multiple sources and sinks.
 
 > CREATE CLUSTER kafka_source_2_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE kafka_source_2
   IN CLUSTER kafka_source_2_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-status-history-${testdrive.seed}')
 
 > CREATE TABLE kafka_source_2_tbl FROM SOURCE kafka_source_2 (REFERENCE "testdrive-status-history-${testdrive.seed}")
   FORMAT TEXT
+> COMMIT
 
 > CREATE CLUSTER kafka_sink_2_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK kafka_sink_2

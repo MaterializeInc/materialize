@@ -32,12 +32,14 @@ $ kafka-ingest topic=data format=avro schema=${writer-schema}
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE unions
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
 
 > CREATE TABLE unions_tbl FROM SOURCE unions (REFERENCE "testdrive-data-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${writer-schema}'
+> COMMIT
 
 > SHOW COLUMNS FROM unions_tbl
 name       nullable  type    comment

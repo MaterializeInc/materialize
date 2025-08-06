@@ -43,12 +43,14 @@ $ kafka-create-topic topic=avroavro
 $ kafka-ingest format=avro topic=avroavro schema=${schema}
 {"f1": "fish", "f2": 1000}
 
+> BEGIN
 > CREATE SOURCE csr_source
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avroavro-${testdrive.seed}')
 
 > CREATE TABLE csr_source_tbl FROM SOURCE csr_source (REFERENCE "testdrive-avroavro-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
+> COMMIT
 
 > SELECT * FROM csr_source_tbl
 f1    f2

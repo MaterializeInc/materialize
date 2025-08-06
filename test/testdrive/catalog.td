@@ -323,12 +323,14 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE source_data
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}');
 
 > CREATE TABLE source_data_tbl FROM SOURCE source_data (REFERENCE "testdrive-data-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn;
+> COMMIT
 
 > CREATE SINK snk
   IN CLUSTER ${arg.single-replica-cluster}

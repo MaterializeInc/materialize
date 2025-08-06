@@ -32,6 +32,7 @@ $ kafka-ingest format=avro topic=schema-strategy-test schema=${second-writer-sch
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CLUSTER schema_strategy_test_inline_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE schema_strategy_test_inline
   IN CLUSTER schema_strategy_test_inline_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-schema-strategy-test-${testdrive.seed}')
@@ -40,6 +41,7 @@ $ kafka-ingest format=avro topic=schema-strategy-test schema=${second-writer-sch
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   VALUE STRATEGY INLINE '${reader-schema}'
   ENVELOPE NONE
+> COMMIT
 
 > SELECT * FROM schema_strategy_test_inline_tbl
 a
@@ -48,6 +50,7 @@ a
 2
 
 > CREATE CLUSTER schema_strategy_test_id_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE schema_strategy_test_id
   IN CLUSTER schema_strategy_test_id_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-schema-strategy-test-${testdrive.seed}')
@@ -56,6 +59,7 @@ a
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   VALUE STRATEGY ID ${id1}
   ENVELOPE NONE
+> COMMIT
 
 > SELECT * FROM schema_strategy_test_id_tbl
 a b
@@ -64,6 +68,7 @@ a b
 2 3
 
 > CREATE CLUSTER schema_strategy_test_id2_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE schema_strategy_test_id2
   IN CLUSTER schema_strategy_test_id2_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-schema-strategy-test-${testdrive.seed}')
@@ -72,6 +77,7 @@ a b
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   VALUE STRATEGY ID ${id2}
   ENVELOPE NONE
+> COMMIT
 
 > SELECT * FROM schema_strategy_test_id2_tbl
 a b c
@@ -80,6 +86,7 @@ a b c
 2 3 4
 
 > CREATE CLUSTER schema_strategy_test_latest_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE schema_strategy_test_latest
   IN CLUSTER schema_strategy_test_latest_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-schema-strategy-test-${testdrive.seed}')
@@ -88,6 +95,7 @@ a b c
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   VALUE STRATEGY LATEST
   ENVELOPE NONE
+> COMMIT
 
 > SELECT * FROM schema_strategy_test_latest_tbl
 a b c

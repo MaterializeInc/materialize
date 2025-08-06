@@ -38,12 +38,14 @@ $ kafka-ingest format=avro topic=upsert-deletion key-format=avro key-schema=${ke
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE upsert_deletion
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-deletion-${testdrive.seed}')
 
 > CREATE TABLE upsert_deletion_tbl FROM SOURCE upsert_deletion (REFERENCE "testdrive-upsert-deletion-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
+> COMMIT
 
 > SELECT COUNT(*) FROM upsert_deletion_tbl;
 10000

@@ -36,9 +36,11 @@ INSERT INTO t1 SELECT 2, string_agg(md5(random()::text), '') FROM generate_serie
 
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
+> BEGIN
 > CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
 
 > CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE t1);
+> COMMIT
 
 > SELECT a, length(b) FROM t1;
 1 32768

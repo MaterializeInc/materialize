@@ -68,6 +68,7 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -75,11 +76,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -87,11 +90,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -99,11 +104,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -111,11 +118,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -123,11 +132,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -135,11 +146,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -147,11 +160,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -159,11 +174,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -171,11 +188,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -183,11 +202,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -195,11 +216,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -207,11 +230,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -219,11 +244,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -231,11 +258,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -243,11 +272,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -255,11 +286,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -267,11 +300,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -279,11 +314,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -291,11 +328,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -303,11 +342,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -315,11 +356,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -327,11 +370,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -339,11 +384,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -351,11 +398,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -363,11 +412,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -375,11 +426,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -387,11 +440,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -399,11 +454,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -411,11 +468,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -423,11 +482,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -435,11 +496,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -447,11 +510,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -459,11 +524,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -471,11 +538,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -483,11 +552,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -495,11 +566,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -507,11 +580,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -519,11 +594,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -531,11 +608,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -543,11 +622,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -555,11 +636,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -567,11 +650,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -579,11 +664,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -591,11 +678,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -603,11 +692,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -615,11 +706,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -627,11 +720,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -639,11 +734,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -651,11 +748,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -663,11 +762,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -675,11 +776,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -687,11 +790,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -699,11 +804,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -711,11 +818,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -723,11 +832,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -735,11 +846,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -747,11 +860,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -759,11 +874,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -771,11 +888,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -783,11 +902,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -795,11 +916,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -807,11 +930,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -819,11 +944,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -831,11 +958,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -843,11 +972,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -855,11 +986,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -867,11 +1000,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -879,11 +1014,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -891,11 +1028,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -903,11 +1042,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -915,11 +1056,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -927,11 +1070,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -939,11 +1084,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -951,11 +1098,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -963,11 +1112,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -975,11 +1126,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -987,11 +1140,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -999,11 +1154,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1011,11 +1168,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1023,11 +1182,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1035,11 +1196,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1047,11 +1210,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1059,11 +1224,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1071,11 +1238,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1083,11 +1252,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1095,11 +1266,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1107,11 +1280,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1119,11 +1294,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1131,11 +1308,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1143,11 +1322,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1155,11 +1336,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1167,11 +1350,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1179,11 +1364,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1191,11 +1378,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1203,11 +1392,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1215,11 +1406,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1227,11 +1420,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1239,11 +1434,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1251,11 +1448,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1263,11 +1462,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1275,11 +1476,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1287,11 +1490,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1299,11 +1504,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1311,11 +1518,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1323,11 +1532,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1335,11 +1546,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1347,11 +1560,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1359,11 +1574,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1371,11 +1588,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1383,11 +1602,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1395,11 +1616,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1407,11 +1630,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1419,11 +1644,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1431,11 +1658,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1443,11 +1672,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1455,11 +1686,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1467,11 +1700,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1479,11 +1714,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1491,11 +1728,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1503,11 +1742,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1515,11 +1756,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1527,11 +1770,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1539,11 +1784,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1551,11 +1798,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1563,11 +1812,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1575,11 +1826,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1587,11 +1840,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1599,11 +1854,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1611,11 +1868,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1623,11 +1882,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1635,11 +1896,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1647,11 +1910,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1659,11 +1924,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1671,11 +1938,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1683,11 +1952,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1695,11 +1966,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1707,11 +1980,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1719,11 +1994,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1731,11 +2008,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1743,11 +2022,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1755,11 +2036,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1767,11 +2050,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1779,11 +2064,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1791,11 +2078,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1803,11 +2092,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1815,11 +2106,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1827,11 +2120,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1839,11 +2134,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1851,11 +2148,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1863,11 +2162,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1875,11 +2176,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1887,11 +2190,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1899,11 +2204,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1911,11 +2218,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1923,11 +2232,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1935,11 +2246,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1947,11 +2260,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1959,11 +2274,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1971,11 +2288,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1983,11 +2302,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -1995,11 +2316,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2007,11 +2330,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2019,11 +2344,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2031,11 +2358,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2043,11 +2372,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2055,11 +2386,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2067,11 +2400,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2079,11 +2414,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2091,11 +2428,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2103,11 +2442,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2115,11 +2456,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2127,11 +2470,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2139,11 +2484,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2151,11 +2498,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2163,11 +2512,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2175,11 +2526,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2187,11 +2540,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2199,11 +2554,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2211,11 +2568,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2223,11 +2582,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2235,11 +2596,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2247,11 +2610,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2259,11 +2624,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2271,11 +2638,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2283,11 +2652,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2295,11 +2666,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2307,11 +2680,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2319,11 +2694,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2331,11 +2708,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2343,11 +2722,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2355,11 +2736,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2367,11 +2750,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2379,11 +2764,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2391,11 +2778,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2403,11 +2792,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2415,11 +2806,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2427,11 +2820,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2439,11 +2834,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2451,11 +2848,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2463,11 +2862,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2475,11 +2876,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2487,11 +2890,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2499,11 +2904,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2511,11 +2918,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2523,11 +2932,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2535,11 +2946,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2547,11 +2960,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2559,11 +2974,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2571,11 +2988,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2583,11 +3002,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2595,11 +3016,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2607,11 +3030,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2619,11 +3044,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2631,11 +3058,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2643,11 +3072,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2655,11 +3086,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2667,11 +3100,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2679,11 +3114,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2691,11 +3128,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2703,11 +3142,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2715,11 +3156,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2727,11 +3170,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2739,11 +3184,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2751,11 +3198,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2763,11 +3212,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2775,11 +3226,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2787,11 +3240,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2799,11 +3254,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2811,11 +3268,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2823,11 +3282,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2835,11 +3296,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2847,11 +3310,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2859,11 +3324,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2871,11 +3338,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2883,11 +3352,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2895,11 +3366,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2907,11 +3380,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2919,11 +3394,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2931,11 +3408,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2943,11 +3422,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2955,11 +3436,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2967,11 +3450,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2979,11 +3464,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -2991,11 +3478,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -3003,11 +3492,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -3015,11 +3506,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -3027,11 +3520,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -3039,11 +3534,13 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv
 
 > DROP SOURCE upsert CASCADE
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-${testdrive.seed}')
@@ -3051,6 +3548,7 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-dbzupsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM upsert_tbl
 > CREATE DEFAULT INDEX ON mv

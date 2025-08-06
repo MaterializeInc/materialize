@@ -32,8 +32,10 @@ CREATE TABLE t1 (id int, name text, id2 int);
 INSERT INTO t1 VALUES (1, NULL, 1);
 
 
+> BEGIN
 > CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
 > CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE public.t1);
+> COMMIT
 
 > SELECT * FROM t1;
 1 <null> 1
