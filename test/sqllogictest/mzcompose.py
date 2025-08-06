@@ -593,6 +593,8 @@ def compileFastSltConfig() -> SltRunConfig:
         "test/sqllogictest/postgres/subselect.slt",
         "test/sqllogictest/postgres/pgcrypto/*.slt",
         "test/sqllogictest/introspection/cluster_log_compaction.slt",
+        # Depends on unstable dependencies.
+        "test/sqllogictest/introspection/relations.slt",
     }
 
     tests = file_util.resolve_paths_with_wildcard(tests)
