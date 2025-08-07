@@ -353,11 +353,11 @@ where
                 allocations += usize::from(cap > 0);
             };
             batch.storage.keys.heap_size(&mut callback);
-            batch.storage.keys_offs.heap_size(&mut callback);
-            batch.storage.vals.heap_size(&mut callback);
-            batch.storage.vals_offs.heap_size(&mut callback);
-            batch.storage.times.heap_size(&mut callback);
-            batch.storage.diffs.heap_size(&mut callback);
+            batch.storage.vals.offs.heap_size(&mut callback);
+            batch.storage.vals.vals.heap_size(&mut callback);
+            batch.storage.upds.offs.heap_size(&mut callback);
+            batch.storage.upds.times.heap_size(&mut callback);
+            batch.storage.upds.diffs.heap_size(&mut callback);
             (size, capacity, allocations)
         })
     }
@@ -379,9 +379,9 @@ where
                 allocations += usize::from(cap > 0);
             };
             batch.storage.keys.heap_size(&mut callback);
-            batch.storage.keys_offs.heap_size(&mut callback);
-            batch.storage.times.heap_size(&mut callback);
-            batch.storage.diffs.heap_size(&mut callback);
+            batch.storage.upds.offs.heap_size(&mut callback);
+            batch.storage.upds.times.heap_size(&mut callback);
+            batch.storage.upds.diffs.heap_size(&mut callback);
             (size, capacity, allocations)
         })
     }
@@ -403,11 +403,11 @@ where
                 allocations += usize::from(cap > 0);
             };
             batch.storage.keys.heap_size(&mut callback);
-            batch.storage.keys_offs.heap_size(&mut callback);
-            batch.storage.vals.heap_size(&mut callback);
-            batch.storage.vals_offs.heap_size(&mut callback);
-            batch.storage.times.heap_size(&mut callback);
-            batch.storage.diffs.heap_size(&mut callback);
+            batch.storage.vals.offs.heap_size(&mut callback);
+            batch.storage.vals.vals.heap_size(&mut callback);
+            batch.storage.upds.offs.heap_size(&mut callback);
+            batch.storage.upds.times.heap_size(&mut callback);
+            batch.storage.upds.diffs.heap_size(&mut callback);
             (size, capacity, allocations)
         })
     }
@@ -428,11 +428,11 @@ where
                 allocations += usize::from(cap > 0);
             };
             batch.storage.keys.heap_size(&mut callback);
-            batch.storage.keys_offs.heap_size(&mut callback);
-            batch.storage.vals.heap_size(&mut callback);
-            batch.storage.vals_offs.heap_size(&mut callback);
-            batch.storage.times.heap_size(&mut callback);
-            batch.storage.diffs.heap_size(&mut callback);
+            batch.storage.vals.offs.heap_size(&mut callback);
+            batch.storage.vals.vals.heap_size(&mut callback);
+            batch.storage.upds.offs.heap_size(&mut callback);
+            batch.storage.upds.times.heap_size(&mut callback);
+            batch.storage.upds.diffs.heap_size(&mut callback);
             (size, capacity, allocations)
         })
     }
@@ -453,9 +453,9 @@ where
                 allocations += usize::from(cap > 0);
             };
             batch.storage.keys.heap_size(&mut callback);
-            batch.storage.keys_offs.heap_size(&mut callback);
-            batch.storage.times.heap_size(&mut callback);
-            batch.storage.diffs.heap_size(&mut callback);
+            batch.storage.upds.offs.heap_size(&mut callback);
+            batch.storage.upds.times.heap_size(&mut callback);
+            batch.storage.upds.diffs.heap_size(&mut callback);
             (size, capacity, allocations)
         })
     }

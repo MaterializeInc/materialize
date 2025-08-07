@@ -15,9 +15,9 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::sync::mpsc;
 
-use differential_dataflow::IntoOwned;
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::operators::arrange::Arranged;
+use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
 use differential_dataflow::{AsCollection, Collection, Data};
 use mz_compute_types::dataflows::DataflowDescription;
@@ -262,20 +262,6 @@ impl ShutdownProbe {
         Self(Some(Rc::new(RefCell::new(button))))
     }
 
-    /// Probe the token for dataflow shutdown.
-    ///
-    /// This method is meant to be used with the `?` operator: It returns `None` if the dataflow is
-    /// in the process of shutting down and `Some` otherwise.
-    ///
-    /// The result of this method is synchronized among workers: It only returns `None` once all
-    /// workers have dropped their shutdown token.
-    pub(super) fn probe(&self) -> Option<()> {
-        match self.in_shutdown() {
-            false => Some(()),
-            true => None,
-        }
-    }
-
     /// Returns whether the dataflow is in the process of shutting down.
     ///
     /// The result of this method is synchronized among workers: It only returns `true` once all
@@ -396,7 +382,7 @@ where
     /// decode all columns.
     pub fn flat_map<D, I, L>(
         &self,
-        key: Option<Row>,
+        key: Option<&Row>,
         max_demand: usize,
         mut logic: L,
     ) -> (Stream<S, I::Item>, Collection<S, DataflowError, Diff>)
@@ -669,7 +655,7 @@ where
         if let Some((key, val)) = key_val {
             self.arrangement(&key)
                 .expect("Should have ensured during planning that this arrangement exists.")
-                .flat_map(val, max_demand, logic)
+                .flat_map(val.as_ref(), max_demand, logic)
         } else {
             use timely::dataflow::operators::Map;
             let (oks, errs) = self
@@ -691,23 +677,31 @@ where
     ///
     /// The function presents the contents of the trace as `(key, value, time, delta)` tuples,
     /// where key and value are potentially specialized, but convertible into rows.
-    fn flat_map_core<Tr, K, D, I, L>(
+    fn flat_map_core<Tr, D, I, L>(
         trace: &Arranged<S, Tr>,
-        key: Option<K>,
+        key: Option<&Tr::KeyOwn>,
         mut logic: L,
         refuel: usize,
     ) -> Stream<S, I::Item>
     where
-        for<'a> Tr::Key<'a>: ToDatumIter + IntoOwned<'a, Owned = K>,
-        for<'a> Tr::Val<'a>: ToDatumIter,
-        Tr: TraceReader<Time = S::Timestamp, Diff = mz_repr::Diff> + Clone + 'static,
-        K: PartialEq + 'static,
+        Tr: for<'a> TraceReader<
+                Key<'a>: ToDatumIter,
+                KeyOwn: PartialEq,
+                Val<'a>: ToDatumIter,
+                Time = S::Timestamp,
+                Diff = mz_repr::Diff,
+            > + Clone
+            + 'static,
         I: IntoIterator<Item = (D, Tr::Time, Tr::Diff)>,
         D: Data,
         L: FnMut(Tr::Key<'_>, Tr::Val<'_>, S::Timestamp, mz_repr::Diff) -> I + 'static,
     {
         use differential_dataflow::consolidation::ConsolidatingContainerBuilder as CB;
 
+        let mut key_con = Tr::KeyContainer::with_capacity(1);
+        if let Some(key) = &key {
+            key_con.push_own(key);
+        }
         let mode = if key.is_some() { "index" } else { "scan" };
         let name = format!("ArrangementFlatMap({})", mode);
         use timely::dataflow::operators::Operator;
@@ -719,6 +713,7 @@ where
                 // Maintain a list of work to do, cursor to navigate and process.
                 let mut todo = std::collections::VecDeque::new();
                 move |input, output| {
+                    let key = key_con.get(0);
                     // First, dequeue all batches.
                     input.for_each(|time, data| {
                         let capability = time.retain();
@@ -735,9 +730,12 @@ where
                     // Second, make progress on `todo`.
                     let mut fuel = refuel;
                     while !todo.is_empty() && fuel > 0 {
-                        todo.front_mut()
-                            .unwrap()
-                            .do_work(&key, &mut logic, &mut fuel, output);
+                        todo.front_mut().unwrap().do_work(
+                            key.as_ref(),
+                            &mut logic,
+                            &mut fuel,
+                            output,
+                        );
                         if fuel > 0 {
                             todo.pop_front();
                         }
@@ -988,7 +986,7 @@ where
 
 impl<C> PendingWork<C>
 where
-    C: Cursor,
+    C: Cursor<KeyOwn: PartialEq + Sized>,
 {
     /// Create a new bundle of pending work, from the capability, cursor, and backing storage.
     fn new(capability: Capability<C::Time>, cursor: C, batch: C::Storage) -> Self {
@@ -999,9 +997,9 @@ where
         }
     }
     /// Perform roughly `fuel` work through the cursor, applying `logic` and sending results to `output`.
-    fn do_work<I, D, L, K>(
+    fn do_work<I, D, L>(
         &mut self,
-        key: &Option<K>,
+        key: Option<&C::Key<'_>>,
         logic: &mut L,
         fuel: &mut usize,
         output: &mut OutputHandleCore<
@@ -1014,8 +1012,6 @@ where
         I: IntoIterator<Item = (D, C::Time, C::Diff)>,
         D: Data,
         L: FnMut(C::Key<'_>, C::Val<'_>, C::Time, C::Diff) -> I + 'static,
-        K: PartialEq + Sized,
-        for<'a> C::Key<'a>: IntoOwned<'a, Owned = K>,
     {
         use differential_dataflow::consolidation::consolidate;
 
@@ -1024,24 +1020,15 @@ where
         let mut session = output.session_with_builder(&self.capability);
         let mut buffer = Vec::new();
         if let Some(key) = key {
-            if self
-                .cursor
-                .get_key(&self.batch)
-                .map(|k| k == IntoOwned::borrow_as(key))
-                != Some(true)
-            {
-                self.cursor.seek_key(&self.batch, IntoOwned::borrow_as(key));
+            let key = C::KeyContainer::reborrow(*key);
+            if self.cursor.get_key(&self.batch).map(|k| k == key) != Some(true) {
+                self.cursor.seek_key(&self.batch, key);
             }
-            if self
-                .cursor
-                .get_key(&self.batch)
-                .map(|k| k == IntoOwned::borrow_as(key))
-                == Some(true)
-            {
+            if self.cursor.get_key(&self.batch).map(|k| k == key) == Some(true) {
                 let key = self.cursor.key(&self.batch);
                 while let Some(val) = self.cursor.get_val(&self.batch) {
                     self.cursor.map_times(&self.batch, |time, diff| {
-                        buffer.push((time.into_owned(), diff.into_owned()));
+                        buffer.push((C::owned_time(time), C::owned_diff(diff)));
                     });
                     consolidate(&mut buffer);
                     for (time, diff) in buffer.drain(..) {
@@ -1061,7 +1048,7 @@ where
             while let Some(key) = self.cursor.get_key(&self.batch) {
                 while let Some(val) = self.cursor.get_val(&self.batch) {
                     self.cursor.map_times(&self.batch, |time, diff| {
-                        buffer.push((time.into_owned(), diff.into_owned()));
+                        buffer.push((C::owned_time(time), C::owned_diff(diff)));
                     });
                     consolidate(&mut buffer);
                     for (time, diff) in buffer.drain(..) {

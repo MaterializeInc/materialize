@@ -1864,25 +1864,23 @@ checksum = "5b63caa9aa9397e2d9480a9b13673856c78d8ac123288526c37d7839f2a86990"
 
 [[package]]
 name = "columnar"
-version = "0.6.0"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bab5b6b26ca5c422e9e203cd01be745028a79439988f154c1f0cf2ae47806193"
+checksum = "6d21bd4fd3428271da95e0c5b727cfed00f2a4f3d3e1d84ba34b6d0d2e594c97"
 dependencies = [
  "bytemuck",
  "columnar_derive",
- "serde",
  "smallvec",
 ]
 
 [[package]]
 name = "columnar_derive"
-version = "0.2.5"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "82d2d0e929f19670e0d1cfea2e3607413555dfc4656fb1545954f3eaf9cc6e0a"
+checksum = "609b8b923e13d799572a49901aadd717f37a29e76cbab7d8e359aa21b6b25553"
 dependencies = [
  "proc-macro2",
  "quote",
- "serde",
  "syn 2.0.104",
 ]
 
@@ -2546,9 +2544,9 @@ dependencies = [
 
 [[package]]
 name = "differential-dataflow"
-version = "0.15.3"
+version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a455d273f7d0c0e1669bd384a065e30ba5e5fe18e5ef2fb67200b649e9487e93"
+checksum = "794e7026545b8909ce19c43e59fe7dac843d5e8ebf5cd78960801993578fa0a3"
 dependencies = [
  "columnar",
  "columnation",
@@ -2560,9 +2558,9 @@ dependencies = [
 
 [[package]]
 name = "differential-dogs3"
-version = "0.1.14"
+version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "86085cab560c3f9d7b9ee0a1e53331c8c01bf84ee2ccdb6c87d07c128a6f06c8"
+checksum = "992bd942238bbf6ebea62a634602f85dab7bef7b0b651638daf8ff4e8e0755ac"
 dependencies = [
  "differential-dataflow",
  "serde",
@@ -9273,7 +9271,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be769465445e8c1474e9c5dac2018218498557af32d9ed057325ec9a41ae81bf"
 dependencies = [
  "heck",
- "itertools 0.10.5",
+ "itertools 0.14.0",
  "log",
  "multimap",
  "once_cell",
@@ -9293,7 +9291,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
 dependencies = [
  "anyhow",
- "itertools 0.10.5",
+ "itertools 0.14.0",
  "proc-macro2",
  "quote",
  "syn 2.0.104",
@@ -11226,9 +11224,9 @@ dependencies = [
 
 [[package]]
 name = "timely"
-version = "0.21.3"
+version = "0.21.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "17c9007b6f132ad1983f50665419e157c3386e5ab2706b3a6d29f832aef211ad"
+checksum = "24044953f29fb1b228ef6ced8abb41c5403c3c5661ca91d5286858dc1ceeaa39"
 dependencies = [
  "bincode",
  "byteorder",
@@ -11245,15 +11243,15 @@ dependencies = [
 
 [[package]]
 name = "timely_bytes"
-version = "0.13.1"
+version = "0.21.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ee3700cd9c50f14046eb86deb4f2825758966b40231ad8ffc479c510c42869a1"
+checksum = "290ce5527acdb648d10f460f160245555c9d5d3977cb63d4aea2f676e432e188"
 
 [[package]]
 name = "timely_communication"
-version = "0.19.3"
+version = "0.21.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c0913c463e192579113ebf1f2a50cdfd9d2c682281490b6c704ffbf951568c29"
+checksum = "90ab22daa4ee1c67304dad45a184100207c70f18441db8e1b59b337718744952"
 dependencies = [
  "byteorder",
  "columnar",
@@ -11266,15 +11264,15 @@ dependencies = [
 
 [[package]]
 name = "timely_container"
-version = "0.15.2"
+version = "0.21.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7c7ebe2a0ecd8afd17682e963b44749c6e92cfb87826ab41673645e8bc9b28bf"
+checksum = "b63e60598564980ed3252d80bd0e16c7e6868d788124dacb7ce57662734e6a86"
 
 [[package]]
 name = "timely_logging"
-version = "0.13.5"
+version = "0.21.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0946cc7209a60906cd2e8df8e16d9330a2c69cee2a08160e858712b24d4ec614"
+checksum = "270d7819fa599702b8273292d88e058cec611091c9c75eb3b86a64914861b3ea"
 dependencies = [
  "timely_container",
 ]

@@ -20,7 +20,7 @@ byteorder = "1.4.3"
 bytes = "1.10.1"
 chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 clap = { version = "4.5.23", features = ["derive"] }
-differential-dataflow = "0.15.3"
+differential-dataflow = "0.16.0"
 itertools = "0.14.0"
 maplit = "1.0.2"
 mz-avro = { path = "../avro", features = ["snappy"] }
@@ -33,7 +33,7 @@ prost = { version = "0.13.5", features = ["no-recursion-limit"] }
 prost-reflect = "0.15.3"
 seahash = "4"
 serde_json = "1.0.140"
-timely = "0.21.3"
+timely = "0.21.5"
 tokio = { version = "1.44.1", features = ["macros", "net", "rt", "rt-multi-thread", "time"] }
 tracing = "0.1.37"
 uuid = { version = "1.17.0", features = ["serde"] }

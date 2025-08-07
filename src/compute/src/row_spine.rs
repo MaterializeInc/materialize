@@ -63,7 +63,6 @@ mod spines {
         U::Time: Columnation,
         U::Diff: Columnation,
     {
-        type Target = U;
         type KeyContainer = DatumContainer;
         type ValContainer = DatumContainer;
         type TimeContainer = TimelyStack<U::Time>;
@@ -76,7 +75,6 @@ mod spines {
         U::Time: Columnation,
         U::Diff: Columnation,
     {
-        type Target = U;
         type KeyContainer = DatumContainer;
         type ValContainer = TimelyStack<U::Val>;
         type TimeContainer = TimelyStack<U::Time>;
@@ -88,7 +86,6 @@ mod spines {
         U::Time: Columnation,
         U::Diff: Columnation,
     {
-        type Target = U;
         type KeyContainer = DatumContainer;
         type ValContainer = TimelyStack<()>;
         type TimeContainer = TimelyStack<U::Time>;
@@ -102,7 +99,6 @@ mod container {
 
     use std::cmp::Ordering;
 
-    use differential_dataflow::IntoOwned;
     use differential_dataflow::trace::implementations::BatchContainer;
     use timely::container::PushInto;
 
@@ -130,28 +126,59 @@ mod container {
         type Owned = Row;
         type ReadItem<'a> = DatumSeq<'a>;
 
+        #[inline(always)]
+        fn into_owned<'a>(item: Self::ReadItem<'a>) -> Self::Owned {
+            item.to_row()
+        }
+
+        #[inline]
+        fn clone_onto<'a>(item: Self::ReadItem<'a>, other: &mut Self::Owned) {
+            let mut packer = other.packer();
+            item.copy_into(&mut packer);
+        }
+
+        #[inline(always)]
+        fn push_ref(&mut self, item: Self::ReadItem<'_>) {
+            self.bytes.push_into(item.bytes);
+        }
+
+        #[inline(always)]
+        fn push_own(&mut self, item: &Self::Owned) {
+            self.bytes.push_into(item.data());
+        }
+
+        #[inline(always)]
+        fn clear(&mut self) {
+            self.bytes.clear();
+        }
+
+        #[inline(always)]
         fn with_capacity(size: usize) -> Self {
             Self {
                 bytes: BytesContainer::with_capacity(size),
             }
         }
 
+        #[inline(always)]
         fn merge_capacity(cont1: &Self, cont2: &Self) -> Self {
             Self {
                 bytes: BytesContainer::merge_capacity(&cont1.bytes, &cont2.bytes),
             }
         }
 
+        #[inline(always)]
         fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> {
             item
         }
 
+        #[inline(always)]
         fn index(&self, index: usize) -> Self::ReadItem<'_> {
             DatumSeq {
                 bytes: self.bytes.index(index),
             }
         }
 
+        #[inline(always)]
         fn len(&self) -> usize {
             self.bytes.len()
         }
@@ -165,8 +192,7 @@ mod container {
 
     impl PushInto<&Row> for DatumContainer {
         fn push_into(&mut self, item: &Row) {
-            let item: DatumSeq<'_> = IntoOwned::borrow_as(item);
-            self.push_into(item);
+            self.push_own(item);
         }
     }
 
@@ -182,39 +208,51 @@ mod container {
     }
 
     impl<'a> DatumSeq<'a> {
+        #[inline]
         pub fn copy_into(&self, row: &mut RowPacker) {
             // SAFETY: `self.bytes` is a correctly formatted row.
             unsafe { row.extend_by_slice_unchecked(self.bytes) }
         }
+        #[inline]
         fn as_bytes(&self) -> &'a [u8] {
             self.bytes
+        }
+        #[inline]
+        pub fn to_row(&self) -> Row {
+            // SAFETY: `self.bytes` is a correctly formatted row.
+            unsafe { Row::from_bytes_unchecked(self.bytes) }
         }
     }
 
     impl<'a> Copy for DatumSeq<'a> {}
     impl<'a> Clone for DatumSeq<'a> {
+        #[inline(always)]
         fn clone(&self) -> Self {
             *self
         }
     }
 
     impl<'a, 'b> PartialEq<DatumSeq<'a>> for DatumSeq<'b> {
+        #[inline]
         fn eq(&self, other: &DatumSeq<'a>) -> bool {
             self.bytes.eq(other.bytes)
         }
     }
     impl<'a> PartialEq<&Row> for DatumSeq<'a> {
+        #[inline]
         fn eq(&self, other: &&Row) -> bool {
             self.bytes.eq(other.data())
         }
     }
     impl<'a> Eq for DatumSeq<'a> {}
     impl<'a, 'b> PartialOrd<DatumSeq<'a>> for DatumSeq<'b> {
+        #[inline]
         fn partial_cmp(&self, other: &DatumSeq<'a>) -> Option<Ordering> {
             Some(self.cmp(other))
         }
     }
     impl<'a> Ord for DatumSeq<'a> {
+        #[inline]
         fn cmp(&self, other: &Self) -> Ordering {
             match self.bytes.len().cmp(&other.bytes.len()) {
                 std::cmp::Ordering::Less => std::cmp::Ordering::Less,
@@ -223,28 +261,9 @@ mod container {
             }
         }
     }
-    impl<'a> IntoOwned<'a> for DatumSeq<'a> {
-        type Owned = Row;
-        #[inline(always)]
-        fn into_owned(self) -> Self::Owned {
-            // SAFETY: `bytes` contains a valid row.
-            unsafe { Row::from_bytes_unchecked(self.bytes) }
-        }
-        #[inline]
-        fn clone_onto(self, other: &mut Self::Owned) {
-            let mut packer = other.packer();
-            self.copy_into(&mut packer);
-        }
-        #[inline(always)]
-        fn borrow_as(other: &'a Self::Owned) -> Self {
-            Self {
-                bytes: other.data(),
-            }
-        }
-    }
-
     impl<'a> Iterator for DatumSeq<'a> {
         type Item = Datum<'a>;
+        #[inline]
         fn next(&mut self) -> Option<Self::Item> {
             if self.bytes.is_empty() {
                 None
@@ -261,6 +280,7 @@ mod container {
             = DatumSeq<'short>
         where
             Self: 'short;
+        #[inline]
         fn to_datum_iter<'short>(&'short self) -> Self::DatumIter<'short> {
             *self
         }
@@ -281,7 +301,7 @@ mod container {
                 let row = Row::pack(datums.clone());
 
                 let mut container = DatumContainer::with_capacity(row.byte_len());
-                container.push(&row);
+                container.push_own(&row);
 
                 // When run under miri this catches undefined bytes written to data
                 // eg by calling push_copy! on a type which contains undefined padding values
@@ -374,6 +394,33 @@ mod bytes_container {
         type Owned = Vec<u8>;
         type ReadItem<'a> = &'a [u8];
 
+        #[inline]
+        fn into_owned<'a>(item: Self::ReadItem<'a>) -> Self::Owned {
+            item.to_vec()
+        }
+
+        #[inline]
+        fn clone_onto<'a>(item: Self::ReadItem<'a>, other: &mut Self::Owned) {
+            other.clear();
+            other.extend_from_slice(item);
+        }
+
+        #[inline(always)]
+        fn push_ref(&mut self, item: Self::ReadItem<'_>) {
+            self.push_into(item);
+        }
+
+        #[inline(always)]
+        fn push_own(&mut self, item: &Self::Owned) {
+            self.push_into(item.as_slice())
+        }
+
+        fn clear(&mut self) {
+            self.batches.clear();
+            self.batches.push(BytesBatch::with_capacities(0, 0));
+            self.length = 0;
+        }
+
         fn with_capacity(size: usize) -> Self {
             Self {
                 length: 0,
@@ -453,7 +500,7 @@ mod bytes_container {
         fn try_push(&mut self, slice: &[u8]) -> bool {
             if self.storage.len() + slice.len() <= self.storage.capacity() {
                 self.storage.extend_from_slice(slice);
-                self.offsets.push(self.storage.len());
+                self.offsets.push_into(self.storage.len());
                 self.len += 1;
                 true
             } else {
@@ -474,7 +521,7 @@ mod bytes_container {
         fn with_capacities(item_cap: usize, byte_cap: usize) -> Self {
             // TODO: be wary of `byte_cap` greater than 2^32.
             let mut offsets = crate::row_spine::OffsetOptimized::with_capacity(item_cap + 1);
-            offsets.push(0);
+            offsets.push_into(0);
             Self {
                 offsets,
                 storage: Region::new_auto(byte_cap.next_power_of_two()),
@@ -498,6 +545,7 @@ mod offset_opt {
 
     impl OffsetStride {
         /// Accepts or rejects a newly pushed element.
+        #[inline]
         fn push(&mut self, item: usize) -> bool {
             match self {
                 OffsetStride::Empty => {
@@ -534,6 +582,7 @@ mod offset_opt {
             }
         }
 
+        #[inline]
         fn index(&self, index: usize) -> usize {
             match self {
                 OffsetStride::Empty => {
@@ -551,6 +600,7 @@ mod offset_opt {
             }
         }
 
+        #[inline]
         fn len(&self) -> usize {
             match self {
                 OffsetStride::Empty => 0,
@@ -570,6 +620,26 @@ mod offset_opt {
         type Owned = usize;
         type ReadItem<'a> = usize;
 
+        #[inline]
+        fn into_owned<'a>(item: Self::ReadItem<'a>) -> Self::Owned {
+            item
+        }
+
+        #[inline]
+        fn push_ref(&mut self, item: Self::ReadItem<'_>) {
+            self.push_into(item)
+        }
+
+        #[inline]
+        fn push_own(&mut self, item: &Self::Owned) {
+            self.push_into(*item)
+        }
+
+        fn clear(&mut self) {
+            self.strided = OffsetStride::Empty;
+            self.spilled.clear();
+        }
+
         fn with_capacity(_size: usize) -> Self {
             Self {
                 strided: OffsetStride::Empty,
@@ -584,10 +654,12 @@ mod offset_opt {
             }
         }
 
+        #[inline]
         fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> {
             item
         }
 
+        #[inline]
         fn index(&self, index: usize) -> Self::ReadItem<'_> {
             if index < self.strided.len() {
                 self.strided.index(index)
@@ -596,12 +668,14 @@ mod offset_opt {
             }
         }
 
+        #[inline]
         fn len(&self) -> usize {
             self.strided.len() + self.spilled.len()
         }
     }
 
     impl PushInto<usize> for OffsetOptimized {
+        #[inline]
         fn push_into(&mut self, item: usize) {
             if !self.spilled.is_empty() {
                 self.spilled.push(item);

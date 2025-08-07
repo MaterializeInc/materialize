@@ -110,7 +110,6 @@ use std::rc::{Rc, Weak};
 use std::sync::Arc;
 use std::task::Poll;
 
-use differential_dataflow::IntoOwned;
 use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, ShutdownButton};
@@ -733,12 +732,15 @@ where
 
         match bundle.arrangement(&idx.key) {
             Some(ArrangementFlavor::Local(oks, errs)) => {
+                // TODO: The following as_collection/leave/arrange sequence could be optimized.
+                //   * Combine as_collection and leave into a single function.
+                //   * Use columnar to extract columns from the batches to implement leave.
                 let mut oks = oks
-                    .as_collection(|k, v| (k.into_owned(), v.into_owned()))
+                    .as_collection(|k, v| (k.to_row(), v.to_row()))
                     .leave()
                     .mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, _>(
-                        "Arrange export iterative",
-                    );
+                    "Arrange export iterative",
+                );
 
                 let mut errs = errs
                     .as_collection(|k, v| (k.clone(), v.clone()))
@@ -918,7 +920,7 @@ where
                     .mz_arrange::<ErrBatcher<_, _>, ErrBuilder<_, _>, ErrSpine<_, _>>(
                         "Arrange recursive err",
                     )
-                    .mz_reduce_abelian::<_, _, _, ErrBuilder<_, _>, ErrSpine<_, _>>(
+                    .mz_reduce_abelian::<_, ErrBuilder<_, _>, ErrSpine<_, _>>(
                         "Distinct recursive err",
                         move |_k, _s, t| t.push(((), Diff::ONE)),
                     )

@@ -17,7 +17,6 @@ use std::time::{Duration, Instant};
 
 use bytesize::ByteSize;
 use differential_dataflow::Hashable;
-use differential_dataflow::IntoOwned;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::{Cursor, TraceReader};
 use mz_compute_client::logging::LoggingConfig;
@@ -1518,13 +1517,16 @@ impl IndexPeek {
         peek_stash_threshold_bytes: usize,
     ) -> PeekStatus
     where
-        for<'a> Tr: TraceReader<DiffGat<'a> = &'a Diff>,
-        for<'a> Tr::Key<'a>: ToDatumIter + IntoOwned<'a, Owned = Row> + Eq,
-        for<'a> Tr::Val<'a>: ToDatumIter,
-        for<'a> Tr::TimeGat<'a>: PartialOrder<mz_repr::Timestamp>,
+        for<'a> Tr: TraceReader<
+                Key<'a>: ToDatumIter + Eq,
+                KeyOwn = Row,
+                Val<'a>: ToDatumIter,
+                TimeGat<'a>: PartialOrder<mz_repr::Timestamp>,
+                DiffGat<'a> = &'a Diff,
+            >,
     {
         let max_result_size = usize::cast_from(max_result_size);
-        let count_byte_size = std::mem::size_of::<NonZeroUsize>();
+        let count_byte_size = size_of::<NonZeroUsize>();
 
         let mut peek_iterator = peek_result_iterator::PeekResultIterator::new(
             peek.target.id().clone(),

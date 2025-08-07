@@ -15,15 +15,15 @@ use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
 use dec::OrderedDecimal;
+use differential_dataflow::Data;
 use differential_dataflow::collection::AsCollection;
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::containers::{Columnation, CopyRegion};
 use differential_dataflow::difference::{IsZero, Multiply, Semigroup};
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
-use differential_dataflow::trace::{Batch, Builder, Trace, TraceReader};
+use differential_dataflow::trace::{Builder, Trace};
 use differential_dataflow::{Collection, Diff as _};
-use differential_dataflow::{Data, IntoOwned};
 use mz_compute_types::plan::reduce::{
     AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, KeyValPlan, MonotonicPlan,
     ReducePlan, ReductionType, SingleBasicPlan, reduction_type,
@@ -330,9 +330,8 @@ where
 
         // First, lets collect all results into a single collection.
         for (reduction_type, arrangement) in arrangements.into_iter() {
-            let collection = arrangement.as_collection(move |key, val| {
-                (key.into_owned(), (reduction_type, val.into_owned()))
-            });
+            let collection = arrangement
+                .as_collection(move |key, val| (key.to_row(), (reduction_type, val.to_row())));
             to_concat.push(collection);
         }
 
@@ -353,7 +352,7 @@ where
         let aggregate_types_err = aggregate_types.clone();
         let (oks, errs) = differential_dataflow::collection::concatenate(scope, to_concat)
             .mz_arrange::<RowValBatcher<_, _, _>, RowValBuilder<_,_,_>, RowValSpine<_, _, _>>("Arrange ReduceCollation")
-            .reduce_pair::<_, _, _, RowRowBuilder<_,_>, RowRowSpine<_, _>, _, _, RowErrBuilder<_,_>, RowErrSpine<_, _>>(
+            .reduce_pair::<_, RowRowBuilder<_,_>, RowRowSpine<_, _>, _, RowErrBuilder<_,_>, RowErrSpine<_, _>>(
                 "ReduceCollation",
                 "ReduceCollation Errors",
                 {
@@ -521,7 +520,7 @@ where
 
         let (output, errors) = collection
             .mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _,>, RowRowSpine<_, _>>("Arranged DistinctBy")
-            .reduce_pair::<_, _, _, RowRowBuilder<_, _,>, RowRowSpine<_, _>, _, _, RowErrBuilder<_,_>, RowErrSpine<_, _>>(
+            .reduce_pair::<_, RowRowBuilder<_, _,>, RowRowSpine<_, _>, _, RowErrBuilder<_,_>, RowErrSpine<_, _>>(
                 "DistinctBy",
                 "DistinctByErrorCheck",
                 move |key, _input, output| {
@@ -609,9 +608,8 @@ where
             if errs.is_some() {
                 err_output = errs
             }
-            to_collect.push(
-                result.as_collection(move |key, val| (key.into_owned(), (index, val.into_owned()))),
-            );
+            to_collect
+                .push(result.as_collection(move |key, val| (key.to_row(), (index, val.to_row()))));
         }
 
         // Allocations for the two closures.
@@ -626,7 +624,7 @@ where
                 "Arranged ReduceFuseBasic input",
             );
 
-        let output = arranged.mz_reduce_abelian::<_, _, _, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+        let output = arranged.mz_reduce_abelian::<_, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
             "ReduceFuseBasic",
             {
                 move |key, input, output| {
@@ -655,7 +653,7 @@ where
         let validation_errs = err_output.expect("expected to validate in at least one aggregate");
         if let Some(mfp) = mfp_after2 {
             let mfp_errs = arranged
-                .mz_reduce_abelian::<_, _, _, RowErrBuilder<_, _>, RowErrSpine<_, _>>(
+                .mz_reduce_abelian::<_, RowErrBuilder<_, _>, RowErrSpine<_, _>>(
                     "ReduceFuseBasic Error Check",
                     move |key, input, output| {
                         // Since negative accumulations are checked in at least one component
@@ -674,7 +672,7 @@ where
                         }
                     },
                 )
-                .as_collection(|_, v| v.into_owned());
+                .as_collection(|_, v| v.clone());
             (output, validation_errs.concat(&mfp_errs))
         } else {
             (output, validation_errs)
@@ -723,8 +721,8 @@ where
             let keyed = partial.map(move |(key, val)| pairer.merge(&key, &val));
             if validating {
                 let (oks, errs) = self
-                    .build_reduce_inaccumulable_distinct::<_, _, RowValBuilder<Result<(), String>, _,_>, RowValSpine<Result<(), String>, _, _>>(keyed, None)
-                    .as_collection(|k, v| (k.into_owned(), v.as_ref().map(|&()| ()).map_err(|m| m.as_str().into())))
+                    .build_reduce_inaccumulable_distinct::<_,RowValBuilder<Result<(), String>, _,_>, RowValSpine<Result<(), String>, _, _>>(keyed, None)
+                    .as_collection(|k, v| (k.to_row(), v.as_ref().map(|&()| ()).map_err(|m| m.as_str().into())))
                     .map_fallible::<CapacityContainerBuilder<_>, CapacityContainerBuilder<_>, _, _, _>("Demux Errors", move |(key_val, result)| match result {
                         Ok(()) => Ok(pairer.split(&key_val)),
                         Err(m) => Err(EvalError::Internal(m).into()),
@@ -733,7 +731,7 @@ where
                 partial = oks;
             } else {
                 partial = self
-                    .build_reduce_inaccumulable_distinct::<_, _, RowBuilder<_, _>, RowSpine<_, _>>(
+                    .build_reduce_inaccumulable_distinct::<_, RowBuilder<_, _>, RowSpine<_, _>>(
                         keyed,
                         Some(" [val: empty]"),
                     )
@@ -759,7 +757,7 @@ where
                 "Arranged {name}"
             ));
         let oks = if !fused_unnest_list {
-            arranged.mz_reduce_abelian::<_, _, _, RowRowBuilder<_, _>, RowRowSpine<_, _>>(name, {
+            arranged.mz_reduce_abelian::<_, RowRowBuilder<_, _>, RowRowSpine<_, _>>(name, {
                 move |key, source, target| {
                     // We respect the multiplicity here (unlike in hierarchical aggregation)
                     // because we don't know that the aggregation method is not sensitive
@@ -793,7 +791,7 @@ where
                 }
             })
         } else {
-            arranged.mz_reduce_abelian::<_, _, _, RowRowBuilder<_, _>, RowRowSpine<_, _>>(name, {
+            arranged.mz_reduce_abelian::<_, RowRowBuilder<_, _>, RowRowSpine<_, _>>(name, {
                 move |key, source, target| {
                     // This part is the same as in the `!fused_unnest_list` if branch above.
                     let iter = source.iter().flat_map(|(v, w)| {
@@ -837,7 +835,7 @@ where
 
             let errs = if !fused_unnest_list {
                 arranged
-                    .mz_reduce_abelian::<_, _, _, RowErrBuilder<_,_>, RowErrSpine<_, _>>(
+                    .mz_reduce_abelian::<_,  RowErrBuilder<_,_>, RowErrSpine<_, _>>(
                         &format!("{name} Error Check"),
                         move |key, source, target| {
                             // Negative counts would be surprising, but until we are 100% certain we won't
@@ -848,7 +846,7 @@ where
                                     if count.is_positive() {
                                         continue;
                                     }
-                                    let value = value.into_owned();
+                                    let value = value.to_row();
                                     let message = "Non-positive accumulation in ReduceInaccumulable";
                                     error_logger
                                         .log(message, &format!("value={value:?}, count={count}"));
@@ -882,7 +880,7 @@ where
                             }
                         },
                     )
-                    .as_collection(|_, v| v.into_owned())
+                    .as_collection(|_, v| v.clone())
             } else {
                 // `render_reduce_plan_inner` doesn't request validation when `fused_unnest_list`.
                 assert!(!must_validate);
@@ -892,7 +890,7 @@ where
                     unreachable!()
                 };
                 arranged
-                    .mz_reduce_abelian::<_, _, _, RowErrBuilder<_, _>, RowErrSpine<_, _>>(
+                    .mz_reduce_abelian::<_, RowErrBuilder<_, _>, RowErrSpine<_, _>>(
                         &format!("{name} Error Check"),
                         move |key, source, target| {
                             let iter = source.iter().flat_map(|&(mut v, ref w)| {
@@ -923,7 +921,7 @@ where
                             }
                         },
                     )
-                    .as_collection(|_, v| v.into_owned())
+                    .as_collection(|_, v| v.clone())
             };
 
             if let Some(e) = err_output {
@@ -935,22 +933,25 @@ where
         (oks, err_output)
     }
 
-    fn build_reduce_inaccumulable_distinct<S, V, Bu, Tr>(
+    fn build_reduce_inaccumulable_distinct<S, Bu, Tr>(
         &self,
         input: Collection<S, Row, Diff>,
         name_tag: Option<&str>,
     ) -> Arranged<S, TraceAgent<Tr>>
     where
         S: Scope<Timestamp = G::Timestamp>,
-        V: Data + MaybeValidatingRow<(), String>,
-        Tr: Trace
-            + for<'a> TraceReader<Key<'a> = DatumSeq<'a>, Time = G::Timestamp, Diff = Diff>
-            + 'static,
-        Tr::Batch: Batch,
-        Bu: Builder<Time = G::Timestamp, Output = Tr::Batch>,
-        Bu::Input: Container + PushInto<((Row, V), Tr::Time, Tr::Diff)>,
-        for<'a> Tr::Key<'a>: IntoOwned<'a, Owned = Row>,
-        for<'a> Tr::Val<'a>: IntoOwned<'a, Owned = V>,
+        Tr: for<'a> Trace<
+                Key<'a> = DatumSeq<'a>,
+                KeyOwn = Row,
+                Time = G::Timestamp,
+                Diff = Diff,
+                ValOwn: Data + MaybeValidatingRow<(), String>,
+            > + 'static,
+        Bu: Builder<
+                Time = G::Timestamp,
+                Input: Container + PushInto<((Row, Tr::ValOwn), Tr::Time, Tr::Diff)>,
+                Output = Tr::Batch,
+            >,
         Arranged<S, TraceAgent<Tr>>: ArrangementSize,
     {
         let error_logger = self.error_logger();
@@ -965,8 +966,8 @@ where
             .mz_arrange::<RowBatcher<_, _>, RowBuilder<_, _>, RowSpine<_, _>>(
                 "Arranged ReduceInaccumulable Distinct [val: empty]",
             )
-            .mz_reduce_abelian::<_, _, _, Bu, Tr>(&output_name, move |_, source, t| {
-                if let Some(err) = V::into_error() {
+            .mz_reduce_abelian::<_, Bu, Tr>(&output_name, move |_, source, t| {
+                if let Some(err) = Tr::ValOwn::into_error() {
                     for (value, count) in source.iter() {
                         if count.is_positive() {
                             continue;
@@ -978,7 +979,7 @@ where
                         return;
                     }
                 }
-                t.push((V::ok(()), Diff::ONE))
+                t.push((Tr::ValOwn::ok(()), Diff::ONE))
             })
     }
 
@@ -1095,7 +1096,7 @@ where
             let must_validate = err_output.is_none();
             if must_validate || mfp_after2.is_some() {
                 let errs = arranged
-                    .mz_reduce_abelian::<_, _, _, RowErrBuilder<_, _>, RowErrSpine<_, _>>(
+                    .mz_reduce_abelian::<_, RowErrBuilder<_, _>, RowErrSpine<_, _>>(
                         "ReduceMinsMaxes Error Check",
                         move |key, source, target| {
                             // Negative counts would be surprising, but until we are 100% certain we wont
@@ -1106,7 +1107,7 @@ where
                                     if count.is_positive() {
                                         continue;
                                     }
-                                    let val = val.into_owned();
+                                    let val = val.to_row();
                                     let message = "Non-positive accumulation in ReduceMinsMaxes";
                                     error_logger
                                         .log(message, &format!("val={val:?}, count={count}"));
@@ -1141,7 +1142,7 @@ where
                             }
                         },
                     )
-                    .as_collection(|_, v| v.into_owned())
+                    .as_collection(|_, v| v.clone())
                     .leave_region();
                 if let Some(e) = &err_output {
                     err_output = Some(e.concat(&errs));
@@ -1150,7 +1151,7 @@ where
                 }
             }
             arranged
-                .mz_reduce_abelian::<_, _, _, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+                .mz_reduce_abelian::<_, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
                     "ReduceMinsMaxes",
                     move |key, source, target| {
                         let temp_storage = RowArena::new();
@@ -1207,12 +1208,12 @@ where
     {
         let (input, negated_output, errs) = if validating {
             let (input, reduced) = self
-                .build_bucketed_negated_output::<_, _, RowValBuilder<_,_,_>, RowValSpine<Result<Row, Row>, _, _>>(
+                .build_bucketed_negated_output::<_, RowValBuilder<_,_,_>, RowValSpine<Result<Row, Row>, _, _>>(
                     input,
                     aggr_funcs.clone(),
                 );
             let (oks, errs) = reduced
-                .as_collection(|k, v| (k.into_owned(), v.clone()))
+                .as_collection(|k, v| (k.to_row(), v.clone()))
                 .map_fallible::<CapacityContainerBuilder<_>, CapacityContainerBuilder<_>, _, _, _>(
                 "Checked Invalid Accumulations",
                 |(hash_key, result)| match result {
@@ -1232,17 +1233,17 @@ where
             (input, oks, Some(errs))
         } else {
             let (input, reduced) = self
-                .build_bucketed_negated_output::<_, _, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+                .build_bucketed_negated_output::<_, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
                     input,
                     aggr_funcs.clone(),
                 );
             // TODO: Here is a good moment where we could apply the next `mod` calculation. Note
             // that we need to apply the mod on both input and oks.
-            let oks = reduced.as_collection(|k, v| (k.into_owned(), v.into_owned()));
+            let oks = reduced.as_collection(|k, v| (k.to_row(), v.to_row()));
             (input, oks, None)
         };
 
-        let input = input.as_collection(|k, v| (k.into_owned(), v.into_owned()));
+        let input = input.as_collection(|k, v| (k.to_row(), v.to_row()));
         let oks = negated_output.concat(&input);
         (oks, errs)
     }
@@ -1250,7 +1251,7 @@ where
     /// Build a dataflow fragment for one stage of a reduction tree for multiple hierarchical
     /// aggregates to arrange and reduce the inputs. Returns the arranged input and the reduction,
     /// with all diffs in the reduction's output negated.
-    fn build_bucketed_negated_output<S, V, Bu, Tr>(
+    fn build_bucketed_negated_output<S, Bu, Tr>(
         &self,
         input: &Collection<S, (Row, Row), Diff>,
         aggrs: Vec<AggregateFunc>,
@@ -1260,14 +1261,18 @@ where
     )
     where
         S: Scope<Timestamp = G::Timestamp>,
-        V: Data + MaybeValidatingRow<Row, Row>,
-        Tr: Trace
-            + for<'a> TraceReader<Key<'a> = DatumSeq<'a>, Time = G::Timestamp, Diff = Diff>
-            + 'static,
-        Tr::Batch: Batch,
-        Bu: Builder<Time = G::Timestamp, Output = Tr::Batch>,
-        Bu::Input: Container + PushInto<((Row, V), Tr::Time, Tr::Diff)>,
-        for<'a> Tr::Val<'a>: IntoOwned<'a, Owned = V>,
+        Tr: for<'a> Trace<
+                Key<'a> = DatumSeq<'a>,
+                KeyOwn = Row,
+                ValOwn: Data + MaybeValidatingRow<Row, Row>,
+                Time = G::Timestamp,
+                Diff = Diff,
+            > + 'static,
+        Bu: Builder<
+                Time = G::Timestamp,
+                Input: Container + PushInto<((Row, Tr::ValOwn), Tr::Time, Tr::Diff)>,
+                Output = Tr::Batch,
+            >,
         Arranged<S, TraceAgent<Tr>>: ArrangementSize,
     {
         let error_logger = self.error_logger();
@@ -1278,10 +1283,10 @@ where
                 "Arranged MinsMaxesHierarchical input",
             );
 
-        let reduced = arranged_input.mz_reduce_abelian::<_, _, _, Bu, Tr>(
+        let reduced = arranged_input.mz_reduce_abelian::<_, Bu, Tr>(
             "Reduced Fallibly MinsMaxesHierarchical",
             move |key, source, target| {
-                if let Some(err) = V::into_error() {
+                if let Some(err) = Tr::ValOwn::into_error() {
                     // Should negative accumulations reach us, we should loudly complain.
                     for (value, count) in source.iter() {
                         if count.is_positive() {
@@ -1293,7 +1298,7 @@ where
                         );
                         // After complaining, output an error here so that we can eventually
                         // report it in an error stream.
-                        target.push((err(key.into_owned()), Diff::ONE));
+                        target.push((err(Tr::owned_key(key)), Diff::ONE));
                         return;
                     }
                 }
@@ -1316,11 +1321,11 @@ where
                 // of the multiplicity of the final result in the input, we only want to have one copy
                 // in the output.
                 target.reserve(source.len().saturating_add(1));
-                target.push((V::ok(row_builder.clone()), Diff::MINUS_ONE));
+                target.push((Tr::ValOwn::ok(row_builder.clone()), Diff::MINUS_ONE));
                 target.extend(source.iter().map(|(values, cnt)| {
                     let mut cnt = *cnt;
                     cnt.negate();
-                    (V::ok((*values).into_owned()), cnt)
+                    (Tr::ValOwn::ok(values.to_row()), cnt)
                 }));
             },
         );
@@ -1395,7 +1400,7 @@ where
             .mz_arrange::<RowBatcher<_, _>, RowBuilder<_, _>, RowSpine<_, Vec<ReductionMonoid>>>(
                 "ArrangeMonotonic [val: empty]",
             );
-        let output = arranged.mz_reduce_abelian::<_, _, _, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+        let output = arranged.mz_reduce_abelian::<_, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
             "ReduceMonotonic",
             {
                 move |key, input, output| {
@@ -1424,7 +1429,7 @@ where
         // conditionally render the second component of the reduction pair.
         if let Some(mfp) = mfp_after2 {
             let mfp_errs = arranged
-                .mz_reduce_abelian::<_, _, _, RowErrBuilder<_, _>, RowErrSpine<_, _>>(
+                .mz_reduce_abelian::<_, RowErrBuilder<_, _>, RowErrSpine<_, _>>(
                     "ReduceMonotonic Error Check",
                     move |key, input, output| {
                         let temp_storage = RowArena::new();
@@ -1539,7 +1544,7 @@ where
                 .mz_arrange::<RowBatcher<_, _>, RowBuilder<_, _>, RowSpine<_, _>>(
                     "Arranged Accumulable Distinct [val: empty]",
                 )
-                .mz_reduce_abelian::<_, _, _, RowBuilder<_, _>, RowSpine<_, _>>(
+                .mz_reduce_abelian::<_, RowBuilder<_, _>, RowSpine<_, _>>(
                     "Reduced Accumulable Distinct [val: empty]",
                     move |_k, _s, t| t.push(((), Diff::ONE)),
                 )
@@ -1575,7 +1580,7 @@ where
         let err_full_aggrs = full_aggrs.clone();
         let (arranged_output, arranged_errs) = collection
             .mz_arrange::<RowBatcher<_,_>, RowBuilder<_,_>, RowSpine<_, (Vec<Accum>, Diff)>>("ArrangeAccumulable [val: empty]")
-            .reduce_pair::<_, _, _, RowRowBuilder<_,_>, RowRowSpine<_, _>, _, _, RowErrBuilder<_,_>, RowErrSpine<_, _>>(
+            .reduce_pair::<_, RowRowBuilder<_,_>, RowRowSpine<_, _>, _, RowErrBuilder<_,_>, RowErrSpine<_, _>>(
                 "ReduceAccumulable",
                 "AccumulableErrorCheck",
                 {
@@ -1611,7 +1616,7 @@ where
                                 "Net-zero records with non-zero accumulation in ReduceAccumulable",
                                 &format!("aggr={aggr:?}, accum={accum:?}"),
                             );
-                            let key = key.into_owned();
+                            let key = key.to_row();
                             let message = format!(
                                 "Invalid data in source, saw net-zero records for key {key} \
                                  with non-zero accumulation in accumulable aggregate"
@@ -1627,7 +1632,7 @@ where
                                     "Invalid negative unsigned aggregation in ReduceAccumulable",
                                     &format!("aggr={aggr:?}, accum={accum:?}"),
                                 );
-                                    let key = key.into_owned();
+                                    let key = key.to_row();
                                     let message = format!(
                                         "Invalid data in source, saw negative accumulation with \
                                          unsigned type for key {key}"
@@ -1656,7 +1661,7 @@ where
             );
         (
             arranged_output,
-            arranged_errs.as_collection(|_key, error| error.into_owned()),
+            arranged_errs.as_collection(|_key, error| error.clone()),
         )
     }
 }

@@ -104,14 +104,13 @@ mod columnar_timestamp {
     }
 
     impl Columnar for Timestamp {
-        type Ref<'a> = Timestamp;
         #[inline(always)]
-        fn into_owned<'a>(other: Self::Ref<'a>) -> Self {
+        fn into_owned<'a>(other: columnar::Ref<'a, Self>) -> Self {
             other
         }
         type Container = Timestamps<Vec<Timestamp>>;
         #[inline(always)]
-        fn reborrow<'b, 'a: 'b>(thing: Self::Ref<'a>) -> Self::Ref<'b>
+        fn reborrow<'b, 'a: 'b>(thing: columnar::Ref<'a, Self>) -> columnar::Ref<'b, Self>
         where
             Self: 'a,
         {
@@ -119,7 +118,8 @@ mod columnar_timestamp {
         }
     }
 
-    impl columnar::Container<Timestamp> for Timestamps<Vec<Timestamp>> {
+    impl columnar::Container for Timestamps<Vec<Timestamp>> {
+        type Ref<'a> = Timestamp;
         type Borrowed<'a>
             = Timestamps<&'a [Timestamp]>
         where
@@ -134,6 +134,23 @@ mod columnar_timestamp {
             Self: 'a,
         {
             Timestamps(item.0)
+        }
+
+        #[inline(always)]
+        fn reborrow_ref<'b, 'a: 'b>(item: Self::Ref<'a>) -> Self::Ref<'b>
+        where
+            Self: 'a,
+        {
+            item
+        }
+
+        #[inline(always)]
+        fn reserve_for<'a, I>(&mut self, selves: I)
+        where
+            Self: 'a,
+            I: Iterator<Item = Self::Borrowed<'a>> + Clone,
+        {
+            self.0.reserve_for(selves.map(|s| s.0));
         }
     }
 
@@ -573,26 +590,4 @@ impl TryFrom<Numeric> for Timestamp {
 
 impl columnation::Columnation for Timestamp {
     type InnerRegion = columnation::CopyRegion<Timestamp>;
-}
-
-mod differential {
-    use differential_dataflow::IntoOwned;
-
-    use crate::Timestamp;
-
-    impl<'a> IntoOwned<'a> for Timestamp {
-        type Owned = Self;
-
-        fn into_owned(self) -> Self::Owned {
-            self
-        }
-
-        fn clone_onto(self, other: &mut Self::Owned) {
-            *other = self;
-        }
-
-        fn borrow_as(owned: &'a Self::Owned) -> Self {
-            *owned
-        }
-    }
 }
