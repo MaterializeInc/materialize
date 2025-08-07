@@ -22,7 +22,15 @@ RUN bash -c '\
   set -euo pipefail; \
   tini -- entrypoint.sh & \
   tini_pid=$!; \
-  until curl -sf localhost:6878/api/readyz; do sleep 0.1; done; \
+  start_time=$(date +%s); \
+  while ! curl -sf localhost:6878/api/readyz; do \
+    sleep 0.1; \
+    now=$(date +%s); \
+    if (( now - start_time > 30 )); then \
+      echo "Timed out, failing build"; \
+      exit 1; \
+    fi; \
+  done; \
   kill -TERM "$tini_pid"; \
   wait "$tini_pid" || true; \
   pg_ctlcluster 16 main stop --mode=fast --force'
