@@ -192,7 +192,7 @@ async fn try_run_sql(
     .await;
 
     if query_with_timeout.is_err() {
-        bail!("query timed out")
+        bail!("query timed out\n")
     }
 
     let rows: Vec<_> = query_with_timeout
@@ -236,7 +236,7 @@ async fn try_run_sql(
                         return Ok(());
                     } else {
                         bail!(
-                            "column name mismatch\nexpected: {:?}\nactual:   {:?}",
+                            "column name mismatch\nexpected: {:?}\nactual:   {:?}\n",
                             column_names,
                             actual_columns
                         );
