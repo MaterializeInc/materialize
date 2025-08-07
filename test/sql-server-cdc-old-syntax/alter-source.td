@@ -11,18 +11,11 @@ $ sql-server-connect name=sql-server
 server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID=${arg.default-sql-server-user};Password=${arg.default-sql-server-password}
 
 $ sql-server-execute name=sql-server
-IF EXISTS (SELECT 1 FROM sys.databases WHERE name = 'test') BEGIN ALTER DATABASE test SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE test; END;
-CREATE DATABASE test;
 USE test;
-EXEC sys.sp_cdc_enable_db;
-ALTER DATABASE test SET ALLOW_SNAPSHOT_ISOLATION ON;
-
 CREATE TABLE table_a (pk INTEGER PRIMARY KEY, f2 VARCHAR(128));
 INSERT INTO table_a VALUES (1, 'one');
 INSERT INTO table_a VALUES (2, 'two');
 EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'table_a', @role_name = 'SA', @supports_net_changes = 0;
-
-# Check empty publication on ALTER
 
 > CREATE SECRET IF NOT EXISTS sql_server_pass AS '${arg.default-sql-server-password}'
 
@@ -40,6 +33,7 @@ EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'table_a', @
 > CREATE SOURCE mz_source
   FROM SQL SERVER CONNECTION sql_server_test_connection
   FOR ALL TABLES;
+> DROP SOURCE dummy;
 
 > SELECT * FROM table_a;
 1 one
@@ -48,7 +42,7 @@ EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'table_a', @
 $ sql-server-execute name=sql-server
 DROP TABLE table_a;
 
-!ALTER SOURCE mz_source ADD SUBSOURCE table_b;
+! ALTER SOURCE mz_source ADD SUBSOURCE table_b;
 contains:reference to table_b not found in source
 
 # Adding a table with the same name as a running table does not allow you to add
@@ -114,6 +108,8 @@ INSERT INTO table_g VALUES (2, 'two');
     TEXT COLUMNS (dbo.table_f.f2)
   )
   FOR ALL TABLES;
+
+> DROP SOURCE dummy;
 
 > SHOW SUBSOURCES ON mz_source
 mz_source_progress    progress
