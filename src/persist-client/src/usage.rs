@@ -1243,7 +1243,7 @@ mod tests {
         let shard_id = ShardId::new();
 
         // Somewhat unsatisfying, we manually construct a rollup blob key.
-        let key = PartialRollupKey::new(SeqNo(1), &RollupId::new());
+        let key = PartialRollupKey::new(SeqNo(1), &RollupId::zero());
         let key = key.complete(&shard_id);
         let () = client
             .blob

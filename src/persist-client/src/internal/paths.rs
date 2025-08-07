@@ -174,8 +174,8 @@ impl FromStr for RollupId {
 }
 
 impl RollupId {
-    pub(crate) fn new() -> Self {
-        RollupId(*Uuid::new_v4().as_bytes())
+    pub(crate) fn zero() -> Self {
+        RollupId(*Uuid::nil().as_bytes())
     }
 }
 

@@ -337,7 +337,7 @@ where
             });
 
         self.state_versions
-            .write_rollup_for_state(self.shard_metrics.as_ref(), state, &RollupId::new())
+            .write_rollup_for_state(self.shard_metrics.as_ref(), state, &RollupId::zero())
             .await
     }
 
