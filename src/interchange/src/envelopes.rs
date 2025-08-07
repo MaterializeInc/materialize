@@ -11,18 +11,17 @@ use std::collections::BTreeMap;
 use std::iter;
 use std::sync::LazyLock;
 
-use differential_dataflow::IntoOwned;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
-use differential_dataflow::trace::{Batch, BatchReader, Cursor, TraceReader};
+use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
 use differential_dataflow::{AsCollection, Collection};
 use itertools::{EitherOrBoth, Itertools};
 use maplit::btreemap;
 use mz_ore::cast::CastFrom;
 use mz_repr::{CatalogItemId, ColumnName, ColumnType, Datum, Diff, Row, RowPacker, ScalarType};
+use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;
-use timely::dataflow::{Scope, Stream};
 
 use crate::avro::DiffPair;
 
@@ -34,20 +33,13 @@ use crate::avro::DiffPair;
 // a given key at each timestamp.
 pub fn combine_at_timestamp<G: Scope, Tr>(
     arranged: Arranged<G, Tr>,
-) -> Collection<G, (Option<Row>, Vec<DiffPair<Row>>), Diff>
+) -> Collection<G, (Tr::KeyOwn, Vec<DiffPair<Tr::ValOwn>>), Diff>
 where
     G::Timestamp: Lattice + Copy,
     Tr: Clone
-        + for<'a> TraceReader<
-            Key<'a> = &'a Option<Row>,
-            Val<'a> = &'a Row,
-            Time = G::Timestamp,
-            Diff = Diff,
-        >,
-    Tr::Batch: Batch,
-    for<'a> Tr::TimeGat<'a>: Ord,
+        + TraceReader<Diff = Diff, Time = G::Timestamp, KeyOwn: Clone + 'static, ValOwn: 'static>,
 {
-    let x: Stream<G, ((Option<Row>, Vec<DiffPair<Row>>), G::Timestamp, Diff)> = arranged
+    arranged
         .stream
         .unary(Pipeline, "combine_at_timestamp", move |_, _| {
             move |input, output| {
@@ -66,10 +58,10 @@ where
                             while cursor.val_valid(&batch) {
                                 let v = cursor.val(&batch);
                                 cursor.map_times(&batch, |t, diff| {
-                                    let diff = diff.into_owned();
+                                    let diff = Tr::owned_diff(diff);
                                     let update = (
-                                        t.into_owned(),
-                                        v.clone(),
+                                        Tr::owned_time(t),
+                                        Tr::owned_val(v),
                                         usize::cast_from(diff.unsigned_abs()),
                                     );
                                     if diff < Diff::ZERO {
@@ -115,7 +107,7 @@ where
                                 let group = group
                                     .map(|(_t, before, after)| DiffPair { before, after })
                                     .collect();
-                                session.give(((k.clone(), group), t, Diff::ONE));
+                                session.give(((Tr::owned_key(k), group), t, Diff::ONE));
                             }
 
                             cursor.step_key(&batch);
@@ -123,8 +115,8 @@ where
                     }
                 }
             }
-        });
-    x.as_collection()
+        })
+        .as_collection()
 }
 
 // NOTE(benesch): statically allocating transient IDs for the

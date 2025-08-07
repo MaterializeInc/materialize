@@ -11,6 +11,7 @@
 
 #![allow(dead_code, missing_docs)]
 
+use columnar::{Container, Ref};
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::trace::implementations::chunker::ColumnationChunker;
@@ -65,7 +66,6 @@ pub(crate) mod spines {
         U::Time: Columnation,
         U::Diff: Columnation,
     {
-        type Target = U;
         type KeyContainer = TimelyStack<U::Key>;
         type ValContainer = TimelyStack<U::Val>;
         type TimeContainer = TimelyStack<U::Time>;
@@ -140,14 +140,15 @@ where
 /// columnation.
 pub trait MzData:
     differential_dataflow::containers::Columnation
-    + for<'a> columnar::Columnar<Container: Clone + Send, Ref<'a>: Copy + Ord>
+    + for<'a> columnar::Columnar<Container: Container<Ref<'a>: Copy + Ord> + Clone + Send>
 {
 }
 
 impl<T> MzData for T
 where
     T: differential_dataflow::containers::Columnation,
-    T: for<'a> columnar::Columnar<Container: Clone + Send, Ref<'a>: Copy + Ord>,
+    T: for<'a> columnar::Columnar<Container: Clone + Send>,
+    for<'a> Ref<'a, T>: Copy + Ord,
 {
 }
 

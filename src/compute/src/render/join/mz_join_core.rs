@@ -41,7 +41,6 @@ use std::collections::VecDeque;
 use std::time::Instant;
 
 use differential_dataflow::Data;
-use differential_dataflow::IntoOwned;
 use differential_dataflow::consolidation::{consolidate, consolidate_updates};
 use differential_dataflow::difference::Multiply;
 use differential_dataflow::lattice::Lattice;
@@ -620,13 +619,13 @@ where
                             if let Some(first) = result.next() {
                                 // Join times.
                                 cursor1.map_times(storage1, |time1, diff1| {
-                                    let mut time1 = time1.into_owned();
+                                    let mut time1 = C1::owned_time(time1);
                                     time1.join_assign(meet);
-                                    let diff1 = diff1.into_owned();
+                                    let diff1 = C1::owned_diff(diff1);
                                     cursor2.map_times(storage2, |time2, diff2| {
-                                        let mut time2 = time2.into_owned();
+                                        let mut time2 = C2::owned_time(time2);
                                         time2.join_assign(&time1);
-                                        let diff = diff1.multiply(&diff2.into_owned());
+                                        let diff = diff1.multiply(&C2::owned_diff(diff2));
                                         buffer.push((time2, diff));
                                     });
                                 });

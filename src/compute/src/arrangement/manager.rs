@@ -17,11 +17,13 @@ use std::time::Instant;
 use differential_dataflow::lattice::antichain_join;
 use differential_dataflow::operators::arrange::{Arranged, ShutdownButton, TraceAgent};
 use differential_dataflow::trace::TraceReader;
+use differential_dataflow::trace::implementations::WithLayout;
 use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
 use mz_repr::{Diff, GlobalId, Timestamp};
 use timely::PartialOrder;
 use timely::dataflow::Scope;
 use timely::dataflow::operators::CapabilitySet;
+use timely::progress::Timestamp as _;
 use timely::progress::frontier::{Antichain, AntichainRef};
 
 use crate::metrics::WorkerMetrics;
@@ -115,7 +117,7 @@ impl TraceManager {
 #[derive(Clone)]
 pub struct PaddedTrace<Tr>
 where
-    Tr: TraceReader<Time = Timestamp>,
+    Tr: TraceReader,
 {
     /// The wrapped trace.
     trace: Tr,
@@ -126,12 +128,12 @@ where
     /// All methods of `PaddedTrace` are written to uphold this invariant. In particular,
     /// `set_logical_compaction_frontier`  sets the `padded_since` to `None` if the new compaction
     /// frontier is >= the previous compaction frontier of `trace`.
-    padded_since: Option<Antichain<Timestamp>>,
+    padded_since: Option<Antichain<Tr::Time>>,
 }
 
 impl<Tr> From<Tr> for PaddedTrace<Tr>
 where
-    Tr: TraceReader<Time = Timestamp>,
+    Tr: TraceReader,
 {
     fn from(trace: Tr) -> Self {
         Self {
@@ -143,13 +145,13 @@ where
 
 impl<Tr> PaddedTrace<Tr>
 where
-    Tr: TraceReader<Time = Timestamp>,
+    Tr: TraceReader,
 {
     /// Turns this trace into a padded version that reports empty data for all times less than the
     /// trace's current logical compaction frontier.
     fn into_padded(mut self) -> Self {
         let trace_since = self.trace.get_logical_compaction();
-        let minimum_frontier = Antichain::from_elem(Timestamp::MIN);
+        let minimum_frontier = Antichain::from_elem(Tr::Time::minimum());
         if PartialOrder::less_than(&minimum_frontier.borrow(), &trace_since) {
             self.padded_since = Some(minimum_frontier);
         }
@@ -157,16 +159,14 @@ where
     }
 }
 
+impl<Tr: TraceReader> WithLayout for PaddedTrace<Tr> {
+    type Layout = Tr::Layout;
+}
+
 impl<Tr> TraceReader for PaddedTrace<Tr>
 where
-    Tr: TraceReader<Time = Timestamp>,
+    Tr: TraceReader,
 {
-    type Key<'a> = Tr::Key<'a>;
-    type Val<'a> = Tr::Val<'a>;
-    type Time = Tr::Time;
-    type TimeGat<'a> = Tr::TimeGat<'a>;
-    type Diff = Tr::Diff;
-    type DiffGat<'a> = Tr::DiffGat<'a>;
     type Batch = Tr::Batch;
     type Storage = Tr::Storage;
     type Cursor = Tr::Cursor;

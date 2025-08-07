@@ -9,7 +9,7 @@ use std::iter::FusedIterator;
 use std::num::NonZeroI64;
 use std::ops::DerefMut;
 
-use differential_dataflow::IntoOwned;
+use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{Cursor, TraceReader};
 use mz_ore::result::ResultExt;
 use mz_repr::fixed_length::ToDatumIter;
@@ -40,11 +40,13 @@ where
 /// constraints, if any.
 impl<Tr> PeekResultIterator<Tr>
 where
-    Tr: TraceReader,
-    for<'a> Tr: TraceReader<DiffGat<'a> = &'a Diff>,
-    for<'a> Tr::Key<'a>: ToDatumIter + IntoOwned<'a, Owned = Row> + Eq,
-    for<'a> Tr::Val<'a>: ToDatumIter,
-    for<'a> Tr::TimeGat<'a>: PartialOrder<mz_repr::Timestamp>,
+    for<'a> Tr: TraceReader<
+            Key<'a>: ToDatumIter + Eq,
+            KeyOwn = Row,
+            Val<'a>: ToDatumIter,
+            TimeGat<'a>: PartialOrder<mz_repr::Timestamp>,
+            DiffGat<'a> = &'a Diff,
+        >,
 {
     pub fn new(
         target_id: GlobalId,
@@ -85,21 +87,26 @@ where
     }
 }
 
-impl<Tr> FusedIterator for PeekResultIterator<Tr>
-where
-    for<'a> Tr: TraceReader<DiffGat<'a> = &'a Diff>,
-    for<'a> Tr::Key<'a>: ToDatumIter + IntoOwned<'a, Owned = Row> + Eq,
-    for<'a> Tr::Val<'a>: ToDatumIter,
-    for<'a> Tr::TimeGat<'a>: PartialOrder<mz_repr::Timestamp>,
+impl<Tr> FusedIterator for PeekResultIterator<Tr> where
+    for<'a> Tr: TraceReader<
+            Key<'a>: ToDatumIter + Eq,
+            KeyOwn = Row,
+            Val<'a>: ToDatumIter,
+            TimeGat<'a>: PartialOrder<mz_repr::Timestamp>,
+            DiffGat<'a> = &'a Diff,
+        >
 {
 }
 
 impl<Tr> Iterator for PeekResultIterator<Tr>
 where
-    for<'a> Tr: TraceReader<DiffGat<'a> = &'a Diff>,
-    for<'a> Tr::Key<'a>: ToDatumIter + IntoOwned<'a, Owned = Row> + Eq,
-    for<'a> Tr::Val<'a>: ToDatumIter,
-    for<'a> Tr::TimeGat<'a>: PartialOrder<mz_repr::Timestamp>,
+    for<'a> Tr: TraceReader<
+            Key<'a>: ToDatumIter + Eq,
+            KeyOwn = Row,
+            Val<'a>: ToDatumIter,
+            TimeGat<'a>: PartialOrder<mz_repr::Timestamp>,
+            DiffGat<'a> = &'a Diff,
+        >,
 {
     type Item = Result<(Row, NonZeroI64), String>;
 
@@ -138,10 +145,13 @@ where
 
 impl<Tr> PeekResultIterator<Tr>
 where
-    for<'a> Tr: TraceReader<DiffGat<'a> = &'a Diff>,
-    for<'a> Tr::Key<'a>: ToDatumIter + IntoOwned<'a, Owned = Row> + Eq,
-    for<'a> Tr::Val<'a>: ToDatumIter,
-    for<'a> Tr::TimeGat<'a>: PartialOrder<mz_repr::Timestamp>,
+    for<'a> Tr: TraceReader<
+            Key<'a>: ToDatumIter + Eq,
+            KeyOwn = Row,
+            Val<'a>: ToDatumIter,
+            TimeGat<'a>: PartialOrder<mz_repr::Timestamp>,
+            DiffGat<'a> = &'a Diff,
+        >,
 {
     /// Extracts and returns the row currently pointed at by our cursor. Returns
     /// `Ok(None)` if our MapFilterProject evaluates to `None`. Also returns any
@@ -256,15 +266,17 @@ where
                     return;
                 }
                 Some(current_literal) => {
+                    let mut key_con = Tr::KeyContainer::with_capacity(1);
+                    key_con.push_own(current_literal);
+                    let current_literal = key_con.get(0).unwrap();
                     // NOTE(vmarcos): We expect the extra allocations below to be manageable
                     // since we only perform as many of them as there are literals.
-                    self.cursor
-                        .seek_key(&self.storage, IntoOwned::borrow_as(current_literal));
+                    self.cursor.seek_key(&self.storage, current_literal);
 
                     if self
                         .cursor
                         .get_key(&self.storage)
-                        .map_or(true, |key| key == IntoOwned::borrow_as(current_literal))
+                        .map_or(true, |key| key == current_literal)
                     {
                         // The cursor found a record whose key matches the
                         // current literal, or we have no more keys and are

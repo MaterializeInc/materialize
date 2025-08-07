@@ -15,7 +15,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use differential_dataflow::IntoOwned;
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
@@ -27,10 +26,12 @@ use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::{CollectionExt, StreamExt};
-use timely::container::CapacityContainerBuilder;
-use timely::dataflow::Scope;
+use timely::container::{CapacityContainerBuilder, ContainerBuilder};
 use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::channels::pushers::Tee;
+use timely::dataflow::channels::pushers::buffer::Session;
 use timely::dataflow::operators::{Map, OkErr};
+use timely::dataflow::{Scope, ScopeParent};
 use timely::progress::Antichain;
 use timely::progress::timestamp::Refines;
 
@@ -309,6 +310,20 @@ where
     }
 }
 
+/// A session with lifetime `'a` in a scope `G` with a container builder `CB`.
+///
+/// This is a shorthand primarily for the reson of readability.
+type SessionFor<'a, G, CB> = Session<
+    'a,
+    <G as ScopeParent>::Timestamp,
+    CB,
+    timely::dataflow::channels::pushers::Counter<
+        <G as ScopeParent>::Timestamp,
+        <CB as ContainerBuilder>::Container,
+        Tee<<G as ScopeParent>::Timestamp, <CB as ContainerBuilder>::Container>,
+    >,
+>;
+
 /// Constructs a `half_join` from supplied arguments.
 ///
 /// This method exists to factor common logic from four code paths that are generic over the type of trace.
@@ -334,8 +349,7 @@ fn build_halfjoin<G, Tr, CF>(
 where
     G: Scope,
     G::Timestamp: RenderTimestamp,
-    Tr: TraceReader<Time = G::Timestamp, Diff = Diff> + Clone + 'static,
-    for<'a> Tr::Key<'a>: IntoOwned<'a, Owned = Row>,
+    Tr: TraceReader<KeyOwn = Row, Time = G::Timestamp, Diff = Diff> + Clone + 'static,
     for<'a> Tr::Val<'a>: ToDatumIter,
     CF: Fn(Tr::TimeGat<'_>, &G::Timestamp) -> bool + 'static,
 {
@@ -376,10 +390,18 @@ where
             // in that we seem to yield too much and do too little work when we do.
             |_timer, count| count > 1_000_000,
             // TODO(mcsherry): consider `RefOrMut` in `half_join` interface to allow re-use.
-            move |key, stream_row, lookup_row, initial, time, diff1, diff2| {
+            move |session: &mut SessionFor<G, CB<Vec<_>>>,
+                  key,
+                  stream_row,
+                  lookup_row,
+                  initial,
+                  diff1,
+                  output| {
                 // Check the shutdown token to avoid doing unnecessary work when the dataflow is
                 // shutting down.
-                shutdown_probe.probe()?;
+                if shutdown_probe.in_shutdown() || output.is_empty() {
+                    return;
+                }
 
                 let mut row_builder = SharedRow::get();
                 let temp_storage = RowArena::new();
@@ -389,15 +411,16 @@ where
                 datums_local.extend(stream_row.iter());
                 datums_local.extend(lookup_row.to_datum_iter());
 
-                let row = closure
-                    .apply(&mut datums_local, &temp_storage, &mut row_builder)
-                    .map(|row| row.cloned());
-                let diff = diff1.clone() * diff2.clone();
-                let dout = (row, time.clone());
-                Some((dout, initial.clone(), diff))
+                let row = closure.apply(&mut datums_local, &temp_storage, &mut row_builder);
+
+                for (time, diff2) in output.drain(..) {
+                    let row = row.as_ref().map(|row| row.cloned()).map_err(Clone::clone);
+                    let diff = diff1.clone() * diff2.clone();
+                    let data = ((row, time.clone()), initial.clone(), diff);
+                    session.give(data);
+                }
             },
         )
-        .inner
         .ok_err(|(data_time, init_time, diff)| {
             // TODO(mcsherry): consider `ok_err()` for `Collection`.
             match data_time {
@@ -422,10 +445,18 @@ where
             // in that we seem to yield too much and do too little work when we do.
             |_timer, count| count > 1_000_000,
             // TODO(mcsherry): consider `RefOrMut` in `half_join` interface to allow re-use.
-            move |key, stream_row, lookup_row, initial, time, diff1, diff2| {
+            move |session: &mut SessionFor<G, CB<Vec<_>>>,
+                  key,
+                  stream_row,
+                  lookup_row,
+                  initial,
+                  diff1,
+                  output| {
                 // Check the shutdown token to avoid doing unnecessary work when the dataflow is
                 // shutting down.
-                shutdown_probe.probe()?;
+                if shutdown_probe.in_shutdown() || output.is_empty() {
+                    return;
+                }
 
                 let mut row_builder = SharedRow::get();
                 let temp_storage = RowArena::new();
@@ -435,16 +466,19 @@ where
                 datums_local.extend(stream_row.iter());
                 datums_local.extend(lookup_row.to_datum_iter());
 
-                let row = closure
+                if let Some(row) = closure
                     .apply(&mut datums_local, &temp_storage, &mut row_builder)
-                    .map(|row| row.cloned())
-                    .expect("Closure claimed to never errer");
-                let diff = diff1.clone() * diff2.clone();
-                row.map(|r| ((r, time.clone()), initial.clone(), diff))
+                    .expect("Closure claimed to never error")
+                {
+                    for (time, diff2) in output.drain(..) {
+                        let diff = diff1.clone() * diff2.clone();
+                        session.give(((row.clone(), time.clone()), initial.clone(), diff));
+                    }
+                }
             },
         );
 
-        (oks, errs)
+        (oks.as_collection(), errs)
     }
 }
 
@@ -494,7 +528,7 @@ where
                                         if source_relation == 0
                                             || inner_as_of.elements().iter().all(|e| e != time)
                                         {
-                                            let time = time.into_owned();
+                                            let time = Tr::owned_time(time);
                                             let temp_storage = RowArena::new();
 
                                             let mut datums_local = datums.borrow();
@@ -514,12 +548,12 @@ where
                                                     Some(Ok(row)) => ok_session.give((
                                                         row,
                                                         time,
-                                                        diff.into_owned(),
+                                                        Tr::owned_diff(diff),
                                                     )),
                                                     Some(Err(err)) => err_session.give((
                                                         err,
                                                         time,
-                                                        diff.into_owned(),
+                                                        Tr::owned_diff(diff),
                                                     )),
                                                     None => {}
                                                 }
@@ -528,7 +562,7 @@ where
                                                     row_builder.packer().extend(&*datums_local);
                                                     row_builder.clone()
                                                 };
-                                                ok_session.give((row, time, diff.into_owned()));
+                                                ok_session.give((row, time, Tr::owned_diff(diff)));
                                             }
                                         }
                                     });

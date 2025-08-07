@@ -15,7 +15,7 @@ use std::fmt::{Display, Write};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use columnar::Columnar;
+use columnar::{Columnar, Ref};
 use differential_dataflow::Collection;
 use differential_dataflow::collection::AsCollection;
 use differential_dataflow::trace::{BatchReader, Cursor};
@@ -778,7 +778,7 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
     }
 
     /// Handle the given compute event.
-    fn handle(&mut self, event: <ComputeEvent as Columnar>::Ref<'_>) {
+    fn handle(&mut self, event: Ref<'_, ComputeEvent>) {
         use ComputeEventReference::*;
         match event {
             Export(export) => self.handle_export(export),
@@ -807,7 +807,7 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
         ExportReference {
             export_id,
             dataflow_index,
-        }: <Export as Columnar>::Ref<'_>,
+        }: Ref<'_, Export>,
     ) {
         let export_id = Columnar::into_owned(export_id);
         let ts = self.ts();
@@ -841,7 +841,7 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
 
     fn handle_export_dropped(
         &mut self,
-        ExportDroppedReference { export_id }: <ExportDropped as Columnar>::Ref<'_>,
+        ExportDroppedReference { export_id }: Ref<'_, ExportDropped>,
     ) {
         let export_id = Columnar::into_owned(export_id);
         let Some(export) = self.state.exports.remove(&export_id) else {
@@ -911,7 +911,7 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
 
     fn handle_dataflow_shutdown(
         &mut self,
-        DataflowShutdownReference { dataflow_index }: <DataflowShutdown as Columnar>::Ref<'_>,
+        DataflowShutdownReference { dataflow_index }: Ref<'_, DataflowShutdown>,
     ) {
         let ts = self.ts();
 
@@ -969,10 +969,7 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
         }
     }
 
-    fn handle_error_count(
-        &mut self,
-        ErrorCountReference { export_id, diff }: <ErrorCount as Columnar>::Ref<'_>,
-    ) {
+    fn handle_error_count(&mut self, ErrorCountReference { export_id, diff }: Ref<'_, ErrorCount>) {
         let ts = self.ts();
         let export_id = Columnar::into_owned(export_id);
 
@@ -1003,10 +1000,7 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
         export.error_count = new_count;
     }
 
-    fn handle_hydration(
-        &mut self,
-        HydrationReference { export_id }: <Hydration as Columnar>::Ref<'_>,
-    ) {
+    fn handle_hydration(&mut self, HydrationReference { export_id }: Ref<'_, Hydration>) {
         let ts = self.ts();
         let export_id = Columnar::into_owned(export_id);
 
@@ -1045,7 +1039,7 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
             peek,
             peek_type,
             installed: _,
-        }: <PeekEvent as Columnar>::Ref<'_>,
+        }: Ref<'_, PeekEvent>,
     ) {
         let peek = Peek::into_owned(peek);
         let uuid = Uuid::from_bytes(peek.uuid);
@@ -1066,7 +1060,7 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
             peek,
             peek_type,
             installed: _,
-        }: <PeekEvent as Columnar>::Ref<'_>,
+        }: Ref<'_, PeekEvent>,
     ) {
         let peek = Peek::into_owned(peek);
         let uuid = Uuid::from_bytes(peek.uuid);
@@ -1094,7 +1088,7 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
             export_id,
             time,
             diff,
-        }: <Frontier as Columnar>::Ref<'_>,
+        }: Ref<'_, Frontier>,
     ) {
         let export_id = Columnar::into_owned(export_id);
         let diff = Diff::from(*diff);
@@ -1111,7 +1105,7 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
             export_id,
             time,
             diff,
-        }: <ImportFrontier as Columnar>::Ref<'_>,
+        }: Ref<'_, ImportFrontier>,
     ) {
         let import_id = Columnar::into_owned(import_id);
         let export_id = Columnar::into_owned(export_id);
@@ -1133,7 +1127,7 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
         ArrangementHeapSizeReference {
             operator_id,
             delta_size,
-        }: <ArrangementHeapSize as Columnar>::Ref<'_>,
+        }: Ref<'_, ArrangementHeapSize>,
     ) {
         let ts = self.ts();
         let Some(state) = self.state.arrangement_size.get_mut(&operator_id) else {
@@ -1154,7 +1148,7 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
         ArrangementHeapCapacityReference {
             operator_id,
             delta_capacity,
-        }: <ArrangementHeapCapacity as Columnar>::Ref<'_>,
+        }: Ref<'_, ArrangementHeapCapacity>,
     ) {
         let ts = self.ts();
         let Some(state) = self.state.arrangement_size.get_mut(&operator_id) else {
@@ -1175,7 +1169,7 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
         ArrangementHeapAllocationsReference {
             operator_id,
             delta_allocations,
-        }: <ArrangementHeapAllocations as Columnar>::Ref<'_>,
+        }: Ref<'_, ArrangementHeapAllocations>,
     ) {
         let ts = self.ts();
         let Some(state) = self.state.arrangement_size.get_mut(&operator_id) else {
@@ -1197,7 +1191,7 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
         ArrangementHeapSizeOperatorReference {
             operator_id,
             address,
-        }: <ArrangementHeapSizeOperator as Columnar>::Ref<'_>,
+        }: Ref<'_, ArrangementHeapSizeOperator>,
     ) {
         let activator = self
             .state
@@ -1222,8 +1216,9 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
     /// Indicate that an arrangement has been dropped and we can cleanup the heap size state.
     fn handle_arrangement_heap_size_operator_dropped(
         &mut self,
-        ArrangementHeapSizeOperatorDropReference { operator_id }: <ArrangementHeapSizeOperatorDrop as Columnar>::Ref<'_>,
+        event: Ref<'_, ArrangementHeapSizeOperatorDrop>,
     ) {
+        let operator_id = event.operator_id;
         if let Some(state) = self.state.arrangement_size.remove(&operator_id) {
             let ts = self.ts();
             let datum = ArrangementHeapDatum { operator_id };
@@ -1249,7 +1244,7 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
     /// Indicate that a new LIR operator exists; record the dataflow address it maps to.
     fn handle_lir_mapping(
         &mut self,
-        LirMappingReference { global_id, mapping }: <LirMapping as Columnar>::Ref<'_>,
+        LirMappingReference { global_id, mapping }: Ref<'_, LirMapping>,
     ) {
         let global_id = Columnar::into_owned(global_id);
         // record the state (for the later drop)
@@ -1280,7 +1275,7 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
         DataflowGlobalReference {
             dataflow_index,
             global_id,
-        }: <DataflowGlobal as Columnar>::Ref<'_>,
+        }: Ref<'_, DataflowGlobal>,
     ) {
         let global_id = Columnar::into_owned(global_id);
         self.state

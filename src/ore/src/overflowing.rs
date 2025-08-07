@@ -87,24 +87,22 @@ impl<T: std::fmt::Display> std::fmt::Display for Overflowing<T> {
 #[cfg(feature = "columnar")]
 mod columnar {
     use crate::overflowing::Overflowing;
-    use columnar::common::index::CopyAs;
+    use columnar::common::PushIndexAs;
     use columnar::{AsBytes, Clear, Columnar, Container, FromBytes, Index, IndexAs, Len, Push};
     use serde::{Deserialize, Serialize};
 
     impl<T: Columnar + Copy + Send> Columnar for Overflowing<T>
     where
-        Vec<T>: Container<T>,
+        for<'a> &'a [T]: AsBytes<'a> + FromBytes<'a>,
         Overflowing<T>: From<T>,
-        for<'a> <T as Columnar>::Ref<'a>: CopyAs<T>,
     {
-        type Ref<'a> = Overflowing<T>;
         #[inline(always)]
-        fn into_owned<'a>(other: Self::Ref<'a>) -> Self {
+        fn into_owned(other: columnar::Ref<'_, Self>) -> Self {
             other
         }
-        type Container = Overflows<T, Vec<T>>;
+        type Container = Overflows<T>;
         #[inline(always)]
-        fn reborrow<'b, 'a: 'b>(thing: Self::Ref<'a>) -> Self::Ref<'b>
+        fn reborrow<'b, 'a: 'b>(thing: columnar::Ref<'a, Self>) -> columnar::Ref<'b, Self>
         where
             Self: 'a,
         {
@@ -114,7 +112,7 @@ mod columnar {
 
     /// Columnar container for [`Overflowing`].
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-    pub struct Overflows<T, TC>(TC, std::marker::PhantomData<T>);
+    pub struct Overflows<T, TC = Vec<T>>(TC, std::marker::PhantomData<T>);
 
     impl<T, TC: Default> Default for Overflows<T, TC> {
         #[inline(always)]
@@ -123,12 +121,11 @@ mod columnar {
         }
     }
 
-    impl<T: Columnar + Copy + Send, TC: Container<T>> Container<Overflowing<T>> for Overflows<T, TC>
+    impl<T: Columnar + Copy + Send, TC: PushIndexAs<T>> Container for Overflows<T, TC>
     where
-        Vec<T>: Container<T>,
         Overflowing<T>: From<T>,
-        for<'a> <T as Columnar>::Ref<'a>: CopyAs<T>,
     {
+        type Ref<'a> = Overflowing<T>;
         type Borrowed<'a>
             = Overflows<T, TC::Borrowed<'a>>
         where
@@ -143,6 +140,23 @@ mod columnar {
             Self: 'a,
         {
             Overflows(TC::reborrow(item.0), std::marker::PhantomData)
+        }
+
+        #[inline(always)]
+        fn reborrow_ref<'b, 'a: 'b>(item: Self::Ref<'a>) -> Self::Ref<'b>
+        where
+            Self: 'a,
+        {
+            item
+        }
+
+        #[inline(always)]
+        fn reserve_for<'a, I>(&mut self, selves: I)
+        where
+            Self: 'a,
+            I: Iterator<Item = Self::Borrowed<'a>> + Clone,
+        {
+            self.0.reserve_for(selves.map(|s| s.0));
         }
     }
 
@@ -185,10 +199,10 @@ mod columnar {
         }
     }
 
-    impl<T: Copy, TC: Push<T>> Push<Overflowing<T>> for Overflows<T, TC> {
+    impl<T: Copy, TC: for<'a> Push<&'a T>> Push<Overflowing<T>> for Overflows<T, TC> {
         #[inline(always)]
         fn push(&mut self, item: Overflowing<T>) {
-            self.0.push(item.0);
+            self.0.push(&item.0);
         }
     }
 

@@ -17,7 +17,7 @@
 
 use std::hash::Hash;
 
-use columnar::Columnar;
+use columnar::{Columnar, Ref};
 use differential_dataflow::Hashable;
 use differential_dataflow::containers::TimelyStack;
 use differential_dataflow::trace::implementations::merge_batcher::{ColMerger, MergeBatcher};
@@ -91,16 +91,17 @@ mod container {
 
     impl<C: Columnar> Column<C> {
         /// Borrows the container as a reference.
-        fn borrow(&self) -> <C::Container as columnar::Container<C>>::Borrowed<'_> {
+        #[inline]
+        fn borrow(&self) -> <C::Container as columnar::Container>::Borrowed<'_> {
             match self {
                 Column::Typed(t) => t.borrow(),
                 Column::Bytes(b) => {
-                    <<C::Container as columnar::Container<C>>::Borrowed<'_>>::from_bytes(
+                    <<C::Container as columnar::Container>::Borrowed<'_>>::from_bytes(
                         &mut Sequence::decode(bytemuck::cast_slice(b)),
                     )
                 }
                 Column::Align(a) => {
-                    <<C::Container as columnar::Container<C>>::Borrowed<'_>>::from_bytes(
+                    <<C::Container as columnar::Container>::Borrowed<'_>>::from_bytes(
                         &mut Sequence::decode(a),
                     )
                 }
@@ -140,14 +141,16 @@ mod container {
     }
 
     impl<C: Columnar> Container for Column<C> {
-        type ItemRef<'a> = C::Ref<'a>;
-        type Item<'a> = C::Ref<'a>;
+        type ItemRef<'a> = columnar::Ref<'a, C>;
+        type Item<'a> = columnar::Ref<'a, C>;
 
+        #[inline]
         fn len(&self) -> usize {
             self.borrow().len()
         }
 
         // This sets the `Bytes` variant to be an empty `Typed` variant, appropriate for pushing into.
+        #[inline]
         fn clear(&mut self) {
             match self {
                 Column::Typed(t) => t.clear(),
@@ -155,14 +158,16 @@ mod container {
             }
         }
 
-        type Iter<'a> = IterOwn<<C::Container as columnar::Container<C>>::Borrowed<'a>>;
+        type Iter<'a> = IterOwn<<C::Container as columnar::Container>::Borrowed<'a>>;
 
+        #[inline]
         fn iter(&self) -> Self::Iter<'_> {
             self.borrow().into_index_iter()
         }
 
-        type DrainIter<'a> = IterOwn<<C::Container as columnar::Container<C>>::Borrowed<'a>>;
+        type DrainIter<'a> = IterOwn<<C::Container as columnar::Container>::Borrowed<'a>>;
 
+        #[inline]
         fn drain(&mut self) -> Self::DrainIter<'_> {
             self.borrow().into_index_iter()
         }
@@ -187,6 +192,7 @@ mod container {
     }
 
     impl<C: Columnar> ContainerBytes for Column<C> {
+        #[inline]
         fn from_bytes(bytes: Bytes) -> Self {
             // Our expectation / hope is that `bytes` is `u64` aligned and sized.
             // If the alignment is borked, we can relocate. If the size is borked,
@@ -205,6 +211,7 @@ mod container {
             }
         }
 
+        #[inline]
         fn length_in_bytes(&self) -> usize {
             match self {
                 Column::Typed(t) => Sequence::length_in_bytes(&t.borrow()),
@@ -213,6 +220,7 @@ mod container {
             }
         }
 
+        #[inline]
         fn into_bytes<W: ::std::io::Write>(&self, writer: &mut W) {
             match self {
                 Column::Typed(t) => Sequence::write(writer, &t.borrow()).unwrap(),
@@ -281,6 +289,7 @@ mod builder {
     }
 
     impl<C: Columnar> Default for ColumnBuilder<C> {
+        #[inline]
         fn default() -> Self {
             ColumnBuilder {
                 current: Default::default(),
@@ -332,10 +341,10 @@ pub type Col2KeyBatcher<K, T, R> = Col2ValBatcher<K, (), T, R>;
 /// time to figure out the lifetimes of the elements when specified as a closure, so we rather
 /// specify it as a function.
 #[inline(always)]
-pub fn columnar_exchange<K, V, T, D>(((k, _), _, _): &<((K, V), T, D) as Columnar>::Ref<'_>) -> u64
+pub fn columnar_exchange<K, V, T, D>(((k, _), _, _): &Ref<'_, ((K, V), T, D)>) -> u64
 where
     K: Columnar,
-    for<'a> K::Ref<'a>: Hash,
+    for<'a> Ref<'a, K>: Hash,
     V: Columnar,
     D: Columnar,
     T: Columnar,
@@ -385,11 +394,11 @@ pub mod batcher {
     impl<'a, D, T, R, C2> PushInto<&'a mut Column<(D, T, R)>> for Chunker<C2>
     where
         D: Columnar,
-        for<'b> D::Ref<'b>: Ord + Copy,
+        for<'b> columnar::Ref<'b, D>: Ord + Copy,
         T: Columnar,
-        for<'b> T::Ref<'b>: Ord + Copy,
-        R: Columnar + Semigroup + for<'b> Semigroup<R::Ref<'b>>,
-        for<'b> R::Ref<'b>: Ord,
+        for<'b> columnar::Ref<'b, T>: Ord + Copy,
+        R: Columnar + Semigroup + for<'b> Semigroup<columnar::Ref<'b, R>>,
+        for<'b> columnar::Ref<'b, R>: Ord,
         C2: Container + for<'b> PushInto<&'b (D, T, R)>,
     {
         fn push_into(&mut self, container: &'a mut Column<(D, T, R)>) {
