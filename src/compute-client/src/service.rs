@@ -20,8 +20,9 @@ use bytesize::ByteSize;
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::lattice::Lattice;
 use mz_expr::row::RowCollection;
-use mz_ore::cast::CastFrom;
-use mz_ore::{assert_none, soft_assert_eq_or_log};
+use mz_ore::cast::CastInto;
+use mz_ore::tracing::OpenTelemetryContext;
+use mz_ore::{assert_none, soft_panic_or_log};
 use mz_repr::{Diff, GlobalId, Row};
 use mz_service::client::{GenericClient, Partitionable, PartitionedState};
 use mz_service::grpc::{GrpcClient, GrpcServer, ProtoServiceTypes, ResponseStream};
@@ -222,6 +223,195 @@ where
             }
         }
     }
+
+    /// Absorb a [`ComputeResponse::Frontiers`].
+    fn absorb_frontiers(
+        &mut self,
+        shard_id: usize,
+        collection_id: GlobalId,
+        frontiers: FrontiersResponse<T>,
+    ) -> Option<ComputeResponse<T>> {
+        let tracked = self
+            .frontiers
+            .entry(collection_id)
+            .or_insert_with(|| TrackedFrontiers::new(self.parts));
+
+        let write_frontier = frontiers
+            .write_frontier
+            .and_then(|f| tracked.update_write_frontier(shard_id, &f));
+        let input_frontier = frontiers
+            .input_frontier
+            .and_then(|f| tracked.update_input_frontier(shard_id, &f));
+        let output_frontier = frontiers
+            .output_frontier
+            .and_then(|f| tracked.update_output_frontier(shard_id, &f));
+
+        let frontiers = FrontiersResponse {
+            write_frontier,
+            input_frontier,
+            output_frontier,
+        };
+        let result = frontiers
+            .has_updates()
+            .then_some(ComputeResponse::Frontiers(collection_id, frontiers));
+
+        if tracked.all_empty() {
+            // All shards have reported advancement to the empty frontier, so we do not
+            // expect further updates for this collection.
+            self.frontiers.remove(&collection_id);
+        }
+
+        result
+    }
+
+    /// Absorb a [`ComputeResponse::PeekResponse`].
+    fn absorb_peek_response(
+        &mut self,
+        shard_id: usize,
+        uuid: Uuid,
+        response: PeekResponse,
+        otel_ctx: OpenTelemetryContext,
+    ) -> Option<ComputeResponse<T>> {
+        let tracked = self.peek_responses.entry(uuid).or_default();
+
+        let prev = tracked.insert(shard_id, response);
+        assert_none!(prev, "duplicate peek response");
+
+        if tracked.len() < self.parts {
+            return None; // some shard responses still outstanding
+        }
+
+        let shards = self.peek_responses.remove(&uuid).unwrap();
+        let response = merge_peek_responses(shards, self.max_result_size);
+
+        Some(ComputeResponse::PeekResponse(uuid, response, otel_ctx))
+    }
+
+    /// Absorb a [`ComputeResponse::CopyToResponse`].
+    fn absorb_copy_to_response(
+        &mut self,
+        shard_id: usize,
+        copyto_id: GlobalId,
+        response: CopyToResponse,
+    ) -> Option<ComputeResponse<T>> {
+        use CopyToResponse::*;
+
+        let tracked = self.copy_to_responses.entry(copyto_id).or_default();
+
+        let prev = tracked.insert(shard_id, response);
+        assert_none!(prev, "duplicate copy-to response");
+
+        if tracked.len() < self.parts {
+            return None; // some shard responses still outstanding
+        }
+
+        let shards = self.copy_to_responses.remove(&copyto_id).unwrap();
+
+        let mut merged = RowCount(0);
+        for resp in shards.into_values() {
+            merged = match (merged, resp) {
+                (Dropped, _) | (_, Dropped) => Dropped,
+                (Error(e), _) | (_, Error(e)) => Error(e),
+                (RowCount(r1), RowCount(r2)) => RowCount(r1 + r2),
+            }
+        }
+
+        Some(ComputeResponse::CopyToResponse(copyto_id, merged))
+    }
+
+    /// Absorb a [`ComputeResponse::SubscribeResponse`].
+    fn absorb_subscribe_response(
+        &mut self,
+        subscribe_id: GlobalId,
+        response: SubscribeResponse<T>,
+    ) -> Option<ComputeResponse<T>> {
+        let tracked = self
+            .pending_subscribes
+            .entry(subscribe_id)
+            .or_insert_with(|| PendingSubscribe::new(self.parts));
+
+        let emit_response = match response {
+            SubscribeResponse::Batch(batch) => {
+                let frontiers = &mut tracked.frontiers;
+                let old_frontier = frontiers.frontier().to_owned();
+                frontiers.update_iter(batch.lower.into_iter().map(|t| (t, -1)));
+                frontiers.update_iter(batch.upper.into_iter().map(|t| (t, 1)));
+                let new_frontier = frontiers.frontier().to_owned();
+
+                match (&mut tracked.stashed_updates, batch.updates) {
+                    (Err(_), _) => {
+                        // Subscribe is borked; nothing to do.
+                        // TODO: Consider refreshing error?
+                    }
+                    (_, Err(text)) => {
+                        tracked.stashed_updates = Err(text);
+                    }
+                    (Ok(stashed_updates), Ok(updates)) => {
+                        stashed_updates.extend(updates);
+                    }
+                }
+
+                // If the frontier has advanced, it is time to announce subscribe progress. Unless
+                // we have already announced that the subscribe has been dropped, in which case we
+                // must keep quiet.
+                if old_frontier != new_frontier && !tracked.dropped {
+                    let updates = match &mut tracked.stashed_updates {
+                        Ok(stashed_updates) => {
+                            // The compute protocol requires us to only send out consolidated
+                            // batches.
+                            consolidate_updates(stashed_updates);
+
+                            let mut ship = Vec::new();
+                            let mut keep = Vec::new();
+                            for (time, data, diff) in stashed_updates.drain(..) {
+                                if new_frontier.less_equal(&time) {
+                                    keep.push((time, data, diff));
+                                } else {
+                                    ship.push((time, data, diff));
+                                }
+                            }
+                            tracked.stashed_updates = Ok(keep);
+                            Ok(ship)
+                        }
+                        Err(text) => Err(text.clone()),
+                    };
+                    Some(ComputeResponse::SubscribeResponse(
+                        subscribe_id,
+                        SubscribeResponse::Batch(SubscribeBatch {
+                            lower: old_frontier,
+                            upper: new_frontier,
+                            updates,
+                        }),
+                    ))
+                } else {
+                    None
+                }
+            }
+            SubscribeResponse::DroppedAt(frontier) => {
+                tracked
+                    .frontiers
+                    .update_iter(frontier.iter().map(|t| (t.clone(), -1)));
+
+                if tracked.dropped {
+                    None
+                } else {
+                    tracked.dropped = true;
+                    Some(ComputeResponse::SubscribeResponse(
+                        subscribe_id,
+                        SubscribeResponse::DroppedAt(frontier),
+                    ))
+                }
+            }
+        };
+
+        if tracked.frontiers.frontier().is_empty() {
+            // All shards have reported advancement to the empty frontier or dropping, so
+            // we do not expect further updates for this subscribe.
+            self.pending_subscribes.remove(&subscribe_id);
+        }
+
+        emit_response
+    }
 }
 
 impl<T> PartitionedState<ComputeCommand<T>, ComputeResponse<T>> for PartitionedComputeState<T>
@@ -252,298 +442,26 @@ where
         shard_id: usize,
         message: ComputeResponse<T>,
     ) -> Option<Result<ComputeResponse<T>, anyhow::Error>> {
-        match message {
+        let response = match message {
             ComputeResponse::Frontiers(id, frontiers) => {
-                // Initialize frontier tracking state for this collection, if necessary.
-                let tracked = self
-                    .frontiers
-                    .entry(id)
-                    .or_insert_with(|| TrackedFrontiers::new(self.parts));
-
-                let write_frontier = frontiers
-                    .write_frontier
-                    .and_then(|f| tracked.update_write_frontier(shard_id, &f));
-                let input_frontier = frontiers
-                    .input_frontier
-                    .and_then(|f| tracked.update_input_frontier(shard_id, &f));
-                let output_frontier = frontiers
-                    .output_frontier
-                    .and_then(|f| tracked.update_output_frontier(shard_id, &f));
-
-                let frontiers = FrontiersResponse {
-                    write_frontier,
-                    input_frontier,
-                    output_frontier,
-                };
-                let result = frontiers
-                    .has_updates()
-                    .then_some(Ok(ComputeResponse::Frontiers(id, frontiers)));
-
-                if tracked.all_empty() {
-                    // All shards have reported advancement to the empty frontier, so we do not
-                    // expect further updates for this collection.
-                    self.frontiers.remove(&id);
-                }
-
-                result
+                self.absorb_frontiers(shard_id, id, frontiers)
             }
             ComputeResponse::PeekResponse(uuid, response, otel_ctx) => {
-                // Incorporate new peek responses; awaiting all responses.
-                let entry = self
-                    .peek_responses
-                    .entry(uuid)
-                    .or_insert_with(Default::default);
-                let novel = entry.insert(shard_id, response);
-                assert_none!(novel, "Duplicate peek response");
-                // We may be ready to respond.
-                if entry.len() == self.parts {
-                    let mut response = PeekResponse::Rows(RowCollection::default());
-                    for (_part, r) in std::mem::take(entry).into_iter() {
-                        response = match (response, r) {
-                            (_, PeekResponse::Canceled) => PeekResponse::Canceled,
-                            (PeekResponse::Canceled, _) => PeekResponse::Canceled,
-                            (_, PeekResponse::Error(e)) => PeekResponse::Error(e),
-                            (PeekResponse::Error(e), _) => PeekResponse::Error(e),
-                            (PeekResponse::Rows(rows), PeekResponse::Stashed(mut stashed))
-                            | (PeekResponse::Stashed(mut stashed), PeekResponse::Rows(rows)) => {
-                                let total_inlined_size = rows
-                                    .byte_len()
-                                    .saturating_add(stashed.inline_rows.byte_len());
-
-                                if total_inlined_size > usize::cast_from(self.max_result_size) {
-                                    // Note: We match on this specific error message in tests
-                                    // so it's important that nothing else returns the same
-                                    // string.
-                                    let err = format!(
-                                        "total result exceeds max size of {}",
-                                        ByteSize::b(self.max_result_size)
-                                    );
-                                    PeekResponse::Error(err)
-                                } else {
-                                    stashed.inline_rows.merge(&rows);
-                                    PeekResponse::Stashed(stashed)
-                                }
-                            }
-                            (PeekResponse::Rows(mut rows), PeekResponse::Rows(other)) => {
-                                let total_byte_size =
-                                    rows.byte_len().saturating_add(other.byte_len());
-
-                                if total_byte_size > usize::cast_from(self.max_result_size) {
-                                    // Note: We match on this specific error message in tests
-                                    // so it's important that nothing else returns the same
-                                    // string.
-                                    let err = format!(
-                                        "total result exceeds max size of {}",
-                                        ByteSize::b(self.max_result_size)
-                                    );
-                                    PeekResponse::Error(err)
-                                } else {
-                                    rows.merge(&other);
-                                    PeekResponse::Rows(rows)
-                                }
-                            }
-                            (PeekResponse::Stashed(stashed), PeekResponse::Stashed(other)) => {
-                                // Deconstruct so we don't miss adding new
-                                // fields. We need to be careful about merging
-                                // everything!
-                                let StashedPeekResponse {
-                                    num_rows_batches: self_num_rows_batches,
-                                    encoded_size_bytes: self_encoded_size_bytes,
-                                    relation_desc: self_relation_desc,
-                                    shard_id: self_shard_id,
-                                    batches: mut self_batches,
-                                    inline_rows: mut self_inline_rows,
-                                } = *stashed;
-                                let StashedPeekResponse {
-                                    num_rows_batches: other_num_rows_batches,
-                                    encoded_size_bytes: other_encoded_size_bytes,
-                                    relation_desc: other_relation_desc,
-                                    shard_id: other_shard_id,
-                                    batches: mut other_batches,
-                                    inline_rows: other_inline_rows,
-                                } = *other;
-
-                                soft_assert_eq_or_log!(self_shard_id, other_shard_id);
-                                soft_assert_eq_or_log!(self_relation_desc, other_relation_desc);
-
-                                let total_inlined_size = self_inline_rows
-                                    .byte_len()
-                                    .saturating_add(other_inline_rows.byte_len());
-
-                                if self_shard_id != other_shard_id {
-                                    let err = format!(
-                                        "internal error: shard IDs of stashed response do not match, got {self_shard_id} and {other_shard_id}",
-                                    );
-                                    PeekResponse::Error(err)
-                                } else if self_relation_desc != other_relation_desc {
-                                    let err = format!(
-                                        "internal error: RelationDesc of stashed response do not match, got {:?} and {:?}",
-                                        self_relation_desc, other_relation_desc,
-                                    );
-                                    PeekResponse::Error(err)
-                                } else if total_inlined_size
-                                    > usize::cast_from(self.max_result_size)
-                                {
-                                    // Note: We match on this specific error message in tests
-                                    // so it's important that nothing else returns the same
-                                    // string.
-                                    let err = format!(
-                                        "total result exceeds max size of {}",
-                                        ByteSize::b(self.max_result_size)
-                                    );
-                                    PeekResponse::Error(err)
-                                } else {
-                                    self_inline_rows.merge(&other_inline_rows);
-
-                                    self_batches.append(&mut other_batches);
-
-                                    let merged_response = StashedPeekResponse {
-                                        num_rows_batches: self_num_rows_batches
-                                            + other_num_rows_batches,
-                                        encoded_size_bytes: self_encoded_size_bytes
-                                            + other_encoded_size_bytes,
-                                        relation_desc: self_relation_desc,
-                                        shard_id: self_shard_id,
-                                        batches: self_batches,
-                                        inline_rows: self_inline_rows,
-                                    };
-
-                                    PeekResponse::Stashed(Box::new(merged_response))
-                                }
-                            }
-                        };
-                    }
-                    self.peek_responses.remove(&uuid);
-                    // We take the otel_ctx from the last peek, but they should all be the same
-                    Some(Ok(ComputeResponse::PeekResponse(uuid, response, otel_ctx)))
-                } else {
-                    None
-                }
+                self.absorb_peek_response(shard_id, uuid, response, otel_ctx)
             }
             ComputeResponse::SubscribeResponse(id, response) => {
-                // Initialize tracking for this subscribe, if necessary.
-                let entry = self
-                    .pending_subscribes
-                    .entry(id)
-                    .or_insert_with(|| PendingSubscribe::new(self.parts));
-
-                let emit_response = match response {
-                    SubscribeResponse::Batch(batch) => {
-                        let frontiers = &mut entry.frontiers;
-                        let old_frontier = frontiers.frontier().to_owned();
-                        frontiers.update_iter(batch.lower.into_iter().map(|t| (t, -1)));
-                        frontiers.update_iter(batch.upper.into_iter().map(|t| (t, 1)));
-                        let new_frontier = frontiers.frontier().to_owned();
-
-                        match (&mut entry.stashed_updates, batch.updates) {
-                            (Err(_), _) => {
-                                // Subscribe is borked; nothing to do.
-                                // TODO: Consider refreshing error?
-                            }
-                            (_, Err(text)) => {
-                                entry.stashed_updates = Err(text);
-                            }
-                            (Ok(stashed_updates), Ok(updates)) => {
-                                stashed_updates.extend(updates);
-                            }
-                        }
-
-                        // If the frontier has advanced, it is time to announce subscribe progress.
-                        // Unless we have already announced that the subscribe has been dropped, in
-                        // which case we must keep quiet.
-                        if old_frontier != new_frontier && !entry.dropped {
-                            let updates = match &mut entry.stashed_updates {
-                                Ok(stashed_updates) => {
-                                    // The compute protocol requires us to only send out
-                                    // consolidated batches.
-                                    consolidate_updates(stashed_updates);
-
-                                    let mut ship = Vec::new();
-                                    let mut keep = Vec::new();
-                                    for (time, data, diff) in stashed_updates.drain(..) {
-                                        if new_frontier.less_equal(&time) {
-                                            keep.push((time, data, diff));
-                                        } else {
-                                            ship.push((time, data, diff));
-                                        }
-                                    }
-                                    entry.stashed_updates = Ok(keep);
-                                    Ok(ship)
-                                }
-                                Err(text) => Err(text.clone()),
-                            };
-                            Some(Ok(ComputeResponse::SubscribeResponse(
-                                id,
-                                SubscribeResponse::Batch(SubscribeBatch {
-                                    lower: old_frontier,
-                                    upper: new_frontier,
-                                    updates,
-                                }),
-                            )))
-                        } else {
-                            None
-                        }
-                    }
-                    SubscribeResponse::DroppedAt(frontier) => {
-                        entry
-                            .frontiers
-                            .update_iter(frontier.iter().map(|t| (t.clone(), -1)));
-
-                        if entry.dropped {
-                            None
-                        } else {
-                            entry.dropped = true;
-                            Some(Ok(ComputeResponse::SubscribeResponse(
-                                id,
-                                SubscribeResponse::DroppedAt(frontier),
-                            )))
-                        }
-                    }
-                };
-
-                if entry.frontiers.frontier().is_empty() {
-                    // All shards have reported advancement to the empty frontier or dropping, so
-                    // we do not expect further updates for this subscribe.
-                    self.pending_subscribes.remove(&id);
-                }
-
-                emit_response
+                self.absorb_subscribe_response(id, response)
             }
             ComputeResponse::CopyToResponse(id, response) => {
-                // Incorporate new copy to responses; awaiting all responses.
-                let entry = self
-                    .copy_to_responses
-                    .entry(id)
-                    .or_insert_with(Default::default);
-                let novel = entry.insert(shard_id, response);
-                assert_none!(novel, "Duplicate copy to response");
-                // We may be ready to respond.
-                if entry.len() == self.parts {
-                    let mut response = CopyToResponse::RowCount(0);
-                    for (_part, r) in std::mem::take(entry).into_iter() {
-                        response = match (response, r) {
-                            // It's important that we receive all the `Dropped` messages as well
-                            // so that the `copy_to_responses` state can be cleared.
-                            (_, CopyToResponse::Dropped) => CopyToResponse::Dropped,
-                            (CopyToResponse::Dropped, _) => CopyToResponse::Dropped,
-                            (_, CopyToResponse::Error(e)) => CopyToResponse::Error(e),
-                            (CopyToResponse::Error(e), _) => CopyToResponse::Error(e),
-                            (CopyToResponse::RowCount(r1), CopyToResponse::RowCount(r2)) => {
-                                CopyToResponse::RowCount(r1 + r2)
-                            }
-                        };
-                    }
-                    self.copy_to_responses.remove(&id);
-                    Some(Ok(ComputeResponse::CopyToResponse(id, response)))
-                } else {
-                    None
-                }
+                self.absorb_copy_to_response(shard_id, id, response)
             }
             response @ ComputeResponse::Status(_) => {
                 // Pass through status responses.
-                Some(Ok(response))
+                Some(response)
             }
-        }
+        };
+
+        response.map(Ok)
     }
 }
 
@@ -672,4 +590,95 @@ impl<T: ComputeControllerTimestamp> PendingSubscribe<T> {
             dropped: false,
         }
     }
+}
+
+/// Merge shard [`PeekResponse`]s into a unified response.
+fn merge_peek_responses(
+    mut shards: BTreeMap<usize, PeekResponse>,
+    max_result_size: u64,
+) -> PeekResponse {
+    use PeekResponse::*;
+
+    // Cancelations and errors short-circuit. Cancelations take precedence over errors.
+    if let Some(idx) = shards.values().position(|r| matches!(r, &Canceled)) {
+        return shards.remove(&idx).unwrap();
+    }
+    if let Some(idx) = shards.values().position(|r| matches!(r, &Error(_))) {
+        return shards.remove(&idx).unwrap();
+    }
+
+    let mut merged = Rows(RowCollection::default());
+    for resp in shards.into_values() {
+        let total_byte_len = merged.inline_byte_len() + resp.inline_byte_len();
+        if total_byte_len > max_result_size.cast_into() {
+            // Note: We match on this specific error message in tests so it's important that
+            // nothing else returns the same string.
+            let err = format!(
+                "total result exceeds max size of {}",
+                ByteSize::b(max_result_size)
+            );
+            return Error(err);
+        }
+
+        merged = match (merged, resp) {
+            (Rows(mut rows1), Rows(rows2)) => {
+                rows1.merge(&rows2);
+                Rows(rows1)
+            }
+            (Rows(rows), Stashed(mut stashed)) | (Stashed(mut stashed), Rows(rows)) => {
+                stashed.inline_rows.merge(&rows);
+                Stashed(stashed)
+            }
+            (Stashed(stashed1), Stashed(stashed2)) => {
+                // Deconstruct so we don't miss adding new fields. We need to be careful about
+                // merging everything!
+                let StashedPeekResponse {
+                    num_rows_batches: num_rows_batches1,
+                    encoded_size_bytes: encoded_size_bytes1,
+                    relation_desc: relation_desc1,
+                    shard_id: shard_id1,
+                    batches: mut batches1,
+                    inline_rows: mut inline_rows1,
+                } = *stashed1;
+                let StashedPeekResponse {
+                    num_rows_batches: num_rows_batches2,
+                    encoded_size_bytes: encoded_size_bytes2,
+                    relation_desc: relation_desc2,
+                    shard_id: shard_id2,
+                    batches: mut batches2,
+                    inline_rows: inline_rows2,
+                } = *stashed2;
+
+                if shard_id1 != shard_id2 {
+                    soft_panic_or_log!(
+                        "shard IDs of stashed responses do not match: \
+                             {shard_id1} != {shard_id2}"
+                    );
+                    return Error("internal error".into());
+                }
+                if relation_desc1 != relation_desc2 {
+                    soft_panic_or_log!(
+                        "relation descs of stashed responses do not match: \
+                             {relation_desc1:?} != {relation_desc2:?}"
+                    );
+                    return Error("internal error".into());
+                }
+
+                batches1.append(&mut batches2);
+                inline_rows1.merge(&inline_rows2);
+
+                Stashed(Box::new(StashedPeekResponse {
+                    num_rows_batches: num_rows_batches1 + num_rows_batches2,
+                    encoded_size_bytes: encoded_size_bytes1 + encoded_size_bytes2,
+                    relation_desc: relation_desc1,
+                    shard_id: shard_id1,
+                    batches: batches1,
+                    inline_rows: inline_rows1,
+                }))
+            }
+            _ => unreachable!("handled above"),
+        }
+    }
+
+    merged
 }
