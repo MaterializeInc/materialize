@@ -203,7 +203,7 @@ so it is executed.""",
     set_parallelism_name(pipeline)
     check_depends_on(pipeline, args.pipeline)
     add_version_to_preflight_tests(pipeline)
-    move_build_to_bazel_lto(pipeline, args.pipeline)
+    move_build_to_bazel_lto(pipeline, bazel_lto)
     trim_builds_prep_thread.join()
     trim_builds(pipeline, hash_check)
     add_cargo_test_dependency(
@@ -946,8 +946,8 @@ def remove_dependencies_on_prs(
             del step["depends_on"]
 
 
-def move_build_to_bazel_lto(pipeline: Any, pipeline_name: str) -> None:
-    if not os.environ["BUILDKITE_TAG"] and not ui.env_is_truthy("CI_RELEASE_LTO_BUILD"):
+def move_build_to_bazel_lto(pipeline: Any, bazel_lto: bool) -> None:
+    if not bazel_lto:
         return
     pipeline.setdefault("env", {})["CI_BAZEL_BUILD"] = 1
     pipeline["env"]["CI_BAZEL_LTO"] = 1

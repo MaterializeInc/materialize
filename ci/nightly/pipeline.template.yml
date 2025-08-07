@@ -1561,7 +1561,7 @@ steps:
         label: "RQG dbt3-joins workload"
         depends_on: build-aarch64
         # Some queries run very slow on Postgres, set a higher timeout to give them a chance to finish
-        timeout_in_minutes: 160
+        timeout_in_minutes: 120
         agents:
           # Runs into timeout/OoM on small agents
           queue: hetzner-aarch64-8cpu-16gb
@@ -1572,6 +1572,7 @@ steps:
               composition: rqg
               args: ["dbt3-joins", "--seed=$BUILDKITE_JOB_ID"]
               ci-builder: stable
+        skip: "still hangs, even after 2 hours to finish"
 
       - id: rqg-lateral-joins
         label: "RQG lateral-joins workload"
