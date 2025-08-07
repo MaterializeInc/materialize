@@ -41,6 +41,11 @@ class SqlServer(Service):
                     f"SA_PASSWORD={sa_password}",
                     *environment_extra,
                 ],
+                "healthcheck": {
+                    "test": f"/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P '{sa_password}' -Q 'SELECT 1'",
+                    "interval": "1s",
+                    "start_period": "30s",
+                },
             },
         )
         self.sa_password = sa_password

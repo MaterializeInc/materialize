@@ -18,6 +18,7 @@ pub async fn run_execute(
     state: &mut State,
 ) -> Result<ControlFlow, anyhow::Error> {
     let name = cmd.args.string("name")?;
+    let split_lines = cmd.args.opt_bool("split-lines")?.unwrap_or(true);
     cmd.args.done()?;
 
     let client = state
@@ -25,10 +26,21 @@ pub async fn run_execute(
         .get_mut(&name)
         .ok_or_else(|| anyhow!("connection {} not found", name.quoted()))?;
 
-    for query in cmd.input {
+    if split_lines {
+        for query in cmd.input {
+            println!(">> {}", query);
+            client
+                .simple_query(query)
+                .await
+                .context("executing SQL Server query")?;
+        }
+    } else {
+        let query = cmd.input.join("\n");
         println!(">> {}", query);
+        // execute uses prepared statements, which will fail for CREATE FUNCTION/PROCEDURE etc, see
+        // https://github.com/prisma/tiberius/issues/236, so using simple_query instead
         client
-            .execute(query, &[])
+            .simple_query(query)
             .await
             .context("executing SQL Server query")?;
     }
