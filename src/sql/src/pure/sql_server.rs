@@ -147,8 +147,6 @@ pub(super) async fn purify_source_exports(
         }
     }
 
-    // TODO(sql_server2): Validate permissions on upstream tables.
-
     let capture_instances: BTreeMap<_, _> = requested_exports
         .iter()
         .map(|requested| {
@@ -164,6 +162,12 @@ pub(super) async fn purify_source_exports(
             (table.qualified_name(), Arc::clone(capture_instance))
         })
         .collect();
+
+    mz_sql_server_util::inspect::validate_source_privileges(
+        client,
+        capture_instances.values().map(|instance| instance.as_ref()),
+    )
+    .await?;
 
     // If CDC is freshly enabled for a table, it has been observed that
     // the `start_lsn`` from `cdc.change_tables` can be ahead of the LSN

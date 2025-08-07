@@ -29,7 +29,6 @@ EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 't2_columns'
 
 INSERT INTO t2_columns VALUES ('invisible');
 
-
 > CREATE SECRET IF NOT EXISTS sql_server_pass AS '${arg.default-sql-server-password}'
 
 > CREATE CONNECTION sql_server_columns_connection TO SQL SERVER (
@@ -73,11 +72,11 @@ INSERT INTO t1_columns VALUES (2.000001, '01:59:32.99901', '$0.89', 0x1122AABBCC
 2.0000010000 01:59:32.999010 ESKqu8wA3Q==
 <null> <null> <null>
 
+> DROP SOURCE t1_columns_sql_server CASCADE;
+
 ! CREATE SOURCE t2_columns_sql_server
   FROM SQL SERVER CONNECTION sql_server_columns_connection (
     EXCLUDE COLUMNS (dbo.t2_columns.c1)
   )
   FOR TABLES (dbo.t2_columns);
 contains:Table t2_columns had all columns excluded
-
-> DROP SOURCE t1_columns_sql_server CASCADE;
