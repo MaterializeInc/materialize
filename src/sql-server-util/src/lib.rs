@@ -638,9 +638,6 @@ impl Connection {
                 let result = client.execute(query, &params[..]).await?;
 
                 match result.rows_affected() {
-                    [] => Err(SqlServerError::InvariantViolated(
-                        "got empty response".into(),
-                    )),
                     rows_affected => {
                         let response = Response::Execute {
                             rows_affected: rows_affected.into(),
@@ -854,6 +851,13 @@ pub enum SqlServerError {
     Generic(#[from] anyhow::Error),
     #[error("programming error! {0}")]
     ProgrammingError(String),
+    #[error(
+        "insufficient permissions for tables [{tables}] or capture instances [{capture_instances}]"
+    )]
+    AuthorizationError {
+        tables: String,
+        capture_instances: String,
+    },
 }
 
 /// Errors returned from decoding SQL Server rows.
