@@ -40,8 +40,8 @@ use crate::internal::machine::{Machine, retry_external};
 use crate::internal::maintenance::RoutineMaintenance;
 use crate::internal::metrics::{GcStepTimings, RetryMetrics};
 use crate::internal::paths::{BlobKey, PartialBlobKey, PartialRollupKey};
-use crate::internal::state::HollowBlobRef;
-use crate::internal::state_versions::{InspectDiff, StateVersionsIter};
+use crate::internal::state::{GC_USE_ACTIVE_GC, HollowBlobRef};
+use crate::internal::state_versions::{InspectDiff, StateVersionsIter, UntypedStateVersionsIter};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct GcReq {
@@ -271,14 +271,65 @@ where
             rollups_to_remove_from_state,
         );
 
-        let mut states = machine
-            .applier
-            .state_versions
-            .fetch_all_live_states(req.shard_id)
-            .await
-            .expect("state is initialized")
+        let mut states = if GC_USE_ACTIVE_GC.get(&machine.applier.cfg) {
+            let diffs = machine
+                .applier
+                .state_versions
+                .fetch_live_diffs_through(&req.shard_id, req.new_seqno_since)
+                .await;
+
+            let initial_seqno = diffs.first().expect("state is initialized").seqno;
+
+            let Some(initial_rollup) = gc_rollups.get(initial_seqno) else {
+                // The latest state is always expected to have a reference to a rollup for the
+                // earliest seqno. If our state doesn't, that could mean:
+                // - Our diffs are too old, and some other process has already truncated past this point.
+                //   (But currently we fetch diffs _after_ checking state, so that shouldn't happen.)
+                // - Our diffs are too new... someone has added a rollup for this seqno _after_ we fetched
+                //   state, then truncated to it.
+                // In either case we're working on outdated data and should stop.
+                debug!(
+                    ?initial_seqno,
+                    ?gc_rollups,
+                    "skipping gc - no rollup at initial seqno. concurrent GC?"
+                );
+                return (RoutineMaintenance::default(), gc_results);
+            };
+
+            let Some(state) = machine
+                .applier
+                .state_versions
+                .fetch_rollup_at_key::<T>(&req.shard_id, initial_rollup)
+                .await
+            else {
+                debug!(
+                    ?initial_seqno,
+                    ?gc_rollups,
+                    "skipping gc - deleted rollup at initial seqno. concurrent GC?"
+                );
+                return (RoutineMaintenance::default(), gc_results);
+            };
+
+            UntypedStateVersionsIter::new(
+                req.shard_id,
+                machine.applier.cfg.clone(),
+                Arc::clone(&machine.applier.metrics),
+                state,
+                diffs,
+            )
             .check_ts_codec()
-            .expect("ts codec has not changed");
+            .expect("ts codec has not changed")
+        } else {
+            machine
+                .applier
+                .state_versions
+                .fetch_all_live_states(req.shard_id)
+                .await
+                .expect("state is initialized")
+                .check_ts_codec()
+                .expect("ts codec has not changed")
+        };
+
         let initial_seqno = states.state().seqno;
         report_step_timing(&machine.applier.metrics.gc.steps.fetch_seconds);
 
@@ -349,11 +400,7 @@ where
         // a rollup to the earliest state we fetched. this invariant isn't affected
         // by the GC work we just performed, but it is a property of GC correctness
         // overall / is a convenient place to run the assertion.
-        let valid_pre_gc_state = states
-            .state()
-            .collections
-            .rollups
-            .contains_key(&initial_seqno);
+        let valid_pre_gc_state = gc_rollups.contains_seqno(&initial_seqno);
 
         // this should never be true in the steady-state, but may be true the
         // first time GC runs after fixing any correctness bugs related to our
@@ -632,6 +679,15 @@ impl GcRollups {
             rollups_lte_seqno_since,
             rollup_seqnos,
         }
+    }
+
+    /// Return the rollup key for the given seqno, if it exists.
+    fn get(&self, seqno: SeqNo) -> Option<&PartialRollupKey> {
+        let index = self
+            .rollups_lte_seqno_since
+            .binary_search_by_key(&seqno, |(k, _)| *k)
+            .ok()?;
+        Some(&self.rollups_lte_seqno_since[index].1)
     }
 
     fn contains_seqno(&self, seqno: &SeqNo) -> bool {

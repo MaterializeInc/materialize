@@ -975,7 +975,7 @@ impl StateVersions {
     }
 
     /// Fetches the rollup at the given key, if it exists.
-    async fn fetch_rollup_at_key<T>(
+    pub async fn fetch_rollup_at_key<T>(
         &self,
         shard_id: &ShardId,
         rollup_key: &PartialRollupKey,
@@ -1015,6 +1015,22 @@ pub struct UntypedStateVersionsIter<T> {
 }
 
 impl<T: Timestamp + Lattice + Codec64> UntypedStateVersionsIter<T> {
+    pub(crate) fn new(
+        shard_id: ShardId,
+        cfg: PersistConfig,
+        metrics: Arc<Metrics>,
+        state: UntypedState<T>,
+        diffs: Vec<VersionedData>,
+    ) -> Self {
+        Self {
+            shard_id,
+            cfg,
+            metrics,
+            state,
+            diffs,
+        }
+    }
+
     pub(crate) fn check_ts_codec(self) -> Result<StateVersionsIter<T>, CodecMismatchT> {
         let key_codec = self.state.key_codec.clone();
         let val_codec = self.state.val_codec.clone();
