@@ -13,7 +13,8 @@
 
 //! Compute layer client and server.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::mem;
 
 use async_trait::async_trait;
 use bytesize::ByteSize;
@@ -21,8 +22,8 @@ use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::lattice::Lattice;
 use mz_expr::row::RowCollection;
 use mz_ore::cast::CastInto;
+use mz_ore::soft_panic_or_log;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_ore::{assert_none, soft_panic_or_log};
 use mz_repr::{Diff, GlobalId, Row};
 use mz_service::client::{GenericClient, Partitionable, PartitionedState};
 use mz_service::grpc::{GrpcClient, GrpcServer, ProtoServiceTypes, ResponseStream};
@@ -117,7 +118,7 @@ where
 /// guaranteed to see all compute commands. Or more specifically: The instance running inside
 /// process 0 sees all commands, whereas the instances running inside the other processes only see
 /// `Hello` and `UpdateConfiguration`. The `PartitionedComputeState` implementation must be
-/// able to cope with this limited visiblity. It does so by performing most of its state management
+/// able to cope with this limited visibility. It does so by performing most of its state management
 /// based on observed compute responses rather than commands.
 #[derive(Debug)]
 pub struct PartitionedComputeState<T> {
@@ -140,7 +141,8 @@ pub struct PartitionedComputeState<T> {
     /// that have been dropped and b) frontier tracking for a collection is not re-initialized
     /// after it was ceased.
     frontiers: BTreeMap<GlobalId, TrackedFrontiers<T>>,
-    /// Pending responses for a peek; returnable once all are available.
+    /// For each in-progress peek the response data received so far, and the set of shards that
+    /// provided responses already.
     ///
     /// Tracking of responses for a peek is initialized when the first `PeekResponse` for that peek
     /// is received. Once all shards have provided a `PeekResponse`, a unified peek response is
@@ -149,8 +151,9 @@ pub struct PartitionedComputeState<T> {
     /// The compute protocol requires that exactly one response is emitted for each peek. This
     /// property ensures that a) we can eventually drop the tracking state maintained for a peek
     /// and b) we won't re-initialize tracking for a peek we have already served.
-    peek_responses: BTreeMap<Uuid, BTreeMap<usize, PeekResponse>>,
-    /// Pending responses for a copy to; returnable once all are available.
+    peek_responses: BTreeMap<Uuid, (PeekResponse, BTreeSet<usize>)>,
+    /// For each in-progress copy-to the response data received so far, and the set of shards that
+    /// provided responses already.
     ///
     /// Tracking of responses for a COPY TO is initialized when the first `CopyResponse` for that command
     /// is received. Once all shards have provided a `CopyResponse`, a unified copy response is
@@ -159,7 +162,7 @@ pub struct PartitionedComputeState<T> {
     /// The compute protocol requires that exactly one response is emitted for each COPY TO command. This
     /// property ensures that a) we can eventually drop the tracking state maintained for a copy
     /// and b) we won't re-initialize tracking for a copy we have already served.
-    copy_to_responses: BTreeMap<GlobalId, BTreeMap<usize, CopyToResponse>>,
+    copy_to_responses: BTreeMap<GlobalId, (CopyToResponse, BTreeSet<usize>)>,
     /// Tracks in-progress `SUBSCRIBE`s, and the stashed rows we are holding back until their
     /// timestamps are complete.
     ///
@@ -272,19 +275,23 @@ where
         response: PeekResponse,
         otel_ctx: OpenTelemetryContext,
     ) -> Option<ComputeResponse<T>> {
-        let tracked = self.peek_responses.entry(uuid).or_default();
+        let (merged, ready_shards) = self.peek_responses.entry(uuid).or_insert((
+            PeekResponse::Rows(RowCollection::default()),
+            BTreeSet::new(),
+        ));
 
-        let prev = tracked.insert(shard_id, response);
-        assert_none!(prev, "duplicate peek response");
+        let first = ready_shards.insert(shard_id);
+        assert!(first, "duplicate peek response");
 
-        if tracked.len() < self.parts {
-            return None; // some shard responses still outstanding
+        let resp1 = mem::replace(merged, PeekResponse::Canceled);
+        *merged = merge_peek_responses(resp1, response, self.max_result_size);
+
+        if ready_shards.len() == self.parts {
+            let (response, _) = self.peek_responses.remove(&uuid).unwrap();
+            Some(ComputeResponse::PeekResponse(uuid, response, otel_ctx))
+        } else {
+            None
         }
-
-        let shards = self.peek_responses.remove(&uuid).unwrap();
-        let response = merge_peek_responses(shards, self.max_result_size);
-
-        Some(ComputeResponse::PeekResponse(uuid, response, otel_ctx))
     }
 
     /// Absorb a [`ComputeResponse::CopyToResponse`].
@@ -296,27 +303,27 @@ where
     ) -> Option<ComputeResponse<T>> {
         use CopyToResponse::*;
 
-        let tracked = self.copy_to_responses.entry(copyto_id).or_default();
+        let (merged, ready_shards) = self
+            .copy_to_responses
+            .entry(copyto_id)
+            .or_insert((CopyToResponse::RowCount(0), BTreeSet::new()));
 
-        let prev = tracked.insert(shard_id, response);
-        assert_none!(prev, "duplicate copy-to response");
+        let first = ready_shards.insert(shard_id);
+        assert!(first, "duplicate copy-to response");
 
-        if tracked.len() < self.parts {
-            return None; // some shard responses still outstanding
+        let resp1 = mem::replace(merged, Dropped);
+        *merged = match (resp1, response) {
+            (Dropped, _) | (_, Dropped) => Dropped,
+            (Error(e), _) | (_, Error(e)) => Error(e),
+            (RowCount(r1), RowCount(r2)) => RowCount(r1 + r2),
+        };
+
+        if ready_shards.len() == self.parts {
+            let (response, _) = self.copy_to_responses.remove(&copyto_id).unwrap();
+            Some(ComputeResponse::CopyToResponse(copyto_id, response))
+        } else {
+            None
         }
-
-        let shards = self.copy_to_responses.remove(&copyto_id).unwrap();
-
-        let mut merged = RowCount(0);
-        for resp in shards.into_values() {
-            merged = match (merged, resp) {
-                (Dropped, _) | (_, Dropped) => Dropped,
-                (Error(e), _) | (_, Error(e)) => Error(e),
-                (RowCount(r1), RowCount(r2)) => RowCount(r1 + r2),
-            }
-        }
-
-        Some(ComputeResponse::CopyToResponse(copyto_id, merged))
     }
 
     /// Absorb a [`ComputeResponse::SubscribeResponse`].
@@ -592,93 +599,88 @@ impl<T: ComputeControllerTimestamp> PendingSubscribe<T> {
     }
 }
 
-/// Merge shard [`PeekResponse`]s into a unified response.
+/// Merge two [`PeekResponse`]s.
 fn merge_peek_responses(
-    mut shards: BTreeMap<usize, PeekResponse>,
+    resp1: PeekResponse,
+    resp2: PeekResponse,
     max_result_size: u64,
 ) -> PeekResponse {
     use PeekResponse::*;
 
     // Cancelations and errors short-circuit. Cancelations take precedence over errors.
-    if let Some(idx) = shards.values().position(|r| matches!(r, &Canceled)) {
-        return shards.remove(&idx).unwrap();
-    }
-    if let Some(idx) = shards.values().position(|r| matches!(r, &Error(_))) {
-        return shards.remove(&idx).unwrap();
+    let (resp1, resp2) = match (resp1, resp2) {
+        (Canceled, _) | (_, Canceled) => return Canceled,
+        (Error(e), _) | (_, Error(e)) => return Error(e),
+        resps => resps,
+    };
+
+    let total_byte_len = resp1.inline_byte_len() + resp2.inline_byte_len();
+    if total_byte_len > max_result_size.cast_into() {
+        // Note: We match on this specific error message in tests so it's important that
+        // nothing else returns the same string.
+        let err = format!(
+            "total result exceeds max size of {}",
+            ByteSize::b(max_result_size)
+        );
+        return Error(err);
     }
 
-    let mut merged = Rows(RowCollection::default());
-    for resp in shards.into_values() {
-        let total_byte_len = merged.inline_byte_len() + resp.inline_byte_len();
-        if total_byte_len > max_result_size.cast_into() {
-            // Note: We match on this specific error message in tests so it's important that
-            // nothing else returns the same string.
-            let err = format!(
-                "total result exceeds max size of {}",
-                ByteSize::b(max_result_size)
-            );
-            return Error(err);
+    match (resp1, resp2) {
+        (Rows(mut rows1), Rows(rows2)) => {
+            rows1.merge(&rows2);
+            Rows(rows1)
         }
+        (Rows(rows), Stashed(mut stashed)) | (Stashed(mut stashed), Rows(rows)) => {
+            stashed.inline_rows.merge(&rows);
+            Stashed(stashed)
+        }
+        (Stashed(stashed1), Stashed(stashed2)) => {
+            // Deconstruct so we don't miss adding new fields. We need to be careful about
+            // merging everything!
+            let StashedPeekResponse {
+                num_rows_batches: num_rows_batches1,
+                encoded_size_bytes: encoded_size_bytes1,
+                relation_desc: relation_desc1,
+                shard_id: shard_id1,
+                batches: mut batches1,
+                inline_rows: mut inline_rows1,
+            } = *stashed1;
+            let StashedPeekResponse {
+                num_rows_batches: num_rows_batches2,
+                encoded_size_bytes: encoded_size_bytes2,
+                relation_desc: relation_desc2,
+                shard_id: shard_id2,
+                batches: mut batches2,
+                inline_rows: inline_rows2,
+            } = *stashed2;
 
-        merged = match (merged, resp) {
-            (Rows(mut rows1), Rows(rows2)) => {
-                rows1.merge(&rows2);
-                Rows(rows1)
-            }
-            (Rows(rows), Stashed(mut stashed)) | (Stashed(mut stashed), Rows(rows)) => {
-                stashed.inline_rows.merge(&rows);
-                Stashed(stashed)
-            }
-            (Stashed(stashed1), Stashed(stashed2)) => {
-                // Deconstruct so we don't miss adding new fields. We need to be careful about
-                // merging everything!
-                let StashedPeekResponse {
-                    num_rows_batches: num_rows_batches1,
-                    encoded_size_bytes: encoded_size_bytes1,
-                    relation_desc: relation_desc1,
-                    shard_id: shard_id1,
-                    batches: mut batches1,
-                    inline_rows: mut inline_rows1,
-                } = *stashed1;
-                let StashedPeekResponse {
-                    num_rows_batches: num_rows_batches2,
-                    encoded_size_bytes: encoded_size_bytes2,
-                    relation_desc: relation_desc2,
-                    shard_id: shard_id2,
-                    batches: mut batches2,
-                    inline_rows: inline_rows2,
-                } = *stashed2;
-
-                if shard_id1 != shard_id2 {
-                    soft_panic_or_log!(
-                        "shard IDs of stashed responses do not match: \
+            if shard_id1 != shard_id2 {
+                soft_panic_or_log!(
+                    "shard IDs of stashed responses do not match: \
                              {shard_id1} != {shard_id2}"
-                    );
-                    return Error("internal error".into());
-                }
-                if relation_desc1 != relation_desc2 {
-                    soft_panic_or_log!(
-                        "relation descs of stashed responses do not match: \
-                             {relation_desc1:?} != {relation_desc2:?}"
-                    );
-                    return Error("internal error".into());
-                }
-
-                batches1.append(&mut batches2);
-                inline_rows1.merge(&inline_rows2);
-
-                Stashed(Box::new(StashedPeekResponse {
-                    num_rows_batches: num_rows_batches1 + num_rows_batches2,
-                    encoded_size_bytes: encoded_size_bytes1 + encoded_size_bytes2,
-                    relation_desc: relation_desc1,
-                    shard_id: shard_id1,
-                    batches: batches1,
-                    inline_rows: inline_rows1,
-                }))
+                );
+                return Error("internal error".into());
             }
-            _ => unreachable!("handled above"),
-        }
-    }
+            if relation_desc1 != relation_desc2 {
+                soft_panic_or_log!(
+                    "relation descs of stashed responses do not match: \
+                             {relation_desc1:?} != {relation_desc2:?}"
+                );
+                return Error("internal error".into());
+            }
 
-    merged
+            batches1.append(&mut batches2);
+            inline_rows1.merge(&inline_rows2);
+
+            Stashed(Box::new(StashedPeekResponse {
+                num_rows_batches: num_rows_batches1 + num_rows_batches2,
+                encoded_size_bytes: encoded_size_bytes1 + encoded_size_bytes2,
+                relation_desc: relation_desc1,
+                shard_id: shard_id1,
+                batches: batches1,
+                inline_rows: inline_rows1,
+            }))
+        }
+        _ => unreachable!("handled above"),
+    }
 }
