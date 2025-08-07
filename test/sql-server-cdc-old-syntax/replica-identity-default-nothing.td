@@ -18,11 +18,7 @@ $ sql-server-connect name=sql-server
 server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID=${arg.default-sql-server-user};Password=${arg.default-sql-server-password}
 
 $ sql-server-execute name=sql-server
-IF EXISTS (SELECT 1 FROM sys.databases WHERE name = 'test') BEGIN ALTER DATABASE test SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE test; END;
-CREATE DATABASE test;
 USE test;
-EXEC sys.sp_cdc_enable_db;
-ALTER DATABASE test SET ALLOW_SNAPSHOT_ISOLATION ON;
 
 > CREATE SECRET IF NOT EXISTS sql_server_pass AS '${arg.default-sql-server-password}'
 

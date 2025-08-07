@@ -17,9 +17,9 @@ server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;U
 $ sql-server-execute name=sql-server
 USE test;
 
-> CREATE SECRET IF NOT EXISTS sql_server_pass AS '${arg.default-sql-server-password}'
+> CREATE SECRET IF NOT EXISTS sql_server_pass AS '${arg.default-sql-server-password}';
 
-> DROP CONNECTION IF EXISTS sql_server_test_connection CASCADE
+> DROP CONNECTION IF EXISTS sql_server_test_connection CASCADE;
 > CREATE CONNECTION sql_server_test_connection TO SQL SERVER (
     HOST 'sql-server',
     PORT 1433,
