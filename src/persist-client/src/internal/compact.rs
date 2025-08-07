@@ -21,6 +21,7 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures::{Stream, pin_mut};
 use futures_util::StreamExt;
+use itertools::Itertools;
 use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
@@ -685,29 +686,26 @@ where
                     / cfg.batch.blob_target_size;
                 let mut run_cfg = cfg.clone();
                 run_cfg.batch.batch_builder_max_outstanding_parts = 1 + extra_outstanding_parts;
-                let descriptions = runs.iter()
-                    .map(|(_, desc, _, _)| *desc)
-                    .collect::<Vec<_>>();
+
+                let (batch_ids, descriptions): (BTreeSet<_>, Vec<_>) = runs.iter()
+                    .map(|(run_id, desc, _, _)| (run_id.0, *desc))
+                    .unzip();
 
                 let input = if incremental_enabled {
-                    let batch_ids = runs.iter()
-                        .map(|(run_id, _, _, _)| run_id.0)
+                    let run_ids = runs.iter()
+                        .map(|(run_id, _, _, _)| run_id.1.expect("run_id should be present"))
                         .collect::<BTreeSet<_>>();
-                    if let Some(batch_id) = batch_ids.first() && batch_ids.len() == 1 {
-                        CompactionInput::PartialBatch(
-                            batch_id.clone(),
-                            runs.iter()
-                                .map(|(run_id, _, _, _)| run_id.1.expect("run_id must be present"))
-                                .collect::<BTreeSet<_>>(),
-                        )
-                    } else {
-                        input_id_range(batch_ids)
+                    match batch_ids.iter().exactly_one().ok() {
+                        Some(batch_id) => {
+                            CompactionInput::PartialBatch(
+                                *batch_id,
+                                run_ids
+                            )
+                        }
+                        None => input_id_range(batch_ids),
                     }
                 } else {
-                    let runs = runs.iter()
-                        .map(|(run_id, _, _, _)| run_id.0)
-                        .collect::<BTreeSet<_>>();
-                    input_id_range(runs)
+                    input_id_range(batch_ids)
                 };
 
                 let desc = if incremental_enabled {
