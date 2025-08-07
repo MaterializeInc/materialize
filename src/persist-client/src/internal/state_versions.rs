@@ -556,6 +556,64 @@ impl StateVersions {
         diffs
     }
 
+    /// Fetches live diffs for a shard. This is a thin wrapper around [Consensus::scan] with the
+    /// right retry policy and instrumentation.
+    async fn fetch_live_diffs(
+        &self,
+        shard_id: &ShardId,
+        from: SeqNo,
+        limit: usize,
+    ) -> Vec<VersionedData> {
+        let path = shard_id.to_string();
+        retry_external(&self.metrics.retries.external.fetch_state_scan, || async {
+            self.consensus.scan(&path, from, limit).await
+        })
+        .instrument(debug_span!("fetch_state::scan"))
+        .await
+    }
+
+    /// Fetches all live_diffs for a shard up to and including a given threshold, allowing us to
+    /// reconstruct states up to and including that version.
+    pub async fn fetch_live_diffs_through(
+        &self,
+        shard_id: &ShardId,
+        through: SeqNo,
+    ) -> Vec<VersionedData> {
+        // Get an initial set of versions from consensus.
+        let scan_limit = STATE_VERSIONS_RECENT_LIVE_DIFFS_LIMIT.get(&self.cfg);
+        let mut versions = self
+            .fetch_live_diffs(shard_id, SeqNo::minimum(), scan_limit)
+            .await;
+
+        if versions.len() == scan_limit {
+            // Loop until our version range either covers the full set, or we stop getting data.
+            loop {
+                let Some(last_seqno) = versions.last().map(|v| v.seqno) else {
+                    break;
+                };
+                if through <= last_seqno {
+                    break;
+                }
+                let from = last_seqno.next();
+                let limit = usize::cast_from(through.0 - last_seqno.0).clamp(1, 10 * scan_limit);
+                let more_versions = self.fetch_live_diffs(shard_id, from, limit).await;
+                let more_versions_len = more_versions.len();
+                if let Some(first) = more_versions.first() {
+                    assert!(last_seqno < first.seqno);
+                }
+                versions.extend(more_versions);
+                if more_versions_len < limit {
+                    break;
+                }
+            }
+        }
+        // We may have fetched more versions than requested; find the index past the last
+        // requested version and truncate there.
+        let partition_index = versions.partition_point(|v| v.seqno <= through);
+        versions.truncate(partition_index);
+        versions
+    }
+
     /// Fetches recent live_diffs for a shard. Intended for when a caller needs to fetch
     /// the latest state in Consensus.
     ///
