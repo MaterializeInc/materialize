@@ -15,13 +15,7 @@ $ sql-server-connect name=sql-server
 server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID=${arg.default-sql-server-user};Password=${arg.default-sql-server-password}
 
 $ sql-server-execute name=sql-server
-DROP DATABASE IF EXISTS test_15;
-CREATE DATABASE test_15;
-USE test_15;
-
-EXEC sys.sp_cdc_enable_db;
-ALTER DATABASE test_15 SET ALLOW_SNAPSHOT_ISOLATION ON;
-
+USE test;
 CREATE TABLE t15_pk (key_col VARCHAR(20) PRIMARY KEY, val_col VARCHAR(1024));
 EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 't15_pk', @role_name = 'SA', @supports_net_changes = 0;
 
@@ -37,7 +31,7 @@ ALTER SYSTEM SET enable_sql_server_source = true;
 > CREATE CONNECTION sql_server_test_15_connection TO SQL SERVER (
     HOST 'sql-server',
     PORT 1433,
-    DATABASE test_15,
+    DATABASE test,
     USER '${arg.default-sql-server-user}',
     PASSWORD = SECRET sql_server_pass
   );

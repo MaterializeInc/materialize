@@ -22,13 +22,7 @@ $ sql-server-connect name=sql-server
 server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID=${arg.default-sql-server-user};Password=${arg.default-sql-server-password}
 
 $ sql-server-execute name=sql-server
-DROP DATABASE IF EXISTS test_ssl;
-CREATE DATABASE test_ssl;
-USE test_ssl;
-
-EXEC sys.sp_cdc_enable_db;
-ALTER DATABASE test_ssl SET ALLOW_SNAPSHOT_ISOLATION ON;
-
+USE test;
 CREATE TABLE t1_pk (key_col VARCHAR(20) PRIMARY KEY, val_col VARCHAR(1024));
 EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 't1_pk', @role_name = 'SA', @supports_net_changes = 0;
 
@@ -46,7 +40,7 @@ EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 't3_text', @
 > CREATE CONNECTION no_ssl_connection TO SQL SERVER (
     HOST 'sql-server',
     PORT 1433,
-    DATABASE test_ssl,
+    DATABASE test,
     USER '${arg.default-sql-server-user}',
     PASSWORD = SECRET sql_server_pass,
     SSL MODE disabled
@@ -66,7 +60,7 @@ no_ssl_connection       sql-server
 > CREATE CONNECTION required_ssl_connection TO SQL SERVER (
     HOST 'sql-server',
     PORT 1433,
-    DATABASE test_ssl,
+    DATABASE test,
     USER '${arg.default-sql-server-user}',
     PASSWORD = SECRET sql_server_pass,
     SSL MODE required
@@ -87,7 +81,7 @@ required_ssl_connection   sql-server
 ! CREATE CONNECTION missing_ca TO SQL SERVER (
     HOST 'sql-server',
     PORT 1433,
-    DATABASE test_ssl,
+    DATABASE test,
     USER '${arg.default-sql-server-user}',
     PASSWORD SECRET sql_server_pass,
     SSL MODE verify_ca
@@ -98,7 +92,7 @@ contains:invalid CONNECTION: SSL MODE 'verify_ca' requires SSL CERTIFICATE AUTHO
 ! CREATE CONNECTION invalid_ca TO SQL SERVER (
     HOST 'sql-server',
     PORT 1433,
-    DATABASE test_ssl,
+    DATABASE test,
     USER '${arg.default-sql-server-user}',
     PASSWORD SECRET sql_server_pass,
     SSL MODE verify_ca,
@@ -114,7 +108,7 @@ contains:certificate verify failed
 > CREATE CONNECTION verify_ca_ssl_connection TO SQL SERVER (
     HOST 'sql-server',
     PORT 1433,
-    DATABASE test_ssl,
+    DATABASE test,
     USER '${arg.default-sql-server-user}',
     PASSWORD SECRET sql_server_pass,
     SSL MODE verify_ca,
