@@ -75,7 +75,7 @@ def is_in_pull_request() -> bool:
     if git.is_on_release_version():
         return False
 
-    if git.contains_commit("HEAD", "main", fetch=True):
+    if git.contains_commit("HEAD", "main"):
         return False
 
     return True
