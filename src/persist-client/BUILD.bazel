@@ -29,7 +29,7 @@ rust_library(
     proc_macro_deps = ["//src/persist-proc:mz_persist_proc"] + all_crate_deps(proc_macro = True),
     rustc_env = {},
     rustc_flags = [],
-    version = "0.130.13",
+    version = "0.130.14",
     deps = [
         ":mz_persist_client_build_script",
         "//src/build-info:mz_build_info",
@@ -68,7 +68,7 @@ rust_test(
     ),
     rustc_env = {},
     rustc_flags = [],
-    version = "0.130.13",
+    version = "0.130.14",
     deps = [
         "//src/build-info:mz_build_info",
         "//src/dyncfg:mz_dyncfg",

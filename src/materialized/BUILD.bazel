@@ -29,7 +29,7 @@ rust_binary(
     proc_macro_deps = [] + all_crate_deps(proc_macro = True),
     rustc_env = {},
     rustc_flags = [],
-    version = "0.130.13",
+    version = "0.130.14",
     deps = [
         "//src/clusterd:mz_clusterd",
         "//src/environmentd:mz_environmentd",
