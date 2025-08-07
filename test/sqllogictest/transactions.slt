@@ -1145,7 +1145,7 @@ CREATE TABLE yellow_t1 (x int);
 ----
 COMPLETE 0
 
-statement error db error: ERROR: object state changed while transaction was in progress
+statement error db error: ERROR: another session modified the catalog while this DDL transaction was open
 ALTER SCHEMA blue RENAME to pink;
 
 statement ok
