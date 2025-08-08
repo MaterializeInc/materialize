@@ -88,8 +88,8 @@ cleanup() {
       ci_uncollapsed_heading "cloudtest: Fetching binaries for coverage"
       mkdir -p coverage/
       chmod 777 coverage/
-      kubectl cp environmentd-0:/usr/local/bin/environmentd coverage/environmentd
-      kubectl cp environmentd-0:/coverage coverage/
+      kubectl cp environmentd-0:/usr/local/bin/environmentd coverage/environmentd || true
+      kubectl cp environmentd-0:/coverage coverage/ || true
       for pod in $(kubectl get pods -o name | grep -E 'cluster-'); do
         kubectl cp "$pod":/coverage coverage/ || true # Could get deleted
         kubectl cp "$pod":/usr/local/bin/clusterd coverage/clusterd || true

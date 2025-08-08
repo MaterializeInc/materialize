@@ -11,7 +11,7 @@
 # re-install the apt things or maelstrom every time we get a CI builder with a
 # cold cache.
 
-MZFROM ubuntu-base
+MZFROM prod-base
 
 RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     bzip2 \

@@ -182,11 +182,12 @@ def is_ancestor(earlier: str, later: str) -> bool:
             command.append("--unshallow")
         spawn.runv(command + [get_remote(), earlier, later])
 
-        try:
-            spawn.capture(["git", "merge-base", "--is-ancestor", earlier, later])
-        except subprocess.CalledProcessError:
-            return False
-        return True
+        return (
+            spawn.run_and_get_return_code(
+                ["git", "merge-base", "--is-ancestor", earlier, later]
+            )
+            == 0
+        )
 
 
 def is_dirty() -> bool:
@@ -333,7 +334,7 @@ def get_common_ancestor_commit(remote: str, branch: str) -> str:
         spawn.runv(command + [remote, branch])
 
         return spawn.capture(
-            ["git", "merge-base", "--is-ancestor", "HEAD", f"{remote}/{branch}"]
+            ["git", "merge-base", "HEAD", f"{remote}/{branch}"]
         ).strip()
 
 

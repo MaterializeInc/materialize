@@ -366,7 +366,6 @@ def increase_agents_timeouts(
                     visit(inner_step)
 
     if coverage:
-        pipeline["env"]["CI_BUILDER_SCCACHE"] = 1
         pipeline["env"]["CI_COVERAGE_ENABLED"] = 1
 
         for step in steps(pipeline):
@@ -378,7 +377,7 @@ def increase_agents_timeouts(
                 step["skip"] = True
             if step.get("id") == "build-x86_64":
                 step["name"] = "Build x86_64 with coverage"
-            if step.get("id") == "build-aarch":
+            if step.get("id") == "build-aarch64":
                 step["name"] = "Build aarch64 with coverage"
     else:
         for step in steps(pipeline):
