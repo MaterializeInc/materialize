@@ -23,15 +23,13 @@ class SqlServer(Service):
         # lowercase letters, base-10 digits and/or non-alphanumeric symbols.
         sa_password: str = DEFAULT_SA_PASSWORD,
         name: str = "sql-server",
-        # 2017 mssql images core on OSx, 2019 is the earliest that has passed
-        image: str = "mcr.microsoft.com/mssql/server:2019-CU32-ubuntu-20.04",
         environment_extra: list[str] = [],
         volumes_extra: list[str] = [],
     ) -> None:
         super().__init__(
             name=name,
             config={
-                "image": image,
+                "mzbuild": "mssql-server",
                 "ports": [1433],
                 "volumes": volumes_extra,
                 "environment": [
