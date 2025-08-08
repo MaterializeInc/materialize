@@ -5163,7 +5163,7 @@ def workflow_test_zero_downtime_reconfigure(
             SELECT size FROM mz_clusters WHERE name='cluster1';
             """
             )
-            == [("1",)]
+            == [("scale=1-workers=1",)]
         )
         c.sql(
             """

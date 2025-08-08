@@ -50,11 +50,11 @@ ALTER CLUSTER foo SET (REPLICATION FACTOR 2)
 query TTTTT rowsort
 SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name != 'quickstart'
 ----
-s1  mz_system  true  1  2
-s2  mz_catalog_server  true  1  2
-s3  mz_probe  true  1  2
-s4  mz_support  true  0  2
-s5  mz_analytics  true  0  2
+s1  mz_system  true  1  scale=1-workers=2
+s2  mz_catalog_server  true  1  scale=1-workers=2
+s3  mz_probe  true  1  scale=1-workers=2
+s4  mz_support  true  0  scale=1-workers=2
+s5  mz_analytics  true  0  scale=1-workers=2
 
 
 query T rowsort
@@ -123,9 +123,9 @@ CREATE CLUSTER baz REPLICAS (), INTROSPECTION INTERVAL 1
 query TTT
 SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster != 'quickstart' ORDER BY 1, 2, 3
 ----
-mz_catalog_server  r1  2
-mz_probe  r1  2
-mz_system  r1  2
+mz_catalog_server  r1  scale=1-workers=2
+mz_probe  r1  scale=1-workers=2
+mz_system  r1  scale=1-workers=2
 
 statement error db error: ERROR: unknown cluster replica size abc
 CREATE CLUSTER foo SIZE 'abc', REPLICATION FACTOR 3
@@ -136,17 +136,17 @@ CREATE CLUSTER foo SIZE 'scale=1-workers=1', REPLICATION FACTOR 3
 query TTT
 SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster != 'quickstart' ORDER BY 1, 2, 3
 ----
-foo  r1  1
-foo  r2  1
-foo  r3  1
-mz_catalog_server  r1  2
-mz_probe  r1  2
-mz_system  r1  2
+foo  r1  scale=1-workers=1
+foo  r2  scale=1-workers=1
+foo  r3  scale=1-workers=1
+mz_catalog_server  r1  scale=1-workers=2
+mz_probe  r1  scale=1-workers=2
+mz_system  r1  scale=1-workers=2
 
 query TTTTT rowsort
 SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name LIKE 'foo'
 ----
-u5  foo  true  3  1
+u5  foo  true  3  scale=1-workers=1
 
 statement ok
 ALTER CLUSTER foo SET (MANAGED = false)
@@ -154,12 +154,12 @@ ALTER CLUSTER foo SET (MANAGED = false)
 query TTT
 SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster != 'quickstart' ORDER BY 1, 2, 3
 ----
-foo  r1  1
-foo  r2  1
-foo  r3  1
-mz_catalog_server  r1  2
-mz_probe  r1  2
-mz_system  r1  2
+foo  r1  scale=1-workers=1
+foo  r2  scale=1-workers=1
+foo  r3  scale=1-workers=1
+mz_catalog_server  r1  scale=1-workers=2
+mz_probe  r1  scale=1-workers=2
+mz_system  r1  scale=1-workers=2
 
 query TTTTT rowsort
 SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name LIKE 'foo'
@@ -169,10 +169,10 @@ u5  foo  false  NULL  NULL
 statement error db error: ERROR: REPLICATION FACTOR 4 does not match number of replicas \(3\)
 ALTER CLUSTER foo SET (MANAGED, REPLICATION FACTOR 4)
 
-statement error db error: ERROR: Cluster replicas of size 1 do not match expected SIZE 2
+statement error db error: ERROR: Cluster replicas of size scale=1-workers=1 do not match expected SIZE scale=1-workers=2
 ALTER CLUSTER foo SET (MANAGED, SIZE 'scale=1-workers=2')
 
-statement error db error: ERROR: Cluster replicas of size 1 do not match expected SIZE abc
+statement error db error: ERROR: Cluster replicas of size scale=1-workers=1 do not match expected SIZE abc
 ALTER CLUSTER foo SET (MANAGED, SIZE abc)
 
 statement ok
@@ -181,17 +181,17 @@ ALTER CLUSTER foo SET (MANAGED, SIZE 'scale=1-workers=1')
 query TTT
 SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS WHERE cluster != 'quickstart') ORDER BY 1, 2, 3
 ----
-foo  r1  1
-foo  r2  1
-foo  r3  1
-mz_catalog_server  r1  2
-mz_probe  r1  2
-mz_system  r1  2
+foo  r1  scale=1-workers=1
+foo  r2  scale=1-workers=1
+foo  r3  scale=1-workers=1
+mz_catalog_server  r1  scale=1-workers=2
+mz_probe  r1  scale=1-workers=2
+mz_system  r1  scale=1-workers=2
 
 query TTTTT rowsort
 SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name LIKE 'foo'
 ----
-u5  foo  true  3  1
+u5  foo  true  3  scale=1-workers=1
 
 query TT
 SELECT mz_clusters.name, mz_cluster_replicas.name FROM mz_cluster_replicas JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id WHERE mz_clusters.name != 'quickstart' ORDER BY 1, 2
@@ -215,15 +215,15 @@ ALTER CLUSTER foo SET (REPLICATION FACTOR 1)
 query TTT
 SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster != 'quickstart' ORDER BY 1, 2, 3
 ----
-foo  r1  1
-mz_catalog_server  r1  2
-mz_probe  r1  2
-mz_system  r1  2
+foo  r1  scale=1-workers=1
+mz_catalog_server  r1  scale=1-workers=2
+mz_probe  r1  scale=1-workers=2
+mz_system  r1  scale=1-workers=2
 
 query TTTTT rowsort
 SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name LIKE 'foo'
 ----
-u5  foo  true  1  1
+u5  foo  true  1  scale=1-workers=1
 
 statement ok
 ALTER CLUSTER foo SET (REPLICATION FACTOR 2)
@@ -231,16 +231,16 @@ ALTER CLUSTER foo SET (REPLICATION FACTOR 2)
 query TTT
 SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster != 'quickstart' ORDER BY 1, 2, 3
 ----
-foo  r1  1
-foo  r2  1
-mz_catalog_server  r1  2
-mz_probe  r1  2
-mz_system  r1  2
+foo  r1  scale=1-workers=1
+foo  r2  scale=1-workers=1
+mz_catalog_server  r1  scale=1-workers=2
+mz_probe  r1  scale=1-workers=2
+mz_system  r1  scale=1-workers=2
 
 query TTTTT rowsort
 SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name LIKE 'foo'
 ----
-u5  foo  true  2  1
+u5  foo  true  2  scale=1-workers=1
 
 statement ok
 ALTER CLUSTER foo RESET (REPLICATION FACTOR)
@@ -248,15 +248,15 @@ ALTER CLUSTER foo RESET (REPLICATION FACTOR)
 query TTT
 SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster != 'quickstart' ORDER BY 1, 2, 3
 ----
-foo  r1  1
-mz_catalog_server  r1  2
-mz_probe  r1  2
-mz_system  r1  2
+foo  r1  scale=1-workers=1
+mz_catalog_server  r1  scale=1-workers=2
+mz_probe  r1  scale=1-workers=2
+mz_system  r1  scale=1-workers=2
 
 query TTTTT rowsort
 SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name LIKE 'foo'
 ----
-u5  foo  true  1  1
+u5  foo  true  1  scale=1-workers=1
 
 statement ok
 ALTER CLUSTER foo SET (SIZE 'scale=1-workers=2')
@@ -264,15 +264,15 @@ ALTER CLUSTER foo SET (SIZE 'scale=1-workers=2')
 query TTT
 SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster != 'quickstart' ORDER BY 1, 2, 3
 ----
-foo  r1  2
-mz_catalog_server  r1  2
-mz_probe  r1  2
-mz_system  r1  2
+foo  r1  scale=1-workers=2
+mz_catalog_server  r1  scale=1-workers=2
+mz_probe  r1  scale=1-workers=2
+mz_system  r1  scale=1-workers=2
 
 query TTTTT rowsort
 SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name LIKE 'foo'
 ----
-u5  foo  true  1  2
+u5  foo  true  1  scale=1-workers=2
 
 statement ok
 ALTER CLUSTER foo SET (SIZE 'scale=1-workers=1', REPLICATION FACTOR 1)
@@ -280,15 +280,15 @@ ALTER CLUSTER foo SET (SIZE 'scale=1-workers=1', REPLICATION FACTOR 1)
 query TTT
 SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster != 'quickstart' ORDER BY 1, 2, 3
 ----
-foo  r1  1
-mz_catalog_server  r1  2
-mz_probe  r1  2
-mz_system  r1  2
+foo  r1  scale=1-workers=1
+mz_catalog_server  r1  scale=1-workers=2
+mz_probe  r1  scale=1-workers=2
+mz_system  r1  scale=1-workers=2
 
 query TTTTT rowsort
 SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name LIKE 'foo'
 ----
-u5  foo  true  1  1
+u5  foo  true  1  scale=1-workers=1
 
 statement error db error: ERROR: cannot drop replica of managed cluster
 DROP CLUSTER REPLICA foo.r1
@@ -315,16 +315,16 @@ DROP CLUSTER REPLICA foo.r1
 query TTT
 SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster != 'quickstart' ORDER BY 1, 2, 3
 ----
-mz_catalog_server  r1  2
-mz_probe  r1  2
-mz_system  r1  2
+mz_catalog_server  r1  scale=1-workers=2
+mz_probe  r1  scale=1-workers=2
+mz_system  r1  scale=1-workers=2
 
 query TTTTTTT
 SELECT r.name, r.size, s.processes, s.cpu_nano_cores, s.memory_bytes, s.workers, s.credits_per_hour FROM mz_cluster_replicas r JOIN mz_catalog.mz_cluster_replica_sizes s ON r.size = s.size JOIN mz_clusters ON r.cluster_id = mz_clusters.id WHERE mz_clusters.name != 'quickstart' ORDER BY r.name
 ----
-r1  2  1  18446744073709000000  18446744073709551615  2  1
-r1  2  1  18446744073709000000  18446744073709551615  2  1
-r1  2  1  18446744073709000000  18446744073709551615  2  1
+r1  scale=1-workers=2  1  18446744073709000000  18446744073709551615  2  1
+r1  scale=1-workers=2  1  18446744073709000000  18446744073709551615  2  1
+r1  scale=1-workers=2  1  18446744073709000000  18446744073709551615  2  1
 
 statement ok
 DROP CLUSTER foo CASCADE
@@ -332,7 +332,7 @@ DROP CLUSTER foo CASCADE
 statement ok
 CREATE CLUSTER foo REPLICAS (r1 (SIZE 'scale=1-workers=1'), r2 (SIZE 'scale=1-workers=2'))
 
-statement error db error: ERROR: Cannot convert unmanaged cluster to managed, non\-unique replica sizes: 1, 2
+statement error db error: ERROR: Cannot convert unmanaged cluster to managed, non\-unique replica sizes: scale=1-workers=1, scale=1-workers=2
 ALTER CLUSTER foo SET (MANAGED)
 
 statement ok
@@ -359,7 +359,7 @@ DROP CLUSTER foo CASCADE
 statement ok
 CREATE CLUSTER foo REPLICAS (r1 (SIZE 'scale=1-workers=1'), r2 (SIZE 'scale=1-workers=1'))
 
-statement error db error: ERROR: Cluster replicas of size 1 do not match expected SIZE 2
+statement error db error: ERROR: Cluster replicas of size scale=1-workers=1 do not match expected SIZE scale=1-workers=2
 ALTER CLUSTER foo SET (MANAGED, SIZE 'scale=1-workers=2')
 
 statement error db error: ERROR: REPLICATION FACTOR 1 does not match number of replicas \(2\)

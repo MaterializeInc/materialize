@@ -110,7 +110,7 @@ mz_system r1 bootstrap <TRUE_OR_FALSE> ""
 > SELECT COUNT(*) FROM mz_catalog.mz_cluster_replicas as r, mz_catalog.mz_clusters as c WHERE r.cluster_id = c.id and c.name = 'mz_support';
 0
 
-! ALTER CLUSTER mz_support SET (replication factor 1, size '2');
+! ALTER CLUSTER mz_support SET (replication factor 1, size 'scale=1-workers=2');
 contains: must be owner of CLUSTER mz_support
 
 $ postgres-execute connection=postgres://mz_support@${testdrive.materialize-internal-sql-addr}/materializeI

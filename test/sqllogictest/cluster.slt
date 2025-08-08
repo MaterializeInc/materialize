@@ -399,11 +399,12 @@ statement ok
 CREATE CLUSTER foo3 REPLICAS (a (SIZE 'scale=2-workers=2'))
 
 # Ensure that identifiers are correctly handled in value position, even when
-# they can't be printed bare. We previously had a bug where `"1"` was
-# incorrectly parsed as size `"1"` (quotes included), but `"small"` was parsed
-# as size `small` (quotes excluded).
+# they can't be printed bare. We previously had a bug where
+# `"scale=1-workers=1"` was incorrectly parsed as size `"scale=1-workers=1"`
+# (quotes included), but `"small"` was parsed as size `small` (quotes
+# excluded).
 statement ok
-CREATE CLUSTER foo4 REPLICAS (a (SIZE "1"))
+CREATE CLUSTER foo4 REPLICAS (a (SIZE "scale=1-workers=1"))
 
 statement ok
 DROP CLUSTER foo, foo2, foo3, foo4 CASCADE
@@ -456,11 +457,11 @@ CREATE CLUSTER REPLICA quickstart.size_1 SIZE 'scale=1-workers=1';
 query TTT
 SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
 ----
-mz_catalog_server  r1  2
-mz_probe  r1  2
-mz_system  r1  2
-quickstart  r1  2
-quickstart  size_1  1
+mz_catalog_server  r1  scale=1-workers=2
+mz_probe  r1  scale=1-workers=2
+mz_system  r1  scale=1-workers=2
+quickstart  r1  scale=1-workers=2
+quickstart  size_1  scale=1-workers=1
 
 statement ok
 CREATE CLUSTER foo REPLICAS (size_1 (SIZE 'scale=1-workers=1'), size_2 (SIZE 'scale=1-workers=2'))
@@ -468,13 +469,13 @@ CREATE CLUSTER foo REPLICAS (size_1 (SIZE 'scale=1-workers=1'), size_2 (SIZE 'sc
 query TTT
 SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
 ----
-foo  size_1  1
-foo  size_2  2
-mz_catalog_server  r1  2
-mz_probe  r1  2
-mz_system  r1  2
-quickstart  r1  2
-quickstart  size_1  1
+foo  size_1  scale=1-workers=1
+foo  size_2  scale=1-workers=2
+mz_catalog_server  r1  scale=1-workers=2
+mz_probe  r1  scale=1-workers=2
+mz_system  r1  scale=1-workers=2
+quickstart  r1  scale=1-workers=2
+quickstart  size_1  scale=1-workers=1
 
 statement ok
 DROP CLUSTER REPLICA IF EXISTS quickstart.bar
@@ -497,10 +498,10 @@ DROP CLUSTER REPLICA foo.size_1, foo.size_2
 query TTT
 SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
 ----
-mz_catalog_server  r1  2
-mz_probe  r1  2
-mz_system  r1  2
-quickstart  r1  2
+mz_catalog_server  r1  scale=1-workers=2
+mz_probe  r1  scale=1-workers=2
+mz_system  r1  scale=1-workers=2
+quickstart  r1  scale=1-workers=2
 
 statement ok
 CREATE CLUSTER REPLICA quickstart.foo_bar SIZE 'scale=1-workers=1'
@@ -673,14 +674,14 @@ CREATE CLUSTER foo REPLICAS (size_1 (SIZE 'scale=1-workers=1'), size_32 (SIZE 's
 query TTTTTTT
 SELECT r.name, r.size, s.processes, s.cpu_nano_cores, s.memory_bytes, s.workers, s.credits_per_hour FROM mz_cluster_replicas r JOIN mz_catalog.mz_cluster_replica_sizes s ON r.size = s.size ORDER BY r.name
 ----
-r1  2  1  18446744073709000000  18446744073709551615  2  1
-r1  2  1  18446744073709000000  18446744073709551615  2  1
-r1  2  1  18446744073709000000  18446744073709551615  2  1
-r1  2  1  18446744073709000000  18446744073709551615  2  1
-size_1  1  1  18446744073709000000  18446744073709551615  1  1
-size_1_8g  1-8G  1  18446744073709000000  8589934592  1  1
-size_2_2  2-2  2  18446744073709000000  18446744073709551615  2  2
-size_32  32  1  18446744073709000000  18446744073709551615  32  1
+r1  scale=1-workers=2  1  18446744073709000000  18446744073709551615  2  1
+r1  scale=1-workers=2  1  18446744073709000000  18446744073709551615  2  1
+r1  scale=1-workers=2  1  18446744073709000000  18446744073709551615  2  1
+r1  scale=1-workers=2  1  18446744073709000000  18446744073709551615  2  1
+size_1  scale=1-workers=1  1  18446744073709000000  18446744073709551615  1  1
+size_1_8g  scale=1-workers=1-mem=8GiB  1  18446744073709000000  8589934592  1  1
+size_2_2  scale=2-workers=2  2  18446744073709000000  18446744073709551615  2  2
+size_32  scale=1-workers=32  1  18446744073709000000  18446744073709551615  32  1
 
 statement ok
 DROP CLUSTER foo CASCADE
@@ -728,7 +729,7 @@ db error: ERROR: cannot modify managed cluster t1
 query TTTT
 SELECT event_type, object_type, regexp_replace(details::text, '"replica_id":"u[^"]*"', '"replica_id":"u%"'), user FROM mz_audit_events ORDER BY occurred_at DESC LIMIT 1;
 ----
-create  cluster-replica  {"billed_as":"free","cluster_id":"u2","cluster_name":"t1","disk":true,"internal":true,"logical_size":"2","reason":"manual","replica_id":"u%","replica_name":"free"}  mz_system
+create  cluster-replica  {"billed_as":"free","cluster_id":"u2","cluster_name":"t1","disk":true,"internal":true,"logical_size":"scale=1-workers=2","reason":"manual","replica_id":"u%","replica_name":"free"}  mz_system
 
 simple conn=mz_system,user=mz_system
 CREATE CLUSTER REPLICA t1.r123 SIZE 'scale=1-workers=2', BILLED AS 'free'
@@ -738,9 +739,9 @@ db error: ERROR: cannot modify managed cluster t1
 query TTTT rowsort
 SELECT name, cluster_id, size, owner_id FROM mz_cluster_replicas WHERE cluster_id = 'u2'
 ----
-free  u2  2  u1
-billed  u2  2  u1
-r1  u2  1  u1
+free  u2  scale=1-workers=2  u1
+billed  u2  scale=1-workers=2  u1
+r1  u2  scale=1-workers=1  u1
 
 query T
 SELECT regexp_replace(id::text, 'u.*', 'u%') FROM mz_internal.mz_internal_cluster_replicas WHERE id LIKE 'u%'
@@ -788,7 +789,7 @@ COMPLETE 0
 query TTTT
 SELECT event_type, object_type, regexp_replace(details::text, '"replica_id":"u[^"]*"', '"replica_id":"u%"'), user FROM mz_audit_events ORDER BY occurred_at DESC LIMIT 1;
 ----
-create  cluster-replica  {"billed_as":"free","cluster_id":"u4","cluster_name":"t1","disk":true,"internal":true,"logical_size":"2","reason":"manual","replica_id":"u%","replica_name":"free"}  mz_system
+create  cluster-replica  {"billed_as":"free","cluster_id":"u4","cluster_name":"t1","disk":true,"internal":true,"logical_size":"scale=1-workers=2","reason":"manual","replica_id":"u%","replica_name":"free"}  mz_system
 
 simple conn=mz_system,user=mz_system
 CREATE CLUSTER REPLICA t1.internal_r2 SIZE 'scale=1-workers=2', INTERNAL
@@ -809,8 +810,8 @@ DROP CLUSTER REPLICA t1.r2
 query TTTT rowsort
 SELECT name, cluster_id, size, owner_id FROM mz_cluster_replicas WHERE cluster_id = 'u4'
 ----
-r1  u4  1  u1
-free  u4  2  u1
+r1  u4  scale=1-workers=1  u1
+free  u4  scale=1-workers=2  u1
 
 simple conn=mz_system,user=mz_system
 CREATE CLUSTER REPLICA t1.r3 SIZE 'scale=1-workers=2', BILLED AS 'free'

@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET allowed_cluster_replica_sizes = '1-no-disk';
+ALTER SYSTEM SET allowed_cluster_replica_sizes = 'scale=1-workers=1-nodisk';
 ALTER SYSTEM SET disk_cluster_replicas_default = false;
 
 # Cannot create clusters with cc cluster size naming schemes

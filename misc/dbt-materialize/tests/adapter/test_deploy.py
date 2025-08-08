@@ -620,7 +620,7 @@ class TestTargetDeploy:
             fetch="one",
         )
 
-        assert size == "1"
+        assert size == "scale=1-workers=1"
         assert replication_factor == "1"
 
         result = project.run_sql(

@@ -31,8 +31,8 @@ ALTER SYSTEM SET enable_disk_cluster_replicas = true
 > CREATE CLUSTER c REPLICAS (r1 (SIZE 'scale=1-workers=1-nodisk', DISK), r2 (SIZE 'scale=1-workers=1-nodisk'))
 
 > SELECT r.name, r.size, r.disk FROM mz_catalog.mz_clusters c, mz_catalog.mz_cluster_replicas r WHERE c.name = 'c' AND c.id = r.cluster_id;
-r1 1-no-disk true
-r2 1-no-disk false
+r1 scale=1-workers=1-nodisk true
+r2 scale=1-workers=1-nodisk false
 
 > DROP CLUSTER c;
 
@@ -40,8 +40,8 @@ r2 1-no-disk false
 > CREATE CLUSTER c SIZE 'scale=1-workers=1-nodisk', REPLICATION FACTOR = 2, DISK;
 
 > SELECT r.name, r.size, r.disk FROM mz_catalog.mz_clusters c, mz_catalog.mz_cluster_replicas r WHERE c.name = 'c' AND c.id = r.cluster_id;
-r1 1-no-disk true
-r2 1-no-disk true
+r1 scale=1-workers=1-nodisk true
+r2 scale=1-workers=1-nodisk true
 
 > DROP CLUSTER c;
 
@@ -52,8 +52,8 @@ ALTER SYSTEM SET disk_cluster_replicas_default = true
 > CREATE CLUSTER c REPLICAS (r1 (SIZE 'scale=1-workers=1-nodisk', DISK), r2 (SIZE 'scale=1-workers=1-nodisk'))
 
 > SELECT r.name, r.size, r.disk FROM mz_catalog.mz_clusters c, mz_catalog.mz_cluster_replicas r WHERE c.name = 'c' AND c.id = r.cluster_id;
-r1 1-no-disk true
-r2 1-no-disk true
+r1 scale=1-workers=1-nodisk true
+r2 scale=1-workers=1-nodisk true
 
 > DROP CLUSTER c;
 
@@ -64,11 +64,11 @@ ALTER SYSTEM RESET disk_cluster_replicas_default
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_disk_cluster_replicas = false
 
-! CREATE CLUSTER c REPLICAS (dff_3 (size '1-no-disk', disk))
+! CREATE CLUSTER c REPLICAS (dff_3 (size 'scale=1-workers=1-nodisk', disk))
 contains:`WITH (DISK)` for cluster replicas is not available
 
 # Cannot set DISK on unmanaged clusters (the option is per replica)
-! CREATE CLUSTER c REPLICAS (dff_3 (size '1-no-disk')), DISK;
+! CREATE CLUSTER c REPLICAS (dff_3 (size 'scale=1-workers=1-nodisk')), DISK;
 contains:DISK not supported for unmanaged clusters
 
 # The following test that we don't crash envd with bad parameters, and instead just fallback

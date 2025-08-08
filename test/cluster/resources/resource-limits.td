@@ -152,7 +152,7 @@ ALTER SYSTEM SET allowed_cluster_replica_sizes = '2, 4'
 "\"2, 4\""
 
 ! CREATE CLUSTER REPLICA c1.r3 SIZE 'scale=1-workers=1'
-contains:unknown cluster replica size 1
+contains:unknown cluster replica size scale=1-workers=1
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM RESET allowed_cluster_replica_sizes
