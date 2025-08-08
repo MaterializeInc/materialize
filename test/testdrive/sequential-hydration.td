@@ -15,9 +15,9 @@
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET compute_hydration_concurrency = 1;
 
-> CREATE CLUSTER source1 SIZE '1', REPLICATION FACTOR 0
-> CREATE CLUSTER source2 SIZE '1', REPLICATION FACTOR 0
-> CREATE CLUSTER source3 SIZE '1', REPLICATION FACTOR 1
+> CREATE CLUSTER source1 SIZE 'scale=1,workers=1', REPLICATION FACTOR 0
+> CREATE CLUSTER source2 SIZE 'scale=1,workers=1', REPLICATION FACTOR 0
+> CREATE CLUSTER source3 SIZE 'scale=1,workers=1', REPLICATION FACTOR 1
 
 > CREATE TABLE t (a int);
 > CREATE MATERIALIZED VIEW mv1 IN CLUSTER source1 AS SELECT * FROM t

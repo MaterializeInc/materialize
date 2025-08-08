@@ -15,7 +15,7 @@ mode cockroach
 reset-server
 
 statement ok
-CREATE CLUSTER c SIZE '1', REPLICATION FACTOR 2;
+CREATE CLUSTER c SIZE 'scale=1,workers=1', REPLICATION FACTOR 2;
 
 statement ok
 ALTER CLUSTER c SET (REPLICATION FACTOR 1)
@@ -69,7 +69,7 @@ DROP CLUSTER c CASCADE;
 # First create a compute item, then a storage item
 
 statement ok
-CREATE CLUSTER c SIZE '1';
+CREATE CLUSTER c SIZE 'scale=1,workers=1';
 
 statement ok
 CREATE MATERIALIZED VIEW mv IN CLUSTER c AS SELECT 1;

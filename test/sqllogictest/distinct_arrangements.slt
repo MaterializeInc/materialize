@@ -24,7 +24,7 @@ COMPLETE 0
 # Run the majority of this test on its own cluster to ensure it doesn't
 # interfere with any other tests.
 statement ok
-CREATE CLUSTER distinct_arrangements REPLICAS (r1 (SIZE '1'))
+CREATE CLUSTER distinct_arrangements REPLICAS (r1 (SIZE 'scale=1,workers=1'))
 
 statement ok
 SET cluster TO distinct_arrangements
@@ -772,7 +772,7 @@ DROP TABLE mods CASCADE
 
 # from linear-join-fuel.td
 statement ok
-CREATE CLUSTER linear_join REPLICAS (r1 (SIZE '1'))
+CREATE CLUSTER linear_join REPLICAS (r1 (SIZE 'scale=1,workers=1'))
 
 statement ok
 SET cluster=linear_join
@@ -1136,7 +1136,7 @@ statement ok
 ALTER CLUSTER distinct_arrangements SET (MANAGED = false);
 
 statement ok
-CREATE CLUSTER REPLICA distinct_arrangements.replica SIZE = '2', INTROSPECTION DEBUGGING = true;
+CREATE CLUSTER REPLICA distinct_arrangements.replica SIZE = 'scale=1,workers=2', INTROSPECTION DEBUGGING = true;
 
 statement ok
 BEGIN

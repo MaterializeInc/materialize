@@ -27,7 +27,9 @@ def test_managed_cluster_sizing(mz: MaterializeApplication) -> None:
     """Test that a SIZE N cluster indeed creates N clusterd instances."""
     SIZE = 2
 
-    mz.environmentd.sql(f"CREATE CLUSTER sized1 SIZE '{SIZE}-1', REPLICATION FACTOR 2")
+    mz.environmentd.sql(
+        f"CREATE CLUSTER sized1 SIZE 'scale={SIZE},workers=1', REPLICATION FACTOR 2"
+    )
     cluster_id = mz.environmentd.sql_query(
         "SELECT id FROM mz_clusters WHERE name = 'sized1'"
     )[0][0]
@@ -91,13 +93,13 @@ def test_managed_cluster_sizing(mz: MaterializeApplication) -> None:
     )
 
     mz.environmentd.sql(
-        'ALTER SYSTEM SET ALLOWED_CLUSTER_REPLICA_SIZES="1"',
+        'ALTER SYSTEM SET ALLOWED_CLUSTER_REPLICA_SIZES="scale=1,workers=1"',
         port="internal",
         user="mz_system",
     )
     try:
         mz.environmentd.sql(
-            'CREATE CLUSTER mzsizetest (SIZE="2")',
+            'CREATE CLUSTER mzsizetest (SIZE="scale=1,workers=2")',
             port="internal",
             user="mz_system",
         )
@@ -164,14 +166,14 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
     # - timedout until ready queries take the appropriate action
     # - Fails to zero-downtime alter cluster with source
     mz.environmentd.sql(
-        'CREATE CLUSTER zdtaltertest ( SIZE = "1" )',
+        'CREATE CLUSTER zdtaltertest ( SIZE = "scale=1,workers=1" )',
         port="internal",
         user="mz_system",
     )
 
     mz.environmentd.sql(
         """
-        ALTER CLUSTER zdtaltertest SET ( SIZE = '2' ) WITH ( WAIT FOR '1ms' )
+        ALTER CLUSTER zdtaltertest SET ( SIZE = 'scale=1,workers=2' ) WITH ( WAIT FOR '1ms' )
         """,
         port="internal",
         user="mz_system",
@@ -180,7 +182,7 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
 
     mz.environmentd.sql(
         """
-        ALTER CLUSTER zdtaltertest SET ( SIZE = '1', REPLICATION FACTOR 2 ) WITH ( WAIT FOR '1ms' )
+        ALTER CLUSTER zdtaltertest SET ( SIZE = 'scale=1,workers=1', REPLICATION FACTOR 2 ) WITH ( WAIT FOR '1ms' )
         """,
         port="internal",
         user="mz_system",
@@ -189,7 +191,7 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
 
     mz.environmentd.sql(
         """
-        ALTER CLUSTER zdtaltertest SET ( SIZE = '1', REPLICATION FACTOR 1 ) WITH ( WAIT FOR '1ms' )
+        ALTER CLUSTER zdtaltertest SET ( SIZE = 'scale=1,workers=1', REPLICATION FACTOR 1 ) WITH ( WAIT FOR '1ms' )
         """,
         port="internal",
         user="mz_system",
@@ -198,7 +200,7 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
 
     mz.environmentd.sql(
         """
-        ALTER CLUSTER zdtaltertest SET ( SIZE = '2', REPLICATION FACTOR 2 ) WITH ( WAIT FOR '1ms' )
+        ALTER CLUSTER zdtaltertest SET ( SIZE = 'scale=1,workers=2', REPLICATION FACTOR 2 ) WITH ( WAIT FOR '1ms' )
         """,
         port="internal",
         user="mz_system",
@@ -207,7 +209,7 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
 
     mz.environmentd.sql(
         """
-        ALTER CLUSTER zdtaltertest SET ( SIZE = '1', REPLICATION FACTOR 1 ) WITH ( WAIT FOR '1ms' )
+        ALTER CLUSTER zdtaltertest SET ( SIZE = 'scale=1,workers=1', REPLICATION FACTOR 1 ) WITH ( WAIT FOR '1ms' )
         """,
         port="internal",
         user="mz_system",
@@ -228,7 +230,7 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
         $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
         DROP CLUSTER IF EXISTS zdtaltertest CASCADE;
         DROP TABLE IF EXISTS t CASCADE;
-        CREATE CLUSTER zdtaltertest ( SIZE = '1');
+        CREATE CLUSTER zdtaltertest ( SIZE = 'scale=1,workers=1');
         GRANT ALL ON CLUSTER zdtaltertest TO materialize;
 
         SET CLUSTER = zdtaltertest;
@@ -261,7 +263,7 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
     def zero_downtime_alter():
         mz.environmentd.sql(
             """
-            ALTER CLUSTER zdtaltertest SET (SIZE = '2') WITH ( WAIT FOR '5s')
+            ALTER CLUSTER zdtaltertest SET (SIZE = 'scale=1,workers=2') WITH ( WAIT FOR '5s')
             """,
             port="internal",
             user="mz_system",
@@ -278,7 +280,7 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
         SELECT size FROM mz_clusters WHERE name='zdtaltertest';
         """
         )
-        == (["1"],)
+        == (["scale=1,workers=1"],)
     ), "Cluster should use original config during alter"
 
     thread.join()
@@ -290,14 +292,14 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
         SELECT size FROM mz_clusters WHERE name='zdtaltertest';
         """
         )
-        == (["2"],)
+        == (["scale=1,workers=2"],)
     ), "Cluster should use new config after alter completes"
 
     # Validate cancelation of alter cluster..with
     mz.environmentd.sql(
         """
         DROP CLUSTER IF EXISTS cluster1 CASCADE;
-        CREATE CLUSTER cluster1 ( SIZE = '1');
+        CREATE CLUSTER cluster1 ( SIZE = 'scale=1,workers=1');
         """,
         port="internal",
         user="mz_system",
@@ -330,7 +332,7 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
         target=query_with_conn,
         args=[
             """
-            ALTER CLUSTER cluster1 SET (SIZE = '2') WITH ( WAIT FOR '5s')
+            ALTER CLUSTER cluster1 SET (SIZE = 'scale=1,workers=2') WITH ( WAIT FOR '5s')
             """,
             conn,
             True,
@@ -352,7 +354,7 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
         SELECT size FROM mz_clusters WHERE name='cluster1';
         """
         )
-        == (["1"],)
+        == (["scale=1,workers=1"],)
     ), "Cluster should not have updated if canceled during alter"
 
     # Test zero-downtime reconfig wait until ready
@@ -367,7 +369,7 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
 
     mz.environmentd.sql(
         """
-        CREATE CLUSTER slow_hydration( SIZE = "1" );
+        CREATE CLUSTER slow_hydration( SIZE = "scale=1,workers=1" );
         SET CLUSTER TO slow_hydration;
         SET DATABASE TO materialize;
         CREATE TABLE test_table (id int);
@@ -396,7 +398,7 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
     # Test fails to alter with source
     mz.environmentd.sql(
         """
-        CREATE CLUSTER cluster_with_source( SIZE = "1" );
+        CREATE CLUSTER cluster_with_source( SIZE = "scale=1,workers=1" );
         SET CLUSTER TO cluster_with_source;
         SET DATABASE TO materialize;
         CREATE SOURCE counter

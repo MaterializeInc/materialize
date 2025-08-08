@@ -230,7 +230,7 @@ contains:cannot show indexes on materialize.public.foo_primary_idx because it is
 
 > SET CLUSTER TO quickstart
 
-> CREATE CLUSTER clstr REPLICAS (r1 (SIZE '1'))
+> CREATE CLUSTER clstr REPLICAS (r1 (SIZE 'scale=1,workers=1'))
 > CREATE DEFAULT INDEX IN CLUSTER clstr ON foo;
 > SET CLUSTER TO mz_catalog_server
 > SHOW INDEXES IN CLUSTER clstr WHERE on = 'foo'

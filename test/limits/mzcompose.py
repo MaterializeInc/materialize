@@ -1762,7 +1762,7 @@ SERVICES = [
     ),
     MySql(),
     SchemaRegistry(),
-    # We create all sources, sinks and dataflows by default with SIZE '1'
+    # We create all sources, sinks and dataflows by default with SIZE 'scale=1,workers=1'
     # The workflow_instance_size workflow is testing multi-process clusters
     Testdrive(
         default_timeout="60s",
@@ -2264,7 +2264,7 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
                 ALTER SYSTEM SET max_clusters = {args.clusters * 10}
                 ALTER SYSTEM SET max_replicas_per_cluster = {args.replicas * 10}
 
-                CREATE CLUSTER single_replica_cluster SIZE = '4';
+                CREATE CLUSTER single_replica_cluster SIZE = 'scale=1,workers=4';
                 GRANT ALL ON CLUSTER single_replica_cluster TO materialize;
                 GRANT ALL ON CLUSTER single_replica_cluster TO "{ADMIN_USER}";
                 GRANT ALL PRIVILEGES ON SCHEMA public TO "{ADMIN_USER}";

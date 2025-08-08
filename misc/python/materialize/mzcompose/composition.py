@@ -75,6 +75,7 @@ FILTERED_ARGS = [
     "aws-secret-access-key=",
     # Not a secret, but too spammy, filter too
     "CLUSTER_REPLICA_SIZES",
+    "cluster-replica-sizes=",
 ]
 
 

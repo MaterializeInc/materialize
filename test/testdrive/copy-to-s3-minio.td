@@ -91,7 +91,7 @@ contains:ORDER BY is not supported in SELECT query for COPY statements
 contains:MAX FILE SIZE cannot be less than 16MB
 
 # Creating cluster with multiple replicas, each with multiple workers
-> CREATE CLUSTER c1 REPLICAS (r1 (size '2'), r2 (size '2'));
+> CREATE CLUSTER c1 REPLICAS (r1 (size 'scale=1,workers=2'), r2 (size 'scale=1,workers=2'));
 > SET cluster = c1;
 
 $ set-from-sql var=key-1

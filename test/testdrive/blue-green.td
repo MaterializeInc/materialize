@@ -66,8 +66,8 @@ SELECT id FROM mz_schemas WHERE name = 'green';
 
 > INSERT INTO source_data VALUES (10), (20), (30)
 
-> CREATE CLUSTER blue_compute SIZE '1'
-> CREATE CLUSTER blue_serving SIZE '1'
+> CREATE CLUSTER blue_compute SIZE 'scale=1,workers=1'
+> CREATE CLUSTER blue_serving SIZE 'scale=1,workers=1'
 
 > CREATE SCHEMA blue
 
@@ -92,8 +92,8 @@ Target cluster: blue_serving
 
 # Spin up a new stack.
 
-> CREATE CLUSTER green_compute SIZE '1'
-> CREATE CLUSTER green_serving SIZE '1'
+> CREATE CLUSTER green_compute SIZE 'scale=1,workers=1'
+> CREATE CLUSTER green_serving SIZE 'scale=1,workers=1'
 
 > CREATE SCHEMA green
 

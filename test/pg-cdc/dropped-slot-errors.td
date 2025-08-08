@@ -22,7 +22,7 @@ ALTER TABLE t1 REPLICA IDENTITY FULL;
 
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
-> CREATE CLUSTER storage REPLICAS (r1 (SIZE '1'))
+> CREATE CLUSTER storage REPLICAS (r1 (SIZE 'scale=1,workers=1'))
 
 > CREATE SECRET pgpass AS 'postgres'
 
@@ -49,7 +49,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 SELECT pg_drop_replication_slot(slot_name) FROM pg_replication_slots
 
 # Resume the ingestion by adding a replica to the cluster.
-> CREATE CLUSTER REPLICA storage.r1 SIZE = '1';
+> CREATE CLUSTER REPLICA storage.r1 SIZE = 'scale=1,workers=1';
 
 > SELECT error ~~ 'postgres: slot overcompacted. Requested LSN % but only LSNs % are available%' FROM mz_internal.mz_source_statuses WHERE name = 't1';
 true

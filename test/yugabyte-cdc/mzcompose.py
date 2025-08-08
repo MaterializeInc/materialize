@@ -35,6 +35,6 @@ def workflow_default(c: Composition) -> None:
         "--no-reset",
         "--max-errors=1",
         f"--seed={seed}",
-        f"--var=default-replica-size={Materialized.Size.DEFAULT_SIZE}-{Materialized.Size.DEFAULT_SIZE}",
+        f"--var=default-replica-size=scale={Materialized.Size.DEFAULT_SIZE},workers={Materialized.Size.DEFAULT_SIZE}",
         "yugabyte-cdc.td",
     )

@@ -73,16 +73,16 @@ statement ok
 CREATE CLUSTER foo REPLICAS (r1 (STORAGECTL ADDRESSES ['s:1234'], STORAGE ADDRESSES ['st:1235'], COMPUTECTL ADDRESSES ['c:1234'], COMPUTE ADDRESSES ['ct:1235']))
 
 statement error cluster 'foo' already exists
-CREATE CLUSTER foo REPLICAS (r1 (SIZE '1'))
+CREATE CLUSTER foo REPLICAS (r1 (SIZE 'scale=1,workers=1'))
 
 statement error cannot create multiple replicas named 'r1' on cluster 'bar'
-CREATE CLUSTER bar REPLICAS (r1 (SIZE '1'), r1 (SIZE '1'))
+CREATE CLUSTER bar REPLICAS (r1 (SIZE 'scale=1,workers=1'), r1 (SIZE 'scale=1,workers=1'))
 
 statement error COMPUTE ADDRESSES specified more than once
 CREATE CLUSTER bar REPLICAS (r1 (COMPUTE ADDRESSES ['localhost:1235'], COMPUTE ADDRESSES ['localhost:1234']))
 
 statement ok
-CREATE CLUSTER bar REPLICAS (r1 (SIZE '1'), r2 (SIZE '1'))
+CREATE CLUSTER bar REPLICAS (r1 (SIZE 'scale=1,workers=1'), r2 (SIZE 'scale=1,workers=1'))
 
 query TT rowsort
 SELECT id, name FROM mz_clusters
@@ -107,10 +107,10 @@ statement error invalid mixture of orchestrated and unorchestrated replica optio
 CREATE CLUSTER baz REPLICAS (r1 (COMPUTE ADDRESSES ['localhost:1234'], SIZE 'small'))
 
 statement error invalid mixture of orchestrated and unorchestrated replica options
-CREATE CLUSTER baz REPLICAS (r1 (SIZE '2', WORKERS 1))
+CREATE CLUSTER baz REPLICAS (r1 (SIZE 'scale=1,workers=2', WORKERS 1))
 
 statement error invalid mixture of orchestrated and unorchestrated replica options
-CREATE CLUSTER baz REPLICAS (r1 (SIZE '2', COMPUTE ADDRESSES ['localhost:1234']))
+CREATE CLUSTER baz REPLICAS (r1 (SIZE 'scale=1,workers=2', COMPUTE ADDRESSES ['localhost:1234']))
 
 statement error COMPUTECTL ADDRESSES and COMPUTE ADDRESSES must have the same length
 CREATE CLUSTER baz REPLICAS (r1 (STORAGECTL ADDRESSES ['localhost:1234'], STORAGE ADDRESSES ['localhost:1234'], COMPUTECTL ADDRESSES ['localhost:1234', 'localhost:4567'], COMPUTE ADDRESSES [], WORKERS 1))
@@ -355,7 +355,7 @@ statement ok
 DROP CLUSTER foo CASCADE
 
 statement ok
-CREATE CLUSTER baz REPLICAS (r1 (SIZE '1'))
+CREATE CLUSTER baz REPLICAS (r1 (SIZE 'scale=1,workers=1'))
 
 statement ok
 CREATE DEFAULT INDEX IN CLUSTER baz ON v
@@ -373,13 +373,13 @@ SELECT name FROM mz_indexes WHERE name NOT LIKE 'mz_%' AND name NOT LIKE 'pg_%';
 
 # Test that dropping a cluster and re-creating it with the same name is valid if introspection sources are enabled
 statement ok
-CREATE CLUSTER foo REPLICAS (r1 (SIZE '1', INTROSPECTION INTERVAL '1s'))
+CREATE CLUSTER foo REPLICAS (r1 (SIZE 'scale=1,workers=1', INTROSPECTION INTERVAL '1s'))
 
 statement ok
 DROP CLUSTER foo CASCADE
 
 statement ok
-CREATE CLUSTER foo REPLICAS (r1 (SIZE '1', INTROSPECTION INTERVAL '1s'))
+CREATE CLUSTER foo REPLICAS (r1 (SIZE 'scale=1,workers=1', INTROSPECTION INTERVAL '1s'))
 
 statement ok
 DROP CLUSTER foo CASCADE
@@ -390,20 +390,21 @@ statement error unknown cluster replica size
 CREATE CLUSTER foo REPLICAS (a (SIZE 'lol'))
 
 statement ok
-CREATE CLUSTER foo REPLICAS (a (SIZE '1'))
+CREATE CLUSTER foo REPLICAS (a (SIZE 'scale=1,workers=1'))
 
 statement ok
-CREATE CLUSTER foo2 REPLICAS (a (SIZE '32'))
+CREATE CLUSTER foo2 REPLICAS (a (SIZE 'scale=1,workers=32'))
 
 statement ok
-CREATE CLUSTER foo3 REPLICAS (a (SIZE '2-2'))
+CREATE CLUSTER foo3 REPLICAS (a (SIZE 'scale=2,workers=2'))
 
 # Ensure that identifiers are correctly handled in value position, even when
-# they can't be printed bare. We previously had a bug where `"1"` was
-# incorrectly parsed as size `"1"` (quotes included), but `"small"` was parsed
-# as size `small` (quotes excluded).
+# they can't be printed bare. We previously had a bug where
+# `"scale=1,workers=1"` was incorrectly parsed as size `"scale=1,workers=1"`
+# (quotes included), but `"small"` was parsed as size `small` (quotes
+# excluded).
 statement ok
-CREATE CLUSTER foo4 REPLICAS (a (SIZE "1"))
+CREATE CLUSTER foo4 REPLICAS (a (SIZE "scale=1,workers=1"))
 
 statement ok
 DROP CLUSTER foo, foo2, foo3, foo4 CASCADE
@@ -421,7 +422,7 @@ SELECT COUNT(name) FROM mz_indexes WHERE cluster_id <> 'u1' AND cluster_id NOT L
 0
 
 statement ok
-CREATE CLUSTER test REPLICAS (foo (SIZE '1'));
+CREATE CLUSTER test REPLICAS (foo (SIZE 'scale=1,workers=1'));
 
 query I
 SELECT COUNT(name) FROM mz_indexes;
@@ -445,36 +446,36 @@ statement ok
 DROP CLUSTER quickstart;
 
 statement ok
-CREATE CLUSTER quickstart REPLICAS (r1 (SIZE '2')), MANAGED = false;
+CREATE CLUSTER quickstart REPLICAS (r1 (SIZE 'scale=1,workers=2')), MANAGED = false;
 
 statement error invalid SIZE: must provide a string value
 CREATE CLUSTER REPLICA quickstart.size_1 SIZE;
 
 statement ok
-CREATE CLUSTER REPLICA quickstart.size_1 SIZE '1';
+CREATE CLUSTER REPLICA quickstart.size_1 SIZE 'scale=1,workers=1';
 
 query TTT
 SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
 ----
-mz_catalog_server  r1  2
-mz_probe  r1  2
-mz_system  r1  2
-quickstart  r1  2
-quickstart  size_1  1
+mz_catalog_server  r1  scale=1,workers=2
+mz_probe  r1  scale=1,workers=2
+mz_system  r1  scale=1,workers=2
+quickstart  r1  scale=1,workers=2
+quickstart  size_1  scale=1,workers=1
 
 statement ok
-CREATE CLUSTER foo REPLICAS (size_1 (SIZE '1'), size_2 (SIZE '2'))
+CREATE CLUSTER foo REPLICAS (size_1 (SIZE 'scale=1,workers=1'), size_2 (SIZE 'scale=1,workers=2'))
 
 query TTT
 SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
 ----
-foo  size_1  1
-foo  size_2  2
-mz_catalog_server  r1  2
-mz_probe  r1  2
-mz_system  r1  2
-quickstart  r1  2
-quickstart  size_1  1
+foo  size_1  scale=1,workers=1
+foo  size_2  scale=1,workers=2
+mz_catalog_server  r1  scale=1,workers=2
+mz_probe  r1  scale=1,workers=2
+mz_system  r1  scale=1,workers=2
+quickstart  r1  scale=1,workers=2
+quickstart  size_1  scale=1,workers=1
 
 statement ok
 DROP CLUSTER REPLICA IF EXISTS quickstart.bar
@@ -497,13 +498,13 @@ DROP CLUSTER REPLICA foo.size_1, foo.size_2
 query TTT
 SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) ORDER BY 1, 2, 3
 ----
-mz_catalog_server  r1  2
-mz_probe  r1  2
-mz_system  r1  2
-quickstart  r1  2
+mz_catalog_server  r1  scale=1,workers=2
+mz_probe  r1  scale=1,workers=2
+mz_system  r1  scale=1,workers=2
+quickstart  r1  scale=1,workers=2
 
 statement ok
-CREATE CLUSTER REPLICA quickstart.foo_bar SIZE '1'
+CREATE CLUSTER REPLICA quickstart.foo_bar SIZE 'scale=1,workers=1'
 
 statement error db error: ERROR: Expected dot, found RENAME
 ALTER CLUSTER REPLICA quickstart RENAME TO bar_foo
@@ -521,7 +522,7 @@ statement ok
 ALTER CLUSTER REPLICA IF EXISTS quickstart.bar_foo RENAME TO foo_bar
 
 statement ok
-CREATE CLUSTER REPLICA quickstart.bar_foo SIZE '1'
+CREATE CLUSTER REPLICA quickstart.bar_foo SIZE 'scale=1,workers=1'
 
 statement error uniqueness violation
 ALTER CLUSTER REPLICA quickstart.bar_foo RENAME TO foo_bar
@@ -533,7 +534,7 @@ statement ok
 DROP CLUSTER REPLICA quickstart.bar_foo
 
 statement ok
-CREATE CLUSTER REPLICA quickstart."foo-bar" SIZE '1'
+CREATE CLUSTER REPLICA quickstart."foo-bar" SIZE 'scale=1,workers=1'
 
 statement ok
 DROP CLUSTER REPLICA quickstart."foo-bar"
@@ -542,7 +543,7 @@ statement ok
 CREATE CLUSTER "foo-bar" REPLICAS ()
 
 statement ok
-CREATE CLUSTER REPLICA "foo-bar"."foo-bar" SIZE '1'
+CREATE CLUSTER REPLICA "foo-bar"."foo-bar" SIZE 'scale=1,workers=1'
 
 statement ok
 DROP CLUSTER REPLICA "foo-bar"."foo-bar"
@@ -551,13 +552,13 @@ statement ok
 DROP CLUSTER "foo-bar"
 
 statement ok
-CREATE CLUSTER REPLICA quickstart."好-好" SIZE '1'
+CREATE CLUSTER REPLICA quickstart."好-好" SIZE 'scale=1,workers=1'
 
 statement ok
 DROP CLUSTER REPLICA quickstart."好-好"
 
 statement ok
-CREATE CLUSTER REPLICA quickstart."好_好" SIZE '1'
+CREATE CLUSTER REPLICA quickstart."好_好" SIZE 'scale=1,workers=1'
 
 statement ok
 DROP CLUSTER REPLICA quickstart."好_好"
@@ -580,7 +581,7 @@ statement ok
 DROP CLUSTER empty
 
 statement ok
-CREATE CLUSTER empty (SIZE '1', REPLICATION FACTOR 0)
+CREATE CLUSTER empty (SIZE 'scale=1,workers=1', REPLICATION FACTOR 0)
 
 simple
 SELECT generate_series(1, 1)
@@ -597,10 +598,10 @@ HINT: Use ALTER CLUSTER to adjust the replication factor of the cluster. Example
 # Phillip's tests
 
 statement error zero-length delimited identifier
-CREATE CLUSTER REPLICA quickstart."" SIZE '1';
+CREATE CLUSTER REPLICA quickstart."" SIZE 'scale=1,workers=1';
 
 statement error unknown cluster
-CREATE CLUSTER REPLICA no_such_cluster.size_1 SIZE '1';
+CREATE CLUSTER REPLICA no_such_cluster.size_1 SIZE 'scale=1,workers=1';
 
 statement error invalid SIZE
 CREATE CLUSTER bad REPLICAS (size_2 (SIZE NULL));
@@ -621,7 +622,7 @@ statement ok
 DROP CLUSTER foo CASCADE;
 
 statement ok
-CREATE CLUSTER foo REPLICAS (size_2 (SIZE '1'));
+CREATE CLUSTER foo REPLICAS (size_2 (SIZE 'scale=1,workers=1'));
 
 statement ok
 SET cluster=foo
@@ -651,7 +652,7 @@ DROP CLUSTER foo CASCADE
 # can't be meaningfully specified
 
 statement error unknown cluster replica availability zone a
-CREATE CLUSTER REPLICA quickstart.replica SIZE '1', AVAILABILITY ZONE 'a'
+CREATE CLUSTER REPLICA quickstart.replica SIZE 'scale=1,workers=1', AVAILABILITY ZONE 'a'
 
 statement error AVAILABILITY ZONE specified more than once
 CREATE CLUSTER REPLICA quickstart.replica AVAILABILITY ZONE 'a', AVAILABILITY ZONE 'b'
@@ -668,19 +669,19 @@ CREATE CLUSTER REPLICA quickstart.replica AVAILABILITY ZONE 'a', STORAGECTL ADDR
 # Test that the contents of mz_cluster_replicas look sensible
 
 statement ok
-CREATE CLUSTER foo REPLICAS (size_1 (SIZE '1'), size_32 (SIZE '32'), size_2_2 (SIZE '2-2'), size_1_8g (SIZE '1-8G'))
+CREATE CLUSTER foo REPLICAS (size_1 (SIZE 'scale=1,workers=1'), size_32 (SIZE 'scale=1,workers=32'), size_2_2 (SIZE 'scale=2,workers=2'), size_1_8g (SIZE 'scale=1,workers=1,mem=8GiB'))
 
 query TTTTTTT
 SELECT r.name, r.size, s.processes, s.cpu_nano_cores, s.memory_bytes, s.workers, s.credits_per_hour FROM mz_cluster_replicas r JOIN mz_catalog.mz_cluster_replica_sizes s ON r.size = s.size ORDER BY r.name
 ----
-r1  2  1  18446744073709000000  18446744073709551615  2  1
-r1  2  1  18446744073709000000  18446744073709551615  2  1
-r1  2  1  18446744073709000000  18446744073709551615  2  1
-r1  2  1  18446744073709000000  18446744073709551615  2  1
-size_1  1  1  18446744073709000000  18446744073709551615  1  1
-size_1_8g  1-8G  1  18446744073709000000  8589934592  1  1
-size_2_2  2-2  2  18446744073709000000  18446744073709551615  2  2
-size_32  32  1  18446744073709000000  18446744073709551615  32  1
+r1  scale=1,workers=2  1  18446744073709000000  18446744073709551615  2  1
+r1  scale=1,workers=2  1  18446744073709000000  18446744073709551615  2  1
+r1  scale=1,workers=2  1  18446744073709000000  18446744073709551615  2  1
+r1  scale=1,workers=2  1  18446744073709000000  18446744073709551615  2  1
+size_1  scale=1,workers=1  1  18446744073709000000  18446744073709551615  1  1
+size_1_8g  scale=1,workers=1,mem=8GiB  1  18446744073709000000  8589934592  1  1
+size_2_2  scale=2,workers=2  2  18446744073709000000  18446744073709551615  2  2
+size_32  scale=1,workers=32  1  18446744073709000000  18446744073709551615  32  1
 
 statement ok
 DROP CLUSTER foo CASCADE
@@ -691,56 +692,56 @@ reset-server
 # Tests for BILLED AS replicas
 
 statement ok
-CREATE CLUSTER t1 SIZE '1', REPLICATION FACTOR 1
+CREATE CLUSTER t1 SIZE 'scale=1,workers=1', REPLICATION FACTOR 1
 
 simple conn=mz_system,user=mz_system
-CREATE CLUSTER REPLICA t1.free SIZE '2', BILLED AS 'free'
+CREATE CLUSTER REPLICA t1.free SIZE 'scale=1,workers=2', BILLED AS 'free'
 ----
 db error: ERROR: cannot modify managed cluster t1
 
 simple conn=mz_system,user=mz_system
-CREATE CLUSTER REPLICA t1.r1234 SIZE '2', INTERNAL, BILLED AS 'free'
+CREATE CLUSTER REPLICA t1.r1234 SIZE 'scale=1,workers=2', INTERNAL, BILLED AS 'free'
 ----
 db error: ERROR: r1234 is reserved for replicas of managed clusters
 
 simple conn=mz_system,user=mz_system
-CREATE CLUSTER REPLICA t1.billed SIZE '2', INTERNAL
+CREATE CLUSTER REPLICA t1.billed SIZE 'scale=1,workers=2', INTERNAL
 ----
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-CREATE CLUSTER REPLICA t1.free SIZE '2', INTERNAL, BILLED AS 'free'
+CREATE CLUSTER REPLICA t1.free SIZE 'scale=1,workers=2', INTERNAL, BILLED AS 'free'
 ----
 COMPLETE 0
 
 statement error db error: ERROR: cannot modify managed cluster t1
-CREATE CLUSTER REPLICA t1.free2 SIZE '2', BILLED AS 'free'
+CREATE CLUSTER REPLICA t1.free2 SIZE 'scale=1,workers=2', BILLED AS 'free'
 
 statement error db error: ERROR: cannot specify INTERNAL or BILLED AS as non\-internal user
-CREATE CLUSTER REPLICA t1.free2 SIZE '2', INTERNAL
+CREATE CLUSTER REPLICA t1.free2 SIZE 'scale=1,workers=2', INTERNAL
 
 
 simple conn=mz_system,user=mz_system
-CREATE CLUSTER REPLICA t1.invalid SIZE '2'
+CREATE CLUSTER REPLICA t1.invalid SIZE 'scale=1,workers=2'
 ----
 db error: ERROR: cannot modify managed cluster t1
 
 query TTTT
 SELECT event_type, object_type, regexp_replace(details::text, '"replica_id":"u[^"]*"', '"replica_id":"u%"'), user FROM mz_audit_events ORDER BY occurred_at DESC LIMIT 1;
 ----
-create  cluster-replica  {"billed_as":"free","cluster_id":"u2","cluster_name":"t1","disk":true,"internal":true,"logical_size":"2","reason":"manual","replica_id":"u%","replica_name":"free"}  mz_system
+create  cluster-replica  {"billed_as":"free","cluster_id":"u2","cluster_name":"t1","disk":true,"internal":true,"logical_size":"scale=1,workers=2","reason":"manual","replica_id":"u%","replica_name":"free"}  mz_system
 
 simple conn=mz_system,user=mz_system
-CREATE CLUSTER REPLICA t1.r123 SIZE '2', BILLED AS 'free'
+CREATE CLUSTER REPLICA t1.r123 SIZE 'scale=1,workers=2', BILLED AS 'free'
 ----
 db error: ERROR: cannot modify managed cluster t1
 
 query TTTT rowsort
 SELECT name, cluster_id, size, owner_id FROM mz_cluster_replicas WHERE cluster_id = 'u2'
 ----
-free  u2  2  u1
-billed  u2  2  u1
-r1  u2  1  u1
+free  u2  scale=1,workers=2  u1
+billed  u2  scale=1,workers=2  u1
+r1  u2  scale=1,workers=1  u1
 
 query T
 SELECT regexp_replace(id::text, 'u.*', 'u%') FROM mz_internal.mz_internal_cluster_replicas WHERE id LIKE 'u%'
@@ -749,7 +750,7 @@ u%
 u%
 
 statement error db error: ERROR: cannot modify managed cluster t1
-CREATE CLUSTER REPLICA t1.free2 SIZE '2', BILLED AS 'free'
+CREATE CLUSTER REPLICA t1.free2 SIZE 'scale=1,workers=2', BILLED AS 'free'
 
 statement ok
 ALTER CLUSTER t1 SET (MANAGED false);
@@ -767,10 +768,10 @@ statement ok
 DROP CLUSTER t1
 
 statement ok
-CREATE CLUSTER t1 SIZE '1'
+CREATE CLUSTER t1 SIZE 'scale=1,workers=1'
 
 simple conn=mz_system,user=mz_system
-CREATE CLUSTER REPLICA t1.free SIZE '2', INTERNAL, BILLED AS 'free'
+CREATE CLUSTER REPLICA t1.free SIZE 'scale=1,workers=2', INTERNAL, BILLED AS 'free'
 ----
 COMPLETE 0
 
@@ -778,20 +779,20 @@ statement ok
 DROP CLUSTER t1
 
 statement ok
-CREATE CLUSTER t1 REPLICAS (r1 (SIZE '1'))
+CREATE CLUSTER t1 REPLICAS (r1 (SIZE 'scale=1,workers=1'))
 
 simple conn=mz_system,user=mz_system
-CREATE CLUSTER REPLICA t1.free SIZE '2', BILLED AS 'free', INTERNAL
+CREATE CLUSTER REPLICA t1.free SIZE 'scale=1,workers=2', BILLED AS 'free', INTERNAL
 ----
 COMPLETE 0
 
 query TTTT
 SELECT event_type, object_type, regexp_replace(details::text, '"replica_id":"u[^"]*"', '"replica_id":"u%"'), user FROM mz_audit_events ORDER BY occurred_at DESC LIMIT 1;
 ----
-create  cluster-replica  {"billed_as":"free","cluster_id":"u4","cluster_name":"t1","disk":true,"internal":true,"logical_size":"2","reason":"manual","replica_id":"u%","replica_name":"free"}  mz_system
+create  cluster-replica  {"billed_as":"free","cluster_id":"u4","cluster_name":"t1","disk":true,"internal":true,"logical_size":"scale=1,workers=2","reason":"manual","replica_id":"u%","replica_name":"free"}  mz_system
 
 simple conn=mz_system,user=mz_system
-CREATE CLUSTER REPLICA t1.internal_r2 SIZE '2', INTERNAL
+CREATE CLUSTER REPLICA t1.internal_r2 SIZE 'scale=1,workers=2', INTERNAL
 ----
 COMPLETE 0
 
@@ -799,7 +800,7 @@ statement ok
 DROP CLUSTER REPLICA t1.internal_r2
 
 simple conn=mz_system,user=mz_system
-CREATE CLUSTER REPLICA t1.r2 SIZE '2'
+CREATE CLUSTER REPLICA t1.r2 SIZE 'scale=1,workers=2'
 ----
 COMPLETE 0
 
@@ -809,19 +810,19 @@ DROP CLUSTER REPLICA t1.r2
 query TTTT rowsort
 SELECT name, cluster_id, size, owner_id FROM mz_cluster_replicas WHERE cluster_id = 'u4'
 ----
-r1  u4  1  u1
-free  u4  2  u1
+r1  u4  scale=1,workers=1  u1
+free  u4  scale=1,workers=2  u1
 
 simple conn=mz_system,user=mz_system
-CREATE CLUSTER REPLICA t1.r3 SIZE '2', BILLED AS 'free'
+CREATE CLUSTER REPLICA t1.r3 SIZE 'scale=1,workers=2', BILLED AS 'free'
 ----
 db error: ERROR: must specify INTERNAL when specifying BILLED AS
 
 statement error db error: ERROR: cannot specify INTERNAL or BILLED AS as non\-internal user
-CREATE CLUSTER REPLICA t1.free2 SIZE '2', BILLED AS 'free'
+CREATE CLUSTER REPLICA t1.free2 SIZE 'scale=1,workers=2', BILLED AS 'free'
 
 statement error db error: ERROR: cannot specify INTERNAL or BILLED AS as non\-internal user
-CREATE CLUSTER REPLICA t1.free2 SIZE '2', INTERNAL
+CREATE CLUSTER REPLICA t1.free2 SIZE 'scale=1,workers=2', INTERNAL
 
 statement ok
 ALTER CLUSTER t1 SET (MANAGED);
@@ -841,24 +842,24 @@ DROP CLUSTER t1
 # Test unmanaged clusters with internal/billed as.
 
 statement error db error: ERROR: cannot specify INTERNAL or BILLED AS as non\-internal user
-CREATE CLUSTER t1 (REPLICAS (r1 (SIZE '1', INTERNAL, BILLED AS 'free')));
+CREATE CLUSTER t1 (REPLICAS (r1 (SIZE 'scale=1,workers=1', INTERNAL, BILLED AS 'free')));
 
 statement error db error: ERROR: cannot specify INTERNAL or BILLED AS as non\-internal user
-CREATE CLUSTER t1 (REPLICAS (internal_r1 (SIZE '1', INTERNAL, BILLED AS 'free')));
+CREATE CLUSTER t1 (REPLICAS (internal_r1 (SIZE 'scale=1,workers=1', INTERNAL, BILLED AS 'free')));
 
 statement error db error: ERROR: cannot specify INTERNAL or BILLED AS as non\-internal user
-CREATE CLUSTER t1 (REPLICAS (internal_r1 (SIZE '1', BILLED AS 'free')));
+CREATE CLUSTER t1 (REPLICAS (internal_r1 (SIZE 'scale=1,workers=1', BILLED AS 'free')));
 
 statement error db error: ERROR: cannot specify INTERNAL or BILLED AS as non\-internal user
-CREATE CLUSTER t1 (REPLICAS (internal_r1 (SIZE '1', INTERNAL)));
+CREATE CLUSTER t1 (REPLICAS (internal_r1 (SIZE 'scale=1,workers=1', INTERNAL)));
 
 simple conn=mz_system,user=mz_system
-CREATE CLUSTER t1 (REPLICAS (internal_r1 (SIZE '1', BILLED AS 'free')));
+CREATE CLUSTER t1 (REPLICAS (internal_r1 (SIZE 'scale=1,workers=1', BILLED AS 'free')));
 ----
 db error: ERROR: must specify INTERNAL when specifying BILLED AS
 
 simple conn=mz_system,user=mz_system
-CREATE CLUSTER t1 (REPLICAS (internal_r1 (SIZE '1', INTERNAL, BILLED AS 'free')));
+CREATE CLUSTER t1 (REPLICAS (internal_r1 (SIZE 'scale=1,workers=1', INTERNAL, BILLED AS 'free')));
 ----
 COMPLETE 0
 
@@ -872,28 +873,28 @@ COMPLETE 0
 mode standard
 
 statement ok
-CREATE CLUSTER c1 (SIZE '1', REPLICATION FACTOR 2)
+CREATE CLUSTER c1 (SIZE 'scale=1,workers=1', REPLICATION FACTOR 2)
 
 query TT
 SHOW CREATE CLUSTER c1
 ----
 c1
-CREATE CLUSTER "c1" (DISK = true, INTROSPECTION DEBUGGING = false, INTROSPECTION INTERVAL = INTERVAL '00:00:01', MANAGED = true, REPLICATION FACTOR = 2, SIZE = '1', SCHEDULE = MANUAL)
+CREATE CLUSTER "c1" (DISK = true, INTROSPECTION DEBUGGING = false, INTROSPECTION INTERVAL = INTERVAL '00:00:01', MANAGED = true, REPLICATION FACTOR = 2, SIZE = 'scale=1,workers=1', SCHEDULE = MANUAL)
 
 statement ok
-ALTER CLUSTER c1 SET (SIZE = '2');
+ALTER CLUSTER c1 SET (SIZE = 'scale=1,workers=2');
 
 query TT
 SHOW CREATE CLUSTER c1
 ----
 c1
-CREATE CLUSTER "c1" (DISK = true, INTROSPECTION DEBUGGING = false, INTROSPECTION INTERVAL = INTERVAL '00:00:01', MANAGED = true, REPLICATION FACTOR = 2, SIZE = '2', SCHEDULE = MANUAL)
+CREATE CLUSTER "c1" (DISK = true, INTROSPECTION DEBUGGING = false, INTROSPECTION INTERVAL = INTERVAL '00:00:01', MANAGED = true, REPLICATION FACTOR = 2, SIZE = 'scale=1,workers=2', SCHEDULE = MANUAL)
 
 statement ok
 DROP CLUSTER c1
 
 simple conn=mz_system,user=mz_system
-CREATE CLUSTER c1 SIZE = '1' FEATURES (ENABLE EAGER DELTA JOINS = TRUE);
+CREATE CLUSTER c1 SIZE = 'scale=1,workers=1' FEATURES (ENABLE EAGER DELTA JOINS = TRUE);
 ----
 COMPLETE 0
 
@@ -901,7 +902,7 @@ query TT
 SHOW CREATE CLUSTER c1
 ----
 c1
-CREATE CLUSTER "c1" (DISK = true, INTROSPECTION DEBUGGING = false, INTROSPECTION INTERVAL = INTERVAL '00:00:01', MANAGED = true, REPLICATION FACTOR = 1, SIZE = '1', SCHEDULE = MANUAL) FEATURES (ENABLE EAGER DELTA JOINS = true)
+CREATE CLUSTER "c1" (DISK = true, INTROSPECTION DEBUGGING = false, INTROSPECTION INTERVAL = INTERVAL '00:00:01', MANAGED = true, REPLICATION FACTOR = 1, SIZE = 'scale=1,workers=1', SCHEDULE = MANUAL) FEATURES (ENABLE EAGER DELTA JOINS = true)
 
 simple conn=mz_system,user=mz_system
 DROP CLUSTER c1;
@@ -935,10 +936,10 @@ s5  NULL
 u1  NULL
 
 statement error WORKLOAD CLASS not supported for non-system users
-CREATE CLUSTER c1 SIZE '1', WORKLOAD CLASS 'production'
+CREATE CLUSTER c1 SIZE 'scale=1,workers=1', WORKLOAD CLASS 'production'
 
 simple conn=mz_system,user=mz_system
-CREATE CLUSTER c1 SIZE '1', WORKLOAD CLASS 'production'
+CREATE CLUSTER c1 SIZE 'scale=1,workers=1', WORKLOAD CLASS 'production'
 ----
 COMPLETE 0
 
@@ -971,7 +972,7 @@ s5  NULL
 u1  NULL
 
 statement ok
-CREATE CLUSTER c1 SIZE '1'
+CREATE CLUSTER c1 SIZE 'scale=1,workers=1'
 
 query TT colnames
 SELECT * FROM mz_internal.mz_cluster_workload_classes

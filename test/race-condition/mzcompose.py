@@ -382,7 +382,7 @@ class WebhookSource(Object):
         return dedent(
             f"""
             > DROP CLUSTER IF EXISTS {self.name}_cluster
-            > CREATE CLUSTER {self.name}_cluster SIZE '1', REPLICATION FACTOR 1
+            > CREATE CLUSTER {self.name}_cluster SIZE 'scale=1,workers=1', REPLICATION FACTOR 1
             > CREATE SOURCE {self.name} IN CLUSTER {self.name}_cluster FROM WEBHOOK BODY FORMAT {self.body_format}
             """
         )

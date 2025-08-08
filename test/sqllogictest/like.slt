@@ -14,7 +14,7 @@ mode cockroach
 # Run all tests on a multi-process cluster, because there were some serialization issues in the past that happened
 # only on multi-process clusters.
 statement ok
-CREATE CLUSTER multiprocess REPLICAS (a (SIZE '2-2'));
+CREATE CLUSTER multiprocess REPLICAS (a (SIZE 'scale=2,workers=2'));
 
 statement ok
 SET cluster = 'multiprocess';
@@ -160,7 +160,7 @@ statement ok
 INSERT INTO t2 VALUES ('abc');
 
 statement ok
-CREATE CLUSTER test SIZE '2-1';
+CREATE CLUSTER test SIZE 'scale=2,workers=1';
 
 statement ok
 SET cluster = test;

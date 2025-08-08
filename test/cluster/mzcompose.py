@@ -1332,7 +1332,7 @@ def workflow_test_drop_quickstart_cluster(c: Composition) -> None:
 
     c.sql("DROP CLUSTER quickstart CASCADE", user="mz_system", port=6877)
     c.sql(
-        "CREATE CLUSTER quickstart REPLICAS (quickstart (SIZE '1'))",
+        "CREATE CLUSTER quickstart REPLICAS (quickstart (SIZE 'scale=1,workers=1'))",
         user="mz_system",
         port=6877,
     )
@@ -2610,7 +2610,7 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
     # Set up a cluster with a couple dataflows.
     c.sql(
         """
-        CREATE CLUSTER test MANAGED, SIZE '1';
+        CREATE CLUSTER test MANAGED, SIZE 'scale=1,workers=1';
         SET cluster = test;
 
         CREATE TABLE t (a int);
@@ -2781,7 +2781,7 @@ def workflow_test_storage_controller_metrics(c: Composition) -> None:
             $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
             ALTER SYSTEM SET enable_alter_table_add_column = true
 
-            > CREATE CLUSTER test SIZE '1'
+            > CREATE CLUSTER test SIZE 'scale=1,workers=1'
             > SET cluster = test
 
             > CREATE TABLE t (a int)
@@ -3248,7 +3248,7 @@ def workflow_test_workload_class_in_metrics(c: Composition) -> None:
     # Create a cluster and wait for it to come up.
     c.sql(
         """
-        CREATE CLUSTER test SIZE '1';
+        CREATE CLUSTER test SIZE 'scale=1,workers=1';
         SET cluster = test;
         SELECT * FROM mz_introspection.mz_dataflow_operators;
         """
@@ -3610,7 +3610,7 @@ def workflow_test_github_7000(c: Composition, parser: WorkflowArgumentParser) ->
         # snapshot by installing it in a cluster without replicas.
         c.sql(
             """
-            CREATE CLUSTER test SIZE '1', REPLICATION FACTOR 0;
+            CREATE CLUSTER test SIZE 'scale=1,workers=1', REPLICATION FACTOR 0;
             SET cluster = test;
 
             CREATE TABLE t (a int);
@@ -3894,7 +3894,7 @@ def workflow_test_refresh_mv_warmup(
         c.testdrive(
             input=dedent(
                 """
-                > CREATE CLUSTER cluster12 SIZE '1';
+                > CREATE CLUSTER cluster12 SIZE 'scale=1,workers=1';
                 > SET cluster = cluster12;
 
                 ## 1. Create a materialized view that has only one refresh, and takes at least a few seconds to hydrate.
@@ -4073,9 +4073,9 @@ def workflow_test_refresh_mv_restart(
             > CREATE TABLE t (x int);
             > INSERT INTO t VALUES (100);
 
-            > CREATE CLUSTER cluster_acj SIZE '1';
-            > CREATE CLUSTER cluster_b SIZE '1';
-            > CREATE CLUSTER cluster_auto_scheduled (SIZE '1', SCHEDULE = ON REFRESH);
+            > CREATE CLUSTER cluster_acj SIZE 'scale=1,workers=1';
+            > CREATE CLUSTER cluster_b SIZE 'scale=1,workers=1';
+            > CREATE CLUSTER cluster_auto_scheduled (SIZE 'scale=1,workers=1', SCHEDULE = ON REFRESH);
 
             > CREATE MATERIALIZED VIEW mv_a
               IN CLUSTER cluster_acj
@@ -4105,8 +4105,8 @@ def workflow_test_refresh_mv_restart(
               WITH (REFRESH EVERY '1000000 sec' ALIGNED TO mz_now()::text::int8 + 2000) AS
               SELECT count(*) FROM (SELECT generate_series(1,x) FROM t);
 
-            > CREATE CLUSTER serving SIZE '1';
-            > CREATE CLUSTER serving_indexed SIZE '1';
+            > CREATE CLUSTER serving SIZE 'scale=1,workers=1';
+            > CREATE CLUSTER serving_indexed SIZE 'scale=1,workers=1';
 
             > CREATE DEFAULT INDEX IN CLUSTER serving_indexed ON mv_a;
             > CREATE DEFAULT INDEX IN CLUSTER serving_indexed ON mv_b;
@@ -4280,7 +4280,7 @@ def workflow_test_refresh_mv_restart(
                 > CREATE TABLE t (x int);
                 > INSERT INTO t VALUES (100);
 
-                > CREATE CLUSTER cluster_defgh (SIZE '1', REPLICATION FACTOR 0);
+                > CREATE CLUSTER cluster_defgh (SIZE 'scale=1,workers=1', REPLICATION FACTOR 0);
 
                 > CREATE MATERIALIZED VIEW mv_3h
                   IN CLUSTER cluster_defgh
@@ -4311,7 +4311,7 @@ def workflow_test_refresh_mv_restart(
                   WITH (REFRESH AT CREATION) AS
                   SELECT count(*) FROM (SELECT generate_series(1,x) FROM t);
 
-                > CREATE CLUSTER serving_indexed SIZE '1';
+                > CREATE CLUSTER serving_indexed SIZE 'scale=1,workers=1';
                 > CREATE DEFAULT INDEX IN CLUSTER serving_indexed ON mv_3d;
                 > CREATE DEFAULT INDEX IN CLUSTER serving_indexed ON mv_3e;
                 > CREATE DEFAULT INDEX IN CLUSTER serving_indexed ON mv_3f;
@@ -4332,7 +4332,7 @@ def workflow_test_refresh_mv_restart(
                 """
                 > ALTER CLUSTER cluster_defgh SET (REPLICATION FACTOR 2);
 
-                > CREATE CLUSTER serving SIZE '1';
+                > CREATE CLUSTER serving SIZE 'scale=1,workers=1';
 
                 > SET TRANSACTION_ISOLATION TO 'STRICT SERIALIZABLE';
 
@@ -4458,7 +4458,7 @@ def workflow_test_github_8734(c: Composition) -> None:
             """
             CREATE TABLE t (a int);
 
-            CREATE CLUSTER test SIZE '1';
+            CREATE CLUSTER test SIZE 'scale=1,workers=1';
             CREATE MATERIALIZED VIEW mv
                 IN CLUSTER test
                 WITH (REFRESH EVERY '60m')
@@ -4636,7 +4636,7 @@ def workflow_test_read_frontier_advancement(
     # test tracking of per-replica read holds.
     c.sql(
         """
-        CREATE CLUSTER test SIZE '2-2', REPLICATION FACTOR 4;
+        CREATE CLUSTER test SIZE 'scale=2,workers=2', REPLICATION FACTOR 4;
         SET cluster = test;
 
         CREATE TABLE t1 (x int);
@@ -5047,7 +5047,7 @@ def workflow_test_zero_downtime_reconfigure(
 
             $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
             ALTER SYSTEM SET enable_zero_downtime_cluster_reconfiguration = true;
-            CREATE CLUSTER cluster1 ( SIZE = '1');
+            CREATE CLUSTER cluster1 ( SIZE = 'scale=1,workers=1');
             GRANT ALL ON CLUSTER cluster1 TO materialize;
 
             > SET CLUSTER = cluster1;
@@ -5103,7 +5103,7 @@ def workflow_test_zero_downtime_reconfigure(
             try:
                 c.sql(
                     """
-                    ALTER CLUSTER cluster1 SET (SIZE = '2') WITH ( WAIT FOR '10s')
+                    ALTER CLUSTER cluster1 SET (SIZE = 'scale=1,workers=2') WITH ( WAIT FOR '10s')
                     """,
                     port=6877,
                     user="mz_system",
@@ -5163,7 +5163,7 @@ def workflow_test_zero_downtime_reconfigure(
             SELECT size FROM mz_clusters WHERE name='cluster1';
             """
             )
-            == [("1",)]
+            == [("scale=1,workers=1",)]
         )
         c.sql(
             """
@@ -5395,7 +5395,7 @@ def workflow_test_constant_sink(c: Composition) -> None:
         c.testdrive(
             dedent(
                 """
-                > CREATE CLUSTER test SIZE '1';
+                > CREATE CLUSTER test SIZE 'scale=1,workers=1';
 
                 > CREATE MATERIALIZED VIEW const IN CLUSTER test AS SELECT 1
 

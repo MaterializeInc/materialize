@@ -23,22 +23,22 @@ statement ok
 CREATE CLUSTER foo REPLICAS ()
 
 statement ok
-CREATE CLUSTER bar REPLICAS (r1 (SIZE '1'), r2 (SIZE '1'))
+CREATE CLUSTER bar REPLICAS (r1 (SIZE 'scale=1,workers=1'), r2 (SIZE 'scale=1,workers=1'))
 
 query TT rowsort
 SELECT name, replicas FROM (SHOW CLUSTERS) WHERE name != 'quickstart'
 ----
 bar
-r1 (1), r2 (1)
+r1 (scale=1,workers=1), r2 (scale=1,workers=1)
 foo
 NULL
 mz_analytics
 NULL
 mz_catalog_server
-r1 (2)
+r1 (scale=1,workers=2)
 mz_probe
-r1 (2)
+r1 (scale=1,workers=2)
 mz_support
 NULL
 mz_system
-r1 (2)
+r1 (scale=1,workers=2)

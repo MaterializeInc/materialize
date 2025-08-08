@@ -17,8 +17,8 @@ $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdri
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET wallclock_lag_recording_interval = '1s'
 
-> CREATE CLUSTER storage SIZE '1'
-> CREATE CLUSTER compute SIZE '1', REPLICATION FACTOR 2
+> CREATE CLUSTER storage SIZE 'scale=1,workers=1'
+> CREATE CLUSTER compute SIZE 'scale=1,workers=1', REPLICATION FACTOR 2
 
 # Set up a bunch of frontiered objects and test that their wallclock lags get
 # reported and are reasonably small.
@@ -210,8 +210,8 @@ tbl_1hour 01:00:00 true true
 
 > DROP CLUSTER storage CASCADE
 > DROP CLUSTER compute CASCADE
-> CREATE CLUSTER storage SIZE '1', REPLICATION FACTOR 0
-> CREATE CLUSTER compute SIZE '1'
+> CREATE CLUSTER storage SIZE 'scale=1,workers=1', REPLICATION FACTOR 0
+> CREATE CLUSTER compute SIZE 'scale=1,workers=1'
 
 > CREATE SOURCE src IN CLUSTER storage FROM LOAD GENERATOR counter (UP TO 100)
 > CREATE INDEX idx IN CLUSTER compute ON src (counter)

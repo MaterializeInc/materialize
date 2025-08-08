@@ -108,7 +108,7 @@ u1  materialize
 u3  bar
 
 statement ok
-CREATE CLUSTER foo REPLICAS (r1 (size '1'))
+CREATE CLUSTER foo REPLICAS (r1 (SIZE 'scale=1,workers=1'))
 
 query TT rowsort
 SELECT id, name FROM mz_clusters
@@ -125,7 +125,7 @@ statement ok
 DROP CLUSTER foo CASCADE
 
 statement ok
-CREATE CLUSTER bar REPLICAS (r1 (size '1'))
+CREATE CLUSTER bar REPLICAS (r1 (SIZE 'scale=1,workers=1'))
 
 query TT rowsort
 SELECT id, name FROM mz_clusters

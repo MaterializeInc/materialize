@@ -38,7 +38,7 @@ class KafkaFormats(Check):
             PROTOBUF
             + dedent(
                 """
-                > CREATE CLUSTER kafka_formats REPLICAS (kafka_formats_r1 (SIZE '4'))
+                > CREATE CLUSTER kafka_formats REPLICAS (kafka_formats_r1 (SIZE 'scale=1,workers=4'))
 
                 > SET cluster=kafka_formats
 

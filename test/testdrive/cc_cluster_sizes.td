@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET allowed_cluster_replica_sizes = '1-no-disk';
+ALTER SYSTEM SET allowed_cluster_replica_sizes = 'scale=1,workers=1,nodisk';
 ALTER SYSTEM SET disk_cluster_replicas_default = false;
 
 # Cannot create clusters with cc cluster size naming schemes
@@ -26,7 +26,7 @@ ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true
 contains:unknown cluster replica size 1cc
 
 # The existing cluster names are fine
-> CREATE CLUSTER c SIZE '1-no-disk';
+> CREATE CLUSTER c SIZE 'scale=1,workers=1,nodisk';
 
 # But ensure we cannot ALTER our way to a cc name either
 ! ALTER CLUSTER c SET (SIZE '1cc');
@@ -50,7 +50,7 @@ true
 > DROP CLUSTER c
 
 # Create a cluster with a legacy size with disk enabled.
-> CREATE CLUSTER c SIZE '1-no-disk', DISK = true
+> CREATE CLUSTER c SIZE 'scale=1,workers=1,nodisk', DISK = true
 > SELECT disk FROM mz_clusters WHERE name = 'c'
 true
 
@@ -70,7 +70,7 @@ true
 
 # Same test as before, except the legacy size cluster has disk explicitly
 # disabled.
-> CREATE CLUSTER c SIZE '1-no-disk', DISK = false
+> CREATE CLUSTER c SIZE 'scale=1,workers=1,nodisk', DISK = false
 > ALTER CLUSTER c SET (SIZE = '1cc')
 > SELECT disk FROM mz_clusters WHERE name = 'c'
 true
@@ -78,7 +78,7 @@ true
 
 # Same test as before, except the legacy size cluster has no disk explicitly
 # configured.
-> CREATE CLUSTER c SIZE = '1-no-disk'
+> CREATE CLUSTER c SIZE = 'scale=1,workers=1,nodisk'
 > SELECT disk FROM mz_clusters WHERE name = 'c'
 false
 > ALTER CLUSTER c SET (SIZE = '1cc')
@@ -92,16 +92,16 @@ contains: DISK option not supported for modern cluster sizes because disk is alw
 contains: DISK option not supported for modern cluster sizes because disk is always enabled
 
 # But it's okay if you're going back to a legacy size.
-> ALTER CLUSTER c SET (DISK = true, SIZE = '1-no-disk')
+> ALTER CLUSTER c SET (DISK = true, SIZE = 'scale=1,workers=1,nodisk')
 > SELECT disk FROM mz_clusters WHERE name = 'c'
 true
 > DROP CLUSTER c
 
 # Ensure that altering from a legacy size to a legacy size does not enable disk.
-> CREATE CLUSTER c SIZE = '1-no-disk'
+> CREATE CLUSTER c SIZE = 'scale=1,workers=1,nodisk'
 > SELECT disk FROM mz_clusters WHERE name = 'c'
 false
-> ALTER CLUSTER c SET (SIZE = '2-no-disk')
+> ALTER CLUSTER c SET (SIZE = 'scale=1,workers=2,nodisk')
 > SELECT disk FROM mz_clusters WHERE name = 'c'
 false
 > DROP CLUSTER c

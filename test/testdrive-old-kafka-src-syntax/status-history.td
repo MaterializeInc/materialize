@@ -7,14 +7,14 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-arg-default default-storage-size=1
+$ set-arg-default default-storage-size=scale=1,workers=1
 
 # Specify the behaviour of the status history tables
 $ set-regex match="\d\d\d\d-\d\d-\d\d \d\d:\d\d:\d\d(\.\d\d\d)?" replacement="<TIMESTAMP>"
 
 > DROP CLUSTER IF EXISTS c CASCADE
 
-> CREATE CLUSTER c SIZE '1', REPLICATION FACTOR 0
+> CREATE CLUSTER c SIZE 'scale=1,workers=1', REPLICATION FACTOR 0
 
 > CREATE SOURCE counter in cluster c FROM LOAD GENERATOR COUNTER (UP TO 100)
 

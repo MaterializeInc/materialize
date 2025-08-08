@@ -36,7 +36,7 @@ statement ok
 DROP ROLE foo
 
 statement ok
-CREATE CLUSTER foo REPLICAS (r (SIZE '1'));
+CREATE CLUSTER foo REPLICAS (r (SIZE 'scale=1,workers=1'));
 
 statement ok
 CREATE MATERIALIZED VIEW v2 AS SELECT 1
@@ -151,7 +151,7 @@ SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY 
 12  create  cluster  {"id":"u1","name":"quickstart"}  NULL
 13  grant  cluster  {"grantee_id":"p","grantor_id":"s1","object_id":"Cu1","privileges":"U"}  NULL
 14  grant  cluster  {"grantee_id":"u1","grantor_id":"s1","object_id":"Cu1","privileges":"UC"}  NULL
-15  create  cluster-replica  {"billed_as":null,"cluster_id":"u1","cluster_name":"quickstart","disk":false,"internal":false,"logical_size":"2","reason":"system","replica_id":"u1","replica_name":"r1"}  NULL
+15  create  cluster-replica  {"billed_as":null,"cluster_id":"u1","cluster_name":"quickstart","disk":false,"internal":false,"logical_size":"scale=1,workers=2","reason":"system","replica_id":"u1","replica_name":"r1"}  NULL
 16  grant  system  {"grantee_id":"s1","grantor_id":"s1","object_id":"SYSTEM","privileges":"RBNP"}  NULL
 17  grant  system  {"grantee_id":"u1","grantor_id":"s1","object_id":"SYSTEM","privileges":"RBNP"}  NULL
 18  alter  system  {"name":"enable_reduce_mfp_fusion","value":"on"}  mz_system
@@ -167,7 +167,7 @@ SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY 
 28  create  role  {"id":"u2","name":"foo"}  materialize
 29  drop  role  {"id":"u2","name":"foo"}  materialize
 30  create  cluster  {"id":"u2","name":"foo"}  materialize
-31  create  cluster-replica  {"billed_as":null,"cluster_id":"u2","cluster_name":"foo","disk":true,"internal":false,"logical_size":"1","reason":"manual","replica_id":"u2","replica_name":"r"}  materialize
+31  create  cluster-replica  {"billed_as":null,"cluster_id":"u2","cluster_name":"foo","disk":true,"internal":false,"logical_size":"scale=1,workers=1","reason":"manual","replica_id":"u2","replica_name":"r"}  materialize
 32  create  materialized-view  {"cluster_id":"u1","database":"materialize","id":"u1","item":"v2","schema":"public"}  materialize
 33  create  view  {"database":"materialize","id":"u2","item":"unmat","schema":"public"}  materialize
 34  create  table  {"database":"materialize","id":"u3","item":"t","schema":"public"}  materialize
@@ -233,8 +233,8 @@ false
 query TTTTBBBT
 SELECT replica_id, cluster_name, replica_name, size, created_at IS NOT NULL, dropped_at IS NOT NULL, created_at < dropped_at, credits_per_hour FROM mz_internal.mz_cluster_replica_history ORDER BY created_at
 ----
-u1  quickstart  r1  2  true  false  NULL  1
-u2  foo  r  1  true  true  true  1
+u1  quickstart  r1  scale=1,workers=2  true  false  NULL  1
+u2  foo  r  scale=1,workers=1  true  true  true  1
 
 simple conn=mz_system,user=mz_system
 CREATE ROLE r1;

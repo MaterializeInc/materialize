@@ -1600,7 +1600,7 @@ fn test_github_12951() {
         let client2_cancel = client2.cancel_token();
 
         client1
-            .batch_execute("CREATE CLUSTER foo REPLICAS (r1 (size '1'))")
+            .batch_execute("CREATE CLUSTER foo REPLICAS (r1 (size 'scale=1,workers=1'))")
             .unwrap();
         client1.batch_execute("CREATE TABLE t1(f1 int)").unwrap();
         client2.batch_execute("SET CLUSTER = foo").unwrap();
@@ -1629,7 +1629,7 @@ fn test_github_12951() {
         let mut client2 = server.connect(postgres::NoTls).unwrap();
 
         client1
-            .batch_execute("CREATE CLUSTER foo REPLICAS (r1 (size '1'))")
+            .batch_execute("CREATE CLUSTER foo REPLICAS (r1 (size 'scale=1,workers=1'))")
             .unwrap();
         client2.batch_execute("SET CLUSTER = foo").unwrap();
         client2.batch_execute("BEGIN; SELECT * FROM t1").unwrap();
@@ -1658,7 +1658,7 @@ fn test_subscribe_outlive_cluster() {
     let client2_cancel = client2.cancel_token();
 
     client1
-        .batch_execute("CREATE CLUSTER foo REPLICAS (r1 (size '1'))")
+        .batch_execute("CREATE CLUSTER foo REPLICAS (r1 (size 'scale=1,workers=1'))")
         .unwrap();
     client1.batch_execute("CREATE TABLE t1(f1 int)").unwrap();
     client2.batch_execute("SET CLUSTER = foo").unwrap();
@@ -1667,7 +1667,7 @@ fn test_subscribe_outlive_cluster() {
         .unwrap();
     client1.batch_execute("DROP CLUSTER foo CASCADE").unwrap();
     client1
-        .batch_execute("CREATE CLUSTER newcluster REPLICAS (r1 (size '1'))")
+        .batch_execute("CREATE CLUSTER newcluster REPLICAS (r1 (size 'scale=1,workers=1'))")
         .unwrap();
     client2_cancel.cancel_query(postgres::NoTls).unwrap();
     client2
@@ -3543,7 +3543,7 @@ async fn test_constant_materialized_view() {
     let server = test_util::TestHarness::default().start().await;
     let client = server.connect().await.unwrap();
     client
-        .batch_execute("CREATE CLUSTER cold (SIZE '1', REPLICATION FACTOR = 0);")
+        .batch_execute("CREATE CLUSTER cold (SIZE 'scale=1,workers=1', REPLICATION FACTOR = 0);")
         .await
         .unwrap();
     // The materialized view is created in a cluster with 0 replicas, so it's upper will be stuck

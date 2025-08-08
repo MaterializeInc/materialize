@@ -24,9 +24,9 @@ $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdri
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET max_clusters = 15
 
-> CREATE CLUSTER source SIZE '1'
-> CREATE CLUSTER compute SIZE '1'
-> CREATE CLUSTER sink SIZE '1'
+> CREATE CLUSTER source SIZE 'scale=1,workers=1'
+> CREATE CLUSTER compute SIZE 'scale=1,workers=1'
+> CREATE CLUSTER sink SIZE 'scale=1,workers=1'
 
 # Set up a bunch of sources and materializations that depend on each other.
 # Put them on different clusters so we can spin some down to create lag.

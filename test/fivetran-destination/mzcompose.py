@@ -106,7 +106,7 @@ def _run_test_case(c: Composition, path: Path):
     c.sql("DROP DATABASE IF EXISTS test")
     c.sql("CREATE DATABASE test")
     c.sql('DROP CLUSTER IF EXISTS "name with space" CASCADE')
-    c.sql("CREATE CLUSTER \"name with space\" SIZE '1'")
+    c.sql("CREATE CLUSTER \"name with space\" SIZE 'scale=1,workers=1'")
     for test_file in sorted(p for p in path.iterdir()):
         test_file = test_file.relative_to(ROOT)
         if test_file.suffix == ".td":

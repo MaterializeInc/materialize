@@ -27,10 +27,10 @@ class SwapCluster(Check):
                 > INSERT INTO swap_cluster3_table VALUES (345);
                 > INSERT INTO swap_cluster4_table VALUES (456);
 
-                > CREATE CLUSTER swap_cluster1 REPLICAS (replica1 (SIZE '2-2'));
-                > CREATE CLUSTER swap_cluster2 REPLICAS (replica1 (SIZE '2-2'));
-                > CREATE CLUSTER swap_cluster3 REPLICAS (replica1 (SIZE '2-2'));
-                > CREATE CLUSTER swap_cluster4 REPLICAS (replica1 (SIZE '2-2'));
+                > CREATE CLUSTER swap_cluster1 REPLICAS (replica1 (SIZE 'scale=2,workers=2'));
+                > CREATE CLUSTER swap_cluster2 REPLICAS (replica1 (SIZE 'scale=2,workers=2'));
+                > CREATE CLUSTER swap_cluster3 REPLICAS (replica1 (SIZE 'scale=2,workers=2'));
+                > CREATE CLUSTER swap_cluster4 REPLICAS (replica1 (SIZE 'scale=2,workers=2'));
 
                 > SET cluster=swap_cluster1
                 > CREATE DEFAULT INDEX ON swap_cluster1_table;

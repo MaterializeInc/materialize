@@ -24,8 +24,8 @@ class RenameCluster(Check):
                 > INSERT INTO rename_cluster1_table VALUES (123);
                 > INSERT INTO rename_cluster2_table VALUES (234);
 
-                > CREATE CLUSTER rename_cluster1 REPLICAS (replica1 (SIZE '2-2'));
-                > CREATE CLUSTER rename_cluster2 REPLICAS (replica1 (SIZE '2-2'));
+                > CREATE CLUSTER rename_cluster1 REPLICAS (replica1 (SIZE 'scale=2,workers=2'));
+                > CREATE CLUSTER rename_cluster2 REPLICAS (replica1 (SIZE 'scale=2,workers=2'));
 
                 > SET cluster=rename_cluster1
                 > CREATE DEFAULT INDEX ON rename_cluster1_table;

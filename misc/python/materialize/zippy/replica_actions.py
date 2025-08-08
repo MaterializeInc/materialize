@@ -64,16 +64,13 @@ class CreateReplica(Action):
 
             size = str(random.choice([2, 4]))
             if size_type is ReplicaSizeType.Nodes:
-                this_replica.size = size + "-1"
+                this_replica.size = f"scale={size},workers=1"
             elif size_type is ReplicaSizeType.Workers:
-                this_replica.size = size
+                this_replica.size = f"scale=1,workers={size}"
             elif size_type is ReplicaSizeType.Both:
-                this_replica.size = f"{size}-{size}"
+                this_replica.size = f"scale={size},workers={size}"
             else:
                 raise RuntimeError(f"Unsupported size type: {size_type}")
-
-            if this_replica.size == "1-1":
-                this_replica.size = "1"
 
             self.replica = this_replica
         elif len(existing_replicas) == 1:

@@ -212,7 +212,7 @@ class DecodeErrorUpsertValue(Check):
                 key1: {"f1": 2}
                 key2: {"f1": 3}
 
-                > CREATE CLUSTER decode_error_upsert_value_cluster SIZE '1';
+                > CREATE CLUSTER decode_error_upsert_value_cluster SIZE 'scale=1,workers=1';
 
                 > CREATE SOURCE decode_error_upsert_value_src
                   IN CLUSTER decode_error_upsert_value_cluster

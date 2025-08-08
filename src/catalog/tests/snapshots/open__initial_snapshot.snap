@@ -1223,7 +1223,7 @@ Snapshot {
                     variant: Some(
                         Managed(
                             ManagedCluster {
-                                size: "1",
+                                size: "scale=1,workers=1",
                                 replication_factor: 1,
                                 availability_zones: [],
                                 logging: Some(
@@ -1361,7 +1361,7 @@ Snapshot {
                     location: Some(
                         Managed(
                             ManagedLocation {
-                                size: "1",
+                                size: "scale=1,workers=1",
                                 availability_zone: None,
                                 disk: false,
                                 internal: false,

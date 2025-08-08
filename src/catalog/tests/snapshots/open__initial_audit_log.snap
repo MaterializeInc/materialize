@@ -185,7 +185,7 @@ expression: audit_log
                         "u1",
                     ),
                     replica_name: "r1",
-                    logical_size: "1",
+                    logical_size: "scale=1,workers=1",
                     disk: false,
                     billed_as: None,
                     internal: false,

@@ -70,8 +70,8 @@ class TestdriveBase:
             f"--log-filter={log_filter}",
             "--var=replicas=1",
             "--var=single-replica-cluster=quickstart",
-            "--var=default-storage-size=1",
-            "--var=default-replica-size=1",
+            "--var=default-storage-size=scale=1,workers=1",
+            "--var=default-replica-size=scale=1,workers=1",
             f"--cluster-replica-sizes={json.dumps(cluster_replica_size_map())}",
             *([f"--aws-region={self.aws_region}"] if self.aws_region else []),
             *(

@@ -25,7 +25,7 @@ class JsonSource(Check):
                 $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=format-json
                 "object":{"a":"b","c":"d"}
 
-                > CREATE CLUSTER single_replica_cluster SIZE '1';
+                > CREATE CLUSTER single_replica_cluster SIZE 'scale=1,workers=1';
 
                 > CREATE SOURCE format_jsonA_src
                   IN CLUSTER single_replica_cluster

@@ -54,12 +54,7 @@ struct Args {
     ///
     /// Passing `--var foo=bar` will create a variable named `arg.foo` with the
     /// value `bar`. Can be specified multiple times to set multiple variables.
-    #[clap(
-        long,
-        env = "VAR",
-        use_value_delimiter = true,
-        value_name = "NAME=VALUE"
-    )]
+    #[clap(long, env = "VAR", value_name = "NAME=VALUE")]
     var: Vec<String>,
     /// A random number to distinguish each testdrive run.
     #[clap(long, value_name = "N", action = ArgAction::Set)]

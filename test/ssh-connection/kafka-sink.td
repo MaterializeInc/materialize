@@ -18,7 +18,7 @@ $ kafka-ingest topic=thetopic format=bytes
 one
 
 > DROP CLUSTER IF EXISTS sc;
-> CREATE CLUSTER sc REPLICAS (r1 (SIZE '32'))
+> CREATE CLUSTER sc REPLICAS (r1 (SIZE 'scale=1,workers=32'))
 
 
 # Unfortunately, currently we need a source we can add stuff to (so kafka), but one that

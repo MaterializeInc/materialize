@@ -665,12 +665,14 @@ def bootstrap_cluster_replica_size() -> str:
 
 
 def cluster_replica_size_map() -> dict[str, dict[str, Any]]:
+    """scale=<n>,workers=<n>[,mem=<n>GiB][,nodisk]"""
+
     def replica_size(
-        workers: int,
         scale: int,
+        workers: int,
         disabled: bool = False,
         is_cc: bool = True,
-        memory_limit: str | None = None,
+        memory_limit: str = "4 GiB",
     ) -> dict[str, Any]:
         return {
             "cpu_exclusive": False,
@@ -679,7 +681,7 @@ def cluster_replica_size_map() -> dict[str, dict[str, Any]]:
             "disabled": disabled,
             "disk_limit": None,
             "is_cc": is_cc,
-            "memory_limit": memory_limit or "4Gi",
+            "memory_limit": memory_limit,
             "scale": scale,
             "workers": workers,
             # "selectors": {},
@@ -687,26 +689,29 @@ def cluster_replica_size_map() -> dict[str, dict[str, Any]]:
 
     replica_sizes = {
         bootstrap_cluster_replica_size(): replica_size(1, 1),
-        "2-4": replica_size(4, 2),
+        "scale=2,workers=4": replica_size(2, 4),
+        "scale=1,workers=1,nodisk": replica_size(1, 1, is_cc=False),
+        "scale=1,workers=2,nodisk": replica_size(1, 2, is_cc=False),
+        # Intentionally not following the naming scheme
         "free": replica_size(0, 0, disabled=True),
         "1cc": replica_size(1, 1),
         "1C": replica_size(1, 1),
-        "1-no-disk": replica_size(1, 1, is_cc=False),
-        "2-no-disk": replica_size(2, 1, is_cc=False),
     }
 
     for i in range(0, 6):
         workers = 1 << i
-        replica_sizes[f"{workers}"] = replica_size(workers, 1)
+        replica_sizes[f"scale=1,workers={workers}"] = replica_size(1, workers)
         for mem in [4, 8, 16, 32]:
-            replica_sizes[f"{workers}-{mem}G"] = replica_size(
-                workers, 1, memory_limit=f"{mem} GiB"
+            replica_sizes[f"scale=1,workers={workers},mem={mem}GiB"] = replica_size(
+                1, workers, memory_limit=f"{mem} GiB"
             )
 
-        replica_sizes[f"{workers}-1"] = replica_size(1, workers)
-        replica_sizes[f"{workers}-{workers}"] = replica_size(workers, workers)
-        replica_sizes[f"mem-{workers}"] = replica_size(
-            workers, 1, memory_limit=f"{workers} GiB"
+        replica_sizes[f"scale={workers},workers=1"] = replica_size(workers, 1)
+        replica_sizes[f"scale={workers},workers={workers}"] = replica_size(
+            workers, workers
+        )
+        replica_sizes[f"scale=1,workers={workers},mem={workers}GiB"] = replica_size(
+            1, workers, memory_limit=f"{workers} GiB"
         )
 
     return replica_sizes

@@ -37,7 +37,7 @@ class ClusterDefinition:
         replica_definitions = []
         for replica in self.replica_definitions:
             replica_definitions.append(
-                f"{replica.get_name()} (SIZE = '1', AVAILABILITY ZONE '{replica.availability_zone}')"
+                f"{replica.get_name()} (SIZE = 'scale=1,workers=1', AVAILABILITY ZONE '{replica.availability_zone}')"
             )
 
         return ", ".join(replica_definitions)

@@ -29,7 +29,7 @@ def test_cluster_sizing(mz: MaterializeApplication) -> None:
     SIZE = 2
 
     mz.environmentd.sql(
-        f"CREATE CLUSTER sized1 REPLICAS (sized_replica1 (SIZE '{SIZE}-1'))"
+        f"CREATE CLUSTER sized1 REPLICAS (sized_replica1 (SIZE 'scale={SIZE},workers=1'))"
     )
     cluster_id = mz.environmentd.sql_query(
         "SELECT id FROM mz_clusters WHERE name = 'sized1'"
@@ -70,7 +70,7 @@ def test_cluster_shutdown(mz: MaterializeApplication, failpoint: str) -> None:
             LOGGER.error(f"Expected SQL error: {e}")
 
     mz.environmentd.sql(
-        "CREATE CLUSTER shutdown1 REPLICAS (shutdown_replica1 (SIZE '1'), shutdown_replica2 (SIZE '1'))"
+        "CREATE CLUSTER shutdown1 REPLICAS (shutdown_replica1 (SIZE 'scale=1,workers=1'), shutdown_replica2 (SIZE 'scale=1,workers=1'))"
     )
 
     cluster_id = mz.environmentd.sql_query(
@@ -135,7 +135,7 @@ def test_disk_label(mz: MaterializeApplication) -> None:
 
     for value in ("true", "false"):
         mz.environmentd.sql(
-            f"CREATE CLUSTER disk_{value} MANAGED, SIZE = '2-no-disk', DISK = {value}"
+            f"CREATE CLUSTER disk_{value} MANAGED, SIZE = 'scale=1,workers=2,nodisk', DISK = {value}"
         )
 
         (cluster_id, replica_id) = mz.environmentd.sql_query(

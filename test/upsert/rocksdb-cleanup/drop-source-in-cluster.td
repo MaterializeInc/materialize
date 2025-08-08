@@ -14,7 +14,7 @@ $ kafka-create-topic topic=upsert
 
 > DROP CLUSTER IF EXISTS c1 CASCADE;
 
-> CREATE CLUSTER c1 REPLICAS (replica1 (SIZE '1'));
+> CREATE CLUSTER c1 REPLICAS (replica1 (SIZE 'scale=1,workers=1'));
 
 > CREATE SOURCE kept_upsert
   IN CLUSTER c1

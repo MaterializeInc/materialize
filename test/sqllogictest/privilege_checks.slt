@@ -134,13 +134,13 @@ COMPLETE 0
 # CREATE CLUSTER
 
 simple conn=joe,user=joe
-CREATE CLUSTER c REPLICAS (r1 (SIZE '1'));
+CREATE CLUSTER c REPLICAS (r1 (SIZE 'scale=1,workers=1'));
 ----
 db error: ERROR: permission denied for SYSTEM
 DETAIL: The 'joe' role needs CREATECLUSTER privileges on SYSTEM
 
 simple conn=child,user=child
-CREATE CLUSTER c REPLICAS (r1 (SIZE '1'));
+CREATE CLUSTER c REPLICAS (r1 (SIZE 'scale=1,workers=1'));
 ----
 db error: ERROR: permission denied for SYSTEM
 DETAIL: The 'child' role needs CREATECLUSTER privileges on SYSTEM
@@ -151,12 +151,12 @@ GRANT CREATECLUSTER ON SYSTEM TO joe;
 COMPLETE 0
 
 simple conn=joe,user=joe
-CREATE CLUSTER c REPLICAS (r1 (SIZE '1'));
+CREATE CLUSTER c REPLICAS (r1 (SIZE 'scale=1,workers=1'));
 ----
 COMPLETE 0
 
 simple conn=child,user=child
-CREATE CLUSTER c1 REPLICAS (r1 (SIZE '1'));
+CREATE CLUSTER c1 REPLICAS (r1 (SIZE 'scale=1,workers=1'));
 ----
 COMPLETE 0
 
@@ -168,17 +168,17 @@ COMPLETE 0
 # CREATE CLUSTER REPLICA
 
 simple conn=mz_system,user=mz_system
-CREATE CLUSTER clus REPLICAS (r1 (SIZE '1'));
+CREATE CLUSTER clus REPLICAS (r1 (SIZE 'scale=1,workers=1'));
 ----
 COMPLETE 0
 
 simple conn=joe,user=joe
-CREATE CLUSTER REPLICA clus.r2 SIZE '1';
+CREATE CLUSTER REPLICA clus.r2 SIZE 'scale=1,workers=1';
 ----
 db error: ERROR: must be owner of CLUSTER clus
 
 simple conn=child,user=child
-CREATE CLUSTER REPLICA clus.r2 SIZE '1';
+CREATE CLUSTER REPLICA clus.r2 SIZE 'scale=1,workers=1';
 ----
 db error: ERROR: must be owner of CLUSTER clus
 
@@ -188,12 +188,12 @@ ALTER CLUSTER clus OWNER TO joe;
 COMPLETE 0
 
 simple conn=joe,user=joe
-CREATE CLUSTER REPLICA clus.r2 SIZE '1';
+CREATE CLUSTER REPLICA clus.r2 SIZE 'scale=1,workers=1';
 ----
 COMPLETE 0
 
 simple conn=child,user=child
-CREATE CLUSTER REPLICA clus.r3 SIZE '1';
+CREATE CLUSTER REPLICA clus.r3 SIZE 'scale=1,workers=1';
 ----
 COMPLETE 0
 
@@ -335,7 +335,7 @@ CREATE SOURCE s1 FROM LOAD GENERATOR COUNTER;
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-CREATE CLUSTER source_cluster REPLICAS (r1 (SIZE '1'));
+CREATE CLUSTER source_cluster REPLICAS (r1 (SIZE 'scale=1,workers=1'));
 ----
 COMPLETE 0
 
@@ -3052,7 +3052,7 @@ GRANT CREATECLUSTER ON SYSTEM TO joe;
 COMPLETE 0
 
 simple conn=joe,user=joe
-CREATE CLUSTER clus REPLICAS (r1 (SIZE '1'));
+CREATE CLUSTER clus REPLICAS (r1 (SIZE 'scale=1,workers=1'));
 ----
 COMPLETE 0
 
@@ -3079,12 +3079,12 @@ GRANT CREATECLUSTER ON SYSTEM TO joe;
 COMPLETE 0
 
 simple conn=joe,user=joe
-CREATE CLUSTER clus REPLICAS (r1 (SIZE '1'));
+CREATE CLUSTER clus REPLICAS (r1 (SIZE 'scale=1,workers=1'));
 ----
 COMPLETE 0
 
 simple conn=joe,user=joe
-CREATE CLUSTER REPLICA clus.r2 SIZE '1';
+CREATE CLUSTER REPLICA clus.r2 SIZE 'scale=1,workers=1';
 ----
 COMPLETE 0
 
@@ -3226,7 +3226,7 @@ GRANT CREATECLUSTER ON SYSTEM TO joe;
 COMPLETE 0
 
 simple conn=joe,user=joe
-CREATE CLUSTER clus REPLICAS (r1 (SIZE '1'));
+CREATE CLUSTER clus REPLICAS (r1 (SIZE 'scale=1,workers=1'));
 ----
 COMPLETE 0
 

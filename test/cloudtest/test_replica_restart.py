@@ -79,7 +79,7 @@ def test_oom_clusterd(mz: MaterializeApplication) -> None:
     mz.environmentd.sql(
         dedent(
             """
-            CREATE CLUSTER oom REPLICAS (oom (size 'mem-2'));
+            CREATE CLUSTER oom REPLICAS (oom (size 'scale=1,workers=2,mem=2GiB'));
             SET cluster=oom;
             CREATE VIEW oom AS
               SELECT repeat('abc' || x || y, 1000000) FROM

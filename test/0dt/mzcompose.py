@@ -111,10 +111,10 @@ def workflow_read_only(c: Composition) -> None:
     c.sql(
         """
         DROP CLUSTER IF EXISTS cluster CASCADE;
-        CREATE CLUSTER cluster SIZE '2-1';
+        CREATE CLUSTER cluster SIZE 'scale=2,workers=1';
         GRANT ALL ON CLUSTER cluster TO materialize;
         ALTER SYSTEM SET cluster = cluster;
-        CREATE CLUSTER cluster_singlereplica SIZE '1', REPLICATION FACTOR 1;
+        CREATE CLUSTER cluster_singlereplica SIZE 'scale=1,workers=1', REPLICATION FACTOR 1;
         GRANT ALL ON CLUSTER cluster_singlereplica TO materialize;
     """,
         service="mz_old",
@@ -410,10 +410,10 @@ def workflow_basic(c: Composition) -> None:
     c.sql(
         """
         DROP CLUSTER IF EXISTS cluster CASCADE;
-        CREATE CLUSTER cluster SIZE '2-1';
+        CREATE CLUSTER cluster SIZE 'scale=2,workers=1';
         GRANT ALL ON CLUSTER cluster TO materialize;
         ALTER SYSTEM SET cluster = cluster;
-        CREATE CLUSTER cluster_singlereplica SIZE '1', REPLICATION FACTOR 1;
+        CREATE CLUSTER cluster_singlereplica SIZE 'scale=1,workers=1', REPLICATION FACTOR 1;
         GRANT ALL ON CLUSTER cluster_singlereplica TO materialize;
     """,
         service="mz_old",
@@ -915,10 +915,10 @@ def workflow_kafka_source_rehydration(c: Composition) -> None:
     c.sql(
         """
         DROP CLUSTER IF EXISTS cluster CASCADE;
-        CREATE CLUSTER cluster SIZE '1';
+        CREATE CLUSTER cluster SIZE 'scale=1,workers=1';
         GRANT ALL ON CLUSTER cluster TO materialize;
         ALTER SYSTEM SET cluster = cluster;
-        CREATE CLUSTER cluster_singlereplica SIZE '1', REPLICATION FACTOR 1;
+        CREATE CLUSTER cluster_singlereplica SIZE 'scale=1,workers=1', REPLICATION FACTOR 1;
         GRANT ALL ON CLUSTER cluster_singlereplica TO materialize;
     """,
         service="mz_old",
@@ -1062,10 +1062,10 @@ def workflow_kafka_source_rehydration_large_initial(c: Composition) -> None:
     c.sql(
         """
         DROP CLUSTER IF EXISTS cluster CASCADE;
-        CREATE CLUSTER cluster SIZE '1';
+        CREATE CLUSTER cluster SIZE 'scale=1,workers=1';
         GRANT ALL ON CLUSTER cluster TO materialize;
         ALTER SYSTEM SET cluster = cluster;
-        CREATE CLUSTER cluster_singlereplica SIZE '1', REPLICATION FACTOR 1;
+        CREATE CLUSTER cluster_singlereplica SIZE 'scale=1,workers=1', REPLICATION FACTOR 1;
         GRANT ALL ON CLUSTER cluster_singlereplica TO materialize;
     """,
         service="mz_old",
@@ -1206,10 +1206,10 @@ def workflow_pg_source_rehydration(c: Composition) -> None:
     c.sql(
         """
         DROP CLUSTER IF EXISTS cluster CASCADE;
-        CREATE CLUSTER cluster SIZE '1';
+        CREATE CLUSTER cluster SIZE 'scale=1,workers=1';
         GRANT ALL ON CLUSTER cluster TO materialize;
         ALTER SYSTEM SET cluster = cluster;
-        CREATE CLUSTER cluster_singlereplica SIZE '1', REPLICATION FACTOR 1;
+        CREATE CLUSTER cluster_singlereplica SIZE 'scale=1,workers=1', REPLICATION FACTOR 1;
         GRANT ALL ON CLUSTER cluster_singlereplica TO materialize;
     """,
         service="mz_old",
@@ -1357,10 +1357,10 @@ def workflow_mysql_source_rehydration(c: Composition) -> None:
     c.sql(
         """
         DROP CLUSTER IF EXISTS cluster CASCADE;
-        CREATE CLUSTER cluster SIZE '1';
+        CREATE CLUSTER cluster SIZE 'scale=1,workers=1';
         GRANT ALL ON CLUSTER cluster TO materialize;
         ALTER SYSTEM SET cluster = cluster;
-        CREATE CLUSTER cluster_singlereplica SIZE '1', REPLICATION FACTOR 1;
+        CREATE CLUSTER cluster_singlereplica SIZE 'scale=1,workers=1', REPLICATION FACTOR 1;
         GRANT ALL ON CLUSTER cluster_singlereplica TO materialize;
     """,
         service="mz_old",
@@ -1536,10 +1536,10 @@ def workflow_kafka_source_failpoint(c: Composition) -> None:
             dedent(
                 """
                 DROP CLUSTER IF EXISTS cluster CASCADE;
-                CREATE CLUSTER cluster SIZE '1';
+                CREATE CLUSTER cluster SIZE 'scale=1,workers=1';
                 GRANT ALL ON CLUSTER cluster TO materialize;
                 ALTER SYSTEM SET cluster = cluster;
-                CREATE CLUSTER cluster_singlereplica SIZE '1', REPLICATION FACTOR 1;
+                CREATE CLUSTER cluster_singlereplica SIZE 'scale=1,workers=1', REPLICATION FACTOR 1;
                 GRANT ALL ON CLUSTER cluster_singlereplica TO materialize;
                 """
             ),
@@ -1829,10 +1829,10 @@ def workflow_upsert_sources(c: Composition) -> None:
     c.sql(
         f"""
         DROP CLUSTER IF EXISTS cluster CASCADE;
-        CREATE CLUSTER cluster SIZE '2-1';
+        CREATE CLUSTER cluster SIZE 'scale=2,workers=1';
         GRANT ALL ON CLUSTER cluster TO materialize;
         ALTER SYSTEM SET cluster = cluster;
-        CREATE CLUSTER cluster_singlereplica SIZE '1', REPLICATION FACTOR 1;
+        CREATE CLUSTER cluster_singlereplica SIZE 'scale=1,workers=1', REPLICATION FACTOR 1;
         GRANT ALL ON CLUSTER cluster_singlereplica TO materialize;
         ALTER SYSTEM SET max_sources = {num_threads * 2};
         ALTER SYSTEM SET max_materialized_views = {num_threads * 2};
@@ -1951,10 +1951,10 @@ def workflow_ddl(c: Composition) -> None:
     c.sql(
         """
         DROP CLUSTER IF EXISTS cluster CASCADE;
-        CREATE CLUSTER cluster SIZE '2-1';
+        CREATE CLUSTER cluster SIZE 'scale=2,workers=1';
         GRANT ALL ON CLUSTER cluster TO materialize;
         ALTER SYSTEM SET cluster = cluster;
-        CREATE CLUSTER cluster_singlereplica SIZE '1', REPLICATION FACTOR 1;
+        CREATE CLUSTER cluster_singlereplica SIZE 'scale=1,workers=1', REPLICATION FACTOR 1;
         GRANT ALL ON CLUSTER cluster_singlereplica TO materialize;
     """,
         service="mz_old",

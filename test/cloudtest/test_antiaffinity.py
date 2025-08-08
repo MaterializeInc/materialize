@@ -69,9 +69,9 @@ def test_create_cluster_antiaffinity(mz: MaterializeApplication) -> None:
     mz.environmentd.sql(
         """
         CREATE CLUSTER antiaffinity_cluster1 REPLICAS (
-            antiaffinity_replica1 (SIZE '1'),
-            antiaffinity_replica2 (SIZE '1'),
-            antiaffinity_replica3 (SIZE '1')
+            antiaffinity_replica1 (SIZE 'scale=1,workers=1'),
+            antiaffinity_replica2 (SIZE 'scale=1,workers=1'),
+            antiaffinity_replica3 (SIZE 'scale=1,workers=1')
         )"""
     )
 
@@ -85,9 +85,9 @@ def test_create_cluster_replica_antiaffinity(mz: MaterializeApplication) -> None
     mz.environmentd.sql(
         """
         CREATE CLUSTER antiaffinity_cluster1 REPLICAS ();
-        CREATE CLUSTER REPLICA antiaffinity_cluster1.antiaffinity_replica1 SIZE '1';
-        CREATE CLUSTER REPLICA antiaffinity_cluster1.antiaffinity_replica2 SIZE '1';
-        CREATE CLUSTER REPLICA antiaffinity_cluster1.antiaffinity_replica3 SIZE '1';
+        CREATE CLUSTER REPLICA antiaffinity_cluster1.antiaffinity_replica1 SIZE 'scale=1,workers=1';
+        CREATE CLUSTER REPLICA antiaffinity_cluster1.antiaffinity_replica2 SIZE 'scale=1,workers=1';
+        CREATE CLUSTER REPLICA antiaffinity_cluster1.antiaffinity_replica3 SIZE 'scale=1,workers=1';
         """
     )
 
@@ -101,9 +101,9 @@ def test_create_cluster_replica_zone_specified(mz: MaterializeApplication) -> No
     mz.environmentd.sql(
         """
         CREATE CLUSTER antiaffinity_cluster1 REPLICAS ();
-        CREATE CLUSTER REPLICA antiaffinity_cluster1.antiaffinity_replica1 SIZE '1' , AVAILABILITY ZONE '3';
-        CREATE CLUSTER REPLICA antiaffinity_cluster1.antiaffinity_replica2 SIZE '1' , AVAILABILITY ZONE '3';
-        CREATE CLUSTER REPLICA antiaffinity_cluster1.antiaffinity_replica3 SIZE '1' , AVAILABILITY ZONE '3';
+        CREATE CLUSTER REPLICA antiaffinity_cluster1.antiaffinity_replica1 SIZE 'scale=1,workers=1' , AVAILABILITY ZONE '3';
+        CREATE CLUSTER REPLICA antiaffinity_cluster1.antiaffinity_replica2 SIZE 'scale=1,workers=1' , AVAILABILITY ZONE '3';
+        CREATE CLUSTER REPLICA antiaffinity_cluster1.antiaffinity_replica3 SIZE 'scale=1,workers=1' , AVAILABILITY ZONE '3';
         """
     )
 
@@ -117,9 +117,9 @@ def test_create_cluster_replica_zone_mixed(mz: MaterializeApplication) -> None:
     mz.environmentd.sql(
         """
         CREATE CLUSTER antiaffinity_cluster1 REPLICAS ();
-        CREATE CLUSTER REPLICA antiaffinity_cluster1.antiaffinity_replica1 SIZE '1' , AVAILABILITY ZONE '3';
-        CREATE CLUSTER REPLICA antiaffinity_cluster1.antiaffinity_replica2 SIZE '1' , AVAILABILITY ZONE '3';
-        CREATE CLUSTER REPLICA antiaffinity_cluster1.antiaffinity_replica3 SIZE '1';
+        CREATE CLUSTER REPLICA antiaffinity_cluster1.antiaffinity_replica1 SIZE 'scale=1,workers=1' , AVAILABILITY ZONE '3';
+        CREATE CLUSTER REPLICA antiaffinity_cluster1.antiaffinity_replica2 SIZE 'scale=1,workers=1' , AVAILABILITY ZONE '3';
+        CREATE CLUSTER REPLICA antiaffinity_cluster1.antiaffinity_replica3 SIZE 'scale=1,workers=1';
         """
     )
 
@@ -139,7 +139,7 @@ def test_managed_set_azs(mz: MaterializeApplication) -> None:
 
     mz.environmentd.sql(
         """
-        CREATE CLUSTER antiaffinity_cluster1 SIZE '1', REPLICATION FACTOR 3, AVAILABILITY ZONES ('1', '3')
+        CREATE CLUSTER antiaffinity_cluster1 SIZE 'scale=1,workers=1', REPLICATION FACTOR 3, AVAILABILITY ZONES ('1', '3')
         """
     )
 
@@ -165,13 +165,13 @@ def test_create_clusters_antiaffinity(mz: MaterializeApplication) -> None:
     mz.environmentd.sql(
         """
         CREATE CLUSTER antiaffinity_cluster1 REPLICAS (
-            antiaffinity_replica1 (SIZE '1')
+            antiaffinity_replica1 (SIZE 'scale=1,workers=1')
         );
         CREATE CLUSTER antiaffinity_cluster2 REPLICAS (
-            antiaffinity_replica2 (SIZE '1')
+            antiaffinity_replica2 (SIZE 'scale=1,workers=1')
         );
         CREATE CLUSTER antiaffinity_cluster3 REPLICAS (
-            antiaffinity_replica3 (SIZE '1')
+            antiaffinity_replica3 (SIZE 'scale=1,workers=1')
         );
         """
     )

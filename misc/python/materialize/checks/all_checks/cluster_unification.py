@@ -15,10 +15,10 @@ class UnifiedCluster(Check):
     def initialize(self) -> Testdrive:
         return Testdrive(
             """
-            >[version>=13800] CREATE CLUSTER shared_cluster_compute_first SIZE '1', REPLICATION FACTOR 2;
-            >[version<13800] CREATE CLUSTER shared_cluster_compute_first SIZE '1', REPLICATION FACTOR 1;
-            >[version>=13800] CREATE CLUSTER shared_cluster_storage_first SIZE '1', REPLICATION FACTOR 2;
-            >[version<13800] CREATE CLUSTER shared_cluster_storage_first SIZE '1', REPLICATION FACTOR 1;
+            >[version>=13800] CREATE CLUSTER shared_cluster_compute_first SIZE 'scale=1,workers=1', REPLICATION FACTOR 2;
+            >[version<13800] CREATE CLUSTER shared_cluster_compute_first SIZE 'scale=1,workers=1', REPLICATION FACTOR 1;
+            >[version>=13800] CREATE CLUSTER shared_cluster_storage_first SIZE 'scale=1,workers=1', REPLICATION FACTOR 2;
+            >[version<13800] CREATE CLUSTER shared_cluster_storage_first SIZE 'scale=1,workers=1', REPLICATION FACTOR 1;
             """
         )
 
