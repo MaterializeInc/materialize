@@ -1532,7 +1532,7 @@ impl IndexPeek {
             peek.target.id().clone(),
             peek.map_filter_project.clone(),
             peek.timestamp,
-            peek.literal_constraints.clone(),
+            peek.literal_constraints.clone().as_deref_mut(),
             oks_handle,
         );
 
