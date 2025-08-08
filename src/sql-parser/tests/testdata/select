@@ -1096,6 +1096,34 @@ SELECT foo FROM LATERAL bar
                            ^
 
 parse-statement
+SELECT foo FROM LATERAL bar(1) WITH ORDINALITY
+----
+SELECT foo FROM bar(1) WITH ORDINALITY
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Function { function: Function { name: Name(UnresolvedItemName([Ident("bar")])), args: Args { args: [Value(Number("1"))], order_by: [] }, filter: None, over: None, distinct: false }, alias: None, with_ordinality: true }, joins: [] }], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+parse-statement
+SELECT foo FROM LATERAL bar(1) AS alias
+----
+SELECT foo FROM bar(1) AS alias
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Function { function: Function { name: Name(UnresolvedItemName([Ident("bar")])), args: Args { args: [Value(Number("1"))], order_by: [] }, filter: None, over: None, distinct: false }, alias: Some(TableAlias { name: Ident("alias"), columns: [], strict: false }), with_ordinality: false }, joins: [] }], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+parse-statement
+SELECT foo FROM LATERAL bar(1) WITH ORDINALITY AS alias
+----
+SELECT foo FROM bar(1) WITH ORDINALITY AS alias
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Function { function: Function { name: Name(UnresolvedItemName([Ident("bar")])), args: Args { args: [Value(Number("1"))], order_by: [] }, filter: None, over: None, distinct: false }, alias: Some(TableAlias { name: Ident("alias"), columns: [], strict: false }), with_ordinality: true }, joins: [] }], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+parse-statement
+SELECT foo FROM LATERAL bar(1) AS alias WITH ORDINALITY
+----
+SELECT foo FROM bar(1) WITH ORDINALITY AS alias
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Function { function: Function { name: Name(UnresolvedItemName([Ident("bar")])), args: Args { args: [Value(Number("1"))], order_by: [] }, filter: None, over: None, distinct: false }, alias: Some(TableAlias { name: Ident("alias"), columns: [], strict: false }), with_ordinality: true }, joins: [] }], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+parse-statement
 SELECT 'foo' OFFSET 0 ROWS
 ----
 SELECT 'foo' OFFSET 0
@@ -1290,6 +1318,34 @@ SELECT * FROM customer LEFT JOIN generate_series(1, customer.id) ON true
 Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("customer")])), alias: None }, joins: [Join { relation: Function { function: Function { name: Name(UnresolvedItemName([Ident("generate_series")])), args: Args { args: [Value(Number("1")), Identifier([Ident("customer"), Ident("id")])], order_by: [] }, filter: None, over: None, distinct: false }, alias: None, with_ordinality: false }, join_operator: LeftOuter(On(Value(Boolean(true)))) }] }], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 parse-statement
+SELECT * FROM customer LEFT JOIN LATERAL generate_series(1, customer.id) WITH ORDINALITY ON true
+----
+SELECT * FROM customer LEFT JOIN generate_series(1, customer.id) WITH ORDINALITY ON true
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("customer")])), alias: None }, joins: [Join { relation: Function { function: Function { name: Name(UnresolvedItemName([Ident("generate_series")])), args: Args { args: [Value(Number("1")), Identifier([Ident("customer"), Ident("id")])], order_by: [] }, filter: None, over: None, distinct: false }, alias: None, with_ordinality: true }, join_operator: LeftOuter(On(Value(Boolean(true)))) }] }], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+parse-statement
+SELECT * FROM customer LEFT JOIN LATERAL generate_series(1, customer.id) AS alias ON true
+----
+SELECT * FROM customer LEFT JOIN generate_series(1, customer.id) AS alias ON true
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("customer")])), alias: None }, joins: [Join { relation: Function { function: Function { name: Name(UnresolvedItemName([Ident("generate_series")])), args: Args { args: [Value(Number("1")), Identifier([Ident("customer"), Ident("id")])], order_by: [] }, filter: None, over: None, distinct: false }, alias: Some(TableAlias { name: Ident("alias"), columns: [], strict: false }), with_ordinality: false }, join_operator: LeftOuter(On(Value(Boolean(true)))) }] }], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+parse-statement
+SELECT * FROM customer LEFT JOIN LATERAL generate_series(1, customer.id) WITH ORDINALITY AS alias ON true
+----
+SELECT * FROM customer LEFT JOIN generate_series(1, customer.id) WITH ORDINALITY AS alias ON true
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("customer")])), alias: None }, joins: [Join { relation: Function { function: Function { name: Name(UnresolvedItemName([Ident("generate_series")])), args: Args { args: [Value(Number("1")), Identifier([Ident("customer"), Ident("id")])], order_by: [] }, filter: None, over: None, distinct: false }, alias: Some(TableAlias { name: Ident("alias"), columns: [], strict: false }), with_ordinality: true }, join_operator: LeftOuter(On(Value(Boolean(true)))) }] }], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+parse-statement
+SELECT * FROM customer LEFT JOIN LATERAL generate_series(1, customer.id) AS alias WITH ORDINALITY ON true
+----
+SELECT * FROM customer LEFT JOIN generate_series(1, customer.id) WITH ORDINALITY AS alias ON true
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("customer")])), alias: None }, joins: [Join { relation: Function { function: Function { name: Name(UnresolvedItemName([Ident("generate_series")])), args: Args { args: [Value(Number("1")), Identifier([Ident("customer"), Ident("id")])], order_by: [] }, filter: None, over: None, distinct: false }, alias: Some(TableAlias { name: Ident("alias"), columns: [], strict: false }), with_ordinality: true }, join_operator: LeftOuter(On(Value(Boolean(true)))) }] }], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+parse-statement
 SELECT * FROM LATERAL ROWS FROM (generate_series(1, 2), generate_series(3, 5))
 ----
 SELECT * FROM ROWS FROM (generate_series(1, 2), generate_series(3, 5))
@@ -1302,6 +1358,20 @@ SELECT * FROM LATERAL ROWS FROM (generate_series(1, 2), generate_series(3, 5)) A
 SELECT * FROM ROWS FROM (generate_series(1, 2), generate_series(3, 5)) AS alias
 =>
 Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: RowsFrom { functions: [Function { name: Name(UnresolvedItemName([Ident("generate_series")])), args: Args { args: [Value(Number("1")), Value(Number("2"))], order_by: [] }, filter: None, over: None, distinct: false }, Function { name: Name(UnresolvedItemName([Ident("generate_series")])), args: Args { args: [Value(Number("3")), Value(Number("5"))], order_by: [] }, filter: None, over: None, distinct: false }], alias: Some(TableAlias { name: Ident("alias"), columns: [], strict: false }), with_ordinality: false }, joins: [] }], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+parse-statement
+SELECT * FROM LATERAL ROWS FROM (generate_series(1, 2), generate_series(3, 5)) WITH ORDINALITY AS alias
+----
+SELECT * FROM ROWS FROM (generate_series(1, 2), generate_series(3, 5)) WITH ORDINALITY AS alias
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: RowsFrom { functions: [Function { name: Name(UnresolvedItemName([Ident("generate_series")])), args: Args { args: [Value(Number("1")), Value(Number("2"))], order_by: [] }, filter: None, over: None, distinct: false }, Function { name: Name(UnresolvedItemName([Ident("generate_series")])), args: Args { args: [Value(Number("3")), Value(Number("5"))], order_by: [] }, filter: None, over: None, distinct: false }], alias: Some(TableAlias { name: Ident("alias"), columns: [], strict: false }), with_ordinality: true }, joins: [] }], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+parse-statement
+SELECT * FROM LATERAL ROWS FROM (generate_series(1, 2), generate_series(3, 5)) AS alias WITH ORDINALITY
+----
+SELECT * FROM ROWS FROM (generate_series(1, 2), generate_series(3, 5)) WITH ORDINALITY AS alias
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: RowsFrom { functions: [Function { name: Name(UnresolvedItemName([Ident("generate_series")])), args: Args { args: [Value(Number("1")), Value(Number("2"))], order_by: [] }, filter: None, over: None, distinct: false }, Function { name: Name(UnresolvedItemName([Ident("generate_series")])), args: Args { args: [Value(Number("3")), Value(Number("5"))], order_by: [] }, filter: None, over: None, distinct: false }], alias: Some(TableAlias { name: Ident("alias"), columns: [], strict: false }), with_ordinality: true }, joins: [] }], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 parse-statement
 SELECT * FROM generate_series(1, 2) WITH ORDINALITY
@@ -1325,11 +1395,68 @@ SELECT * FROM ROWS FROM (generate_series(1, 2), generate_series(3, 5)) WITH ORDI
 Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: RowsFrom { functions: [Function { name: Name(UnresolvedItemName([Ident("generate_series")])), args: Args { args: [Value(Number("1")), Value(Number("2"))], order_by: [] }, filter: None, over: None, distinct: false }, Function { name: Name(UnresolvedItemName([Ident("generate_series")])), args: Args { args: [Value(Number("3")), Value(Number("5"))], order_by: [] }, filter: None, over: None, distinct: false }], alias: None, with_ordinality: true }, joins: [] }], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 parse-statement
+SELECT * FROM unnest(ARRAY['a', 'b', 'c']) WITH ORDINALITY AS t (letter, position)
+----
+SELECT * FROM unnest(ARRAY['a', 'b', 'c']) WITH ORDINALITY AS t (letter, position)
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Function { function: Function { name: Name(UnresolvedItemName([Ident("unnest")])), args: Args { args: [Array([Value(String("a")), Value(String("b")), Value(String("c"))])], order_by: [] }, filter: None, over: None, distinct: false }, alias: Some(TableAlias { name: Ident("t"), columns: [Ident("letter"), Ident("position")], strict: false }), with_ordinality: true }, joins: [] }], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+# Weird order; supported only for backcompat reasons
+parse-statement
+SELECT * FROM unnest(ARRAY['a', 'b', 'c']) AS t (letter, position) WITH ORDINALITY
+----
+SELECT * FROM unnest(ARRAY['a', 'b', 'c']) WITH ORDINALITY AS t (letter, position)
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Function { function: Function { name: Name(UnresolvedItemName([Ident("unnest")])), args: Args { args: [Array([Value(String("a")), Value(String("b")), Value(String("c"))])], order_by: [] }, filter: None, over: None, distinct: false }, alias: Some(TableAlias { name: Ident("t"), columns: [Ident("letter"), Ident("position")], strict: false }), with_ordinality: true }, joins: [] }], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+parse-statement
+SELECT * FROM unnest(ARRAY['a', 'b', 'c']) WITH ORDINALITY AS t (letter, position) WITH ORDINALITY
+----
+error: WITH ORDINALITY specified twice
+SELECT * FROM unnest(ARRAY['a', 'b', 'c']) WITH ORDINALITY AS t (letter, position) WITH ORDINALITY
+                                                                                        ^
+
+parse-statement
+SELECT * FROM unnest(ARRAY['a', 'b', 'c']) AS WITH ORDINALITY t (letter, position) WITH ORDINALITY
+----
+error: Expected end of statement, found ORDINALITY
+SELECT * FROM unnest(ARRAY['a', 'b', 'c']) AS WITH ORDINALITY t (letter, position) WITH ORDINALITY
+                                                   ^
+
+parse-statement
 SELECT * FROM ROWS FROM (generate_series(1, 2), generate_series(3, 5))
 ----
 SELECT * FROM ROWS FROM (generate_series(1, 2), generate_series(3, 5))
 =>
 Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: RowsFrom { functions: [Function { name: Name(UnresolvedItemName([Ident("generate_series")])), args: Args { args: [Value(Number("1")), Value(Number("2"))], order_by: [] }, filter: None, over: None, distinct: false }, Function { name: Name(UnresolvedItemName([Ident("generate_series")])), args: Args { args: [Value(Number("3")), Value(Number("5"))], order_by: [] }, filter: None, over: None, distinct: false }], alias: None, with_ordinality: false }, joins: [] }], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+parse-statement
+SELECT * FROM ROWS FROM (generate_series(1, 2), generate_series(3, 5)) WITH ORDINALITY
+----
+SELECT * FROM ROWS FROM (generate_series(1, 2), generate_series(3, 5)) WITH ORDINALITY
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: RowsFrom { functions: [Function { name: Name(UnresolvedItemName([Ident("generate_series")])), args: Args { args: [Value(Number("1")), Value(Number("2"))], order_by: [] }, filter: None, over: None, distinct: false }, Function { name: Name(UnresolvedItemName([Ident("generate_series")])), args: Args { args: [Value(Number("3")), Value(Number("5"))], order_by: [] }, filter: None, over: None, distinct: false }], alias: None, with_ordinality: true }, joins: [] }], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+parse-statement
+SELECT * FROM ROWS FROM (generate_series(1, 2), generate_series(3, 5)) AS t (a)
+----
+SELECT * FROM ROWS FROM (generate_series(1, 2), generate_series(3, 5)) AS t (a)
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: RowsFrom { functions: [Function { name: Name(UnresolvedItemName([Ident("generate_series")])), args: Args { args: [Value(Number("1")), Value(Number("2"))], order_by: [] }, filter: None, over: None, distinct: false }, Function { name: Name(UnresolvedItemName([Ident("generate_series")])), args: Args { args: [Value(Number("3")), Value(Number("5"))], order_by: [] }, filter: None, over: None, distinct: false }], alias: Some(TableAlias { name: Ident("t"), columns: [Ident("a")], strict: false }), with_ordinality: false }, joins: [] }], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+parse-statement
+SELECT * FROM ROWS FROM (generate_series(1, 2), generate_series(3, 5)) WITH ORDINALITY AS t (a, b)
+----
+SELECT * FROM ROWS FROM (generate_series(1, 2), generate_series(3, 5)) WITH ORDINALITY AS t (a, b)
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: RowsFrom { functions: [Function { name: Name(UnresolvedItemName([Ident("generate_series")])), args: Args { args: [Value(Number("1")), Value(Number("2"))], order_by: [] }, filter: None, over: None, distinct: false }, Function { name: Name(UnresolvedItemName([Ident("generate_series")])), args: Args { args: [Value(Number("3")), Value(Number("5"))], order_by: [] }, filter: None, over: None, distinct: false }], alias: Some(TableAlias { name: Ident("t"), columns: [Ident("a"), Ident("b")], strict: false }), with_ordinality: true }, joins: [] }], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+parse-statement
+SELECT * FROM ROWS FROM (generate_series(1, 2), generate_series(3, 5)) AS t (a, b) WITH ORDINALITY
+----
+SELECT * FROM ROWS FROM (generate_series(1, 2), generate_series(3, 5)) WITH ORDINALITY AS t (a, b)
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: RowsFrom { functions: [Function { name: Name(UnresolvedItemName([Ident("generate_series")])), args: Args { args: [Value(Number("1")), Value(Number("2"))], order_by: [] }, filter: None, over: None, distinct: false }, Function { name: Name(UnresolvedItemName([Ident("generate_series")])), args: Args { args: [Value(Number("3")), Value(Number("5"))], order_by: [] }, filter: None, over: None, distinct: false }], alias: Some(TableAlias { name: Ident("t"), columns: [Ident("a"), Ident("b")], strict: false }), with_ordinality: true }, joins: [] }], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
 
 # Ensure parsing AS OF is case-insensitive
 parse-statement
