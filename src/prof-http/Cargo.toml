@@ -18,7 +18,7 @@ cfg-if = "1.0.1"
 headers = "0.4.1"
 http = "1.2.0"
 include_dir = "0.7.4"
-mappings = "0.7.0"
+mappings = "0.7.1"
 mime = "0.3.16"
 mz-build-info = { path = "../build-info", default-features = false }
 mz-http-util = { path = "../http-util", default-features = false }
