@@ -6577,7 +6577,7 @@ impl<'a> ExprContext<'a> {
         self.column_type(expr).scalar_type()
     }
 
-    fn derived_query_context(&self) -> QueryContext {
+    fn derived_query_context(&self) -> QueryContext<'_> {
         let mut scope = self.scope.clone();
         scope.lateral_barrier = true;
         self.qcx.derived_context(scope, self.relation_type.clone())

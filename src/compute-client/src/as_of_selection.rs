@@ -382,7 +382,7 @@ impl<'a, T: TimestampManipulation> Context<'a, T> {
     /// # Panics
     ///
     /// Panics if the identified collection doesn't exist.
-    fn expect_collection(&self, id: GlobalId) -> &Collection<T> {
+    fn expect_collection(&self, id: GlobalId) -> &Collection<'_, T> {
         self.collections
             .get(&id)
             .unwrap_or_else(|| panic!("collection missing: {id}"))

@@ -41,7 +41,7 @@ pub(crate) static MYSQL_DATABASE_FAKE_NAME: &str = "mysql";
 /// Convert an unresolved item name to a qualified table reference.
 pub(super) fn external_reference_to_table(
     name: &UnresolvedItemName,
-) -> Result<QualifiedTableRef, MySqlSourcePurificationError> {
+) -> Result<QualifiedTableRef<'_>, MySqlSourcePurificationError> {
     if name.0.len() != 2 {
         Err(MySqlSourcePurificationError::InvalidTableReference(
             name.to_string(),

@@ -180,7 +180,7 @@ pub struct MonotonicTop1Plan {
     /// not a requirement that the input be directly subjected to consolidation.
     /// More details in the monotonic one-shot `SELECT`s design doc.[^1]
     ///
-    /// [^1] <https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/20230421_stabilize_monotonic_select.md>
+    /// [^1]: <https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/20230421_stabilize_monotonic_select.md>
     pub must_consolidate: bool,
 }
 
@@ -220,7 +220,7 @@ pub struct MonotonicTopKPlan {
     /// not a requirement that the input be directly subjected to consolidation.
     /// More details in the monotonic one-shot `SELECT`s design doc.[^1]
     ///
-    /// [^1] <https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/20230421_stabilize_monotonic_select.md>
+    /// [^1]: <https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/20230421_stabilize_monotonic_select.md>
     pub must_consolidate: bool,
 }
 

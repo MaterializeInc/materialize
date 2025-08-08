@@ -782,7 +782,8 @@ impl<'a> FromSql<'a> for MzTimestamp {
     }
 }
 
-struct MzAclItem(#[allow(dead_code)] String);
+#[allow(dead_code)]
+struct MzAclItem(String);
 
 impl<'a> FromSql<'a> for MzAclItem {
     fn from_sql(_ty: &Type, raw: &'a [u8]) -> Result<Self, Box<dyn Error + Sync + Send>> {

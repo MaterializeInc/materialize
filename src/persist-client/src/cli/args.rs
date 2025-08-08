@@ -235,7 +235,7 @@ impl Blob for ReadOnly<Arc<dyn Blob>> {
 
 #[async_trait]
 impl Consensus for ReadOnly<Arc<dyn Consensus>> {
-    fn list_keys(&self) -> ResultStream<String> {
+    fn list_keys(&self) -> ResultStream<'_, String> {
         if self.ignored_write() {
             warn!("potentially-invalid list_keys() after ignored write");
         }

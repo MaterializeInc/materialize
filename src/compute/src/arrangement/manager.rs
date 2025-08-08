@@ -198,7 +198,7 @@ where
         }
     }
 
-    fn get_logical_compaction(&mut self) -> AntichainRef<Self::Time> {
+    fn get_logical_compaction(&mut self) -> AntichainRef<'_, Self::Time> {
         match &self.padded_since {
             Some(since) => since.borrow(),
             None => self.trace.get_logical_compaction(),
@@ -209,7 +209,7 @@ where
         self.trace.set_physical_compaction(frontier);
     }
 
-    fn get_physical_compaction(&mut self) -> AntichainRef<Self::Time> {
+    fn get_physical_compaction(&mut self) -> AntichainRef<'_, Self::Time> {
         self.trace.get_logical_compaction()
     }
 

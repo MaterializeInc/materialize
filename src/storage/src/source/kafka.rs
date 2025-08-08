@@ -1295,7 +1295,7 @@ impl PartitionConsumer {
     /// be transformed into empty values.
     ///
     /// The inner `Option` represents if there is a message to process.
-    fn get_next_message(&self) -> Result<Option<(BorrowedMessage, PartitionId)>, KafkaError> {
+    fn get_next_message(&self) -> Result<Option<(BorrowedMessage<'_>, PartitionId)>, KafkaError> {
         match self.partition_queue.poll(Duration::from_millis(0)) {
             Some(Ok(msg)) => Ok(Some((msg, self.pid))),
             Some(Err(err)) => Err(err),

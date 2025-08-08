@@ -367,7 +367,7 @@ pub trait OreSinkExt<T>: Sink<T> {
 
     /// Like [`futures::sink::SinkExt::send`], but does not flush the sink after enqueuing
     /// `item`.
-    fn enqueue(&mut self, item: T) -> Enqueue<Self, T> {
+    fn enqueue(&mut self, item: T) -> Enqueue<'_, Self, T> {
         Enqueue {
             sink: self,
             item: Some(item),

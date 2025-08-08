@@ -326,7 +326,7 @@ impl PostgresConsensus {
 
 #[async_trait]
 impl Consensus for PostgresConsensus {
-    fn list_keys(&self) -> ResultStream<String> {
+    fn list_keys(&self) -> ResultStream<'_, String> {
         let q = "SELECT DISTINCT shard FROM consensus";
 
         Box::pin(try_stream! {

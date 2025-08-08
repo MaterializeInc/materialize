@@ -648,7 +648,7 @@ impl MirScalarExpr {
         mem::replace(self, MirScalarExpr::literal_null(ScalarType::String))
     }
 
-    pub fn as_literal(&self) -> Option<Result<Datum, &EvalError>> {
+    pub fn as_literal(&self) -> Option<Result<Datum<'_>, &EvalError>> {
         if let MirScalarExpr::Literal(lit, _column_type) = self {
             Some(lit.as_ref().map(|row| row.unpack_first()))
         } else {

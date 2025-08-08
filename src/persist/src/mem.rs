@@ -237,7 +237,7 @@ impl MemConsensus {
 
 #[async_trait]
 impl Consensus for MemConsensus {
-    fn list_keys(&self) -> ResultStream<String> {
+    fn list_keys(&self) -> ResultStream<'_, String> {
         // Yield to maximize our chances for getting interesting orderings.
         let store = self.data.lock().expect("lock poisoned");
         let keys: Vec<_> = store.keys().cloned().collect();

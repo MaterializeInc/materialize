@@ -153,7 +153,7 @@ impl SchemaPieceOrNamed {
     }
 
     #[inline(always)]
-    pub fn as_ref(&self) -> SchemaPieceRefOrNamed {
+    pub fn as_ref(&self) -> SchemaPieceRefOrNamed<'_> {
         match self {
             SchemaPieceOrNamed::Piece(piece) => SchemaPieceRefOrNamed::Piece(piece),
             SchemaPieceOrNamed::Named(index) => SchemaPieceRefOrNamed::Named(*index),
@@ -382,7 +382,7 @@ impl std::fmt::Debug for Schema {
 }
 
 impl Schema {
-    pub fn top_node(&self) -> SchemaNode {
+    pub fn top_node(&self) -> SchemaNode<'_> {
         let (inner, name) = self.top.get_piece_and_name(self);
         SchemaNode {
             root: self,
@@ -390,7 +390,7 @@ impl Schema {
             name,
         }
     }
-    pub fn top_node_or_named(&self) -> SchemaNodeOrNamed {
+    pub fn top_node_or_named(&self) -> SchemaNodeOrNamed<'_> {
         SchemaNodeOrNamed {
             root: self,
             inner: self.top.as_ref(),

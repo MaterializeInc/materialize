@@ -521,7 +521,7 @@ impl<C: ConnectionAccess> KafkaConnection<C> {
         &self,
         connection_context: &ConnectionContext,
         connection_id: CatalogItemId,
-    ) -> Cow<str> {
+    ) -> Cow<'_, str> {
         if let Some(progress_topic) = &self.progress_topic {
             Cow::Borrowed(progress_topic)
         } else {

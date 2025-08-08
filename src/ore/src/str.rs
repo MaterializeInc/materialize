@@ -46,7 +46,7 @@ pub trait StrExt {
     /// let message = format!("unknown user {}", name.quoted());
     /// assert_eq!(message, r#"unknown user "b@d\"inp!t\"""#);
     /// ```
-    fn quoted(&self) -> QuotedStr;
+    fn quoted(&self) -> QuotedStr<'_>;
     /// Same as [`StrExt::quoted`], but also escapes new lines and tabs.
     ///
     /// # Examples
@@ -58,14 +58,14 @@ pub trait StrExt {
     /// let message = format!("unknown user {}", name.escaped());
     /// assert_eq!(message, r#"unknown user "b@d\"\tinp!t\"\r\n""#);
     /// ```
-    fn escaped(&self) -> EscapedStr;
+    fn escaped(&self) -> EscapedStr<'_>;
 }
 
 impl StrExt for str {
-    fn quoted(&self) -> QuotedStr {
+    fn quoted(&self) -> QuotedStr<'_> {
         QuotedStr(self)
     }
-    fn escaped(&self) -> EscapedStr {
+    fn escaped(&self) -> EscapedStr<'_> {
         EscapedStr(self)
     }
 }

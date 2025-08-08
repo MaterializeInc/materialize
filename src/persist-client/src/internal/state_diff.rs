@@ -245,7 +245,7 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
         diffs
     }
 
-    pub(crate) fn blob_inserts(&self) -> impl Iterator<Item = HollowBlobRef<T>> {
+    pub(crate) fn blob_inserts(&self) -> impl Iterator<Item = HollowBlobRef<'_, T>> {
         let batches = self
             .referenced_batches()
             .filter_map(|spine_diff| match spine_diff {

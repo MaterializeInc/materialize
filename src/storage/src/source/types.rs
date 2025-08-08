@@ -84,7 +84,7 @@ pub trait SourceRender {
     /// Finally, the source is expected to return an opaque token that when dropped will cause the
     /// source to immediately drop all capabilities and advance its frontier to the empty antichain.
     ///
-    /// [^1] <https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/20210831_correctness.md#describing-definite-data>
+    /// [^1]: <https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/20210831_correctness.md#describing-definite-data>
     fn render<G: Scope<Timestamp = Self::Time>>(
         self,
         scope: &mut G,

@@ -114,7 +114,7 @@ impl<T> ParserStatementErrorMapper<T> for Result<T, ParserError> {
 #[mz_ore::instrument(target = "compiler", level = "trace", name = "sql_to_ast")]
 pub fn parse_statements_with_limit(
     sql: &str,
-) -> Result<Result<Vec<StatementParseResult>, ParserStatementError>, String> {
+) -> Result<Result<Vec<StatementParseResult<'_>>, ParserStatementError>, String> {
     if sql.bytes().count() > MAX_STATEMENT_BATCH_SIZE {
         return Err(format!(
             "statement batch size cannot exceed {}",
@@ -126,7 +126,7 @@ pub fn parse_statements_with_limit(
 
 /// Parses a SQL string containing zero or more SQL statements.
 #[mz_ore::instrument(target = "compiler", level = "trace", name = "sql_to_ast")]
-pub fn parse_statements(sql: &str) -> Result<Vec<StatementParseResult>, ParserStatementError> {
+pub fn parse_statements(sql: &str) -> Result<Vec<StatementParseResult<'_>>, ParserStatementError> {
     let tokens = lexer::lex(sql).map_err(|error| ParserStatementError {
         error: error.into(),
         statement: None,

@@ -90,7 +90,7 @@ impl TryFrom<SelectOptionExtracted> for GroupSizeHints {
     /// new syntax with `AGGREGATE INPUT GROUP SIZE`, `DISTINCT ON INPUT GROUP SIZE`,
     /// and `LIMIT INPUT GROUP SIZE`. If the two syntax versions are mixed in the
     /// same `OPTIONS` clause, an error is returned.[^1]
-    /// [^1] <https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/20230829_topk_size_hint.md>
+    /// [^1]: <https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/20230829_topk_size_hint.md>
     fn try_from(select_option_extracted: SelectOptionExtracted) -> Result<Self, Self::Error> {
         let SelectOptionExtracted {
             expected_group_size,

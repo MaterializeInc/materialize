@@ -173,16 +173,19 @@ mod test {
     use crate::{BinaryFunc, EvalError, func};
 
     #[sqlfunc(sqlname = "INFALLIBLE", is_infix_op = true)]
+    #[allow(dead_code)]
     fn infallible1(a: f32, b: f32) -> f32 {
         a + b
     }
 
     #[sqlfunc]
+    #[allow(dead_code)]
     fn infallible2(a: Option<f32>, b: Option<f32>) -> f32 {
         a.unwrap_or_default() + b.unwrap_or_default()
     }
 
     #[sqlfunc]
+    #[allow(dead_code)]
     fn infallible3(a: f32, b: f32) -> Option<f32> {
         Some(a + b)
     }
@@ -291,16 +294,19 @@ mod test {
     }
 
     #[sqlfunc]
+    #[allow(dead_code)]
     fn fallible1(a: f32, b: f32) -> Result<f32, EvalError> {
         Ok(a + b)
     }
 
     #[sqlfunc]
+    #[allow(dead_code)]
     fn fallible2(a: Option<f32>, b: Option<f32>) -> Result<f32, EvalError> {
         Ok(a.unwrap_or_default() + b.unwrap_or_default())
     }
 
     #[sqlfunc]
+    #[allow(dead_code)]
     fn fallible3(a: f32, b: f32) -> Result<Option<f32>, EvalError> {
         Ok(Some(a + b))
     }

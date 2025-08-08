@@ -491,7 +491,7 @@ pub struct ReloadingSslContext {
 }
 
 impl ReloadingSslContext {
-    pub fn get(&self) -> RwLockReadGuard<SslContext> {
+    pub fn get(&self) -> RwLockReadGuard<'_, SslContext> {
         self.context.read().expect("poisoned")
     }
 }

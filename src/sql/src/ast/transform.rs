@@ -357,7 +357,7 @@ impl<'a, 'ast> Visit<'ast, Raw> for QueryIdentAgg<'a> {
     }
 
     fn visit_ident(&mut self, ident: &'ast Ident) {
-        self.check_failure(&[ident.clone()]);
+        self.check_failure(std::slice::from_ref(ident));
         // This is an unqualified item using `self.name`, e.g. an alias, which
         // we cannot unambiguously resolve.
         if ident == self.name {

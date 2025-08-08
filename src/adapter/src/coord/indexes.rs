@@ -20,7 +20,7 @@ use crate::optimize::dataflows::DataflowBuilder;
 
 impl Coordinator {
     /// Creates a new index oracle for the specified compute instance.
-    pub fn index_oracle(&self, instance: ComputeInstanceId) -> DataflowBuilder {
+    pub fn index_oracle(&self, instance: ComputeInstanceId) -> DataflowBuilder<'_> {
         self.dataflow_builder(instance)
     }
 }

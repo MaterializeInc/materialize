@@ -178,7 +178,10 @@ impl LiteralConstraints {
                         *relation = MirRelationExpr::Join {
                             // It's important to keep the `filter_list` in the second position.
                             // Both the lowering and EXPLAIN depends on this.
-                            inputs: vec![relation.clone().arrange_by(&[key.clone()]), filter_list],
+                            inputs: vec![
+                                relation.clone().arrange_by(std::slice::from_ref(&key)),
+                                filter_list,
+                            ],
                             equivalences: key
                                 .iter()
                                 .enumerate()

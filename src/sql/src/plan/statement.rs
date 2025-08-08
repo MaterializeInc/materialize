@@ -672,7 +672,7 @@ impl<'a> StatementContext<'a> {
         }
     }
 
-    pub fn get_cluster(&self, id: &ClusterId) -> &dyn CatalogCluster {
+    pub fn get_cluster(&self, id: &ClusterId) -> &dyn CatalogCluster<'_> {
         self.catalog.get_cluster(*id)
     }
 
@@ -774,7 +774,10 @@ impl<'a> StatementContext<'a> {
         Ok(self.catalog.resolve_function(&name)?)
     }
 
-    pub fn resolve_cluster(&self, name: Option<&Ident>) -> Result<&dyn CatalogCluster, PlanError> {
+    pub fn resolve_cluster(
+        &self,
+        name: Option<&Ident>,
+    ) -> Result<&dyn CatalogCluster<'_>, PlanError> {
         let name = name.map(|name| name.as_str());
         Ok(self.catalog.resolve_cluster(name)?)
     }

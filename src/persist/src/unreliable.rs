@@ -188,7 +188,7 @@ impl UnreliableConsensus {
 
 #[async_trait]
 impl Consensus for UnreliableConsensus {
-    fn list_keys(&self) -> ResultStream<String> {
+    fn list_keys(&self) -> ResultStream<'_, String> {
         // TODO: run_op for streams
         self.consensus.list_keys()
     }

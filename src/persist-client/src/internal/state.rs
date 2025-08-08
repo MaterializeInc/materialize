@@ -2709,7 +2709,7 @@ where
         None
     }
 
-    pub(crate) fn blobs(&self) -> impl Iterator<Item = HollowBlobRef<T>> {
+    pub(crate) fn blobs(&self) -> impl Iterator<Item = HollowBlobRef<'_, T>> {
         let batches = self.collections.trace.batches().map(HollowBlobRef::Batch);
         let rollups = self.collections.rollups.values().map(HollowBlobRef::Rollup);
         batches.chain(rollups)

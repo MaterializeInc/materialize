@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(output_type = \"String\", sqlname = \"tocharts\", propagates_nulls = true)]\nfn to_char_timestamp_format<'a>(a: Datum<'a>, format: &str) -> String {\n    let ts = a.unwrap_timestamp();\n    let fmt = DateTimeFormat::compile(format);\n    fmt.render(&*ts)\n}\n"
+expression: "#[sqlfunc(output_type = \"String\", sqlname = \"tocharts\", propagates_nulls = true)]\n#[allow(dead_code)]\nfn to_char_timestamp_format<'a>(a: Datum<'a>, format: &str) -> String {\n    let ts = a.unwrap_timestamp();\n    let fmt = DateTimeFormat::compile(format);\n    fmt.render(&*ts)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -58,6 +58,7 @@ impl std::fmt::Display for ToCharTimestampFormat {
         f.write_str("tocharts")
     }
 }
+#[allow(dead_code)]
 fn to_char_timestamp_format<'a>(a: Datum<'a>, format: &str) -> String {
     let ts = a.unwrap_timestamp();
     let fmt = DateTimeFormat::compile(format);

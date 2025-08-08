@@ -437,7 +437,7 @@ impl ArrayOrd {
     }
 
     /// Return a struct representing the value at a particular index in this array.
-    pub fn at(&self, idx: usize) -> ArrayIdx {
+    pub fn at(&self, idx: usize) -> ArrayIdx<'_> {
         ArrayIdx { idx, array: self }
     }
 }
@@ -667,7 +667,7 @@ impl ArrayBound {
     }
 
     /// Get the value of the bound.
-    pub fn get(&self) -> ArrayIdx {
+    pub fn get(&self) -> ArrayIdx<'_> {
         self.ord.at(self.index)
     }
 

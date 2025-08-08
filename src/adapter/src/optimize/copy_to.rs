@@ -192,7 +192,7 @@ impl LocalMirPlan<Unresolved> {
         timestamp_ctx: TimestampContext<Timestamp>,
         session: &dyn SessionMetadata,
         stats: Box<dyn StatisticsOracle>,
-    ) -> LocalMirPlan<Resolved> {
+    ) -> LocalMirPlan<Resolved<'_>> {
         LocalMirPlan {
             expr: self.expr,
             df_meta: self.df_meta,

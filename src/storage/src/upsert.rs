@@ -51,6 +51,7 @@ use types::{
     upsert_bincode_opts,
 };
 
+#[cfg(test)]
 pub mod memory;
 mod rocksdb;
 // TODO(aljoscha): Move next to upsert module, rename to upsert_types.

@@ -542,7 +542,7 @@ mod index_map {
 
     impl IndexMap<'_> {
         /// Creates a new index map with knowledge of the provided global indexes.
-        pub fn new(global: &dyn IndexOracle) -> IndexMap {
+        pub fn new(global: &dyn IndexOracle) -> IndexMap<'_> {
             IndexMap {
                 local: BTreeMap::new(),
                 global,

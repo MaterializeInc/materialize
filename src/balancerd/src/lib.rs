@@ -31,7 +31,7 @@ use anyhow::Context;
 use axum::response::IntoResponse;
 use axum::{Router, routing};
 use bytes::BytesMut;
-use domain::base::{Dname, Rtype};
+use domain::base::{Name, Rtype};
 use domain::rdata::AllRecordData;
 use domain::resolv::StubResolver;
 use futures::TryFutureExt;
@@ -1106,11 +1106,11 @@ impl HttpsBalancer {
     /// Finds the tenant of a DNS address. Errors or lack of cname resolution here are ok, because
     /// this is only used for metrics.
     async fn tenant(resolver: &StubResolver, addr: &str) -> Option<String> {
-        let Ok(dname) = Dname::<Vec<_>>::from_str(addr) else {
+        let Ok(dname) = Name::<Vec<_>>::from_str(addr) else {
             return None;
         };
         // Lookup the CNAME. If there's a CNAME, find the tenant.
-        let lookup = resolver.query((dname, Rtype::Cname)).await;
+        let lookup = resolver.query((dname, Rtype::CNAME)).await;
         if let Ok(lookup) = lookup {
             if let Ok(answer) = lookup.answer() {
                 let res = answer.limit_to::<AllRecordData<_, _>>();
@@ -1118,7 +1118,7 @@ impl HttpsBalancer {
                     let Ok(record) = record else {
                         continue;
                     };
-                    if record.rtype() != Rtype::Cname {
+                    if record.rtype() != Rtype::CNAME {
                         continue;
                     }
                     let cname = record.data();

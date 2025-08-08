@@ -93,7 +93,7 @@ impl Pretty {
         RcDoc::intersperse(docs, Doc::line()).group()
     }
 
-    fn doc_format_specifier<T: AstInfo>(&self, v: &FormatSpecifier<T>) -> RcDoc {
+    fn doc_format_specifier<T: AstInfo>(&self, v: &FormatSpecifier<T>) -> RcDoc<'_> {
         match v {
             FormatSpecifier::Bare(format) => nest_title("FORMAT", self.doc_display_pass(format)),
             FormatSpecifier::KeyValue { key, value } => {

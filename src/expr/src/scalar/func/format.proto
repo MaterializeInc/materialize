@@ -41,8 +41,6 @@ message ProtoDateTimeField {
     ProtoWordCaps caps = 2;
   }
 
-  message ProtoDayName {}
-
   oneof kind {
     google.protobuf.Empty hour12 = 1;
     google.protobuf.Empty hour24 = 2;

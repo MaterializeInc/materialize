@@ -736,11 +736,11 @@ impl Catalog {
         self.state.for_session(session)
     }
 
-    pub fn for_sessionless_user(&self, role_id: RoleId) -> ConnCatalog {
+    pub fn for_sessionless_user(&self, role_id: RoleId) -> ConnCatalog<'_> {
         self.state.for_sessionless_user(role_id)
     }
 
-    pub fn for_system_session(&self) -> ConnCatalog {
+    pub fn for_system_session(&self) -> ConnCatalog<'_> {
         self.state.for_system_session()
     }
 
@@ -1957,7 +1957,7 @@ impl SessionCatalog for ConnCatalog<'_> {
     fn resolve_cluster(
         &self,
         cluster_name: Option<&str>,
-    ) -> Result<&dyn mz_sql::catalog::CatalogCluster, SqlCatalogError> {
+    ) -> Result<&dyn mz_sql::catalog::CatalogCluster<'_>, SqlCatalogError> {
         Ok(self
             .state
             .resolve_cluster(cluster_name.unwrap_or_else(|| self.active_cluster()))?)
@@ -1966,7 +1966,7 @@ impl SessionCatalog for ConnCatalog<'_> {
     fn resolve_cluster_replica(
         &self,
         cluster_replica_name: &QualifiedReplica,
-    ) -> Result<&dyn CatalogClusterReplica, SqlCatalogError> {
+    ) -> Result<&dyn CatalogClusterReplica<'_>, SqlCatalogError> {
         Ok(self.state.resolve_cluster_replica(cluster_replica_name)?)
     }
 
@@ -2098,11 +2098,11 @@ impl SessionCatalog for ConnCatalog<'_> {
             .map(|item| convert::identity::<&dyn SqlCatalogItem>(item))
     }
 
-    fn get_cluster(&self, id: ClusterId) -> &dyn mz_sql::catalog::CatalogCluster {
+    fn get_cluster(&self, id: ClusterId) -> &dyn mz_sql::catalog::CatalogCluster<'_> {
         &self.state.clusters_by_id[&id]
     }
 
-    fn get_clusters(&self) -> Vec<&dyn mz_sql::catalog::CatalogCluster> {
+    fn get_clusters(&self) -> Vec<&dyn mz_sql::catalog::CatalogCluster<'_>> {
         self.state
             .clusters_by_id
             .values()
@@ -2114,12 +2114,12 @@ impl SessionCatalog for ConnCatalog<'_> {
         &self,
         cluster_id: ClusterId,
         replica_id: ReplicaId,
-    ) -> &dyn mz_sql::catalog::CatalogClusterReplica {
+    ) -> &dyn mz_sql::catalog::CatalogClusterReplica<'_> {
         let cluster = self.get_cluster(cluster_id);
         cluster.replica(replica_id)
     }
 
-    fn get_cluster_replicas(&self) -> Vec<&dyn mz_sql::catalog::CatalogClusterReplica> {
+    fn get_cluster_replicas(&self) -> Vec<&dyn mz_sql::catalog::CatalogClusterReplica<'_>> {
         self.get_clusters()
             .into_iter()
             .flat_map(|cluster| cluster.replicas().into_iter())

@@ -3618,7 +3618,7 @@ impl Coordinator {
 
     /// Creates a new dataflow builder from the catalog and indexes in `self`.
     #[instrument(level = "debug")]
-    pub fn dataflow_builder(&self, instance: ComputeInstanceId) -> DataflowBuilder {
+    pub fn dataflow_builder(&self, instance: ComputeInstanceId) -> DataflowBuilder<'_> {
         let compute = self
             .instance_snapshot(instance)
             .expect("compute instance does not exist");

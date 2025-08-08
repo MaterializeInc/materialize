@@ -9,7 +9,6 @@
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
-use std::io::Read;
 use std::rc::Rc;
 
 use anyhow::{Context, Error};
@@ -131,68 +130,6 @@ impl Decoder {
             );
         }
         Ok(result)
-    }
-}
-
-pub struct AvroStringDecoder<'a> {
-    pub buf: &'a mut Vec<u8>,
-}
-
-impl<'a> AvroDecode for AvroStringDecoder<'a> {
-    type Out = ();
-    fn string<'b, R: AvroRead>(
-        self,
-        r: ValueOrReader<'b, &'b str, R>,
-    ) -> Result<Self::Out, AvroError> {
-        match r {
-            ValueOrReader::Value(val) => {
-                self.buf.resize_with(val.len(), Default::default);
-                val.as_bytes().read_exact(self.buf)?;
-            }
-            ValueOrReader::Reader { len, r } => {
-                self.buf.resize_with(len, Default::default);
-                r.read_exact(self.buf)?;
-            }
-        }
-        Ok(())
-    }
-    define_unexpected! {
-        record, union_branch, array, map, enum_variant, scalar, decimal, bytes, json, uuid, fixed
-    }
-}
-
-// TODO(parkmycar): Should we just delete this?
-#[allow(dead_code)]
-pub(super) struct OptionalRecordDecoder<'a, 'row> {
-    pub packer: &'a mut RowPacker<'row>,
-    pub buf: &'a mut Vec<u8>,
-}
-
-impl<'a, 'row> AvroDecode for OptionalRecordDecoder<'a, 'row> {
-    type Out = bool;
-    fn union_branch<'b, R: AvroRead, D: AvroDeserializer>(
-        self,
-        idx: usize,
-        _n_variants: usize,
-        null_variant: Option<usize>,
-        deserializer: D,
-        reader: &'b mut R,
-    ) -> Result<Self::Out, AvroError> {
-        if Some(idx) == null_variant {
-            // we are done, the row is null!
-            Ok(false)
-        } else {
-            let d = AvroFlatDecoder {
-                packer: self.packer,
-                buf: self.buf,
-                is_top: false,
-            };
-            deserializer.deserialize(reader, d)?;
-            Ok(true)
-        }
-    }
-    define_unexpected! {
-        record, array, map, enum_variant, scalar, decimal, bytes, string, json, uuid, fixed
     }
 }
 

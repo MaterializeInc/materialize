@@ -73,7 +73,7 @@ type Timestamp = u64;
 /// A [`Transaction`] batches multiple catalog operations together and commits them atomically.
 /// An operation also logically groups multiple catalog updates together.
 #[derive(Derivative)]
-#[derivative(Debug, PartialEq)]
+#[derivative(Debug)]
 pub struct Transaction<'a> {
     #[derivative(Debug = "ignore")]
     #[derivative(PartialEq = "ignore")]
@@ -2874,7 +2874,7 @@ mod unique_name {
 ///
 /// `K` is the primary key type. Multiple entries with the same key are disallowed.
 /// `V` is the an arbitrary value type.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 struct TableTransaction<K, V> {
     initial: BTreeMap<K, V>,
     // The desired updates to keys after commit.

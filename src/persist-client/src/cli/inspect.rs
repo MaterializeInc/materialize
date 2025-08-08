@@ -17,7 +17,6 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::anyhow;
 use bytes::{BufMut, Bytes};
-use differential_dataflow::difference::{IsZero, Semigroup};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures_util::{StreamExt, TryStreamExt};
@@ -703,8 +702,6 @@ pub(crate) struct K;
 pub(crate) struct V;
 #[derive(Default, Debug, PartialEq, Eq)]
 struct T;
-#[derive(Default, Debug, Clone, Eq, PartialEq, PartialOrd, Ord)]
-struct D(i64);
 
 pub(crate) static KVTD_CODECS: Mutex<(String, String, String, String, Option<CodecConcreteType>)> =
     Mutex::new((
@@ -796,30 +793,6 @@ impl Codec for T {
     fn decode_schema(buf: &Bytes) -> Self::Schema {
         assert_eq!(*buf, Bytes::new());
         TodoSchema::default()
-    }
-}
-
-impl Codec64 for D {
-    fn codec_name() -> String {
-        KVTD_CODECS.lock().expect("lockable").3.clone()
-    }
-
-    fn encode(&self) -> [u8; 8] {
-        [0; 8]
-    }
-
-    fn decode(_buf: [u8; 8]) -> Self {
-        Self(0)
-    }
-}
-
-impl Semigroup for D {
-    fn plus_equals(&mut self, _rhs: &Self) {}
-}
-
-impl IsZero for D {
-    fn is_zero(&self) -> bool {
-        false
     }
 }
 
