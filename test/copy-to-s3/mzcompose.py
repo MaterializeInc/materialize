@@ -71,7 +71,7 @@ def workflow_nightly(c: Composition, parser: WorkflowArgumentParser) -> None:
         "--default-size",
         type=int,
         default=1,  # Reduced memory
-        help="Use SIZE 'N-N' for replicas and SIZE 'N' for sources",
+        help="Use SIZE 'scale=N,workers=N' for replicas and SIZE 'scale=N,workers=1' for sources",
     )
 
     args = parser.parse_args()

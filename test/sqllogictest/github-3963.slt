@@ -19,7 +19,7 @@ DROP CLUSTER quickstart CASCADE
 
 statement ok
 CREATE CLUSTER test
-  REPLICAS (replica_a (SIZE '1'))
+  REPLICAS (replica_a (SIZE 'scale=1,workers=1'))
 
 statement ok
 SET CLUSTER = 'test'

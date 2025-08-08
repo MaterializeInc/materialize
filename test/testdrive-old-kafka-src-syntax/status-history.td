@@ -14,7 +14,7 @@ $ set-regex match="\d\d\d\d-\d\d-\d\d \d\d:\d\d:\d\d(\.\d\d\d)?" replacement="<T
 
 > DROP CLUSTER IF EXISTS c CASCADE
 
-> CREATE CLUSTER c SIZE '1', REPLICATION FACTOR 0
+> CREATE CLUSTER c SIZE 'scale=1,workers=1', REPLICATION FACTOR 0
 
 > CREATE SOURCE counter in cluster c FROM LOAD GENERATOR COUNTER (UP TO 100)
 

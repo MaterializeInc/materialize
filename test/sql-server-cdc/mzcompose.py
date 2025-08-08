@@ -114,7 +114,7 @@ def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
             f"--seed={seed}",
             f"--var=ssl-ca={ssl_ca}",
             f"--var=alt-ssl-ca={alt_ssl_ca}",
-            f"--var=default-replica-size={Materialized.Size.DEFAULT_SIZE}-{Materialized.Size.DEFAULT_SIZE}",
+            f"--var=default-replica-size=scale={Materialized.Size.DEFAULT_SIZE},workers={Materialized.Size.DEFAULT_SIZE}",
             f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
             f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
             "setup/setup.td",

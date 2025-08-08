@@ -17,11 +17,11 @@
 > DROP CLUSTER IF EXISTS test_source
 
 > CREATE CLUSTER test REPLICAS (
-    r1 (SIZE '1'),
-    r2 (SIZE '1')
+    r1 (SIZE 'scale=1,workers=1'),
+    r2 (SIZE 'scale=1,workers=1')
   )
 > CREATE CLUSTER test_source REPLICAS (
-    s1 (SIZE '1')
+    s1 (SIZE 'scale=1,workers=1')
   )
 
 > SET cluster = test;
@@ -239,7 +239,7 @@ idx1 r2
 mv1  r1
 mv1  r2
 
-> CREATE CLUSTER REPLICA test.r3 SIZE '1'
+> CREATE CLUSTER REPLICA test.r3 SIZE 'scale=1,workers=1'
 
 > SELECT
     objects.name,
@@ -332,7 +332,7 @@ r3 <null>
 # Test that frontiers are correctly initialized on for collections on clusters
 # with zero replicas.
 
-> CREATE CLUSTER empty SIZE '1', REPLICATION FACTOR 0
+> CREATE CLUSTER empty SIZE 'scale=1,workers=1', REPLICATION FACTOR 0
 > CREATE TABLE t2 (a int)
 > CREATE INDEX idx2 IN CLUSTER empty ON t2 (a)
 

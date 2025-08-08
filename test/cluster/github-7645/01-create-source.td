@@ -12,7 +12,7 @@ ALTER SYSTEM SET storage_statistics_collection_interval = 1000
 ALTER SYSTEM SET storage_statistics_interval = 2000
 
 > DROP CLUSTER IF EXISTS test_cluster CASCADE;
-> CREATE CLUSTER test_cluster (SIZE '1');
+> CREATE CLUSTER test_cluster (SIZE 'scale=1,workers=1');
 
 > CREATE SOURCE count IN CLUSTER test_cluster FROM LOAD GENERATOR COUNTER
 

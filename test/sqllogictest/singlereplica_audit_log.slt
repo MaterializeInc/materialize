@@ -36,7 +36,7 @@ statement ok
 DROP ROLE foo
 
 statement ok
-CREATE CLUSTER foo REPLICAS (r (SIZE '1'));
+CREATE CLUSTER foo REPLICAS (r (SIZE 'scale=1,workers=1'));
 
 statement ok
 CREATE MATERIALIZED VIEW v2 AS SELECT 1

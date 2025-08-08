@@ -40,7 +40,7 @@ def schemas() -> str:
 
 
 def cluster() -> str:
-    return "> CREATE CLUSTER identifiers SIZE '4'\n"
+    return "> CREATE CLUSTER identifiers SIZE 'scale=1,workers=4'\n"
 
 
 class Identifiers(Check):

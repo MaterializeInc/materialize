@@ -10,7 +10,7 @@
 $ skip-if
 SELECT mz_version_num() < 7600;
 
-> CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '1'));
+> CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE 'scale=1,workers=1'));
 
 > CREATE SOURCE my_webhook_source IN CLUSTER webhook_cluster FROM WEBHOOK
   BODY FORMAT TEXT

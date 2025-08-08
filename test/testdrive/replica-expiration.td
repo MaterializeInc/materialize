@@ -12,7 +12,7 @@
 ## No retractions: expiration=30d, temporal filter width=20d
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET compute_replica_expiration_offset = '30d'
-> CREATE CLUSTER test (SIZE = '1')
+> CREATE CLUSTER test (SIZE = 'scale=1,workers=1')
 > SET CLUSTER TO test
 > CREATE TABLE events (
     content TEXT,
@@ -35,7 +35,7 @@ true
 ## Does retractions: expiration=20d, temporal filter width=30d
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET compute_replica_expiration_offset = '20d'
-> CREATE CLUSTER test (SIZE = '1')
+> CREATE CLUSTER test (SIZE = 'scale=1,workers=1')
 > SET CLUSTER TO test
 > CREATE TABLE events (
     content TEXT,
@@ -60,7 +60,7 @@ ALTER SYSTEM SET compute_replica_expiration_offset = '20d'
 ## No retractions: expiration=30d, temporal filter width=20d
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET compute_replica_expiration_offset = '30d'
-> CREATE CLUSTER test (SIZE = '1')
+> CREATE CLUSTER test (SIZE = 'scale=1,workers=1')
 > SET CLUSTER TO test
 > CREATE TABLE events (
     content TEXT,
@@ -79,7 +79,7 @@ ALTER SYSTEM SET compute_replica_expiration_offset = '30d'
 ## Does retractions: expiration=20d, temporal filter width=30d
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET compute_replica_expiration_offset = '20d'
-> CREATE CLUSTER test (SIZE = '1')
+> CREATE CLUSTER test (SIZE = 'scale=1,workers=1')
 > SET CLUSTER TO test
 > CREATE TABLE events (
     content TEXT,
@@ -101,7 +101,7 @@ ALTER SYSTEM SET compute_replica_expiration_offset = '20d'
 ## No transitive refresh enables expiration, thus no retractions
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET compute_replica_expiration_offset = '20d'
-> CREATE CLUSTER test (SIZE = '1')
+> CREATE CLUSTER test (SIZE = 'scale=1,workers=1')
 > SET CLUSTER TO test
 > CREATE TABLE events (
     id INT,
@@ -137,7 +137,7 @@ ALTER SYSTEM SET compute_replica_expiration_offset = '20d'
 ## Transitive refresh disables expiration, resulting in retractions
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET compute_replica_expiration_offset = '20d'
-> CREATE CLUSTER test (SIZE = '1');
+> CREATE CLUSTER test (SIZE = 'scale=1,workers=1');
 > SET CLUSTER TO test;
 > CREATE TABLE events (
     id INT,
@@ -176,7 +176,7 @@ ALTER SYSTEM SET compute_replica_expiration_offset = '20d'
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET compute_replica_expiration_offset = '20d';
-> CREATE CLUSTER test (SIZE = '1');
+> CREATE CLUSTER test (SIZE = 'scale=1,workers=1');
 > SET CLUSTER TO test;
 > CREATE VIEW events_over_time AS VALUES ('joe', 100), ('mike', 101), ('sam', 200), ('end', 18446144073709551615);
 > CREATE VIEW events AS SELECT * FROM events_over_time WHERE mz_now() <= column2 + 2592000000; -- 30d in ms
@@ -202,7 +202,7 @@ mz_timestamp mz_progressed mz_diff column1 column2
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET compute_replica_expiration_offset = 0;
-> CREATE CLUSTER test (SIZE = '1')
+> CREATE CLUSTER test (SIZE = 'scale=1,workers=1')
 > SET CLUSTER TO test
 > CREATE TABLE events (
     content TEXT,
@@ -225,7 +225,7 @@ true
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET compute_replica_expiration_offset = '30d';
-> CREATE CLUSTER test (SIZE = '1', REPLICATION FACTOR = 0);
+> CREATE CLUSTER test (SIZE = 'scale=1,workers=1', REPLICATION FACTOR = 0);
 > SET CLUSTER TO test;
 # `now()` cannot be materialized.
 > CREATE MATERIALIZED VIEW events_mv AS

@@ -102,7 +102,7 @@ ALTER SYSTEM SET cluster_refresh_mv_compaction_estimate = 0
 ## - 1b. Turn the replica off just after a refresh, and then turn the replica back on only after the next refresh time
 ##   has passed.
 
-> CREATE CLUSTER refresh_cluster SIZE = '1', REPLICATION FACTOR = 1;
+> CREATE CLUSTER refresh_cluster SIZE = 'scale=1,workers=1', REPLICATION FACTOR = 1;
 > SET cluster = refresh_cluster;
 > CREATE MATERIALIZED VIEW mv5
   WITH (REFRESH EVERY '8 sec' ALIGNED TO mz_now()::text::int8 + 5000)
@@ -391,7 +391,7 @@ true
 # Automated cluster scheduling for REFRESH
 # ----------------------------------------
 
-> CREATE CLUSTER scheduled_cluster (SIZE = '1', SCHEDULE = ON REFRESH);
+> CREATE CLUSTER scheduled_cluster (SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH);
 
 # No MV yet, so the cluster should be turned off.
 > SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'scheduled_cluster';
@@ -449,7 +449,7 @@ true
 
 # Things should keep working if we switch from managed to unmanaged cluster and then back.
 > ALTER CLUSTER scheduled_cluster SET (MANAGED = false, SCHEDULE = MANUAL);
-> ALTER CLUSTER scheduled_cluster SET (MANAGED = true, SIZE = '1', SCHEDULE = ON REFRESH);
+> ALTER CLUSTER scheduled_cluster SET (MANAGED = true, SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH);
 
 > INSERT INTO t2 VALUES (64);
 
@@ -459,7 +459,7 @@ true
 ## When we create an MV whose first refresh is in the far future, we should immediately turn on the cluster briefly, so
 ## that the Persist shard's write frontier moves from 0 to the first refresh time.
 
-> CREATE CLUSTER scheduled_cluster_2 (SIZE = '1', SCHEDULE = ON REFRESH);
+> CREATE CLUSTER scheduled_cluster_2 (SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH);
 > SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'scheduled_cluster_2';
 0
 
@@ -490,7 +490,7 @@ true
 
 $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 $ postgres-execute connection=mz_system
-CREATE CLUSTER REPLICA scheduled_cluster.unbilled SIZE '2-2', BILLED AS 'free', INTERNAL;
+CREATE CLUSTER REPLICA scheduled_cluster.unbilled SIZE 'scale=2,workers=2', BILLED AS 'free', INTERNAL;
 
 > INSERT INTO t2 VALUES (200);
 
@@ -524,8 +524,8 @@ DROP CLUSTER REPLICA scheduled_cluster.unbilled;
 
 ## HYDRATION TIME ESTIMATE
 
-> CREATE CLUSTER c_schedule_6 (SIZE = '1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '995 seconds'));
-> CREATE CLUSTER c_schedule_7 (SIZE = '1');
+> CREATE CLUSTER c_schedule_6 (SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '995 seconds'));
+> CREATE CLUSTER c_schedule_7 (SIZE = 'scale=1,workers=1');
 > ALTER CLUSTER c_schedule_7 SET (SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '995 seconds'));
 
 # Create MVs whose first refresh is 1000 seconds from now.
@@ -576,7 +576,7 @@ DROP CLUSTER REPLICA scheduled_cluster.unbilled;
   AS SELECT count(*) FROM t2;
 
 # Cluster doesn't have a replica at the moment of creating an MV.
-> CREATE CLUSTER cluster_no_replica SIZE = '2', REPLICATION FACTOR = 0;
+> CREATE CLUSTER cluster_no_replica SIZE = 'scale=1,workers=2', REPLICATION FACTOR = 0;
 > CREATE MATERIALIZED VIEW mv18_no_replica
   IN CLUSTER cluster_no_replica
   WITH (REFRESH EVERY '2 seconds')
@@ -632,7 +632,7 @@ true <null>
 # hydration quick to just get it over with, and then we make the next hydration
 # slow, and try to catch the bug there.
 
-> CREATE CLUSTER cluster_to_be_bricked SIZE = '1', REPLICATION FACTOR = 1;
+> CREATE CLUSTER cluster_to_be_bricked SIZE = 'scale=1,workers=1', REPLICATION FACTOR = 1;
 > CREATE TABLE t6 (a int);
 > INSERT INTO t6 VALUES (1);
 > CREATE MATERIALIZED VIEW mv_long_hydration

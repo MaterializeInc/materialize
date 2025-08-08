@@ -87,7 +87,7 @@ contains: column "f_nonexistent" does not exist
 > COMMIT
 
 # Create a cluster, run a query on it, and drop it to ensure that we retain the cluster name
-> CREATE CLUSTER c REPLICAS (r1 (size '1'))
+> CREATE CLUSTER c REPLICAS (r1 (SIZE 'scale=1,workers=1'))
 
 > SET cluster TO c
 
@@ -137,7 +137,7 @@ quickstart quickstart my_app 1 {} success <null> 18 1 standard true "SELECT coun
 quickstart quickstart my_app 1 {} success <null> 4 2 constant true "FETCH c" "strict serializable" <null> materialize {public}
 quickstart quickstart my_app 1 {} success <null> <null> <null> <null> true BEGIN "strict serializable" <null> materialize {public}
 quickstart quickstart my_app 1 {} success <null> <null> <null> <null> true COMMIT "strict serializable" <null> materialize {public}
-quickstart quickstart my_app 1 {} success <null> <null> <null> <null> true "CREATE CLUSTER c REPLICAS (r1 (size '1'))" "strict serializable" <null> materialize {public}
+quickstart quickstart my_app 1 {} success <null> <null> <null> <null> true "CREATE CLUSTER c REPLICAS (r1 (SIZE 'scale=1,workers=1'))" "strict serializable" <null> materialize {public}
 quickstart quickstart my_app 1 {} success <null> <null> <null> <null> true "CREATE DEFAULT INDEX i ON t" "strict serializable" <null> materialize {public}
 quickstart quickstart my_app 1 {} success <null> <null> <null> <null> true "CREATE TABLE t(f int)" "strict serializable" <null> materialize {public}
 quickstart quickstart my_app 1 {} success <null> <null> <null> <null> true "DECLARE c CURSOR FOR VALUES (1), (2)" "strict serializable" <null> materialize {public}
@@ -159,8 +159,8 @@ BEGIN execution-began
 BEGIN execution-finished
 COMMIT execution-began
 COMMIT execution-finished
-"CREATE CLUSTER c REPLICAS (r1 (size '1'))" execution-began
-"CREATE CLUSTER c REPLICAS (r1 (size '1'))" execution-finished
+"CREATE CLUSTER c REPLICAS (r1 (SIZE 'scale=1,workers=1'))" execution-began
+"CREATE CLUSTER c REPLICAS (r1 (SIZE 'scale=1,workers=1'))" execution-finished
 "CREATE DEFAULT INDEX i ON t" execution-began
 "CREATE DEFAULT INDEX i ON t" execution-finished
 "CREATE TABLE t(f int)" execution-began

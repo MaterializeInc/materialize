@@ -23,7 +23,7 @@
 # introspection relations are asynchronously updated, so DDL commands are not
 # immediately reflected there.
 
-> CREATE CLUSTER test REPLICAS (hydrated_test_1 (SIZE '1'))
+> CREATE CLUSTER test REPLICAS (hydrated_test_1 (SIZE 'scale=1,workers=1'))
 > SET cluster = test
 
 # Test that on an empty cluster only the introspection indexes show up.
@@ -91,7 +91,7 @@ mv_const hydrated_test_1 true
 
 # Test adding new replicas.
 
-> CREATE CLUSTER REPLICA test.hydrated_test_2 SIZE '1'
+> CREATE CLUSTER REPLICA test.hydrated_test_2 SIZE 'scale=1,workers=1'
 
 > SELECT o.name, r.name, h.hydrated, h.hydration_time IS NOT NULL
   FROM mz_internal.mz_compute_hydration_statuses h
@@ -204,7 +204,7 @@ mv       hydrated_test_2 true
 
 # Test dropping dataflows.
 
-> CREATE CLUSTER REPLICA test.hydrated_test_3 SIZE '1'
+> CREATE CLUSTER REPLICA test.hydrated_test_3 SIZE 'scale=1,workers=1'
 
 > SELECT o.name, r.name, h.hydrated, h.hydration_time IS NOT NULL
   FROM mz_internal.mz_compute_hydration_statuses h
@@ -322,7 +322,7 @@ snk           hydrated_test_3 true
 
 # Test adding new replicas.
 
-> CREATE CLUSTER REPLICA test.hydrated_test_4 SIZE '1'
+> CREATE CLUSTER REPLICA test.hydrated_test_4 SIZE 'scale=1,workers=1'
 
 > SELECT o.name, r.name, h.hydrated
   FROM mz_internal.mz_hydration_statuses h

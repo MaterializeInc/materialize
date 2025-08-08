@@ -44,7 +44,7 @@ SERVICES = [
     Materialized(),
     Testdrive(
         entrypoint_extra=[
-            f"--var=default-replica-size={Materialized.Size.DEFAULT_SIZE}-{Materialized.Size.DEFAULT_SIZE}",
+            f"--var=default-replica-size=scale={Materialized.Size.DEFAULT_SIZE},workers={Materialized.Size.DEFAULT_SIZE}",
         ],
     ),
     testdrive_no_reset,
@@ -288,7 +288,7 @@ def workflow_allowed_cluster_replica_sizes(c: Composition) -> None:
             $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 
             # We can create a cluster with sizes '1' and '2'
-            > CREATE CLUSTER test REPLICAS (r1 (SIZE '1'), r2 (SIZE '2'))
+            > CREATE CLUSTER test REPLICAS (r1 (SIZE 'scale=1,workers=1'), r2 (SIZE 'scale=1,workers=2'))
 
             > SHOW CLUSTER REPLICAS WHERE cluster = 'test'
             test r1 1 true ""
@@ -298,7 +298,7 @@ def workflow_allowed_cluster_replica_sizes(c: Composition) -> None:
             $ postgres-execute connection=mz_system
             ALTER SYSTEM SET allowed_cluster_replica_sizes = '1'
 
-            ! CREATE CLUSTER REPLICA test.r3 SIZE '2'
+            ! CREATE CLUSTER REPLICA test.r3 SIZE 'scale=1,workers=2'
             contains:unknown cluster replica size 2
             """
         ),
@@ -320,14 +320,14 @@ def workflow_allowed_cluster_replica_sizes(c: Composition) -> None:
             test r2 2 true ""
 
             # We cannot create replicas with size '2' (system parameter value persists across restarts)
-            ! CREATE CLUSTER REPLICA test.r3 SIZE '2'
+            ! CREATE CLUSTER REPLICA test.r3 SIZE 'scale=1,workers=2'
             contains:unknown cluster replica size 2
 
             # We can create replicas with size '2' after listing that size as allowed
             $ postgres-execute connection=mz_system
             ALTER SYSTEM SET allowed_cluster_replica_sizes = '1', '2'
 
-            > CREATE CLUSTER REPLICA test.r3 SIZE '2'
+            > CREATE CLUSTER REPLICA test.r3 SIZE 'scale=1,workers=2'
 
             > SHOW CLUSTER REPLICAS WHERE cluster = 'test'
             test r1 1 true ""
@@ -678,7 +678,7 @@ def workflow_bound_size_mz_cluster_replica_metrics_history(c: Composition) -> No
         service="testdrive_no_reset",
         input=dedent(
             """
-            > CREATE CLUSTER test SIZE '1'
+            > CREATE CLUSTER test SIZE 'scale=1,workers=1'
 
             > SELECT count(*) >= 1
               FROM mz_internal.mz_cluster_replica_metrics_history m

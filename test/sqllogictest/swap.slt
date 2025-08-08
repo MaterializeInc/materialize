@@ -118,10 +118,10 @@ statement error db error: ERROR: unacceptable schema name 'mz_swap'
 CREATE SCHEMA mz_swap;
 
 statement ok
-CREATE CLUSTER foo SIZE = '1';
+CREATE CLUSTER foo SIZE = 'scale=1,workers=1';
 
 statement ok
-CREATE CLUSTER bar SIZE = '1';
+CREATE CLUSTER bar SIZE = 'scale=1,workers=1';
 
 statement ok
 CREATE INDEX green_idx IN CLUSTER foo ON green.t1 (x);

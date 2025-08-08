@@ -511,7 +511,7 @@ EOF
 # Querying user objects should not be allowed from the catalog server cluster.
 
 statement ok
-CREATE CLUSTER foo REPLICAS (r1 (SIZE '1'));
+CREATE CLUSTER foo REPLICAS (r1 (SIZE 'scale=1,workers=1'));
 
 statement ok
 SET CLUSTER TO foo;
@@ -574,7 +574,7 @@ COMPLETE 0
 # Replicas in system clusters should system IDs.
 
 simple conn=mz_system,user=mz_system
-ALTER CLUSTER mz_system SET (SIZE = '2')
+ALTER CLUSTER mz_system SET (SIZE = 'scale=1,workers=2')
 ----
 COMPLETE 0
 

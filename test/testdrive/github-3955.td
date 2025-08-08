@@ -9,7 +9,7 @@
 
 # Regression test for https://github.com/MaterializeInc/database-issues/issues/3955
 
-> CREATE CLUSTER test (SIZE '4-4');
+> CREATE CLUSTER test (SIZE 'scale=4,workers=4');
 > SET cluster = test;
 
 # In case the environment has other replicas

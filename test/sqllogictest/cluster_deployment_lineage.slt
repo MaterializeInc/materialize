@@ -16,14 +16,14 @@ reset-server
 
 # Create the clusters for blue/green deployment
 statement ok
-CREATE CLUSTER blue_green (SIZE = '1');
+CREATE CLUSTER blue_green (SIZE = 'scale=1,workers=1');
 
 statement ok
-CREATE CLUSTER blue_green_dbt_deploy (SIZE = '1');
+CREATE CLUSTER blue_green_dbt_deploy (SIZE = 'scale=1,workers=1');
 
 # Create a cluster that is not part of the blue/green deployment
 statement ok
-CREATE CLUSTER non_blue_green (SIZE = '1');
+CREATE CLUSTER non_blue_green (SIZE = 'scale=1,workers=1');
 
 query TT
 SELECT id, name FROM mz_clusters WHERE id IN ('u2', 'u3', 'u4') ORDER BY id;

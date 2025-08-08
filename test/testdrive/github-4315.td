@@ -9,7 +9,7 @@
 
 # Regression test for https://github.com/MaterializeInc/database-issues/issues/4315
 
-> CREATE CLUSTER c REPLICAS (r (SIZE '2-2'))
+> CREATE CLUSTER c REPLICAS (r (SIZE 'scale=2,workers=2'))
 
 $ set-from-sql var=now
 SELECT mz_now()::text

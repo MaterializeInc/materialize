@@ -60,7 +60,7 @@ SHOW CONNECTIONS
 d   kafka   (empty)
 
 statement ok
-CREATE CLUSTER other_cluster SIZE '1', REPLICATION FACTOR 0
+CREATE CLUSTER other_cluster SIZE 'scale=1,workers=1', REPLICATION FACTOR 0
 
 query error db error: ERROR: ALTER \.\.\. SET CLUSTER syntax is not available
 ALTER MATERIALIZED VIEW does_not_exist SET CLUSTER quickstart

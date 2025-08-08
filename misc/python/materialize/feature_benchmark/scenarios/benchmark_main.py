@@ -692,7 +692,7 @@ class AccumulateReductions(Dataflow):
 > INSERT INTO t (a, b) VALUES (0, 0);
 
 > DROP CLUSTER IF EXISTS idx_cluster CASCADE;
-> CREATE CLUSTER idx_cluster SIZE '1-8G', REPLICATION FACTOR 1;
+> CREATE CLUSTER idx_cluster SIZE 'scale=1,workers=1,mem=8GiB', REPLICATION FACTOR 1;
 
 > CREATE VIEW accumulable AS
   SELECT
@@ -1026,7 +1026,7 @@ $ kafka-ingest format=bytes topic=kafka-envelope-none-bytes repeat={self.n()}
 
 > CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
-> CREATE CLUSTER source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
+> CREATE CLUSTER source_cluster SIZE 'scale={self._default_size},workers=1', REPLICATION FACTOR 1;
 
 > CREATE SOURCE s1
   IN CLUSTER source_cluster
@@ -1072,7 +1072,7 @@ $ kafka-ingest format=avro topic=kafka-upsert key-format=avro key-schema=${{keys
     URL '${{testdrive.schema-registry-url}}'
   );
 
-> CREATE CLUSTER source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
+> CREATE CLUSTER source_cluster SIZE 'scale={self._default_size},workers=1', REPLICATION FACTOR 1;
 
 > CREATE SOURCE s1
   IN CLUSTER source_cluster
@@ -1117,7 +1117,7 @@ $ kafka-ingest format=avro topic=upsert-unique key-format=avro key-schema=${{key
   TO CONFLUENT SCHEMA REGISTRY (URL '${{testdrive.schema-registry-url}}');
   /* A */
 
-> CREATE CLUSTER source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
+> CREATE CLUSTER source_cluster SIZE 'scale={self._default_size},workers=1', REPLICATION FACTOR 1;
 
 > CREATE SOURCE s1
   IN CLUSTER source_cluster
@@ -1165,7 +1165,7 @@ $ kafka-ingest format=avro topic=kafka-recovery key-format=avro key-schema=${{ke
 > CREATE CONNECTION IF NOT EXISTS s1_csr_conn
   TO CONFLUENT SCHEMA REGISTRY (URL '${{testdrive.schema-registry-url}}');
 
-> CREATE CLUSTER source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
+> CREATE CLUSTER source_cluster SIZE 'scale={self._default_size},workers=1', REPLICATION FACTOR 1;
 
 > CREATE SOURCE s1
   IN CLUSTER source_cluster
@@ -1244,7 +1244,7 @@ class KafkaRestartBig(ScenarioBig):
 > CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
 > DROP CLUSTER IF EXISTS source_cluster CASCADE
-> CREATE CLUSTER source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
+> CREATE CLUSTER source_cluster SIZE 'scale={self._default_size},workers=1', REPLICATION FACTOR 1;
 
 > CREATE SOURCE s1
   IN CLUSTER source_cluster
@@ -1315,7 +1315,7 @@ $ kafka-create-topic topic=kafka-scalability partitions=8
 
 > CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
-> CREATE CLUSTER source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
+> CREATE CLUSTER source_cluster SIZE 'scale={self._default_size},workers=1', REPLICATION FACTOR 1;
 
 > CREATE SOURCE s1
   IN CLUSTER source_cluster
@@ -1374,7 +1374,7 @@ $ kafka-ingest format=avro topic=sink-input key-format=avro key-schema=${{keysch
   FOR CONFLUENT SCHEMA REGISTRY
   URL '${{testdrive.schema-registry-url}}';
 
-> CREATE CLUSTER source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
+> CREATE CLUSTER source_cluster SIZE 'scale={self._default_size},workers=1', REPLICATION FACTOR 1;
 
 > CREATE SOURCE source1
   IN CLUSTER source_cluster
@@ -1397,7 +1397,7 @@ $ kafka-ingest format=avro topic=sink-input key-format=avro key-schema=${{keysch
   /* A */
 
 > DROP CLUSTER IF EXISTS sink_cluster CASCADE
-> CREATE CLUSTER sink_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
+> CREATE CLUSTER sink_cluster SIZE 'scale={self._default_size},workers=1', REPLICATION FACTOR 1;
 
 > CREATE SINK sink1
   IN CLUSTER sink_cluster
@@ -1471,7 +1471,7 @@ ALTER SYSTEM SET max_tables = {self.n() * 4};
   URL '${{testdrive.schema-registry-url}}';
 
 > DROP CLUSTER IF EXISTS kafka_source_cluster CASCADE;
-> CREATE CLUSTER kafka_source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
+> CREATE CLUSTER kafka_source_cluster SIZE 'scale={self._default_size},workers=1', REPLICATION FACTOR 1;
 """
         )
 
@@ -1567,7 +1567,7 @@ ALTER TABLE pk_table REPLICA IDENTITY FULL;
     PASSWORD SECRET pgpass
   )
 
-> CREATE CLUSTER source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
+> CREATE CLUSTER source_cluster SIZE 'scale={self._default_size},workers=1', REPLICATION FACTOR 1;
 
 > CREATE SOURCE mz_source_pgcdc
   IN CLUSTER source_cluster
@@ -1621,7 +1621,7 @@ ALTER TABLE t1 REPLICA IDENTITY FULL;
     PASSWORD SECRET pgpass
   )
 
-> CREATE CLUSTER source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
+> CREATE CLUSTER source_cluster SIZE 'scale={self._default_size},workers=1', REPLICATION FACTOR 1;
 
 > CREATE SOURCE s1
   IN CLUSTER source_cluster
@@ -1699,7 +1699,7 @@ INSERT INTO pk_table SELECT @i:=@i+1, @i*@i FROM mysql.time_zone t1, mysql.time_
     PASSWORD SECRET mysqlpass
   )
 
-> CREATE CLUSTER source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
+> CREATE CLUSTER source_cluster SIZE 'scale={self._default_size},workers=1', REPLICATION FACTOR 1;
 
 > CREATE SOURCE mz_source_mysqlcdc
   IN CLUSTER source_cluster
@@ -1753,7 +1753,7 @@ CREATE TABLE t1 (pk SERIAL PRIMARY KEY, f2 BIGINT);
     PASSWORD SECRET mysqlpass
   )
 
-> CREATE CLUSTER source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
+> CREATE CLUSTER source_cluster SIZE 'scale={self._default_size},workers=1', REPLICATION FACTOR 1;
 
 > CREATE SOURCE s1
   IN CLUSTER source_cluster
@@ -1906,7 +1906,7 @@ $ kafka-ingest format=avro topic=startup-time schema=${schema} repeat=1
         create_sources = "\n".join(
             f"""
 > DROP CLUSTER IF EXISTS source{i}_cluster CASCADE;
-> CREATE CLUSTER source{i}_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
+> CREATE CLUSTER source{i}_cluster SIZE 'scale={self._default_size},workers=1', REPLICATION FACTOR 1;
 
 > CREATE SOURCE source{i}
   IN CLUSTER source{i}_cluster
@@ -1931,7 +1931,7 @@ $ kafka-ingest format=avro topic=startup-time schema=${schema} repeat=1
         create_sinks = "\n".join(
             f"""
 > DROP CLUSTER IF EXISTS sink{i}_cluster;
-> CREATE CLUSTER sink{i}_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
+> CREATE CLUSTER sink{i}_cluster SIZE 'scale={self._default_size},workers=1', REPLICATION FACTOR 1;
 > CREATE SINK sink{i}
   IN CLUSTER sink{i}_cluster
   FROM source{i}_tbl
@@ -2105,7 +2105,7 @@ class HydrateIndex(Scenario):
             self.table_ten(),
             TdAction(
                 """
-> CREATE CLUSTER idx_cluster SIZE '16', REPLICATION FACTOR 1
+> CREATE CLUSTER idx_cluster SIZE 'scale=1,workers=16', REPLICATION FACTOR 1
 """
             ),
         ]

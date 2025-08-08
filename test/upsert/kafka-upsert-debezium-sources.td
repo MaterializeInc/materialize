@@ -82,7 +82,7 @@ $ set schema={
   }
 
 # The quickstart cluster doesn't seem to inherit from `disk_cluster_replicas_default`.
-> CREATE CLUSTER test_cluster SIZE '4'
+> CREATE CLUSTER test_cluster SIZE 'scale=1,workers=4'
 
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);

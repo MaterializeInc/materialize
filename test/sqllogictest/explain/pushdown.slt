@@ -115,7 +115,7 @@ materialize.public.numbers  1233  0  1  0
 
 # EXPLAIN FILTER PUSHDOWN should work even if there are no replicas.
 statement ok
-CREATE CLUSTER no_replicas (SIZE '1', REPLICATION FACTOR 0);
+CREATE CLUSTER no_replicas (SIZE 'scale=1,workers=1', REPLICATION FACTOR 0);
 
 statement ok
 SET CLUSTER = no_replicas;

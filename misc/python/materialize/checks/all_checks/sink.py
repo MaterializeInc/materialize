@@ -223,7 +223,7 @@ class SinkTables(Check):
 
                 > CREATE MATERIALIZED VIEW sink_large_transaction_view AS SELECT f1 - 1 AS f1 , f2 FROM sink_large_transaction_table;
 
-                > CREATE CLUSTER sink_large_transaction_sink1_cluster SIZE '4';
+                > CREATE CLUSTER sink_large_transaction_sink1_cluster SIZE 'scale=1,workers=4';
 
                 > CREATE SINK sink_large_transaction_sink1
                   IN CLUSTER sink_large_transaction_sink1_cluster
@@ -1280,8 +1280,8 @@ class AlterSinkWebhook(Check):
         return Testdrive(
             dedent(
                 """
-                >[version>=14700] CREATE CLUSTER sink_webhook_cluster SIZE '1', REPLICATION FACTOR 2;
-                >[version<14700] CREATE CLUSTER sink_webhook_cluster SIZE '1', REPLICATION FACTOR 1;
+                >[version>=14700] CREATE CLUSTER sink_webhook_cluster SIZE 'scale=1,workers=1', REPLICATION FACTOR 2;
+                >[version<14700] CREATE CLUSTER sink_webhook_cluster SIZE 'scale=1,workers=1', REPLICATION FACTOR 1;
                 > CREATE SOURCE webhook_alter1 IN CLUSTER sink_webhook_cluster FROM WEBHOOK BODY FORMAT TEXT;
                 > CREATE SINK sink_alter_wh FROM webhook_alter1
                   INTO KAFKA CONNECTION kafka_conn (TOPIC 'sink-alter-wh')
@@ -1448,7 +1448,7 @@ class SinkFormat(Check):
                 > CREATE TABLE sink_format_table (f1 INTEGER, f2 TEXT, f3 INT, PRIMARY KEY (f1));
                 > CREATE DEFAULT INDEX ON sink_format_table;
                 > INSERT INTO sink_format_table VALUES (1, 'A', 10);
-                > CREATE CLUSTER sink_format_sink1_cluster SIZE '1';
+                > CREATE CLUSTER sink_format_sink1_cluster SIZE 'scale=1,workers=1';
 
                 > CREATE SINK sink_format_sink1
                   IN CLUSTER sink_format_sink1_cluster
@@ -1515,7 +1515,7 @@ class SinkPartitionByDebezium(Check):
 
                 > CREATE MATERIALIZED VIEW sink_partition_by_debezium_view AS SELECT f1 - 1 AS f1 , f2 FROM sink_partition_by_debezium_table;
 
-                > CREATE CLUSTER sink_partition_by_debezium_sink1_cluster SIZE '4';
+                > CREATE CLUSTER sink_partition_by_debezium_sink1_cluster SIZE 'scale=1,workers=4';
 
                 > CREATE SINK sink_partition_by_debezium_sink1
                   IN CLUSTER sink_partition_by_debezium_sink1_cluster

@@ -12,7 +12,7 @@ $ kafka-create-topic topic=upsert
 > CREATE CONNECTION conn
   FOR KAFKA BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT
 
-> CREATE CLUSTER kept_cluster SIZE '1'
+> CREATE CLUSTER kept_cluster SIZE 'scale=1,workers=1'
 
 > CREATE SOURCE kept_upsert
   IN CLUSTER kept_cluster
@@ -24,7 +24,7 @@ $ kafka-create-topic topic=upsert
   KEY FORMAT TEXT VALUE FORMAT TEXT
   ENVELOPE UPSERT
 
-> CREATE CLUSTER dropped_cluster SIZE '1'
+> CREATE CLUSTER dropped_cluster SIZE 'scale=1,workers=1'
 
 > CREATE SOURCE dropped_upsert
   IN CLUSTER dropped_cluster

@@ -48,7 +48,7 @@ ALTER SYSTEM SET enable_sql_server_source = true;
   );
 
 # Create a SQL Server Source.
-> CREATE CLUSTER src_tables (SIZE = '1', REPLICATION FACTOR = 1);
+> CREATE CLUSTER src_tables (SIZE = 'scale=1,workers=1', REPLICATION FACTOR = 1);
 > SET CLUSTER TO src_tables;
 > CREATE SOURCE ms_src FROM SQL SERVER CONNECTION ms_conn;
 

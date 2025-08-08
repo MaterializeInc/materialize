@@ -4596,7 +4596,7 @@ materialize  NULL  NULL  cluster  r3      UC
 materialize  NULL  NULL  cluster  PUBLIC  C
 
 statement ok
-CREATE CLUSTER c REPLICAS (r1 (SIZE '1'))
+CREATE CLUSTER c REPLICAS (r1 (SIZE 'scale=1,workers=1'))
 
 query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_clusters WHERE name = 'c'
@@ -4612,7 +4612,7 @@ statement ok
 DROP CLUSTER c
 
 simple conn=r6,user=r6
-CREATE CLUSTER c REPLICAS (r1 (SIZE '1'))
+CREATE CLUSTER c REPLICAS (r1 (SIZE 'scale=1,workers=1'))
 ----
 COMPLETE 0
 
@@ -4629,7 +4629,7 @@ DROP CLUSTER c
 COMPLETE 0
 
 simple conn=r7,user=r7
-CREATE CLUSTER c REPLICAS (r1 (SIZE '1'))
+CREATE CLUSTER c REPLICAS (r1 (SIZE 'scale=1,workers=1'))
 ----
 COMPLETE 0
 
@@ -4646,7 +4646,7 @@ DROP CLUSTER c
 COMPLETE 0
 
 simple conn=r9,user=r9
-CREATE CLUSTER c REPLICAS (r1 (SIZE '1'))
+CREATE CLUSTER c REPLICAS (r1 (SIZE 'scale=1,workers=1'))
 ----
 COMPLETE 0
 
@@ -4716,7 +4716,7 @@ SELECT * FROM default_privileges
 PUBLIC NULL  NULL  type  PUBLIC  U
 
 statement ok
-CREATE CLUSTER c REPLICAS (r1 (SIZE '1'))
+CREATE CLUSTER c REPLICAS (r1 (SIZE 'scale=1,workers=1'))
 
 query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_clusters WHERE name = 'c'
@@ -4728,7 +4728,7 @@ statement ok
 DROP CLUSTER c
 
 simple conn=r6,user=r6
-CREATE CLUSTER c REPLICAS (r1 (SIZE '1'))
+CREATE CLUSTER c REPLICAS (r1 (SIZE 'scale=1,workers=1'))
 ----
 COMPLETE 0
 
@@ -4744,7 +4744,7 @@ DROP CLUSTER c
 COMPLETE 0
 
 simple conn=r7,user=r7
-CREATE CLUSTER c REPLICAS (r1 (SIZE '1'))
+CREATE CLUSTER c REPLICAS (r1 (SIZE 'scale=1,workers=1'))
 ----
 COMPLETE 0
 
@@ -4760,7 +4760,7 @@ DROP CLUSTER c
 COMPLETE 0
 
 simple conn=r9,user=r9
-CREATE CLUSTER c REPLICAS (r1 (SIZE '1'))
+CREATE CLUSTER c REPLICAS (r1 (SIZE 'scale=1,workers=1'))
 ----
 COMPLETE 0
 

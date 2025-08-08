@@ -127,7 +127,7 @@ true
 # Regression test for a bug where the TRANSFORM USING sugar did not roundtrip
 # the cluster through the catalog's `create_sql`.
 statement ok
-CREATE CLUSTER c2 SIZE '1'
+CREATE CLUSTER c2 SIZE 'scale=1,workers=1'
 
 statement ok
 SET CLUSTER TO c2

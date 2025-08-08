@@ -162,7 +162,7 @@ class TestContractInvalidCluster:
 
         run_dbt(["run", "--models", "contract_invalid_cluster"], expect_pass=True)
 
-        project.run_sql("CREATE CLUSTER quickstart SIZE = '1'")
+        project.run_sql("CREATE CLUSTER quickstart SIZE = 'scale=1,workers=1'")
 
 
 class TestContractPseudoTypes:

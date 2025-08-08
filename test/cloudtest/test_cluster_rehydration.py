@@ -18,7 +18,7 @@ def test_create_drop_source(mz: MaterializeApplication) -> None:
     mz.testdrive.run(
         input=dedent(
             """
-            > CREATE CLUSTER c REPLICAS ( r1 (SIZE = '1', INTROSPECTION INTERVAL = 0));
+            > CREATE CLUSTER c REPLICAS ( r1 (SIZE = 'scale=1,workers=1', INTROSPECTION INTERVAL = 0));
 
             > CREATE SOURCE counter IN CLUSTER c
                 FROM LOAD GENERATOR COUNTER

@@ -9,7 +9,7 @@
 
 # This whole file is copy and pasted from source-tables.td, with the added force_source_table_syntax flag.
 
-$ set-arg-default default-replica-size=1
+$ set-arg-default default-replica-size=scale=1,workers=1
 $ set-arg-default single-replica-cluster=quickstart
 
 #

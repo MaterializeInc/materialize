@@ -196,7 +196,7 @@ SELECT name, privilege FROM item_privileges WHERE name = 'conn'
 conn  materialize=U/materialize
 
 statement ok
-CREATE CLUSTER c REPLICAS (r1 (SIZE '1'));
+CREATE CLUSTER c REPLICAS (r1 (SIZE 'scale=1,workers=1'));
 
 query TT rowsort
 SELECT * FROM cluster_privileges WHERE name = 'c'
@@ -4587,12 +4587,12 @@ false
 ## Clusters
 
 simple conn=mz_system,user=mz_system
-CREATE CLUSTER c1 REPLICAS (r1 (SIZE '1'));
+CREATE CLUSTER c1 REPLICAS (r1 (SIZE 'scale=1,workers=1'));
 ----
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-CREATE CLUSTER c2 REPLICAS (r1 (SIZE '1'));
+CREATE CLUSTER c2 REPLICAS (r1 (SIZE 'scale=1,workers=1'));
 ----
 COMPLETE 0
 

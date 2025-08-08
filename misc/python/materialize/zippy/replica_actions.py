@@ -92,7 +92,7 @@ class CreateReplica(Action):
                 dedent(
                     f"""
                 $ postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
-                CREATE CLUSTER REPLICA quickstart.{self.replica.name} SIZE '{self.replica.size}'
+                CREATE CLUSTER REPLICA quickstart.{self.replica.name} SIZE 'scale={self.replica.size},workers=1'
                 """
                 ),
                 mz_service=state.mz_service,

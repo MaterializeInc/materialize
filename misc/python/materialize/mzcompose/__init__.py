@@ -672,7 +672,7 @@ def cluster_replica_size_map() -> dict[str, dict[str, Any]]:
         workers: int,
         disabled: bool = False,
         is_cc: bool = True,
-        memory_limit: str = "4Gi",
+        memory_limit: str = "4 GiB",
     ) -> dict[str, Any]:
         return {
             "cpu_exclusive": False,

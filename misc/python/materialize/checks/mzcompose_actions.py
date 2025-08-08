@@ -326,7 +326,7 @@ class DropCreateDefaultReplica(MzcomposeAction):
             """
             ALTER CLUSTER quickstart SET (MANAGED = false);
             DROP CLUSTER REPLICA quickstart.r1;
-            CREATE CLUSTER REPLICA quickstart.r1 SIZE '1';
+            CREATE CLUSTER REPLICA quickstart.r1 SIZE 'scale=1,workers=1';
             """,
             port=6877,
             user="mz_system",

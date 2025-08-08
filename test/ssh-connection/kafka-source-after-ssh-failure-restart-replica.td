@@ -10,7 +10,7 @@
 # This test script runs after the SSH bastion host has been terminated.
 
 > DROP CLUSTER REPLICA sc.r1
-> CREATE CLUSTER REPLICA sc.r1 SIZE '32'
+> CREATE CLUSTER REPLICA sc.r1 SIZE 'scale=1,workers=32'
 
 > SELECT status FROM mz_internal.mz_source_statuses st
   JOIN mz_sources s ON st.id = s.id

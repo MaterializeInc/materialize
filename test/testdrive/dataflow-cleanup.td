@@ -21,7 +21,7 @@ ALTER SYSTEM SET enable_introspection_subscribes = false
 
 > DROP CLUSTER IF EXISTS test
 
-> CREATE CLUSTER test REPLICAS (r1 (SIZE '1', INTROSPECTION INTERVAL '10ms'))
+> CREATE CLUSTER test REPLICAS (r1 (SIZE 'scale=1,workers=1', INTROSPECTION INTERVAL '10ms'))
 > SET cluster = test
 > SELECT count(*) > 0 FROM mz_introspection.mz_dataflow_operators
 false
@@ -80,7 +80,7 @@ false
 
 # Regression test for https://github.com/MaterializeInc/database-issues/issues/4712
 
-> CREATE CLUSTER lgtpch_cluster_cleanup SIZE '1';
+> CREATE CLUSTER lgtpch_cluster_cleanup SIZE 'scale=1,workers=1';
 
 > CREATE SOURCE lgtpch IN CLUSTER lgtpch_cluster_cleanup FROM LOAD GENERATOR TPCH (SCALE FACTOR 0.1, UP TO 100);
 

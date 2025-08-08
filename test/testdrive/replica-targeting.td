@@ -24,9 +24,9 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 # frontiers of introspection sources as well.
 
 > CREATE CLUSTER test REPLICAS (
-      r1 (SIZE '1'),
-      r2 (SIZE '2'),
-      r4 (SIZE '4')
+      r1 (SIZE 'scale=1,workers=1'),
+      r2 (SIZE 'scale=1,workers=2'),
+      r4 (SIZE 'scale=1,workers=4')
   )
 
 > SET cluster = test
@@ -78,7 +78,7 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 # advances to the empty frontier. Regression test for database-issues#7457.
 
 > DROP CLUSTER test CASCADE
-> CREATE CLUSTER test SIZE '4-4', REPLICATION FACTOR 4
+> CREATE CLUSTER test SIZE 'scale=4,workers=4', REPLICATION FACTOR 4
 > SET cluster_replica = r1
 
 > CREATE MATERIALIZED VIEW mv AS SELECT 1

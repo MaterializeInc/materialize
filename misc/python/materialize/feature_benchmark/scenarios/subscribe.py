@@ -117,7 +117,7 @@ class SubscribeParallelKafka(SubscribeParallel):
              > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
              > DROP CLUSTER IF EXISTS source_cluster CASCADE;
-             > CREATE CLUSTER source_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
+             > CREATE CLUSTER source_cluster SIZE 'scale={self._default_size},workers=1', REPLICATION FACTOR 1;
 
              > DROP SOURCE IF EXISTS s1 CASCADE;
 

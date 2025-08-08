@@ -64,7 +64,7 @@ $ kafka-create-topic topic=upsert-compound-key
 $ kafka-ingest format=avro topic=upsert-compound-key key-format=avro key-schema=${keyschema} schema=${schema}
 {"b": "bdata", "a": 1} {"before": null, "after": {"row": {"a": 1, "data": "fish1", "b": "bdata"}}}
 
-> CREATE CLUSTER upsert_cluster SIZE = '1', REPLICATION FACTOR = 1;
+> CREATE CLUSTER upsert_cluster SIZE = 'scale=1,workers=1', REPLICATION FACTOR = 1;
 
 > CREATE SOURCE upsert_compound_key
   IN CLUSTER upsert_cluster

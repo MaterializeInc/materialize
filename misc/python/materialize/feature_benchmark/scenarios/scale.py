@@ -25,7 +25,7 @@ class SmallClusters(Scenario):
                 f"""
                 > DROP CLUSTER IF EXISTS cluster{i} CASCADE;
 
-                > CREATE CLUSTER cluster{i} REPLICAS (r (SIZE '4-1'));
+                > CREATE CLUSTER cluster{i} REPLICAS (r (SIZE 'scale=4,workers=1'));
 
                 > CREATE MATERIALIZED VIEW v{i}
                   IN CLUSTER cluster{i}

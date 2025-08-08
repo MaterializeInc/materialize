@@ -79,7 +79,7 @@ def populate(mz: MaterializeApplication, seed: int) -> None:
                 URL '${{testdrive.schema-registry-url}}'
               );
 
-            > CREATE CLUSTER storage_shared_fate REPLICAS (storage_shared_fate_replica (SIZE '{CLUSTER_SIZE}-1'));
+            > CREATE CLUSTER storage_shared_fate REPLICAS (storage_shared_fate_replica (SIZE 'scale={CLUSTER_SIZE},workers=1'));
 
             > CREATE CONNECTION kafka TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT)
 

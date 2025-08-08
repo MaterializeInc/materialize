@@ -18,7 +18,7 @@ statement ok
 INSERT INTO t VALUES (1, 2), (3, 4), (5, 6)
 
 statement ok
-CREATE CLUSTER other REPLICAS (r1 (SIZE '1'), r2 (SIZE '2-2'))
+CREATE CLUSTER other REPLICAS (r1 (SIZE 'scale=1,workers=1'), r2 (SIZE 'scale=2,workers=2'))
 
 
 # Test: Materialized view can be created.
@@ -1278,7 +1278,7 @@ COMPLETE 0
 
 # Should be disabled
 query error db error: ERROR: `SCHEDULE = ON REFRESH` cluster option is not available
-CREATE CLUSTER c_schedule_0 (SIZE = '1', SCHEDULE = ON REFRESH);
+CREATE CLUSTER c_schedule_0 (SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH);
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_cluster_schedule_refresh = true
@@ -1292,25 +1292,25 @@ ALTER SYSTEM SET cluster_refresh_mv_compaction_estimate = 0
 COMPLETE 0
 
 statement error db error: ERROR: Expected one of MANUAL or ON, found identifier "aaaaaaaa"
-CREATE CLUSTER c_schedule_0 (SIZE = '1', SCHEDULE = AAAAAAAA);
+CREATE CLUSTER c_schedule_0 (SIZE = 'scale=1,workers=1', SCHEDULE = AAAAAAAA);
 
 statement error db error: ERROR: Expected one of MANUAL or ON, found number "42"
-CREATE CLUSTER c_schedule_0 (SIZE = '1', SCHEDULE = 42);
+CREATE CLUSTER c_schedule_0 (SIZE = 'scale=1,workers=1', SCHEDULE = 42);
 
 statement error db error: ERROR: Expected one of MANUAL or ON, found REFRESH
-CREATE CLUSTER c_schedule_0 (SIZE = '1', SCHEDULE = REFRESH);
+CREATE CLUSTER c_schedule_0 (SIZE = 'scale=1,workers=1', SCHEDULE = REFRESH);
 
 statement error db error: ERROR: REPLICATION FACTOR cannot be given together with any SCHEDULE other than MANUAL
-CREATE CLUSTER c_schedule_0 (SIZE = '1', SCHEDULE = ON REFRESH, REPLICATION FACTOR = 1);
+CREATE CLUSTER c_schedule_0 (SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH, REPLICATION FACTOR = 1);
 
 statement ok
-CREATE CLUSTER c_schedule_1 (SIZE = '1', SCHEDULE = MANUAL);
+CREATE CLUSTER c_schedule_1 (SIZE = 'scale=1,workers=1', SCHEDULE = MANUAL);
 
 statement ok
-CREATE CLUSTER c_schedule_2 (SIZE = '1', SCHEDULE MANUAL);
+CREATE CLUSTER c_schedule_2 (SIZE = 'scale=1,workers=1', SCHEDULE MANUAL);
 
 statement ok
-CREATE CLUSTER c_schedule_3 (SIZE = '1', SCHEDULE = ON REFRESH);
+CREATE CLUSTER c_schedule_3 (SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH);
 
 statement error db error: ERROR: REPLICATION FACTOR cannot be set if the cluster SCHEDULE is anything other than MANUAL
 ALTER CLUSTER c_schedule_3 SET (REPLICATION FACTOR = 1);
@@ -1348,7 +1348,7 @@ statement ok
 ALTER CLUSTER c_schedule_1 SET (MANAGED = false, SCHEDULE = MANUAL);
 
 statement ok
-ALTER CLUSTER c_schedule_1 SET (MANAGED = true, SIZE = '1');
+ALTER CLUSTER c_schedule_1 SET (MANAGED = true, SIZE = 'scale=1,workers=1');
 
 statement ok
 ALTER CLUSTER c_schedule_1 SET (SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '0 seconds'));
@@ -1366,7 +1366,7 @@ statement ok
 ALTER CLUSTER c_schedule_1 RESET (INTROSPECTION DEBUGGING);
 
 statement ok
-CREATE CLUSTER unmanaged1 (SCHEDULE = MANUAL, REPLICAS (r1 (SIZE '1')))
+CREATE CLUSTER unmanaged1 (SCHEDULE = MANUAL, REPLICAS (r1 (SIZE 'scale=1,workers=1')))
 
 statement ok
 ALTER cluster unmanaged1 SET (SCHEDULE = MANUAL);
@@ -1375,13 +1375,13 @@ statement error db error: ERROR: cluster schedules other than MANUAL are not sup
 ALTER cluster unmanaged1 SET (SCHEDULE = ON REFRESH);
 
 statement error db error: ERROR: REPLICATION FACTOR cannot be given together with any SCHEDULE other than MANUAL
-ALTER cluster unmanaged1 SET (managed = true, SCHEDULE = ON REFRESH, REPLICATION FACTOR = 1, SIZE = '1');
+ALTER cluster unmanaged1 SET (managed = true, SCHEDULE = ON REFRESH, REPLICATION FACTOR = 1, SIZE = 'scale=1,workers=1');
 
 statement error db error: ERROR: cluster schedules other than MANUAL are not supported for unmanaged clusters
-CREATE CLUSTER unmanaged2 (SCHEDULE = ON REFRESH, REPLICAS (r1 (SIZE '1')))
+CREATE CLUSTER unmanaged2 (SCHEDULE = ON REFRESH, REPLICAS (r1 (SIZE 'scale=1,workers=1')))
 
 statement ok
-CREATE CLUSTER c_schedule_5 (SIZE = '1');
+CREATE CLUSTER c_schedule_5 (SIZE = 'scale=1,workers=1');
 
 statement error db error: ERROR: Expected one of OWNER or RENAME or RESET or SET or SWAP, found left parenthesis
 ALTER CLUSTER c_schedule_5 (MANAGED = false, SCHEDULE = REFRESH);
@@ -1440,7 +1440,7 @@ SELECT * FROM mv11
 ## Very short refresh interval.
 
 statement ok
-CREATE CLUSTER c_schedule_4 (SIZE = '1', SCHEDULE = ON REFRESH);
+CREATE CLUSTER c_schedule_4 (SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH);
 
 statement ok
 CREATE MATERIALIZED VIEW mv12
@@ -1480,19 +1480,19 @@ SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'c_schedule_4
 ## HYDRATION TIME ESTIMATE
 
 statement error db error: ERROR: Expected literal string, found number "0"
-CREATE CLUSTER c_bad (SIZE = '1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = 0));
+CREATE CLUSTER c_bad (SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = 0));
 
 statement error db error: ERROR: HYDRATION TIME ESTIMATE must be non\-negative; got: \-01:00:00
-CREATE CLUSTER c_bad (SIZE = '1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '-1 hour'));
+CREATE CLUSTER c_bad (SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '-1 hour'));
 
 statement error db error: ERROR: invalid input syntax for type interval: unknown units aaaa: "1 aaaa"
-CREATE CLUSTER c_bad (SIZE = '1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1 aaaa'));
+CREATE CLUSTER c_bad (SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1 aaaa'));
 
 statement error db error: ERROR: HYDRATION TIME ESTIMATE must not involve units larger than days
-CREATE CLUSTER c_bad (SIZE = '1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1 month'));
+CREATE CLUSTER c_bad (SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1 month'));
 
 statement error db error: ERROR: invalid input syntax for type interval: Overflows maximum days; cannot exceed 2147483647/\-2147483648 days: "1000000000000 days"
-CREATE CLUSTER c_bad (SIZE = '1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1000000000000 days'));
+CREATE CLUSTER c_bad (SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1000000000000 days'));
 
 # ----------------------------------------
 # Introspection
@@ -1545,7 +1545,7 @@ mvi3  at  NULL  NULL  true
 mvi3  at  NULL  NULL  true
 
 statement ok
-CREATE CLUSTER c_schedule_hydration_time_estimate (SIZE = '1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '995 seconds'));
+CREATE CLUSTER c_schedule_hydration_time_estimate (SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '995 seconds'));
 
 # Make the above cluster turn on, so that we can test how the HYDRATION TIME ESTIMATE looks in `mz_audit_events`.
 statement ok
@@ -1605,7 +1605,7 @@ ALTER SYSTEM SET cluster_refresh_mv_compaction_estimate = 1200000
 COMPLETE 0
 
 statement ok
-CREATE CLUSTER c_schedule_6 (SIZE = '1', SCHEDULE = ON REFRESH);
+CREATE CLUSTER c_schedule_6 (SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH);
 
 query I
 SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'c_schedule_6';

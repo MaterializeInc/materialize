@@ -24,7 +24,7 @@ def populate(mz: MaterializeApplication, seed: int) -> None:
     mz.testdrive.run(
         input=dedent(
             f"""
-            > CREATE CLUSTER shared_fate REPLICAS (shared_fate_replica (SIZE '{CLUSTER_SIZE}-1'));
+            > CREATE CLUSTER shared_fate REPLICAS (shared_fate_replica (SIZE 'scale={CLUSTER_SIZE},workers=1'));
             > SET cluster = shared_fate;
 
             > CREATE TABLE t1 (f1 INTEGER);

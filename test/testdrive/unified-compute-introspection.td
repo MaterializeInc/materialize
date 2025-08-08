@@ -13,7 +13,7 @@
 # Note that we count on the retry behavior of testdrive in this test
 # since introspection sources may take some time to catch up.
 
-$ set-arg-default default-replica-size=1
+$ set-arg-default default-replica-size=scale=1,workers=1
 
 # Test dataflow error introspection.
 

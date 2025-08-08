@@ -13,7 +13,7 @@
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_mz_join_core = true
 
-> CREATE CLUSTER linear_join REPLICAS (r1 (SIZE '1'))
+> CREATE CLUSTER linear_join REPLICAS (r1 (SIZE 'scale=1,workers=1'))
 
 > SET cluster=linear_join
 

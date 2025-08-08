@@ -10,7 +10,7 @@
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
 
-> CREATE CLUSTER to_recreate SIZE '1'
+> CREATE CLUSTER to_recreate SIZE 'scale=1,workers=1'
 
 # Test detection of topic deletion.
 

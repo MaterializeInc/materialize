@@ -12,7 +12,7 @@ $ set-regex match=(\d+) replacement=<number>
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_explain_pushdown = true
 
-> CREATE CLUSTER sources (SIZE '1', REPLICATION FACTOR 0);
+> CREATE CLUSTER sources (SIZE 'scale=1,workers=1', REPLICATION FACTOR 0);
 
 > CREATE SOURCE counter IN CLUSTER sources FROM LOAD GENERATOR COUNTER (UP TO 100);
 
