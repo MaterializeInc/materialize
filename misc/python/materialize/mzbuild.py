@@ -1003,6 +1003,7 @@ class ResolvedImage:
                 try:
                     spawn.runv(
                         command,
+                        stdin=subprocess.DEVNULL,
                         stdout=sys.stderr.buffer,
                     )
                     self.acquired = True
