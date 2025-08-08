@@ -1586,3 +1586,26 @@ FROM
 ----
 {bb,a}  a  2
 {bb,a}  bb  1
+
+# This query is carefully constructed to exercise `FlatMapElimination`:
+# - The CASE is there to prevent HIR lowering from seeing unnest's argument as a constant, in which case it would make
+#   it a cross join with a FlatMap on a constant, which would be simplified by `FoldConstants` before
+#   `FlatMapElimination` would have a chance to see it.
+# - However, MIR optimization is able to remove the CASE, because `x.a` can never be null, as it is a primary key.
+#   Therefore, `unnest`'s argument becomes a constant (later than HIR lowering), on which `FlatMapElimination` can do
+#   its magic.
+query T multiline
+EXPLAIN OPTIMIZED PLAN FOR
+SELECT * FROM
+  x,
+  LATERAL unnest(LIST[1 + CASE WHEN x.a IS NULL THEN x.a ELSE 0 END]) WITH ORDINALITY;
+----
+Explained Query:
+  Map (1, 1)
+    ReadStorage materialize.public.x
+
+Source materialize.public.x
+
+Target cluster: quickstart
+
+EOF
