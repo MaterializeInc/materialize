@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(output_type = \"Numeric\", sqlname = \"extracttstz\", propagates_nulls = true)]\nfn date_part_timestamp_timestamp_tz_numeric<'a>(\n    units: &str,\n    ts: CheckedTimestamp<DateTime<Utc>>,\n) -> Result<Datum<'a>, EvalError> {\n    match units.parse() {\n        Ok(units) => Ok(date_part_timestamp_inner::<_, Numeric>(units, &*ts)?.into()),\n        Err(_) => Err(EvalError::UnknownUnits(units.into())),\n    }\n}\n"
+expression: "#[sqlfunc(output_type = \"Numeric\", sqlname = \"extracttstz\", propagates_nulls = true)]\n#[allow(dead_code)]\nfn date_part_timestamp_timestamp_tz_numeric<'a>(\n    units: &str,\n    ts: CheckedTimestamp<DateTime<Utc>>,\n) -> Result<Datum<'a>, EvalError> {\n    match units.parse() {\n        Ok(units) => Ok(date_part_timestamp_inner::<_, Numeric>(units, &*ts)?.into()),\n        Err(_) => Err(EvalError::UnknownUnits(units.into())),\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -59,6 +59,7 @@ impl std::fmt::Display for DatePartTimestampTimestampTzNumeric {
         f.write_str("extracttstz")
     }
 }
+#[allow(dead_code)]
 fn date_part_timestamp_timestamp_tz_numeric<'a>(
     units: &str,
     ts: CheckedTimestamp<DateTime<Utc>>,

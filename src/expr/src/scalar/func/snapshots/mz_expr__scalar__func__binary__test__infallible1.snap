@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/binary.rs
-expression: "#[sqlfunc(sqlname = \"INFALLIBLE\", is_infix_op = true)]\nfn infallible1(a: f32, b: f32) -> f32 {\n    a + b\n}\n"
+expression: "#[sqlfunc(sqlname = \"INFALLIBLE\", is_infix_op = true)]\n#[allow(dead_code)]\nfn infallible1(a: f32, b: f32) -> f32 {\n    a + b\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -55,6 +55,7 @@ impl std::fmt::Display for Infallible1 {
         f.write_str("INFALLIBLE")
     }
 }
+#[allow(dead_code)]
 fn infallible1(a: f32, b: f32) -> f32 {
     a + b
 }

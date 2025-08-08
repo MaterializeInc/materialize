@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(is_infix_op = true, sqlname = \"<@\", propagates_nulls = true)]\nfn range_contains_i32_rev<'a>(a: Range<Datum<'a>>, b: i32) -> bool {\n    a.contains_elem(&b)\n}\n"
+expression: "#[sqlfunc(is_infix_op = true, sqlname = \"<@\", propagates_nulls = true)]\n#[allow(dead_code)]\nfn range_contains_i32_rev<'a>(a: Range<Datum<'a>>, b: i32) -> bool {\n    a.contains_elem(&b)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -58,6 +58,7 @@ impl std::fmt::Display for RangeContainsI32Rev {
         f.write_str("<@")
     }
 }
+#[allow(dead_code)]
 fn range_contains_i32_rev<'a>(a: Range<Datum<'a>>, b: i32) -> bool {
     a.contains_elem(&b)
 }

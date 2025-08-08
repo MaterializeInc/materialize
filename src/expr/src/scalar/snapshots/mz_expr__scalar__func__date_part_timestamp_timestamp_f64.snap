@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(sqlname = \"date_partts\", propagates_nulls = true)]\nfn date_part_timestamp_timestamp_f64(\n    units: &str,\n    ts: CheckedTimestamp<NaiveDateTime>,\n) -> Result<f64, EvalError> {\n    match units.parse() {\n        Ok(units) => date_part_timestamp_inner(units, &*ts),\n        Err(_) => Err(EvalError::UnknownUnits(units.into())),\n    }\n}\n"
+expression: "#[sqlfunc(sqlname = \"date_partts\", propagates_nulls = true)]\n#[allow(dead_code)]\nfn date_part_timestamp_timestamp_f64(\n    units: &str,\n    ts: CheckedTimestamp<NaiveDateTime>,\n) -> Result<f64, EvalError> {\n    match units.parse() {\n        Ok(units) => date_part_timestamp_inner(units, &*ts),\n        Err(_) => Err(EvalError::UnknownUnits(units.into())),\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -55,6 +55,7 @@ impl std::fmt::Display for DatePartTimestampTimestampF64 {
         f.write_str("date_partts")
     }
 }
+#[allow(dead_code)]
 fn date_part_timestamp_timestamp_f64(
     units: &str,
     ts: CheckedTimestamp<NaiveDateTime>,

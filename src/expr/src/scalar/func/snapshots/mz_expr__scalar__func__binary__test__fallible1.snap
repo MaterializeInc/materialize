@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/binary.rs
-expression: "#[sqlfunc()]\nfn fallible1(a: f32, b: f32) -> Result<f32, EvalError> {\n    Ok(a + b)\n}\n"
+expression: "#[sqlfunc()]\n#[allow(dead_code)]\nfn fallible1(a: f32, b: f32) -> Result<f32, EvalError> {\n    Ok(a + b)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -52,6 +52,7 @@ impl std::fmt::Display for Fallible1 {
         f.write_str(stringify!(fallible1))
     }
 }
+#[allow(dead_code)]
 fn fallible1(a: f32, b: f32) -> Result<f32, EvalError> {
     Ok(a + b)
 }

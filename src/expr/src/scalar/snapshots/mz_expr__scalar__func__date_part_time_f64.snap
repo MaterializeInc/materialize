@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    output_type = \"f64\",\n    sqlname = \"date_partt\",\n    propagates_nulls = true,\n    introduces_nulls = false\n)]\nfn date_part_time_f64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {\n    let units = a.unwrap_str();\n    match units.parse() {\n        Ok(units) => Ok(date_part_time_inner::<f64>(units, b.unwrap_time())?.into()),\n        Err(_) => Err(EvalError::UnknownUnits(units.into())),\n    }\n}\n"
+expression: "#[sqlfunc(\n    output_type = \"f64\",\n    sqlname = \"date_partt\",\n    propagates_nulls = true,\n    introduces_nulls = false\n)]\n#[allow(dead_code)]\nfn date_part_time_f64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {\n    let units = a.unwrap_str();\n    match units.parse() {\n        Ok(units) => Ok(date_part_time_inner::<f64>(units, b.unwrap_time())?.into()),\n        Err(_) => Err(EvalError::UnknownUnits(units.into())),\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -58,6 +58,7 @@ impl std::fmt::Display for DatePartTimeF64 {
         f.write_str("date_partt")
     }
 }
+#[allow(dead_code)]
 fn date_part_time_f64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let units = a.unwrap_str();
     match units.parse() {
