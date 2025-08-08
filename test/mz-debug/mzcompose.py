@@ -55,6 +55,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         ["docker", "pull", mz_debug["image"]],
         check=True,
         capture_output=True,
+        stdin=subprocess.DEVNULL,
     )
     container_id = subprocess.check_output(
         ["docker", "create", mz_debug["image"]], text=True

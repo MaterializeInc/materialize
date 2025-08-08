@@ -241,6 +241,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                                 ["docker", "pull", clusterd["image"]],
                                 check=True,
                                 capture_output=True,
+                                stdin=subprocess.DEVNULL,
                             )
                             container_id = subprocess.check_output(
                                 ["docker", "create", clusterd["image"]], text=True

@@ -36,7 +36,7 @@ from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from inspect import Traceback, getframeinfo, getmembers, isfunction, stack
 from tempfile import TemporaryFile
-from typing import Any, TextIO, TypeVar, cast
+from typing import IO, Any, TextIO, TypeVar, cast
 
 import psycopg
 import sqlparse
@@ -299,7 +299,7 @@ class Composition:
         capture: bool | TextIO = False,
         capture_stderr: bool | TextIO = False,
         capture_and_print: bool = False,
-        stdin: str | None = None,
+        stdin: str | IO[bytes] | int | None = None,
         check: bool = True,
         max_tries: int = 1,
         silent: bool = False,
@@ -316,7 +316,7 @@ class Composition:
                 be an opened file to capture stderr into the file directly.
             capture_and_print: Print during execution and capture the stdout and
                 stderr of the `docker compose` invocation.
-            input: A string to provide as stdin for the command.
+            stdin: A string or IO handle to use as the process's stdin stream
         """
 
         if not self.silent and not silent:
@@ -430,7 +430,8 @@ class Composition:
                         check=check,
                         stdout=stdout,
                         stderr=stderr,
-                        input=stdin,
+                        input=stdin if isinstance(stdin, str) else None,
+                        stdin=stdin if isinstance(stdin, IO) else None,
                         text=True,
                         bufsize=1,
                         env=environment,
@@ -940,7 +941,7 @@ class Composition:
     def pull_single_image_by_service_name(
         self, service_name: str, max_tries: int
     ) -> None:
-        self.invoke("pull", service_name, max_tries=max_tries)
+        self.invoke("pull", service_name, max_tries=max_tries, stdin=subprocess.DEVNULL)
 
     def try_pull_service_image(
         self, service: MzComposeService, max_tries: int = 2
