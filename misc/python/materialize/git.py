@@ -346,12 +346,8 @@ def is_on_release_version() -> bool:
 def contains_commit(
     commit_sha: str,
     target: str = "HEAD",
-    fetch: bool = False,
     remote_url: str = MATERIALIZE_REMOTE_URL,
 ) -> bool:
-    if fetch:
-        remote = get_remote(remote_url)
-        target = f"{remote}/{target}"
     return is_ancestor(commit_sha, target)
 
 
