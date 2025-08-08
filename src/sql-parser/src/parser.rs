@@ -8132,8 +8132,7 @@ impl<'a> Parser<'a> {
                 let name = self.parse_raw_name()?;
                 self.expect_token(&Token::LParen)?;
                 let args = self.parse_optional_args(false)?;
-                let alias = self.parse_optional_table_alias()?;
-                let with_ordinality = self.parse_keywords(&[WITH, ORDINALITY]);
+                let (with_ordinality, alias) = self.parse_table_function_suffix()?;
                 return Ok(TableFactor::Function {
                     function: Function {
                         name,
@@ -8204,8 +8203,7 @@ impl<'a> Parser<'a> {
             let name = self.parse_raw_name()?;
             if self.consume_token(&Token::LParen) {
                 let args = self.parse_optional_args(false)?;
-                let alias = self.parse_optional_table_alias()?;
-                let with_ordinality = self.parse_keywords(&[WITH, ORDINALITY]);
+                let (with_ordinality, alias) = self.parse_table_function_suffix()?;
                 Ok(TableFactor::Function {
                     function: Function {
                         name,
@@ -8230,13 +8228,32 @@ impl<'a> Parser<'a> {
         self.expect_token(&Token::LParen)?;
         let functions = self.parse_comma_separated(Parser::parse_named_function)?;
         self.expect_token(&Token::RParen)?;
-        let alias = self.parse_optional_table_alias()?;
-        let with_ordinality = self.parse_keywords(&[WITH, ORDINALITY]);
+        let (with_ordinality, alias) = self.parse_table_function_suffix()?;
         Ok(TableFactor::RowsFrom {
             functions,
             alias,
             with_ordinality,
         })
+    }
+
+    /// Parses the things that can come after the argument list of a table function call. These are
+    /// - optional WITH ORDINALITY
+    /// - optional table alias
+    /// - optional WITH ORDINALITY again! This is allowed just to keep supporting our earlier buggy
+    ///   order where we allowed WITH ORDINALITY only after the table alias. (Postgres and other
+    ///   systems support it only before the table alias.)
+    fn parse_table_function_suffix(&mut self) -> Result<(bool, Option<TableAlias>), ParserError> {
+        let with_ordinality_1 = self.parse_keywords(&[WITH, ORDINALITY]);
+        let alias = self.parse_optional_table_alias()?;
+        let with_ordinality_2 = self.parse_keywords(&[WITH, ORDINALITY]);
+        if with_ordinality_1 && with_ordinality_2 {
+            return parser_err!(
+                self,
+                self.peek_prev_pos(),
+                "WITH ORDINALITY specified twice"
+            );
+        }
+        Ok((with_ordinality_1 || with_ordinality_2, alias))
     }
 
     fn parse_named_function(&mut self) -> Result<Function<Raw>, ParserError> {
