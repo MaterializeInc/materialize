@@ -7,7 +7,7 @@
 
 use std::iter::FusedIterator;
 use std::num::NonZeroI64;
-use std::ops::DerefMut;
+use std::ops::Range;
 
 use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{Cursor, TraceReader};
@@ -22,16 +22,71 @@ where
 {
     // For debug/trace logging.
     target_id: GlobalId,
-    literals_exhausted: bool,
-    cursor: <Tr as TraceReader>::Cursor,
-    storage: <Tr as TraceReader>::Storage,
+    cursor: Tr::Cursor,
+    storage: Tr::Storage,
     map_filter_project: mz_expr::SafeMfpPlan,
     peek_timestamp: mz_repr::Timestamp,
     row_builder: Row,
     datum_vec: DatumVec,
-    has_literal_constraints: bool,
-    literals: Box<dyn Iterator<Item = Row>>,
-    current_literal: Option<Row>,
+    literals: Option<Literals<Tr>>,
+}
+
+/// Helper to handle literals in peeks
+struct Literals<Tr: TraceReader> {
+    /// The literals in a container, sorted by `Ord`.
+    literals: Tr::KeyContainer,
+    /// The range of the literals that are still available.
+    range: Range<usize>,
+    /// The current index in the literals.
+    current_index: Option<usize>,
+}
+
+impl<Tr: TraceReader<KeyOwn: Ord>> Literals<Tr> {
+    /// Construct a new `Literals` from a mutable slice of literals. Sorts contents.
+    fn new(literals: &mut [Tr::KeyOwn], cursor: &mut Tr::Cursor, storage: &Tr::Storage) -> Self {
+        // We have to sort the literal constraints because cursor.seek_key can
+        // seek only forward.
+        literals.sort();
+        let mut container = Tr::KeyContainer::with_capacity(literals.len());
+        for constraint in literals {
+            container.push_own(constraint)
+        }
+        let range = 0..container.len();
+        let mut this = Self {
+            literals: container,
+            range,
+            current_index: None,
+        };
+        this.seek_next_literal_key(cursor, storage);
+        this
+    }
+
+    /// Returns the current literal, if any.
+    fn peek(&self) -> Option<Tr::Key<'_>> {
+        self.current_index
+            .and_then(|index| self.literals.get(index))
+    }
+
+    /// Returns `true` if there are no more literals to process.
+    fn is_exhausted(&self) -> bool {
+        self.current_index.is_none()
+    }
+
+    /// Seeks the cursor to the next key of a matching literal, if any.
+    fn seek_next_literal_key(&mut self, cursor: &mut Tr::Cursor, storage: &Tr::Storage) {
+        while let Some(index) = self.range.next() {
+            let literal = self.literals.get(index).expect("index out of bounds");
+            cursor.seek_key(storage, literal);
+            if cursor.get_key(storage).map_or(true, |key| key == literal) {
+                self.current_index = Some(index);
+                return;
+            }
+            // The cursor landed on a record that has a different key,
+            // meaning that there is no record whose key would match the
+            // current literal.
+        }
+        self.current_index = None;
+    }
 }
 
 /// An [Iterator] that extracts a peek result from a [TraceReader].
@@ -52,38 +107,28 @@ where
         target_id: GlobalId,
         map_filter_project: mz_expr::SafeMfpPlan,
         peek_timestamp: mz_repr::Timestamp,
-        mut literal_constraints: Option<Vec<Row>>,
+        literal_constraints: Option<&mut [Row]>,
         trace_reader: &mut Tr,
     ) -> Self {
-        let (cursor, storage) = trace_reader.cursor();
+        let (mut cursor, storage) = trace_reader.cursor();
+        let literals = literal_constraints
+            .map(|constraints| Literals::new(constraints, &mut cursor, &storage));
 
-        // We have to sort the literal constraints because cursor.seek_key can
-        // seek only forward.
-        if let Some(literal_constraints) = literal_constraints.as_mut() {
-            literal_constraints.sort();
-        }
-        let has_literal_constraints = literal_constraints.is_some();
-        let literals = literal_constraints.into_iter().flatten();
-
-        let mut result = Self {
+        Self {
             target_id,
-            literals_exhausted: false,
             cursor,
             storage,
             map_filter_project,
             peek_timestamp,
             row_builder: Row::default(),
             datum_vec: DatumVec::new(),
-            has_literal_constraints,
-            literals: Box::new(literals),
-            current_literal: None,
-        };
-
-        if result.has_literal_constraints {
-            result.seek_to_next_literal();
+            literals,
         }
+    }
 
-        result
+    /// Returns `true` if the iterator has no more literals to process, or if there are no literals at all.
+    fn literals_exhausted(&self) -> bool {
+        self.literals.as_ref().map_or(false, Literals::is_exhausted)
     }
 }
 
@@ -112,7 +157,7 @@ where
 
     fn next(&mut self) -> Option<Self::Item> {
         let result = loop {
-            if self.literals_exhausted {
+            if self.literals_exhausted() {
                 return None;
             }
 
@@ -169,18 +214,21 @@ where
         let row_item = self.cursor.val(&self.storage);
         let row = row_item.to_datum_iter();
 
+        let maybe_literal;
         let mut borrow = self.datum_vec.borrow();
         borrow.extend(key);
         borrow.extend(row);
 
-        if self.has_literal_constraints {
+        if let Some(literals) = &mut self.literals
+            && let Some(literal) = literals.peek()
+        {
             // The peek was created from an IndexedFilter join. We have to add those columns
             // here that the join would add in a dataflow.
-            let datum_vec = borrow.deref_mut();
-            // unwrap is ok, because it could be None only if !has_literal_constraints or if
+            // unwrap is ok, because it could be None only if current_literals is exhauseted or if
             // the iteration is finished. In the latter case we already exited the while
             // loop.
-            datum_vec.extend(self.current_literal.as_ref().unwrap().iter());
+            maybe_literal = literal;
+            borrow.extend(maybe_literal.to_datum_iter());
         }
         if let Some(result) = self
             .map_filter_project
@@ -228,14 +276,14 @@ where
             "must only step key when the vals for a key are exhausted"
         );
 
-        if !self.has_literal_constraints {
-            self.cursor.step_key(&self.storage);
-        } else {
-            self.seek_to_next_literal();
+        if let Some(literals) = &mut self.literals {
+            literals.seek_next_literal_key(&mut self.cursor, &self.storage);
 
-            if self.literals_exhausted {
+            if literals.is_exhausted() {
                 return true;
             }
+        } else {
+            self.cursor.step_key(&self.storage);
         }
 
         if !self.cursor.key_valid(&self.storage) {
@@ -249,47 +297,5 @@ where
         );
 
         false
-    }
-
-    /// Seeks our cursor to the next literal constraint. If there are no more
-    /// literal constraints, marks self as `exhausted`.
-    fn seek_to_next_literal(&mut self) {
-        loop {
-            // Go to the next literal constraint.
-            // (i.e., to the next OR argument in something like `c=3 OR c=7 OR c=9`)
-            self.current_literal = self.literals.next();
-            match &self.current_literal {
-                None => {
-                    // We ran out of literals, so we set literals_exhausted to
-                    // true so that we can early-return in `next()`.
-                    self.literals_exhausted = true;
-                    return;
-                }
-                Some(current_literal) => {
-                    let mut key_con = Tr::KeyContainer::with_capacity(1);
-                    key_con.push_own(current_literal);
-                    let current_literal = key_con.get(0).unwrap();
-                    // NOTE(vmarcos): We expect the extra allocations below to be manageable
-                    // since we only perform as many of them as there are literals.
-                    self.cursor.seek_key(&self.storage, current_literal);
-
-                    if self
-                        .cursor
-                        .get_key(&self.storage)
-                        .map_or(true, |key| key == current_literal)
-                    {
-                        // The cursor found a record whose key matches the
-                        // current literal, or we have no more keys and are
-                        // therefore exhausted.
-
-                        // We return and calls to `next()` will start
-                        // returning its vals.
-                        return;
-                    }
-                    // The cursor landed on a record that has a different key, meaning that there is
-                    // no record whose key would match the current literal.
-                }
-            }
-        }
     }
 }
