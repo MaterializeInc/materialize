@@ -254,11 +254,10 @@ where
 
     let tuning = dataflow_paramters.upsert_rocksdb_tuning_config.clone();
 
-    // When running RocksDB in memory, the file system is emulated, so the path doesn't
-    // matter. However, we still need to pick one that exists on the host because of
-    // https://github.com/rust-rocksdb/rust-rocksdb/issues/1015.  RocksDB will still
-    // create a lock file at this path, so we need to ensure that whatever path is used
-    // will be unique per worker.
+    // When running RocksDB in memory, the file system is emulated. However, we still need to
+    // pick a path that exists because RocksDB will attempt to create the working directory
+    // (see https://github.com/rust-rocksdb/rust-rocksdb/issues/1015) and write a lock file,
+    // so we need to ensure the directory is unique per worker.
     let rocksdb_dir = instance_context
         .scratch_directory
         .clone()
