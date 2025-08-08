@@ -196,6 +196,7 @@ wrappers = [
     "buildid",
     "cookie_store",
     "deadpool-postgres",
+    "domain",
     "eventsource-client",
     "fail",
     "generator",

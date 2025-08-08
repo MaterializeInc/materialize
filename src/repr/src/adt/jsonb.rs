@@ -120,7 +120,7 @@ impl Jsonb {
     }
 
     /// Constructs a [`JsonbRef`] that references the JSON in this `Jsonb`.
-    pub fn as_ref(&self) -> JsonbRef {
+    pub fn as_ref(&self) -> JsonbRef<'_> {
         JsonbRef {
             datum: self.row.unpack_first(),
         }

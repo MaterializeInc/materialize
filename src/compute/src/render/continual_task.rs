@@ -742,7 +742,7 @@ impl<D: Ord> SinkState<D, Timestamp> {
         // Time to write some data! Produce the collection as of write_ts by
         // advancing timestamps, consolidating, and filtering out anything at
         // future timestamps.
-        let as_of = &[write_ts.clone()];
+        let as_of = std::slice::from_ref(write_ts);
         for ((_, t), _) in self.to_append.iter_mut() {
             t.advance_by(AntichainRef::new(as_of))
         }

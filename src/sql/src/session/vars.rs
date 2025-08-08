@@ -148,7 +148,7 @@ pub enum OwnedVarInput {
 
 impl OwnedVarInput {
     /// Converts this owned variable input as a [`VarInput`].
-    pub fn borrow(&self) -> VarInput {
+    pub fn borrow(&self) -> VarInput<'_> {
         match self {
             OwnedVarInput::Flat(v) => VarInput::Flat(v),
             OwnedVarInput::SqlSet(v) => VarInput::SqlSet(v),

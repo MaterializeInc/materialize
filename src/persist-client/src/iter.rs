@@ -494,7 +494,7 @@ where
     /// Return an iterator over the next consolidated chunk of output, if there's any left.
     ///
     /// Requirement: at least the first part of each run should be fetched and nonempty.
-    fn iter(&mut self) -> Option<ConsolidatingIter<T, D>> {
+    fn iter(&mut self) -> Option<ConsolidatingIter<'_, T, D>> {
         // If an incompletely-consolidated part has been stashed by the last iterator,
         // push that into state as a new run.
         // One might worry about the list of runs growing indefinitely, if we're adding a new

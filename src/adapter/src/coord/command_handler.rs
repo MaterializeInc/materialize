@@ -80,7 +80,7 @@ impl Coordinator {
     /// BOXED FUTURE: As of Nov 2023 the returned Future from this function was 58KB. This would
     /// get stored on the stack which is bad for runtime performance, and blow up our stack usage.
     /// Because of that we purposefully move this Future onto the heap (i.e. Box it).
-    pub(crate) fn handle_command(&mut self, mut cmd: Command) -> LocalBoxFuture<()> {
+    pub(crate) fn handle_command(&mut self, mut cmd: Command) -> LocalBoxFuture<'_, ()> {
         async move {
             if let Some(session) = cmd.session_mut() {
                 session.apply_external_metadata_updates();

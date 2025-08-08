@@ -938,7 +938,7 @@ impl ParsedDateTime {
     ) -> Result<(), String> {
         use DateTimeField::*;
 
-        if u.is_some() {
+        if let Some(unwrapped_u) = &u {
             match f {
                 Millennium if self.millennium.is_none() => {
                     self.millennium = u;
@@ -965,7 +965,7 @@ impl ParsedDateTime {
                     self.minute = u;
                 }
                 Second if self.second.is_none() => {
-                    if u.as_ref().unwrap().fraction != 0
+                    if unwrapped_u.fraction != 0
                         && (self.millisecond.is_some() || self.microsecond.is_some())
                     {
                         return Err(format!(

@@ -387,7 +387,7 @@ pub type ResultStream<'a, T> = Pin<Box<dyn Stream<Item = Result<T, ExternalError
 #[async_trait]
 pub trait Consensus: std::fmt::Debug + Send + Sync {
     /// Returns all the keys ever created in the consensus store.
-    fn list_keys(&self) -> ResultStream<String>;
+    fn list_keys(&self) -> ResultStream<'_, String>;
 
     /// Returns a recent version of `data`, and the corresponding sequence number, if
     /// one exists at this location.
@@ -433,7 +433,7 @@ pub trait Consensus: std::fmt::Debug + Send + Sync {
 
 #[async_trait]
 impl<A: Consensus + 'static> Consensus for Tasked<A> {
-    fn list_keys(&self) -> ResultStream<String> {
+    fn list_keys(&self) -> ResultStream<'_, String> {
         // Similarly to Blob::list_keys_and_metadata, this is difficult to make into a task.
         // (If we use an unbounded channel between the task and the caller, we can buffer forever;
         // if we use a bounded channel, we lose the isolation benefits of Tasked.)

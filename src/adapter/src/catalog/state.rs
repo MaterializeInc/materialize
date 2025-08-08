@@ -341,7 +341,7 @@ impl CatalogState {
         }
     }
 
-    pub fn for_sessionless_user(&self, role_id: RoleId) -> ConnCatalog {
+    pub fn for_sessionless_user(&self, role_id: RoleId) -> ConnCatalog<'_> {
         let (notices_tx, _notices_rx) = mpsc::unbounded_channel();
         let cluster = self.system_configuration.default_cluster();
 
@@ -363,7 +363,7 @@ impl CatalogState {
         }
     }
 
-    pub fn for_system_session(&self) -> ConnCatalog {
+    pub fn for_system_session(&self) -> ConnCatalog<'_> {
         self.for_sessionless_user(MZ_SYSTEM_ROLE_ID)
     }
 
@@ -835,7 +835,7 @@ impl CatalogState {
 
     /// Returns the [`RelationDesc`] for a [`GlobalId`], if the provided [`GlobalId`] refers to an
     /// object that returns rows.
-    pub fn try_get_desc_by_global_id(&self, id: &GlobalId) -> Option<Cow<RelationDesc>> {
+    pub fn try_get_desc_by_global_id(&self, id: &GlobalId) -> Option<Cow<'_, RelationDesc>> {
         let entry = self.try_get_entry_by_global_id(id)?;
         let desc = match entry.item() {
             CatalogItem::Table(table) => Cow::Owned(table.desc_for(id)),

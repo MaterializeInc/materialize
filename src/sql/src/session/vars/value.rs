@@ -94,7 +94,7 @@ impl<T: Any> AsAny for T {
 }
 
 /// Helper method to extract a single value from any kind of [`VarInput`].
-fn extract_single_value(input: VarInput) -> Result<&str, VarParseError> {
+fn extract_single_value(input: VarInput<'_>) -> Result<&str, VarParseError> {
     match input {
         VarInput::Flat(value) => Ok(value),
         VarInput::SqlSet([value]) => Ok(value),

@@ -289,20 +289,20 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
     fn get_type_by_name(&self, name: &QualifiedItemName) -> Option<&dyn CatalogItem>;
 
     /// Gets a cluster by ID.
-    fn get_cluster(&self, id: ClusterId) -> &dyn CatalogCluster;
+    fn get_cluster(&self, id: ClusterId) -> &dyn CatalogCluster<'_>;
 
     /// Gets all clusters.
-    fn get_clusters(&self) -> Vec<&dyn CatalogCluster>;
+    fn get_clusters(&self) -> Vec<&dyn CatalogCluster<'_>>;
 
     /// Gets a cluster replica by ID.
     fn get_cluster_replica(
         &self,
         cluster_id: ClusterId,
         replica_id: ReplicaId,
-    ) -> &dyn CatalogClusterReplica;
+    ) -> &dyn CatalogClusterReplica<'_>;
 
     /// Gets all cluster replicas.
-    fn get_cluster_replicas(&self) -> Vec<&dyn CatalogClusterReplica>;
+    fn get_cluster_replicas(&self) -> Vec<&dyn CatalogClusterReplica<'_>>;
 
     /// Gets all system privileges.
     fn get_system_privileges(&self) -> &PrivilegeMap;
@@ -618,10 +618,10 @@ pub trait CatalogCluster<'a> {
     fn replica_ids(&self) -> &BTreeMap<String, ReplicaId>;
 
     /// Returns the replicas of the cluster.
-    fn replicas(&self) -> Vec<&dyn CatalogClusterReplica>;
+    fn replicas(&self) -> Vec<&dyn CatalogClusterReplica<'_>>;
 
     /// Returns the replica belonging to the cluster with replica ID `id`.
-    fn replica(&self, id: ReplicaId) -> &dyn CatalogClusterReplica;
+    fn replica(&self, id: ReplicaId) -> &dyn CatalogClusterReplica<'_>;
 
     /// Returns the ID of the owning role.
     fn owner_id(&self) -> RoleId;
@@ -775,7 +775,7 @@ pub trait CatalogCollectionItem: CatalogItem + Send + Sync {
     ///
     /// If the catalog item is not of a type that produces data (i.e., a sink or
     /// an index), it returns an error.
-    fn desc(&self, name: &FullItemName) -> Result<Cow<RelationDesc>, CatalogError>;
+    fn desc(&self, name: &FullItemName) -> Result<Cow<'_, RelationDesc>, CatalogError>;
 
     /// The [`GlobalId`] for this item.
     fn global_id(&self) -> GlobalId;

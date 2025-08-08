@@ -263,7 +263,7 @@ impl MapFilterProject {
     }
 
     /// Determines if a scalar expression must be equal to a literal datum.
-    pub fn literal_constraint(&self, expr: &MirScalarExpr) -> Option<Datum> {
+    pub fn literal_constraint(&self, expr: &MirScalarExpr) -> Option<Datum<'_>> {
         for (_pos, predicate) in self.predicates.iter() {
             if let MirScalarExpr::CallBinary {
                 func: crate::BinaryFunc::Eq,

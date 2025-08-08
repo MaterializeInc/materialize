@@ -408,7 +408,7 @@ impl<T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync> TxnsCac
     }
 
     /// Returns the operations needing application as of the current progress.
-    pub(crate) fn unapplied(&self) -> impl Iterator<Item = (&ShardId, Unapplied, &T)> {
+    pub(crate) fn unapplied(&self) -> impl Iterator<Item = (&ShardId, Unapplied<'_>, &T)> {
         assert_eq!(self.only_data_id, None);
         let registers = self
             .unapplied_registers

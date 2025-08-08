@@ -133,7 +133,7 @@ pub struct PartOrd {
 
 impl PartOrd {
     /// Iterate over the contents of the part in their un-decoded form.
-    pub fn iter(&self) -> impl Iterator<Item = (ArrayIdx, ArrayIdx, [u8; 8], [u8; 8])> {
+    pub fn iter(&self) -> impl Iterator<Item = (ArrayIdx<'_>, ArrayIdx<'_>, [u8; 8], [u8; 8])> {
         (0..self.time.len()).map(move |i| {
             let key = self.key.at(i);
             let val = self.val.at(i);

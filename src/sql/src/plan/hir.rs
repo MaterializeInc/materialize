@@ -3129,7 +3129,7 @@ impl HirScalarExpr {
         Ok(HirScalarExpr::Literal(row, scalar_type, TreatAsEqual(None)))
     }
 
-    pub fn as_literal(&self) -> Option<Datum> {
+    pub fn as_literal(&self) -> Option<Datum<'_>> {
         if let HirScalarExpr::Literal(row, _column_type, _name) = self {
             Some(row.unpack_first())
         } else {

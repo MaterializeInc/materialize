@@ -842,7 +842,7 @@ trait ResultSender: Send {
     );
 
     /// Returns a future that resolves only when the client connection has gone away.
-    fn connection_error(&mut self) -> BoxFuture<Error>;
+    fn connection_error(&mut self) -> BoxFuture<'_, Error>;
     /// Reports whether the client supports streaming SUBSCRIBE results.
     fn allow_subscribe(&self) -> bool;
 
@@ -898,7 +898,7 @@ impl ResultSender for SqlResponse {
         (Ok(res), stmt_logging)
     }
 
-    fn connection_error(&mut self) -> BoxFuture<Error> {
+    fn connection_error(&mut self) -> BoxFuture<'_, Error> {
         Box::pin(futures::future::pending())
     }
 
@@ -1098,7 +1098,7 @@ impl ResultSender for WebSocket {
 
     // Send a websocket Ping every second to verify the client is still
     // connected.
-    fn connection_error(&mut self) -> BoxFuture<Error> {
+    fn connection_error(&mut self) -> BoxFuture<'_, Error> {
         Box::pin(async {
             let mut tick = time::interval(Duration::from_secs(1));
             tick.tick().await;

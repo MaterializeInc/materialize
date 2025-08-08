@@ -3635,7 +3635,7 @@ impl AnalyzedRegex {
     }
 }
 
-pub fn csv_extract(a: Datum, n_cols: usize) -> impl Iterator<Item = (Row, Diff)> + '_ {
+pub fn csv_extract(a: Datum<'_>, n_cols: usize) -> impl Iterator<Item = (Row, Diff)> + '_ {
     let bytes = a.unwrap_str().as_bytes();
     let mut row = Row::default();
     let csv_reader = csv::ReaderBuilder::new()

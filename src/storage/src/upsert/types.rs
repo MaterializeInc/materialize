@@ -90,7 +90,6 @@ use std::time::Instant;
 
 use bincode::Options;
 use itertools::Itertools;
-use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_repr::{Diff, GlobalId};
 use serde::{Serialize, de::DeserializeOwned};
@@ -302,7 +301,9 @@ impl<T, O> StateValue<T, O> {
     /// 2. An estimate (it only looks at value sizes, and not errors)
     ///
     /// Other implementations may use more accurate accounting.
+    #[cfg(test)]
     pub fn memory_size(&self) -> u64 {
+        use mz_ore::cast::CastFrom;
         match self {
             // Similar to `Row::byte_len`, we add the heap size and the size of the value itself.
             Self::Consolidating(Consolidating { value_xor, .. }) => {

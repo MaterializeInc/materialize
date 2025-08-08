@@ -418,7 +418,7 @@ impl KafkaSinkConnection {
     }
 
     /// Returns the name of the progress topic to use for the sink.
-    pub fn progress_topic(&self, connection_context: &ConnectionContext) -> Cow<str> {
+    pub fn progress_topic(&self, connection_context: &ConnectionContext) -> Cow<'_, str> {
         self.connection
             .progress_topic(connection_context, self.connection_id)
     }

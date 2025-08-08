@@ -91,7 +91,7 @@ impl MaelstromConsensus {
 
 #[async_trait]
 impl Consensus for MaelstromConsensus {
-    fn list_keys(&self) -> ResultStream<String> {
+    fn list_keys(&self) -> ResultStream<'_, String> {
         unimplemented!("TODO")
     }
 

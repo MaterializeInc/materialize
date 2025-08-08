@@ -605,7 +605,7 @@ impl RowRef {
     }
 
     /// Unpack `self` into a `Vec<Datum>` for efficient random access.
-    pub fn unpack(&self) -> Vec<Datum> {
+    pub fn unpack(&self) -> Vec<Datum<'_>> {
         // It's usually cheaper to unpack twice to figure out the right length than it is to grow the vec as we go
         let len = self.iter().count();
         let mut vec = Vec::with_capacity(len);
@@ -616,12 +616,12 @@ impl RowRef {
     /// Return the first [`Datum`] in `self`
     ///
     /// Panics if the [`RowRef`] is empty.
-    pub fn unpack_first(&self) -> Datum {
+    pub fn unpack_first(&self) -> Datum<'_> {
         self.iter().next().unwrap()
     }
 
     /// Iterate the [`Datum`] elements of the [`RowRef`].
-    pub fn iter(&self) -> DatumListIter {
+    pub fn iter(&self) -> DatumListIter<'_> {
         DatumListIter { data: &self.0 }
     }
 
@@ -1959,7 +1959,7 @@ impl RowPacker<'_> {
     /// This function is intentionally somewhat inconvenient to call. You
     /// usually want to call [`Row::packer`] instead to start packing from
     /// scratch.
-    pub fn for_existing_row(row: &mut Row) -> RowPacker {
+    pub fn for_existing_row(row: &mut Row) -> RowPacker<'_> {
         RowPacker { row }
     }
 

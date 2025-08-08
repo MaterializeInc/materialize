@@ -2033,26 +2033,31 @@ where
 }
 
 #[sqlfunc(is_infix_op = true, sqlname = "@>", propagates_nulls = true)]
+#[allow(dead_code)]
 fn range_contains_i32<'a>(a: Range<Datum<'a>>, b: i32) -> bool {
     a.contains_elem(&b)
 }
 
 #[sqlfunc(is_infix_op = true, sqlname = "@>", propagates_nulls = true)]
+#[allow(dead_code)]
 fn range_contains_i64<'a>(a: Range<Datum<'a>>, elem: i64) -> bool {
     a.contains_elem(&elem)
 }
 
 #[sqlfunc(is_infix_op = true, sqlname = "@>", propagates_nulls = true)]
+#[allow(dead_code)]
 fn range_contains_date<'a>(a: Range<Datum<'a>>, elem: Date) -> bool {
     a.contains_elem(&elem)
 }
 
 #[sqlfunc(is_infix_op = true, sqlname = "@>", propagates_nulls = true)]
+#[allow(dead_code)]
 fn range_contains_numeric<'a>(a: Range<Datum<'a>>, elem: OrderedDecimal<Numeric>) -> bool {
     a.contains_elem(&elem)
 }
 
 #[sqlfunc(is_infix_op = true, sqlname = "@>", propagates_nulls = true)]
+#[allow(dead_code)]
 fn range_contains_timestamp<'a>(
     a: Range<Datum<'a>>,
     elem: CheckedTimestamp<NaiveDateTime>,
@@ -2061,6 +2066,7 @@ fn range_contains_timestamp<'a>(
 }
 
 #[sqlfunc(is_infix_op = true, sqlname = "@>", propagates_nulls = true)]
+#[allow(dead_code)]
 fn range_contains_timestamp_tz<'a>(
     a: Range<Datum<'a>>,
     elem: CheckedTimestamp<DateTime<Utc>>,
@@ -2069,26 +2075,31 @@ fn range_contains_timestamp_tz<'a>(
 }
 
 #[sqlfunc(is_infix_op = true, sqlname = "<@", propagates_nulls = true)]
+#[allow(dead_code)]
 fn range_contains_i32_rev<'a>(a: Range<Datum<'a>>, b: i32) -> bool {
     a.contains_elem(&b)
 }
 
 #[sqlfunc(is_infix_op = true, sqlname = "<@", propagates_nulls = true)]
+#[allow(dead_code)]
 fn range_contains_i64_rev<'a>(a: Range<Datum<'a>>, elem: i64) -> bool {
     a.contains_elem(&elem)
 }
 
 #[sqlfunc(is_infix_op = true, sqlname = "<@", propagates_nulls = true)]
+#[allow(dead_code)]
 fn range_contains_date_rev<'a>(a: Range<Datum<'a>>, elem: Date) -> bool {
     a.contains_elem(&elem)
 }
 
 #[sqlfunc(is_infix_op = true, sqlname = "<@", propagates_nulls = true)]
+#[allow(dead_code)]
 fn range_contains_numeric_rev<'a>(a: Range<Datum<'a>>, elem: OrderedDecimal<Numeric>) -> bool {
     a.contains_elem(&elem)
 }
 
 #[sqlfunc(is_infix_op = true, sqlname = "<@", propagates_nulls = true)]
+#[allow(dead_code)]
 fn range_contains_timestamp_rev<'a>(
     a: Range<Datum<'a>>,
     elem: CheckedTimestamp<NaiveDateTime>,
@@ -2097,6 +2108,7 @@ fn range_contains_timestamp_rev<'a>(
 }
 
 #[sqlfunc(is_infix_op = true, sqlname = "<@", propagates_nulls = true)]
+#[allow(dead_code)]
 fn range_contains_timestamp_tz_rev<'a>(
     a: Range<Datum<'a>>,
     elem: CheckedTimestamp<DateTime<Utc>>,
@@ -2267,6 +2279,7 @@ where
 }
 
 #[sqlfunc(output_type = "String", sqlname = "tocharts", propagates_nulls = true)]
+#[allow(dead_code)]
 fn to_char_timestamp_format<'a>(a: Datum<'a>, format: &str) -> String {
     let ts = a.unwrap_timestamp();
     let fmt = DateTimeFormat::compile(format);
@@ -2278,6 +2291,7 @@ fn to_char_timestamp_format<'a>(a: Datum<'a>, format: &str) -> String {
     sqlname = "tochartstz",
     propagates_nulls = true
 )]
+#[allow(dead_code)]
 fn to_char_timestamp_tz_format<'a>(a: Datum<'a>, format: &str) -> String {
     let ts = a.unwrap_timestamptz();
     let fmt = DateTimeFormat::compile(format);
@@ -2506,6 +2520,7 @@ fn list_contains_list<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     propagates_nulls = true,
     introduces_nulls = false
 )]
+#[allow(dead_code)]
 fn list_contains_list_rev<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     list_contains_list(b, a)
 }
@@ -2645,6 +2660,7 @@ where
     propagates_nulls = true,
     introduces_nulls = false
 )]
+#[allow(dead_code)]
 fn date_part_interval_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let units = a.unwrap_str();
     match units.parse() {
@@ -2659,6 +2675,7 @@ fn date_part_interval_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a
     propagates_nulls = true,
     introduces_nulls = false
 )]
+#[allow(dead_code)]
 fn date_part_interval_f64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let units = a.unwrap_str();
     match units.parse() {
@@ -2684,6 +2701,7 @@ where
     propagates_nulls = true,
     introduces_nulls = false
 )]
+#[allow(dead_code)]
 fn date_part_time_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let units = a.unwrap_str();
     match units.parse() {
@@ -2698,6 +2716,7 @@ fn date_part_time_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, E
     propagates_nulls = true,
     introduces_nulls = false
 )]
+#[allow(dead_code)]
 fn date_part_time_f64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let units = a.unwrap_str();
     match units.parse() {
@@ -2723,6 +2742,7 @@ where
     sqlname = "extractts",
     propagates_nulls = true
 )]
+#[allow(dead_code)]
 fn date_part_timestamp_timestamp_numeric<'a>(
     units: &str,
     ts: CheckedTimestamp<NaiveDateTime>,
@@ -2738,6 +2758,7 @@ fn date_part_timestamp_timestamp_numeric<'a>(
     sqlname = "extracttstz",
     propagates_nulls = true
 )]
+#[allow(dead_code)]
 fn date_part_timestamp_timestamp_tz_numeric<'a>(
     units: &str,
     ts: CheckedTimestamp<DateTime<Utc>>,
@@ -2749,6 +2770,7 @@ fn date_part_timestamp_timestamp_tz_numeric<'a>(
 }
 
 #[sqlfunc(sqlname = "date_partts", propagates_nulls = true)]
+#[allow(dead_code)]
 fn date_part_timestamp_timestamp_f64(
     units: &str,
     ts: CheckedTimestamp<NaiveDateTime>,
@@ -2760,6 +2782,7 @@ fn date_part_timestamp_timestamp_f64(
 }
 
 #[sqlfunc(sqlname = "date_parttstz", propagates_nulls = true)]
+#[allow(dead_code)]
 fn date_part_timestamp_timestamp_tz_f64(
     units: &str,
     ts: CheckedTimestamp<DateTime<Utc>>,
@@ -2832,6 +2855,7 @@ where
     sqlname = "bin_unix_epoch_timestamp",
     propagates_nulls = true
 )]
+#[allow(dead_code)]
 fn date_bin_timestamp<'a>(
     stride: Interval,
     source: CheckedTimestamp<NaiveDateTime>,
@@ -2848,6 +2872,7 @@ fn date_bin_timestamp<'a>(
     sqlname = "bin_unix_epoch_timestamptz",
     propagates_nulls = true
 )]
+#[allow(dead_code)]
 fn date_bin_timestamp_tz<'a>(
     stride: Interval,
     source: CheckedTimestamp<DateTime<Utc>>,
@@ -2869,6 +2894,7 @@ where
 }
 
 #[sqlfunc(sqlname = "date_truncts", propagates_nulls = true)]
+#[allow(dead_code)]
 fn date_trunc_units_timestamp(
     units: &str,
     ts: CheckedTimestamp<NaiveDateTime>,
@@ -2880,6 +2906,7 @@ fn date_trunc_units_timestamp(
 }
 
 #[sqlfunc(sqlname = "date_trunctstz", propagates_nulls = true)]
+#[allow(dead_code)]
 fn date_trunc_units_timestamp_tz(
     units: &str,
     ts: CheckedTimestamp<DateTime<Utc>>,
@@ -7747,7 +7774,7 @@ fn regexp_replace_dynamic<'a>(
 
 /// Sets `limit` based on the presence of 'g' in `flags` for use in `Regex::replacen`,
 /// and removes 'g' from `flags` if present.
-pub(crate) fn regexp_replace_parse_flags(flags: &str) -> (usize, Cow<str>) {
+pub(crate) fn regexp_replace_parse_flags(flags: &str) -> (usize, Cow<'_, str>) {
     // 'g' means to replace all instead of the first. Use a Cow to avoid allocating in the fast
     // path. We could switch build_regex to take an iter which would also achieve that.
     let (limit, flags) = if flags.contains('g') {
@@ -8639,6 +8666,7 @@ fn array_contains_array<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     propagates_nulls = true,
     introduces_nulls = false
 )]
+#[allow(dead_code)]
 fn array_contains_array_rev<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     array_contains_array(a, b)
 }

@@ -669,7 +669,7 @@ struct BuiltinReader<'a> {
 }
 
 impl<'a> BuiltinReader<'a> {
-    fn new(line: &str, pos: usize) -> BuiltinReader {
+    fn new(line: &str, pos: usize) -> BuiltinReader<'_> {
         BuiltinReader {
             inner: &line[1..],
             pos,
@@ -781,7 +781,7 @@ impl<'a> Iterator for BuiltinReader<'a> {
 pub struct ArgMap(BTreeMap<String, String>);
 
 impl ArgMap {
-    pub fn values_mut(&mut self) -> btree_map::ValuesMut<String, String> {
+    pub fn values_mut(&mut self) -> btree_map::ValuesMut<'_, String, String> {
         self.0.values_mut()
     }
 
