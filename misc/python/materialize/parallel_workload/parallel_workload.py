@@ -140,7 +140,7 @@ def run(
             system_exe.execute("DROP CLUSTER quickstart CASCADE")
             replica_names = [f"r{replica_id}" for replica_id in range(0, replicas)]
             replica_string = ",".join(
-                f"{replica_name} (SIZE 'scale=1,workers=4')"
+                f"{replica_name} (SIZE 'scale=1-workers=4')"
                 for replica_name in replica_names
             )
             system_exe.execute(

@@ -665,7 +665,7 @@ def bootstrap_cluster_replica_size() -> str:
 
 
 def cluster_replica_size_map() -> dict[str, dict[str, Any]]:
-    """workers=<n>,scale=<n>[,mem=<n>GiB][,no-disk]"""
+    """scale=<n>-workers=<n>[-mem=<n>GiB][-nodisk]"""
 
     def replica_size(
         scale: int,
@@ -689,9 +689,9 @@ def cluster_replica_size_map() -> dict[str, dict[str, Any]]:
 
     replica_sizes = {
         bootstrap_cluster_replica_size(): replica_size(1, 1),
-        "scale=2,workers=4": replica_size(2, 4),
-        "scale=1,workers=1,no-disk": replica_size(1, 1, is_cc=False),
-        "scale=1,workers=2,no-disk": replica_size(1, 2, is_cc=False),
+        "scale=2-workers=4": replica_size(2, 4),
+        "scale=1-workers=1-nodisk": replica_size(1, 1, is_cc=False),
+        "scale=1-workers=2-nodisk": replica_size(1, 2, is_cc=False),
         # Intentionally not following the naming scheme
         "free": replica_size(0, 0, disabled=True),
         "1cc": replica_size(1, 1),
@@ -700,17 +700,17 @@ def cluster_replica_size_map() -> dict[str, dict[str, Any]]:
 
     for i in range(0, 6):
         workers = 1 << i
-        replica_sizes[f"scale=1,workers={workers}"] = replica_size(1, workers)
+        replica_sizes[f"scale=1-workers={workers}"] = replica_size(1, workers)
         for mem in [4, 8, 16, 32]:
-            replica_sizes[f"scale=1,workers={workers},mem={mem}GiB"] = replica_size(
+            replica_sizes[f"scale=1-workers={workers}-mem={mem}GiB"] = replica_size(
                 1, workers, memory_limit=f"{mem} GiB"
             )
 
-        replica_sizes[f"scale={workers},workers=1"] = replica_size(workers, 1)
-        replica_sizes[f"scale={workers},workers={workers}"] = replica_size(
+        replica_sizes[f"scale={workers}-workers=1"] = replica_size(workers, 1)
+        replica_sizes[f"scale={workers}-workers={workers}"] = replica_size(
             workers, workers
         )
-        replica_sizes[f"scale=1,workers={workers},mem={workers}GiB"] = replica_size(
+        replica_sizes[f"scale=1-workers={workers}-mem={workers}GiB"] = replica_size(
             1, workers, memory_limit=f"{workers} GiB"
         )
 

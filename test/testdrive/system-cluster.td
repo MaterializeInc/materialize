@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 $ set-arg-default replicas=1
-$ set-arg-default default-replica-size=scale=1,workers=1
+$ set-arg-default default-replica-size=scale=1-workers=1
 
 # The expected number of rows in system tables depends on the number of replicas
 $ skip-if
@@ -48,13 +48,13 @@ ALTER SYSTEM SET enable_rbac_checks TO true
 ! DROP CLUSTER mz_joe CASCADE
 contains:unknown cluster 'mz_joe'
 
-! CREATE CLUSTER mz_joe REPLICAS (r1 (SIZE 'scale=1,workers=1'))
+! CREATE CLUSTER mz_joe REPLICAS (r1 (SIZE 'scale=1-workers=1'))
 contains:cluster name "mz_joe" is reserved
 
 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
 ALTER SYSTEM SET enable_rbac_checks TO false
 
-! CREATE CLUSTER REPLICA mz_system.r2 SIZE 'scale=1,workers=1';
+! CREATE CLUSTER REPLICA mz_system.r2 SIZE 'scale=1-workers=1';
 contains: cannot modify managed cluster mz_system
 
 ! DROP CLUSTER REPLICA mz_system.r1;
@@ -114,7 +114,7 @@ mz_system r1 bootstrap <TRUE_OR_FALSE> ""
 contains: must be owner of CLUSTER mz_support
 
 $ postgres-execute connection=postgres://mz_support@${testdrive.materialize-internal-sql-addr}/materializeI
-ALTER CLUSTER mz_support SET (replication factor 0, SIZE 'scale=1,workers=1');
+ALTER CLUSTER mz_support SET (replication factor 0, SIZE 'scale=1-workers=1');
 
 $ unset-regex
 

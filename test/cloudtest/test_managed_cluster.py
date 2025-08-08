@@ -28,7 +28,7 @@ def test_managed_cluster_sizing(mz: MaterializeApplication) -> None:
     SIZE = 2
 
     mz.environmentd.sql(
-        f"CREATE CLUSTER sized1 SIZE 'scale={SIZE},workers=1', REPLICATION FACTOR 2"
+        f"CREATE CLUSTER sized1 SIZE 'scale={SIZE}-workers=1', REPLICATION FACTOR 2"
     )
     cluster_id = mz.environmentd.sql_query(
         "SELECT id FROM mz_clusters WHERE name = 'sized1'"
@@ -173,7 +173,7 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
 
     mz.environmentd.sql(
         """
-        ALTER CLUSTER zdtaltertest SET ( SIZE = 'scale=1,workers=2' ) WITH ( WAIT FOR '1ms' )
+        ALTER CLUSTER zdtaltertest SET ( SIZE = 'scale=1-workers=2' ) WITH ( WAIT FOR '1ms' )
         """,
         port="internal",
         user="mz_system",
@@ -182,7 +182,7 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
 
     mz.environmentd.sql(
         """
-        ALTER CLUSTER zdtaltertest SET ( SIZE = 'scale=1,workers=1', REPLICATION FACTOR 2 ) WITH ( WAIT FOR '1ms' )
+        ALTER CLUSTER zdtaltertest SET ( SIZE = 'scale=1-workers=1', REPLICATION FACTOR 2 ) WITH ( WAIT FOR '1ms' )
         """,
         port="internal",
         user="mz_system",
@@ -191,7 +191,7 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
 
     mz.environmentd.sql(
         """
-        ALTER CLUSTER zdtaltertest SET ( SIZE = 'scale=1,workers=1', REPLICATION FACTOR 1 ) WITH ( WAIT FOR '1ms' )
+        ALTER CLUSTER zdtaltertest SET ( SIZE = 'scale=1-workers=1', REPLICATION FACTOR 1 ) WITH ( WAIT FOR '1ms' )
         """,
         port="internal",
         user="mz_system",
@@ -200,7 +200,7 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
 
     mz.environmentd.sql(
         """
-        ALTER CLUSTER zdtaltertest SET ( SIZE = 'scale=1,workers=2', REPLICATION FACTOR 2 ) WITH ( WAIT FOR '1ms' )
+        ALTER CLUSTER zdtaltertest SET ( SIZE = 'scale=1-workers=2', REPLICATION FACTOR 2 ) WITH ( WAIT FOR '1ms' )
         """,
         port="internal",
         user="mz_system",
@@ -209,7 +209,7 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
 
     mz.environmentd.sql(
         """
-        ALTER CLUSTER zdtaltertest SET ( SIZE = 'scale=1,workers=1', REPLICATION FACTOR 1 ) WITH ( WAIT FOR '1ms' )
+        ALTER CLUSTER zdtaltertest SET ( SIZE = 'scale=1-workers=1', REPLICATION FACTOR 1 ) WITH ( WAIT FOR '1ms' )
         """,
         port="internal",
         user="mz_system",
@@ -230,7 +230,7 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
         $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
         DROP CLUSTER IF EXISTS zdtaltertest CASCADE;
         DROP TABLE IF EXISTS t CASCADE;
-        CREATE CLUSTER zdtaltertest ( SIZE = 'scale=1,workers=1');
+        CREATE CLUSTER zdtaltertest ( SIZE = 'scale=1-workers=1');
         GRANT ALL ON CLUSTER zdtaltertest TO materialize;
 
         SET CLUSTER = zdtaltertest;
@@ -263,7 +263,7 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
     def zero_downtime_alter():
         mz.environmentd.sql(
             """
-            ALTER CLUSTER zdtaltertest SET (SIZE = 'scale=1,workers=2') WITH ( WAIT FOR '5s')
+            ALTER CLUSTER zdtaltertest SET (SIZE = 'scale=1-workers=2') WITH ( WAIT FOR '5s')
             """,
             port="internal",
             user="mz_system",
@@ -299,7 +299,7 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
     mz.environmentd.sql(
         """
         DROP CLUSTER IF EXISTS cluster1 CASCADE;
-        CREATE CLUSTER cluster1 ( SIZE = 'scale=1,workers=1');
+        CREATE CLUSTER cluster1 ( SIZE = 'scale=1-workers=1');
         """,
         port="internal",
         user="mz_system",
@@ -332,7 +332,7 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
         target=query_with_conn,
         args=[
             """
-            ALTER CLUSTER cluster1 SET (SIZE = 'scale=1,workers=2') WITH ( WAIT FOR '5s')
+            ALTER CLUSTER cluster1 SET (SIZE = 'scale=1-workers=2') WITH ( WAIT FOR '5s')
             """,
             conn,
             True,

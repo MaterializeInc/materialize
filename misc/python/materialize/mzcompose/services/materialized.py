@@ -221,16 +221,16 @@ class Materialized(Service):
                 command += ["--unsafe-mode"]
 
         self.default_storage_size = (
-            "scale=1,workers=1"
+            "scale=1-workers=1"
             if default_size == 1
-            else f"scale={default_size},workers=1"
+            else f"scale={default_size}-workers=1"
         )
 
         self.default_replica_size = (
-            "scale=1,workers=1"
+            "scale=1-workers=1"
             if default_size == 1
             else (
-                f"scale={default_size},workers={default_size}"
+                f"scale={default_size}-workers={default_size}"
                 if isinstance(default_size, int)
                 else default_size
             )

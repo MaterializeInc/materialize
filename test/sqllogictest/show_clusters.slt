@@ -23,7 +23,7 @@ statement ok
 CREATE CLUSTER foo REPLICAS ()
 
 statement ok
-CREATE CLUSTER bar REPLICAS (r1 (SIZE 'scale=1,workers=1'), r2 (SIZE 'scale=1,workers=1'))
+CREATE CLUSTER bar REPLICAS (r1 (SIZE 'scale=1-workers=1'), r2 (SIZE 'scale=1-workers=1'))
 
 query TT rowsort
 SELECT name, replicas FROM (SHOW CLUSTERS) WHERE name != 'quickstart'
