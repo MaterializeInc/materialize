@@ -38,7 +38,7 @@ clap = { version = "4.5.23", features = ["derive"] }
 differential-dataflow = "0.16.0"
 futures = "0.3.31"
 futures-util = "0.3"
-h2 = "0.4.11"
+h2 = "0.4.12"
 hex = "0.4.3"
 itertools = "0.14.0"
 mz-build-info = { path = "../build-info" }
