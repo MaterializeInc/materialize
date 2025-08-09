@@ -101,12 +101,12 @@ impl<T> JoinHandle<T> {
         AbortOnDropHandle(self.0)
     }
 
-    /// Checks if the task associated with this [`JoinHandle`] has finished.a
+    /// Checks if the task associated with this [`JoinHandle`] has finished.
     pub fn is_finished(&self) -> bool {
         self.0.is_finished()
     }
 
-    /// Checks if the task associated with this [`JoinHandle`] has finished.a
+    /// Checks if the task associated with this [`JoinHandle`] has finished.
     pub fn into_tokio_handle(self) -> TokioJoinHandle<T> {
         self.0
     }

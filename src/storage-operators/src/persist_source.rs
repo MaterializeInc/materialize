@@ -18,6 +18,7 @@ use std::hash::Hash;
 use std::sync::Arc;
 use std::time::Instant;
 
+use crate::metrics::BackpressureMetrics;
 use differential_dataflow::lattice::Lattice;
 use futures::{StreamExt, future::Either};
 use mz_expr::{ColumnSpecs, Interpreter, MfpPlan, ResultSpec, UnmaterializableFunc};
@@ -31,6 +32,7 @@ use mz_persist_client::fetch::{FetchedBlob, FetchedPart};
 use mz_persist_client::operators::shard_source::{
     ErrorHandler, FilterResult, SnapshotMode, shard_source,
 };
+use mz_persist_client::operators::time::AsOfBounds;
 use mz_persist_types::Codec64;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::columnar::{ColumnEncoder, Schema};
@@ -64,8 +66,6 @@ use timely::progress::timestamp::PathSummary;
 use timely::scheduling::Activator;
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::trace;
-
-use crate::metrics::BackpressureMetrics;
 
 /// This opaque token represents progress within a timestamp, allowing finer-grained frontier
 /// progress than would otherwise be possible.
@@ -144,7 +144,7 @@ pub fn persist_source<G>(
     worker_dyncfgs: &ConfigSet,
     metadata: CollectionMetadata,
     read_schema: Option<RelationDesc>,
-    as_of: Option<Antichain<Timestamp>>,
+    as_of: &AsOfBounds<G::Timestamp>,
     snapshot_mode: SnapshotMode,
     until: Antichain<Timestamp>,
     map_filter_project: Option<&mut MfpPlan>,
@@ -208,7 +208,7 @@ where
             Arc::clone(&persist_clients),
             metadata.clone(),
             read_schema,
-            as_of.clone(),
+            as_of,
             snapshot_mode,
             until.clone(),
             map_filter_project,
@@ -246,10 +246,7 @@ where
             },
             txns_shard,
             metadata.data_shard,
-            as_of
-                .expect("as_of is provided for table sources")
-                .into_option()
-                .expect("shard is not closed"),
+            as_of,
             until,
             Arc::new(metadata.relation_desc),
             Arc::new(UnitSchema),
@@ -279,7 +276,7 @@ pub fn persist_source_core<'g, G>(
     persist_clients: Arc<PersistClientCache>,
     metadata: CollectionMetadata,
     read_schema: Option<RelationDesc>,
-    as_of: Option<Antichain<Timestamp>>,
+    as_of: &AsOfBounds<G::Timestamp>,
     snapshot_mode: SnapshotMode,
     until: Antichain<Timestamp>,
     map_filter_project: Option<&mut MfpPlan>,

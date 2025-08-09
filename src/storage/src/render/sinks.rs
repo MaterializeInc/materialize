@@ -12,6 +12,8 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::healthcheck::HealthStatusMessage;
+use crate::storage_state::StorageState;
 use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::trace::implementations::ord_neu::{
     ColValBatcher, ColValBuilder, ColValSpine,
@@ -20,6 +22,7 @@ use differential_dataflow::{AsCollection, Collection, Hashable};
 use mz_interchange::avro::DiffPair;
 use mz_interchange::envelopes::combine_at_timestamp;
 use mz_persist_client::operators::shard_source::SnapshotMode;
+use mz_persist_client::operators::time::AsOfBounds;
 use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
 use mz_storage_operators::persist_source;
 use mz_storage_types::controller::CollectionMetadata;
@@ -29,9 +32,6 @@ use mz_timely_util::builder_async::PressOnDropButton;
 use timely::dataflow::operators::Leave;
 use timely::dataflow::{Scope, Stream};
 use tracing::warn;
-
-use crate::healthcheck::HealthStatusMessage;
-use crate::storage_state::StorageState;
 
 /// _Renders_ complete _differential_ [`Collection`]s
 /// that represent the sink and its errors as requested
@@ -55,6 +55,8 @@ where
 
     let name = format!("{sink_id}-sinks");
 
+    let bounds = AsOfBounds::new(error_handler.clone(), None);
+
     scope.scoped(&name, |scope| {
         let mut tokens = vec![];
         let sink_render = get_sink_render_for(&sink.connection);
@@ -67,7 +69,7 @@ where
             storage_state.storage_configuration.config_set(),
             sink.from_storage_metadata.clone(),
             None,
-            Some(sink.as_of.clone()),
+            &bounds,
             snapshot_mode,
             timely::progress::Antichain::new(),
             None,
@@ -81,6 +83,7 @@ where
             zip_into_diff_pairs(sink_id, sink, &*sink_render, ok_collection.as_collection());
 
         let (health, sink_tokens) = sink_render.render_sink(
+            &bounds,
             storage_state,
             sink,
             sink_id,
@@ -202,6 +205,7 @@ where
     /// Renders the sink's dataflow.
     fn render_sink(
         &self,
+        bounds: &AsOfBounds<Timestamp>,
         storage_state: &mut StorageState,
         sink: &StorageSinkDesc<CollectionMetadata, Timestamp>,
         sink_id: GlobalId,
