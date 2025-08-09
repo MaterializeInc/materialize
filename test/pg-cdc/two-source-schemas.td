@@ -44,9 +44,11 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 INSERT INTO schema1.t1 SELECT * FROM schema1.t1;
 INSERT INTO schema2.t1 SELECT * FROM schema2.t1;
 
+> BEGIN
 > CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
 
+> COMMIT
 > CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE schema1.t1);
 ! CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE schema2.t1);
 contains:catalog item 't1' already exists
@@ -64,9 +66,11 @@ contains:reference t1 is ambiguous, consider specifying an additional layer of q
 
 > DROP SOURCE mz_source CASCADE;
 
+> BEGIN
 > CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
 > CREATE TABLE t1_1 FROM SOURCE mz_source (REFERENCE schema1.t1);
 > CREATE TABLE t1_2 FROM SOURCE mz_source (REFERENCE schema2.t1);
+> COMMIT
 
 > SELECT * FROM t1_1;
 1

@@ -24,10 +24,12 @@ USE public;
 CREATE TABLE t (f1 TEXT);
 INSERT INTO t VALUES ('ghp_9fK8sL3x7TqR1vEzYm2pDaN4WjXbQzUtV0aN');
 
+> BEGIN
 > CREATE SOURCE mysql_source
   FROM MYSQL CONNECTION mysql_conn;
 
 > CREATE TABLE t FROM SOURCE mysql_source (REFERENCE public.t);
+> COMMIT
 
 > SELECT * FROM t
 ghp_9fK8sL3x7TqR1vEzYm2pDaN4WjXbQzUtV0aN

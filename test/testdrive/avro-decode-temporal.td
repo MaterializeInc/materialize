@@ -25,6 +25,7 @@ $ kafka-ingest format=avro topic=avro-decode-date schema=${date} timestamp=1
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CLUSTER avro_decode_date_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE avro_decode_date
   IN CLUSTER avro_decode_date_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-decode-date-${testdrive.seed}')
@@ -32,6 +33,7 @@ $ kafka-ingest format=avro topic=avro-decode-date schema=${date} timestamp=1
 > CREATE TABLE avro_decode_date_tbl FROM SOURCE avro_decode_date (REFERENCE "testdrive-avro-decode-date-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${date}'
   ENVELOPE NONE
+> COMMIT
 
 > SELECT * FROM avro_decode_date_tbl
 1969-12-31
@@ -52,6 +54,7 @@ $ kafka-ingest format=avro topic=avro-decode-time-millis schema=${time-millis} t
 {"f1": 12345678}
 
 > CREATE CLUSTER avro_decode_time_millis_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE avro_decode_time_millis
   IN CLUSTER avro_decode_time_millis_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-decode-date-${testdrive.seed}')
@@ -59,6 +62,7 @@ $ kafka-ingest format=avro topic=avro-decode-time-millis schema=${time-millis} t
 > CREATE TABLE avro_decode_time_millis_tbl FROM SOURCE avro_decode_time_millis (REFERENCE "testdrive-avro-decode-date-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${time-millis}'
   ENVELOPE NONE
+> COMMIT
 
 > SELECT * FROM avro_decode_time_millis_tbl
 -1
@@ -85,6 +89,7 @@ $ kafka-ingest format=avro topic=avro-decode-timestamp-millis schema=${timestamp
 {"f1": 1234567890}
 
 > CREATE CLUSTER avro_decode_timestamp_millis_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE avro_decode_timestamp_millis
   IN CLUSTER avro_decode_timestamp_millis_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-decode-timestamp-millis-${testdrive.seed}')
@@ -92,6 +97,7 @@ $ kafka-ingest format=avro topic=avro-decode-timestamp-millis schema=${timestamp
 > CREATE TABLE avro_decode_timestamp_millis_tbl FROM SOURCE avro_decode_timestamp_millis (REFERENCE "testdrive-avro-decode-timestamp-millis-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${timestamp-millis}'
   ENVELOPE NONE
+> COMMIT
 
 > SELECT * FROM avro_decode_timestamp_millis_tbl
 "1970-01-01 00:00:00"
@@ -122,6 +128,7 @@ $ kafka-ingest format=avro topic=avro-decode-timestamp-micros schema=${timestamp
 {"f1": 1234567890}
 
 > CREATE CLUSTER avro_decode_timestamp_micros_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE avro_decode_timestamp_micros
   IN CLUSTER avro_decode_timestamp_micros_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-decode-timestamp-micros-${testdrive.seed}')
@@ -129,6 +136,7 @@ $ kafka-ingest format=avro topic=avro-decode-timestamp-micros schema=${timestamp
 > CREATE TABLE avro_decode_timestamp_micros_tbl FROM SOURCE avro_decode_timestamp_micros (REFERENCE "testdrive-avro-decode-timestamp-micros-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${timestamp-micros}'
   ENVELOPE NONE
+> COMMIT
 
 > SELECT * FROM avro_decode_timestamp_micros_tbl
 "1970-01-01 00:00:00"
@@ -158,6 +166,7 @@ $ kafka-ingest format=avro topic=avro-decode-local-timestamp-millis schema=${loc
 {"f1": 1234567890}
 
 > CREATE CLUSTER avro_decode_local_timestamp_millis_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE avro_decode_local_timestamp_millis
   IN CLUSTER avro_decode_local_timestamp_millis_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-decode-local-timestamp-millis-${testdrive.seed}')
@@ -165,6 +174,7 @@ $ kafka-ingest format=avro topic=avro-decode-local-timestamp-millis schema=${loc
 > CREATE TABLE avro_decode_local_timestamp_millis_tbl FROM SOURCE avro_decode_local_timestamp_millis (REFERENCE "testdrive-avro-decode-local-timestamp-millis-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${local-timestamp-millis}'
   ENVELOPE NONE
+> COMMIT
 
 > SELECT * FROM avro_decode_local_timestamp_millis_tbl
 0

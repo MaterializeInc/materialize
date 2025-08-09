@@ -29,6 +29,7 @@ $ kafka-ingest format=avro topic=re-created schema=${schema} repeat=10
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE re_created
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-re-created-${testdrive.seed}')
 
@@ -36,6 +37,7 @@ $ kafka-ingest format=avro topic=re-created schema=${schema} repeat=10
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   INCLUDE PARTITION AS kafka_partition, OFFSET AS mz_offset
   ENVELOPE NONE
+> COMMIT
 
 > CREATE VIEW a_view AS SELECT * FROM re_created_tbl;
 > CREATE DEFAULT INDEX ON a_view;

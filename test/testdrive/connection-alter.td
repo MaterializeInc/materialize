@@ -35,12 +35,14 @@ conn   kafka
     SECURITY PROTOCOL PLAINTEXT
   )
 
+> BEGIN
 > CREATE SOURCE mz_source
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION conn (TOPIC 'testdrive-connection_test-${testdrive.seed}')
 
 > CREATE TABLE mz_source_tbl (first, second) FROM SOURCE mz_source (REFERENCE "testdrive-connection_test-${testdrive.seed}")
   FORMAT CSV WITH 2 COLUMNS
+> COMMIT
 
 > SELECT * FROM mz_source_tbl
 first second

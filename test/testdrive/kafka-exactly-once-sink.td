@@ -168,20 +168,24 @@ $ kafka-ingest format=avro topic=input_dbz key-format=avro key-schema=${dbz-key-
   );
 
 > CREATE CLUSTER input_kafka_cdcv2_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE input_kafka_cdcv2
   IN CLUSTER input_kafka_cdcv2_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input_cdcv2-${testdrive.seed}')
 
 > CREATE TABLE input_kafka_cdcv2_tbl FROM SOURCE input_kafka_cdcv2 (REFERENCE "testdrive-input_cdcv2-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${cdcv2-schema}' ENVELOPE MATERIALIZE
+> COMMIT
 
 > CREATE CLUSTER input_kafka_dbz_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE input_kafka_dbz
   IN CLUSTER input_kafka_dbz_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input_dbz-${testdrive.seed}')
 
 > CREATE TABLE input_kafka_dbz_tbl FROM SOURCE input_kafka_dbz (REFERENCE "testdrive-input_dbz-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE TABLE input_table (a bigint, b bigint)
 
@@ -328,12 +332,14 @@ $ kafka-create-topic topic=progress-test-input
   );
 
 > CREATE CLUSTER compaction_test_input_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE compaction_test_input
   IN CLUSTER compaction_test_input_cluster
   FROM KAFKA CONNECTION kafka_fixed (TOPIC 'testdrive-progress-test-input-${testdrive.seed}')
 
 > CREATE TABLE compaction_test_input_tbl FROM SOURCE compaction_test_input (REFERENCE "testdrive-progress-test-input-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${cdcv2-schema}' ENVELOPE MATERIALIZE
+> COMMIT
 
 > CREATE CLUSTER compaction_test_sink_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK compaction_test_sink
@@ -357,12 +363,14 @@ $ kafka-verify-data headers=materialize-timestamp format=avro sink=materialize.p
 1	{"before": null, "after": {"row": {"a": 2, "b": 2}}}
 
 > CREATE CLUSTER compaction_test_sink_check_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE compaction_test_sink_check
   IN CLUSTER compaction_test_sink_check_cluster
   FROM KAFKA CONNECTION kafka_fixed (TOPIC 'testdrive-progress-fixed-${testdrive.seed}')
 
 > CREATE TABLE compaction_test_sink_check_tbl FROM SOURCE compaction_test_sink_check (REFERENCE "testdrive-progress-fixed-${testdrive.seed}")
   FORMAT JSON ENVELOPE NONE
+> COMMIT
 
 # Retrieve all the progress messages that are beyond [2]. There should be
 # exactly one of them because the upper of the CDCv2 stream stops at [2].
@@ -379,12 +387,14 @@ $ kafka-ingest format=avro topic=rt-binding-progress-test-input key-format=avro 
 {"a": 1} {"before": null, "after": {"row": {"a": 1, "b": 1}}, "source": {"lsn": {"long": 3}, "sequence": {"string": "[\"1\", \"3\"]"}, "snapshot": {"string": "false"}}, "op": "c"}
 
 > CREATE CLUSTER rt_binding_progress_test_source_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE rt_binding_progress_test_source
   IN CLUSTER rt_binding_progress_test_source_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-rt-binding-progress-test-input-${testdrive.seed}')
 
 > CREATE TABLE rt_binding_progress_test_source_tbl FROM SOURCE rt_binding_progress_test_source (REFERENCE "testdrive-rt-binding-progress-test-input-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE DEBEZIUM
+> COMMIT
 
 > CREATE CLUSTER rt_binding_progress_test_sink_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK rt_binding_progress_test_sink

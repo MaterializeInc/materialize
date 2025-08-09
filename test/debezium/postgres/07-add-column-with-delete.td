@@ -26,12 +26,14 @@ $ schema-registry-wait topic=postgres.public.alter_add_column_with_delete
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE alter_add_column_with_delete
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.alter_add_column_with_delete');
 
 > CREATE TABLE alter_add_column_with_delete_tbl FROM SOURCE alter_add_column_with_delete (REFERENCE "postgres.public.alter_add_column_with_delete")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
+> COMMIT
 
 > SELECT f1 FROM alter_add_column_with_delete_tbl;
 123

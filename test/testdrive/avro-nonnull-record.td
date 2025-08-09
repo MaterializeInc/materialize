@@ -38,12 +38,14 @@ $ kafka-ingest topic=data format=avro schema=${writer-schema}
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE basic
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
 
 > CREATE TABLE basic_tbl FROM SOURCE basic (REFERENCE "testdrive-data-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${writer-schema}'
+> COMMIT
 
 > SELECT (b1.a).b, (b2.a).b FROM basic_tbl b1 LEFT JOIN basic_tbl b2 ON (b1.a).b = (b2.a).c
 1 1

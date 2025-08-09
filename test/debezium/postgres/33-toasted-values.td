@@ -28,12 +28,14 @@ $ schema-registry-wait topic=postgres.public.toasted_full
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE toasted_full
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.toasted_full');
 
 > CREATE TABLE toasted_full_tbl FROM SOURCE toasted_full (REFERENCE "postgres.public.toasted_full")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
+> COMMIT
 
 > SELECT length(f1) = (32 * 1024) + 1, substr(f1, 1, 2), substr(f1, 32 * 1024, 2) FROM toasted_full_tbl;
 <null> <null> <null>

@@ -28,6 +28,7 @@ $ kafka-ingest format=avro topic=resolution-arrays schema=${array-int} timestamp
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE resolution_arrays
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-resolution-arrays-${testdrive.seed}')
@@ -35,6 +36,7 @@ $ kafka-ingest format=avro topic=resolution-arrays schema=${array-int} timestamp
 > CREATE TABLE resolution_arrays_tbl FROM SOURCE resolution_arrays (REFERENCE "testdrive-resolution-arrays-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
+> COMMIT
 
 $ kafka-ingest format=avro topic=resolution-arrays schema=${array-double} timestamp=2
 {"f1": [ 234.345 ] }

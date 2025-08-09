@@ -28,6 +28,7 @@ $ kafka-ingest format=avro topic=resolution-enums schema=${enum-reader} timestam
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE resolution_enums
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-resolution-enums-${testdrive.seed}')
@@ -35,6 +36,7 @@ $ kafka-ingest format=avro topic=resolution-enums schema=${enum-reader} timestam
 > CREATE TABLE resolution_enums_tbl FROM SOURCE resolution_enums (REFERENCE "testdrive-resolution-enums-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
+> COMMIT
 
 # E5 will be recorded as E_DEFAULT
 $ kafka-ingest format=avro topic=resolution-enums schema=${enum-writer} timestamp=2

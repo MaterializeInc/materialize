@@ -183,7 +183,7 @@ impl Coordinator {
                         return_if_err!(self.catalog_mut().allocate_user_id(id_ts).await, ctx);
                     let result = self
                         .sequence_create_source(
-                            ctx.session_mut(),
+                            &mut ctx,
                             vec![CreateSourcePlanBundle {
                                 item_id,
                                 global_id,
@@ -200,7 +200,7 @@ impl Coordinator {
                         resolved_ids.is_empty(),
                         "each plan has separate resolved_ids"
                     );
-                    let result = self.sequence_create_source(ctx.session_mut(), plans).await;
+                    let result = self.sequence_create_source(&mut ctx, plans).await;
                     ctx.retire(result);
                 }
                 Plan::CreateConnection(plan) => {
@@ -255,7 +255,7 @@ impl Coordinator {
                 }
                 Plan::CreateContinualTask(plan) => {
                     let res = self
-                        .sequence_create_continual_task(ctx.session(), plan, resolved_ids)
+                        .sequence_create_continual_task(&mut ctx, plan, resolved_ids)
                         .await;
                     ctx.retire(res);
                 }
@@ -441,15 +441,11 @@ impl Coordinator {
                     self.sequence_alter_cluster_staged(ctx, plan).await;
                 }
                 Plan::AlterClusterRename(plan) => {
-                    let result = self
-                        .sequence_alter_cluster_rename(ctx.session_mut(), plan)
-                        .await;
+                    let result = self.sequence_alter_cluster_rename(&mut ctx, plan).await;
                     ctx.retire(result);
                 }
                 Plan::AlterClusterSwap(plan) => {
-                    let result = self
-                        .sequence_alter_cluster_swap(ctx.session_mut(), plan)
-                        .await;
+                    let result = self.sequence_alter_cluster_swap(&mut ctx, plan).await;
                     ctx.retire(result);
                 }
                 Plan::AlterClusterReplicaRename(plan) => {
@@ -466,27 +462,19 @@ impl Coordinator {
                     ctx.retire(result);
                 }
                 Plan::AlterRetainHistory(plan) => {
-                    let result = self
-                        .sequence_alter_retain_history(ctx.session_mut(), plan)
-                        .await;
+                    let result = self.sequence_alter_retain_history(&mut ctx, plan).await;
                     ctx.retire(result);
                 }
                 Plan::AlterItemRename(plan) => {
-                    let result = self
-                        .sequence_alter_item_rename(ctx.session_mut(), plan)
-                        .await;
+                    let result = self.sequence_alter_item_rename(&mut ctx, plan).await;
                     ctx.retire(result);
                 }
                 Plan::AlterSchemaRename(plan) => {
-                    let result = self
-                        .sequence_alter_schema_rename(ctx.session_mut(), plan)
-                        .await;
+                    let result = self.sequence_alter_schema_rename(&mut ctx, plan).await;
                     ctx.retire(result);
                 }
                 Plan::AlterSchemaSwap(plan) => {
-                    let result = self
-                        .sequence_alter_schema_swap(ctx.session_mut(), plan)
-                        .await;
+                    let result = self.sequence_alter_schema_swap(&mut ctx, plan).await;
                     ctx.retire(result);
                 }
                 Plan::AlterRole(plan) => {
@@ -518,7 +506,7 @@ impl Coordinator {
                     ctx.retire(result);
                 }
                 Plan::AlterTableAddColumn(plan) => {
-                    let result = self.sequence_alter_table(ctx.session(), plan).await;
+                    let result = self.sequence_alter_table(&mut ctx, plan).await;
                     ctx.retire(result);
                 }
                 Plan::AlterNetworkPolicy(plan) => {

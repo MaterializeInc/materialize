@@ -34,9 +34,11 @@ INSERT INTO t1 VALUES ('това е текст'), ('това ''е'' "текст"
 
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
+> BEGIN
 > CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
 
 > CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE t1);
+> COMMIT
 
 > SELECT COUNT(*) > 0 FROM t1;
 true

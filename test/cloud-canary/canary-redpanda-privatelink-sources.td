@@ -34,6 +34,7 @@ $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=120s
   SASL PASSWORD = SECRET redpanda_privatelink_password
   );
 
+> BEGIN
 > CREATE SOURCE redpanda_privatelink_bytes
   IN CLUSTER canary_sources
   FROM KAFKA CONNECTION redpanda_privatelink_conn (TOPIC 'testdrive-bytes-privatelink-${testdrive.seed}');
@@ -41,6 +42,7 @@ $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=120s
 > CREATE TABLE redpanda_privatelink_bytes_tbl FROM SOURCE redpanda_privatelink_bytes (REFERENCE "testdrive-bytes-privatelink-${testdrive.seed}")
   FORMAT BYTES
   ENVELOPE NONE;
+> COMMIT
 
 > CREATE MATERIALIZED VIEW redpanda_privatelink_bytes_view AS SELECT COUNT(*) AS cnt FROM redpanda_privatelink_bytes_tbl;
 

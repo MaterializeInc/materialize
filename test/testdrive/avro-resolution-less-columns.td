@@ -28,6 +28,7 @@ $ kafka-ingest format=avro topic=resolution-2to1 schema=${2columns} timestamp=1
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE resolution_2to1
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-resolution-2to1-${testdrive.seed}')
@@ -35,6 +36,7 @@ $ kafka-ingest format=avro topic=resolution-2to1 schema=${2columns} timestamp=1
 > CREATE TABLE resolution_2to1_tbl FROM SOURCE resolution_2to1 (REFERENCE "testdrive-resolution-2to1-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
+> COMMIT
 
 $ kafka-ingest format=avro topic=resolution-2to1 schema=${1column} timestamp=2
 {"f1": "val_f1b"}

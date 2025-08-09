@@ -39,6 +39,7 @@ $ kafka-ingest format=avro topic=avroavro key-format=avro key-schema=${keyschema
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE avroavro
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC
@@ -49,6 +50,7 @@ $ kafka-ingest format=avro topic=avroavro key-format=avro key-schema=${keyschema
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE KEY AS named
   ENVELOPE UPSERT
+> COMMIT
 
 > SELECT (named).key, (named).key2, f1, f2 from avroavro_tbl
 key     key2  f1       f2
@@ -68,6 +70,7 @@ $ kafka-create-topic topic=single
 $ kafka-ingest format=avro topic=single key-format=avro key-schema=${keyschemasingle} schema=${schema}
 {"key": "fish" } {"f1": "fishval", "f2": 1000}
 
+> BEGIN
 > CREATE SOURCE single
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC
@@ -78,6 +81,7 @@ $ kafka-ingest format=avro topic=single key-format=avro key-schema=${keyschemasi
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE KEY AS named
   ENVELOPE UPSERT
+> COMMIT
 
 > SELECT named, f1, f2 from single_tbl
 named   f1       f2

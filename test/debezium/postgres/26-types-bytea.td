@@ -24,12 +24,14 @@ $ schema-registry-wait topic=postgres.public.bytea_type
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE bytea_type
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.bytea_type');
 
 > CREATE TABLE bytea_type_tbl FROM SOURCE bytea_type (REFERENCE "postgres.public.bytea_type")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
+> COMMIT
 
 # There is \\x124 below instead of \x1234 but apparently this is outside of Mz
 # as Mz returns the correct length and the correct output in the psql client

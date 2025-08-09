@@ -23,12 +23,14 @@ $ schema-registry-wait topic=postgres.public.decimal_handling_mode_precise
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE decimal_handling_mode_precise
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.decimal_handling_mode_precise');
 
 > CREATE TABLE decimal_handling_mode_precise_tbl FROM SOURCE decimal_handling_mode_precise (REFERENCE "postgres.public.decimal_handling_mode_precise")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
+> COMMIT
 
 > SELECT f1, pg_typeof(f1) FROM decimal_handling_mode_precise_tbl
 1234567.89 numeric
@@ -65,12 +67,14 @@ INSERT INTO decimal_handling_mode_double VALUES (2234567.890);
 
 $ schema-registry-wait topic=postgres.public.decimal_handling_mode_double
 
+> BEGIN
 > CREATE SOURCE decimal_handling_mode_double
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.decimal_handling_mode_double');
 
 > CREATE TABLE decimal_handling_mode_double_tbl FROM SOURCE decimal_handling_mode_double (REFERENCE "postgres.public.decimal_handling_mode_double")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
+> COMMIT
 
 > SELECT f1, pg_typeof(f1) FROM decimal_handling_mode_double_tbl;
 2234567.89 "double precision"
@@ -106,12 +110,14 @@ INSERT INTO decimal_handling_mode_string VALUES (3234567.890);
 
 $ schema-registry-wait topic=postgres.public.decimal_handling_mode_string
 
+> BEGIN
 > CREATE SOURCE decimal_handling_mode_string
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.decimal_handling_mode_string');
 
 > CREATE TABLE decimal_handling_mode_string_tbl FROM SOURCE decimal_handling_mode_string (REFERENCE "postgres.public.decimal_handling_mode_string")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
+> COMMIT
 
 > SELECT f1, pg_typeof(f1) FROM decimal_handling_mode_string_tbl;
 3234567.890 text
