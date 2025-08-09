@@ -4051,7 +4051,7 @@ pub(crate) mod tests {
 
         let rollup_seqno = SeqNo(5);
         let rollup = HollowRollup {
-            key: PartialRollupKey::new(rollup_seqno, &RollupId::new()),
+            key: PartialRollupKey::new(rollup_seqno, &RollupId::zero()),
             encoded_size_bytes: None,
         };
 
@@ -4151,7 +4151,7 @@ pub(crate) mod tests {
         state.collections.active_rollup = None;
         let rollup_seqno = SeqNo(9);
         let rollup = HollowRollup {
-            key: PartialRollupKey::new(rollup_seqno, &RollupId::new()),
+            key: PartialRollupKey::new(rollup_seqno, &RollupId::zero()),
             encoded_size_bytes: None,
         };
         assert!(
@@ -4201,7 +4201,7 @@ pub(crate) mod tests {
 
         let rollup_seqno = SeqNo(5);
         let rollup = HollowRollup {
-            key: PartialRollupKey::new(rollup_seqno, &RollupId::new()),
+            key: PartialRollupKey::new(rollup_seqno, &RollupId::zero()),
             encoded_size_bytes: None,
         };
 
@@ -4277,7 +4277,7 @@ pub(crate) mod tests {
         // add another rollup and ensure we're always picking the latest
         let rollup_seqno = SeqNo(6);
         let rollup = HollowRollup {
-            key: PartialRollupKey::new(rollup_seqno, &RollupId::new()),
+            key: PartialRollupKey::new(rollup_seqno, &RollupId::zero()),
             encoded_size_bytes: None,
         };
         assert!(
