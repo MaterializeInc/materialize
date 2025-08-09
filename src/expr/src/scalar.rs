@@ -770,14 +770,16 @@ impl MirScalarExpr {
 
     /// Reduces a complex expression where possible.
     ///
-    /// This function uses nullability information present in `column_types`,
-    /// and the result may only continue to be a correct transformation as
-    /// long as this information continues to hold (nullability may not hold
-    /// as expressions migrate around).
+    /// The `NULLABILITY` parameter indicates whether the method is allowed
+    /// to rely on nullability information present in `column_types`. This
+    /// is not generally safe to do, because although being present in the
+    /// type the nullability is not a type-level property, and may not be
+    /// maintained as the surrounding expressions are transformed.
     ///
-    /// (If you'd like to not use nullability information here, then you can
-    /// tweak the nullabilities in `column_types` before passing it to this
-    /// function, see e.g. in `EquivalenceClasses::minimize`.)
+    /// For example, expressions in `If::cond` or in arguments to `Coalesce`
+    /// should not use this information, as they may result in expressions
+    /// that remove guards preventing errors, and they may now error if the
+    /// nullability changes (e.g. because a filter moves, as they often do).
     ///
     /// Also performs partial canonicalization on the expression.
     ///
@@ -799,7 +801,7 @@ impl MirScalarExpr {
     /// test.reduce(&input_type);
     /// assert_eq!(test, expr_t);
     /// ```
-    pub fn reduce(&mut self, column_types: &[ColumnType]) {
+    pub fn reduce<const NULLABILITY: bool>(&mut self, column_types: &[ColumnType]) {
         let temp_storage = &RowArena::new();
         let eval = |e: &MirScalarExpr| {
             MirScalarExpr::literal(e.eval(&[], temp_storage), e.typ(column_types).scalar_type)
@@ -815,7 +817,7 @@ impl MirScalarExpr {
                     match e {
                         MirScalarExpr::CallUnary { func, expr } => {
                             if *func == UnaryFunc::IsNull(func::IsNull) {
-                                if !expr.typ(column_types).nullable {
+                                if !expr.typ(column_types).nullable && NULLABILITY {
                                     *e = MirScalarExpr::literal_false();
                                 } else {
                                     // Try to at least decompose IsNull into a disjunction
@@ -849,10 +851,29 @@ impl MirScalarExpr {
                                     _ => {}
                                 }
                             }
+                            None
                         }
-                        _ => {}
-                    };
-                    None
+                        MirScalarExpr::If { cond, then, els } => {
+                            cond.reduce::<false>(column_types);
+                            Some(vec![then, els])
+                        }
+                        MirScalarExpr::CallVariadic { func, exprs } => {
+                            if let VariadicFunc::Coalesce = func {
+                                if !exprs.is_empty() {
+                                    let len = exprs.len();
+                                    for expr in exprs.iter_mut().take(len - 1) {
+                                        expr.reduce::<false>(column_types);
+                                    }
+                                    Some(vec![&mut exprs[len - 1]])
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        }
+                        _ => None,
+                    }
                 },
                 &mut |e| match e {
                     // Evaluate and pull up constants
@@ -1226,10 +1247,9 @@ impl MirScalarExpr {
                             // column. All arguments after it get ignored, so throw them
                             // away. This intentionally throws away errors that can
                             // never happen.
-                            if let Some(i) = exprs
-                                .iter()
-                                .position(|e| e.is_literal() || !e.typ(column_types).nullable)
-                            {
+                            if let Some(i) = exprs.iter().position(|e| {
+                                e.is_literal() || (NULLABILITY && !e.typ(column_types).nullable)
+                            }) {
                                 exprs.truncate(i + 1);
                             }
 
@@ -3411,7 +3431,7 @@ mod tests {
 
         for tc in test_cases {
             let mut actual = tc.input.clone();
-            actual.reduce(&relation_type);
+            actual.reduce::<true>(&relation_type);
             assert!(
                 actual == tc.output,
                 "input: {}\nactual: {}\nexpected: {}",
