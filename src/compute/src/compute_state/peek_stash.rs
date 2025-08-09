@@ -59,7 +59,7 @@ impl StashingPeek {
     pub fn start_upload(
         persist_clients: Arc<PersistClientCache>,
         persist_location: &PersistLocation,
-        peek: Peek,
+        mut peek: Peek,
         mut trace_bundle: TraceBundle,
         batch_max_runs: usize,
     ) -> Self {
@@ -75,10 +75,10 @@ impl StashingPeek {
         let oks_handle = trace_bundle.oks_mut();
 
         let peek_iterator = peek_result_iterator::PeekResultIterator::new(
-            peek.target.id().clone(),
+            peek.target.id(),
             peek.map_filter_project.clone(),
             peek.timestamp,
-            peek.literal_constraints.clone(),
+            peek.literal_constraints.as_deref_mut(),
             oks_handle,
         );
 
