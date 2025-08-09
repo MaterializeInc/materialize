@@ -839,18 +839,12 @@ impl Coordinator {
             let (compute, location) = match replica_config {
                 mz_sql::plan::ReplicaConfig::Unorchestrated {
                     storagectl_addrs,
-                    storage_addrs,
                     computectl_addrs,
-                    compute_addrs,
-                    workers,
                     compute,
                 } => {
                     let location = mz_catalog::durable::ReplicaLocation::Unmanaged {
                         storagectl_addrs,
-                        storage_addrs,
                         computectl_addrs,
-                        compute_addrs,
-                        workers,
                     };
                     (compute, location)
                 }
@@ -970,18 +964,12 @@ impl Coordinator {
         let (compute, location) = match config {
             mz_sql::plan::ReplicaConfig::Unorchestrated {
                 storagectl_addrs,
-                storage_addrs,
                 computectl_addrs,
-                compute_addrs,
-                workers,
                 compute,
             } => {
                 let location = mz_catalog::durable::ReplicaLocation::Unmanaged {
                     storagectl_addrs,
-                    storage_addrs,
                     computectl_addrs,
-                    compute_addrs,
-                    workers,
                 };
                 (compute, location)
             }
