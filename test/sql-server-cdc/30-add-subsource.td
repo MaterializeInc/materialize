@@ -33,9 +33,6 @@ INSERT INTO t2_add_subsource VALUES ('100'), ('200'), (NULL), ('300');
 > CREATE SECRET IF NOT EXISTS sql_server_pass AS '${arg.default-sql-server-password}'
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_sql_server_source = true;
-
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET log_filter = 'mz_sql=debug,info';
 
 > CREATE CONNECTION IF NOT EXISTS sql_server_test_add_subsource_conn TO SQL SERVER (
