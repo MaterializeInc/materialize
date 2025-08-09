@@ -125,7 +125,7 @@ schemars = { version = "0.8.22", features = ["uuid1"] }
 scopeguard = { version = "1.2.0" }
 semver = { version = "1.0.26", features = ["serde"] }
 serde = { version = "1.0.219", features = ["alloc", "derive", "rc"] }
-serde_json = { version = "1.0.140", features = ["alloc", "arbitrary_precision", "float_roundtrip", "preserve_order", "raw_value", "unbounded_depth"] }
+serde_json = { version = "1.0.142", features = ["alloc", "arbitrary_precision", "float_roundtrip", "preserve_order", "raw_value", "unbounded_depth"] }
 sha2 = { version = "0.10.9", features = ["asm"] }
 similar = { version = "2.7.0", features = ["inline", "unicode"] }
 smallvec = { version = "1.15.1", default-features = false, features = ["const_new", "serde", "union"] }
@@ -137,7 +137,7 @@ timely = { version = "0.21.5" }
 tokio = { version = "1.44.2", features = ["full", "test-util", "tracing"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde", "with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 tokio-stream = { version = "0.1.17", features = ["net", "sync"] }
-tokio-util = { version = "0.7.15", features = ["codec", "compat", "io", "time"] }
+tokio-util = { version = "0.7.16", features = ["codec", "compat", "io", "time"] }
 toml_datetime = { version = "0.6.11", default-features = false, features = ["serde"] }
 toml_edit = { version = "0.22.26", features = ["serde"] }
 tonic = { version = "0.12.3", features = ["gzip"] }
@@ -155,7 +155,7 @@ uuid = { version = "1.17.0", features = ["serde", "v4", "v5", "v7"] }
 zeroize = { version = "1.8.1", features = ["serde"] }
 zstd = { version = "0.13.3" }
 zstd-safe = { version = "7.2.1", default-features = false, features = ["arrays", "legacy", "std", "zdict_builder"] }
-zstd-sys = { version = "2.0.13", features = ["std"] }
+zstd-sys = { version = "2.0.15", features = ["std"] }
 
 [build-dependencies]
 ahash = { version = "0.8.12" }
@@ -268,7 +268,7 @@ schemars = { version = "0.8.22", features = ["uuid1"] }
 scopeguard = { version = "1.2.0" }
 semver = { version = "1.0.26", features = ["serde"] }
 serde = { version = "1.0.219", features = ["alloc", "derive", "rc"] }
-serde_json = { version = "1.0.140", features = ["alloc", "arbitrary_precision", "float_roundtrip", "preserve_order", "raw_value", "unbounded_depth"] }
+serde_json = { version = "1.0.142", features = ["alloc", "arbitrary_precision", "float_roundtrip", "preserve_order", "raw_value", "unbounded_depth"] }
 sha2 = { version = "0.10.9", features = ["asm"] }
 similar = { version = "2.7.0", features = ["inline", "unicode"] }
 smallvec = { version = "1.15.1", default-features = false, features = ["const_new", "serde", "union"] }
@@ -281,7 +281,7 @@ timely = { version = "0.21.5" }
 tokio = { version = "1.44.2", features = ["full", "test-util", "tracing"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde", "with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 tokio-stream = { version = "0.1.17", features = ["net", "sync"] }
-tokio-util = { version = "0.7.15", features = ["codec", "compat", "io", "time"] }
+tokio-util = { version = "0.7.16", features = ["codec", "compat", "io", "time"] }
 toml_datetime = { version = "0.6.11", default-features = false, features = ["serde"] }
 toml_edit = { version = "0.22.26", features = ["serde"] }
 tonic = { version = "0.12.3", features = ["gzip"] }
@@ -299,7 +299,7 @@ uuid = { version = "1.17.0", features = ["serde", "v4", "v5", "v7"] }
 zeroize = { version = "1.8.1", features = ["serde"] }
 zstd = { version = "0.13.3" }
 zstd-safe = { version = "7.2.1", default-features = false, features = ["arrays", "legacy", "std", "zdict_builder"] }
-zstd-sys = { version = "2.0.13", features = ["std"] }
+zstd-sys = { version = "2.0.15", features = ["std"] }
 
 [target.x86_64-unknown-linux-gnu.dependencies]
 camino = { version = "1.1.10", default-features = false, features = ["serde1"] }
