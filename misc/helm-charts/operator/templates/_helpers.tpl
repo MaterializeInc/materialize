@@ -105,14 +105,33 @@ postgresql://{{ .Values.metadatadb.username }}:{{ .Values.metadatadb.password }}
 Helper template to process cluster sizes based on storage class configuration
 */}}
 {{- define "materialize.processClusterSizes" -}}
-{{- $result := dict }}
-{{- range $size, $config := .Values.operator.clusters.sizes }}
-{{- $newConfig := deepCopy $config }}
-{{- if not $.Values.storage.storageClass.name }}
-{{- $_ := set $newConfig "disk_limit" "0" }}
-{{- end }}
-{{- $_ := set $newConfig "is_cc" true }}
-{{- $_ := set $result $size $newConfig }}
-{{- end }}
-{{- $result | toYaml }}
+    {{- $result := dict }}
+
+    {{- range $size, $config := .Values.operator.clusters.sizes }}
+        {{- $newConfig := deepCopy $config }}
+
+        {{- if or (not $.Values.storage.storageClass.name) $.Values.operator.clusters.enable_swap }}
+            {{- $_ := set $newConfig "disk_limit" "0" }}
+        {{- end }}
+
+        {{- if and ($.Values.operator.clusters.enable_swap) (not (index $newConfig "memory_request")) }}
+            {{- $memory_limit_MiB_int := 0 }}
+
+            {{- if regexMatch "^[0-9]+MiB" $newConfig.memory_limit }}
+                {{- $memory_limit_MiB_int = ($newConfig.memory_limit | replace "MiB" "" | int)}}
+            {{- else if regexMatch "^[0-9]+GiB" $newConfig.memory_limit }}
+                {{- $memory_limit_MiB_int = ($newConfig.memory_limit | replace "GiB" "" | int | mul 1024)}}
+            {{- else }}
+                {{- fail "Cluster size memory_limit must be defined in either MiB or GiB"}}
+            {{- end }}
+
+            {{- $memory_request_MiB_int := sub $memory_limit_MiB_int 1 }}
+            {{- $_ := set $newConfig "memory_request" (print $memory_request_MiB_int "MiB") }}
+        {{- end }}
+
+        {{- $_ := set $newConfig "is_cc" true }}
+        {{- $_ := set $result $size $newConfig }}
+    {{- end }}
+
+    {{- $result | toYaml }}
 {{- end }}
