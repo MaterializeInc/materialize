@@ -7,42 +7,97 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-sql-timeout duration=60s
 
 #
 # Test progress statistics
 #
 
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET storage_statistics_collection_interval = 1000
-ALTER SYSTEM SET storage_statistics_interval = 2000
 
-> CREATE SECRET mysqlpass AS '${arg.mysql-root-password}'
+$ sql-server-connect name=sql-server
+server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID=${arg.default-sql-server-user};Password=${arg.default-sql-server-password}
 
+$ sql-server-execute name=sql-server
+DROP DATABASE IF EXISTS test_stats;
+CREATE DATABASE test_stats;
+USE test_stats;
 
-> CREATE CONNECTION mysqc TO MYSQL (
-    HOST mysql,
-    USER root,
-    PASSWORD SECRET mysqlpass
-  )
+EXEC sys.sp_cdc_enable_db;
+ALTER DATABASE test_stats SET ALLOW_SNAPSHOT_ISOLATION ON;
 
-$ mysql-connect name=mysql url=mysql://root@mysql password=${arg.mysql-root-password}
-
-$ mysql-execute name=mysql
-DROP DATABASE IF EXISTS public;
-CREATE DATABASE public;
-USE public;
-CREATE TABLE t1 (f1 TEXT);
+CREATE TABLE t1 (f1 VARCHAR(20));
+EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 't1', @role_name = 'SA', @supports_net_changes = 0;
 
 INSERT INTO t1 VALUES ('one');
 
-> CREATE CLUSTER stats_cluster SIZE '${arg.default-replica-size}'
+CREATE TABLE dummy (data int);
+EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'dummy', @role_name = 'SA', @supports_net_changes = 0;
 
-> CREATE SOURCE mz_source IN CLUSTER stats_cluster FROM MYSQL CONNECTION mysqc;
-> CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE public.t1);
+
+
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_sql_server_source = true;
+ALTER SYSTEM SET storage_statistics_collection_interval = 1000;
+ALTER SYSTEM SET storage_statistics_interval = 2000;
+
+> CREATE SECRET IF NOT EXISTS mspass AS '${arg.default-sql-server-password}'
+
+> CREATE CONNECTION msconn TO SQL SERVER (
+    HOST 'sql-server',
+    PORT 1433,
+    DATABASE test_stats,
+    USER '${arg.default-sql-server-user}',
+    PASSWORD = SECRET mspass
+  );
+
+
+> CREATE CLUSTER stats_cluster SIZE '${arg.default-replica-size}'
+> CREATE SOURCE mz_source IN CLUSTER stats_cluster FROM SQL SERVER CONNECTION msconn;
+> CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE dbo.t1);
+
+
+$ set-regex match=u\d+ replacement="<REPLICAID>"
+> SELECT cr.id
+  FROM
+    mz_clusters c,
+    mz_cluster_replicas cr,
+    mz_internal.mz_source_statistics_raw u,
+    mz_sources s
+  WHERE
+    c.name = 'stats_cluster' AND c.id = cr.cluster_id AND cr.id = u.replica_id
+    AND s.name IN ('mz_source') AND u.id = s.id
+  ORDER BY cr.id
+  LIMIT 1
+<REPLICAID>
+
+$ set-from-sql var=replica_id
+SELECT cr.id
+  FROM
+    mz_clusters c,
+    mz_cluster_replicas cr,
+    mz_internal.mz_source_statistics_raw u,
+    mz_sources s
+  WHERE
+    c.name = 'stats_cluster' AND c.id = cr.cluster_id AND cr.id = u.replica_id
+    AND s.name IN ('mz_source') AND u.id = s.id
+  ORDER BY cr.id
+  LIMIT 1
+
+# Wait until snapshot has emitted stats and then insert a new row
+# to force LSN in MS SQL to progress.
+> SELECT s.name, ss.snapshot_records_known = ss.snapshot_records_staged
+  FROM mz_internal.mz_source_statistics ss JOIN mz_sources s using (id)
+  WHERE s.name = 'mz_source'
+    AND ss.replica_id = '${replica_id}'
+    AND ss.snapshot_records_staged > 0;
+mz_source true
+
+$ sql-server-execute name=sql-server
+INSERT INTO dummy VALUES (1);
 
 > SELECT COUNT(*) > 0 FROM t1;
 true
+
 
 # NOTE: we make sure that we have stats for a replica, otherwise the
 # set-from-sql below might fail because it doesn't do retries when a row is
@@ -98,8 +153,7 @@ SELECT
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('mz_source') AND u.replica_id = '${replica_id}'
 
-
-$ mysql-execute name=mysql
+$ sql-server-execute name=sql-server
 INSERT INTO t1 VALUES ('two');
 
 > SELECT
@@ -125,7 +179,7 @@ SELECT
 
 > ALTER CLUSTER stats_cluster SET (REPLICATION FACTOR 0)
 
-$ mysql-execute name=mysql
+$ sql-server-execute name=sql-server
 INSERT INTO t1 VALUES ('three');
 
 > ALTER CLUSTER stats_cluster SET (REPLICATION FACTOR 1)
@@ -186,15 +240,27 @@ SELECT cr.id
   GROUP BY s.name
 mz_source true true <null> <null>
 
-# TODO(guswynn/roshan): test snapshot stats when alter cluster add table is supported by mysql
-# Ensure snapshot stats are overridden when we add a new table
-$ mysql-execute name=mysql
-USE public;
-CREATE TABLE t2 (f1 TEXT);
+
+$ sql-server-execute name=sql-server
+CREATE TABLE t2 (f1 VARCHAR(20));
+EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 't2', @role_name = 'SA', @supports_net_changes = 0;
 INSERT INTO t2 VALUES ('one');
 INSERT INTO t2 VALUES ('two');
 
-> CREATE TABLE t2 FROM SOURCE mz_source (REFERENCE public.t2);
+
+> CREATE TABLE t2 FROM SOURCE mz_source (REFERENCE dbo.t2);
+
+# Wait until snapshot has emitted stats and then insert a new row
+# to force LSN in MS SQL to progress.
+> SELECT s.name, ss.snapshot_records_known = ss.snapshot_records_staged
+  FROM mz_internal.mz_source_statistics ss JOIN mz_sources s using (id)
+  WHERE s.name = 'mz_source'
+    AND ss.replica_id = '${replica_id}'
+    AND ss.snapshot_records_staged > 0;
+mz_source true
+
+$ sql-server-execute name=sql-server
+INSERT INTO dummy VALUES (1);
 
 > SELECT COUNT(*) > 0 FROM t2;
 true
