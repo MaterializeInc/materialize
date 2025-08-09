@@ -26,6 +26,7 @@ import psycopg
 import yaml
 
 from materialize import MZ_ROOT, ci_util, git, spawn
+from materialize.mz_version import MzVersion
 from materialize.mzcompose.composition import (
     Composition,
     Service,
@@ -348,9 +349,14 @@ class State:
                     "requests": {"cpu": "100m", "memory": "256Mi"},
                 },
                 "backendSecretName": "materialize-backend",
-                "authenticatorKind": "None",
             },
         }
+
+        # Only supported since self-managed v25.2
+        if not tag.startswith("v") or MzVersion.parse_mz(tag) >= MzVersion.parse_mz(
+            "v0.147.0"
+        ):
+            self.materialize_environment["spec"]["authenticatorKind"] = "None"
 
         spawn.runv(
             ["kubectl", "apply", "-f", "-"],
@@ -698,9 +704,13 @@ class AWS(State):
                     "requests": {"cpu": "100m", "memory": "256Mi"},
                 },
                 "backendSecretName": "materialize-backend",
-                "authenticatorKind": "None",
             },
         }
+        # Only supported since self-managed v25.2
+        if not tag.startswith("v") or MzVersion.parse_mz(tag) >= MzVersion.parse_mz(
+            "v0.147.0"
+        ):
+            self.materialize_environment["spec"]["authenticatorKind"] = "None"
 
         self.version += 1
         spawn.runv(
