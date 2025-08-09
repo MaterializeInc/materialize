@@ -1228,9 +1228,7 @@ impl MirRelationExpr {
             }
             Project { outputs, .. } => outputs.len(),
             Map { scalars, .. } => input_arities.next().unwrap() + scalars.len(),
-            FlatMap { func, .. } => {
-                input_arities.next().unwrap() + func.output_type().column_types.len()
-            }
+            FlatMap { func, .. } => input_arities.next().unwrap() + func.output_arity(),
             Join { .. } => input_arities.sum(),
             Reduce {
                 input: _,

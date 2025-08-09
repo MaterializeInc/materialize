@@ -182,6 +182,10 @@ message ProtoTableFunc {
     mz_repr.relation_and_scalar.ProtoRelationType relation = 2;
   }
 
+  message ProtoWithOrdinality {
+    ProtoTableFunc inner = 1;
+  }
+
   oneof kind {
     bool jsonb_each = 1;
     google.protobuf.Empty jsonb_object_keys = 2;
@@ -203,5 +207,6 @@ message ProtoTableFunc {
     mz_repr.relation_and_scalar.ProtoScalarType unnest_map = 18;
     google.protobuf.Empty regexp_matches = 19;
     mz_repr.relation_and_scalar.ProtoScalarType guard_subquery_size = 20;
+    ProtoWithOrdinality with_ordinality = 21;
   }
 }

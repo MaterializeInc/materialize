@@ -291,7 +291,7 @@ impl ProjectionPushdown {
                     // The actual projection always has the newly-created columns at
                     // the end.
                     let mut actual_projection = columns_to_pushdown;
-                    for c in 0..func.output_type().arity() {
+                    for c in 0..func.output_arity() {
                         actual_projection.push(inner_arity + c);
                     }
                     actual_projection

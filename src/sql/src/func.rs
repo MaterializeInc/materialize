@@ -460,12 +460,16 @@ fn sql_impl_table_func_inner(
         let (mut expr, scope) = invoke(ecx.qcx, types)?;
         expr.splice_parameters(&args, 0);
         Ok(TableFuncPlan {
-            expr,
+            imp: TableFuncImpl::Expr(expr),
             column_names: scope.column_names().cloned().collect(),
         })
     })
 }
 
+/// Implements a table function using SQL.
+///
+/// Warning: These implementations are currently defective for WITH ORDINALITY / FROM ROWS, see
+/// comment in `plan_table_function_internal`.
 fn sql_impl_table_func(sql: &'static str) -> Operation<TableFuncPlan> {
     sql_impl_table_func_inner(sql, None)
 }
@@ -1657,8 +1661,47 @@ macro_rules! builtins {
 
 #[derive(Debug)]
 pub struct TableFuncPlan {
-    pub expr: HirRelationExpr,
+    pub imp: TableFuncImpl,
     pub column_names: Vec<ColumnName>,
+}
+
+/// The implementation of a table function is either
+/// 1. just a `CallTable` HIR node (in which case we can put `WITH ORDINALITY` into it when we
+///    create the actual HIR node in `plan_table_function_internal`),
+/// 2. or a general HIR expression. This happens when it's implemented as SQL, i.e., by a call to
+///    `sql_impl_table_func_inner`.
+///
+/// TODO(ggevay): when a table function in 2. is used with WITH ORDINALITY or ROWS FROM, we fall
+/// back to the legacy WITH ORDINALITY implementation, which relies on the row_number window
+/// function, and is mostly broken. It can give an incorrect ordering, and also has an extreme
+/// performance problem in some cases, see
+/// <https://github.com/MaterializeInc/database-issues/issues/4764#issuecomment-2854572614>
+///
+/// These table functions are somewhat exotic, and WITH ORDINALITY / ROWS FROM are also somewhat
+/// exotic, so let's hope that the combination of these is so exotic that nobody will need it for
+/// quite a while. Note that the SQL standard only allows WITH ORDINALITY on `unnest_...` functions,
+/// of which none fall into the 2. category, so we are fine with these; it's only a Postgres
+/// extension to support WITH ORDINALITY on arbitrary table functions. When this combination arises,
+/// we emit a Sentry error, so that we'll know about it.
+///
+/// When we eventually need to fix this, a possible approach would be to write two SQL
+/// implementations: one would be their current implementation, and the other would be
+/// WITH ORDINALITY.
+/// - This will be trivial for some table functions, e.g., those that end with an UNNEST just need a
+///   WITH ORDINALITY on this UNNEST (e.g., `regexp_split_to_table`).
+/// - `_pg_expandarray` and `date_bin_hopping` also look easy.
+/// - `mz_name_rank` and `mz_resolve_object_name` look more complicated but hopefully solvable.
+///
+/// Another approach to fixing this would be to add an ORDER BY to the SQL definitions and then
+/// move this ORDER BY into a row_number window function call. This would at least solve the
+/// correctness problem, but not the performance problem.
+#[derive(Debug)]
+pub enum TableFuncImpl {
+    CallTable {
+        func: TableFunc,
+        exprs: Vec<HirScalarExpr>,
+    },
+    Expr(HirRelationExpr),
 }
 
 #[derive(Debug)]
@@ -1782,7 +1825,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
         "aclexplode" => Table {
             params!(ScalarType::Array(Box::new(ScalarType::AclItem))) =>  Operation::unary(move |_ecx, aclitems| {
                 Ok(TableFuncPlan {
-                    expr: HirRelationExpr::CallTable {
+                    imp: TableFuncImpl::CallTable {
                         func: TableFunc::AclExplode,
                         exprs: vec![aclitems],
                     },
@@ -3234,7 +3277,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
         "generate_series" => Table {
             params!(Int32, Int32, Int32) => Operation::variadic(move |_ecx, exprs| {
                 Ok(TableFuncPlan {
-                    expr: HirRelationExpr::CallTable {
+                    imp: TableFuncImpl::CallTable {
                         func: TableFunc::GenerateSeriesInt32,
                         exprs,
                     },
@@ -3243,7 +3286,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             }) => ReturnType::set_of(Int32.into()), 1066;
             params!(Int32, Int32) => Operation::binary(move |_ecx, start, stop| {
                 Ok(TableFuncPlan {
-                    expr: HirRelationExpr::CallTable {
+                    imp: TableFuncImpl::CallTable {
                         func: TableFunc::GenerateSeriesInt32,
                         exprs: vec![start, stop, HirScalarExpr::literal(Datum::Int32(1), ScalarType::Int32)],
                     },
@@ -3252,7 +3295,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             }) => ReturnType::set_of(Int32.into()), 1067;
             params!(Int64, Int64, Int64) => Operation::variadic(move |_ecx, exprs| {
                 Ok(TableFuncPlan {
-                    expr: HirRelationExpr::CallTable {
+                    imp: TableFuncImpl::CallTable {
                         func: TableFunc::GenerateSeriesInt64,
                         exprs,
                     },
@@ -3261,7 +3304,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             }) => ReturnType::set_of(Int64.into()), 1068;
             params!(Int64, Int64) => Operation::binary(move |_ecx, start, stop| {
                 Ok(TableFuncPlan {
-                    expr: HirRelationExpr::CallTable {
+                    imp: TableFuncImpl::CallTable {
                         func: TableFunc::GenerateSeriesInt64,
                         exprs: vec![start, stop, HirScalarExpr::literal(Datum::Int64(1), ScalarType::Int64)],
                     },
@@ -3270,7 +3313,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             }) => ReturnType::set_of(Int64.into()), 1069;
             params!(Timestamp, Timestamp, Interval) => Operation::variadic(move |_ecx, exprs| {
                 Ok(TableFuncPlan {
-                    expr: HirRelationExpr::CallTable {
+                    imp: TableFuncImpl::CallTable {
                         func: TableFunc::GenerateSeriesTimestamp,
                         exprs,
                     },
@@ -3279,7 +3322,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             }) => ReturnType::set_of(Timestamp.into()), 938;
             params!(TimestampTz, TimestampTz, Interval) => Operation::variadic(move |_ecx, exprs| {
                 Ok(TableFuncPlan {
-                    expr: HirRelationExpr::CallTable {
+                    imp: TableFuncImpl::CallTable {
                         func: TableFunc::GenerateSeriesTimestampTz,
                         exprs,
                     },
@@ -3291,7 +3334,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
         "generate_subscripts" => Table {
             params!(ArrayAny, Int32) => Operation::variadic(move |_ecx, exprs| {
                 Ok(TableFuncPlan {
-                    expr: HirRelationExpr::CallTable {
+                    imp: TableFuncImpl::CallTable {
                         func: TableFunc::GenerateSubscriptsArray,
                         exprs,
                     },
@@ -3303,7 +3346,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
         "jsonb_array_elements" => Table {
             params!(Jsonb) => Operation::unary(move |_ecx, jsonb| {
                 Ok(TableFuncPlan {
-                    expr: HirRelationExpr::CallTable {
+                    imp: TableFuncImpl::CallTable {
                         func: TableFunc::JsonbArrayElements { stringify: false },
                         exprs: vec![jsonb],
                     },
@@ -3314,7 +3357,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
         "jsonb_array_elements_text" => Table {
             params!(Jsonb) => Operation::unary(move |_ecx, jsonb| {
                 Ok(TableFuncPlan {
-                    expr: HirRelationExpr::CallTable {
+                    imp: TableFuncImpl::CallTable {
                         func: TableFunc::JsonbArrayElements { stringify: true },
                         exprs: vec![jsonb],
                     },
@@ -3325,7 +3368,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
         "jsonb_each" => Table {
             params!(Jsonb) => Operation::unary(move |_ecx, jsonb| {
                 Ok(TableFuncPlan {
-                    expr: HirRelationExpr::CallTable {
+                    imp: TableFuncImpl::CallTable {
                         func: TableFunc::JsonbEach { stringify: false },
                         exprs: vec![jsonb],
                     },
@@ -3336,7 +3379,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
         "jsonb_each_text" => Table {
             params!(Jsonb) => Operation::unary(move |_ecx, jsonb| {
                 Ok(TableFuncPlan {
-                    expr: HirRelationExpr::CallTable {
+                    imp: TableFuncImpl::CallTable {
                         func: TableFunc::JsonbEach { stringify: true },
                         exprs: vec![jsonb],
                     },
@@ -3347,7 +3390,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
         "jsonb_object_keys" => Table {
             params!(Jsonb) => Operation::unary(move |_ecx, jsonb| {
                 Ok(TableFuncPlan {
-                    expr: HirRelationExpr::CallTable {
+                    imp: TableFuncImpl::CallTable {
                         func: TableFunc::JsonbObjectKeys,
                         exprs: vec![jsonb],
                     },
@@ -3416,7 +3459,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(String, String) => Operation::variadic(move |_ecx, exprs| {
                 let column_names = vec!["regexp_matches".into()];
                 Ok(TableFuncPlan {
-                    expr: HirRelationExpr::CallTable {
+                    imp: TableFuncImpl::CallTable {
                         func: TableFunc::RegexpMatches,
                         exprs: vec![exprs[0].clone(), exprs[1].clone()],
                     },
@@ -3426,7 +3469,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(String, String, String) => Operation::variadic(move |_ecx, exprs| {
                 let column_names = vec!["regexp_matches".into()];
                 Ok(TableFuncPlan {
-                    expr: HirRelationExpr::CallTable {
+                    imp: TableFuncImpl::CallTable {
                         func: TableFunc::RegexpMatches,
                         exprs: vec![exprs[0].clone(), exprs[1].clone(), exprs[2].clone()],
                     },
@@ -3533,7 +3576,7 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
 
                 let column_names = (1..=ncols).map(|i| format!("column{}", i).into()).collect();
                 Ok(TableFuncPlan {
-                    expr: HirRelationExpr::CallTable {
+                    imp: TableFuncImpl::CallTable {
                         func: TableFunc::CsvExtract(ncols),
                         exprs: vec![input],
                     },
@@ -3825,7 +3868,7 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                     sql_bail!("regexp_extract must specify at least one capture group");
                 }
                 Ok(TableFuncPlan {
-                    expr: HirRelationExpr::CallTable {
+                    imp: TableFuncImpl::CallTable {
                         func: TableFunc::RegexpExtract(regex),
                         exprs: vec![haystack],
                     },
@@ -3837,7 +3880,7 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(Int64) => Operation::unary(move |ecx, n| {
                 ecx.require_feature_flag(&crate::session::vars::ENABLE_REPEAT_ROW)?;
                 Ok(TableFuncPlan {
-                    expr: HirRelationExpr::CallTable {
+                    imp: TableFuncImpl::CallTable {
                         func: TableFunc::Repeat,
                         exprs: vec![n],
                     },
@@ -3864,7 +3907,7 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             vec![ArrayAny] => Operation::unary(move |ecx, e| {
                 let el_typ = ecx.scalar_type(&e).unwrap_array_element_type().clone();
                 Ok(TableFuncPlan {
-                    expr: HirRelationExpr::CallTable {
+                    imp: TableFuncImpl::CallTable {
                         func: TableFunc::UnnestArray { el_typ },
                         exprs: vec![e],
                     },
@@ -3876,7 +3919,7 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             vec![ListAny] => Operation::unary(move |ecx, e| {
                 let el_typ = ecx.scalar_type(&e).unwrap_list_element_type().clone();
                 Ok(TableFuncPlan {
-                    expr: HirRelationExpr::CallTable {
+                    imp: TableFuncImpl::CallTable {
                         func: TableFunc::UnnestList { el_typ },
                         exprs: vec![e],
                     },
@@ -3888,7 +3931,7 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             vec![MapAny] => Operation::unary(move |ecx, e| {
                 let value_type = ecx.scalar_type(&e).unwrap_map_value_type().clone();
                 Ok(TableFuncPlan {
-                    expr: HirRelationExpr::CallTable {
+                    imp: TableFuncImpl::CallTable {
                         func: TableFunc::UnnestMap { value_type },
                         exprs: vec![e],
                     },
@@ -3926,7 +3969,7 @@ pub static MZ_INTERNAL_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLo
         "mz_aclexplode" => Table {
             params!(ScalarType::Array(Box::new(ScalarType::MzAclItem))) =>  Operation::unary(move |_ecx, mz_aclitems| {
                 Ok(TableFuncPlan {
-                    expr: HirRelationExpr::CallTable {
+                    imp: TableFuncImpl::CallTable {
                         func: TableFunc::MzAclExplode,
                         exprs: vec![mz_aclitems],
                     },
