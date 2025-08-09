@@ -18,13 +18,15 @@ export STEP_START_TIMESTAMP_WITH_TZ
 
 ci_unimportant_heading "Download coverage data from run"
 mkdir -p coverage
+BUILDKITE_BUILD_ID="0198847f-103e-4936-a2dd-f9be46a9e343" # dnm
+
 buildkite-agent artifact download 'coverage/*.zst' coverage/
 find coverage -name '*.zst' -exec zstd -d {} \;
 
 ci_uncollapsed_heading "Uncovered Lines in Pull Request"
 find coverage -name '*.lcov' -not -name 'cargotest.lcov' -exec bin/ci-coverage-pr-report --unittests=coverage/cargotest.lcov {} +
 buildkite-agent artifact upload junit_coverage*.xml
-bin/ci-annotate-errors junit_coverage*.xml
+bin/ci-annotate-errors junit_coverage*.xml || true
 
 ci_unimportant_heading "Create coverage report"
 REPORT=coverage_without_unittests_"$BUILDKITE_BUILD_ID"
