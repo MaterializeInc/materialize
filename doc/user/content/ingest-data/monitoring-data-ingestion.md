@@ -5,7 +5,7 @@ menu:
   main:
     identifier: ingest-monitoring
     parent: ingest-data
-    weight: 39
+    weight: 49
 ---
 
 ### Monitoring the snapshotting progress
