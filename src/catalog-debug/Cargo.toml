@@ -28,7 +28,7 @@ mz-repr = { path = "../repr" }
 mz-service = { path = "../service" }
 mz-sql = { path = "../sql" }
 serde = "1.0.219"
-serde_json = "1.0.127"
+serde_json = "1.0.142"
 tokio = "1.44.1"
 tracing = "0.1.37"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
