@@ -198,7 +198,7 @@ pub enum StateValue<T, O> {
 impl<T, O> std::fmt::Debug for StateValue<T, O> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            StateValue::Consolidating(_) => write!(f, "Consolidating"),
+            StateValue::Consolidating(c) => std::fmt::Display::fmt(c, f),
             StateValue::Value(_) => write!(f, "Value"),
         }
     }
