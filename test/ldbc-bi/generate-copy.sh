@@ -9,7 +9,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 #
-# generate-copy — generates \copy commands from LDBC BI csv files
+# generate-copy — generates initial inserts from LDBC BI csv files
 
 set -eu -o pipefail
 
