@@ -53,7 +53,7 @@ use types::{
 
 #[cfg(test)]
 pub mod memory;
-mod rocksdb;
+pub(crate) mod rocksdb;
 // TODO(aljoscha): Move next to upsert module, rename to upsert_types.
 pub(crate) mod types;
 
