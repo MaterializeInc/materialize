@@ -288,6 +288,34 @@ mod tests {
             expected_response,
         )
         .await;
+
+        // Test options update
+        let request = r#"{
+            "jsonrpc":"2.0",
+            "id": 2,
+            "method":"workspace/executeCommand",
+            "params": {
+                "command": "optionsUpdate",
+                "arguments": [{ "formattingWidth": 10 }]
+            }
+        }"#;
+        let expected_response = vec![LspMessage::<(), ()> {
+            jsonrpc: "2.0".to_string(),
+            id: Some(2),
+            result: None,
+            method: None,
+            params: None,
+            error: None,
+        }];
+
+        write_and_assert(
+            req_client,
+            resp_client,
+            &mut [0; 1024],
+            request,
+            expected_response,
+        )
+        .await;
     }
 
     /// Asserts that the server can parse a single SQL statement `SELECT 100;`.
