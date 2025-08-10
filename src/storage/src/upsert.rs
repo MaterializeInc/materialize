@@ -61,8 +61,18 @@ pub(crate) mod types;
 
 pub type UpsertValue = Result<Row, UpsertError>;
 
-#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct UpsertKey([u8; 32]);
+
+impl Debug for UpsertKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "0x")?;
+        for byte in self.0 {
+            write!(f, "{:02x}", byte)?;
+        }
+        Ok(())
+    }
+}
 
 impl AsRef<[u8]> for UpsertKey {
     #[inline(always)]
