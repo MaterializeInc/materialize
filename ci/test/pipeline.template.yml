@@ -219,7 +219,7 @@ steps:
         depends_on: []
         timeout_in_minutes: 30
         agents:
-          queue: mac
+          queue: buildkite-hosted-macos
         coverage: skip
         sanitizer: skip
 
