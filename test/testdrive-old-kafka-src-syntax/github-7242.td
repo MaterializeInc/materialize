@@ -10,6 +10,7 @@
 $ set-sql-timeout duration=60s
 $ set-arg-default single-replica-cluster=quickstart
 
+> BEGIN
 > CREATE SOURCE tpch
   IN CLUSTER ${arg.single-replica-cluster}
   FROM LOAD GENERATOR TPCH (SCALE FACTOR 0.1, UP TO 1000);
@@ -22,6 +23,7 @@ $ set-arg-default single-replica-cluster=quickstart
 > CREATE TABLE partsupp FROM SOURCE tpch (REFERENCE partsupp);
 > CREATE TABLE region FROM SOURCE tpch (REFERENCE region);
 > CREATE TABLE supplier FROM SOURCE tpch (REFERENCE supplier);
+> COMMIT
 
 > CREATE CONNECTION kafka_fixed TO KAFKA (
     BROKER '${testdrive.kafka-addr}',

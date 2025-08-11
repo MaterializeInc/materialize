@@ -15,6 +15,7 @@ XYZ
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE envelope_none_bytes
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-envelope-none-bytes-${testdrive.seed}')
 
@@ -22,6 +23,7 @@ XYZ
   FORMAT BYTES
   INCLUDE PARTITION AS kafka_partition, OFFSET AS mz_offset
   ENVELOPE NONE
+> COMMIT
 
 > SELECT COUNT(*) FROM envelope_none_bytes_tbl
 10000
@@ -32,6 +34,7 @@ $ kafka-ingest topic=envelope-none-text format=bytes repeat=5000
 ABC
 XYZ
 
+> BEGIN
 > CREATE SOURCE envelope_none_text
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-envelope-none-text-${testdrive.seed}')
 
@@ -39,6 +42,7 @@ XYZ
   FORMAT TEXT
   INCLUDE PARTITION AS kafka_partition, OFFSET AS mz_offset
   ENVELOPE NONE
+> COMMIT
 
 > SELECT COUNT(*) FROM envelope_none_text_tbl
 10000

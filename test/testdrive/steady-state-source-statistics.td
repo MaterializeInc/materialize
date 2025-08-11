@@ -55,6 +55,7 @@ goofus,gallant
     URL '${testdrive.schema-registry-url}'
   );
 
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC
@@ -65,6 +66,7 @@ goofus,gallant
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   INCLUDE OFFSET
   ENVELOPE UPSERT
+> COMMIT
 
 > CREATE SOURCE counter
   IN CLUSTER ${arg.single-replica-cluster}

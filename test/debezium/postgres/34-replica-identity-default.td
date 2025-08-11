@@ -25,12 +25,14 @@ $ schema-registry-wait topic=postgres.public.replica_identity_default
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE replica_identity_default
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.replica_identity_default');
 
 > CREATE TABLE replica_identity_default_tbl FROM SOURCE replica_identity_default (REFERENCE "postgres.public.replica_identity_default")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
+> COMMIT
 
 > SELECT * FROM replica_identity_default_tbl
 1 1 1

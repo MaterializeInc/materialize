@@ -29,6 +29,7 @@ abc:abc
   SASL PASSWORD = SECRET redpanda_password
   );
 
+> BEGIN
 > CREATE SOURCE redpanda_bytes
   IN CLUSTER canary_sources
   FROM KAFKA CONNECTION redpanda_conn (TOPIC 'testdrive-bytes-${testdrive.seed}');
@@ -36,6 +37,7 @@ abc:abc
 > CREATE TABLE redpanda_bytes_tbl FROM SOURCE redpanda_bytes (REFERENCE "testdrive-bytes-${testdrive.seed}")
   FORMAT BYTES
   ENVELOPE NONE;
+> COMMIT
 
 > CREATE MATERIALIZED VIEW redpanda_bytes_view AS SELECT COUNT(*) AS cnt FROM redpanda_bytes_tbl;
 

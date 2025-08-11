@@ -40,11 +40,13 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 > CREATE CLUSTER stats_cluster SIZE '${arg.default-replica-size}'
 
+> BEGIN
 > CREATE SOURCE mz_source
   IN CLUSTER stats_cluster
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
 
 > CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE t1);
+> COMMIT
 
 > SELECT COUNT(*) > 0 FROM t1;
 true

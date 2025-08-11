@@ -35,9 +35,11 @@ INSERT INTO t1 VALUES ('{"bar": "baz", "balance": 7.77, "active": false}'::json,
 
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
+> BEGIN
 > CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
 
 > CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE t1);
+> COMMIT
 
 > SELECT COUNT(*) > 0 FROM t1;
 true

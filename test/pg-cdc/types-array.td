@@ -114,6 +114,7 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
     PASSWORD SECRET pgpass
   )
 
+> BEGIN
 > CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
 
 > CREATE TABLE t_boolean_array FROM SOURCE mz_source (REFERENCE t_boolean_array);
@@ -130,6 +131,7 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
 > CREATE TABLE t_time_array FROM SOURCE mz_source (REFERENCE t_time_array);
 > CREATE TABLE t_timestamp_array FROM SOURCE mz_source (REFERENCE t_timestamp_array);
 > CREATE TABLE t_timestamptz_array FROM SOURCE mz_source (REFERENCE t_timestamptz_array);
+> COMMIT
 
 # Insert the same data post-snapshot
 $ postgres-execute connection=postgres://postgres:postgres@postgres

@@ -37,11 +37,13 @@ ALTER SYSTEM SET force_source_table_syntax = true
 # Multi-output load generator source using source-fed tables
 #
 
+> BEGIN
 > CREATE SOURCE auction_house
   IN CLUSTER ${arg.single-replica-cluster}
   FROM LOAD GENERATOR AUCTION (AS OF 300, UP TO 301);
 
 > CREATE TABLE bids FROM SOURCE auction_house (REFERENCE "auction"."bids");
+> COMMIT
 
 > SELECT count(*) FROM bids
 255
@@ -84,6 +86,7 @@ users auction {id,org_id,name}
 # Single-output load generator source using source-fed tables
 #
 
+> BEGIN
 > CREATE SOURCE counter
   IN CLUSTER ${arg.single-replica-cluster}
   FROM LOAD GENERATOR COUNTER (AS OF 4, UP TO 5);
@@ -91,6 +94,7 @@ users auction {id,org_id,name}
 > CREATE TABLE counter_1 FROM SOURCE counter (REFERENCE "counter");
 
 > CREATE TABLE counter_2 FROM SOURCE counter (REFERENCE "counter");
+> COMMIT
 
 > SELECT count(*) from counter_1;
 5
@@ -398,6 +402,7 @@ $ kafka-ingest format=avro topic=avroavro key-format=avro key-schema=${keyschema
 {"key": "mammal1"}
 {"key": "mammalmore"} {"f1":"moose", "f2": 2}
 
+> BEGIN
 > CREATE SOURCE avro_source
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avroavro-${testdrive.seed}');
@@ -413,6 +418,7 @@ $ kafka-ingest format=avro topic=avroavro key-format=avro key-schema=${keyschema
 > CREATE TABLE avro_table_append_cols (a, b) FROM SOURCE avro_source (REFERENCE "testdrive-avroavro-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
+> COMMIT
 
 > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'avro_table_upsert';
 running
@@ -462,6 +468,7 @@ ALTER SYSTEM SET enable_create_table_from_source = true
 ALTER SYSTEM SET enable_load_generator_key_value = true
 ALTER SYSTEM SET force_source_table_syntax = true
 
+> BEGIN
 > CREATE SOURCE keyvalue
   IN CLUSTER ${arg.single-replica-cluster}
   FROM LOAD GENERATOR KEY VALUE (
@@ -477,6 +484,7 @@ ALTER SYSTEM SET force_source_table_syntax = true
 > CREATE TABLE kv_1 FROM SOURCE keyvalue INCLUDE KEY ENVELOPE UPSERT;
 
 > CREATE TABLE kv_2 FROM SOURCE keyvalue INCLUDE KEY ENVELOPE NONE;
+> COMMIT
 
 > SELECT partition, count(*) FROM kv_1 GROUP BY partition
 0   4

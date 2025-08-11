@@ -20,6 +20,7 @@ $ kafka-ingest topic=static format=bytes
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE indexed
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn
@@ -27,9 +28,11 @@ $ kafka-ingest topic=static format=bytes
 
 > CREATE TABLE indexed_tbl (c) FROM SOURCE indexed (REFERENCE "testdrive-static-${testdrive.seed}")
   FORMAT TEXT
+> COMMIT
 
 > CREATE DEFAULT INDEX ON indexed_tbl
 
+> BEGIN
 > CREATE SOURCE unindexed
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn
@@ -37,6 +40,7 @@ $ kafka-ingest topic=static format=bytes
 
 > CREATE TABLE unindexed_tbl (c) FROM SOURCE unindexed (REFERENCE "testdrive-static-${testdrive.seed}")
   FORMAT TEXT
+> COMMIT
 
 > CREATE VIEW v_unindexed AS SELECT count(*) FROM unindexed_tbl
 

@@ -35,6 +35,7 @@ one
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE remote1
   IN CLUSTER storage_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-remote1-${testdrive.seed}')
@@ -45,6 +46,7 @@ one
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-remote2-${testdrive.seed}')
 > CREATE TABLE remote2_tbl FROM SOURCE remote2 (REFERENCE "testdrive-remote2-${testdrive.seed}")
   FORMAT TEXT
+> COMMIT
 
 > CREATE SOURCE webhook_text IN CLUSTER storage_cluster FROM WEBHOOK
   BODY FORMAT TEXT;

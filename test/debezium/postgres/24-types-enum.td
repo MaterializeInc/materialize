@@ -24,12 +24,14 @@ $ schema-registry-wait topic=postgres.public.enum_type
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE enum_type
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.enum_type');
 
 > CREATE TABLE enum_type_tbl FROM SOURCE enum_type (REFERENCE "postgres.public.enum_type")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
+> COMMIT
 
 > SELECT pg_typeof(f1), f1 FROM enum_type_tbl;
 text val1

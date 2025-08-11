@@ -26,12 +26,14 @@ $ kafka-ingest format=avro topic=kafka-multi-broker schema=${schema} timestamp=3
 
 > CREATE CONNECTION kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
 
+> BEGIN
 > CREATE SOURCE kafka_multi_broker
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-multi-broker-${testdrive.seed}')
 
 > CREATE TABLE kafka_multi_broker_tbl FROM SOURCE kafka_multi_broker (REFERENCE "testdrive-kafka-multi-broker-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE NONE
+> COMMIT
 
 $ kafka-ingest format=avro topic=kafka-multi-broker schema=${schema} timestamp=4
 {"f1": "02-01" }

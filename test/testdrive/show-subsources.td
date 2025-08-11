@@ -10,6 +10,7 @@
 $ set-arg-default single-replica-cluster=quickstart
 
 # Create a load generator source that has several subsources.
+> BEGIN
 > CREATE SOURCE lga
   IN CLUSTER ${arg.single-replica-cluster}
   FROM LOAD GENERATOR AUCTION (UP TO 100);
@@ -19,6 +20,7 @@ $ set-arg-default single-replica-cluster=quickstart
 > CREATE TABLE bids FROM SOURCE lga (REFERENCE bids);
 > CREATE TABLE organizations FROM SOURCE lga (REFERENCE organizations);
 > CREATE TABLE users FROM SOURCE lga (REFERENCE users);
+> COMMIT
 
 # By default, `SHOW SUBSOURCES` should show all sources in the schema.
 > SHOW SUBSOURCES

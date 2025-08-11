@@ -46,13 +46,17 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
     PASSWORD SECRET pgpass
   )
 
+> BEGIN
 > CREATE SOURCE pg_source1
   FROM POSTGRES CONNECTION pg_conn_1 (PUBLICATION 'mz_source');
 > CREATE TABLE table_a FROM SOURCE pg_source1 (REFERENCE table_a);
+> COMMIT
 
+> BEGIN
 > CREATE SOURCE pg_source2
   FROM POSTGRES CONNECTION pg_conn_2 (PUBLICATION 'mz_source');
 > CREATE TABLE table_b FROM SOURCE pg_source2 (REFERENCE table_b);
+> COMMIT
 
 > CREATE TABLE t (a int);
 > INSERT INTO t VALUES (1);

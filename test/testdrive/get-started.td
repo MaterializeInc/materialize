@@ -17,6 +17,7 @@ ALTER SYSTEM SET enable_create_table_from_source = true
 
 > SET cluster TO ${arg.single-replica-cluster}
 
+> BEGIN
 > CREATE SOURCE demo
   FROM LOAD GENERATOR AUCTION (TICK INTERVAL '50ms', UP TO 1000)
 
@@ -25,6 +26,7 @@ ALTER SYSTEM SET enable_create_table_from_source = true
 > CREATE TABLE bids FROM SOURCE demo (REFERENCE bids);
 > CREATE TABLE organizations FROM SOURCE demo (REFERENCE organizations);
 > CREATE TABLE users FROM SOURCE demo (REFERENCE users);
+> COMMIT
 
 > SHOW SOURCES
 name          type           cluster                        comment

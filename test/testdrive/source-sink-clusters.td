@@ -72,19 +72,23 @@ bb
 > CREATE CONNECTION kafka
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
 
+> BEGIN
 > CREATE SOURCE data1
   IN CLUSTER storage
   FROM KAFKA CONNECTION kafka (TOPIC 'testdrive-data1-${testdrive.seed}')
 
 > CREATE TABLE data1_tbl FROM SOURCE data1 (REFERENCE "testdrive-data1-${testdrive.seed}")
   FORMAT TEXT
+> COMMIT
 
+> BEGIN
 > CREATE SOURCE data2
   IN CLUSTER storage
   FROM KAFKA CONNECTION kafka (TOPIC 'testdrive-data2-${testdrive.seed}')
 
 > CREATE TABLE data2_tbl FROM SOURCE data2 (REFERENCE "testdrive-data2-${testdrive.seed}")
   FORMAT TEXT
+> COMMIT
 
 > SELECT * FROM data1_tbl
 a

@@ -45,11 +45,13 @@ ALTER TABLE table_1 REPLICA IDENTITY FULL;
 INSERT INTO table_1 VALUES (2, 'two');
 INSERT INTO table_1 VALUES (3, 'three');
 
+> BEGIN
 > CREATE SOURCE mz_source
   IN CLUSTER sconn_drop_cluster
   FROM POSTGRES CONNECTION pg_conn (PUBLICATION 'mz_source');
 
 > CREATE TABLE table_1 FROM SOURCE mz_source (REFERENCE table_1);
+> COMMIT
 
 > SELECT * FROM table_1;
 1 one

@@ -34,6 +34,7 @@ contains: unsupported scale factor 9223372036854776000
   FROM LOAD GENERATOR TPCH (SCALE FACTOR -1)
 contains: unsupported scale factor -1
 
+> BEGIN
 > CREATE SOURCE gen
   IN CLUSTER ${arg.single-replica-cluster}
   FROM LOAD GENERATOR TPCH (SCALE FACTOR .01, UP TO 100)
@@ -46,6 +47,7 @@ contains: unsupported scale factor -1
 > CREATE TABLE partsupp FROM SOURCE gen (REFERENCE partsupp);
 > CREATE TABLE region FROM SOURCE gen (REFERENCE region);
 > CREATE TABLE supplier FROM SOURCE gen (REFERENCE supplier);
+> COMMIT
 
 > SHOW SOURCES
 name           type            cluster                          comment

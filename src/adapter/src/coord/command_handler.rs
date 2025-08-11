@@ -732,7 +732,10 @@ impl Coordinator {
                     }
 
                     // These statements must be kept in-sync with `must_serialize_ddl()`.
-                    Statement::AlterObjectRename(_) | Statement::AlterObjectSwap(_) => {
+                    Statement::AlterObjectRename(_)
+                    | Statement::AlterObjectSwap(_)
+                    | Statement::CreateTableFromSource(_)
+                    | Statement::CreateSource(_) => {
                         let state = self.catalog().for_session(ctx.session()).state().clone();
                         let revision = self.catalog().transient_revision();
 
@@ -743,6 +746,7 @@ impl Coordinator {
                             ops: vec![],
                             state,
                             revision,
+                            side_effects: vec![],
                         }) {
                             return ctx.retire(Err(err));
                         }
@@ -776,10 +780,8 @@ impl Coordinator {
                     | Statement::CreateSchema(_)
                     | Statement::CreateSecret(_)
                     | Statement::CreateSink(_)
-                    | Statement::CreateSource(_)
                     | Statement::CreateSubsource(_)
                     | Statement::CreateTable(_)
-                    | Statement::CreateTableFromSource(_)
                     | Statement::CreateType(_)
                     | Statement::CreateView(_)
                     | Statement::CreateWebhookSource(_)

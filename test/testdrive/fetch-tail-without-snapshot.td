@@ -26,6 +26,7 @@ $ kafka-ingest format=avro topic=tail-without-snapshot schema=${int} timestamp=1
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE tail_without_snapshot
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-tail-without-snapshot-${testdrive.seed}')
@@ -33,6 +34,7 @@ $ kafka-ingest format=avro topic=tail-without-snapshot schema=${int} timestamp=1
 > CREATE TABLE tail_without_snapshot_tbl FROM SOURCE tail_without_snapshot (REFERENCE "testdrive-tail-without-snapshot-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${int}'
   ENVELOPE NONE
+> COMMIT
 
 > SELECT * FROM tail_without_snapshot_tbl;
 123

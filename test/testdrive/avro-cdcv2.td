@@ -109,6 +109,7 @@ $ kafka-ingest format=avro topic=data schema=${schema}
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE data_schema_inline
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
@@ -116,6 +117,7 @@ $ kafka-ingest format=avro topic=data schema=${schema}
 > CREATE TABLE data_schema_inline_tbl FROM SOURCE data_schema_inline (REFERENCE "testdrive-data-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE MATERIALIZE
+> COMMIT
 
 $ kafka-ingest format=avro topic=data schema=${schema}
 {"com.materialize.cdc.progress":{"lower":[0],"upper":[3],"counts":[]}}

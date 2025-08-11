@@ -29,6 +29,7 @@ $ kafka-ingest format=avro topic=resolution-int2double schema=${int-col} timesta
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE resolution_int2double
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-resolution-int2double-${testdrive.seed}')
@@ -36,6 +37,7 @@ $ kafka-ingest format=avro topic=resolution-int2double schema=${int-col} timesta
 > CREATE TABLE resolution_int2double_tbl FROM SOURCE resolution_int2double (REFERENCE "testdrive-resolution-int2double-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
+> COMMIT
 
 $ kafka-ingest format=avro topic=resolution-int2double schema=${double-col} timestamp=2
 {"f1": 234.456}

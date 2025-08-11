@@ -32,11 +32,13 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
     USER postgres,
     PASSWORD SECRET pgpass
   )
+> BEGIN
 > CREATE SOURCE mz_source
   IN CLUSTER storage
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
 
 > CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE t1);
+> COMMIT
 
 # Wait for the initial snapshot to be ingested
 > SELECT * FROM t1
