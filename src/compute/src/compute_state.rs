@@ -1528,11 +1528,13 @@ impl IndexPeek {
         let max_result_size = usize::cast_from(max_result_size);
         let count_byte_size = size_of::<NonZeroUsize>();
 
+        // We clone `literal_constraints` here because we don't want to move the constraints
+        // out of the peek struct, and don't want to modify in-place.
         let mut peek_iterator = peek_result_iterator::PeekResultIterator::new(
             peek.target.id().clone(),
             peek.map_filter_project.clone(),
             peek.timestamp,
-            peek.literal_constraints.clone(),
+            peek.literal_constraints.clone().as_deref_mut(),
             oks_handle,
         );
 
