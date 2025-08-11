@@ -226,6 +226,26 @@ class Indexes(Generator):
             print(f"{i}")
 
 
+class IndexedViews(Generator):
+    MAX_COUNT = 1000  # TODO: Bump when https://github.com/MaterializeInc/database-issues/issues/9307 is fixed
+
+    @classmethod
+    def body(cls) -> None:
+        print("$ postgres-execute connection=mz_system")
+        print(f"ALTER SYSTEM SET max_objects_per_schema = {cls.COUNT * 10};")
+        print(
+            "> CREATE TABLE t (f0 INTEGER, f1 INTEGER, f2 INTEGER, f3 INTEGER, f4 INTEGER, f5 INTEGER, f6 INTEGER, f7 INTEGER);"
+        )
+        print("> INSERT INTO t VALUES (0, 1, 2, 3, 4, 5, 6, 7);")
+
+        for i in cls.all():
+            print(f"> CREATE VIEW v{i} AS SELECT * FROM t;")
+            print(f"> CREATE DEFAULT INDEX i{i} ON v{i}")
+        for i in cls.all():
+            cls.store_explain_and_run(f"SELECT *, {i} FROM v{i}")
+            print(f"0 1 2 3 4 5 6 7 {i}")
+
+
 class KafkaTopics(Generator):
     COUNT = min(Generator.COUNT, 20)  # CREATE SOURCE is slow
 
