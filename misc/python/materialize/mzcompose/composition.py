@@ -444,10 +444,26 @@ class Composition:
 
                 if retry < max_tries:
                     print("Retrying ...")
-                    time.sleep(3)
-                    if build and buildkite.is_build_failed(build):
-                        print(f"Build {build} has been marked as failed, exiting hard")
-                        sys.exit(1)
+                    if build:
+                        for retry in range(max_tries):
+                            try:
+                                build_status = buildkite.get_build_status(build)
+                            except subprocess.CalledProcessError:
+                                time.sleep(3)
+                                break
+                            if build_status == "failed":
+                                print(
+                                    f"Build {build} has been marked as failed, exiting hard"
+                                )
+                                sys.exit(1)
+                            elif build_status == "success":
+                                break
+                            assert (
+                                build_status == "pending"
+                            ), f"Unknown build status {build_status}"
+                            time.sleep(1)
+                    else:
+                        time.sleep(3)
                     continue
                 else:
                     raise CommandFailureCausedUIError(

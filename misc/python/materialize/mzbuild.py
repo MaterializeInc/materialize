@@ -1014,15 +1014,30 @@ class ResolvedImage:
                         # happened based on error code
                         # (https://github.com/docker/cli/issues/538) and we
                         # want to print output directly to terminal.
-                        print(f"Retrying in {sleep_time}s ...")
-                        time.sleep(sleep_time)
-                        sleep_time = min(sleep_time * 2, 10)
                         if build := os.getenv("CI_WAITING_FOR_BUILD"):
-                            if buildkite.is_build_failed(build):
-                                print(
-                                    f"Build {build} has been marked as failed, exiting hard"
-                                )
-                                sys.exit(1)
+                            for retry in range(max_retries):
+                                try:
+                                    build_status = buildkite.get_build_status(build)
+                                except subprocess.CalledProcessError:
+                                    time.sleep(sleep_time)
+                                    sleep_time = min(sleep_time * 2, 10)
+                                    break
+                                print(f"Build {build} status: {build_status}")
+                                if build_status == "failed":
+                                    print(
+                                        f"Build {build} has been marked as failed, exiting hard"
+                                    )
+                                    sys.exit(1)
+                                elif build_status == "success":
+                                    break
+                                assert (
+                                    build_status == "pending"
+                                ), f"Unknown build status {build_status}"
+                                time.sleep(1)
+                        else:
+                            print(f"Retrying in {sleep_time}s ...")
+                            time.sleep(sleep_time)
+                            sleep_time = min(sleep_time * 2, 10)
                         continue
                     else:
                         break
