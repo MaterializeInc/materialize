@@ -223,17 +223,17 @@ A
 > SELECT * FROM source1_tbl
 A
 
-# TODO: This should be made reliable without sleeping, database-issues#7611
-$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=5s
-
 # Sinks
 > CREATE SINK sink1 FROM v1mat
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'sink1')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-  ENVELOPE DEBEZIUM
+  KEY (c1) NOT ENFORCED
+  FORMAT JSON
+  ENVELOPE UPSERT
 
-$ kafka-verify-data format=avro sink=materialize.public.sink1 sort-messages=true
-{"before": null, "after": {"row":{"c1": 3}}}
+# Note: nothing constrains Materialize to _start_ the sink from the most recent timestamp, but it should
+# eventually reflect the latest count.
+$ kafka-verify-data format=json key=false sink=materialize.public.sink1 partial-search=10
+{"c1": 3}
 """,
     )
 
