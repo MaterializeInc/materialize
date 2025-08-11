@@ -200,6 +200,7 @@ so it is executed.""",
     permit_rerunning_successful_steps(pipeline)
     set_retry_on_agent_lost(pipeline)
     set_default_agents_queue(pipeline)
+    unparallelize(pipeline)
     set_parallelism_name(pipeline)
     check_depends_on(pipeline, args.pipeline)
     add_version_to_preflight_tests(pipeline)
@@ -1055,6 +1056,19 @@ def remove_mz_specific_keys(pipeline: Any) -> None:
             raise UIError(
                 f"Every step should have an explicit timeout_in_minutes value, missing in: {step}"
             )
+
+
+def unparallelize(pipeline: Any) -> None:
+    """Removes parallelism in the test, which will run longer, but exposes some interesting parallelism in some tests."""
+    if not ui.env_is_truthy("CI_UNPARALLELIZE"):
+        return
+
+    for step in steps(pipeline):
+        if "parallelism" not in step:
+            continue
+
+        step["timeout_in_minutes"] *= step["parallelism"]
+        del step["parallelism"]
 
 
 if __name__ == "__main__":
