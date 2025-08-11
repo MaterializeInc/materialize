@@ -26,11 +26,11 @@ cmake(
     name = "librdkafka",
     build_args = ["-j8"],
     build_data = ["@openssl//:openssl_root"],
+    copts = ["-UNDEBUG"],
     env = {
         # Note: casing here is important.
         "OpenSSL_ROOT": "$(execpath @openssl//:openssl_root)",
     },
-    copts = ["-UNDEBUG"],
     generate_args = [
         # Features enabled by the Rust `rdkafka-sys` crate.
         "-DRDKAFKA_BUILD_STATIC=1",
