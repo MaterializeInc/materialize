@@ -214,6 +214,8 @@ where
         let row_item = self.cursor.val(&self.storage);
         let row = row_item.to_datum_iter();
 
+        // An optional literal that we might have added to the borrow. Needs to be declared
+        // before the borrow to ensure correct drop order.
         let maybe_literal;
         let mut borrow = self.datum_vec.borrow();
         borrow.extend(key);
@@ -224,9 +226,6 @@ where
         {
             // The peek was created from an IndexedFilter join. We have to add those columns
             // here that the join would add in a dataflow.
-            // unwrap is ok, because it could be None only if current_literals is exhauseted or if
-            // the iteration is finished. In the latter case we already exited the while
-            // loop.
             maybe_literal = literal;
             borrow.extend(maybe_literal.to_datum_iter());
         }
