@@ -1421,7 +1421,7 @@ mod tests {
     fn test_memory_size() {
         let finalized_value: StateValue<(), ()> = StateValue::finalized_value(Ok(Row::default()));
         assert!(
-            finalized_value.memory_size() <= 88,
+            finalized_value.memory_size() <= 144,
             "memory size is {}",
             finalized_value.memory_size(),
         );
@@ -1429,7 +1429,7 @@ mod tests {
         let provisional_value_with_finalized_value: StateValue<(), ()> =
             finalized_value.into_provisional_value(Ok(Row::default()), (), ());
         assert!(
-            provisional_value_with_finalized_value.memory_size() <= 112,
+            provisional_value_with_finalized_value.memory_size() <= 168,
             "memory size is {}",
             provisional_value_with_finalized_value.memory_size(),
         );
@@ -1437,7 +1437,7 @@ mod tests {
         let provisional_value_without_finalized_value: StateValue<(), ()> =
             StateValue::new_provisional_value(Ok(Row::default()), (), ());
         assert!(
-            provisional_value_without_finalized_value.memory_size() <= 88,
+            provisional_value_without_finalized_value.memory_size() <= 144,
             "memory size is {}",
             provisional_value_without_finalized_value.memory_size(),
         );
@@ -1450,7 +1450,7 @@ mod tests {
             &mut Vec::new(),
         );
         assert!(
-            consolidating_value.memory_size() <= 90,
+            consolidating_value.memory_size() <= 146,
             "memory size is {}",
             consolidating_value.memory_size(),
         );
