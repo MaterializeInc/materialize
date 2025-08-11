@@ -121,7 +121,7 @@ so it is executed.""",
         pipeline.get("env", {}).get("CI_BAZEL_LTO", 0) == 1
         or bool(os.environ["BUILDKITE_TAG"])
         or (
-            os.environ["BUILDKITE_BRANCH"] == "main"
+            not ui.env_is_truthy("BUILDKITE_PULL_REQUEST")
             and args.pipeline in ("nightly", "release-qualification")
         )
         or ui.env_is_truthy("CI_RELEASE_LTO_BUILD")
