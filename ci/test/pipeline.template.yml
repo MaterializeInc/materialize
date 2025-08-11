@@ -383,7 +383,7 @@ steps:
     depends_on: build-x86_64
     timeout_in_minutes: 30
     inputs: [test/sql-server-cdc]
-    parallelism: 2
+    parallelism: 3
     plugins:
       - ./ci/plugins/mzcompose:
           composition: sql-server-cdc

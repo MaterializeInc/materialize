@@ -98,7 +98,7 @@ def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     # must start test-certs, otherwise the certificates needed by sql-server may not be avaiable
     # in the secrets volume when it starts up
-    c.up("materialized", "test-certs", "sql-server")
+    c.up("materialized", "test-certs", "sql-server", Service("testdrive", idle=True))
     seed = random.getrandbits(16)
 
     ssl_ca = c.exec(
