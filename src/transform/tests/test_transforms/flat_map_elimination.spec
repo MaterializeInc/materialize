@@ -83,7 +83,7 @@ FlatMap wrap3(0, 1, 2, 3)
 ## Support for unnest_~ calls
 ## --------------------------
 
-# Rewrite possible for `unnset_array`
+# Rewrite possible for `unnest_array`
 # Example SQL: select unnest(array[f1]) from t1 where f1 = 5;
 apply pipeline=flat_map_elimination
 FlatMap unnest_array({5})
@@ -101,7 +101,7 @@ FlatMap unnest_list([5])
 Map (5)
   Get t0
 
-# Rewrite not possible: unnest_array(-) argument is not resuced
+# Rewrite not possible: unnest_array(-) argument is not reduced to a literal
 apply pipeline=flat_map_elimination
 FlatMap unnest_array(array[5])
   Get t0
@@ -109,7 +109,7 @@ FlatMap unnest_array(array[5])
 FlatMap unnest_array(array[5])
   Get t0
 
-# Rewrite not possible: unnest_list(-) argument is not resuced
+# Rewrite not possible: unnest_list(-) argument is not reduced to a literal
 apply pipeline=flat_map_elimination
 FlatMap unnest_list(list[5])
   Get t0
@@ -119,16 +119,37 @@ FlatMap unnest_list(list[5])
 
 # Rewrite not possible: unnest_array(-) argument is not a singleton
 apply pipeline=flat_map_elimination
+FlatMap unnest_array({5, 6})
+  Get t0
+----
+FlatMap unnest_array({5, 6})
+  Get t0
+
+# Rewrite not possible: unnest_list(-) argument is not a singleton
+apply pipeline=flat_map_elimination
 FlatMap unnest_list([5, 6])
   Get t0
 ----
 FlatMap unnest_list([5, 6])
   Get t0
 
-# Rewrite not possible: unnest_list(-) argument is not a singleton
+# generate_series can produce 0, 1, or more rows, based on its arguments
 apply pipeline=flat_map_elimination
-FlatMap unnest_list(list[5])
+FlatMap generate_series(5, 2, 1)
   Get t0
 ----
-FlatMap unnest_list(list[5])
+Constant <empty>
+
+apply pipeline=flat_map_elimination
+FlatMap generate_series(5, 5, 1)
   Get t0
+----
+Map (5)
+  Get t0
+
+apply pipeline=flat_map_elimination
+FlatMap generate_series(5, 6, 1)
+  Get t0
+----
+FlatMap generate_series(5, 6, 1)
+  Get

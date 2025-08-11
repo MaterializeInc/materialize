@@ -6874,7 +6874,8 @@ NULL  11  NULL  22  22  22  {22}
 # than one window function call in one test, because we currently forget the key information after a window function
 # call (even when `ReduceElision` simplifies the window function call).
 # TODO: Add an optimization that eliminates a Map-FlatMap pair where the Map is just creating a 1-element list on which
-# the FlatMap is immediately calling `unnest_list`.
+# the FlatMap is immediately calling `unnest_list`. We could use the `Equivalences` analysis for this, which would tell
+# us that the column reference in `unnest_list` is equal to a `list_create` with 1 argument.
 query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(keys, humanized expressions) AS VERBOSE TEXT FOR
 SELECT
