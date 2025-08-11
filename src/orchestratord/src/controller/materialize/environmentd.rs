@@ -646,19 +646,17 @@ fn create_service_account_object(
     mz: &Materialize,
 ) -> Option<ServiceAccount> {
     if mz.create_service_account() {
-        let annotations = if config.cloud_provider == CloudProvider::Aws {
-            let role_arn = mz
-                .spec
+        let annotations = match (
+            config.cloud_provider,
+            mz.spec
                 .environmentd_iam_role_arn
                 .as_deref()
-                .or(config.aws_info.environmentd_iam_role_arn.as_deref())
-                .unwrap()
-                .to_string();
-            Some(btreemap! {
-                "eks.amazonaws.com/role-arn".to_string() => role_arn
-            })
-        } else {
-            None
+                .or(config.aws_info.environmentd_iam_role_arn.as_deref()),
+        ) {
+            (CloudProvider::Aws, Some(role_arn)) => Some(btreemap! {
+                "eks.amazonaws.com/role-arn".to_string() => role_arn.to_string()
+            }),
+            _ => None,
         };
         Some(ServiceAccount {
             metadata: ObjectMeta {
