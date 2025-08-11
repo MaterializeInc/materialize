@@ -59,7 +59,7 @@ $ kafka-ingest format=avro topic=kafka-parallel-ingestion key-format=avro key-sc
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
-> CREATE CLUSTER s{s}_cluster SIZE '{self._default_size}', REPLICATION FACTOR 1;
+> CREATE CLUSTER s{s}_cluster SIZE 'scale={self._default_size},workers=1', REPLICATION FACTOR 1;
 
 > CREATE SOURCE s{s}
   IN CLUSTER s{s}_cluster

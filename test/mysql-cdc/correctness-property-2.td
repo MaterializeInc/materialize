@@ -51,7 +51,7 @@ INSERT INTO t1 (f2) SELECT @i:=@i+1 FROM mysql.time_zone t1, mysql.time_zone t2 
 # Start ingestion by adding a replica to the cluster. We must do this from a
 # different connection to not disturb the transaction we're in.
 $ postgres-execute connection=postgres://materialize:materialize@${testdrive.materialize-sql-addr}
-CREATE CLUSTER REPLICA storage.r1 SIZE = '1';
+CREATE CLUSTER REPLICA storage.r1 SIZE = 'scale=1,workers=1';
 
 # Verify that at timestamp 0 there is only one record whose value is the final value
 > FETCH 1 c WITH (timeout = '1d');

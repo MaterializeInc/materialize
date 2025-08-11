@@ -143,7 +143,7 @@ true
 # but a bad group ID prefix will fail, but only after restart when the progress
 # topic contains entries.
 
-> CREATE CLUSTER c (SIZE = '1')
+> CREATE CLUSTER c (SIZE = 'scale=1,workers=1')
 
 > CREATE SINK broken4 IN CLUSTER c FROM mv
   INTO KAFKA CONNECTION kafka_good_progress_topic (
@@ -157,7 +157,7 @@ $ kafka-verify-data format=json key=false sink=materialize.public.broken4 sort-m
 {"column1": 2}
 
 # Resize the cluster on which the sink is running to force the sink to restart.
-> ALTER CLUSTER c SET (SIZE = '2')
+> ALTER CLUSTER c SET (SIZE = 'scale=1,workers=2')
 
 > SELECT EXISTS (
     SELECT 1
@@ -188,7 +188,7 @@ $ kafka-verify-data format=json key=false sink=materialize.public.working sort-m
 {"column1": 2}
 
 # Resize the cluster on which the sink is running to force the sink to restart.
-> ALTER CLUSTER c SET (SIZE = '1')
+> ALTER CLUSTER c SET (SIZE = 'scale=1,workers=1')
 
 # Ensure that the sink is emitting new messages.
 > INSERT INTO t VALUES (3)

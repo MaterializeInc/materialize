@@ -12,7 +12,7 @@ ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true
 ALTER SYSTEM SET storage_statistics_collection_interval = 1000
 ALTER SYSTEM SET storage_statistics_interval = 2000
 
-> CREATE CLUSTER cluster1 (SIZE '2')
+> CREATE CLUSTER cluster1 (SIZE 'scale=1,workers=2')
 
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);

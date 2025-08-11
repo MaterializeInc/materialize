@@ -951,7 +951,9 @@ class Database:
             Cluster(
                 i,
                 managed=rng.choice([True, False]),
-                size=rng.choice(["1", "2"]),
+                size=rng.choice(
+                    ["scale=1,workers=1", "scale=1,workers=4", "scale=2,workers=2"]
+                ),
                 replication_factor=1,
                 introspection_interval=rng.choice(["0", "1s", "10s"]),
             )

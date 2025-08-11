@@ -147,35 +147,35 @@ impl ClusterReplicaSizeMap {
     /// value is computed in production.
     pub fn for_tests() -> Self {
         // {
-        //     "1": {"scale": 1, "workers": 1},
-        //     "2": {"scale": 1, "workers": 2},
-        //     "4": {"scale": 1, "workers": 4},
+        //     "scale=1,workers=1": {"scale": 1, "workers": 1},
+        //     "scale=1,workers=2": {"scale": 1, "workers": 2},
+        //     "scale=1,workers=4": {"scale": 1, "workers": 4},
         //     /// ...
-        //     "32": {"scale": 1, "workers": 32}
+        //     "scale=1,workers=32": {"scale": 1, "workers": 32}
         //     /// Testing with multiple processes on a single machine
-        //     "2-4": {"scale": 2, "workers": 4},
+        //     "scale=2,workers=4": {"scale": 2, "workers": 4},
         //     /// Used in mzcompose tests
-        //     "2-2": {"scale": 2, "workers": 2},
+        //     "scale=2,workers=2": {"scale": 2, "workers": 2},
         //     ...
-        //     "16-16": {"scale": 16, "workers": 16},
+        //     "scale=16,workers=16": {"scale": 16, "workers": 16},
         //     /// Used in the shared_fate cloudtest tests
-        //     "2-1": {"scale": 2, "workers": 1},
+        //     "scale=2,workers=1": {"scale": 2, "workers": 1},
         //     ...
-        //     "16-1": {"scale": 16, "workers": 1},
+        //     "scale=16,workers=1": {"scale": 16, "workers": 1},
         //     /// Used in the cloudtest tests that force OOMs
-        //     "mem-2": { "memory_limit": 2Gb },
+        //     "scale=1,workers=1,mem=2GiB": { "memory_limit": 2GiB },
         //     ...
-        //     "mem-16": { "memory_limit": 16Gb },
+        //     "scale=1,workers=1,mem=16": { "memory_limit": 16GiB },
         // }
         let mut inner = (0..=5)
             .flat_map(|i| {
                 let workers: u8 = 1 << i;
                 [
-                    (workers.to_string(), None),
-                    (format!("{workers}-4G"), Some(4)),
-                    (format!("{workers}-8G"), Some(8)),
-                    (format!("{workers}-16G"), Some(16)),
-                    (format!("{workers}-32G"), Some(32)),
+                    (format!("scale=1,workers={workers}"), None),
+                    (format!("scale=1,workers={workers},mem=4GiB"), Some(4)),
+                    (format!("scale=1,workers={workers},mem=8GiB"), Some(8)),
+                    (format!("scale=1,workers={workers},mem=16GiB"), Some(16)),
+                    (format!("scale=1,workers={workers},mem=32GiB"), Some(32)),
                 ]
                 .map(|(name, memory_limit)| {
                     (
@@ -201,7 +201,7 @@ impl ClusterReplicaSizeMap {
         for i in 1..=5 {
             let scale = 1 << i;
             inner.insert(
-                format!("{scale}-1"),
+                format!("scale={scale},workers=1"),
                 ReplicaAllocation {
                     memory_limit: None,
                     memory_request: None,
@@ -218,7 +218,7 @@ impl ClusterReplicaSizeMap {
             );
 
             inner.insert(
-                format!("{scale}-{scale}"),
+                format!("scale={scale},workers={scale}"),
                 ReplicaAllocation {
                     memory_limit: None,
                     memory_request: None,
@@ -235,7 +235,7 @@ impl ClusterReplicaSizeMap {
             );
 
             inner.insert(
-                format!("mem-{scale}"),
+                format!("scale=1,workers=8,mem={scale}GiB"),
                 ReplicaAllocation {
                     memory_limit: Some(MemoryLimit(ByteSize(u64::cast_from(scale) * (1 << 30)))),
                     memory_request: None,
@@ -253,7 +253,7 @@ impl ClusterReplicaSizeMap {
         }
 
         inner.insert(
-            "2-4".to_string(),
+            "scale=2,workers=4".to_string(),
             ReplicaAllocation {
                 memory_limit: None,
                 memory_request: None,

@@ -89,8 +89,8 @@ struct Args {
     #[clap(long, env = "ORCHESTRATOR_PROCESS_WRAPPER")]
     orchestrator_process_wrapper: Option<String>,
     /// Replica size
-    #[clap(long, default_value = "2")]
-    replica_size: usize,
+    #[clap(long, default_value = "scale=1,workers=2")]
+    replica_size: String,
     /// Replication factor
     #[clap(long, default_value = "1")]
     replicas: usize,
@@ -197,7 +197,7 @@ async fn main() -> ExitCode {
             }
         },
         replicas: args.replicas,
-        replica_size: args.replica_size,
+        replica_size: args.replica_size.clone(),
     };
 
     if let (Some(shard), Some(shard_count)) = (args.shard, args.shard_count) {

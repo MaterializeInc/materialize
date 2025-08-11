@@ -193,26 +193,26 @@ impl Default for TestHarness {
             seed: rand::random(),
             storage_usage_collection_interval: Duration::from_secs(3600),
             storage_usage_retention_period: None,
-            default_cluster_replica_size: "1".to_string(),
+            default_cluster_replica_size: "scale=1,workers=1".to_string(),
             default_cluster_replication_factor: 1,
             builtin_system_cluster_config: BootstrapBuiltinClusterConfig {
-                size: "1".to_string(),
+                size: "scale=1,workers=1".to_string(),
                 replication_factor: SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR,
             },
             builtin_catalog_server_cluster_config: BootstrapBuiltinClusterConfig {
-                size: "1".to_string(),
+                size: "scale=1,workers=1".to_string(),
                 replication_factor: CATALOG_SERVER_CLUSTER_DEFAULT_REPLICATION_FACTOR,
             },
             builtin_probe_cluster_config: BootstrapBuiltinClusterConfig {
-                size: "1".to_string(),
+                size: "scale=1,workers=1".to_string(),
                 replication_factor: PROBE_CLUSTER_DEFAULT_REPLICATION_FACTOR,
             },
             builtin_support_cluster_config: BootstrapBuiltinClusterConfig {
-                size: "1".to_string(),
+                size: "scale=1,workers=1".to_string(),
                 replication_factor: SUPPORT_CLUSTER_DEFAULT_REPLICATION_FACTOR,
             },
             builtin_analytics_cluster_config: BootstrapBuiltinClusterConfig {
-                size: "1".to_string(),
+                size: "scale=1,workers=1".to_string(),
                 replication_factor: ANALYTICS_CLUSTER_DEFAULT_REPLICATION_FACTOR,
             },
             propagate_crashes: false,

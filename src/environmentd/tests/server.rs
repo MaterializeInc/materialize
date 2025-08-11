@@ -1670,9 +1670,9 @@ fn test_storage_usage_records_are_not_cleared_on_restart() {
 #[mz_ore::test]
 fn test_default_cluster_sizes() {
     let server = test_util::TestHarness::default()
-        .with_builtin_system_cluster_replica_size("1".to_string())
-        .with_builtin_catalog_server_cluster_replica_size("1".to_string())
-        .with_default_cluster_replica_size("2".to_string())
+        .with_builtin_system_cluster_replica_size("scale=1,workers=1".to_string())
+        .with_builtin_catalog_server_cluster_replica_size("scale=1,workers=1".to_string())
+        .with_default_cluster_replica_size("scale=1,workers=2".to_string())
         .start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
 
@@ -1685,7 +1685,7 @@ fn test_default_cluster_sizes() {
         .get(0)
         .unwrap()
         .get(0);
-    assert_eq!(builtin_size, "1");
+    assert_eq!(builtin_size, "scale=1,workers=1");
 
     let builtin_size: String = client
         .query(
@@ -1696,7 +1696,7 @@ fn test_default_cluster_sizes() {
         .get(0)
         .unwrap()
         .get(0);
-    assert_eq!(builtin_size, "2");
+    assert_eq!(builtin_size, "scale=1,workers=2");
 }
 
 #[mz_ore::test]
@@ -2791,7 +2791,7 @@ async fn smoketest_webhook_source() {
     // Create a webhook source.
     client
         .execute(
-            "CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '1'));",
+            "CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE 'scale=1,workers=1'));",
             &[],
         )
         .await
@@ -2902,7 +2902,7 @@ fn test_invalid_webhook_body() {
     // Create a cluster we can install webhook sources on.
     client
         .execute(
-            "CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '1'));",
+            "CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE 'scale=1,workers=1'));",
             &[],
         )
         .expect("failed to create cluster");
@@ -2985,7 +2985,7 @@ fn test_webhook_duplicate_headers() {
     // Create a webhook source that includes headers.
     client
         .execute(
-            "CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '1'));",
+            "CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE 'scale=1,workers=1'));",
             &[],
         )
         .expect("failed to create cluster");
@@ -3245,7 +3245,7 @@ async fn webhook_concurrent_actions() {
     let src_name = "webhook_json";
     client
         .execute(
-            "CREATE CLUSTER webhook_cluster_concurrent REPLICAS (r1 (SIZE '1'));",
+            "CREATE CLUSTER webhook_cluster_concurrent REPLICAS (r1 (SIZE 'scale=1,workers=1'));",
             &[],
         )
         .await
@@ -3417,7 +3417,7 @@ fn webhook_concurrency_limit() {
     // Create a webhook source.
     client
         .execute(
-            "CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '1'));",
+            "CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE 'scale=1,workers=1'));",
             &[],
         )
         .expect("failed to create cluster");
@@ -3489,7 +3489,7 @@ fn webhook_too_large_request() {
     // Create a webhook source.
     client
         .execute(
-            "CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '1'));",
+            "CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE 'scale=1,workers=1'));",
             &[],
         )
         .expect("failed to create cluster");
@@ -3564,7 +3564,7 @@ fn test_webhook_url_notice() {
     // Create a webhook source that includes headers.
     client
         .execute(
-            "CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '1'));",
+            "CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE 'scale=1,workers=1'));",
             &[],
         )
         .expect("failed to create cluster");
@@ -3626,7 +3626,7 @@ async fn webhook_concurrent_swap() {
     let webhook_cluster = "webhook_cluster_concurrent_swap";
     client
         .execute(
-            &format!("CREATE CLUSTER {webhook_cluster} REPLICAS (r1 (SIZE '1'));"),
+            &format!("CREATE CLUSTER {webhook_cluster} REPLICAS (r1 (SIZE 'scale=1,workers=1'));"),
             &[],
         )
         .await
@@ -3843,7 +3843,10 @@ fn concurrent_cluster_drop() {
     let mut drop_client = server.connect(postgres::NoTls).unwrap();
 
     txn_client
-        .execute("CREATE CLUSTER c REPLICAS (r1 (SIZE '1'));", &[])
+        .execute(
+            "CREATE CLUSTER c REPLICAS (r1 (SIZE 'scale=1,workers=1'));",
+            &[],
+        )
         .expect("failed to create cluster");
     txn_client
         .execute("CREATE TABLE t (a INT);", &[])
@@ -4693,7 +4696,7 @@ fn test_webhook_request_compression() {
     // Create a webhook source.
     client
         .execute(
-            "CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE '1'));",
+            "CREATE CLUSTER webhook_cluster REPLICAS (r1 (SIZE 'scale=1,workers=1'));",
             &[],
         )
         .expect("failed to create cluster");

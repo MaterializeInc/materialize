@@ -99,7 +99,7 @@ def workflow_selection(c: Composition, parser: WorkflowArgumentParser) -> None:
 def run_sqllogictest(
     c: Composition, parser: WorkflowArgumentParser, run_config: SltRunConfig
 ) -> None:
-    parser.add_argument("--replica-size", default=2, type=int)
+    parser.add_argument("--replica-size", default="scale=1,workers=2", type=str)
     parser.add_argument("--replicas", default=1, type=int)
     args = parser.parse_args()
     c.up(c.metadata_store())

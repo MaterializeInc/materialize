@@ -335,7 +335,7 @@ ReadyForQuery {"status":"I"}
 send
 Query {"query": "create cluster c1 REPLICAS ()"}
 Query {"query": "create cluster c2 REPLICAS ()"}
-Query {"query": "create cluster CL3 REPLICAS (r1 (SIZE = '1'))"}
+Query {"query": "create cluster CL3 REPLICAS (r1 (SIZE = 'scale=1,workers=1'))"}
 Query {"query": "set cluster = c1"}
 Query {"query": "drop cluster c2"}
 Query {"query": "drop cluster c1"}

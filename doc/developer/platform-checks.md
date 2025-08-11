@@ -186,7 +186,7 @@ class DropCreateDefaultReplica(Action):
         c.sql(
             """
             ALTER CLUSTER quickstart SET (REPLICATION FACTOR 0);
-            ALTER CLUSTER quickstart SET (SIZE '1', REPLICATION FACTOR 1);
+            ALTER CLUSTER quickstart SET (SIZE 'scale=1,workers=1', REPLICATION FACTOR 1);
             """
         )
 ```

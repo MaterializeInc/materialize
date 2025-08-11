@@ -253,7 +253,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         if Mz0dtDeploy in scenario.actions_with_weight():
             c.sql(
                 """
-                CREATE CLUSTER storage (SIZE = '2-2');
+                CREATE CLUSTER storage (SIZE = 'scale=2,workers=2');
             """
             )
         else:

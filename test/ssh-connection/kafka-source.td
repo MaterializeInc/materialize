@@ -21,7 +21,7 @@ one
 # in which we opened one SSH tunnel per worker thread per broker, which
 # tripped the default `MaxStartups 10` sshd configuration.
 > DROP CLUSTER IF EXISTS sc;
-> CREATE CLUSTER sc REPLICAS (r1 (SIZE '32'))
+> CREATE CLUSTER sc REPLICAS (r1 (SIZE 'scale=1,workers=32'))
 
 # Test the various types of tunnels
 

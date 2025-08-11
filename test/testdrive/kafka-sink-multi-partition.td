@@ -15,7 +15,7 @@
 
 $ kafka-create-topic topic=v1 partitions=100
 
-$ set-arg-default default-storage-size=1
+$ set-arg-default default-storage-size=scale=1,workers=1
 $ set-arg-default single-replica-cluster=quickstart
 
 > CREATE CONNECTION kafka_conn

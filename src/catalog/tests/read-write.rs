@@ -138,7 +138,7 @@ async fn test_audit_logs(state_builder: TestCatalogStateBuilder) {
                 cluster_name: "foo".to_string(),
                 replica_id: Some("1".to_string()),
                 replica_name: "bar".to_string(),
-                logical_size: "1".to_string(),
+                logical_size: "scale=1,workers=1".to_string(),
                 disk: false,
                 billed_as: None,
                 internal: false,

@@ -15,7 +15,7 @@
 //! $ cargo run --release --example upsert_open_loop -- --runtime 5sec \
 //!   --records-per-second 200000 --num-keys 200000 --batch-size 20000 \
 //!   --key-value-store in-memory-hash-map \
-//!   --num-async-workers 16 --num-timely-workers=16 --num-sources=16
+//!   --num-async-workers 16 --num-timely,workers=16 --num-sources=16
 //! ```
 //!
 //! ## Description
@@ -346,8 +346,8 @@ async fn run_benchmark(
     );
 
     let benchmark_description = format!(
-        "key-value-backend={} upsert-pre-reduce={} num-sources={} num-async-workers={} \
-        num-timely-workers={} runtime={:?} num_records_total={} records-per-second={} \
+        "key-value-backend={} upsert-pre-reduce={} num-sources={} num-async,workers={} \
+        num-timely,workers={} runtime={:?} num_records_total={} records-per-second={} \
         num-keys={} key-record-size-bytes={} value-record-size-bytes={} batch-size={}",
         args.key_value_store,
         args.upsert_pre_reduce,

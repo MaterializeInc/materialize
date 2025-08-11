@@ -99,7 +99,7 @@ class TestModelCluster:
         results = run_dbt(["seed"])
         assert len(results) == 1
 
-        project.run_sql("CREATE CLUSTER not_default SIZE = '1'")
+        project.run_sql("CREATE CLUSTER not_default SIZE = 'scale=1,workers=1'")
         run_dbt(["run", "--exclude", "invalid_cluster", "default_cluster"])
 
         check_relations_equal(project.adapter, ["actual_clusters", "expected_clusters"])
@@ -130,7 +130,7 @@ class TestModelCluster:
         # re-run.
         run_dbt(["seed", "--models", "test_seed"], expect_pass=True)
 
-        project.run_sql("CREATE CLUSTER quickstart SIZE = '1'")
+        project.run_sql("CREATE CLUSTER quickstart SIZE = 'scale=1,workers=1'")
 
 
 class TestProjectConfigCluster:

@@ -9,7 +9,7 @@
 
 # Tests to verify that source timestamps are rounded to the timestamp interval.
 
-> CREATE CLUSTER test SIZE '1'
+> CREATE CLUSTER test SIZE 'scale=1,workers=1'
 
 $ kafka-create-topic topic=test
 

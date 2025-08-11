@@ -22,7 +22,7 @@ ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;
   )
 
 # Create a serving cluster that should still respond to queries.
-> CREATE CLUSTER serving SIZE '1'
+> CREATE CLUSTER serving SIZE 'scale=1,workers=1'
 
 # Create an MV maintained on the compute cluster and indexed on the serving
 # cluster. It's important that the MV reads from an index too, to reproduce

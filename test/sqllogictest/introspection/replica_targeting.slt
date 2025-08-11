@@ -20,8 +20,8 @@ INSERT INTO test VALUES('a', 'b')
 statement ok
 CREATE CLUSTER test
   REPLICAS (
-    replica_a (SIZE '1', INTROSPECTION INTERVAL '50 milliseconds'),
-    replica_b (SIZE '2', INTROSPECTION INTERVAL '50 milliseconds')
+    replica_a (SIZE 'scale=1,workers=1', INTROSPECTION INTERVAL '50 milliseconds'),
+    replica_b (SIZE 'scale=1,workers=2', INTROSPECTION INTERVAL '50 milliseconds')
   )
 
 statement ok
@@ -101,8 +101,8 @@ DROP CLUSTER test CASCADE
 statement ok
 CREATE CLUSTER test
   REPLICAS (
-    replica_a (SIZE '1', INTROSPECTION INTERVAL 0),
-    replica_b (SIZE '1', INTROSPECTION INTERVAL 1)
+    replica_a (SIZE 'scale=1,workers=1', INTROSPECTION INTERVAL 0),
+    replica_b (SIZE 'scale=1,workers=1', INTROSPECTION INTERVAL 1)
   )
 
 statement ok

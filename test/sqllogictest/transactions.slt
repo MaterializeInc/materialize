@@ -902,7 +902,7 @@ statement ok
 CREATE TABLE t (a INT)
 
 statement ok
-CREATE CLUSTER c REPLICAS (r1 (SIZE '1'))
+CREATE CLUSTER c REPLICAS (r1 (SIZE 'scale=1,workers=1'))
 
 statement ok
 BEGIN
@@ -1230,7 +1230,7 @@ statement ok
 CREATE VIEW green_v1 AS ( SELECT SUM(x) FROM green_t1 );
 
 statement ok
-CREATE CLUSTER green_compute SIZE '1';
+CREATE CLUSTER green_compute SIZE 'scale=1,workers=1';
 
 statement ok
 CREATE MATERIALIZED VIEW green_mv1 IN CLUSTER green_compute AS ( SELECT AVG(x) FROM green_t1 );

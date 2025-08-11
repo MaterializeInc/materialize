@@ -118,8 +118,8 @@ class TestApplyGrantsAndPrivileges:
     def test_apply_cluster_grants(self, project):
         project.run_sql("CREATE ROLE my_role")
         project.run_sql("GRANT my_role TO materialize")
-        project.run_sql("CREATE CLUSTER blue_cluster SIZE = '1'")
-        project.run_sql("CREATE CLUSTER green_cluster SIZE = '1'")
+        project.run_sql("CREATE CLUSTER blue_cluster SIZE = 'scale=1,workers=1'")
+        project.run_sql("CREATE CLUSTER green_cluster SIZE = 'scale=1,workers=1'")
 
         project.run_sql("GRANT CREATE ON CLUSTER green_cluster TO my_role")
         project.run_sql("GRANT USAGE ON CLUSTER blue_cluster TO my_role")
@@ -405,8 +405,8 @@ class TestTargetDeploy:
         project.run_sql("DROP SCHEMA IF EXISTS staging_dbt_deploy CASCADE")
 
     def test_dbt_deploy(self, project):
-        project.run_sql("CREATE CLUSTER prod SIZE = '1'")
-        project.run_sql("CREATE CLUSTER prod_dbt_deploy SIZE = '1'")
+        project.run_sql("CREATE CLUSTER prod SIZE = 'scale=1,workers=1'")
+        project.run_sql("CREATE CLUSTER prod_dbt_deploy SIZE = 'scale=1,workers=1'")
         project.run_sql("CREATE SCHEMA prod")
         project.run_sql("CREATE SCHEMA prod_dbt_deploy")
         project.run_sql("CREATE SCHEMA staging")
@@ -522,8 +522,8 @@ class TestTargetDeploy:
             ), f"Missing timestamp in {schema_name} comment"
 
     def test_dbt_deploy_with_force(self, project):
-        project.run_sql("CREATE CLUSTER prod SIZE = '1'")
-        project.run_sql("CREATE CLUSTER prod_dbt_deploy SIZE = '1'")
+        project.run_sql("CREATE CLUSTER prod SIZE = 'scale=1,workers=1'")
+        project.run_sql("CREATE CLUSTER prod_dbt_deploy SIZE = 'scale=1,workers=1'")
         project.run_sql("CREATE SCHEMA prod")
         project.run_sql("CREATE SCHEMA prod_dbt_deploy")
         project.run_sql("CREATE SCHEMA staging")
@@ -563,7 +563,7 @@ class TestTargetDeploy:
         assert before_schemas["prod"] == after_schemas["prod_dbt_deploy"]
 
     def test_dbt_deploy_missing_deployment_cluster(self, project):
-        project.run_sql("CREATE CLUSTER prod SIZE = '1'")
+        project.run_sql("CREATE CLUSTER prod SIZE = 'scale=1,workers=1'")
         project.run_sql("CREATE SCHEMA prod")
         project.run_sql("CREATE SCHEMA prod_dbt_deploy")
         project.run_sql("CREATE SCHEMA staging")
@@ -572,8 +572,8 @@ class TestTargetDeploy:
         run_dbt(["run-operation", "deploy_promote"], expect_pass=False)
 
     def test_dbt_deploy_missing_deployment_schema(self, project):
-        project.run_sql("CREATE CLUSTER prod SIZE = '1'")
-        project.run_sql("CREATE CLUSTER prod_dbt_deploy SIZE = '1'")
+        project.run_sql("CREATE CLUSTER prod SIZE = 'scale=1,workers=1'")
+        project.run_sql("CREATE CLUSTER prod_dbt_deploy SIZE = 'scale=1,workers=1'")
         project.run_sql("CREATE SCHEMA prod")
 
         run_dbt(["run-operation", "deploy_promote"], expect_pass=False)
@@ -588,7 +588,7 @@ class TestTargetDeploy:
 
     def test_dbt_deploy_init_with_refresh_hydration_time(self, project):
         project.run_sql(
-            "CREATE CLUSTER prod (SIZE = '1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1 hour'))"
+            "CREATE CLUSTER prod (SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1 hour'))"
         )
         project.run_sql("CREATE SCHEMA prod")
         project.run_sql("CREATE SCHEMA staging")
@@ -609,7 +609,7 @@ class TestTargetDeploy:
         assert cluster_type == ("on-refresh",)
 
     def test_dbt_deploy_init_and_cleanup(self, project):
-        project.run_sql("CREATE CLUSTER prod SIZE = '1'")
+        project.run_sql("CREATE CLUSTER prod SIZE = 'scale=1,workers=1'")
         project.run_sql("CREATE SCHEMA prod")
         project.run_sql("CREATE SCHEMA staging")
 
@@ -620,7 +620,7 @@ class TestTargetDeploy:
             fetch="one",
         )
 
-        assert size == "1"
+        assert size == "scale=1,workers=1"
         assert replication_factor == "1"
 
         result = project.run_sql(
@@ -644,10 +644,10 @@ class TestTargetDeploy:
         assert bool(result[0])
 
     def test_cluster_contains_objects(self, project):
-        project.run_sql("CREATE CLUSTER prod SIZE = '1'")
+        project.run_sql("CREATE CLUSTER prod SIZE = 'scale=1,workers=1'")
         project.run_sql("CREATE SCHEMA prod")
         project.run_sql("CREATE SCHEMA prod_dbt_deploy")
-        project.run_sql("CREATE CLUSTER prod_dbt_deploy SIZE = '1'")
+        project.run_sql("CREATE CLUSTER prod_dbt_deploy SIZE = 'scale=1,workers=1'")
         project.run_sql("CREATE SCHEMA staging")
         project.run_sql("CREATE SCHEMA staging_dbt_deploy")
 
@@ -666,10 +666,10 @@ class TestTargetDeploy:
         )
 
     def test_schema_contains_objects(self, project):
-        project.run_sql("CREATE CLUSTER prod SIZE = '1'")
+        project.run_sql("CREATE CLUSTER prod SIZE = 'scale=1,workers=1'")
         project.run_sql("CREATE SCHEMA prod")
         project.run_sql("CREATE SCHEMA prod_dbt_deploy")
-        project.run_sql("CREATE CLUSTER prod_dbt_deploy SIZE = '1'")
+        project.run_sql("CREATE CLUSTER prod_dbt_deploy SIZE = 'scale=1,workers=1'")
         project.run_sql("CREATE SCHEMA staging")
         project.run_sql("CREATE SCHEMA staging_dbt_deploy")
 
@@ -782,7 +782,7 @@ class TestEndToEndDeployment:
 
         # Prepare the source table, the sink cluster and schema
         project.run_sql("CREATE TABLE source_table (val INTEGER)")
-        project.run_sql("CREATE CLUSTER sinks_cluster SIZE = '1'")
+        project.run_sql("CREATE CLUSTER sinks_cluster SIZE = 'scale=1,workers=1'")
         project.run_sql("CREATE SCHEMA sinks_schema")
 
         project.run_sql("INSERT INTO source_table VALUES (1)")

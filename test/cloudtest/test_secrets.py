@@ -104,7 +104,7 @@ def test_missing_secret(mz: MaterializeApplication) -> None:
           $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
           ALTER SYSTEM SET enable_connection_validation_syntax = true
 
-          > CREATE CLUSTER to_be_killed REPLICAS (to_be_killed (SIZE '1'));
+          > CREATE CLUSTER to_be_killed REPLICAS (to_be_killed (SIZE 'scale=1,workers=1'));
 
           > CREATE SECRET to_be_deleted AS 'postgres'
 

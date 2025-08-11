@@ -82,7 +82,7 @@ contains:ORDER BY is not supported in SELECT query for COPY statements
 contains:MAX FILE SIZE cannot be less than 16MB
 
 # Creating cluster with multiple replicas, each with multiple workers
-> CREATE CLUSTER c1 REPLICAS (r1 (size '2'), r2 (size '1'));
+> CREATE CLUSTER c1 REPLICAS (r1 (size 'scale=1,workers=2'), r2 (SIZE 'scale=1,workers=1'));
 > SET cluster = c1;
 
 # functions like now() should work in the s3 path

@@ -69,10 +69,10 @@ class LoadGeneratorMultiReplica(Check):
         return Testdrive(
             dedent(
                 """
-            >[version>=13800] CREATE CLUSTER multi_cluster1 SIZE '1', REPLICATION FACTOR 2;
-            >[version<13800] CREATE CLUSTER multi_cluster1 SIZE '1', REPLICATION FACTOR 1;
-            >[version>=13800] CREATE CLUSTER multi_cluster2 SIZE '1', REPLICATION FACTOR 2;
-            >[version<13800] CREATE CLUSTER multi_cluster2 SIZE '1', REPLICATION FACTOR 1;
+            >[version>=13800] CREATE CLUSTER multi_cluster1 SIZE 'scale=1,workers=1', REPLICATION FACTOR 2;
+            >[version<13800] CREATE CLUSTER multi_cluster1 SIZE 'scale=1,workers=1', REPLICATION FACTOR 1;
+            >[version>=13800] CREATE CLUSTER multi_cluster2 SIZE 'scale=1,workers=1', REPLICATION FACTOR 2;
+            >[version<13800] CREATE CLUSTER multi_cluster2 SIZE 'scale=1,workers=1', REPLICATION FACTOR 1;
                 """
             )
         )

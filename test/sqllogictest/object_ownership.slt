@@ -381,7 +381,7 @@ statement error must be owner of SOURCE materialize.public.js
 ALTER SOURCE js OWNER TO group_materialize
 
 statement error db error: ERROR: Expected one of TIMESTAMP or RETAIN, found SIZE
-ALTER SOURCE js SET (SIZE = '4')
+ALTER SOURCE js SET (SIZE = 'scale=1,workers=4')
 
 ## Views
 
@@ -821,7 +821,7 @@ materialize
 ## Clusters
 
 statement ok
-CREATE CLUSTER mclus REPLICAS (mr1 (SIZE '1'));
+CREATE CLUSTER mclus REPLICAS (mr1 (SIZE 'scale=1,workers=1'));
 
 query T
 SELECT mz_roles.name
@@ -865,7 +865,7 @@ statement ok
 DROP CLUSTER mclus
 
 simple conn=joe,user=joe
-CREATE CLUSTER jclus REPLICAS (jr1 (SIZE '1'));
+CREATE CLUSTER jclus REPLICAS (jr1 (SIZE 'scale=1,workers=1'));
 ----
 COMPLETE 0
 
@@ -912,10 +912,10 @@ COMPLETE 0
 ## Cluster Replicas
 
 statement ok
-CREATE CLUSTER mclus REPLICAS (mr1 (SIZE '1'));
+CREATE CLUSTER mclus REPLICAS (mr1 (SIZE 'scale=1,workers=1'));
 
 statement ok
-CREATE CLUSTER REPLICA mclus.mr2 SIZE '1';
+CREATE CLUSTER REPLICA mclus.mr2 SIZE 'scale=1,workers=1';
 
 query T
 SELECT mz_roles.name
@@ -968,12 +968,12 @@ statement ok
 DROP CLUSTER mclus
 
 simple conn=joe,user=joe
-CREATE CLUSTER jclus REPLICAS (jr1 (SIZE '1'));
+CREATE CLUSTER jclus REPLICAS (jr1 (SIZE 'scale=1,workers=1'));
 ----
 COMPLETE 0
 
 simple conn=joe,user=joe
-CREATE CLUSTER REPLICA jclus.jr2 SIZE '1';
+CREATE CLUSTER REPLICA jclus.jr2 SIZE 'scale=1,workers=1';
 ----
 COMPLETE 0
 
@@ -1881,7 +1881,7 @@ GRANT CREATE ON CLUSTER quickstart TO owner;
 COMPLETE 0
 
 simple conn=owner11,user=owner
-CREATE CLUSTER clus REPLICAS (r1 (SIZE '1'));
+CREATE CLUSTER clus REPLICAS (r1 (SIZE 'scale=1,workers=1'));
 ----
 COMPLETE 0
 
@@ -1957,12 +1957,12 @@ GRANT CREATE ON SCHEMA materialize.public TO owner;
 COMPLETE 0
 
 simple conn=owner12,user=owner
-CREATE CLUSTER clus REPLICAS (r1 (SIZE '1'));
+CREATE CLUSTER clus REPLICAS (r1 (SIZE 'scale=1,workers=1'));
 ----
 COMPLETE 0
 
 simple conn=owner12,user=owner
-CREATE CLUSTER REPLICA clus.r2 SIZE '1';
+CREATE CLUSTER REPLICA clus.r2 SIZE 'scale=1,workers=1';
 ----
 COMPLETE 0
 
@@ -2512,7 +2512,7 @@ SELECT name FROM mz_tables WHERE name = 't'
 t
 
 statement ok
-CREATE CLUSTER c REPLICAS (replica1 (SIZE '1'));
+CREATE CLUSTER c REPLICAS (replica1 (SIZE 'scale=1,workers=1'));
 
 query T
 SELECT name FROM mz_clusters WHERE name = 'c'
@@ -2618,7 +2618,7 @@ SELECT name FROM mz_tables WHERE name = 't'
 t
 
 statement ok
-CREATE CLUSTER c REPLICAS (replica1 (SIZE '1'));
+CREATE CLUSTER c REPLICAS (replica1 (SIZE 'scale=1,workers=1'));
 
 query T
 SELECT name FROM mz_clusters WHERE name = 'c'
@@ -2709,7 +2709,7 @@ SELECT name FROM mz_tables WHERE name = 't'
 t
 
 statement ok
-CREATE CLUSTER c REPLICAS (replica1 (SIZE '1'));
+CREATE CLUSTER c REPLICAS (replica1 (SIZE 'scale=1,workers=1'));
 
 query T
 SELECT name FROM mz_clusters WHERE name = 'c'
@@ -2835,7 +2835,7 @@ COMPLETE 0
 ## Testing dropping a cluster with bound objects
 
 statement ok
-CREATE CLUSTER c REPLICAS (r1 (SIZE '1'));
+CREATE CLUSTER c REPLICAS (r1 (SIZE 'scale=1,workers=1'));
 
 statement ok
 CREATE MATERIALIZED VIEW mv IN CLUSTER c AS SELECT 1;
@@ -2862,7 +2862,7 @@ SELECT name FROM mz_materialized_views WHERE name = 'mv'
 ----
 
 statement ok
-CREATE CLUSTER c REPLICAS (r1 (SIZE '1'));
+CREATE CLUSTER c REPLICAS (r1 (SIZE 'scale=1,workers=1'));
 
 statement ok
 GRANT CREATE ON CLUSTER c TO joe
@@ -2968,7 +2968,7 @@ SELECT mz_roles.name
 joe
 
 statement ok
-CREATE CLUSTER c REPLICAS (replica1 (SIZE '1'));
+CREATE CLUSTER c REPLICAS (replica1 (SIZE 'scale=1,workers=1'));
 
 query T
 SELECT mz_roles.name

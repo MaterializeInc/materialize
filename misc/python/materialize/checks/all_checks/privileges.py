@@ -36,7 +36,7 @@ class Privileges(Check):
                 CREATE SOURCE privilege_source{i} FROM LOAD GENERATOR COUNTER
                 $ postgres-execute connection=postgres://materialize@${{testdrive.materialize-sql-addr}}
                 CREATE SINK privilege_sink{i} FROM privilege_mv{i} INTO KAFKA CONNECTION privilege_kafka_conn{i} (TOPIC 'sink-sink-privilege{i}') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION privilege_csr_conn{i} ENVELOPE DEBEZIUM
-                CREATE CLUSTER privilege_cluster{i} REPLICAS (privilege_cluster_r{i} (SIZE '4'))
+                CREATE CLUSTER privilege_cluster{i} REPLICAS (privilege_cluster_r{i} (SIZE 'scale=1,workers=4'))
                 """
             )
 

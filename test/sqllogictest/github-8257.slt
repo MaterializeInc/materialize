@@ -11,8 +11,8 @@
 
 statement ok
 CREATE CLUSTER test REPLICAS(
-    r1 (SIZE '1'),
-    r2 (SIZE '1')
+    r1 (SIZE 'scale=1,workers=1'),
+    r2 (SIZE 'scale=1,workers=1')
 )
 
 statement ok
@@ -31,8 +31,8 @@ DROP CLUSTER test CASCADE
 
 statement ok
 CREATE CLUSTER test REPLICAS(
-    r1 (SIZE '1'),
-    r2 (SIZE '1')
+    r1 (SIZE 'scale=1,workers=1'),
+    r2 (SIZE 'scale=1,workers=1')
 )
 
 statement ok

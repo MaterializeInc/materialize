@@ -12,7 +12,7 @@ ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true
 ALTER SYSTEM SET storage_statistics_collection_interval = 1000
 ALTER SYSTEM SET storage_statistics_interval = 1000
 
-> CREATE CLUSTER cluster1 REPLICAS (r1 (SIZE '2'))
+> CREATE CLUSTER cluster1 REPLICAS (r1 (SIZE 'scale=1,workers=2'))
 
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
@@ -22,7 +22,7 @@ ALTER SYSTEM SET storage_statistics_interval = 1000
 > INSERT INTO t VALUES ('key1', 'value')
 
 # Setup various sinks and sources
-> CREATE CLUSTER sink_size_cluster SIZE '2';
+> CREATE CLUSTER sink_size_cluster SIZE 'scale=1,workers=2';
 > CREATE SINK sink_size
   IN CLUSTER sink_size_cluster
   FROM simple_view
@@ -43,7 +43,7 @@ $ kafka-create-topic topic=upsert partitions=1
 $ kafka-ingest format=bytes topic=upsert key-format=bytes key-terminator=:
 one:two
 
-> CREATE CLUSTER upsert_size_cluster SIZE '2';
+> CREATE CLUSTER upsert_size_cluster SIZE 'scale=1,workers=2';
 > CREATE SOURCE upsert_size
   IN CLUSTER upsert_size_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC
@@ -74,7 +74,7 @@ one two
 
 > CREATE SCHEMA subsources_size;
 > CREATE SCHEMA subsources_cluster;
-> CREATE CLUSTER subsource_size_s_cluster SIZE '2';
+> CREATE CLUSTER subsource_size_s_cluster SIZE 'scale=1,workers=2';
 > CREATE SOURCE subsources_size.s IN CLUSTER subsource_size_s_cluster FROM LOAD GENERATOR AUCTION (UP TO 100);
 > CREATE SOURCE subsources_cluster.s IN CLUSTER cluster1 FROM LOAD GENERATOR AUCTION (UP TO 100);
 

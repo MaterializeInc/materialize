@@ -148,7 +148,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             c.sql("DROP CLUSTER quickstart CASCADE", user="mz_system", port=6877)
             replica_names = [f"r{replica_id}" for replica_id in range(0, args.replicas)]
             replica_string = ",".join(
-                f"{replica_name} (SIZE '4')" for replica_name in replica_names
+                f"{replica_name} (SIZE 'scale=1,workers=4')"
+                for replica_name in replica_names
             )
             c.sql(
                 f"CREATE CLUSTER quickstart REPLICAS ({replica_string})",
@@ -162,7 +163,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             )
 
         c.sql(
-            "CREATE CLUSTER singlereplica SIZE = '4', REPLICATION FACTOR = 1",
+            "CREATE CLUSTER singlereplica SIZE = 'scale=1,workers=4', REPLICATION FACTOR = 1",
         )
 
         conn = c.sql_connection()

@@ -44,8 +44,8 @@ def test_testdrive(mz: MaterializeApplication) -> None:
                 > CREATE DEFAULT INDEX ON t1;
                 > INSERT INTO t1 VALUES (1);
 
-                > CREATE CLUSTER c1 REPLICAS (r1 (SIZE '1'), r2 (SIZE '2-2'));
-                > CREATE CLUSTER c2 SIZE '1', REPLICATION FACTOR 2;
+                > CREATE CLUSTER c1 REPLICAS (r1 (SIZE 'scale=1,workers=1'), r2 (SIZE 'scale=2,workers=2'));
+                > CREATE CLUSTER c2 SIZE 'scale=1,workers=1', REPLICATION FACTOR 2;
                 > SET cluster=c1
 
                 > CREATE CONNECTION kafka TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)

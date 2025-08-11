@@ -12,7 +12,7 @@
 mode cockroach
 
 statement ok
-CREATE CLUSTER c1 REPLICAS (r (SIZE '1'));
+CREATE CLUSTER c1 REPLICAS (r (SIZE 'scale=1,workers=1'));
 
 statement ok
 SET CLUSTER TO c1;

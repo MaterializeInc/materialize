@@ -293,7 +293,7 @@ SELECT objsubid, description FROM pg_description WHERE objoid >= 20000;
 ----
 
 statement ok
-CREATE CLUSTER comment_cluster REPLICAS (r1 (SIZE '1'), r2 (SIZE '1'));
+CREATE CLUSTER comment_cluster REPLICAS (r1 (SIZE 'scale=1,workers=1'), r2 (SIZE 'scale=1,workers=1'));
 
 statement ok
 COMMENT ON CLUSTER comment_cluster IS 'careful_now';

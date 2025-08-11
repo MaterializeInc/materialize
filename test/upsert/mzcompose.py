@@ -91,7 +91,7 @@ def workflow_testdrive(c: Composition, parser: WorkflowArgumentParser) -> None:
         "--default-size",
         type=int,
         default=Materialized.Size.DEFAULT_SIZE,
-        help="Use SIZE 'N-N' for replicas and SIZE 'N' for sources",
+        help="Use SIZE 'scale=N,workers=N' for replicas and SIZE 'scale=N,workers=1' for sources",
     )
 
     parser.add_argument("--replicas", type=int, default=1, help="use multiple replicas")

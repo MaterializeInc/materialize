@@ -805,7 +805,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t t1, t t2
 EOF
 
 statement ok
-CREATE CLUSTER other SIZE '1'
+CREATE CLUSTER other SIZE 'scale=1,workers=1'
 
 statement ok
 SET CLUSTER = other;

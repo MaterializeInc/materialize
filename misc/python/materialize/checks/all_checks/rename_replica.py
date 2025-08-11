@@ -28,9 +28,9 @@ class RenameReplica(Check):
                 > CREATE MATERIALIZED VIEW rename_replica_view AS SELECT COUNT(f1) FROM rename_replica_table;
 
                 > INSERT INTO rename_replica_table VALUES (2);
-                > CREATE CLUSTER REPLICA rename_replica.replica1 SIZE '2-2';
+                > CREATE CLUSTER REPLICA rename_replica.replica1 SIZE 'scale=2,workers=2';
                 > INSERT INTO rename_replica_table VALUES (3);
-                > CREATE CLUSTER REPLICA rename_replica.replica2 SIZE '2-2';
+                > CREATE CLUSTER REPLICA rename_replica.replica2 SIZE 'scale=2,workers=2';
                 > INSERT INTO rename_replica_table VALUES (4);
                 > ALTER CLUSTER REPLICA rename_replica.replica1 RENAME TO replica_new1
                 """,

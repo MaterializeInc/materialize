@@ -15,7 +15,7 @@ reset-server
 # ---- NewClusterForm.tsx
 
 statement ok
-CREATE CLUSTER foo REPLICAS ( r1 (SIZE = '1') );
+CREATE CLUSTER foo REPLICAS ( r1 (SIZE = 'scale=1,workers=1') );
 
 query T
 SELECT id FROM mz_clusters WHERE name = 'foo';
@@ -109,7 +109,7 @@ u1  u1  materialized-view  1970-01-01␠00:00:00.666+00  1970-01-01␠00:00:00.6
 # ---- mz_cluster_replica_name_history
 
 statement ok
-CREATE CLUSTER foo REPLICAS ( weewoo1 (SIZE = '1') );
+CREATE CLUSTER foo REPLICAS ( weewoo1 (SIZE = 'scale=1,workers=1') );
 
 statement ok
 ALTER CLUSTER REPLICA foo.weewoo1 RENAME TO weewoo2;

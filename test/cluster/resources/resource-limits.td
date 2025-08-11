@@ -78,18 +78,18 @@ ALTER SYSTEM SET max_clusters = 3
 > SHOW max_clusters
 3
 
-> CREATE CLUSTER c1 REPLICAS (r1 (size '1'))
+> CREATE CLUSTER c1 REPLICAS (r1 (SIZE 'scale=1,workers=1'))
 
-> CREATE CLUSTER c2 REPLICAS (r (SIZE '1'));
+> CREATE CLUSTER c2 REPLICAS (r (SIZE 'scale=1,workers=1'));
 
-! CREATE CLUSTER c3 REPLICAS (r (SIZE '1'));
+! CREATE CLUSTER c3 REPLICAS (r (SIZE 'scale=1,workers=1'));
 contains:creating cluster would violate max_clusters limit (desired: 4, limit: 3, current: 3)
 
 > DROP CLUSTER c2 CASCADE;
 
-> CREATE CLUSTER c3 REPLICAS (r (SIZE '1'));
+> CREATE CLUSTER c3 REPLICAS (r (SIZE 'scale=1,workers=1'));
 
-! CREATE CLUSTER c4 REPLICAS (r (SIZE '1'));
+! CREATE CLUSTER c4 REPLICAS (r (SIZE 'scale=1,workers=1'));
 contains:creating cluster would violate max_clusters limit (desired: 4, limit: 3, current: 3)
 
 
@@ -99,7 +99,7 @@ ALTER SYSTEM SET max_clusters = 4
 > SHOW max_clusters
 4
 
-> CREATE CLUSTER c4 REPLICAS (r (SIZE '1'));
+> CREATE CLUSTER c4 REPLICAS (r (SIZE 'scale=1,workers=1'));
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET max_replicas_per_cluster = 1
@@ -107,7 +107,7 @@ ALTER SYSTEM SET max_replicas_per_cluster = 1
 > SHOW max_replicas_per_cluster
 1
 
-! CREATE CLUSTER REPLICA c1.r2 SIZE '1'
+! CREATE CLUSTER REPLICA c1.r2 SIZE 'scale=1,workers=1'
 contains:creating cluster replica would violate max_replicas_per_cluster limit (desired: 2, limit: 1, current: 1)
 
 > SELECT COUNT(*) FROM mz_cluster_replicas JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id WHERE mz_clusters.name = 'mz_analytics'
@@ -131,7 +131,7 @@ ALTER SYSTEM SET max_replicas_per_cluster = 100
 > SHOW max_replicas_per_cluster
 100
 
-#> CREATE CLUSTER REPLICA c1.r2 SIZE '1'
+#> CREATE CLUSTER REPLICA c1.r2 SIZE 'scale=1,workers=1'
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET allowed_cluster_replica_sizes = '2', 4
@@ -151,8 +151,8 @@ ALTER SYSTEM SET allowed_cluster_replica_sizes = '2, 4'
 > SHOW allowed_cluster_replica_sizes
 "\"2, 4\""
 
-! CREATE CLUSTER REPLICA c1.r3 SIZE '1'
-contains:unknown cluster replica size 1
+! CREATE CLUSTER REPLICA c1.r3 SIZE 'scale=1,workers=1'
+contains:unknown cluster replica size scale=1,workers=1
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM RESET allowed_cluster_replica_sizes
@@ -160,7 +160,7 @@ ALTER SYSTEM RESET allowed_cluster_replica_sizes
 > SHOW allowed_cluster_replica_sizes
 ""
 
-> CREATE CLUSTER REPLICA c1.r3 SIZE '1'
+> CREATE CLUSTER REPLICA c1.r3 SIZE 'scale=1,workers=1'
 
 > DROP CLUSTER REPLICA c1.r3
 
@@ -447,9 +447,9 @@ ALTER SYSTEM SET max_credit_consumption_rate = 3
 
 # Size 1 has 1 credit and size 2-1 has 2 credits
 
-> CREATE CLUSTER c1 REPLICAS (r1 (size '1'), r2 (size '2-1'))
+> CREATE CLUSTER c1 REPLICAS (r1 (SIZE 'scale=1,workers=1'), r2 (SIZE 'scale=2,workers=1'))
 
-! CREATE CLUSTER REPLICA c1.r3 SIZE '1'
+! CREATE CLUSTER REPLICA c1.r3 SIZE 'scale=1,workers=1'
 contains:creating cluster replica would violate max_credit_consumption_rate limit (desired: 4, limit: 3, current: 3)
 
 > SELECT COUNT(*) FROM mz_cluster_replicas JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id WHERE mz_clusters.name = 'mz_analytics'
@@ -473,14 +473,14 @@ ALTER SYSTEM SET max_credit_consumption_rate = 4.0
 > SHOW max_credit_consumption_rate
 4.0
 
-> CREATE CLUSTER REPLICA c1.r3 SIZE '1'
+> CREATE CLUSTER REPLICA c1.r3 SIZE 'scale=1,workers=1'
 
-! CREATE CLUSTER REPLICA c1.r4 SIZE '2-1'
+! CREATE CLUSTER REPLICA c1.r4 SIZE 'scale=2,workers=1'
 contains:creating cluster replica would violate max_credit_consumption_rate limit (desired: 6, limit: 4.0, current: 4)
 
 > DROP CLUSTER REPLICA c1.r2
 
-> CREATE CLUSTER REPLICA c1.r4 SIZE '2-1'
+> CREATE CLUSTER REPLICA c1.r4 SIZE 'scale=2,workers=1'
 
 > DROP CLUSTER c1 CASCADE
 

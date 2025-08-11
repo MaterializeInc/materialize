@@ -161,7 +161,7 @@ true
 
 # Test that the dependency relations are cleaned up when a cluster is dropped.
 
-> CREATE CLUSTER cleanup SIZE '1'
+> CREATE CLUSTER cleanup SIZE 'scale=1,workers=1'
 > CREATE INDEX idx_cleanup IN CLUSTER cleanup ON t1 (a)
 > CREATE MATERIALIZED VIEW mv_cleanup IN CLUSTER cleanup AS SELECT * FROM t2
 > CREATE SINK snk_cleanup IN CLUSTER cleanup FROM t1

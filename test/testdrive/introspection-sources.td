@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 $ set-sql-timeout duration=300s
-$ set-arg-default default-replica-size=1
+$ set-arg-default default-replica-size=scale=1,workers=1
 
 # Test for a subset of the information returned by introspection sources.
 # The test focuses on computing answers that are independent of particular
@@ -24,7 +24,7 @@ $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.mater
 ALTER SYSTEM SET enable_introspection_subscribes = false
 
 # In case the environment has other replicas
-> CREATE CLUSTER test SIZE '4-4'
+> CREATE CLUSTER test SIZE 'scale=4,workers=4'
 > SET cluster = test
 
 > CREATE TABLE t (a int)
@@ -350,7 +350,7 @@ true true true true true
 # Test mz_dataflow_arrangement_sizes with hierarchical reductions and top-k over
 # monotonic inputs. The latter is when there is a possibility for memory misestimation
 # since we include monoids in the diff field.
-> CREATE CLUSTER counter_cluster SIZE = '1';
+> CREATE CLUSTER counter_cluster SIZE = 'scale=1,workers=1';
 > CREATE SOURCE counter IN CLUSTER counter_cluster FROM LOAD GENERATOR COUNTER (TICK INTERVAL '2ms');
 
 > CREATE VIEW input AS

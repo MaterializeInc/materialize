@@ -42,7 +42,7 @@ INIT_SCRIPT = dedent(
     """
     # This source will persist throughout the CRDB rolling restart
     > DROP CLUSTER IF EXISTS s_old_cluster CASCADE;
-    > CREATE CLUSTER s_old_cluster SIZE = '4-4';
+    > CREATE CLUSTER s_old_cluster SIZE = 'scale=4,workers=4';
     > CREATE SOURCE s_old IN CLUSTER s_old_cluster FROM LOAD GENERATOR COUNTER (TICK INTERVAL '0.1s');
 
     > SELECT COUNT(*) > 1 FROM s_old;
@@ -50,7 +50,7 @@ INIT_SCRIPT = dedent(
 
     # This source is recreated periodically
     > DROP CLUSTER IF EXISTS s_new_cluster CASCADE;
-    > CREATE CLUSTER s_new_cluster SIZE ='4-4';
+    > CREATE CLUSTER s_new_cluster SIZE = 'scale=4,workers=4';
     > CREATE SOURCE s_new IN CLUSTER s_new_cluster FROM LOAD GENERATOR COUNTER (TICK INTERVAL '0.1s');
 
     > SELECT COUNT(*) > 1 FROM s_new;

@@ -25,7 +25,7 @@ ALTER SYSTEM SET enable_compute_peek_response_stash TO 'false';
 COMPLETE 0
 
 statement ok
-CREATE CLUSTER c1 SIZE 'mem-2';
+CREATE CLUSTER c1 SIZE 'scale=1,workers=8,mem=2GiB';
 
 query I
 SELECT workers FROM mz_catalog.mz_cluster_replica_sizes JOIN mz_cluster_replicas USING (size) JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id WHERE mz_clusters.name != 'quickstart';

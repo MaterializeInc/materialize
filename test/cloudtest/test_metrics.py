@@ -16,7 +16,7 @@ def test_replica_metrics(mz: MaterializeApplication) -> None:
     mz.testdrive.run(
         input=dedent(
             """
-            > CREATE CLUSTER my_cluster REPLICAS (my_replica (SIZE '4-4'))
+            > CREATE CLUSTER my_cluster REPLICAS (my_replica (SIZE 'scale=4,workers=4'))
 
             > SELECT process_id
               FROM mz_internal.mz_cluster_replica_metrics m

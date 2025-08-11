@@ -576,7 +576,7 @@ true
 # Ensure we can start a source with more workers than the default max_wal_senders param (10)
 #
 
-> CREATE CLUSTER large_cluster SIZE '16';
+> CREATE CLUSTER large_cluster SIZE 'scale=1,workers=16';
 
 > CREATE SOURCE large_cluster_source
   IN CLUSTER large_cluster

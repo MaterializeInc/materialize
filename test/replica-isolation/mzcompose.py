@@ -221,7 +221,7 @@ def populate(c: Composition) -> None:
             $ kafka-create-topic topic=source1
             $ kafka-ingest format=bytes topic=source1 repeat=1000000
             A${kafka-ingest.iteration}
-            > CREATE CLUSTER c SIZE '1';
+            > CREATE CLUSTER c SIZE 'scale=1,workers=1';
             > CREATE CONNECTION IF NOT EXISTS kafka_conn
               TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
             > CREATE SOURCE source1

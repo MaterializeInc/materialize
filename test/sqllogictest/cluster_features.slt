@@ -18,18 +18,18 @@ mode cockroach
 
 # Regular users cannot create clusters with FEATURES yet.
 statement error db error: ERROR: FEATURES not supported for non\-system users
-CREATE CLUSTER FOO SIZE = '1' FEATURES (ENABLE EAGER DELTA JOINS = TRUE);
+CREATE CLUSTER FOO SIZE = 'scale=1,workers=1' FEATURES (ENABLE EAGER DELTA JOINS = TRUE);
 
 # Cluster and system config for the test DDL statements below
 # -----------------------------------------------------------
 
 simple conn=mz_system,user=mz_system
-CREATE CLUSTER c1 SIZE = '1' FEATURES (ENABLE EAGER DELTA JOINS = TRUE);
+CREATE CLUSTER c1 SIZE = 'scale=1,workers=1' FEATURES (ENABLE EAGER DELTA JOINS = TRUE);
 ----
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-CREATE CLUSTER c2 SIZE = '1' FEATURES (ENABLE EAGER DELTA JOINS = FALSE);
+CREATE CLUSTER c2 SIZE = 'scale=1,workers=1' FEATURES (ENABLE EAGER DELTA JOINS = FALSE);
 ----
 COMPLETE 0
 

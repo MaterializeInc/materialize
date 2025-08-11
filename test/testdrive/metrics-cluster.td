@@ -9,9 +9,9 @@
 
 $ set-sql-timeout duration=300s
 
-> CREATE CLUSTER foo REPLICAS (size_1 (SIZE '1'), size_32 (SIZE '32'), size_2_2 (SIZE '2-2'))
+> CREATE CLUSTER foo REPLICAS (size_1 (SIZE 'scale=1,workers=1'), size_32 (SIZE 'scale=1,workers=32'), size_2_2 (SIZE 'scale=2,workers=2'))
 > CREATE CLUSTER bar REPLICAS ()
-> CREATE CLUSTER xyzzy REPLICAS (size_4 (SIZE '4'))
+> CREATE CLUSTER xyzzy REPLICAS (size_4 (SIZE 'scale=1,workers=4'))
 
 > SELECT
       c.name,

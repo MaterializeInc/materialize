@@ -11,7 +11,7 @@
 # in `upsert` continued to be processed properly in pr materialize#24663. Its short,
 # so its copied here.
 
-$ set-arg-default default-storage-size=1
+$ set-arg-default default-storage-size=scale=1,workers=1
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET storage_statistics_collection_interval = 1000

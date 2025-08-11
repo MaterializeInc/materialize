@@ -85,7 +85,7 @@ def create_mzs(
             seed=1,
             entrypoint_extra=[
                 "--var=replicas=1",
-                f"--var=default-replica-size={Materialized.Size.DEFAULT_SIZE}-{Materialized.Size.DEFAULT_SIZE}",
+                f"--var=default-replica-size=scale={Materialized.Size.DEFAULT_SIZE},workers={Materialized.Size.DEFAULT_SIZE}",
                 f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
             ],
             volumes_extra=["secrets:/share/secrets"],

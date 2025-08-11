@@ -878,7 +878,7 @@ impl<'a> Runner<'a> {
             for (i, row) in rows.iter().enumerate() {
                 let name: &str = row.get("name");
                 let size: &str = row.get("size");
-                if name != format!("r{i}") || size != self.config.replica_size.to_string() {
+                if name != format!("r{i}") || size != self.config.replica_size {
                     needs_default_replica = true;
                     break;
                 }
@@ -1168,30 +1168,30 @@ impl<'a> RunnerInner<'a> {
             now,
             environment_id,
             cluster_replica_sizes: ClusterReplicaSizeMap::for_tests(),
-            bootstrap_default_cluster_replica_size: config.replica_size.to_string(),
+            bootstrap_default_cluster_replica_size: config.replica_size.clone(),
             bootstrap_default_cluster_replication_factor: config
                 .replicas
                 .try_into()
                 .expect("replicas must fit"),
             bootstrap_builtin_system_cluster_config: BootstrapBuiltinClusterConfig {
                 replication_factor: SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR,
-                size: config.replica_size.to_string(),
+                size: config.replica_size.clone(),
             },
             bootstrap_builtin_catalog_server_cluster_config: BootstrapBuiltinClusterConfig {
                 replication_factor: CATALOG_SERVER_CLUSTER_DEFAULT_REPLICATION_FACTOR,
-                size: config.replica_size.to_string(),
+                size: config.replica_size.clone(),
             },
             bootstrap_builtin_probe_cluster_config: BootstrapBuiltinClusterConfig {
                 replication_factor: PROBE_CLUSTER_DEFAULT_REPLICATION_FACTOR,
-                size: config.replica_size.to_string(),
+                size: config.replica_size.clone(),
             },
             bootstrap_builtin_support_cluster_config: BootstrapBuiltinClusterConfig {
                 replication_factor: SUPPORT_CLUSTER_DEFAULT_REPLICATION_FACTOR,
-                size: config.replica_size.to_string(),
+                size: config.replica_size.clone(),
             },
             bootstrap_builtin_analytics_cluster_config: BootstrapBuiltinClusterConfig {
                 replication_factor: ANALYTICS_CLUSTER_DEFAULT_REPLICATION_FACTOR,
-                size: config.replica_size.to_string(),
+                size: config.replica_size.clone(),
             },
             system_parameter_defaults: {
                 let mut params = BTreeMap::new();
@@ -1948,7 +1948,7 @@ pub struct RunConfig<'a> {
     /// - It's safe for different databases to reference the same state: all data is scoped by UUID.
     pub persist_dir: TempDir,
     pub replicas: usize,
-    pub replica_size: usize,
+    pub replica_size: String,
 }
 
 fn print_record(config: &RunConfig<'_>, record: &Record) {
