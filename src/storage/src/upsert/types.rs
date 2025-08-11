@@ -435,7 +435,7 @@ impl<T: Eq, O> StateValue<T, O> {
             StateValue::Value(Value::Tombstone(order)) => {
                 StateValue::Value(Value::ProvisionalValue {
                     finalized_value: None,
-                    provisional_value: (None, provisional_ts, order),
+                    provisional_value: (None, provisional_ts, provisional_order),
                 })
             }
             StateValue::Value(Value::ProvisionalValue {
