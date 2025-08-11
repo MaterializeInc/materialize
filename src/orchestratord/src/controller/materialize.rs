@@ -263,10 +263,6 @@ impl Context {
                 config.aws_info.aws_account_id.is_some(),
                 "--aws-account-id is required when using --cloud-provider=aws"
             );
-            assert!(
-                config.aws_info.environmentd_iam_role_arn.is_some(),
-                "--environmentd-iam-role-arn is required when using --cloud-provider=aws"
-            );
         }
 
         Self {
