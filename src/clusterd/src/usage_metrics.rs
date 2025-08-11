@@ -9,7 +9,8 @@
 
 //! Support for collecting system usage metrics.
 //!
-//! Currently only disk usage is supported. We may want to add CPU and memory usage in the future.
+//! Currently only disk and swap usage is supported.
+//! We may want to add CPU and memory usage in the future.
 
 use std::path::PathBuf;
 
@@ -26,6 +27,7 @@ impl Collector {
     pub fn collect(&self) -> Usage {
         Usage {
             disk_bytes: self.collect_disk_usage(),
+            swap_bytes: self.collect_swap_usage(),
         }
     }
 
@@ -49,10 +51,33 @@ impl Collector {
 
         Some(used_bytes)
     }
+
+    #[cfg(target_os = "linux")]
+    fn collect_swap_usage(&self) -> Option<u64> {
+        use mz_compute::memory_limiter::ProcStatus;
+        use mz_ore::cast::CastInto;
+
+        match ProcStatus::from_proc() {
+            Ok(status) => {
+                let bytes = status.vm_swap.cast_into();
+                Some(bytes)
+            }
+            Err(err) => {
+                error!("error reading /proc/self/status: {err}");
+                None
+            }
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn collect_swap_usage(&self) -> Option<u64> {
+        None
+    }
 }
 
 /// A system usage measurement.
 #[derive(Serialize)]
 pub(crate) struct Usage {
     disk_bytes: Option<u64>,
+    swap_bytes: Option<u64>,
 }
