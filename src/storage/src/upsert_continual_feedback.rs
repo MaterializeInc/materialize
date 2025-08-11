@@ -122,7 +122,7 @@ where
     G::Timestamp: Refines<mz_repr::Timestamp> + TotalOrder + Sync,
     F: FnOnce() -> Fut + 'static,
     Fut: std::future::Future<Output = US>,
-    US: UpsertStateBackend<G::Timestamp, Option<FromTime>>,
+    US: UpsertStateBackend<G::Timestamp, FromTime>,
     FromTime: Debug + timely::ExchangeData + Ord + Sync,
 {
     let mut builder = AsyncOperatorBuilder::new("Upsert".to_string(), input.scope());
@@ -165,11 +165,7 @@ where
         drop(output_cap);
         let mut snapshot_cap = CapabilitySet::from_elem(snapshot_cap);
 
-        // The order key of the `UpsertState` is `Option<FromTime>`, which implements `Default`
-        // (as required for `consolidate_chunk`), with slightly more efficient serialization
-        // than a default `Partitioned`.
-
-        let mut state = UpsertState::<_, G::Timestamp, Option<FromTime>>::new(
+        let mut state = UpsertState::<_, G::Timestamp, FromTime>::new(
             state_fn().await,
             upsert_shared_metrics,
             &upsert_metrics,
@@ -185,7 +181,7 @@ where
 
         // A re-usable buffer of changes, per key. This is an `IndexMap` because it has to be `drain`-able
         // and have a consistent iteration order.
-        let mut commands_state: indexmap::IndexMap<_, upsert_types::UpsertValueAndSize<G::Timestamp, Option<FromTime>>> =
+        let mut commands_state: indexmap::IndexMap<_, upsert_types::UpsertValueAndSize<G::Timestamp, FromTime>> =
             indexmap::IndexMap::new();
         let mut multi_get_scratch = Vec::new();
 
@@ -602,16 +598,16 @@ enum DrainStyle<'a, T> {
 /// stale state, since in this drain style no modifications to the state are made.
 async fn drain_staged_input<S, G, T, FromTime, E>(
     stash: &mut Vec<(T, UpsertKey, Reverse<FromTime>, Option<UpsertValue>)>,
-    commands_state: &mut indexmap::IndexMap<UpsertKey, UpsertValueAndSize<T, Option<FromTime>>>,
+    commands_state: &mut indexmap::IndexMap<UpsertKey, UpsertValueAndSize<T, FromTime>>,
     output_updates: &mut Vec<(Result<Row, UpsertError>, T, Diff)>,
     multi_get_scratch: &mut Vec<UpsertKey>,
     drain_style: DrainStyle<'_, T>,
     error_emitter: &mut E,
-    state: &mut UpsertState<'_, S, T, Option<FromTime>>,
+    state: &mut UpsertState<'_, S, T, FromTime>,
     source_config: &crate::source::SourceExportCreationConfig,
 ) -> Option<T>
 where
-    S: UpsertStateBackend<T, Option<FromTime>>,
+    S: UpsertStateBackend<T, FromTime>,
     G: Scope,
     T: TotalOrder + timely::ExchangeData + Debug + Ord + Sync,
     FromTime: timely::ExchangeData + Ord + Sync,
@@ -754,8 +750,7 @@ where
         // is from snapshotting, which always sorts below new values/deletes.
         let existing_order = existing_state_cell
             .as_ref()
-            .and_then(|cs| cs.provisional_order(&ts).map_or(None, Option::as_ref));
-        //.map(|cs| cs.provisional_order(&ts).map_or(None, Option::as_ref));
+            .and_then(|cs| cs.provisional_order(&ts));
         if existing_order >= Some(&from_time.0) {
             // Skip this update. If no later updates adjust this key, then we just
             // end up writing the same value back to state. If there
@@ -780,12 +775,12 @@ where
                             Some(existing_value) => existing_value.clone().into_provisional_value(
                                 value.clone(),
                                 ts.clone(),
-                                Some(from_time.0.clone()),
+                                from_time.0.clone(),
                             ),
                             None => StateValue::new_provisional_value(
                                 value.clone(),
                                 ts.clone(),
-                                Some(from_time.0.clone()),
+                                from_time.0.clone(),
                             ),
                         };
 
@@ -811,10 +806,10 @@ where
 
                         let new_value = match existing_value {
                             Some(existing_value) => existing_value
-                                .into_provisional_tombstone(ts.clone(), Some(from_time.0.clone())),
+                                .into_provisional_tombstone(ts.clone(), from_time.0.clone()),
                             None => StateValue::new_provisional_tombstone(
                                 ts.clone(),
-                                Some(from_time.0.clone()),
+                                from_time.0.clone(),
                             ),
                         };
 
@@ -1064,8 +1059,8 @@ mod test {
 
         let rocksdb_dir = tempfile::tempdir().unwrap();
         let output_handle = timely::execute_directly(move |worker| {
-            let (mut input_handle, mut persist_handle, output_probe, output_handle) = worker
-                .dataflow::<MzTimestamp, _, _>(|scope| {
+            let (mut input_handle, mut persist_handle, output_probe, output_handle) =
+                worker.dataflow::<MzTimestamp, _, _>(|scope| {
                     // Enter a subscope since the upsert operator expects to work a backpressure
                     // enabled scope.
                     scope.scoped::<(MzTimestamp, Subtime), _, _>("upsert", |scope| {
@@ -1081,7 +1076,8 @@ mod test {
                         let upsert_metrics =
                             UpsertMetrics::new(&upsert_metrics_defs, source_id, 0, None);
                         let rocksdb_shared_metrics = Arc::clone(&upsert_metrics.rocksdb_shared);
-                        let rocksdb_instance_metrics = Arc::clone(&upsert_metrics.rocksdb_instance_metrics);
+                        let rocksdb_instance_metrics =
+                            Arc::clone(&upsert_metrics.rocksdb_instance_metrics);
 
                         let metrics_registry = MetricsRegistry::new();
                         let storage_metrics = StorageMetrics::register_with(&metrics_registry);
@@ -1118,12 +1114,12 @@ mod test {
                                 |a: &[u8],
                                  b: ValueIterator<
                                     BincodeOpts,
-                                    StateValue<(MzTimestamp, Subtime), Option<_>>,
+                                    StateValue<(MzTimestamp, Subtime), u64>,
                                 >| {
-                                    consolidating_merge_function::<
-                                        (MzTimestamp, Subtime),
-                                        Option<_>,
-                                    >(a.into(), b)
+                                    consolidating_merge_function::<(MzTimestamp, Subtime), u64>(
+                                        a.into(),
+                                        b,
+                                    )
                                 },
                             ));
                             let rocksdb_cleanup_tries = 5;
@@ -1162,7 +1158,12 @@ mod test {
                         );
                         std::mem::forget(button);
 
-                        (input_handle, persist_handle, output.inner.probe(), output.inner.capture())
+                        (
+                            input_handle,
+                            persist_handle,
+                            output.inner.probe(),
+                            output.inner.capture(),
+                        )
                     })
                 });
 
