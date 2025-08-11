@@ -122,7 +122,7 @@ where
     G::Timestamp: Refines<mz_repr::Timestamp> + TotalOrder + Sync,
     F: FnOnce() -> Fut + 'static,
     Fut: std::future::Future<Output = US>,
-    US: UpsertStateBackend<G::Timestamp, Option<FromTime>>,
+    US: UpsertStateBackend<G::Timestamp, FromTime>,
     FromTime: Debug + timely::ExchangeData + Ord + Sync,
 {
     let mut builder = AsyncOperatorBuilder::new("Upsert".to_string(), input.scope());
@@ -165,11 +165,7 @@ where
         drop(output_cap);
         let mut snapshot_cap = CapabilitySet::from_elem(snapshot_cap);
 
-        // The order key of the `UpsertState` is `Option<FromTime>`, which implements `Default`
-        // (as required for `consolidate_chunk`), with slightly more efficient serialization
-        // than a default `Partitioned`.
-
-        let mut state = UpsertState::<_, G::Timestamp, Option<FromTime>>::new(
+        let mut state = UpsertState::<_, G::Timestamp, FromTime>::new(
             state_fn().await,
             upsert_shared_metrics,
             &upsert_metrics,
@@ -185,7 +181,7 @@ where
 
         // A re-usable buffer of changes, per key. This is an `IndexMap` because it has to be `drain`-able
         // and have a consistent iteration order.
-        let mut commands_state: indexmap::IndexMap<_, upsert_types::UpsertValueAndSize<G::Timestamp, Option<FromTime>>> =
+        let mut commands_state: indexmap::IndexMap<_, upsert_types::UpsertValueAndSize<G::Timestamp, FromTime>> =
             indexmap::IndexMap::new();
         let mut multi_get_scratch = Vec::new();
 
@@ -602,16 +598,16 @@ enum DrainStyle<'a, T> {
 /// stale state, since in this drain style no modifications to the state are made.
 async fn drain_staged_input<S, G, T, FromTime, E>(
     stash: &mut Vec<(T, UpsertKey, Reverse<FromTime>, Option<UpsertValue>)>,
-    commands_state: &mut indexmap::IndexMap<UpsertKey, UpsertValueAndSize<T, Option<FromTime>>>,
+    commands_state: &mut indexmap::IndexMap<UpsertKey, UpsertValueAndSize<T, FromTime>>,
     output_updates: &mut Vec<(Result<Row, UpsertError>, T, Diff)>,
     multi_get_scratch: &mut Vec<UpsertKey>,
     drain_style: DrainStyle<'_, T>,
     error_emitter: &mut E,
-    state: &mut UpsertState<'_, S, T, Option<FromTime>>,
+    state: &mut UpsertState<'_, S, T, FromTime>,
     source_config: &crate::source::SourceExportCreationConfig,
 ) -> Option<T>
 where
-    S: UpsertStateBackend<T, Option<FromTime>>,
+    S: UpsertStateBackend<T, FromTime>,
     G: Scope,
     T: TotalOrder + timely::ExchangeData + Debug + Ord + Sync,
     FromTime: timely::ExchangeData + Ord + Sync,
@@ -754,8 +750,7 @@ where
         // is from snapshotting, which always sorts below new values/deletes.
         let existing_order = existing_state_cell
             .as_ref()
-            .and_then(|cs| cs.provisional_order(&ts).map_or(None, Option::as_ref));
-        //.map(|cs| cs.provisional_order(&ts).map_or(None, Option::as_ref));
+            .and_then(|cs| cs.provisional_order(&ts));
         if existing_order >= Some(&from_time.0) {
             // Skip this update. If no later updates adjust this key, then we just
             // end up writing the same value back to state. If there
@@ -780,12 +775,12 @@ where
                             Some(existing_value) => existing_value.clone().into_provisional_value(
                                 value.clone(),
                                 ts.clone(),
-                                Some(from_time.0.clone()),
+                                from_time.0.clone(),
                             ),
                             None => StateValue::new_provisional_value(
                                 value.clone(),
                                 ts.clone(),
-                                Some(from_time.0.clone()),
+                                from_time.0.clone(),
                             ),
                         };
 
@@ -811,10 +806,10 @@ where
 
                         let new_value = match existing_value {
                             Some(existing_value) => existing_value
-                                .into_provisional_tombstone(ts.clone(), Some(from_time.0.clone())),
+                                .into_provisional_tombstone(ts.clone(), from_time.0.clone()),
                             None => StateValue::new_provisional_tombstone(
                                 ts.clone(),
-                                Some(from_time.0.clone()),
+                                from_time.0.clone(),
                             ),
                         };
 
@@ -887,11 +882,13 @@ mod test {
     use mz_ore::metrics::MetricsRegistry;
     use mz_persist_types::ShardId;
     use mz_repr::{Datum, Timestamp as MzTimestamp};
+    use mz_rocksdb::{RocksDBConfig, ValueIterator};
     use mz_storage_operators::persist_source::Subtime;
     use mz_storage_types::sources::SourceEnvelope;
     use mz_storage_types::sources::envelope::{KeyEnvelope, UpsertEnvelope, UpsertStyle};
+    use rocksdb::Env;
     use timely::dataflow::operators::capture::Extract;
-    use timely::dataflow::operators::{Capture, Input};
+    use timely::dataflow::operators::{Capture, Input, Probe};
     use timely::progress::Timestamp;
 
     use crate::metrics::StorageMetrics;
@@ -899,6 +896,7 @@ mod test {
     use crate::source::SourceExportCreationConfig;
     use crate::statistics::{SourceStatistics, SourceStatisticsMetricDefs};
     use crate::upsert::memory::InMemoryHashMap;
+    use crate::upsert::types::{BincodeOpts, consolidating_merge_function, upsert_bincode_opts};
 
     use super::*;
 
@@ -1049,6 +1047,197 @@ mod test {
             (Ok(value1.clone()), new_ts(0), Diff::ONE),
             (Ok(value1), new_ts(3), Diff::MINUS_ONE),
             (Ok(value4), new_ts(3), Diff::ONE),
+        ];
+        assert_eq!(actual_output, expected_output);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn gh_9540_repro() {
+        // Helper to wrap timestamps in the appropriate types
+        let mz_ts = |ts| (MzTimestamp::new(ts), Subtime::minimum());
+
+        let rocksdb_dir = tempfile::tempdir().unwrap();
+        let output_handle = timely::execute_directly(move |worker| {
+            let (mut input_handle, mut persist_handle, output_probe, output_handle) =
+                worker.dataflow::<MzTimestamp, _, _>(|scope| {
+                    // Enter a subscope since the upsert operator expects to work a backpressure
+                    // enabled scope.
+                    scope.scoped::<(MzTimestamp, Subtime), _, _>("upsert", |scope| {
+                        let (input_handle, input) = scope.new_input();
+                        let (persist_handle, persist_input) = scope.new_input();
+                        let upsert_config = UpsertConfig {
+                            shrink_upsert_unused_buffers_by_ratio: 0,
+                        };
+                        let source_id = GlobalId::User(0);
+                        let metrics_registry = MetricsRegistry::new();
+                        let upsert_metrics_defs =
+                            UpsertMetricDefs::register_with(&metrics_registry);
+                        let upsert_metrics =
+                            UpsertMetrics::new(&upsert_metrics_defs, source_id, 0, None);
+                        let rocksdb_shared_metrics = Arc::clone(&upsert_metrics.rocksdb_shared);
+                        let rocksdb_instance_metrics =
+                            Arc::clone(&upsert_metrics.rocksdb_instance_metrics);
+
+                        let metrics_registry = MetricsRegistry::new();
+                        let storage_metrics = StorageMetrics::register_with(&metrics_registry);
+
+                        let metrics_registry = MetricsRegistry::new();
+                        let source_statistics_defs =
+                            SourceStatisticsMetricDefs::register_with(&metrics_registry);
+                        let envelope = SourceEnvelope::Upsert(UpsertEnvelope {
+                            source_arity: 2,
+                            style: UpsertStyle::Default(KeyEnvelope::Flattened),
+                            key_indices: vec![0],
+                        });
+                        let source_statistics = SourceStatistics::new(
+                            source_id,
+                            0,
+                            &source_statistics_defs,
+                            source_id,
+                            &ShardId::new(),
+                            envelope,
+                            Antichain::from_elem(Timestamp::minimum()),
+                        );
+
+                        let source_config = SourceExportCreationConfig {
+                            id: GlobalId::User(0),
+                            worker_id: 0,
+                            metrics: storage_metrics,
+                            source_statistics,
+                        };
+
+                        // A closure that will initialize and return a configured RocksDB instance
+                        let rocksdb_init_fn = move || async move {
+                            let merge_operator = Some((
+                                "upsert_state_snapshot_merge_v1".to_string(),
+                                |a: &[u8],
+                                 b: ValueIterator<
+                                    BincodeOpts,
+                                    StateValue<(MzTimestamp, Subtime), u64>,
+                                >| {
+                                    consolidating_merge_function::<(MzTimestamp, Subtime), u64>(
+                                        a.into(),
+                                        b,
+                                    )
+                                },
+                            ));
+                            let rocksdb_cleanup_tries = 5;
+                            let tuning = RocksDBConfig::new(Default::default(), None);
+                            crate::upsert::rocksdb::RocksDB::new(
+                                mz_rocksdb::RocksDBInstance::new(
+                                    rocksdb_dir.path(),
+                                    mz_rocksdb::InstanceOptions::new(
+                                        Env::mem_env().unwrap(),
+                                        rocksdb_cleanup_tries,
+                                        merge_operator,
+                                        // For now, just use the same config as the one used for
+                                        // merging snapshots.
+                                        upsert_bincode_opts(),
+                                    ),
+                                    tuning,
+                                    rocksdb_shared_metrics,
+                                    rocksdb_instance_metrics,
+                                )
+                                .unwrap(),
+                            )
+                        };
+
+                        let (output, _, _, button) = upsert_inner(
+                            &input.as_collection(),
+                            vec![0],
+                            Antichain::from_elem(Timestamp::minimum()),
+                            persist_input.as_collection(),
+                            None,
+                            upsert_metrics,
+                            source_config,
+                            rocksdb_init_fn,
+                            upsert_config,
+                            true,
+                            None,
+                        );
+                        std::mem::forget(button);
+
+                        (
+                            input_handle,
+                            persist_handle,
+                            output.inner.probe(),
+                            output.inner.capture(),
+                        )
+                    })
+                });
+
+            // We work with a hypothetical schema of (key int, value int).
+
+            // The input will contain records for two keys, 0 and 1.
+            let key0 = UpsertKey::from_key(Ok(&Row::pack_slice(&[Datum::Int64(0)])));
+
+            // We will assume that the kafka topic contains the following messages with their
+            // associated reclocked timestamp:
+            //  1. {offset=1, key=0, value=0}    @ mz_time = 0
+            //  2. {offset=2, key=0, value=NULL} @ mz_time = 1
+            //  3. {offset=3, key=0, value=0}    @ mz_time = 2
+            //  4. {offset=4, key=0, value=NULL} @ mz_time = 2  // <- messages 3 and 4 are *BOTH* reclocked to time 2
+            let value1 = Row::pack_slice(&[Datum::Int64(0), Datum::Int64(0)]);
+            let msg1 = ((key0, Some(Ok(value1.clone())), 1), mz_ts(0), Diff::ONE);
+            let msg2 = ((key0, None, 2), mz_ts(1), Diff::ONE);
+            let msg3 = ((key0, Some(Ok(value1.clone())), 3), mz_ts(2), Diff::ONE);
+            let msg4 = ((key0, None, 4), mz_ts(2), Diff::ONE);
+
+            // The first message will initialize the upsert state such that key 0 has value 0 and
+            // produce an output update to that effect.
+            input_handle.send(msg1);
+            input_handle.advance_to(mz_ts(1));
+            while output_probe.less_than(&mz_ts(1)) {
+                worker.step_or_park(None);
+            }
+            // Feedback the produced output..
+            persist_handle.send((Ok(value1.clone()), mz_ts(0), Diff::ONE));
+            persist_handle.advance_to(mz_ts(1));
+            // ..and send the next upsert command that deletes the key.
+            input_handle.send(msg2);
+            input_handle.advance_to(mz_ts(2));
+            while output_probe.less_than(&mz_ts(2)) {
+                worker.step_or_park(None);
+            }
+
+            // Feedback the produced output..
+            persist_handle.send((Ok(value1), mz_ts(1), Diff::MINUS_ONE));
+            persist_handle.advance_to(mz_ts(2));
+            // ..and send the next *out of order* upsert command that deletes the key. Here msg4
+            // happens at offset 4 and the operator should rememeber that.
+            input_handle.send(msg4);
+            input_handle.flush();
+            // Run the worker for enough steps to process these events. We can't guide the
+            // execution with the probe here since the frontier does not advance, only provisional
+            // updates are produced.
+            for _ in 0..5 {
+                worker.step();
+            }
+
+            // Send the missing message that will now confuse the operator because it has lost
+            // track that for key 0 it has already seen a command for offset 4, and therefore msg3
+            // should be skipped.
+            input_handle.send(msg3);
+            input_handle.flush();
+            input_handle.advance_to(mz_ts(3));
+
+            output_handle
+        });
+
+        let mut actual_output = output_handle
+            .extract()
+            .into_iter()
+            .flat_map(|(_cap, container)| container)
+            .collect();
+        differential_dataflow::consolidation::consolidate_updates(&mut actual_output);
+
+        // The expected consolidated output contains only updates for key 0 which has the value 0
+        // at timestamp 0 and the value 2 at timestamp 3
+        let value1 = Row::pack_slice(&[Datum::Int64(0), Datum::Int64(0)]);
+        let expected_output: Vec<(Result<Row, DataflowError>, _, _)> = vec![
+            (Ok(value1.clone()), mz_ts(0), Diff::ONE),
+            (Ok(value1), mz_ts(1), Diff::MINUS_ONE),
         ];
         assert_eq!(actual_output, expected_output);
     }
