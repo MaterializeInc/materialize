@@ -12,6 +12,7 @@ use std::cmp::Reverse;
 use std::convert::AsRef;
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use differential_dataflow::hashable::Hashable;
@@ -254,19 +255,18 @@ where
 
     let tuning = dataflow_paramters.upsert_rocksdb_tuning_config.clone();
 
-    let rocksdb_dir = match &instance_context.scratch_directory {
-        Some(root) => root
-            .join("storage")
-            .join("upsert")
-            .join(source_config.id.to_string())
-            .join(source_config.worker_id.to_string()),
-        None => {
-            // When running RocksDB in memory, the file system is emulated, so the path doesn't
-            // matter. However, we still need to pick one that exists on the host because of
-            // https://github.com/rust-rocksdb/rust-rocksdb/issues/1015.
-            "/tmp".into()
-        }
-    };
+    // When running RocksDB in memory, the file system is emulated. However, we still need to
+    // pick a path that exists because RocksDB will attempt to create the working directory
+    // (see https://github.com/rust-rocksdb/rust-rocksdb/issues/1015) and write a lock file,
+    // so we need to ensure the directory is unique per worker.
+    let rocksdb_dir = instance_context
+        .scratch_directory
+        .clone()
+        .unwrap_or_else(|| PathBuf::from("/tmp"))
+        .join("storage")
+        .join("upsert")
+        .join(source_config.id.to_string())
+        .join(source_config.worker_id.to_string());
 
     tracing::info!(
         worker_id = %source_config.worker_id,
