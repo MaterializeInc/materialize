@@ -211,10 +211,10 @@ cleanup() {
           # shellcheck disable=SC2044
           for i in $(find . -name '*.profraw'); do
               echo "$i"
-              cp "$i" profraws/
+              cp "$i" profraws/ || true
               rm -f "$i" || true
               if ! bin/ci-builder run stable rust-profdata merge -o /dev/null "profraws/$(basename "$i")"; then
-                  rm -f "profraws/$(basename "$i")"
+                  rm -f "profraws/$(basename "$i")" || true
               fi
           done
           find profraws -name '*.profraw' -exec bin/ci-builder run stable rust-profdata merge -sparse -o coverage/"$BUILDKITE_JOB_ID".profdata {} +

@@ -377,6 +377,7 @@ def increase_agents_timeouts(
                 step["name"] = "Build aarch64 with coverage"
             if step.get("id") == "cargo-test":
                 step["agents"]["queue"] = "hetzner-x86-64-dedi-32cpu-128gb"
+                del step["parallelism"]
     else:
         for step in steps(pipeline):
             if step.get("coverage") == "only":
