@@ -97,6 +97,10 @@ pub mod v1alpha1 {
         // Resource requirements for the console pod
         pub console_resource_requirements: Option<ResourceRequirements>,
 
+        // Name of the kubernetes service account to use.
+        // If not set, we will create one with the same name as this Materialize object.
+        pub service_account_name: Option<String>,
+
         // When changes are made to the environmentd resources (either via
         // modifying fields in the spec here or by deploying a new
         // orchestratord version which changes how resources are generated),
@@ -177,8 +181,15 @@ pub mod v1alpha1 {
             self.meta().namespace.clone().unwrap()
         }
 
+        pub fn create_service_account(&self) -> bool {
+            self.spec.service_account_name.is_none()
+        }
+
         pub fn service_account_name(&self) -> String {
-            self.name_unchecked()
+            self.spec
+                .service_account_name
+                .clone()
+                .unwrap_or_else(|| self.name_unchecked())
         }
 
         pub fn role_name(&self) -> String {
