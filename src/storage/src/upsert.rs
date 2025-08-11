@@ -296,18 +296,11 @@ where
     let rocksdb_init_fn = move || async move {
         let merge_operator = if rocksdb_use_native_merge_operator {
             Some((
-                        "upsert_state_snapshot_merge_v1".to_string(),
-                        |a: &[u8],
-                         b: ValueIterator<
-                            BincodeOpts,
-                            StateValue<G::Timestamp, Option<FromTime>>,
-                        >| {
-                            consolidating_merge_function::<G::Timestamp, Option<FromTime>>(
-                                a.into(),
-                                b,
-                            )
-                        },
-                    ))
+                "upsert_state_snapshot_merge_v1".to_string(),
+                |a: &[u8], b: ValueIterator<BincodeOpts, StateValue<G::Timestamp, FromTime>>| {
+                    consolidating_merge_function::<G::Timestamp, FromTime>(a.into(), b)
+                },
+            ))
         } else {
             None
         };
@@ -372,7 +365,7 @@ where
     G::Timestamp: Refines<mz_repr::Timestamp> + TotalOrder + Sync,
     F: FnOnce() -> Fut + 'static,
     Fut: std::future::Future<Output = US>,
-    US: UpsertStateBackend<G::Timestamp, Option<FromTime>>,
+    US: UpsertStateBackend<G::Timestamp, FromTime>,
     FromTime: Debug + timely::ExchangeData + Ord + Sync,
 {
     // Hard-coded to true because classic UPSERT cannot be used safely with
@@ -514,18 +507,15 @@ enum DrainStyle<'a, T> {
 /// from the input timely edge.
 async fn drain_staged_input<S, G, T, FromTime, E>(
     stash: &mut Vec<(T, UpsertKey, Reverse<FromTime>, Option<UpsertValue>)>,
-    commands_state: &mut indexmap::IndexMap<
-        UpsertKey,
-        types::UpsertValueAndSize<T, Option<FromTime>>,
-    >,
+    commands_state: &mut indexmap::IndexMap<UpsertKey, types::UpsertValueAndSize<T, FromTime>>,
     output_updates: &mut Vec<(Result<Row, UpsertError>, T, Diff)>,
     multi_get_scratch: &mut Vec<UpsertKey>,
     drain_style: DrainStyle<'_, T>,
     error_emitter: &mut E,
-    state: &mut UpsertState<'_, S, T, Option<FromTime>>,
+    state: &mut UpsertState<'_, S, T, FromTime>,
     source_config: &crate::source::SourceExportCreationConfig,
 ) where
-    S: UpsertStateBackend<T, Option<FromTime>>,
+    S: UpsertStateBackend<T, FromTime>,
     G: Scope,
     T: PartialOrder + Ord + Clone + Send + Sync + Serialize + Debug + 'static,
     FromTime: timely::ExchangeData + Ord + Sync,
@@ -601,7 +591,9 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
         // Skip this command if its order key is below the one in the upsert state.
         // Note that the existing order key may be `None` if the existing value
         // is from snapshotting, which always sorts below new values/deletes.
-        let existing_order = existing_value.as_ref().and_then(|cs| cs.order().as_ref());
+        let existing_order = existing_value
+            .as_ref()
+            .and_then(|cs| cs.provisional_order(&ts));
         if existing_order >= Some(&from_time.0) {
             // Skip this update. If no later updates adjust this key, then we just
             // end up writing the same value back to state. If there
@@ -612,11 +604,10 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
 
         match value {
             Some(value) => {
-                if let Some(old_value) = existing_value.replace(StateValue::finalized_value(
-                    value.clone(),
-                    Some(from_time.0.clone()),
-                )) {
-                    if let Value::FinalizedValue(old_value, _) = old_value.into_decoded() {
+                if let Some(old_value) =
+                    existing_value.replace(StateValue::finalized_value(value.clone()))
+                {
+                    if let Value::FinalizedValue(old_value) = old_value.into_decoded() {
                         output_updates.push((old_value, ts.clone(), Diff::MINUS_ONE));
                     }
                 }
@@ -624,13 +615,13 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
             }
             None => {
                 if let Some(old_value) = existing_value.take() {
-                    if let Value::FinalizedValue(old_value, _) = old_value.into_decoded() {
+                    if let Value::FinalizedValue(old_value) = old_value.into_decoded() {
                         output_updates.push((old_value, ts, Diff::MINUS_ONE));
                     }
                 }
 
                 // Record a tombstone for deletes.
-                *existing_value = Some(StateValue::tombstone(Some(from_time.0.clone())));
+                *existing_value = Some(StateValue::tombstone());
             }
         }
     }
@@ -690,7 +681,7 @@ where
     G::Timestamp: TotalOrder + Sync,
     F: FnOnce() -> Fut + 'static,
     Fut: std::future::Future<Output = US>,
-    US: UpsertStateBackend<G::Timestamp, Option<FromTime>>,
+    US: UpsertStateBackend<G::Timestamp, FromTime>,
     FromTime: timely::ExchangeData + Ord + Sync,
 {
     let mut builder = AsyncOperatorBuilder::new("Upsert".to_string(), input.scope());
@@ -731,10 +722,7 @@ where
     let shutdown_button = builder.build(move |caps| async move {
         let [mut output_cap, mut snapshot_cap, health_cap]: [_; 3] = caps.try_into().unwrap();
 
-        // The order key of the `UpsertState` is `Option<FromTime>`, which implements `Default`
-        // (as required for `consolidate_chunk`), with slightly more efficient serialization
-        // than a default `Partitioned`.
-        let mut state = UpsertState::<_, _, Option<FromTime>>::new(
+        let mut state = UpsertState::<_, _, FromTime>::new(
             state().await,
             upsert_shared_metrics,
             &upsert_metrics,
@@ -831,7 +819,7 @@ where
         // and have a consistent iteration order.
         let mut commands_state: indexmap::IndexMap<
             _,
-            types::UpsertValueAndSize<G::Timestamp, Option<FromTime>>,
+            types::UpsertValueAndSize<G::Timestamp, FromTime>,
         > = indexmap::IndexMap::new();
         let mut multi_get_scratch = Vec::new();
 
