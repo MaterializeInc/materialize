@@ -215,8 +215,6 @@ impl Orchestrator for KubernetesOrchestrator {
 #[derive(Clone, Copy)]
 struct ServiceInfo {
     scale: u16,
-    disk: bool,
-    disk_limit: Option<DiskLimit>,
 }
 
 struct NamespacedKubernetesOrchestrator {
@@ -1228,14 +1226,10 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             },
         });
 
-        self.service_infos.lock().expect("poisoned lock").insert(
-            id.to_string(),
-            ServiceInfo {
-                scale,
-                disk,
-                disk_limit,
-            },
-        );
+        self.service_infos
+            .lock()
+            .expect("poisoned lock")
+            .insert(id.to_string(), ServiceInfo { scale });
 
         Ok(Box::new(KubernetesService { hosts, ports }))
     }
@@ -1445,31 +1439,16 @@ impl OrchestratorWorker {
             self_: &OrchestratorWorker,
             service_name: &str,
             i: usize,
-            disk: bool,
-            disk_limit: Option<DiskLimit>,
         ) -> ServiceProcessMetrics {
             let name = format!("{service_name}-{i}");
 
-            let disk_usage_fut = async {
-                if disk {
-                    Some(get_disk_usage(self_, service_name, i).await)
-                } else {
-                    None
-                }
-            };
+            let disk_usage_fut = get_disk_usage(self_, service_name, i);
             let (metrics, disk_usage) =
                 match futures::future::join(self_.metrics_api.get(&name), disk_usage_fut).await {
-                    (Ok(metrics), disk_usage) => {
-                        let disk_usage = match disk_usage {
-                            Some(Ok(disk_usage)) => Some(disk_usage),
-                            Some(Err(e)) => {
-                                warn!("Failed to fetch disk usage for {name}: {e}");
-                                None
-                            }
-                            _ => None,
-                        };
-
-                        (metrics, disk_usage)
+                    (Ok(metrics), Ok(disk_usage)) => (metrics, disk_usage),
+                    (Ok(metrics), Err(e)) => {
+                        warn!("Failed to fetch disk usage for {name}: {e}");
+                        (metrics, None)
                     }
                     (Err(e), _) => {
                         warn!("Failed to get metrics for {name}: {e}");
@@ -1516,21 +1495,6 @@ impl OrchestratorWorker {
                 }
             };
 
-            // We only populate a `disk_usage` if we have both:
-            // - a disk limit (so it must be an actual managed cluster with a real limit)
-            // - a reported disk usage
-            //
-            // The disk limit can be more up-to-date (from `service_infos`) than the
-            // reported metric. In that case, we report the minimum of the usage
-            // and the limit, which means we can report 100% usage temporarily
-            // if a replica is sized down.
-            let disk_usage = match (disk_usage, disk_limit) {
-                (Some(disk_usage), Some(DiskLimit(disk_limit))) => {
-                    Some(std::cmp::min(disk_usage, disk_limit.0))
-                }
-                _ => None,
-            };
-
             ServiceProcessMetrics {
                 cpu_nano_cores: cpu,
                 memory_bytes: memory,
@@ -1547,10 +1511,11 @@ impl OrchestratorWorker {
             self_: &OrchestratorWorker,
             service_name: &str,
             i: usize,
-        ) -> anyhow::Result<u64> {
+        ) -> anyhow::Result<Option<u64>> {
             #[derive(Deserialize)]
             pub(crate) struct Usage {
                 disk_bytes: Option<u64>,
+                swap_bytes: Option<u64>,
             }
 
             let service = self_
@@ -1584,16 +1549,21 @@ impl OrchestratorWorker {
                 .build()
                 .context("error building HTTP client")?;
             let resp = http_client.get(metrics_url).send().await?;
-            let usage: Usage = resp.json().await?;
+            let Usage {
+                disk_bytes,
+                swap_bytes,
+            } = resp.json().await?;
 
-            usage
-                .disk_bytes
-                .ok_or_else(|| anyhow!("process did not provide disk usage"))
+            let bytes = if let (Some(disk), Some(swap)) = (disk_bytes, swap_bytes) {
+                Some(disk + swap)
+            } else {
+                disk_bytes.or(swap_bytes)
+            };
+            Ok(bytes)
         }
 
-        let ret = futures::future::join_all(
-            (0..info.scale).map(|i| get_metrics(self, name, i.into(), info.disk, info.disk_limit)),
-        );
+        let ret =
+            futures::future::join_all((0..info.scale).map(|i| get_metrics(self, name, i.into())));
 
         ret.await
     }
