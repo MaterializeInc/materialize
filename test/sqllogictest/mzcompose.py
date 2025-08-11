@@ -102,7 +102,6 @@ def run_sqllogictest(
     parser.add_argument("--replica-size", default="scale=1,workers=2", type=str)
     parser.add_argument("--replicas", default=1, type=int)
     args = parser.parse_args()
-    c.up(c.metadata_store())
 
     work_queue = Queue()
     stop_event = threading.Event()
@@ -117,6 +116,10 @@ def run_sqllogictest(
 
     # Hacky way to make sure we have downloaded the image
     c.up(Service("slt_1", idle=True))
+    # Keep them all up to prevent container startups from taking a long time
+    c.up(
+        c.metadata_store(), *[Service(f"slt_{i+1}", idle=True) for i in range(NUM_SLTS)]
+    )
 
     def worker(container_name: str):
         exception: Exception | None = None
@@ -144,7 +147,7 @@ def run_sqllogictest(
                 c.metadata_store(),
             )
             try:
-                c.run(container_name, *cmd, capture=True, capture_stderr=True)
+                c.exec(container_name, *cmd, capture=True, capture_stderr=True)
                 # Uploading successful junit files wastes time and contains no useful information
                 os.remove(junit_report_path)
             except CommandFailureCausedUIError as e:
