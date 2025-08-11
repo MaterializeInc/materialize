@@ -667,10 +667,8 @@ where
             );
             let total_chunked_runs = chunked_runs.len();
 
-            let mut applied = 0;
-
-            for (runs, run_chunk_max_memory_usage) in
-                chunked_runs
+            for (applied, (runs, run_chunk_max_memory_usage)) in
+                chunked_runs.into_iter().enumerate()
             {
                 metrics.compaction.chunks_compacted.inc();
                 metrics
@@ -772,7 +770,6 @@ where
                 };
 
                 yield Ok(res);
-                applied += 1;
             }
         }
     }
@@ -804,9 +801,10 @@ where
         Self::compact_all(stream, req).await
     }
 
-    /// Sorts and groups all runs from the inputs into chunks, each of which has been determined
-    /// to consume no more than `run_reserved_memory_bytes` at a time, unless the input parts
-    /// were written with a different target size than this build.
+    /// Chunks runs with the following rules:
+    /// 1. Runs from multiple batches are allowed to be mixed as long as _every_ run in the
+    ///    the batch is present in the chunk.
+    /// 2. Otherwise runs are split into chunks of runs from a single batch.
     fn chunk_runs<'a>(
         ordered_runs: &'a [(
             RunLocation,
@@ -835,97 +833,107 @@ where
                 acc
             });
 
-        let all_batches_have_one_run = grouped.values().all(|runs| runs.len() <= 1);
+        let mut grouped = grouped.into_iter().peekable();
 
-        let mut chunks = Vec::new();
+        let mut chunks = vec![];
+        let mut current_chunk = vec![];
+        let mut current_chunk_max_memory_usage = 0;
+        let mut mem_violation = false;
 
-        // There are two cases to consider here:
-        // 1. All input batches have ≤1 run each, in which case we can compact runs
-        //    from different batches together as memory allows.
-        // 2. Some input batches have >1 run, in which case we must compact runs only
-        //    within each individual batch to maintain batch boundaries.
-        // In both cases, we should compact runs in the order they were written.
-        // This is all to make it easy to apply the compaction result incrementally.
-        // By ensuring we never write out batches that contain runs from separate input batches
-        // (except for when each input batch has exactly one run), we can easily slot the
-        // results in to the existing batches. The special case of a single run per input batch
-        // means that each batch is, by itself, fully "compact", and the result of compaction
-        // will cleanly replace the input batches in a grouped manner.
+        fn max_part_bytes<T>(parts: &[RunPart<T>], cfg: &CompactConfig) -> usize {
+            parts
+                .iter()
+                .map(|p| p.max_part_bytes())
+                .max()
+                .unwrap_or(cfg.batch.blob_target_size)
+        }
 
-        if all_batches_have_one_run {
-            // All batches have ≤1 run — compact across batches
-            let mut current_chunk = Vec::new();
-            let mut current_memory = 0;
+        while let Some((_spine_id, runs)) = grouped.next() {
+            let batch_size = runs
+                .iter()
+                .map(|(_, _, _, parts)| max_part_bytes(parts, cfg))
+                .sum::<usize>();
 
-            for (_spine_id, mut runs) in grouped.into_iter() {
-                let (run_id, desc, meta, parts) = runs.pop().unwrap();
+            let num_runs = runs.len();
 
-                let run_size = parts
-                    .iter()
-                    .map(|p| p.max_part_bytes())
-                    .max()
-                    .unwrap_or(cfg.batch.blob_target_size);
+            // Determine if adding this batch poses a memory violation risk.
+            // If we have a single run which is greater than the reserved memory, we need to be careful.
+            // We need to force it to be merged with another batch (if present)
+            // or else compaction won't make progress.
+            let memory_violation_risk =
+                batch_size > run_reserved_memory_bytes && num_runs == 1 && current_chunk.is_empty();
 
-                if !current_chunk.is_empty()
-                    && current_memory + run_size > run_reserved_memory_bytes
-                {
-                    if current_chunk.len() == 1 {
-                        metrics.compaction.memory_violations.inc();
-                        current_chunk.push((run_id, desc, meta, &*parts));
-                        current_memory += run_size;
-                        chunks.push((std::mem::take(&mut current_chunk), current_memory));
-                        current_memory = 0;
-                        continue;
+            if mem_violation && num_runs == 1 {
+                // After a memory violation, combine the next single run (if present)
+                // into the chunk, forcing us to make progress.
+                current_chunk.extend(runs.clone());
+                current_chunk_max_memory_usage += batch_size;
+                mem_violation = false;
+                continue;
+            } else if current_chunk_max_memory_usage + batch_size <= run_reserved_memory_bytes {
+                // If the whole batch fits into the current mixed-batch chunk, add it and consider continuing to mix.
+                current_chunk.extend(runs);
+                current_chunk_max_memory_usage += batch_size;
+                continue;
+            } else if memory_violation_risk {
+                // If adding this single-run batch would cause a memory violation, add it anyway.
+                metrics.compaction.memory_violations.inc();
+                mem_violation = true;
+                current_chunk.extend(runs.clone());
+                current_chunk_max_memory_usage += batch_size;
+                continue;
+            }
+
+            // Otherwise, we cannot mix this batch partially. Flush any existing mixed chunk first.
+            if !current_chunk.is_empty() {
+                chunks.push((
+                    std::mem::take(&mut current_chunk),
+                    current_chunk_max_memory_usage,
+                ));
+                mem_violation = false;
+                current_chunk_max_memory_usage = 0;
+            }
+
+            // Now process this batch alone, splitting into single-batch chunks as needed.
+            let mut run_iter = runs.into_iter().peekable();
+            debug_assert!(current_chunk.is_empty());
+            debug_assert_eq!(current_chunk_max_memory_usage, 0);
+
+            while let Some((run_id, desc, meta, parts)) = run_iter.next() {
+                let run_size = max_part_bytes(parts, cfg);
+                current_chunk.push((run_id, desc, meta, parts));
+                current_chunk_max_memory_usage += run_size;
+
+                if let Some((_, _, _, next_parts)) = run_iter.peek() {
+                    let next_size = max_part_bytes(next_parts, cfg);
+                    if current_chunk_max_memory_usage + next_size > run_reserved_memory_bytes {
+                        // If the current chunk only has one run, record a memory violation metric.
+                        if current_chunk.len() == 1 {
+                            metrics.compaction.memory_violations.inc();
+                            continue;
+                        }
+                        // Flush the current chunk and start a new one.
+                        chunks.push((
+                            std::mem::take(&mut current_chunk),
+                            current_chunk_max_memory_usage,
+                        ));
+                        current_chunk_max_memory_usage = 0;
                     }
-
-                    chunks.push((std::mem::take(&mut current_chunk), current_memory));
-                    current_memory = 0;
                 }
-
-                current_chunk.push((run_id, desc, meta, &*parts));
-                current_memory += run_size;
             }
 
             if !current_chunk.is_empty() {
-                chunks.push((current_chunk, current_memory));
+                chunks.push((
+                    std::mem::take(&mut current_chunk),
+                    current_chunk_max_memory_usage,
+                ));
+                current_chunk_max_memory_usage = 0;
             }
-        } else {
-            // Some batches have >1 run — compact only within each batch
-            for (_spine_id, runs) in grouped.into_iter() {
-                let mut current_chunk = Vec::new();
-                let mut current_memory = 0;
+        }
 
-                for (run_id, desc, meta, parts) in runs {
-                    let run_size = parts
-                        .iter()
-                        .map(|p| p.max_part_bytes())
-                        .max()
-                        .unwrap_or(cfg.batch.blob_target_size);
-
-                    if !current_chunk.is_empty()
-                        && current_memory + run_size > run_reserved_memory_bytes
-                    {
-                        if current_chunk.len() == 1 {
-                            metrics.compaction.memory_violations.inc();
-                            current_chunk.push((run_id, desc, meta, &*parts));
-                            current_memory += run_size;
-                            chunks.push((std::mem::take(&mut current_chunk), current_memory));
-                            current_memory = 0;
-                            continue;
-                        }
-
-                        chunks.push((std::mem::take(&mut current_chunk), current_memory));
-                        current_memory = 0;
-                    }
-
-                    current_chunk.push((run_id, desc, meta, &*parts));
-                    current_memory += run_size;
-                }
-
-                if !current_chunk.is_empty() {
-                    chunks.push((current_chunk, current_memory));
-                }
-            }
+        // If we ended with a mixed-batch chunk in progress, flush it.
+        if !current_chunk.is_empty() {
+            chunks.push((current_chunk, current_chunk_max_memory_usage));
         }
 
         chunks

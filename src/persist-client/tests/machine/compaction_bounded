@@ -328,3 +328,106 @@ c 14 1
 d 14 1
 <run 0>
 part 0
+
+# Two batches with multiple parts, memory bound only allows chunking within each batch.
+# This exercises single-batch chunking when mixing batches would exceed the memory bound.
+write-batch output=sb0 lower=0 upper=4 target_size=0 parts_size_override=60
+a 0 1
+b 1 1
+c 2 1
+d 3 1
+----
+parts=4 len=4
+
+write-batch output=sb1 lower=4 upper=8 target_size=0 parts_size_override=60
+e 4 1
+f 5 1
+g 6 1
+h 7 1
+----
+parts=4 len=4
+
+# Memory bound is too small to mix both batches, but allows 2 parts at a time.
+# Compaction will chunk within each batch, not across batches.
+compact output=sb0_1 inputs=(sb0,sb1) lower=0 upper=8 since=8 target_size=30 memory_bound=120
+----
+parts=4 len=8
+
+fetch-batch input=sb0_1
+----
+<part 0>
+a 8 1
+b 8 1
+<part 1>
+c 8 1
+d 8 1
+<part 2>
+e 8 1
+f 8 1
+<part 3>
+g 8 1
+h 8 1
+<run 0>
+part 0
+part 1
+<run 1>
+part 2
+part 3
+
+# Test: Compacting a single batch with a higher memory bound.
+# This exercises merging all parts into a single run when the bound allows.
+compact output=sb0_1_iter1 inputs=(sb0_1) lower=0 upper=8 since=8 target_size=120 memory_bound=240
+----
+parts=1 len=8
+
+fetch-batch input=sb0_1_iter1
+----
+<part 0>
+a 8 1
+b 8 1
+c 8 1
+d 8 1
+e 8 1
+f 8 1
+g 8 1
+h 8 1
+<run 0>
+part 0
+
+# Two batches, each with a single run that is too large for the memory bound.
+# This exercises forced progress logic: compaction must merge even when runs exceed the bound.
+write-batch output=big0 lower=0 upper=4 target_size=240 parts_size_override=240
+a 0 1
+b 1 1
+c 2 1
+d 3 1
+----
+parts=1 len=4
+
+write-batch output=big1 lower=4 upper=8 target_size=240 parts_size_override=240
+e 4 1
+f 5 1
+g 6 1
+h 7 1
+----
+parts=1 len=4
+
+# Memory bound is smaller than either run, so compaction is forced to violate the bound to make progress.
+# The result is a single run containing all data.
+compact output=big0_1 inputs=(big0,big1) lower=0 upper=8 since=8 target_size=120 memory_bound=120
+----
+parts=1 len=8
+
+fetch-batch input=big0_1
+----
+<part 0>
+a 8 1
+b 8 1
+c 8 1
+d 8 1
+e 8 1
+f 8 1
+g 8 1
+h 8 1
+<run 0>
+part 0
