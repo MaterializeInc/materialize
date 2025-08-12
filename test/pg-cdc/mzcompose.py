@@ -418,10 +418,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         if name in ("default", "large-scale"):
             return
 
-        # TODO: Flaky, reenable when database-issues#7611 is fixed
-        if name == "statuses":
-            return
-
         # TODO: Flaky, reenable when database-issues#8447 is fixed
         if name == "silent-connection-drop":
             return
