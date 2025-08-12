@@ -859,11 +859,20 @@ impl MirScalarExpr {
                         }
                         MirScalarExpr::CallVariadic { func, exprs } => {
                             // `Coalesce` conditionally evaluates its arguments based on their nullability.
-                            // The thinking is that the final term will be unconditionally evaluated, once
-                            // reached, which makes it suitable for optimization that relies on unstable
-                            // information like nullability. With further detail about the evaluation order
-                            // semantics, we may be able to simplify this logic, but until we are certain
-                            // we can avoid optimizing the terms based on an ephemeral nullability reading.
+                            //
+                            // Each term except the last has the potential to guard the evaluation of those
+                            // expressions that follow it, which may error. If we optimize away the guards
+                            // using information that becomes invalid (e.g. nullability, as a filter moves)
+                            // we may expose errors that would not occur on the unoptimized expressions.
+                            //
+                            // As a concrete example, consider
+                            // ```ignore
+                            //   COALESCE(CASE WHEN x IS NULL 1 ELSE NULL END,
+                            //            CASE WHEN x IS NULL 1/0 ELSE NULL END)
+                            // ```
+                            // If `x` is null, this will not error. If we transiently believe `x` cannot be
+                            // null, we would optimize the first expression to `NULL` and then discard it,
+                            // leaving only the second expression which will error on a null `x`.
                             if let VariadicFunc::Coalesce = func {
                                 if !exprs.is_empty() {
                                     let len = exprs.len();
@@ -1249,13 +1258,19 @@ impl MirScalarExpr {
                             // Remove any null values if not all values are null.
                             exprs.retain(|e| !e.is_literal_null());
 
-                            // Find the first argument that is a literal or non-nullable
-                            // column. All arguments after it get ignored, so throw them
-                            // away. This intentionally throws away errors that can
-                            // never happen.
-                            if let Some(i) = exprs.iter().position(|e| {
-                                e.is_literal() || (NULLABILITY && !e.typ(column_types).nullable)
-                            }) {
+                            // If we find a literal (literal nulls have just been discarded),
+                            // then we can be certain that evaluation will end with that term,
+                            // and we can prune remaining terms.
+                            //
+                            // It is tempting to apply the same reasoning with nullability
+                            // information, but we cannot rely on it holding true, and truncating
+                            // expressions may result in a different runtime behavior, e.g. null
+                            // rather than some non-null value that results from a pruned expression.
+                            // It is presently unclear under what circumstances the optimization is
+                            // safe, as it relies on an understanding of which consumers of this
+                            // column may error, panic, or otherwise misbehave when presented with
+                            // a null value that they may have been promised they will not receive.
+                            if let Some(i) = exprs.iter().position(|e| e.is_literal()) {
                                 exprs.truncate(i + 1);
                             }
 
