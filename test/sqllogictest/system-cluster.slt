@@ -411,7 +411,7 @@ ORDER BY r.id;
 Explained Query:
   Finish order_by=[#0{id} asc nulls_last] output=[#0..=#5]
     Project (#0{id}..=#3{size}, #5{name}, #29)
-      Map (((uint8_to_double(#27{memory_bytes}) / uint8_to_double(#21{memory_bytes})) * 100))
+      Map (((uint8_to_double(#27{memory_bytes}) / uint8_to_double(case when (0 = uint8_to_numeric(#21{memory_bytes})) then null else #21{memory_bytes} end)) * 100))
         Join on=(#0{id} = #15{id} = #24{replica_id} AND #2{cluster_id} = #4{id} AND #16{size} = #17{size}) type=delta
           ArrangeBy keys=[[#0{id}], [#2{cluster_id}]]
             Project (#0{id}..=#3{size})
