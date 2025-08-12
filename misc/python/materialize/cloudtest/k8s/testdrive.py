@@ -20,6 +20,7 @@ from materialize.cloudtest.k8s.api.k8s_pod import K8sPod
 from materialize.mzcompose import (
     cluster_replica_size_map,
 )
+from materialize.mzcompose.composition import filter_cmd
 from materialize.mzcompose.test_result import (
     extract_error_chunks_from_output,
 )
@@ -187,13 +188,13 @@ class TestdrivePod(K8sPod, TestdriveBase):
 
             assert (
                 output is not None
-            ), f"Missing stdout and stderr when running '{e.cmd}' without success"
+            ), f"Missing stdout and stderr when running '{filter_cmd(e.cmd)}' without success"
 
             error_chunks = extract_error_chunks_from_output(output)
             error_text = "\n".join(error_chunks)
             raise CommandFailureCausedUIError(
-                f"Running {' '.join(command)} in testdrive failed with:\n{error_text}",
-                e.cmd,
+                f"Running {' '.join(filter_cmd(e.cmd))} in testdrive failed with:\n{error_text}",
+                filter_cmd(e.cmd),
                 e.stdout,
                 e.stderr,
             )

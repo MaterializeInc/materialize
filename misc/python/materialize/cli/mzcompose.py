@@ -40,9 +40,9 @@ from semver.version import Version
 
 from materialize import MZ_ROOT, ci_util, mzbuild, spawn, ui
 from materialize.mzcompose.composition import (
-    FILTERED_ARGS,
     Composition,
     UnknownCompositionError,
+    filter_cmd,
 )
 from materialize.mzcompose.test_result import TestResult
 from materialize.ui import UIError
@@ -831,19 +831,7 @@ To see the available workflows, run:
             for obj in test_case.errors + test_case.failures + test_case.skipped:
                 for typ in ("message", "output"):
                     if obj[typ]:
-                        obj[typ] = " ".join(
-                            [
-                                (
-                                    "[REDACTED]"
-                                    if any(
-                                        filtered_arg in word
-                                        for filtered_arg in FILTERED_ARGS
-                                    )
-                                    else word
-                                )
-                                for word in obj[typ].split(" ")
-                            ]
-                        )
+                        obj[typ] = " ".join(filter_cmd(obj[typ].split(" ")))
         junit_report = ci_util.junit_report_filename("mzcompose")
         with junit_report.open("w") as f:
             junit_xml.to_xml_report_file(f, [junit_suite])

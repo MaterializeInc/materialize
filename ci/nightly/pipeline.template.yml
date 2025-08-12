@@ -1073,6 +1073,7 @@ steps:
               # Uses .td-file based parallelism instead
               args: [-m=long, test/cloudtest/test_upgrade.py, --no-test-parallelism]
         sanitizer: skip
+        skip: "TODO(def-): Reenable in one version when labels are fixed in old version"
 
   - group: "K8s node recovery cloudtest"
     key: k8s-node-recovery

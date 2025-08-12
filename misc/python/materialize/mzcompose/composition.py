@@ -79,6 +79,18 @@ FILTERED_ARGS = [
 ]
 
 
+def filter_cmd(args: list[str]) -> list[str]:
+    """Don't print out secrets in test logs"""
+    return [
+        (
+            "[REDACTED]"
+            if any(filtered_arg in arg for filtered_arg in FILTERED_ARGS)
+            else arg
+        )
+        for arg in args
+    ]
+
+
 class Service:
     def __init__(self, name: str, idle: bool = False):
         self.name = name
@@ -321,16 +333,9 @@ class Composition:
         """
 
         if not self.silent and not silent:
-            # Don't print out secrets in test logs
-            filtered_args = [
-                (
-                    "[REDACTED]"
-                    if any(filtered_arg in arg for filtered_arg in FILTERED_ARGS)
-                    else arg
-                )
-                for arg in args
-            ]
-            print(f"$ docker compose {' '.join(filtered_args)}", file=sys.stderr)
+            print(
+                f"$ docker compose {' '.join(filter_cmd(list(args)))}", file=sys.stderr
+            )
 
         stdout = None
         if capture:
