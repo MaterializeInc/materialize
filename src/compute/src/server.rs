@@ -537,10 +537,11 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                                     )
                                 });
 
-                            // We cannot reconcile subscriptions at the moment, because the
-                            // response buffer is shared, and to a first approximation must be
-                            // completely reformed.
+                            // We cannot reconcile subscribe and copy-to sinks at the moment,
+                            // because the response buffer is shared, and to a first approximation
+                            // must be completely reformed.
                             let subscribe_free = dataflow.subscribe_ids().next().is_none();
+                            let copy_to_free = dataflow.copy_to_ids().next().is_none();
 
                             // If we have replaced any dependency of this dataflow, we need to
                             // replace this dataflow, to make it use the replacement.
@@ -548,7 +549,11 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                                 .imported_index_ids()
                                 .all(|id| retain_ids.contains(&id));
 
-                            if compatible && uncompacted && subscribe_free && dependencies_retained
+                            if compatible
+                                && uncompacted
+                                && subscribe_free
+                                && copy_to_free
+                                && dependencies_retained
                             {
                                 // Match found; remove the match from the deletion queue,
                                 // and compact its outputs to the dataflow's `as_of`.
@@ -563,6 +568,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                                     ?compatible,
                                     ?uncompacted,
                                     ?subscribe_free,
+                                    ?copy_to_free,
                                     ?dependencies_retained,
                                     old_as_of = ?old_dataflow.as_of,
                                     new_as_of = ?as_of,
@@ -587,6 +593,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                                 compatible,
                                 uncompacted,
                                 subscribe_free,
+                                copy_to_free,
                                 dependencies_retained,
                             );
                         } else {
@@ -675,18 +682,20 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                 // Sink tokens should be retained for retained dataflows, and dropped for dropped
                 // dataflows.
                 //
-                // Dropping the tokens of active subscribes makes them place `DroppedAt` responses
-                // into the subscribe response buffer. We drop that buffer in the next step, which
-                // ensures that we don't send out `DroppedAt` responses for subscribes dropped
-                // during reconciliation.
+                // Dropping the tokens of active subscribe and copy-tos makes them place
+                // `DroppedAt` responses into the respective response buffer. We drop those buffers
+                // in the next step, which ensures that we don't send out `DroppedAt` responses for
+                // subscribe/copy-tos dropped during reconciliation.
                 if !retained {
                     collection.sink_token = None;
                 }
             }
 
-            // We must drop the subscribe response buffer as it is global across all subscribes.
-            // If it were broken out by `GlobalId` then we could drop only those of dataflows we drop.
+            // We must drop the response buffers as they are global across all subscribe/copy-tos.
+            // If they were broken out by `GlobalId` then we could drop only the response buffers
+            // of dataflows we drop.
             compute_state.subscribe_response_buffer = Rc::new(RefCell::new(Vec::new()));
+            compute_state.copy_to_response_buffer = Rc::new(RefCell::new(Vec::new()));
 
             // The controller expects the logging collections to be readable from the minimum time
             // initially. We cannot recreate the logging arrangements without restarting the
