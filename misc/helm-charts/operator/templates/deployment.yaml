@@ -25,6 +25,10 @@ spec:
       labels:
         {{- include "materialize-operator.selectorLabels" . | nindent 8 }}
     spec:
+      securityContext:
+        fsGroup: 999
+        runAsGroup: 999
+        runAsUser: 999
       serviceAccountName: {{ include "materialize-operator.serviceAccountName" . }}
       {{- if .Values.operator.nodeSelector }}
       nodeSelector:
@@ -226,3 +230,12 @@ spec:
         {{- end }}
         resources:
           {{- toYaml .Values.operator.resources | nindent 10 }}
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+              - ALL
+          privileged: false
+          runAsNonRoot: true
+          seccompProfile:
+            type: RuntimeDefault
