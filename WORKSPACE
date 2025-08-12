@@ -635,6 +635,7 @@ crates_repository(
         "//:src/frontegg-client/Cargo.toml",
         "//:src/frontegg-mock/Cargo.toml",
         "//:src/http-util/Cargo.toml",
+        "//:src/iceberg-rest/Cargo.toml",
         "//:src/interchange/Cargo.toml",
         "//:src/kafka-util/Cargo.toml",
         "//:src/license-keys/Cargo.toml",

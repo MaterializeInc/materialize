@@ -6800,6 +6800,7 @@ pub fn plan_alter_connection(
         Connection::Ssh(_) => CreateConnectionType::Ssh,
         Connection::MySql(_) => CreateConnectionType::MySql,
         Connection::SqlServer(_) => CreateConnectionType::SqlServer,
+        Connection::IcebergCatalog(_) => CreateConnectionType::IcebergCatalog,
     };
 
     // Collect all options irrespective of action taken on them.

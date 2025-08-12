@@ -75,6 +75,8 @@ url = { version = "2.3.1", features = ["serde"] }
 uuid = { version = "1.17.0", features = ["serde", "v4"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 base64 = "0.22.1"
+mz-iceberg-rest = { path = "../iceberg-rest" }
+iceberg = { git = "https://github.com/apache/iceberg-rust.git", rev = "bc469c3f908260d8e99ff8a9f4f49b99daa0b9b6" }
 
 [dev-dependencies]
 base64 = "0.22.1"

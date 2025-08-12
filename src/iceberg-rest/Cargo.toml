@@ -1,0 +1,28 @@
+[package]
+name = "mz-iceberg-rest"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-trait = "0.1.88"
+aws-types = "1.3.8"
+chrono = "0.4.41"
+http = "1.3.1"
+iceberg = { git = "https://github.com/apache/iceberg-rust.git", rev = "bc469c3f908260d8e99ff8a9f4f49b99daa0b9b6" }
+itertools = "0.14.0"
+mockito = "1.7.0"
+reqwest = "0.12.23"
+serde = "1.0.219"
+serde_derive = "1.0.219"
+serde_json = "1.0.142"
+tokio = "1.47.1"
+typed-builder = "0.21.1"
+uuid = "1.18.0"
+aws-sigv4 = { version = "1.3.3", features = ["http0-compat", "sign-eventstream"] }
+aws-credential-types = "1.2.5"
+bytes = "1.10.1"
+mz-ore = { path = "../ore" }
+
+[lints]
+workspace = true
