@@ -11,5 +11,5 @@
 #
 # lint-versions - Check rust version
 
-grep "rust-version = " Cargo.toml | grep -q "1\.88\.0" || \
+grep "rust-version = " Cargo.toml | grep -q "1\.89\.0" || \
 (echo "Please validate new Rust versions for compilation time performance regressions or ask Team Testing to do so. Afterwards change the tested version in bin/lint-versions" && exit 1)

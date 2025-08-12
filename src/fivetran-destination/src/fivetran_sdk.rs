@@ -7,9 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-// Note(parkmycar): We wrap this in a `mod` block soley for the purpose of allowing lints for the
+// Note(parkmycar): We wrap this in a `mod` block solely for the purpose of allowing lints for the
 // generated protobuf code.
 #[allow(
+    dead_code,
     clippy::enum_variant_names,
     clippy::clone_on_ref_ptr,
     clippy::as_conversions
