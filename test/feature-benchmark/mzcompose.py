@@ -233,9 +233,7 @@ def run_one_scenario(
                 clusterd_image, size, additional_system_parameter_defaults
             )
 
-        start_overridden_mz_clusterd_and_cockroach(c, mz, clusterd, instance)
-        if balancerd:
-            c.up("balancerd")
+        start_overridden_mz_clusterd_and_cockroach(c, mz, clusterd, instance, balancerd)
 
         with c.override(
             Testdrive(
@@ -357,9 +355,16 @@ def create_clusterd_service(
 
 
 def start_overridden_mz_clusterd_and_cockroach(
-    c: Composition, mz: Materialized, clusterd: Clusterd, instance: str
+    c: Composition, mz: Materialized, clusterd: Clusterd, instance: str, balancerd: bool
 ) -> None:
     with c.override(mz, clusterd):
+        c.up(
+            "cockroach",
+            "materialized",
+            "clusterd",
+            *(["balancerd"] if balancerd else []),
+        )
+
         version_request_command = c.run(
             "materialized",
             "-c",
@@ -370,8 +375,7 @@ def start_overridden_mz_clusterd_and_cockroach(
         )
         version = version_request_command.stdout.strip()
         print(f"The version of the '{instance.upper()}' Mz instance is: {version}")
-
-        c.up("cockroach", "materialized", "clusterd")
+        c.verify_build_profile()
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:

@@ -16,6 +16,9 @@ ENV RUST_BACKTRACE=1
 # (database-issues#9159).
 ENV RUST_LIB_BACKTRACE=0
 
+ARG BUILD_PROFILE=optimize
+LABEL build.profile=$BUILD_PROFILE
+
 RUN sed -i -e 's#http://archive\.ubuntu\.com#http://us-east-1.ec2.archive.ubuntu.com#' \
            -e 's#http://security\.ubuntu\.com#http://us-east-1.ec2.archive.ubuntu.com#' \
            -e 's#http://ports\.ubuntu\.com#http://us-east-1.ec2.ports.ubuntu.com#' /etc/apt/sources.list.d/ubuntu.sources

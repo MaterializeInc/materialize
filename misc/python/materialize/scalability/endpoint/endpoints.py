@@ -185,6 +185,7 @@ class MaterializeContainer(MaterializeNonRemote):
             )
         ):
             self.composition.up("materialized")
+            self.composition.verify_build_profile()
 
             if self.use_balancerd:
                 self.composition.up("balancerd")

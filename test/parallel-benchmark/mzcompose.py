@@ -483,6 +483,7 @@ def run_once(
             else:
                 print("~~~ Starting up services")
                 c.up(*service_names, Service("testdrive", idle=True))
+                c.verify_build_profile()
 
                 mz_version = c.query_mz_version()
                 mz_string = f"{mz_version} (docker)"

@@ -1676,3 +1676,18 @@ class Composition:
         if exceptions:
             print(f"Further exceptions were raised:\n{exceptions[1:]}")
             raise exceptions[0]
+
+    def verify_build_profile(self, container: str = "materialized") -> None:
+        """Make sure the container is using the same build profile as we have set locally. This is mostly useful to ensure benchmarks compare using the same profile (release vs release, or optimized vs optimized)."""
+        image = self.compose["services"][container]["image"]
+        labels = json.loads(
+            spawn.capture(
+                ["docker", "inspect", "--format={{json .Config.Labels}}", image]
+            )
+        )
+        # TODO: When we have a few versions released with build.profile labels, assert that exists
+        if build_profile := labels.get("build.profile"):
+            expected_profile = self.repo.rd.profile.name
+            assert (
+                build_profile == expected_profile
+            ), f"Expected {image} to be of profile {expected_profile}, but found {build_profile} instead. Consider passing `--release` or `--optimized` to `mzcompose` explicitly."

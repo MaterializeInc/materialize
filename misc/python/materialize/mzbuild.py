@@ -943,6 +943,7 @@ class ResolvedImage:
             pre_image.run(prep[type(pre_image)])
         build_args = {
             **self.image.build_args,
+            "BUILD_PROFILE": self.image.rd.profile.name,
             "ARCH_GCC": str(self.image.rd.arch),
             "ARCH_GO": self.image.rd.arch.go_str(),
             "CI_SANITIZER": str(self.image.rd.sanitizer),
