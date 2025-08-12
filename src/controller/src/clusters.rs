@@ -770,14 +770,7 @@ where
                     ("type".into(), "cluster".into()),
                     ("replica-role".into(), role_label.into()),
                     ("workers".into(), location.allocation.workers.to_string()),
-                    (
-                        "size".into(),
-                        location
-                            .size
-                            .to_string()
-                            .replace("=", "-")
-                            .replace(",", "_"),
-                    ),
+                    ("size".into(), location.size.to_string()),
                 ]),
                 availability_zones: match location.availability_zones {
                     ManagedReplicaAvailabilityZones::FromCluster(azs) => azs,
