@@ -3,5 +3,5 @@
 # It is extremely unlikely that we'll ever need additional packages here. Do not
 # add to this list without consulting with @testing!
 
-pip==25.1.1
+pip==25.2
 setuptools==80.9.0
