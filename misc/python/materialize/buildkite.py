@@ -311,14 +311,8 @@ def get_job_url_from_pipeline_and_build(
     return get_job_url_from_build_url(build_url, build_job_id)
 
 
-def is_build_failed(build: str) -> bool:
-    try:
-        return (
-            spawn.capture(
-                ["buildkite-agent", "meta-data", "get", build],
-                stderr=subprocess.DEVNULL,
-            )
-            == "failed"
-        )
-    except subprocess.CalledProcessError:
-        return False
+def get_build_status(build: str) -> str:
+    return spawn.capture(
+        ["buildkite-agent", "meta-data", "get", build],
+        stderr=subprocess.DEVNULL,
+    )

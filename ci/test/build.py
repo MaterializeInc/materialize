@@ -25,6 +25,7 @@ from materialize.xcompile import Arch
 
 def main() -> None:
     try:
+        set_build_status("pending")
         coverage = ui.env_is_truthy("CI_COVERAGE_ENABLED")
         sanitizer = Sanitizer[os.getenv("CI_SANITIZER", "none")]
         bazel = ui.env_is_truthy("CI_BAZEL_BUILD")
@@ -46,6 +47,7 @@ def main() -> None:
         built_images = set()
         deps = repo.resolve_dependencies(image for image in repo if image.publish)
         deps.ensure(post_build=lambda image: built_images.add(image))
+        set_build_status("success")
 
         with ThreadPoolExecutor(max_workers=2) as executor:
             futures = [
@@ -56,17 +58,21 @@ def main() -> None:
             # Wait until all tasks are complete
             wait(futures)
     except:
-        if step_key := os.getenv("BUILDKITE_STEP_KEY"):
-            spawn.runv(
-                [
-                    "buildkite-agent",
-                    "meta-data",
-                    "set",
-                    step_key,
-                    "failed",
-                ]
-            )
+        set_build_status("failed")
         raise
+
+
+def set_build_status(status: str) -> None:
+    if step_key := os.getenv("BUILDKITE_STEP_KEY"):
+        spawn.runv(
+            [
+                "buildkite-agent",
+                "meta-data",
+                "set",
+                step_key,
+                status,
+            ]
+        )
 
 
 def annotate_buildkite_with_tags(arch: Arch, deps: mzbuild.DependencySet) -> None:
