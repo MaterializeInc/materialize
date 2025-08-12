@@ -953,6 +953,7 @@ impl<'a> Datum<'a> {
             if let ScalarType::Jsonb = scalar_type {
                 // json type checking
                 match datum {
+                    Datum::Dummy => panic!("Datum::Dummy observed"),
                     Datum::JsonNull
                     | Datum::False
                     | Datum::True
