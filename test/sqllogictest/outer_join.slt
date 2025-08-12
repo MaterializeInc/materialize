@@ -175,13 +175,11 @@ Explained Query:
       ArrangeBy
         raw=true
         arrangements[0]={ key=[#0], permutation=id, thinning=(#1) }
-        types=[integer?, integer?]
         Get::PassArrangements materialize.public.left
           raw=true
       ArrangeBy
         raw=true
         arrangements[0]={ key=[#0], permutation=id, thinning=(#1, #2) }
-        types=[integer?, integer?, boolean?]
         Union
           Get::Collection l0
             project=(#0..=#2)
@@ -195,7 +193,6 @@ Explained Query:
               ArrangeBy
                 raw=false
                 arrangements[0]={ key=[#0], permutation=id, thinning=() }
-                types=[integer?]
                 Union consolidate_output=true
                   Negate
                     Get::Collection l0
@@ -210,7 +207,6 @@ Explained Query:
       ArrangeBy
         raw=true
         arrangements[0]={ key=[#0], permutation=id, thinning=(#1, #2) }
-        types=[integer?, integer?, boolean?]
         Union
           Get::Collection materialize.public.right2
             project=(#0..=#2)
@@ -224,7 +220,6 @@ Explained Query:
               ArrangeBy
                 raw=false
                 arrangements[0]={ key=[#0], permutation=id, thinning=() }
-                types=[integer?]
                 Union consolidate_output=true
                   Negate
                     Get::Collection materialize.public.right2

@@ -289,13 +289,11 @@ Explained Query:
           ArrangeBy
             raw=true
             arrangements[0]={ key=[#1{c}], permutation={#0: #1, #1: #0}, thinning=(#0) }
-            types=[integer, text]
             Get::PassArrangements l0
               raw=true
           ArrangeBy
             raw=true
             arrangements[0]={ key=[#0{c}], permutation=id, thinning=() }
-            types=[text]
             Get::Collection l0
               project=(#1)
               raw=true

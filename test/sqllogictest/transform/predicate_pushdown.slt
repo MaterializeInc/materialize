@@ -373,11 +373,9 @@ Explained Query:
     Get::PassArrangements materialize.public.t1
       raw=false
       arrangements[0]={ key=[#0{f1}], permutation=id, thinning=(#1) }
-      types=[integer?, integer?]
     Get::PassArrangements materialize.public.t2
       raw=false
       arrangements[0]={ key=[#0{f1}], permutation=id, thinning=(#1) }
-      types=[integer?, integer?]
 
 Used Indexes:
   - materialize.public.t1_f1_ind (differential join)

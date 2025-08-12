@@ -393,7 +393,6 @@ Explained Query:
           key=#0{a}
           raw=false
           arrangements[0]={ key=[#0{a}], permutation=id, thinning=(#1) }
-          types=[integer?, integer?]
   Return
     Mfp
       project=(#2)
