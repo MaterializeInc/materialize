@@ -3176,6 +3176,53 @@ impl<'a> Parser<'a> {
         })
     }
 
+    fn parse_create_kafka_sink(
+        &mut self,
+        name: Option<UnresolvedItemName>,
+        in_cluster: Option<RawClusterName>,
+        from: RawItemName,
+        if_not_exists: bool,
+        connection: CreateSinkConnection<Raw>,
+    ) -> Result<CreateSinkStatement<Raw>, ParserError> {
+        let format = match &self.parse_one_of_keywords(&[KEY, FORMAT]) {
+            Some(KEY) => {
+                self.expect_keyword(FORMAT)?;
+                let key = self.parse_format()?;
+                self.expect_keywords(&[VALUE, FORMAT])?;
+                let value = self.parse_format()?;
+                Some(FormatSpecifier::KeyValue { key, value })
+            }
+            Some(FORMAT) => Some(FormatSpecifier::Bare(self.parse_format()?)),
+            Some(_) => unreachable!("parse_one_of_keywords returns None for this"),
+            None => None,
+        };
+        let envelope = if self.parse_keyword(ENVELOPE) {
+            Some(self.parse_sink_envelope()?)
+        } else {
+            None
+        };
+
+        let with_options = if self.parse_keyword(WITH) {
+            self.expect_token(&Token::LParen)?;
+            let options = self.parse_comma_separated(Parser::parse_create_sink_option)?;
+            self.expect_token(&Token::RParen)?;
+            options
+        } else {
+            vec![]
+        };
+
+        Ok(CreateSinkStatement {
+            name,
+            in_cluster,
+            from,
+            connection,
+            format,
+            envelope,
+            if_not_exists,
+            with_options,
+        })
+    }
+
     fn parse_create_sink(&mut self) -> Result<Statement<Raw>, ParserError> {
         self.expect_keyword(SINK)?;
         let if_not_exists = self.parse_if_not_exists()?;
@@ -3203,43 +3250,13 @@ impl<'a> Parser<'a> {
         self.expect_keyword(INTO)?;
         let connection = self.parse_create_sink_connection()?;
 
-        let format = match self.parse_one_of_keywords(&[KEY, FORMAT]) {
-            Some(KEY) => {
-                self.expect_keyword(FORMAT)?;
-                let key = self.parse_format()?;
-                self.expect_keywords(&[VALUE, FORMAT])?;
-                let value = self.parse_format()?;
-                Some(FormatSpecifier::KeyValue { key, value })
+        let statement = match connection {
+            conn @ CreateSinkConnection::Kafka { .. } => {
+                self.parse_create_kafka_sink(name, in_cluster, from, if_not_exists, conn)
             }
-            Some(FORMAT) => Some(FormatSpecifier::Bare(self.parse_format()?)),
-            Some(_) => unreachable!("parse_one_of_keywords returns None for this"),
-            None => None,
-        };
-        let envelope = if self.parse_keyword(ENVELOPE) {
-            Some(self.parse_sink_envelope()?)
-        } else {
-            None
-        };
+        }?;
 
-        let with_options = if self.parse_keyword(WITH) {
-            self.expect_token(&Token::LParen)?;
-            let options = self.parse_comma_separated(Parser::parse_create_sink_option)?;
-            self.expect_token(&Token::RParen)?;
-            options
-        } else {
-            vec![]
-        };
-
-        Ok(Statement::CreateSink(CreateSinkStatement {
-            name,
-            in_cluster,
-            from,
-            connection,
-            format,
-            envelope,
-            if_not_exists,
-            with_options,
-        }))
+        Ok(Statement::CreateSink(statement))
     }
 
     /// Parse the name of a CREATE SINK optional parameter
@@ -3591,8 +3608,9 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_create_sink_connection(&mut self) -> Result<CreateSinkConnection<Raw>, ParserError> {
-        self.expect_keyword(KAFKA)?;
+    fn parse_create_kafka_sink_connection(
+        &mut self,
+    ) -> Result<CreateSinkConnection<Raw>, ParserError> {
         self.expect_keyword(CONNECTION)?;
 
         let connection = self.parse_raw_name()?;
@@ -3639,6 +3657,17 @@ impl<'a> Parser<'a> {
             key,
             headers,
         })
+    }
+
+    fn parse_create_sink_connection(&mut self) -> Result<CreateSinkConnection<Raw>, ParserError> {
+        match self.expect_one_of_keywords(&[KAFKA, ICEBERG])? {
+            KAFKA => self.parse_create_kafka_sink_connection(),
+            ICEBERG => {
+                let pos = self.index;
+                Err(ParserError::new(pos, "ICEBERG sinks are not supported yet"))
+            }
+            _ => unreachable!(),
+        }
     }
 
     fn parse_create_view(&mut self) -> Result<Statement<Raw>, ParserError> {
