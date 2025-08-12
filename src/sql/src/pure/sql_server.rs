@@ -101,11 +101,6 @@ pub(super) async fn purify_source_exports(
         }
     };
 
-    // TODO(sql_server2): Should we check if these have overlapping columns?
-    // What do our other sources do?
-    let text_cols_map = map_column_refs(text_columns, SqlServerConfigOptionName::TextColumns)?;
-    let excl_cols_map = map_column_refs(excl_columns, SqlServerConfigOptionName::ExcludeColumns)?;
-
     if requested_exports.is_empty() {
         sql_bail!(
             "SQL Server source must ingest at least one table, but {} matched none",
@@ -115,6 +110,13 @@ pub(super) async fn purify_source_exports(
                 .to_ast_string_simple()
         )
     }
+
+    super::validate_source_export_names(&requested_exports)?;
+
+    // TODO(sql_server2): Should we check if these have overlapping columns?
+    // What do our other sources do?
+    let text_cols_map = map_column_refs(text_columns, SqlServerConfigOptionName::TextColumns)?;
+    let excl_cols_map = map_column_refs(excl_columns, SqlServerConfigOptionName::ExcludeColumns)?;
 
     // Ensure the columns we intend to include are supported.
     //
