@@ -17,6 +17,7 @@
 use std::collections::HashMap;
 
 use itertools::Itertools;
+use mz_ore::cast::CastFrom;
 
 use super::UpsertKey;
 use super::types::{
@@ -93,7 +94,7 @@ where
             stats.processed_gets += 1;
             let value = self.state.get(&key).cloned();
             let metadata = value.as_ref().map(|v| ValueMetadata {
-                size: v.memory_size(),
+                size: u64::cast_from(v.memory_size()),
                 is_tombstone: v.is_tombstone(),
             });
             stats.processed_gets_size += metadata.map_or(0, |m| m.size);

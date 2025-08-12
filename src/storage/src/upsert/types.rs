@@ -219,20 +219,28 @@ impl<T, O> std::fmt::Debug for StateValue<T, O> {
 /// updates with the same timestamp at which the provisional update was
 /// recorded.
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
-pub enum Value<T, O> {
-    FinalizedValue(UpsertValue),
-    Tombstone,
-    ProvisionalValue {
-        // We keep the finalized value around, because the provisional value is
-        // only valid when processing updates at the same timestamp. And at any
-        // point we might still require access to the finalized value.
-        finalized_value: Option<UpsertValue>,
-        // A provisional value of `None` is a provisional tombstone.
-        //
-        // WIP: We can also box this, to keep the size of StateValue as it was
-        // previously.
-        provisional_value: (Option<UpsertValue>, T, O),
-    },
+pub struct Value<T, O> {
+    /// The finalized value of a key is the value we know to be correct for the last complete
+    /// timestamp that got processed. A finalized value of None means that the key has been deleted
+    /// and acts as a tombstone.
+    pub finalized: Option<UpsertValue>,
+    /// When `Some(_)` it contains the upsert value has been processed for a yet incomplete
+    /// timestamp. When None, no provisional update has been emitted yet.
+    pub provisional: Option<ProvisionalValue<T, O>>,
+}
+
+/// A provisional value emitted for a timestamp. This struct contains enough information to
+#[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
+pub struct ProvisionalValue<T, O> {
+    /// The timestamp at which this provisional value occured at
+    pub timestamp: T,
+    /// The order of this upsert command *within* the timestamp. Commands that happen at the same
+    /// timestamp with lower order get ignored. Commands with higher order override this one. If
+    /// there a case of equal order then the value itself is used as a tie breaker.
+    pub order: O,
+    /// The provisional value. A provisional value of None means that the key has been deleted and
+    /// acts as a tombstone.
+    pub value: Option<UpsertValue>,
 }
 
 /// A value as produced during consolidation.
@@ -256,22 +264,27 @@ impl fmt::Display for Consolidating {
 }
 
 impl<T, O> StateValue<T, O> {
-    /// A finalized, that is (assumed) persistent, value occurring at some order
-    /// key.
+    /// A finalized, that is (assumed) persistent, value.
     pub fn finalized_value(value: UpsertValue) -> Self {
-        Self::Value(Value::FinalizedValue(value))
+        Self::Value(Value {
+            finalized: Some(value),
+            provisional: None,
+        })
     }
 
     #[allow(unused)]
-    /// A tombstoned value occurring at some order key.
+    /// A tombstoned value.
     pub fn tombstone() -> Self {
-        Self::Value(Value::Tombstone)
+        Self::Value(Value {
+            finalized: None,
+            provisional: None,
+        })
     }
 
     /// Whether the value is a tombstone.
     pub fn is_tombstone(&self) -> bool {
         match self {
-            Self::Value(Value::Tombstone) => true,
+            Self::Value(value) => value.finalized.is_none(),
             _ => false,
         }
     }
@@ -290,107 +303,63 @@ impl<T, O> StateValue<T, O> {
     ///
     /// Other implementations may use more accurate accounting.
     #[cfg(test)]
-    pub fn memory_size(&self) -> u64 {
-        use mz_ore::cast::CastFrom;
-        match self {
-            // Similar to `Row::byte_len`, we add the heap size and the size of the value itself.
-            Self::Consolidating(Consolidating { value_xor, .. }) => {
-                u64::cast_from(value_xor.len()) + u64::cast_from(std::mem::size_of::<Self>())
-            }
-            Self::Value(Value::FinalizedValue(Ok(row), ..)) => {
-                // `Row::byte_len` includes the size of `Row`, which is also in `Self`, so we
-                // subtract it.
-                u64::cast_from(row.byte_len()) - u64::cast_from(std::mem::size_of::<mz_repr::Row>())
-                // This assumes the size of any `O` instantiation is meaningful (i.e. not a heap
-                // object).
-                + u64::cast_from(std::mem::size_of::<Self>())
-            }
-            Self::Value(Value::ProvisionalValue {
-                finalized_value,
-                provisional_value,
-            }) => {
-                finalized_value.as_ref().map(|v| match v.as_ref() {
-                    Ok(row) =>
-                        // The finalized value is boxed, so the size of Row is
-                        // not included in the outer size of Self. We therefore
-                        // don't subtract it here like for the other branches.
-                        u64::cast_from(row.byte_len())
-                        // Add the size of the order, because it's also behind
-                        // the box.
-                        + u64::cast_from(std::mem::size_of::<O>()),
+    pub fn memory_size(&self) -> usize {
+        use std::mem::size_of_val;
+        let heap_size = match self {
+            Self::Consolidating(Consolidating { value_xor, .. }) => value_xor.len(),
+            Self::Value(value) => {
+                let finalized_heap_size = match value.finalized {
+                    Some(Ok(ref row)) => {
+                        // `Row::byte_len` includes the size of `Row`, which is also in `Self`, so we
+                        // subtract it.
+                        row.byte_len() - size_of_val(&row)
+                    }
                     // Assume errors are rare enough to not move the needle.
-                    Err(_) => 0,
-                }).unwrap_or(0)
-                +
-                provisional_value.0.as_ref().map(|v| match v{
-                    Ok(row) =>
-                        // `Row::byte_len` includes the size of `Row`, which is
-                        // also in `Self`, so we subtract it.
-                        u64::cast_from(row.byte_len()) - u64::cast_from(std::mem::size_of::<mz_repr::Row>()),
-                        // The size of order is already included in the outer
-                        // size of self.
-                    // Assume errors are rare enough to not move the needle.
-                    Err(_) => 0,
-                }).unwrap_or(0)
-                // This assumes the size of any `O` instantiation is meaningful (i.e. not a heap
-                // object).
-                + u64::cast_from(std::mem::size_of::<Self>())
+                    _ => 0,
+                };
+                let provisional_heap_size = match value.provisional {
+                    Some(ref provisional) => match provisional.value {
+                        Some(Ok(ref row)) => {
+                            // `Row::byte_len` includes the size of `Row`, which is also in `Self`, so we
+                            // subtract it.
+                            row.byte_len() - size_of_val(&row)
+                        }
+                        // Assume errors are rare enough to not move the needle.
+                        _ => 0,
+                    },
+                    None => 0,
+                };
+                finalized_heap_size + provisional_heap_size
             }
-            Self::Value(Value::Tombstone) => {
-                // This assumes the size of any `O` instantiation is meaningful (i.e. not a heap
-                // object).
-                u64::cast_from(std::mem::size_of::<Self>())
-            }
-            Self::Value(Value::FinalizedValue(Err(_), ..)) => {
-                // Assume errors are rare enough to not move the needle.
-                0
-            }
-        }
+        };
+        heap_size + size_of_val(self)
     }
 }
 
 impl<T: Eq, O> StateValue<T, O> {
     /// Creates a new provisional value, occurring at some order key, observed
     /// at the given timestamp.
-    pub fn new_provisional_value(
-        provisional_value: UpsertValue,
-        provisional_ts: T,
-        order: O,
-    ) -> Self {
-        Self::Value(Value::ProvisionalValue {
-            finalized_value: None,
-            provisional_value: (Some(provisional_value), provisional_ts, order),
+    pub fn new_provisional_value(value: UpsertValue, timestamp: T, order: O) -> Self {
+        Self::Value(Value {
+            finalized: None,
+            provisional: Some(ProvisionalValue {
+                value: Some(value),
+                timestamp,
+                order,
+            }),
         })
     }
 
-    /// Creates a provisional value, that retains the finalized value along with
-    /// its order in this `StateValue`, if any.
-    ///
-    /// We record the finalized value, so that we can present it when needed or
-    /// when trying to read a provisional value at a different timestamp.
-    pub fn into_provisional_value(
-        self,
-        provisional_value: UpsertValue,
-        provisional_ts: T,
-        provisional_order: O,
-    ) -> Self {
+    /// Creates a provisional value, that retains the finalized value in this `StateValue`.
+    pub fn into_provisional_value(self, value: UpsertValue, timestamp: T, order: O) -> Self {
         match self {
-            StateValue::Value(Value::FinalizedValue(value)) => {
-                StateValue::Value(Value::ProvisionalValue {
-                    finalized_value: Some(value),
-                    provisional_value: (Some(provisional_value), provisional_ts, provisional_order),
-                })
-            }
-            StateValue::Value(Value::Tombstone) => StateValue::Value(Value::ProvisionalValue {
-                finalized_value: None,
-                provisional_value: (Some(provisional_value), provisional_ts, provisional_order),
-            }),
-            StateValue::Value(Value::ProvisionalValue {
-                finalized_value,
-                provisional_value: _,
-            }) => StateValue::Value(Value::ProvisionalValue {
-                finalized_value,
-                provisional_value: (Some(provisional_value), provisional_ts, provisional_order),
+            StateValue::Value(finalized) => Self::Value(Value {
+                finalized: finalized.finalized,
+                provisional: Some(ProvisionalValue {
+                    value: Some(value),
+                    timestamp,
+                    order,
+                }),
             }),
             StateValue::Consolidating(_) => {
                 panic!("called `into_provisional_value` without calling `ensure_decoded`")
@@ -400,37 +369,31 @@ impl<T: Eq, O> StateValue<T, O> {
 
     /// Creates a new provisional tombstone occurring at some order key,
     /// observed at the given timestamp.
-    pub fn new_provisional_tombstone(provisional_ts: T, order: O) -> Self {
-        Self::Value(Value::ProvisionalValue {
-            finalized_value: None,
-            provisional_value: (None, provisional_ts, order),
+    pub fn new_provisional_tombstone(timestamp: T, order: O) -> Self {
+        Self::Value(Value {
+            finalized: None,
+            provisional: Some(ProvisionalValue {
+                value: None,
+                timestamp,
+                order,
+            }),
         })
     }
 
-    /// Creates a provisional tombstone, that retains the finalized value along
-    /// with its order in this `StateValue`, if any.
+    /// Creates a provisional tombstone, that retains the finalized value in this `StateValue`.
     ///
     /// We record the current finalized value, so that we can present it when
     /// needed or when trying to read a provisional value at a different
     /// timestamp.
-    pub fn into_provisional_tombstone(self, provisional_ts: T, provisional_order: O) -> Self {
+    pub fn into_provisional_tombstone(self, timestamp: T, order: O) -> Self {
         match self {
-            StateValue::Value(Value::FinalizedValue(value)) => {
-                StateValue::Value(Value::ProvisionalValue {
-                    finalized_value: Some(value),
-                    provisional_value: (None, provisional_ts, provisional_order),
-                })
-            }
-            StateValue::Value(Value::Tombstone) => StateValue::Value(Value::ProvisionalValue {
-                finalized_value: None,
-                provisional_value: (None, provisional_ts, provisional_order),
-            }),
-            StateValue::Value(Value::ProvisionalValue {
-                finalized_value,
-                provisional_value: _,
-            }) => StateValue::Value(Value::ProvisionalValue {
-                finalized_value,
-                provisional_value: (None, provisional_ts, provisional_order),
+            StateValue::Value(finalized) => Self::Value(Value {
+                finalized: finalized.finalized,
+                provisional: Some(ProvisionalValue {
+                    value: None,
+                    timestamp,
+                    order,
+                }),
             }),
             StateValue::Consolidating(_) => {
                 panic!("called `into_provisional_tombstone` without calling `ensure_decoded`")
@@ -438,16 +401,13 @@ impl<T: Eq, O> StateValue<T, O> {
         }
     }
 
-    /// Returns the order of a provisional value at the given timestamp if it exists.
+    /// Returns the order of a provisional value at the given timestamp, if any.
     pub fn provisional_order(&self, ts: &T) -> Option<&O> {
         match self {
-            Self::Value(Value::FinalizedValue(_)) => None,
-            Self::Value(Value::Tombstone) => None,
-            Self::Value(Value::ProvisionalValue {
-                finalized_value: _,
-                provisional_value: (_, provisional_ts, provisional_order),
-            }) if provisional_ts == ts => Some(provisional_order),
-            Self::Value(Value::ProvisionalValue { .. }) => None,
+            Self::Value(value) => match &value.provisional {
+                Some(p) if &p.timestamp == ts => Some(&p.order),
+                _ => None,
+            },
             Self::Consolidating(_) => {
                 panic!("called `provisional_order` without calling `ensure_decoded`")
             }
@@ -458,16 +418,10 @@ impl<T: Eq, O> StateValue<T, O> {
     /// Falls back to the finalized value, or `None` if there is neither.
     pub fn provisional_value_ref(&self, ts: &T) -> Option<&UpsertValue> {
         match self {
-            Self::Value(Value::FinalizedValue(value)) => Some(value),
-            Self::Value(Value::Tombstone) => None,
-            Self::Value(Value::ProvisionalValue {
-                finalized_value: _,
-                provisional_value: (provisional_value, provisional_ts, _provisional_order),
-            }) if provisional_ts == ts => provisional_value.as_ref(),
-            Self::Value(Value::ProvisionalValue {
-                finalized_value,
-                provisional_value: _,
-            }) => finalized_value.as_ref(),
+            Self::Value(value) => match &value.provisional {
+                Some(p) if &p.timestamp == ts => p.value.as_ref(),
+                _ => value.finalized.as_ref(),
+            },
             Self::Consolidating(_) => {
                 panic!("called `provisional_value_ref` without calling `ensure_decoded`")
             }
@@ -477,13 +431,8 @@ impl<T: Eq, O> StateValue<T, O> {
     /// Returns the the finalized value, if one is present.
     pub fn into_finalized_value(self) -> Option<UpsertValue> {
         match self {
-            Self::Value(Value::FinalizedValue(value)) => Some(value),
-            Self::Value(Value::Tombstone) => None,
-            Self::Value(Value::ProvisionalValue {
-                finalized_value,
-                provisional_value: _,
-            }) => finalized_value,
-            _ => panic!("called `order` without calling `ensure_decoded`"),
+            Self::Value(v) => v.finalized,
+            _ => panic!("called `into_finalized_value` without calling `ensure_decoded`"),
         }
     }
 }
@@ -663,9 +612,7 @@ impl<T: Eq, O> StateValue<T, O> {
                             consolidating,
                             source_id,
                         );
-                        *self = Self::Value(Value::FinalizedValue(
-                            bincode_opts.deserialize(value).unwrap(),
-                        ));
+                        *self = Self::finalized_value(bincode_opts.deserialize(value).unwrap());
                     }
                     0 => {
                         assert_eq!(
@@ -690,7 +637,7 @@ impl<T: Eq, O> StateValue<T, O> {
                             consolidating,
                             source_id,
                         );
-                        *self = Self::Value(Value::Tombstone);
+                        *self = Self::tombstone();
                     }
                     other => panic!(
                         "invalid upsert state: non 0/1 diff_sum: {}, state: {}, {}",

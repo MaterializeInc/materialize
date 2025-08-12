@@ -48,7 +48,7 @@ use crate::metrics::upsert::UpsertMetrics;
 use crate::storage_state::StorageInstanceContext;
 use crate::upsert_continual_feedback;
 use types::{
-    BincodeOpts, StateValue, UpsertState, UpsertStateBackend, Value, consolidating_merge_function,
+    BincodeOpts, StateValue, UpsertState, UpsertStateBackend, consolidating_merge_function,
     upsert_bincode_opts,
 };
 
@@ -607,7 +607,7 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
                 if let Some(old_value) =
                     existing_value.replace(StateValue::finalized_value(value.clone()))
                 {
-                    if let Value::FinalizedValue(old_value) = old_value.into_decoded() {
+                    if let Some(old_value) = old_value.into_decoded().finalized {
                         output_updates.push((old_value, ts.clone(), Diff::MINUS_ONE));
                     }
                 }
@@ -615,7 +615,7 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
             }
             None => {
                 if let Some(old_value) = existing_value.take() {
-                    if let Value::FinalizedValue(old_value) = old_value.into_decoded() {
+                    if let Some(old_value) = old_value.into_decoded().finalized {
                         output_updates.push((old_value, ts, Diff::MINUS_ONE));
                     }
                 }
