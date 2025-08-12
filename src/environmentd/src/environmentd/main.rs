@@ -486,42 +486,42 @@ pub struct Args {
     #[clap(
         long,
         env = "BOOTSTRAP_DEFAULT_CLUSTER_REPLICA_SIZE",
-        default_value = "1"
+        default_value = "scale=1,workers=1"
     )]
     bootstrap_default_cluster_replica_size: String,
     /// The size of the builtin system cluster replicas if bootstrapping.
     #[clap(
         long,
         env = "BOOTSTRAP_BUILTIN_SYSTEM_CLUSTER_REPLICA_SIZE",
-        default_value = "1"
+        default_value = "scale=1,workers=1"
     )]
     bootstrap_builtin_system_cluster_replica_size: String,
     /// The size of the builtin catalog server cluster replicas if bootstrapping.
     #[clap(
         long,
         env = "BOOTSTRAP_BUILTIN_CATALOG_SERVER_CLUSTER_REPLICA_SIZE",
-        default_value = "1"
+        default_value = "scale=1,workers=1"
     )]
     bootstrap_builtin_catalog_server_cluster_replica_size: String,
     /// The size of the builtin probe cluster replicas if bootstrapping.
     #[clap(
         long,
         env = "BOOTSTRAP_BUILTIN_PROBE_CLUSTER_REPLICA_SIZE",
-        default_value = "1"
+        default_value = "scale=1,workers=1"
     )]
     bootstrap_builtin_probe_cluster_replica_size: String,
     /// The size of the builtin support cluster replicas if bootstrapping.
     #[clap(
         long,
         env = "BOOTSTRAP_BUILTIN_SUPPORT_CLUSTER_REPLICA_SIZE",
-        default_value = "1"
+        default_value = "scale=1,workers=1"
     )]
     bootstrap_builtin_support_cluster_replica_size: String,
     /// The size of the builtin analytics cluster replicas if bootstrapping.
     #[clap(
         long,
         env = "BOOTSTRAP_BUILTIN_ANALYTICS_CLUSTER_REPLICA_SIZE",
-        default_value = "1"
+        default_value = "scale=1,workers=1"
     )]
     bootstrap_builtin_analytics_cluster_replica_size: String,
     #[clap(
