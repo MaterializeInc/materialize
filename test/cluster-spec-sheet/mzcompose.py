@@ -16,20 +16,17 @@ Privatelink. Runs only on main and release branches.
 import argparse
 import os
 import re
-
 import time
 from abc import abstractmethod
 from textwrap import dedent
 from typing import Any
 
+import matplotlib.pyplot as plt
+import pandas as pd
 import pg8000
 import pg8000.native
 
-import pandas as pd
-import matplotlib.pyplot as plt
-from matplotlib.ticker import FuncFormatter, LogLocator
 from materialize import MZ_ROOT
-
 from materialize.mzcompose.composition import (
     Composition,
     WorkflowArgumentParser,
@@ -158,7 +155,7 @@ class Scenario:
 class TpchScenario(Scenario):
 
     def name(self) -> str:
-        return f"tpch"
+        return "tpch"
 
     def materialize_views(self) -> list[str]:
         return ["lineitem"]
@@ -233,7 +230,7 @@ class TpchScenario(Scenario):
 class TpchScenarioMV(Scenario):
 
     def name(self) -> str:
-        return f"tpch_mv"
+        return "tpch_mv"
 
     def materialize_views(self) -> list[str]:
         return ["lineitem"]
@@ -327,7 +324,7 @@ class TpchScenarioMV(Scenario):
 
 class AuctionScenario(Scenario):
     def name(self) -> str:
-        return f"auction"
+        return "auction"
 
     def materialize_views(self) -> list[str]:
         return ["auctions", "bids"]
@@ -987,7 +984,7 @@ def plot_time_ms(data: pd.DataFrame, query: str, title: str) -> pd.DataFrame:
     )
     (level, dropped) = labels_to_drop(df2)
     filtered = df2.droplevel(level, axis=1).dropna(axis=1, how="all")
-    ax = filtered.plot(
+    filtered.plot(
         kind="bar",
         figsize=(12, 6),
         ylabel="Time [ms]",
@@ -1010,7 +1007,7 @@ def plot_credit_time(data: pd.DataFrame, query: str, title: str) -> pd.DataFrame
     )
     (level, dropped) = labels_to_drop(df2)
     filtered = df2.droplevel(level, axis=1).dropna(axis=1, how="all")
-    ax = filtered.plot(
+    filtered.plot(
         kind="bar",
         figsize=(12, 6),
         ylabel="Cost [centi-credits]",
