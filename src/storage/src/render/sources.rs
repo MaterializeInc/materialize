@@ -43,7 +43,7 @@ use crate::decode::{render_decode_cdcv2, render_decode_delimited};
 use crate::healthcheck::{HealthStatusMessage, StatusNamespace};
 use crate::source::types::{DecodeResult, SourceOutput, SourceRender};
 use crate::source::{self, RawSourceCreationConfig, SourceExportCreationConfig};
-use crate::upsert::UpsertKey;
+use crate::upsert::{UpsertKey, UpsertValue};
 
 /// _Renders_ complete _differential_ [`Collection`]s
 /// that represent the final source and its errors
@@ -479,7 +479,7 @@ fn append_metadata_to_value<G: Scope, FromTime: Timestamp>(
 fn upsert_commands<G: Scope, FromTime: Timestamp>(
     input: Collection<G, DecodeResult<FromTime>, Diff>,
     upsert_envelope: UpsertEnvelope,
-) -> Collection<G, (UpsertKey, Option<Result<Row, UpsertError>>, FromTime), Diff> {
+) -> Collection<G, (UpsertKey, Option<UpsertValue>, FromTime), Diff> {
     let mut row_buf = Row::default();
     input.map(move |result| {
         let from_time = result.from_time;
@@ -493,9 +493,15 @@ fn upsert_commands<G: Scope, FromTime: Timestamp>(
         // If we have a well-formed key we can continue, otherwise we're upserting an error
         let key = match key {
             Ok(key) => key,
-            err @ Err(_) => match result.value {
-                Some(_) => return (UpsertKey::from_key(err.as_ref()), Some(err), from_time),
-                None => return (UpsertKey::from_key(err.as_ref()), None, from_time),
+            Err(err) => match result.value {
+                Some(_) => {
+                    return (
+                        UpsertKey::from_key(Err(&err)),
+                        Some(Err(Box::new(err))),
+                        from_time,
+                    );
+                }
+                None => return (UpsertKey::from_key(Err(&err)), None, from_time),
             },
         };
 
@@ -584,10 +590,10 @@ fn upsert_commands<G: Scope, FromTime: Timestamp>(
                         packer.extend_by_row(&metadata);
                         Some(Ok(row_buf.clone()))
                     }
-                    _ => Some(Err(UpsertError::Value(UpsertValueError {
+                    _ => Some(Err(Box::new(UpsertError::Value(UpsertValueError {
                         for_key: key_row,
                         inner,
-                    }))),
+                    })))),
                 }
             }
             None => None,

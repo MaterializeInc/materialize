@@ -304,7 +304,9 @@ impl<T, O> StateValue<T, O> {
     /// Other implementations may use more accurate accounting.
     #[cfg(test)]
     pub fn memory_size(&self) -> usize {
-        use std::mem::size_of_val;
+        use mz_repr::Row;
+        use std::mem::size_of;
+
         let heap_size = match self {
             Self::Consolidating(Consolidating { value_xor, .. }) => value_xor.len(),
             Self::Value(value) => {
@@ -312,7 +314,7 @@ impl<T, O> StateValue<T, O> {
                     Some(Ok(ref row)) => {
                         // `Row::byte_len` includes the size of `Row`, which is also in `Self`, so we
                         // subtract it.
-                        row.byte_len() - size_of_val(&row)
+                        row.byte_len() - size_of::<Row>()
                     }
                     // Assume errors are rare enough to not move the needle.
                     _ => 0,
@@ -322,7 +324,7 @@ impl<T, O> StateValue<T, O> {
                         Some(Ok(ref row)) => {
                             // `Row::byte_len` includes the size of `Row`, which is also in `Self`, so we
                             // subtract it.
-                            row.byte_len() - size_of_val(&row)
+                            row.byte_len() - size_of::<Row>()
                         }
                         // Assume errors are rare enough to not move the needle.
                         _ => 0,
@@ -332,7 +334,7 @@ impl<T, O> StateValue<T, O> {
                 finalized_heap_size + provisional_heap_size
             }
         };
-        heap_size + size_of_val(self)
+        heap_size + size_of::<Self>()
     }
 }
 
@@ -1366,7 +1368,7 @@ mod tests {
     fn test_memory_size() {
         let finalized_value: StateValue<(), ()> = StateValue::finalized_value(Ok(Row::default()));
         assert!(
-            finalized_value.memory_size() <= 144,
+            finalized_value.memory_size() <= 64,
             "memory size is {}",
             finalized_value.memory_size(),
         );
@@ -1374,7 +1376,7 @@ mod tests {
         let provisional_value_with_finalized_value: StateValue<(), ()> =
             finalized_value.into_provisional_value(Ok(Row::default()), (), ());
         assert!(
-            provisional_value_with_finalized_value.memory_size() <= 168,
+            provisional_value_with_finalized_value.memory_size() <= 64,
             "memory size is {}",
             provisional_value_with_finalized_value.memory_size(),
         );
@@ -1382,7 +1384,7 @@ mod tests {
         let provisional_value_without_finalized_value: StateValue<(), ()> =
             StateValue::new_provisional_value(Ok(Row::default()), (), ());
         assert!(
-            provisional_value_without_finalized_value.memory_size() <= 144,
+            provisional_value_without_finalized_value.memory_size() <= 64,
             "memory size is {}",
             provisional_value_without_finalized_value.memory_size(),
         );
@@ -1395,7 +1397,7 @@ mod tests {
             &mut Vec::new(),
         );
         assert!(
-            consolidating_value.memory_size() <= 146,
+            consolidating_value.memory_size() <= 66,
             "memory size is {}",
             consolidating_value.memory_size(),
         );
