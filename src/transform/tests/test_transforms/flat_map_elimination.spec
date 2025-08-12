@@ -152,4 +152,4 @@ FlatMap generate_series(5, 6, 1)
   Get t0
 ----
 FlatMap generate_series(5, 6, 1)
-  Get
+  Get t0
