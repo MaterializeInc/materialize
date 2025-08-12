@@ -1399,7 +1399,8 @@ impl Coordinator {
                             }
                             ConnectionDetails::Csr(_)
                             | ConnectionDetails::Ssh { .. }
-                            | ConnectionDetails::Aws(_) => {}
+                            | ConnectionDetails::Aws(_)
+                            | ConnectionDetails::IcebergCatalog(_) => {}
                         },
                         CatalogItem::Table(_) => {
                             new_tables += 1;
@@ -1579,7 +1580,8 @@ impl Coordinator {
                 ConnectionDetails::Kafka(_) => current_kafka_connections += 1,
                 ConnectionDetails::Csr(_)
                 | ConnectionDetails::Ssh { .. }
-                | ConnectionDetails::Aws(_) => {}
+                | ConnectionDetails::Aws(_)
+                | ConnectionDetails::IcebergCatalog(_) => {}
             }
         }
         self.validate_resource_limit(

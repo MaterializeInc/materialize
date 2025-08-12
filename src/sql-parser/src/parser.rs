@@ -2362,9 +2362,9 @@ impl<'a> Parser<'a> {
             TO => true,
             _ => unreachable!(),
         };
-        let connection_type = match self
-            .expect_one_of_keywords(&[AWS, KAFKA, CONFLUENT, POSTGRES, SSH, SQL, MYSQL, YUGABYTE])?
-        {
+        let connection_type = match self.expect_one_of_keywords(&[
+            AWS, KAFKA, CONFLUENT, POSTGRES, SSH, SQL, MYSQL, YUGABYTE, ICEBERG,
+        ])? {
             AWS => {
                 if self.parse_keyword(PRIVATELINK) {
                     CreateConnectionType::AwsPrivatelink
@@ -2388,6 +2388,10 @@ impl<'a> Parser<'a> {
             }
             MYSQL => CreateConnectionType::MySql,
             YUGABYTE => CreateConnectionType::Yugabyte,
+            ICEBERG => {
+                self.expect_keyword(CATALOG)?;
+                CreateConnectionType::IcebergCatalog
+            }
             _ => unreachable!(),
         };
         if expect_paren {
@@ -2632,9 +2636,11 @@ impl<'a> Parser<'a> {
                 SESSION,
                 SSH,
                 SSL,
+                TYPE,
                 URL,
                 USER,
                 USERNAME,
+                WAREHOUSE,
             ])? {
                 ACCESS => {
                     self.expect_keywords(&[KEY, ID])?;
@@ -2722,6 +2728,8 @@ impl<'a> Parser<'a> {
                     _ => unreachable!(),
                 },
                 URL => ConnectionOptionName::Url,
+                TYPE => ConnectionOptionName::CatalogType,
+                WAREHOUSE => ConnectionOptionName::Warehouse,
                 USER | USERNAME => ConnectionOptionName::User,
                 _ => unreachable!(),
             },

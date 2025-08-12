@@ -780,8 +780,10 @@ pub enum ConnectionOptionName {
     SslKey,
     SslMode,
     SessionToken,
+    CatalogType,
     Url,
     User,
+    Warehouse,
 }
 
 impl AstDisplay for ConnectionOptionName {
@@ -819,8 +821,10 @@ impl AstDisplay for ConnectionOptionName {
             ConnectionOptionName::SslKey => "SSL KEY",
             ConnectionOptionName::SslMode => "SSL MODE",
             ConnectionOptionName::SessionToken => "SESSION TOKEN",
+            ConnectionOptionName::CatalogType => "TYPE",
             ConnectionOptionName::Url => "URL",
             ConnectionOptionName::User => "USER",
+            ConnectionOptionName::Warehouse => "WAREHOUSE",
         })
     }
 }
@@ -864,8 +868,10 @@ impl WithOptionName for ConnectionOptionName {
             | ConnectionOptionName::SslKey
             | ConnectionOptionName::SslMode
             | ConnectionOptionName::SessionToken
+            | ConnectionOptionName::CatalogType
             | ConnectionOptionName::Url
-            | ConnectionOptionName::User => false,
+            | ConnectionOptionName::User
+            | ConnectionOptionName::Warehouse => false,
         }
     }
 }
@@ -890,6 +896,7 @@ pub enum CreateConnectionType {
     SqlServer,
     MySql,
     Yugabyte,
+    IcebergCatalog,
 }
 
 impl AstDisplay for CreateConnectionType {
@@ -921,6 +928,9 @@ impl AstDisplay for CreateConnectionType {
             }
             Self::Yugabyte => {
                 f.write_str("YUGABYTE");
+            }
+            Self::IcebergCatalog => {
+                f.write_str("ICEBERG CATALOG");
             }
         }
     }

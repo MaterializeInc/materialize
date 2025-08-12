@@ -34,14 +34,14 @@ use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::connections::string_or_secret::StringOrSecret;
 use mz_storage_types::connections::{
     AwsPrivatelink, AwsPrivatelinkConnection, CsrConnection, CsrConnectionHttpAuth,
-    KafkaConnection, KafkaSaslConfig, KafkaTlsConfig, KafkaTopicOptions, MySqlConnection,
-    MySqlSslMode, PostgresConnection, SqlServerConnectionDetails, SshConnection, SshTunnel,
-    TlsIdentity, Tunnel,
+    IcebergCatalogConnection, IcebergCatalogType, KafkaConnection, KafkaSaslConfig, KafkaTlsConfig,
+    KafkaTopicOptions, MySqlConnection, MySqlSslMode, PostgresConnection,
+    SqlServerConnectionDetails, SshConnection, SshTunnel, TlsIdentity, Tunnel,
 };
 
 use crate::names::Aug;
 use crate::plan::statement::{Connection, ResolvedItemName};
-use crate::plan::with_options;
+use crate::plan::with_options::{self};
 use crate::plan::{ConnectionDetails, PlanError, SshKey, StatementContext};
 use crate::session::vars::{self, ENABLE_AWS_MSK_IAM_AUTH};
 
@@ -78,8 +78,10 @@ generate_extracted_config!(
     (SslKey, with_options::Secret),
     (SslMode, String),
     (SessionToken, StringOrSecret),
+    (CatalogType, IcebergCatalogType),
     (Url, String),
-    (User, StringOrSecret)
+    (User, StringOrSecret),
+    (Warehouse, String)
 );
 
 generate_extracted_config!(
@@ -179,6 +181,7 @@ pub(super) fn validate_options_per_connection_type(
             SslMode,
             User,
         ],
+        CreateConnectionType::IcebergCatalog => &[CatalogType, Url, AwsConnection, Warehouse],
     };
 
     for o in permitted_options {
@@ -611,6 +614,41 @@ impl ConnectionOptionExtracted {
                     encryption,
                     certificate_validation_policy,
                     tls_root_cert: self.ssl_certificate_authority,
+                })
+            }
+            CreateConnectionType::IcebergCatalog => {
+                if !matches!(self.catalog_type, Some(IcebergCatalogType::S3TablesRest)) {
+                    sql_bail!(
+                        "invalid CONNECTION: ICEBERG connections currently only support CATALOG TYPE 's3tables'"
+                    );
+                }
+
+                let uri: reqwest::Url = match &self.url {
+                    Some(url) => url
+                        .parse()
+                        .map_err(|e| sql_err!("parsing Iceberg catalog url: {e}"))?,
+                    None => sql_bail!("invalid CONNECTION: must specify URL"),
+                };
+
+                let warehouse = self
+                    .warehouse
+                    .as_ref()
+                    .cloned()
+                    .ok_or_else(|| sql_err!("WAREHOUSE option is required"))?;
+
+                let aws_connection = get_aws_connection_reference(scx, &self)?;
+
+                if aws_connection.is_none() {
+                    sql_bail!(
+                        "invalid CONNECTION: ICEBERG s3tables connections require an AWS connection"
+                    );
+                }
+
+                ConnectionDetails::IcebergCatalog(IcebergCatalogConnection {
+                    catalog_type: IcebergCatalogType::S3TablesRest,
+                    uri: uri.to_string(),
+                    warehouse,
+                    aws_connection,
                 })
             }
         };

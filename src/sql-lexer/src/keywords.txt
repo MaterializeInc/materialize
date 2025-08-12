@@ -74,6 +74,7 @@ Cardinality
 Cascade
 Case
 Cast
+Catalog
 Certificate
 Chain
 Chains
@@ -509,6 +510,7 @@ Version
 View
 Views
 Wait
+Warehouse
 Warning
 Webhook
 When
