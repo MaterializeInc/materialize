@@ -50,7 +50,7 @@
 //!
 //! ## Note
 //!
-//! This crate is implemented following a similar pattern to [`mz-frontegg-client`], [rust-orb-billing] and [rust-frontegg].
+//! This crate is implemented following a similar pattern to `mz-frontegg-client`, [rust-orb-billing] and [rust-frontegg].
 //!
 //! [mz-frontegg-client]:
 //! [rust-orb-billing]: <https://github.com/MaterializeInc/rust-orb-billing>

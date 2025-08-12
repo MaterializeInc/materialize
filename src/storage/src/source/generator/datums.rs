@@ -25,8 +25,7 @@ impl Generator for Datums {
         _: NowFn,
         _seed: Option<u64>,
         _resume_offset: MzOffset,
-    ) -> Box<(dyn Iterator<Item = (LoadGeneratorOutput, Event<Option<MzOffset>, (Row, Diff)>)>)>
-    {
+    ) -> Box<dyn Iterator<Item = (LoadGeneratorOutput, Event<Option<MzOffset>, (Row, Diff)>)>> {
         let typs = ScalarType::enumerate();
         let mut datums: Vec<Vec<Datum>> = typs
             .iter()

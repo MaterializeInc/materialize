@@ -7,16 +7,13 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::cell::RefCell;
 use std::collections::BTreeMap;
-use std::rc::Rc;
 
 use anyhow::{Context, Error};
 use mz_avro::error::{DecodeError, Error as AvroError};
 use mz_avro::{
     AvroArrayAccess, AvroDecode, AvroDeserializer, AvroMapAccess, AvroRead, AvroRecordAccess,
-    GeneralDeserializer, StatefulAvroDecodable, ValueDecoder, ValueOrReader, define_unexpected,
-    give_value,
+    GeneralDeserializer, ValueDecoder, ValueOrReader, give_value,
 };
 use mz_ore::error::ErrorExt;
 use mz_repr::adt::date::Date;
@@ -130,47 +127,6 @@ impl Decoder {
             );
         }
         Ok(result)
-    }
-}
-
-pub(super) struct RowDecoder {
-    state: (Rc<RefCell<Row>>, Rc<RefCell<Vec<u8>>>),
-}
-
-impl AvroDecode for RowDecoder {
-    type Out = RowWrapper;
-    fn record<R: AvroRead, A: AvroRecordAccess<R>>(
-        self,
-        a: &mut A,
-    ) -> Result<Self::Out, AvroError> {
-        let mut row_borrow = self.state.0.borrow_mut();
-        let mut buf_borrow = self.state.1.borrow_mut();
-        let mut packer = row_borrow.packer();
-        let inner = AvroFlatDecoder {
-            packer: &mut packer,
-            buf: &mut buf_borrow,
-            is_top: true,
-        };
-        inner.record(a)?;
-        Ok(RowWrapper(row_borrow.clone()))
-    }
-    define_unexpected! {
-        union_branch, array, map, enum_variant, scalar, decimal, bytes, string, json, uuid, fixed
-    }
-}
-
-// Get around orphan rule
-#[derive(Debug)]
-pub(super) struct RowWrapper(#[allow(dead_code)] pub Row);
-
-impl StatefulAvroDecodable for RowWrapper {
-    type Decoder = RowDecoder;
-    // TODO - can we make this some sort of &'a mut (Row, Vec<u8>) without
-    // running into lifetime crap?
-    type State = (Rc<RefCell<Row>>, Rc<RefCell<Vec<u8>>>);
-
-    fn new_decoder(state: Self::State) -> Self::Decoder {
-        Self::Decoder { state }
     }
 }
 

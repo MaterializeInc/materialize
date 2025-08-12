@@ -60,7 +60,7 @@ macro_rules! cast_from {
                 }
             }
 
-            /// Casts [`$from`] to [`$to`].
+            /// Casts `from` to `to`.
             ///
             /// This is equivalent to the [`crate::cast::CastFrom`] implementation but is
             /// available as a `const fn`.

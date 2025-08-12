@@ -27,8 +27,7 @@ impl Generator for Counter {
         _now: NowFn,
         _seed: Option<u64>,
         resume_offset: MzOffset,
-    ) -> Box<(dyn Iterator<Item = (LoadGeneratorOutput, Event<Option<MzOffset>, (Row, Diff)>)>)>
-    {
+    ) -> Box<dyn Iterator<Item = (LoadGeneratorOutput, Event<Option<MzOffset>, (Row, Diff)>)>> {
         let max_cardinality = self.max_cardinality;
 
         Box::new(

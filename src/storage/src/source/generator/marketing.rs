@@ -34,8 +34,7 @@ impl Generator for Marketing {
         now: mz_ore::now::NowFn,
         seed: Option<u64>,
         _resume_offset: MzOffset,
-    ) -> Box<(dyn Iterator<Item = (LoadGeneratorOutput, Event<Option<MzOffset>, (Row, Diff)>)>)>
-    {
+    ) -> Box<dyn Iterator<Item = (LoadGeneratorOutput, Event<Option<MzOffset>, (Row, Diff)>)>> {
         let mut rng: SmallRng = SmallRng::seed_from_u64(seed.unwrap_or_default());
 
         let mut counter = 0;

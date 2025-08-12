@@ -72,8 +72,7 @@ impl Generator for Auction {
         now: NowFn,
         seed: Option<u64>,
         _resume_offset: MzOffset,
-    ) -> Box<(dyn Iterator<Item = (LoadGeneratorOutput, Event<Option<MzOffset>, (Row, Diff)>)>)>
-    {
+    ) -> Box<dyn Iterator<Item = (LoadGeneratorOutput, Event<Option<MzOffset>, (Row, Diff)>)>> {
         let mut rng = SmallRng::seed_from_u64(seed.unwrap_or_default());
 
         let organizations = COMPANIES.iter().enumerate().map(|(offset, name)| {
