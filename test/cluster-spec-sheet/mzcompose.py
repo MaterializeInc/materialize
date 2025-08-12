@@ -15,6 +15,8 @@ Privatelink. Runs only on main and release branches.
 
 import argparse
 import os
+import re
+
 import time
 from abc import abstractmethod
 from textwrap import dedent
@@ -46,6 +48,13 @@ SERVICES = [
         app_password=APP_PASSWORD or "",
     ),
 ]
+
+
+def replica_size_for_scale(scale: int) -> str:
+    """
+    Returns the replica size for a given scale.
+    """
+    return f"{scale}00cc-swap"
 
 
 class ScenarioRunner:
@@ -748,17 +757,17 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             "scenario,scale,mode,category,test_name,cluster_size,repetition,size_bytes,time_ms\n"
         )
         run_scenario_strong(
-            scenario=TpchScenario(1, "100cc"),
+            scenario=TpchScenario(1, replica_size_for_scale(1)),
             results_file=f,
             connection=connection,
         )
         run_scenario_strong(
-            scenario=TpchScenarioMV(1, "100cc"),
+            scenario=TpchScenarioMV(1, replica_size_for_scale(1)),
             results_file=f,
             connection=connection,
         )
         run_scenario_strong(
-            scenario=AuctionScenario(4, "100cc"),
+            scenario=AuctionScenario(4, replica_size_for_scale(1)),
             results_file=f,
             connection=connection,
         )
@@ -796,12 +805,7 @@ def run_scenario_strong(
         runner.run_query(f"SELECT COUNT(*) > 0 FROM {name};")
 
     for replica_size in [
-        "100cc",
-        "200cc",
-        "400cc",
-        "800cc",
-        "1600cc",
-        "3200cc",
+        replica_size_for_scale(scale) for scale in [1, 2, 4, 8, 16, 32]
     ]:
         # Create a cluster with the specified size
         runner.run_query("DROP CLUSTER IF EXISTS c CASCADE")
@@ -824,17 +828,10 @@ def run_scenario_weak(
 
     initial_scale = scenario.scale
 
-    for replica_size_scale in [
-        ("100cc", 1),
-        ("200cc", 2),
-        ("400cc", 4),
-        ("800cc", 8),
-        ("1600cc", 16),
-        ("3200cc", 32),
-    ]:
-        replica_size = replica_size_scale[0]
+    for replica_scale in [1, 2, 4, 8, 16, 32]:
+        replica_size = replica_size_for_scale(replica_scale)
         scenario.replica_size = replica_size
-        scenario.scale = initial_scale * replica_size_scale[1]
+        scenario.scale = initial_scale * replica_scale
         runner = ScenarioRunner(
             scenario.name(),
             scenario.scale,
@@ -879,7 +876,9 @@ def workflow_plot(c: Composition, parser: WorkflowArgumentParser) -> None:
 def analyze_file(file: str):
     df = pd.read_csv(file)
     # Cluster replica size as credits/hour
-    df["credits_per_h"] = df["cluster_size"].str[:-2].astype(int) / 100
+    df["credits_per_h"] = df["cluster_size"].map(
+        lambda s: float(re.search(r"\d+", s).group()) / 100.0
+    )
     # Cluster replica size as centi-credits/s
     df["ccredit_per_s"] = df["credits_per_h"] / 3600 * 100
     # Number of timely workers
