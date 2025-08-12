@@ -74,10 +74,6 @@ pub struct AvailableCollections {
     /// The documentation for `KeyValRowMapping` explains these fields better.
     #[proptest(strategy = "prop::collection::vec(any_arranged_thin(), 0..3)")]
     pub arranged: Vec<(Vec<MirScalarExpr>, Vec<usize>, Vec<usize>)>,
-    /// The types of the columns in the raw form of the collection, if known. We
-    /// only capture types when necessary to support arrangement specialization,
-    /// so this only done for specific LIR operators during lowering.
-    pub types: Option<Vec<ColumnType>>,
 }
 
 /// A strategy that produces arrangements that are thinner than the default. That is
@@ -108,7 +104,7 @@ impl RustType<ProtoAvailableCollections> for AvailableCollections {
         ProtoAvailableCollections {
             raw: self.raw,
             arranged: self.arranged.into_proto(),
-            types: self.types.into_proto(),
+            types: None::<Vec<ColumnType>>.into_proto(),
         }
     }
 
@@ -117,7 +113,6 @@ impl RustType<ProtoAvailableCollections> for AvailableCollections {
             Self {
                 raw: x.raw,
                 arranged: x.arranged.into_rust()?,
-                types: x.types.into_rust()?,
             }
         })
     }
@@ -129,17 +124,11 @@ impl AvailableCollections {
         Self {
             raw: true,
             arranged: Vec::new(),
-            types: None,
         }
     }
 
-    /// Represent a collection that is arranged in the
-    /// specified ways, with optionally given types describing
-    /// the rows that would be in the raw form of the collection.
-    pub fn new_arranged(
-        arranged: Vec<(Vec<MirScalarExpr>, Vec<usize>, Vec<usize>)>,
-        types: Option<Vec<ColumnType>>,
-    ) -> Self {
+    /// Represent a collection that is arranged in the specified ways.
+    pub fn new_arranged(arranged: Vec<(Vec<MirScalarExpr>, Vec<usize>, Vec<usize>)>) -> Self {
         assert!(
             !arranged.is_empty(),
             "Invariant violated: at least one collection must exist"
@@ -147,7 +136,6 @@ impl AvailableCollections {
         Self {
             raw: false,
             arranged,
-            types,
         }
     }
 

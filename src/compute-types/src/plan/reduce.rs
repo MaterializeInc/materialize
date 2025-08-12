@@ -818,7 +818,7 @@ impl ReducePlan {
             .map(MirScalarExpr::column)
             .collect::<Vec<_>>();
         let (permutation, thinning) = permutation_for_arrangement(&key, arity);
-        AvailableCollections::new_arranged(vec![(key, permutation, thinning)], None)
+        AvailableCollections::new_arranged(vec![(key, permutation, thinning)])
     }
 
     /// Extracts a fusable MFP for the reduction from the given `mfp` along with a residual
