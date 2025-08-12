@@ -3784,10 +3784,7 @@ pub enum TableFunc {
         relation: RelationType,
     },
     RegexpMatches,
-    /// Evaluates the inner table function, expands its results into unary (repeating each row as
-    /// many times as the diff indicates), and appends an integer corresponding to the ordinal
-    /// position (starting from 1). For example, it numbers the elements of a list when calling
-    /// `unnest_list`.
+    /// Implements the WITH ORDINALITY clause.
     ///
     /// Don't construct `TableFunc::WithOrdinality` manually! Use the `with_ordinality` constructor
     /// function instead, which checks whether the given table function supports `WithOrdinality`.
@@ -3797,6 +3794,11 @@ pub enum TableFunc {
 
 /// Private enum variant of `TableFunc`. Don't construct this directly, but use
 /// `TableFunc::with_ordinality` instead.
+///
+/// Evaluates the inner table function, expands its results into unary (repeating each row as
+/// many times as the diff indicates), and appends an integer corresponding to the ordinal
+/// position (starting from 1). For example, it numbers the elements of a list when calling
+/// `unnest_list`.
 ///
 /// TODO(ggevay): This struct (and its field) is pub only temporarily, until we make
 /// `FlatMapElimination` not dive into it.
@@ -3832,8 +3834,7 @@ impl TableFunc {
                 inner: Box::new(inner),
             })),
             // IMPORTANT: Before adding a new table function here, consider negative diffs:
-            // `WithOrdinality::eval` currently asserts that the inner table function never emits
-            // negative diffs.
+            // `WithOrdinality::eval` will panic if the inner table function emits a negative diff.
             _ => None,
         }
     }
@@ -3974,6 +3975,7 @@ impl RustType<ProtoTableFunc> for TableFunc {
 }
 
 impl TableFunc {
+    /// Executes `self` on the given input row (`datums`).
     pub fn eval<'a>(
         &'a self,
         datums: &'a [Datum<'a>],
@@ -4334,13 +4336,19 @@ impl fmt::Display for TableFunc {
 }
 
 impl WithOrdinality {
+    /// Executes the `self.inner` table function on the given input row (`datums`), and zips
+    /// 1, 2, 3, ... to the result as a new column. We need to expand rows with non-1 diffs into the
+    /// corresponding number of rows with unit diffs, because the ordinality column will have
+    /// different values for each copy.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the `inner` table function emits a negative diff.
     fn eval<'a>(
         &'a self,
         datums: &'a [Datum<'a>],
         temp_storage: &'a RowArena,
     ) -> Result<Box<dyn Iterator<Item = (Row, Diff)> + 'a>, EvalError> {
-        // zip 1, 2, 3, 4, ... to the output of the table function. We need to blow up non-1 diffs,
-        // because the ordinality column will have different values for each copy.
         let mut next_ordinal: i64 = 1;
         let it = self
             .inner
