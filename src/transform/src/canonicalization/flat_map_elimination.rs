@@ -45,9 +45,9 @@ impl FlatMapElimination {
     /// Turns `FlatMap` into `Map` if only one row is produced by flatmap.
     pub fn action(relation: &mut MirRelationExpr) {
         if let MirRelationExpr::FlatMap { func, exprs, input } = relation {
-            let (func, with_ordinality) = if let TableFunc::WithOrdinality { inner } = func {
+            let (func, with_ordinality) = if let TableFunc::WithOrdinality(with_ordinality) = func {
                 // get to the actual function, but remember that we have a WITH ORDINALITY clause.
-                (&**inner, true)
+                (&*with_ordinality.inner, true)
             } else {
                 (&*func, false)
             };

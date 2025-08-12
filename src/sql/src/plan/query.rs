@@ -3301,9 +3301,12 @@ fn plan_table_function_internal(
             let expr = match tf.imp {
                 TableFuncImpl::CallTable { mut func, exprs } => {
                     if with_ordinality {
-                        func = TableFunc::WithOrdinality {
-                            inner: Box::new(func),
-                        };
+                        func = TableFunc::with_ordinality(func.clone()).ok_or(
+                            PlanError::Unsupported {
+                                feature: format!("WITH ORDINALITY on {}", func),
+                                discussion_no: None,
+                            },
+                        )?;
                     }
                     HirRelationExpr::CallTable { func, exprs }
                 }
@@ -3351,9 +3354,10 @@ fn plan_table_function_internal(
 
             let mut func = TableFunc::TabletizedScalar { relation, name };
             if with_ordinality {
-                func = TableFunc::WithOrdinality {
-                    inner: Box::new(func),
-                };
+                func = TableFunc::with_ordinality(func.clone()).ok_or(PlanError::Unsupported {
+                    feature: format!("WITH ORDINALITY on {}", func),
+                    discussion_no: None,
+                })?;
             }
             (
                 HirRelationExpr::CallTable {
