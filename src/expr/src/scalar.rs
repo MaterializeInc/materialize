@@ -858,6 +858,12 @@ impl MirScalarExpr {
                             Some(vec![then, els])
                         }
                         MirScalarExpr::CallVariadic { func, exprs } => {
+                            // `Coalesce` conditionally evaluates its arguments based on their nullability.
+                            // The thinking is that the final term will be unconditionally evaluated, once
+                            // reached, which makes it suitable for optimization that relies on unstable
+                            // information like nullability. With further detail about the evaluation order
+                            // semantics, we may be able to simplify this logic, but until we are certain
+                            // we can avoid optimizing the terms based on an ephemeral nullability reading.
                             if let VariadicFunc::Coalesce = func {
                                 if !exprs.is_empty() {
                                     let len = exprs.len();
