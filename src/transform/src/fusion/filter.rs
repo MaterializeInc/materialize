@@ -13,7 +13,7 @@
 //!
 //! ```rust
 //! use mz_expr::{MirRelationExpr, MirScalarExpr};
-//! use mz_repr::{SqlColumnType, Datum, SqlRelationType, ScalarType};
+//! use mz_repr::{SqlColumnType, Datum, SqlRelationType, SqlScalarType};
 //! use mz_repr::optimize::OptimizerFeatures;
 //! use mz_transform::{typecheck, Transform, TransformCtx};
 //! use mz_transform::dataflow::DataflowMetainfo;
@@ -21,7 +21,7 @@
 //! use mz_transform::fusion::filter::Filter;
 //!
 //! let input = MirRelationExpr::constant(vec![], SqlRelationType::new(vec![
-//!     ScalarType::Bool.nullable(false),
+//!     SqlScalarType::Bool.nullable(false),
 //! ]));
 //!
 //! let predicate0 = MirScalarExpr::column(0);

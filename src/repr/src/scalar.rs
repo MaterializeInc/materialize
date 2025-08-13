@@ -949,8 +949,132 @@ impl<'a> Datum<'a> {
         }
     }
 
+    pub fn is_instance_of(self, column_type: &ReprColumnType) -> bool {
+        fn is_instance_of_scalar(datum: Datum, scalar_type: &ReprScalarType) -> bool {
+            if let ReprScalarType::Jsonb = scalar_type {
+                // json type checking
+                match datum {
+                    Datum::Dummy => panic!("Datum::Dummy observed"),
+                    Datum::JsonNull
+                    | Datum::False
+                    | Datum::True
+                    | Datum::Numeric(_)
+                    | Datum::String(_) => true,
+                    Datum::List(list) => list
+                        .iter()
+                        .all(|elem| is_instance_of_scalar(elem, scalar_type)),
+                    Datum::Map(dict) => dict
+                        .iter()
+                        .all(|(_key, val)| is_instance_of_scalar(val, scalar_type)),
+                    _ => false,
+                }
+            } else {
+                // sql type checking
+                match (datum, scalar_type) {
+                    (Datum::Dummy, _) => panic!("Datum::Dummy observed"),
+                    (Datum::Null, _) => false,
+                    (Datum::False, ReprScalarType::Bool) => true,
+                    (Datum::False, _) => false,
+                    (Datum::True, ReprScalarType::Bool) => true,
+                    (Datum::True, _) => false,
+                    (Datum::Int16(_), ReprScalarType::Int16) => true,
+                    (Datum::Int16(_), _) => false,
+                    (Datum::Int32(_), ReprScalarType::Int32) => true,
+                    (Datum::Int32(_), _) => false,
+                    (Datum::Int64(_), ReprScalarType::Int64) => true,
+                    (Datum::Int64(_), _) => false,
+                    (Datum::UInt8(_), ReprScalarType::UInt8) => true,
+                    (Datum::UInt8(_), _) => false,
+                    (Datum::UInt16(_), ReprScalarType::UInt16) => true,
+                    (Datum::UInt16(_), _) => false,
+                    (Datum::UInt32(_), ReprScalarType::UInt32) => true,
+                    (Datum::UInt32(_), _) => false,
+                    (Datum::UInt64(_), ReprScalarType::UInt64) => true,
+                    (Datum::UInt64(_), _) => false,
+                    (Datum::Float32(_), ReprScalarType::Float32) => true,
+                    (Datum::Float32(_), _) => false,
+                    (Datum::Float64(_), ReprScalarType::Float64) => true,
+                    (Datum::Float64(_), _) => false,
+                    (Datum::Date(_), ReprScalarType::Date) => true,
+                    (Datum::Date(_), _) => false,
+                    (Datum::Time(_), ReprScalarType::Time) => true,
+                    (Datum::Time(_), _) => false,
+                    (Datum::Timestamp(_), ReprScalarType::Timestamp { .. }) => true,
+                    (Datum::Timestamp(_), _) => false,
+                    (Datum::TimestampTz(_), ReprScalarType::TimestampTz { .. }) => true,
+                    (Datum::TimestampTz(_), _) => false,
+                    (Datum::Interval(_), ReprScalarType::Interval) => true,
+                    (Datum::Interval(_), _) => false,
+                    (Datum::Bytes(_), ReprScalarType::Bytes) => true,
+                    (Datum::Bytes(_), _) => false,
+                    (Datum::String(_), ReprScalarType::String) => true,
+                    (Datum::String(_), _) => false,
+                    (Datum::Uuid(_), ReprScalarType::Uuid) => true,
+                    (Datum::Uuid(_), _) => false,
+                    (Datum::Array(array), ReprScalarType::Array(t)) => {
+                        array.elements.iter().all(|e| match e {
+                            Datum::Null => true,
+                            _ => is_instance_of_scalar(e, t),
+                        })
+                    }
+                    (Datum::Array(array), ReprScalarType::Int2Vector) => {
+                        array.dims().len() == 1
+                            && array
+                                .elements
+                                .iter()
+                                .all(|e| is_instance_of_scalar(e, &ReprScalarType::Int16))
+                    }
+                    (Datum::Array(_), _) => false,
+                    (Datum::List(list), ReprScalarType::List { element_type, .. }) => list
+                        .iter()
+                        .all(|e| e.is_null() || is_instance_of_scalar(e, element_type)),
+                    (Datum::List(list), ReprScalarType::Record { fields, .. }) => {
+                        list.iter().zip_eq(fields).all(|(e, t)| {
+                            (e.is_null() && t.nullable) || is_instance_of_scalar(e, &t.scalar_type)
+                        })
+                    }
+                    (Datum::List(_), _) => false,
+                    (Datum::Map(map), ReprScalarType::Map { value_type, .. }) => map
+                        .iter()
+                        .all(|(_k, v)| v.is_null() || is_instance_of_scalar(v, value_type)),
+                    (Datum::Map(_), _) => false,
+                    (Datum::JsonNull, _) => false,
+                    (Datum::Numeric(_), ReprScalarType::Numeric) => true,
+                    (Datum::Numeric(_), _) => false,
+                    (Datum::MzTimestamp(_), ReprScalarType::MzTimestamp) => true,
+                    (Datum::MzTimestamp(_), _) => false,
+                    (Datum::Range(Range { inner }), ReprScalarType::Range { element_type }) => {
+                        match inner {
+                            None => true,
+                            Some(inner) => {
+                                true && match inner.lower.bound {
+                                    None => true,
+                                    Some(b) => is_instance_of_scalar(b.datum(), element_type),
+                                } && match inner.upper.bound {
+                                    None => true,
+                                    Some(b) => is_instance_of_scalar(b.datum(), element_type),
+                                }
+                            }
+                        }
+                    }
+                    (Datum::Range(_), _) => false,
+                    (Datum::MzAclItem(_), ReprScalarType::MzAclItem) => true,
+                    (Datum::MzAclItem(_), _) => false,
+                    (Datum::AclItem(_), ReprScalarType::AclItem) => true,
+                    (Datum::AclItem(_), _) => false,
+                }
+            }
+        }
+        if column_type.nullable {
+            if let Datum::Null = self {
+                return true;
+            }
+        }
+        is_instance_of_scalar(self, &column_type.scalar_type)
+    }
+
     /// Reports whether this datum is an instance of the specified column type.
-    pub fn is_instance_of(self, column_type: &SqlColumnType) -> bool {
+    pub fn is_instance_of_sql(self, column_type: &SqlColumnType) -> bool {
         fn is_instance_of_scalar(datum: Datum, scalar_type: &SqlScalarType) -> bool {
             if let SqlScalarType::Jsonb = scalar_type {
                 // json type checking
@@ -1403,7 +1527,7 @@ impl fmt::Display for Datum<'_> {
 ///
 /// Each variant maps to a variant of [`ReprScalarType`], with some overlap.
 ///
-/// There is a direct correspondence between `Datum` variants and `ScalarType`
+/// There is a direct correspondence between `Datum` variants and `SqlScalarType`
 /// variants.
 #[derive(
     Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Ord, PartialOrd, Hash, EnumKind, MzReflect,
@@ -1457,7 +1581,7 @@ pub enum SqlScalarType {
     /// A single byte character type backed by a [`Datum::UInt8`].
     ///
     /// PostgreSQL calls this type `"char"`. Note the quotes, which distinguish
-    /// it from the type `ScalarType::Char`.
+    /// it from the type `SqlScalarType::Char`.
     PgLegacyChar,
     /// A character type for storing identifiers of no more than 64 characters
     /// in length.
@@ -1523,7 +1647,7 @@ pub enum SqlScalarType {
     Oid,
     /// The type of [`Datum::Map`]
     ///
-    /// Keys within the map are always of type [`ScalarType::String`].
+    /// Keys within the map are always of type [`SqlScalarType::String`].
     /// Values within the map are of the specified type. Values may always
     /// be [`Datum::Null`].
     Map {
@@ -2600,11 +2724,11 @@ impl SqlScalarType {
     ///
     /// # Panics
     ///
-    /// Panics if the scalar type is not [`ScalarType::Numeric`].
+    /// Panics if the scalar type is not [`SqlScalarType::Numeric`].
     pub fn unwrap_numeric_max_scale(&self) -> Option<NumericMaxScale> {
         match self {
             SqlScalarType::Numeric { max_scale } => *max_scale,
-            _ => panic!("ScalarType::unwrap_numeric_scale called on {:?}", self),
+            _ => panic!("SqlScalarType::unwrap_numeric_scale called on {:?}", self),
         }
     }
 
@@ -2612,34 +2736,37 @@ impl SqlScalarType {
     ///
     /// # Panics
     ///
-    /// Panics if the scalar type is not [`ScalarType::Timestamp`] or
-    /// [`ScalarType::TimestampTz`].
+    /// Panics if the scalar type is not [`SqlScalarType::Timestamp`] or
+    /// [`SqlScalarType::TimestampTz`].
     pub fn unwrap_timestamp_precision(&self) -> Option<TimestampPrecision> {
         match self {
             SqlScalarType::Timestamp { precision } | SqlScalarType::TimestampTz { precision } => {
                 *precision
             }
             _ => panic!(
-                "ScalarType::unwrap_timestamp_precision called on {:?}",
+                "SqlScalarType::unwrap_timestamp_precision called on {:?}",
                 self
             ),
         }
     }
 
-    /// Returns the [`ScalarType`] of elements in a [`ScalarType::List`].
+    /// Returns the [`SqlScalarType`] of elements in a [`SqlScalarType::List`].
     ///
     /// # Panics
     ///
-    /// Panics if called on anything other than a [`ScalarType::List`].
+    /// Panics if called on anything other than a [`SqlScalarType::List`].
     pub fn unwrap_list_element_type(&self) -> &SqlScalarType {
         match self {
             SqlScalarType::List { element_type, .. } => element_type,
-            _ => panic!("ScalarType::unwrap_list_element_type called on {:?}", self),
+            _ => panic!(
+                "SqlScalarType::unwrap_list_element_type called on {:?}",
+                self
+            ),
         }
     }
 
-    /// Returns the [`ScalarType`] of elements in the nth layer a
-    /// [`ScalarType::List`].
+    /// Returns the [`SqlScalarType`] of elements in the nth layer a
+    /// [`SqlScalarType::List`].
     ///
     /// For example, in an `int list list`, the:
     /// - 0th layer is `int list list`
@@ -2649,7 +2776,7 @@ impl SqlScalarType {
     /// # Panics
     ///
     /// Panics if the nth-1 layer is anything other than a
-    /// [`ScalarType::List`].
+    /// [`SqlScalarType::List`].
     pub fn unwrap_list_nth_layer_type(&self, layer: usize) -> &SqlScalarType {
         if layer == 0 {
             return self;
@@ -2659,50 +2786,50 @@ impl SqlScalarType {
                 element_type.unwrap_list_nth_layer_type(layer - 1)
             }
             _ => panic!(
-                "ScalarType::unwrap_list_nth_layer_type called on {:?}",
+                "SqlScalarType::unwrap_list_nth_layer_type called on {:?}",
                 self
             ),
         }
     }
 
-    /// Returns vector of [`ScalarType`] elements in a [`ScalarType::Record`].
+    /// Returns vector of [`SqlScalarType`] elements in a [`SqlScalarType::Record`].
     ///
     /// # Panics
     ///
-    /// Panics if called on anything other than a [`ScalarType::Record`].
+    /// Panics if called on anything other than a [`SqlScalarType::Record`].
     pub fn unwrap_record_element_type(&self) -> Vec<&SqlScalarType> {
         match self {
             SqlScalarType::Record { fields, .. } => {
                 fields.iter().map(|(_, t)| &t.scalar_type).collect_vec()
             }
             _ => panic!(
-                "ScalarType::unwrap_record_element_type called on {:?}",
+                "SqlScalarType::unwrap_record_element_type called on {:?}",
                 self
             ),
         }
     }
 
-    /// Returns vector of [`SqlColumnType`] elements in a [`ScalarType::Record`].
+    /// Returns vector of [`SqlColumnType`] elements in a [`SqlScalarType::Record`].
     ///
     /// # Panics
     ///
-    /// Panics if called on anything other than a [`ScalarType::Record`].
+    /// Panics if called on anything other than a [`SqlScalarType::Record`].
     pub fn unwrap_record_element_column_type(&self) -> Vec<&SqlColumnType> {
         match self {
             SqlScalarType::Record { fields, .. } => fields.iter().map(|(_, t)| t).collect_vec(),
             _ => panic!(
-                "ScalarType::unwrap_record_element_column_type called on {:?}",
+                "SqlScalarType::unwrap_record_element_column_type called on {:?}",
                 self
             ),
         }
     }
 
     /// Returns number of dimensions/axes (also known as "rank") on a
-    /// [`ScalarType::List`].
+    /// [`SqlScalarType::List`].
     ///
     /// # Panics
     ///
-    /// Panics if called on anything other than a [`ScalarType::List`].
+    /// Panics if called on anything other than a [`SqlScalarType::List`].
     pub fn unwrap_list_n_layers(&self) -> usize {
         let mut descender = self.unwrap_list_element_type();
         let mut layers = 1;
@@ -2769,86 +2896,95 @@ impl SqlScalarType {
         }
     }
 
-    /// Returns the [`ScalarType`] of elements in a [`ScalarType::Array`] or the
-    /// elements of a vector type, e.g. [`ScalarType::Int16`] for
-    /// [`ScalarType::Int2Vector`].
+    /// Returns the [`SqlScalarType`] of elements in a [`SqlScalarType::Array`] or the
+    /// elements of a vector type, e.g. [`SqlScalarType::Int16`] for
+    /// [`SqlScalarType::Int2Vector`].
     ///
     /// # Panics
     ///
-    /// Panics if called on anything other than a [`ScalarType::Array`] or
-    /// [`ScalarType::Int2Vector`].
+    /// Panics if called on anything other than a [`SqlScalarType::Array`] or
+    /// [`SqlScalarType::Int2Vector`].
     pub fn unwrap_array_element_type(&self) -> &SqlScalarType {
         match self {
             SqlScalarType::Array(s) => &**s,
             SqlScalarType::Int2Vector => &SqlScalarType::Int16,
-            _ => panic!("ScalarType::unwrap_array_element_type called on {:?}", self),
+            _ => panic!(
+                "SqlScalarType::unwrap_array_element_type called on {:?}",
+                self
+            ),
         }
     }
 
-    /// Returns the [`ScalarType`] of elements in a [`ScalarType::Array`],
-    /// [`ScalarType::Int2Vector`], or [`ScalarType::List`].
+    /// Returns the [`SqlScalarType`] of elements in a [`SqlScalarType::Array`],
+    /// [`SqlScalarType::Int2Vector`], or [`SqlScalarType::List`].
     ///
     /// # Panics
     ///
-    /// Panics if called on anything other than a [`ScalarType::Array`],
-    /// [`ScalarType::Int2Vector`], or [`ScalarType::List`].
+    /// Panics if called on anything other than a [`SqlScalarType::Array`],
+    /// [`SqlScalarType::Int2Vector`], or [`SqlScalarType::List`].
     pub fn unwrap_collection_element_type(&self) -> &SqlScalarType {
         match self {
             SqlScalarType::Array(element_type) => element_type,
             SqlScalarType::Int2Vector => &SqlScalarType::Int16,
             SqlScalarType::List { element_type, .. } => element_type,
             _ => panic!(
-                "ScalarType::unwrap_collection_element_type called on {:?}",
+                "SqlScalarType::unwrap_collection_element_type called on {:?}",
                 self
             ),
         }
     }
 
-    /// Returns the [`ScalarType`] of values in a [`ScalarType::Map`].
+    /// Returns the [`SqlScalarType`] of values in a [`SqlScalarType::Map`].
     ///
     /// # Panics
     ///
-    /// Panics if called on anything other than a [`ScalarType::Map`].
+    /// Panics if called on anything other than a [`SqlScalarType::Map`].
     pub fn unwrap_map_value_type(&self) -> &SqlScalarType {
         match self {
             SqlScalarType::Map { value_type, .. } => &**value_type,
-            _ => panic!("ScalarType::unwrap_map_value_type called on {:?}", self),
+            _ => panic!("SqlScalarType::unwrap_map_value_type called on {:?}", self),
         }
     }
 
-    /// Returns the length of a [`ScalarType::Char`].
+    /// Returns the length of a [`SqlScalarType::Char`].
     ///
     /// # Panics
     ///
-    /// Panics if called on anything other than a [`ScalarType::Char`].
+    /// Panics if called on anything other than a [`SqlScalarType::Char`].
     pub fn unwrap_char_length(&self) -> Option<CharLength> {
         match self {
             SqlScalarType::Char { length, .. } => *length,
-            _ => panic!("ScalarType::unwrap_char_length called on {:?}", self),
+            _ => panic!("SqlScalarType::unwrap_char_length called on {:?}", self),
         }
     }
 
-    /// Returns the max length of a [`ScalarType::VarChar`].
+    /// Returns the max length of a [`SqlScalarType::VarChar`].
     ///
     /// # Panics
     ///
-    /// Panics if called on anything other than a [`ScalarType::VarChar`].
+    /// Panics if called on anything other than a [`SqlScalarType::VarChar`].
     pub fn unwrap_varchar_max_length(&self) -> Option<VarCharMaxLength> {
         match self {
             SqlScalarType::VarChar { max_length, .. } => *max_length,
-            _ => panic!("ScalarType::unwrap_varchar_max_length called on {:?}", self),
+            _ => panic!(
+                "SqlScalarType::unwrap_varchar_max_length called on {:?}",
+                self
+            ),
         }
     }
 
-    /// Returns the [`ScalarType`] of elements in a [`ScalarType::Range`].
+    /// Returns the [`SqlScalarType`] of elements in a [`SqlScalarType::Range`].
     ///
     /// # Panics
     ///
-    /// Panics if called on anything other than a [`ScalarType::Map`].
+    /// Panics if called on anything other than a [`SqlScalarType::Map`].
     pub fn unwrap_range_element_type(&self) -> &SqlScalarType {
         match self {
             SqlScalarType::Range { element_type } => &**element_type,
-            _ => panic!("ScalarType::unwrap_range_element_type called on {:?}", self),
+            _ => panic!(
+                "SqlScalarType::unwrap_range_element_type called on {:?}",
+                self
+            ),
         }
     }
 
@@ -2894,8 +3030,8 @@ impl SqlScalarType {
     }
 
     /// Returns whether or not `self` is a vector-like type, i.e.
-    /// [`ScalarType::Array`], [`ScalarType::Int2Vector`], or
-    /// [`ScalarType::List`], irrespective of its element type.
+    /// [`SqlScalarType::Array`], [`SqlScalarType::Int2Vector`], or
+    /// [`SqlScalarType::List`], irrespective of its element type.
     pub fn is_vec(&self) -> bool {
         matches!(
             self,
@@ -2930,12 +3066,12 @@ impl SqlScalarType {
     /// Determines equality among scalar types that acknowledges custom OIDs,
     /// but ignores other embedded values.
     ///
-    /// In most situations, you want to use `base_eq` rather than `ScalarType`'s
+    /// In most situations, you want to use `base_eq` rather than `SqlScalarType`'s
     /// implementation of `Eq`. `base_eq` expresses the semantics of direct type
     /// interoperability whereas `Eq` expresses an exact comparison between the
     /// values.
     ///
-    /// For instance, `base_eq` signals that e.g. two [`ScalarType::Numeric`]
+    /// For instance, `base_eq` signals that e.g. two [`SqlScalarType::Numeric`]
     /// values can be added together, irrespective of their embedded scale. In
     /// contrast, two `Numeric` values with different scales are never `Eq` to
     /// one another.
@@ -3000,9 +3136,9 @@ impl SqlScalarType {
         }
     }
 
-    /// Returns various interesting datums for a ScalarType (max, min, 0 values, etc.).
+    /// Returns various interesting datums for a SqlScalarType (max, min, 0 values, etc.).
     pub fn interesting_datums(&self) -> impl Iterator<Item = Datum<'static>> {
-        // TODO: Add datums for the types that have an inner Box'd ScalarType. It'd be best to
+        // TODO: Add datums for the types that have an inner Box'd SqlScalarType. It'd be best to
         // re-use this function to dynamically generate interesting datums of the requested type.
         // But the 'static bound makes this either hard or impossible. We might need to remove that
         // and return, say, an owned Row. This would require changing lots of dependent test
@@ -3449,7 +3585,7 @@ impl SqlScalarType {
             SqlScalarType::Uuid => Box::new((*UUID).iter()),
             SqlScalarType::Array(inner_type) => {
                 if matches!(inner_type.as_ref(), SqlScalarType::Array(_)) {
-                    panic!("ScalarType::Array cannot have a nested Array");
+                    panic!("SqlScalarType::Array cannot have a nested Array");
                 }
 
                 Box::new(
@@ -3531,28 +3667,28 @@ impl SqlScalarType {
             SqlScalarType::MzAclItem,
             // TODO: Fill in some variants of these.
             /*
-            ScalarType::AclItem,
-            ScalarType::Array(_),
-            ScalarType::List {
+            SqlScalarType::AclItem,
+            SqlScalarType::Array(_),
+            SqlScalarType::List {
                 element_type: todo!(),
                 custom_id: todo!(),
             },
-            ScalarType::Record {
+            SqlScalarType::Record {
                 fields: todo!(),
                 custom_id: todo!(),
             },
-            ScalarType::Map {
+            SqlScalarType::Map {
                 value_type: todo!(),
                 custom_id: todo!(),
             },
-            ScalarType::Range {
+            SqlScalarType::Range {
                 element_type: todo!(),
             }
             */
         ]
     }
 
-    /// Returns the appropriate element type for making a [`ScalarType::Array`] whose elements are
+    /// Returns the appropriate element type for making a [`SqlScalarType::Array`] whose elements are
     /// of `self`.
     ///
     /// If the type is not compatible with making an array, returns in the error position.
@@ -3609,7 +3745,7 @@ impl Arbitrary for SqlScalarType {
     type Strategy = BoxedStrategy<SqlScalarType>;
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        // A strategy for generating the leaf cases of ScalarType
+        // A strategy for generating the leaf cases of SqlScalarType
         let leaf = Union::new(vec![
             Just(SqlScalarType::Bool).boxed(),
             Just(SqlScalarType::UInt16).boxed(),
@@ -3653,7 +3789,7 @@ impl Arbitrary for SqlScalarType {
             Just(SqlScalarType::RegClass).boxed(),
             Just(SqlScalarType::Int2Vector).boxed(),
         ])
-        // None of the leaf ScalarTypes types are really "simpler" than others
+        // None of the leaf SqlScalarTypes types are really "simpler" than others
         // so don't waste time trying to shrink.
         .no_shrink()
         .boxed();
@@ -3736,7 +3872,7 @@ impl Arbitrary for SqlScalarType {
 ///
 /// Each variant here corresponds to one or more variants of [`SqlScalarType`].
 ///
-/// There is a direct correspondence between `Datum` variants and `ScalarType`
+/// There is a direct correspondence between `Datum` variants and `SqlScalarType`
 /// variants.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Ord, PartialOrd, Hash, MzReflect)]
 pub enum ReprScalarType {
@@ -3765,7 +3901,8 @@ pub enum ReprScalarType {
     Jsonb,
     String, // also includes SqlScalarType::{VarChar,Char,PgLegacyName}
     Uuid,
-    Array(Box<ReprScalarType>), // also includes SqlScalarType::Int2Vector
+    Array(Box<ReprScalarType>),
+    Int2Vector, // differs from Array enough to stick around
     List {
         element_type: Box<ReprScalarType>,
     },
@@ -3833,7 +3970,7 @@ impl From<SqlScalarType> for ReprScalarType {
             SqlScalarType::RegProc => ReprScalarType::UInt32,
             SqlScalarType::RegType => ReprScalarType::UInt32,
             SqlScalarType::RegClass => ReprScalarType::UInt32,
-            SqlScalarType::Int2Vector => ReprScalarType::Array(Box::new(ReprScalarType::Int16)),
+            SqlScalarType::Int2Vector => ReprScalarType::Int2Vector,
             SqlScalarType::MzTimestamp => ReprScalarType::MzTimestamp,
             SqlScalarType::Range { element_type } => ReprScalarType::Range {
                 element_type: Box::new((*element_type).into()),
@@ -3992,7 +4129,7 @@ pub fn arb_datum_for_column(column_type: SqlColumnType) -> impl Strategy<Value =
     }
 }
 
-/// Generates an arbitrary [`PropDatum`] for the provided [`ScalarType`].
+/// Generates an arbitrary [`PropDatum`] for the provided [`SqlScalarType`].
 pub fn arb_datum_for_scalar(scalar_type: SqlScalarType) -> impl Strategy<Value = PropDatum> {
     match scalar_type {
         SqlScalarType::Bool => any::<bool>().prop_map(PropDatum::Bool).boxed(),
@@ -4544,6 +4681,29 @@ mod tests {
             let actual = protobuf_roundtrip::<_, ProtoScalarType>(&expect);
             assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
+        }
+    }
+
+    proptest! {
+        #[mz_ore::test]
+        fn sql_repr_types_agree_on_valid_data((src, datum) in any::<SqlColumnType>().prop_flat_map(|src| {
+            let datum = arb_datum_for_column(src.clone());
+            (Just(src.clone()), datum) }
+        )) {
+            let tgt: ReprColumnType = src.clone().into();
+            let datum = Datum::from(&datum);
+            assert_eq!(datum.is_instance_of_sql(&src), datum.is_instance_of(&tgt), "translated to repr type {tgt:#?}");
+        }
+    }
+
+    proptest! {
+        #[mz_ore::test]
+        fn sql_repr_types_agree_on_random_data(src in any::<SqlColumnType>(), datum in arb_datum()) {
+            let tgt: ReprColumnType = src.clone().into();
+            let datum = Datum::from(&datum);
+            if let Datum::Dummy = datum { return Ok(()); }
+
+            assert_eq!(datum.is_instance_of_sql(&src), datum.is_instance_of(&tgt), "translated to repr type {tgt:#?}");
         }
     }
 
