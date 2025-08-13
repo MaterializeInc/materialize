@@ -71,7 +71,7 @@ mod relation {
     use std::collections::BTreeMap;
 
     use mz_expr::{AccessStrategy, Id, JoinImplementation, LocalId, MirRelationExpr};
-    use mz_repr::{Diff, RelationType, Row, ScalarType};
+    use mz_repr::{Diff, Row, SqlRelationType, SqlScalarType};
 
     use crate::parser::analyses::Analyses;
 
@@ -123,14 +123,14 @@ mod relation {
     fn parse_constant(ctx: CtxRef, input: ParseStream) -> Result {
         let constant = input.parse::<kw::Constant>()?;
 
-        let parse_typ = |input: ParseStream| -> syn::Result<RelationType> {
+        let parse_typ = |input: ParseStream| -> syn::Result<SqlRelationType> {
             let analyses = analyses::parse_analyses(input)?;
             let Some(column_types) = analyses.types else {
                 let msg = "Missing expected `types` analyses for Constant line";
                 Err(Error::new(input.span(), msg))?
             };
             let keys = analyses.keys.unwrap_or_default();
-            Ok(RelationType { column_types, keys })
+            Ok(SqlRelationType { column_types, keys })
         };
 
         if input.eat3(syn::Token![<], kw::empty, syn::Token![>]) {
@@ -181,7 +181,7 @@ mod relation {
             }),
             None => Ok(MirRelationExpr::Get {
                 id: Id::Local(parse_local_id(ident)?),
-                typ: RelationType::empty(),
+                typ: SqlRelationType::empty(),
                 access_strategy: AccessStrategy::UnknownOrLocal,
             }),
         }
@@ -257,7 +257,7 @@ mod relation {
                         Err(Error::new(with.span(), msg))?
                     };
                     let keys = analyses.keys.unwrap_or_default();
-                    RelationType { column_types, keys }
+                    SqlRelationType { column_types, keys }
                 };
 
                 // An ugly-ugly hack to pass the type information of the WMR CTE
@@ -353,29 +353,29 @@ mod relation {
         let ident = input.parse::<syn::Ident>()?;
         let func = match ident.to_string().to_lowercase().as_str() {
             "unnest_list" => UnnestList {
-                el_typ: ScalarType::Int64, // FIXME
+                el_typ: SqlScalarType::Int64, // FIXME
             },
             "unnest_array" => UnnestArray {
-                el_typ: ScalarType::Int64, // FIXME
+                el_typ: SqlScalarType::Int64, // FIXME
             },
             "wrap1" => Wrap {
                 types: vec![
-                    ScalarType::Int64.nullable(true), // FIXME
+                    SqlScalarType::Int64.nullable(true), // FIXME
                 ],
                 width: 1,
             },
             "wrap2" => Wrap {
                 types: vec![
-                    ScalarType::Int64.nullable(true), // FIXME
-                    ScalarType::Int64.nullable(true), // FIXME
+                    SqlScalarType::Int64.nullable(true), // FIXME
+                    SqlScalarType::Int64.nullable(true), // FIXME
                 ],
                 width: 2,
             },
             "wrap3" => Wrap {
                 types: vec![
-                    ScalarType::Int64.nullable(true), // FIXME
-                    ScalarType::Int64.nullable(true), // FIXME
-                    ScalarType::Int64.nullable(true), // FIXME
+                    SqlScalarType::Int64.nullable(true), // FIXME
+                    SqlScalarType::Int64.nullable(true), // FIXME
+                    SqlScalarType::Int64.nullable(true), // FIXME
                 ],
                 width: 3,
             },
@@ -640,8 +640,8 @@ mod relation {
 
     #[derive(Default)]
     pub struct FixTypesCtx {
-        env: BTreeMap<LocalId, RelationType>,
-        typ: Vec<RelationType>,
+        env: BTreeMap<LocalId, SqlRelationType>,
+        typ: Vec<SqlRelationType>,
     }
 
     pub fn fix_types(
@@ -721,7 +721,7 @@ mod scalar {
     use mz_expr::{
         BinaryFunc, ColumnOrder, MirScalarExpr, UnaryFunc, UnmaterializableFunc, VariadicFunc,
     };
-    use mz_repr::{AsColumnType, Datum, Row, RowArena, ScalarType};
+    use mz_repr::{AsColumnType, Datum, Row, RowArena, SqlScalarType};
 
     use super::*;
 
@@ -1046,28 +1046,28 @@ mod scalar {
     fn parse_literal_array(input: ParseStream) -> Result {
         use mz_expr::func::VariadicFunc::*;
 
-        let elem_type = ScalarType::Int64; // FIXME
+        let elem_type = SqlScalarType::Int64; // FIXME
         let func = ArrayCreate { elem_type };
         let exprs = input.parse_comma_sep(parse_literal_ok)?;
 
         // Evaluate into a datum
         let temp_storage = RowArena::default();
         let datum = func.eval(&[], &temp_storage, &exprs).expect("datum");
-        let typ = ScalarType::Array(Box::new(ScalarType::Int64)); // FIXME
+        let typ = SqlScalarType::Array(Box::new(SqlScalarType::Int64)); // FIXME
         Ok(MirScalarExpr::literal_ok(datum, typ))
     }
 
     fn parse_literal_list(input: ParseStream) -> Result {
         use mz_expr::func::VariadicFunc::*;
 
-        let elem_type = ScalarType::Int64; // FIXME
+        let elem_type = SqlScalarType::Int64; // FIXME
         let func = ListCreate { elem_type };
         let exprs = input.parse_comma_sep(parse_literal_ok)?;
 
         // Evaluate into a datum
         let temp_storage = RowArena::default();
         let datum = func.eval(&[], &temp_storage, &exprs).expect("datum");
-        let typ = ScalarType::Array(Box::new(ScalarType::Int64)); // FIXME
+        let typ = SqlScalarType::Array(Box::new(SqlScalarType::Int64)); // FIXME
         Ok(MirScalarExpr::literal_ok(datum, typ))
     }
 
@@ -1080,7 +1080,7 @@ mod scalar {
         let inner;
         syn::bracketed!(inner in input);
 
-        let elem_type = ScalarType::Int64; // FIXME
+        let elem_type = SqlScalarType::Int64; // FIXME
         let func = ArrayCreate { elem_type };
         let exprs = inner.parse_comma_sep(parse_expr)?;
 
@@ -1096,7 +1096,7 @@ mod scalar {
         let inner;
         syn::bracketed!(inner in input);
 
-        let elem_type = ScalarType::Int64; // FIXME
+        let elem_type = SqlScalarType::Int64; // FIXME
         let func = ListCreate { elem_type };
         let exprs = inner.parse_comma_sep(parse_expr)?;
 
@@ -1285,13 +1285,13 @@ mod row {
 }
 
 mod analyses {
-    use mz_repr::{ColumnType, ScalarType};
+    use mz_repr::{SqlColumnType, SqlScalarType};
 
     use super::*;
 
     #[derive(Default)]
     pub struct Analyses {
-        pub types: Option<Vec<ColumnType>>,
+        pub types: Option<Vec<SqlColumnType>>,
         pub keys: Option<Vec<Vec<usize>>>,
     }
 
@@ -1330,36 +1330,36 @@ mod analyses {
         Ok(analyses)
     }
 
-    fn parse_types(input: ParseStream) -> syn::Result<Vec<ColumnType>> {
+    fn parse_types(input: ParseStream) -> syn::Result<Vec<SqlColumnType>> {
         let inner;
         syn::parenthesized!(inner in input);
         inner.parse_comma_sep(parse_column_type)
     }
 
-    pub fn parse_column_type(input: ParseStream) -> syn::Result<ColumnType> {
+    pub fn parse_column_type(input: ParseStream) -> syn::Result<SqlColumnType> {
         let scalar_type = parse_scalar_type(input)?;
         Ok(scalar_type.nullable(input.eat(syn::Token![?])))
     }
 
-    pub fn parse_scalar_type(input: ParseStream) -> syn::Result<ScalarType> {
+    pub fn parse_scalar_type(input: ParseStream) -> syn::Result<SqlScalarType> {
         let lookahead = input.lookahead1();
 
         let scalar_type = if input.look_and_eat(bigint, &lookahead) {
-            ScalarType::Int64
+            SqlScalarType::Int64
         } else if input.look_and_eat(double, &lookahead) {
             input.parse::<precision>()?;
-            ScalarType::Float64
+            SqlScalarType::Float64
         } else if input.look_and_eat(boolean, &lookahead) {
-            ScalarType::Bool
+            SqlScalarType::Bool
         } else if input.look_and_eat(character, &lookahead) {
             input.parse::<varying>()?;
-            ScalarType::VarChar { max_length: None }
+            SqlScalarType::VarChar { max_length: None }
         } else if input.look_and_eat(integer, &lookahead) {
-            ScalarType::Int32
+            SqlScalarType::Int32
         } else if input.look_and_eat(smallint, &lookahead) {
-            ScalarType::Int16
+            SqlScalarType::Int16
         } else if input.look_and_eat(text, &lookahead) {
-            ScalarType::String
+            SqlScalarType::String
         } else {
             Err(lookahead.error())?
         };
@@ -1382,12 +1382,12 @@ pub enum Def {
     Source {
         name: String,
         cols: Vec<String>,
-        typ: mz_repr::RelationType,
+        typ: mz_repr::SqlRelationType,
     },
 }
 
 mod def {
-    use mz_repr::{ColumnType, RelationType};
+    use mz_repr::{SqlColumnType, SqlRelationType};
 
     use super::*;
 
@@ -1429,7 +1429,7 @@ mod def {
             (column_names, column_types)
         };
 
-        let typ = RelationType { column_types, keys };
+        let typ = SqlRelationType { column_types, keys };
 
         Ok(Def::Source { name, cols, typ })
     }
@@ -1437,7 +1437,7 @@ mod def {
     fn parse_def_source_column(
         _ctx: CtxRef,
         input: ParseStream,
-    ) -> syn::Result<(String, ColumnType)> {
+    ) -> syn::Result<(String, SqlColumnType)> {
         input.parse::<syn::Token![-]>()?;
         let column_name = input.parse::<syn::Ident>()?.to_string();
         input.parse::<syn::Token![:]>()?;

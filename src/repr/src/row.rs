@@ -2929,7 +2929,7 @@ mod tests {
     use chrono::{DateTime, NaiveDate};
     use mz_ore::{assert_err, assert_none};
 
-    use crate::ScalarType;
+    use crate::SqlScalarType;
 
     use super::*;
 
@@ -2986,7 +2986,7 @@ mod tests {
 
         round_trip(vec![]);
         round_trip(
-            ScalarType::enumerate()
+            SqlScalarType::enumerate()
                 .iter()
                 .flat_map(|r#type| r#type.interesting_datums())
                 .collect(),

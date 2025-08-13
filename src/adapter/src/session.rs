@@ -31,7 +31,7 @@ use mz_ore::now::{EpochMillis, NowFn};
 use mz_pgwire_common::Format;
 use mz_repr::role_id::RoleId;
 use mz_repr::user::{ExternalUserMetadata, InternalUserMetadata};
-use mz_repr::{CatalogItemId, Datum, Row, RowIterator, ScalarType, TimestampManipulation};
+use mz_repr::{CatalogItemId, Datum, Row, RowIterator, SqlScalarType, TimestampManipulation};
 use mz_sql::ast::{AstInfo, Raw, Statement, TransactionAccessMode};
 use mz_sql::plan::{Params, PlanContext, QueryWhen, StatementDesc};
 use mz_sql::session::metadata::SessionMetadata;
@@ -703,7 +703,7 @@ impl<T: TimestampManipulation> Session<T> {
         desc: StatementDesc,
         stmt: Option<Statement<Raw>>,
         logging: Arc<QCell<PreparedStatementLoggingInfo>>,
-        params: Vec<(Datum, ScalarType)>,
+        params: Vec<(Datum, SqlScalarType)>,
         result_formats: Vec<Format>,
         catalog_revision: u64,
     ) -> Result<(), AdapterError> {

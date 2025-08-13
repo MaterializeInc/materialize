@@ -67,7 +67,7 @@ impl ProjectionLifting {
         &self,
         relation: &mut MirRelationExpr,
         // Map from names to new get type and projection required at use.
-        gets: &mut BTreeMap<Id, (mz_repr::RelationType, Vec<usize>)>,
+        gets: &mut BTreeMap<Id, (mz_repr::SqlRelationType, Vec<usize>)>,
     ) -> Result<(), crate::TransformError> {
         self.checked_recur(|_| {
             match relation {

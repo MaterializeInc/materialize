@@ -13,7 +13,7 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsBuilder};
 use mz_persist::metrics::ColumnarMetrics;
 use mz_persist_types::Codec;
-use mz_repr::{ColumnType, Datum, ProtoRow, RelationDesc, Row, ScalarType};
+use mz_repr::{Datum, ProtoRow, RelationDesc, Row, SqlColumnType, SqlScalarType};
 use mz_storage_types::sources::SourceData;
 use rand::distributions::{Alphanumeric, DistString};
 use rand::rngs::StdRng;
@@ -58,16 +58,16 @@ fn benches_roundtrip(c: &mut Criterion) {
         let schema = RelationDesc::from_names_and_types(vec![
             (
                 "a",
-                ColumnType {
+                SqlColumnType {
                     nullable: false,
-                    scalar_type: ScalarType::UInt64,
+                    scalar_type: SqlScalarType::UInt64,
                 },
             ),
             (
                 "b",
-                ColumnType {
+                SqlColumnType {
                     nullable: true,
-                    scalar_type: ScalarType::UInt64,
+                    scalar_type: SqlScalarType::UInt64,
                 },
             ),
         ]);
@@ -87,16 +87,16 @@ fn benches_roundtrip(c: &mut Criterion) {
         let schema = RelationDesc::from_names_and_types(vec![
             (
                 "a",
-                ColumnType {
+                SqlColumnType {
                     nullable: false,
-                    scalar_type: ScalarType::Bytes,
+                    scalar_type: SqlScalarType::Bytes,
                 },
             ),
             (
                 "b",
-                ColumnType {
+                SqlColumnType {
                     nullable: true,
-                    scalar_type: ScalarType::Bytes,
+                    scalar_type: SqlScalarType::Bytes,
                 },
             ),
         ]);
@@ -120,16 +120,16 @@ fn benches_roundtrip(c: &mut Criterion) {
         let schema = RelationDesc::from_names_and_types(vec![
             (
                 "a",
-                ColumnType {
+                SqlColumnType {
                     nullable: false,
-                    scalar_type: ScalarType::String,
+                    scalar_type: SqlScalarType::String,
                 },
             ),
             (
                 "b",
-                ColumnType {
+                SqlColumnType {
                     nullable: true,
-                    scalar_type: ScalarType::String,
+                    scalar_type: SqlScalarType::String,
                 },
             ),
         ]);
