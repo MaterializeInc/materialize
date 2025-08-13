@@ -54,29 +54,29 @@ In general, we may want a "smart index selector", which can appropriately handle
 
 Having MIR be typechecked in terms of representation types demands a few changes, which can be broken into three PRs:
 
-1. Rename the existing `ScalarType` to `HirScalarType`. (We may want to rename `ColumnType` and `RelationType`, as well.)
-2. Have MIR work with `MirScalarType` (see [MVP](#minimal-viable-prototype)).
-   a. Introduce the `MirScalarType` datatype (see [MVP](#minimal-viable-prototype)).
-   b. Change the optimizer to work with `MirScalarType` throughout.
-   c. Change the adapter to record the `HirScalarType` of a query and update its nullability information using the `MirScalarType` at the end of optimization.
+1. Rename the existing `ScalarType` to `SqlScalarType`. (We may want to add a `Sql` prefix to `ColumnType` and `RelationType`, as well.)
+2. Have MIR work with `ReprScalarType`.
+   a. Introduce the `ReprScalarType` datatype (see [MVP](#minimal-viable-prototype)).
+   b. Change the optimizer to work with `ReprScalarType` throughout.
+   c. Change the adapter to record the `SqlScalarType` of a query and update its nullability information using the `ReprScalarType` at the end of optimization.
 3. Elide noop casts, confirming that we plan the problematic joins better.
 
 PR #2 will have a large diff.
-On the plus side, it should be a largely mechanical change: there is a straightforward way to project a `HirScalarType` to a `MirScalarType`, and most uses of types in the optimizer will be parametric.
+On the plus side, it should be a largely mechanical change: there is a straightforward way to project a `SqlScalarType` to a `ReprScalarType`, and most uses of types in the optimizer will be parametric.
 
 ## Minimal Viable Prototype
 
 The representation types will look like the following:
 
 ```rust
-pub enum MirScalarType {
+pub enum ReprScalarType {
   Bool,
   Int16,
   Int32,
   Int64,
-  UInt8, // also includes HirScalarType::PgLegacyChar
+  UInt8, // also includes SqlScalarType::PgLegacyChar
   UInt16,
-  UInt32, // also includes HirScalarType::{Oid,RegClass,RegProc,RegType}
+  UInt32, // also includes SqlScalarType::{Oid,RegClass,RegProc,RegType}
   UInt64,
   Float32,
   Float64,
@@ -89,27 +89,68 @@ pub enum MirScalarType {
   Interval,
   Bytes,
   Jsonb,
-  String, // also includes HirScalarType::{VarChar,Char,PgLegacyName}
+  String, // also includes SqlScalarType::{VarChar,Char,PgLegacyName}
   Uuid,
-  Array(Box<MirScalarType>), // also includes HirScalarType::Int2Vector
-  List { element_type: Box<MirScalarType> }, // also includes HirScalarType::Record
-  Map { value_type: Box<MirScalarType> },
-  Range { element_type: Box<MirScalarType> },
+  Array(Box<ReprScalarType>), // also includes SqlScalarType::Int2Vector
+  List { element_type: Box<ReprScalarType> }, // also includes SqlScalarType::Record
+  Map { value_type: Box<ReprScalarType> },
+  Range { element_type: Box<ReprScalarType> },
   MzAclItem,
   AclItem,
 }
 
-pub struct MirColumnType {
-    pub scalar_type: MirScalarType,
+pub struct ReprColumnType {
+    pub scalar_type: ReprScalarType,
     pub nullable: bool,
 }
 ```
 
 Since LIR is effectively untyped, there's no need for us to define `LirScalarType` or the like. We already use `MirScalarExpr` inside of `Mfp`s in LIR.
 
-We'll need to define a projection from `HirScalarType` to `MirScalarType` (see [`ScalarType::is_instance_of()`](https://github.com/MaterializeInc/materialize/blob/e4578164fb28a204b43c58ab8ff6c1d3e3b4427f/src/repr/src/scalar.rs#L947) for the correspondence).
+We'll need to define a projection from `SqlScalarType` to `ReprScalarType` (see [`ScalarType::is_instance_of()`](https://github.com/MaterializeInc/materialize/blob/e4578164fb28a204b43c58ab8ff6c1d3e3b4427f/src/repr/src/scalar.rs#L947) for the correspondence).
 
-In `EXPLAIN PLAN`s, we will report `MirScalarType`s with `r`-prefixed names, where `r` is short for "representation", e.g., `rstring` is the `MirScalarType` corresponding to `text`, `varchar`, etc.
+In `EXPLAIN PLAN`s, we will report `ReprScalarType`s with `r`-prefixed names, where `r` is short for "representation", e.g., `rstring` is the `ReprScalarType` corresponding to `text`, `varchar`, etc.
+
+### What changes?
+
+  - Rename `ScalarType` to `SqlScalarType`; ditto `ColumnType` and `RelationType`.
+  - Introduce `ReprScalarType` and a corresponding `ReprColumnType` and (possibliy) `ReprRelationType`. Add a `From` instance to compile `Sql*` types to `Reper*` types.
+  - Adapt `MirScalarExpr`, `MirRelationExpr`, `PlanNode`, and `Expr` to use `ReprColumnType`.
+    + `TableFunc` uses `ScalarType`. We can split into `Sql` and `Repr` versions, or have it take the type as a parameter.
+    + `AggregateFunc` is already split; the `expr` crate's `MapAgg` can use `ReprScalarType`.
+    + `UnaryFunc` doesn't take any type arguments.
+    + `BinaryFunc::RangeContainsElem` changes to use `ReprScalarType`.
+    + `VariadicFunc` uses `ScalarType`. We can split it or parameterize it.
+  - Several transforms need to change.
+    * Parametric (used for arity or equality)
+      + `optimize_dataflow_demand`
+      + `demand`
+      + `reduction_pushdown`
+      + `redundant_join`
+      + `union_cancel`
+      + `anf`
+      + `projection_lifting`
+      + `projection_pushdown`
+    * Real reasoning
+      + `column_knowledge`
+      + `join implementation` (needs keys)
+      + `literal_constraints`
+      + `non_null_requirements` (nullability only)
+      + `normalize_lets` (parametric except for nullability)
+      + `predicate_pushdown` (calls `MSE::reduce` and `canonicalize_equivalences` and `canonicalize_predicates`)
+      + `semijoin_idempotence` (nullability only)
+      + `fusion::filter` (calls `canonicalize_predicates`)
+      + `typecheck` (quelle surprise)
+  - `AvailableCollections` could be split or parameterized---or its users can use the `From` instance to deal with `Repr` types.
+  - Some `EXPLAIN` infrastructure would have to be updated to emit representation types.
+
+### What would it look like to address nullability at the same time?
+
+The catalog tracks nullability, and it would be a major change to no longer do so. But we can stop tracking that kind of information as types in the optimizer itself.
+
+The "real reasoning" transforms above (and a few others) use type-based nullability information (`analysis`, `column_knowledge`, `equivalence_propagation`, `fold_constants`, `literal_constraints`, `non_null_requirements`, `predicate_pushdown`, `semijoin_idempotence`, `typecheck`, `equivalences`, `filter`), and would need to be updated.
+
+Quite a few things in `expr` would need to change: the abstract interperet, all kinds of MRE and MSE methods, lots of binary and variadic ffunc methods. Notably we would _not_ be updating `output_types`, which should produce `Sql` types, not `Repr` types.
 
 ## Alternatives
 
@@ -129,6 +170,6 @@ Such rewriting feels a bit risky/annoying/confusing, and I'm not sure how it wou
 
 ## Open questions
 
-It's possible that (as Nikhil worries) somewhere in the pgwire or WS layers calls `.typ()` on a `MirRelationExpr` and expects a `HirScalarType` but will now find a `MirScalarType`.
+It's possible that (as Nikhil worries) somewhere in the pgwire or WS layers calls `.typ()` on a `MirRelationExpr` and expects a `SqlScalarType` but will now find a `ReprScalarType`.
 I don't know those layers well, but we could derisk some of the work of PR #2 by checking for that in advance.
 (In any case, the Rust type checker will be eager to tell us about it.)
