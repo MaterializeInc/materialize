@@ -13,7 +13,7 @@ use std::fmt::Debug;
 use std::future::Future;
 use std::time::Duration;
 
-use differential_dataflow::difference::Semigroup;
+use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use mz_ore::instrument;
 use mz_ore::now::EpochMillis;
@@ -114,7 +114,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64 + Sync,
-    D: Semigroup + Codec64 + Send + Sync,
+    D: Monoid + Codec64 + Send + Sync,
     O: Opaque + Codec64,
 {
     pub(crate) fn new(
