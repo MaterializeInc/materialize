@@ -44,9 +44,6 @@ INSERT INTO table_varchar_max VALUES (42, NULL);
 
 > CREATE SECRET IF NOT EXISTS sql_server_pass AS '${arg.default-sql-server-password}'
 
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_sql_server_source = true;
-
 > CREATE CONNECTION sql_server_test_50_connection TO SQL SERVER (
     HOST 'sql-server',
     PORT 1433,

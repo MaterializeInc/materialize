@@ -9,9 +9,6 @@
 
 # Setup SQL Server state.
 
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_sql_server_source = true;
-
 > CREATE SECRET ssl_ca AS '${arg.ssl-ca}'
 > CREATE SECRET alt_ssl_ca AS '${arg.alt-ssl-ca}'
 > CREATE SECRET IF NOT EXISTS sql_server_pass AS '${arg.default-sql-server-password}'

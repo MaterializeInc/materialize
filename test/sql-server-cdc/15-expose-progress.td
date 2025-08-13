@@ -25,9 +25,6 @@ INSERT INTO t15_pk VALUES ('a', 'hello world'), ('b', 'foobar'), ('c', 'anotha o
 
 > CREATE SECRET IF NOT EXISTS sql_server_pass AS '${arg.default-sql-server-password}'
 
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_sql_server_source = true;
-
 > CREATE CONNECTION sql_server_test_15_connection TO SQL SERVER (
     HOST 'sql-server',
     PORT 1433,

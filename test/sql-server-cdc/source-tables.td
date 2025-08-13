@@ -36,9 +36,6 @@ INSERT INTO text_cols VALUES (1.444889, '12:00:00', '$100.99', 0x1100AB);
 
 > CREATE SECRET IF NOT EXISTS sql_server_pass AS '${arg.default-sql-server-password}'
 
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_sql_server_source = true;
-
 > CREATE CONNECTION ms_conn TO SQL SERVER (
     HOST 'sql-server',
     PORT 1433,
