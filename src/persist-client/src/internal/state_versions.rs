@@ -672,7 +672,7 @@ impl StateVersions {
         );
         let rollup_seqno = empty_state.seqno.next();
         let rollup = HollowRollup {
-            key: PartialRollupKey::new(rollup_seqno, &RollupId::new()),
+            key: PartialRollupKey::new(rollup_seqno, &RollupId::zero()),
             // Chicken-and-egg problem here. We don't know the size of the
             // rollup until we encode it, but it includes a reference back to
             // itself.
