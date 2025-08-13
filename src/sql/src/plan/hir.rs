@@ -167,7 +167,7 @@ pub enum HirRelationExpr {
         /// Column indices used to order rows within groups.
         order_key: Vec<ColumnOrder>,
         /// Number of records to retain.
-        /// It is of ScalarType::Int64.
+        /// It is of SqlScalarType::Int64.
         /// (UInt64 would make sense in theory: Then we wouldn't need to manually check
         /// non-negativity, but would just get this for free when casting to UInt64. However, Int64
         /// is better for Postgres compat. This is because if there is a $1 here, then when external
@@ -176,7 +176,7 @@ pub enum HirRelationExpr {
         /// unsigned types are non-standard, and also don't exist even in Postgres.)
         limit: Option<HirScalarExpr>,
         /// Number of records to skip.
-        /// It is of ScalarType::Int64.
+        /// It is of SqlScalarType::Int64.
         /// This can contain parameters at first, but by the time we reach lowering, this should
         /// already be simply a Literal.
         offset: HirScalarExpr,
@@ -3091,7 +3091,7 @@ impl HirScalarExpr {
 
     pub fn literal(datum: Datum, scalar_type: SqlScalarType) -> HirScalarExpr {
         let col_type = scalar_type.nullable(datum.is_null());
-        soft_assert_or_log!(datum.is_instance_of(&col_type), "type is correct");
+        soft_assert_or_log!(datum.is_instance_of_sql(&col_type), "type is correct");
         let row = Row::pack([datum]);
         HirScalarExpr::Literal(row, col_type, TreatAsEqual(None))
     }
@@ -3500,7 +3500,7 @@ impl HirScalarExpr {
     ///
     /// # Panics
     ///
-    /// Panics if this expression does not have type [`ScalarType::Int64`].
+    /// Panics if this expression does not have type [`SqlScalarType::Int64`].
     pub fn into_literal_int64(self) -> Option<i64> {
         self.simplify_to_literal().and_then(|row| {
             let datum = row.unpack_first();
@@ -3519,7 +3519,7 @@ impl HirScalarExpr {
     ///
     /// # Panics
     ///
-    /// Panics if this expression does not have type [`ScalarType::String`].
+    /// Panics if this expression does not have type [`SqlScalarType::String`].
     pub fn into_literal_string(self) -> Option<String> {
         self.simplify_to_literal().and_then(|row| {
             let datum = row.unpack_first();
@@ -3541,7 +3541,7 @@ impl HirScalarExpr {
     ///
     /// # Panics
     ///
-    /// Panics if this expression does not have type [`ScalarType::MzTimestamp`].
+    /// Panics if this expression does not have type [`SqlScalarType::MzTimestamp`].
     pub fn into_literal_mz_timestamp(self) -> Option<Timestamp> {
         self.simplify_to_literal().and_then(|row| {
             let datum = row.unpack_first();
@@ -3553,7 +3553,7 @@ impl HirScalarExpr {
         })
     }
 
-    /// Attempts to simplify this expression of [`ScalarType::Int64`] to a literal Int64 and
+    /// Attempts to simplify this expression of [`SqlScalarType::Int64`] to a literal Int64 and
     /// returns it as an i64.
     ///
     /// Returns `PlanError::ConstantExpressionSimplificationFailed` if
@@ -3563,7 +3563,7 @@ impl HirScalarExpr {
     ///
     /// # Panics
     ///
-    /// Panics if this expression does not have type [`ScalarType::Int64`].
+    /// Panics if this expression does not have type [`SqlScalarType::Int64`].
     pub fn try_into_literal_int64(self) -> Result<i64, PlanError> {
         // TODO: add the `is_constant` check also to all the other into_literal_... (by adding it to
         // `simplify_to_literal`), but those should be just soft_asserts at first that it doesn't

@@ -611,7 +611,7 @@ impl ParamList {
         }
     }
 
-    /// Matches a `&[ScalarType]` derived from the user's function argument
+    /// Matches a `&[SqlScalarType]` derived from the user's function argument
     /// against this `ParamList`'s permitted arguments.
     fn exact_match(&self, types: &[&SqlScalarType]) -> bool {
         types.iter().enumerate().all(|(i, t)| self[i] == **t)
@@ -666,7 +666,7 @@ impl From<Vec<ParamType>> for ParamList {
 /// "Compatible" parameters contrast with parameters that contain "Any" in their
 /// name, but not "Compatible." These parameters require all other "Any"-type
 /// parameters be of the same type from the perspective of
-/// [`ScalarType::base_eq`].
+/// [`SqlScalarType::base_eq`].
 ///
 /// For more details on polymorphic parameter resolution, see `PolymorphicSolution`.
 pub enum ParamType {
@@ -702,18 +702,18 @@ pub enum ParamType {
     /// A pseudotype permitting any map type, permitting other "Compatibility"-type
     /// parameters to find the best common type.
     MapAnyCompatible,
-    /// A pseudotype permitting any type except `ScalarType::List` and
-    /// `ScalarType::Array`, requiring other "Any"-type
+    /// A pseudotype permitting any type except `SqlScalarType::List` and
+    /// `SqlScalarType::Array`, requiring other "Any"-type
     /// parameters to be of the same type.
     NonVecAny,
-    /// A pseudotype permitting any type except `ScalarType::List` and
-    /// `ScalarType::Array`, requiring other "Compatibility"-type
+    /// A pseudotype permitting any type except `SqlScalarType::List` and
+    /// `SqlScalarType::Array`, requiring other "Compatibility"-type
     /// parameters to be of the same type.
     NonVecAnyCompatible,
     /// A standard parameter that accepts arguments that match its embedded
-    /// `ScalarType`.
+    /// `SqlScalarType`.
     Plain(SqlScalarType),
-    /// A polymorphic pseudotype permitting a `ScalarType::Record` of any type,
+    /// A polymorphic pseudotype permitting a `SqlScalarType::Record` of any type,
     /// but all records must be structurally equal.
     RecordAny,
     /// An pseudotype permitting any range type, requiring other "Any"-type
@@ -762,7 +762,7 @@ impl ParamType {
 
     /// Is `self` the [`ParamType`] corresponding to `t`'s [near match] value?
     ///
-    /// [near match]: ScalarType::near_match
+    /// [near match]: SqlScalarType::near_match
     fn is_near_match(&self, t: &SqlScalarType) -> bool {
         match (self, t.near_match()) {
             (ParamType::Plain(t), Some(near_match)) => t.structural_eq(near_match),
@@ -1308,7 +1308,7 @@ enum PolymorphicCompatClass {
     /// work with `BestCommonList` are incommensurate with the parameter types
     /// used with `BestCommonMap`.
     BestCommonMap,
-    /// Represents type resolution for `ScalarType::Record` types, which e.g.
+    /// Represents type resolution for `SqlScalarType::Record` types, which e.g.
     /// ignores custom types and type modifications.
     ///
     /// In [PG], this is handled by invocation of the function calls that take
@@ -1494,7 +1494,7 @@ impl PolymorphicSolution {
         true
     }
 
-    // Determines the appropriate `ScalarType` for the given `ParamType` based
+    // Determines the appropriate `SqlScalarType` for the given `ParamType` based
     // on the polymorphic solution.
     fn target_for_param_type(&self, param: &ParamType) -> Option<SqlScalarType> {
         use ParamType::*;
@@ -1607,7 +1607,7 @@ fn coerce_args_to_types(
     Ok(res_exprs)
 }
 
-/// Provides shorthand for converting `Vec<ScalarType>` into `Vec<ParamType>`.
+/// Provides shorthand for converting `Vec<SqlScalarType>` into `Vec<ParamType>`.
 macro_rules! params {
     ([$($p:expr),*], $v:ident...) => { ParamList::Variadic { leading: vec![$($p.into(),)*], trailing: $v.into() } };
     ($v:ident...) => { ParamList::Variadic { leading: vec![], trailing: $v.into() } };
@@ -3145,7 +3145,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                 // responsibility to apply the JSON-specific behavior of casting
                 // SQL nulls to JSON nulls; otherwise the produced `Datum::Map`
                 // can contain `Datum::Null` values that are not valid for the
-                // `ScalarType::Jsonb` type.
+                // `SqlScalarType::Jsonb` type.
                 let val = HirScalarExpr::call_variadic(
                     VariadicFunc::Coalesce,
                     vec![typeconv::to_jsonb(ecx, val), json_null],

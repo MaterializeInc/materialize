@@ -38,7 +38,7 @@ use crate::{Datum, ReprScalarType, Row, SqlScalarType, arb_datum_for_column};
 /// Int32 or String) with its nullability.
 ///
 /// To construct a column type, either initialize the struct directly, or
-/// use the [`ScalarType::nullable`] method.
+/// use the [`SqlScalarType::nullable`] method.
 #[derive(
     Arbitrary, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect,
 )]
@@ -520,11 +520,11 @@ struct ColumnMetadata {
 /// A `RelationDesc`s is typically constructed via its builder API:
 ///
 /// ```
-/// use mz_repr::{SqlColumnType, RelationDesc, ScalarType};
+/// use mz_repr::{SqlColumnType, RelationDesc, SqlScalarType};
 ///
 /// let desc = RelationDesc::builder()
-///     .with_column("id", ScalarType::Int64.nullable(false))
-///     .with_column("price", ScalarType::Float64.nullable(true))
+///     .with_column("id", SqlScalarType::Int64.nullable(false))
+///     .with_column("price", SqlScalarType::Float64.nullable(true))
 ///     .finish();
 /// ```
 ///
@@ -552,11 +552,11 @@ struct ColumnMetadata {
 ///
 /// ```
 /// use std::collections::BTreeSet;
-/// use mz_repr::{ColumnIndex, RelationDesc, ScalarType};
+/// use mz_repr::{ColumnIndex, RelationDesc, SqlScalarType};
 ///
 /// let desc = RelationDesc::builder()
-///     .with_column("name", ScalarType::String.nullable(false))
-///     .with_column("email", ScalarType::String.nullable(false))
+///     .with_column("name", SqlScalarType::String.nullable(false))
+///     .with_column("email", SqlScalarType::String.nullable(false))
 ///     .finish();
 ///
 /// // Project away the second column.

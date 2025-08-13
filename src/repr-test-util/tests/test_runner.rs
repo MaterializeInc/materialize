@@ -44,7 +44,7 @@ mod tests {
                 .ok_or_else(|| "Empty row spec".to_string())?,
         )?;
         let scalar_types: Option<Vec<SqlScalarType>> =
-            deserialize_optional_generic(&mut stream_iter, "Vec<ScalarType>")?;
+            deserialize_optional_generic(&mut stream_iter, "Vec<SqlScalarType>")?;
         let scalar_types = if let Some(scalar_types) = scalar_types {
             scalar_types
         } else {
