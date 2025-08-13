@@ -47,7 +47,9 @@ pub use crate::relation_and_scalar::ProtoScalarType;
 pub use crate::relation_and_scalar::proto_scalar_type::ProtoRecordField;
 use crate::role_id::RoleId;
 use crate::row::DatumNested;
-use crate::{CatalogItemId, ColumnName, DatumList, DatumMap, Row, RowArena, SqlColumnType};
+use crate::{
+    CatalogItemId, ColumnName, DatumList, DatumMap, ReprColumnType, Row, RowArena, SqlColumnType,
+};
 
 /// A single value.
 ///
@@ -1397,7 +1399,9 @@ impl fmt::Display for Datum<'_> {
     }
 }
 
-/// The type of a [`Datum`].
+/// The type of a [`Datum`] in SQL terms.
+///
+/// Each variant maps to a variant of [`ReprScalarType`], with some overlap.
 ///
 /// There is a direct correspondence between `Datum` variants and `ScalarType`
 /// variants.
@@ -3725,6 +3729,118 @@ impl Arbitrary for SqlScalarType {
             ])
         })
         .boxed()
+    }
+}
+
+/// The type of a [`Datum`] as it is represented.
+///
+/// Each variant here corresponds to one or more variants of [`SqlScalarType`].
+///
+/// There is a direct correspondence between `Datum` variants and `ScalarType`
+/// variants.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Ord, PartialOrd, Hash, MzReflect)]
+pub enum ReprScalarType {
+    Bool,
+    Int16,
+    Int32,
+    Int64,
+    UInt8, // also includes SqlScalarType::PgLegacyChar
+    UInt16,
+    UInt32, // also includes SqlScalarType::{Oid,RegClass,RegProc,RegType}
+    UInt64,
+    Float32,
+    Float64,
+    Numeric,
+    Date,
+    Time,
+    Timestamp {
+        precision: Option<TimestampPrecision>,
+    },
+    TimestampTz {
+        precision: Option<TimestampPrecision>,
+    },
+    MzTimestamp,
+    Interval,
+    Bytes,
+    Jsonb,
+    String, // also includes SqlScalarType::{VarChar,Char,PgLegacyName}
+    Uuid,
+    Array(Box<ReprScalarType>), // also includes SqlScalarType::Int2Vector
+    List {
+        element_type: Box<ReprScalarType>,
+    },
+    Record {
+        fields: Box<[ReprColumnType]>,
+    },
+    Map {
+        value_type: Box<ReprScalarType>,
+    },
+    Range {
+        element_type: Box<ReprScalarType>,
+    },
+    MzAclItem,
+    AclItem,
+}
+
+impl From<SqlScalarType> for ReprScalarType {
+    fn from(typ: SqlScalarType) -> Self {
+        match typ {
+            SqlScalarType::Bool => ReprScalarType::Bool,
+            SqlScalarType::Int16 => ReprScalarType::Int16,
+            SqlScalarType::Int32 => ReprScalarType::Int32,
+            SqlScalarType::Int64 => ReprScalarType::Int64,
+            SqlScalarType::UInt16 => ReprScalarType::UInt16,
+            SqlScalarType::UInt32 => ReprScalarType::UInt32,
+            SqlScalarType::UInt64 => ReprScalarType::UInt64,
+            SqlScalarType::Float32 => ReprScalarType::Float32,
+            SqlScalarType::Float64 => ReprScalarType::Float64,
+            SqlScalarType::Numeric { max_scale: _ } => ReprScalarType::Numeric,
+            SqlScalarType::Date => ReprScalarType::Date,
+            SqlScalarType::Time => ReprScalarType::Time,
+            SqlScalarType::Timestamp { precision } => ReprScalarType::Timestamp { precision },
+            SqlScalarType::TimestampTz { precision } => ReprScalarType::TimestampTz { precision },
+            SqlScalarType::Interval => ReprScalarType::Interval,
+            SqlScalarType::PgLegacyChar => ReprScalarType::UInt8,
+            SqlScalarType::PgLegacyName => ReprScalarType::String,
+            SqlScalarType::Bytes => ReprScalarType::Bytes,
+            SqlScalarType::String => ReprScalarType::String,
+            SqlScalarType::Char { length: _ } => ReprScalarType::String,
+            SqlScalarType::VarChar { max_length: _ } => ReprScalarType::String,
+            SqlScalarType::Jsonb => ReprScalarType::Jsonb,
+            SqlScalarType::Uuid => ReprScalarType::Uuid,
+            SqlScalarType::Array(element_type) => {
+                ReprScalarType::Array(Box::new((*element_type).into()))
+            }
+            SqlScalarType::List {
+                element_type,
+                custom_id: _,
+            } => ReprScalarType::List {
+                element_type: Box::new((*element_type).into()),
+            },
+            SqlScalarType::Record {
+                fields,
+                custom_id: _,
+            } => ReprScalarType::Record {
+                fields: fields.into_iter().map(|(_, typ)| typ.into()).collect(),
+            },
+            SqlScalarType::Oid => ReprScalarType::UInt32,
+            SqlScalarType::Map {
+                value_type,
+                custom_id: _,
+            } => ReprScalarType::Map {
+                value_type: Box::new((*value_type).into()),
+            },
+            SqlScalarType::RegProc => ReprScalarType::UInt32,
+            SqlScalarType::RegType => ReprScalarType::UInt32,
+            SqlScalarType::RegClass => ReprScalarType::UInt32,
+            SqlScalarType::Int2Vector => ReprScalarType::Array(Box::new(ReprScalarType::Int16)),
+            SqlScalarType::MzTimestamp => ReprScalarType::MzTimestamp,
+            SqlScalarType::Range { element_type } => ReprScalarType::Range {
+                element_type: Box::new((*element_type).into()),
+            },
+            SqlScalarType::MzAclItem => ReprScalarType::MzAclItem,
+            SqlScalarType::AclItem => ReprScalarType::AclItem,
+        }
     }
 }
 
