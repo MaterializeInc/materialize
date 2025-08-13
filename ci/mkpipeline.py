@@ -82,7 +82,7 @@ mkpipeline creates a Buildkite pipeline based on a template file and uploads it
 so it is executed.""",
     )
 
-    parser.add_argument("--coverage", action="store_true")
+    parser.add_argument("--coverage", action="store_true", default=True)
     parser.add_argument(
         "--sanitizer",
         default=Sanitizer[os.getenv("CI_SANITIZER", "none")],
@@ -216,7 +216,7 @@ so it is executed.""",
         args.bazel_remote_cache,
         bazel_lto,
     )
-    remove_dependencies_on_prs(pipeline, args.pipeline, hash_check)
+    # remove_dependencies_on_prs(pipeline, args.pipeline, hash_check)
     remove_mz_specific_keys(pipeline)
 
     print("--- Uploading new pipeline:")
