@@ -42,7 +42,7 @@ def wait_ready_and_promote(mz_service: str) -> list[MzcomposeAction]:
 
 class ZeroDowntimeRestartEntireMz(Scenario):
     def actions(self) -> list[Action]:
-        system_parameter_defaults = get_default_system_parameters(zero_downtime=True)
+        system_parameter_defaults = get_default_system_parameters()
         return [
             StartMz(
                 self,
@@ -80,7 +80,7 @@ class ZeroDowntimeRestartEntireMz(Scenario):
 
 class ZeroDowntimeRestartEntireMzForcedMigrations(Scenario):
     def actions(self) -> list[Action]:
-        system_parameter_defaults = get_default_system_parameters(zero_downtime=True)
+        system_parameter_defaults = get_default_system_parameters()
         return [
             StartMz(
                 self,
@@ -127,9 +127,7 @@ class ZeroDowntimeUpgradeEntireMz(Scenario):
 
     def actions(self) -> list[Action]:
         print(f"Upgrading from tag {self.base_version()}")
-        system_parameter_defaults = get_default_system_parameters(
-            self.base_version(), zero_downtime=True
-        )
+        system_parameter_defaults = get_default_system_parameters(self.base_version())
         return [
             StartMz(
                 self,
@@ -166,9 +164,7 @@ class ZeroDowntimeBumpedVersion(Scenario):
     version with just the version number bumped."""
 
     def actions(self) -> list[Action]:
-        system_parameter_defaults = get_default_system_parameters(
-            self.base_version(), zero_downtime=True
-        )
+        system_parameter_defaults = get_default_system_parameters(self.base_version())
         return [
             StartMz(
                 self,
@@ -209,9 +205,7 @@ class ZeroDowntimeUpgradeEntireMzTwoVersions(Scenario):
 
     def actions(self) -> list[Action]:
         print(f"Upgrade path: {self.base_version()} -> {get_last_version()} -> current")
-        system_parameter_defaults = get_default_system_parameters(
-            self.base_version(), zero_downtime=True
-        )
+        system_parameter_defaults = get_default_system_parameters(self.base_version())
         return [
             # Start with previous_version
             StartMz(
@@ -274,9 +268,7 @@ class ZeroDowntimeUpgradeEntireMzFourVersions(Scenario):
         print(
             f"Upgrade path: {self.minor_versions[3]} -> {self.minor_versions[2]} -> {get_previous_version()} -> {get_last_version()} -> current"
         )
-        system_parameter_defaults = get_default_system_parameters(
-            self.base_version(), zero_downtime=True
-        )
+        system_parameter_defaults = get_default_system_parameters(self.base_version())
         return [
             StartMz(
                 self,
