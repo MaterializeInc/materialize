@@ -32,7 +32,7 @@ _select&lowbar;with&lowbar;ctes_, _select&lowbar;with&lowbar;recursive&lowbar;ct
 **DISTINCT** | <a name="select-distinct"></a>Return only distinct values.
 **DISTINCT ON (** _col&lowbar;ref_... **)**  | <a name="select-distinct-on"></a>Return only the first row with a distinct value for _col&lowbar;ref_. If an `ORDER BY` clause is also present, then `DISTINCT ON` will respect that ordering when choosing which row to return for each distinct value of `col_ref...`. Please note that in this case, you should start the `ORDER BY` clause with the same `col_ref...` as the `DISTINCT ON` clause. For an example, see [Top K](/transform-data/idiomatic-materialize-sql/top-k/#select-top-1-item).
 _target&lowbar;elem_ | Return identified columns or functions.
-**FROM** _table&lowbar;ref_ | The tables you want to read from; note that these can also be other `SELECT` statements or [Common Table Expressions](#common-table-expressions-ctes) (CTEs).
+**FROM** _table&lowbar;expr_ | The tables you want to read from; note that these can also be other `SELECT` statements, [Common Table Expressions](#common-table-expressions-ctes) (CTEs), or [table function calls](/sql/functions/table-functions).
 _join&lowbar;expr_ | A join expression; for more details, see the [`JOIN` documentation](/sql/select/join/).
 **WHERE** _expression_ | Filter tuples by _expression_.
 **GROUP BY** _col&lowbar;ref_ | Group aggregations by _col&lowbar;ref_.
