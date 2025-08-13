@@ -26,7 +26,8 @@ use mz_compute_types::sinks::{
 };
 use mz_compute_types::sources::SourceInstanceDesc;
 use mz_controller_types::dyncfgs::{
-    ENABLE_WALLCLOCK_LAG_HISTOGRAM_COLLECTION, WALLCLOCK_LAG_RECORDING_INTERVAL,
+    ENABLE_PAUSED_CLUSTER_READHOLD_DOWNGRADE, ENABLE_WALLCLOCK_LAG_HISTOGRAM_COLLECTION,
+    WALLCLOCK_LAG_RECORDING_INTERVAL,
 };
 use mz_dyncfg::ConfigSet;
 use mz_expr::RowSetFinishing;
@@ -2299,6 +2300,9 @@ where
     ///    forwarded collections, as forwarding the implied capability also forwards the corresponding
     ///    dataflow as-of.
     fn forward_implied_capabilities(&mut self) {
+        if !ENABLE_PAUSED_CLUSTER_READHOLD_DOWNGRADE.get(&self.dyncfg) {
+            return;
+        }
         if !self.replicas.is_empty() {
             return;
         }

@@ -1301,6 +1301,7 @@ class FlipFlagsAction(Action):
             "persist_enable_incremental_compaction",
             "storage_statistics_retention_duration",
             "enable_ctp_cluster_protocols",
+            "enable_paused_cluster_readhold_downgrade",
         ]
 
     def run(self, exe: Executor) -> bool:
