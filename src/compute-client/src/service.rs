@@ -345,18 +345,7 @@ where
                 frontiers.update_iter(batch.upper.into_iter().map(|t| (t, 1)));
                 let new_frontier = frontiers.frontier().to_owned();
 
-                match (&mut tracked.stashed_updates, batch.updates) {
-                    (Err(_), _) => {
-                        // Subscribe is borked; nothing to do.
-                        // TODO: Consider refreshing error?
-                    }
-                    (_, Err(text)) => {
-                        tracked.stashed_updates = Err(text);
-                    }
-                    (Ok(stashed_updates), Ok(updates)) => {
-                        stashed_updates.extend(updates);
-                    }
-                }
+                tracked.stash(batch.updates, self.max_result_size);
 
                 // If the frontier has advanced, it is time to announce subscribe progress. Unless
                 // we have already announced that the subscribe has been dropped, in which case we
@@ -578,6 +567,8 @@ struct PendingSubscribe<T> {
     frontiers: MutableAntichain<T>,
     /// The updates we are holding back until their timestamps are complete.
     stashed_updates: Result<Vec<(T, Row, Diff)>, String>,
+    /// The row size of stashed updates, for `max_result_size` checking.
+    stashed_result_size: usize,
     /// Whether we have already emitted a `DroppedAt` response for this subscribe.
     ///
     /// This field is used to ensure we emit such a response only once.
@@ -594,7 +585,37 @@ impl<T: ComputeControllerTimestamp> PendingSubscribe<T> {
         Self {
             frontiers,
             stashed_updates: Ok(Vec::new()),
+            stashed_result_size: 0,
             dropped: false,
+        }
+    }
+
+    /// Stash a new batch of updates.
+    ///
+    /// This also implements the short-circuit behavior of error responses, and performs
+    /// `max_result_size` checking.
+    fn stash(&mut self, new_updates: Result<Vec<(T, Row, Diff)>, String>, max_result_size: u64) {
+        match (&mut self.stashed_updates, new_updates) {
+            (Err(_), _) => {
+                // Subscribe is borked; nothing to do.
+                // TODO: Consider refreshing error?
+            }
+            (_, Err(text)) => {
+                self.stashed_updates = Err(text);
+            }
+            (Ok(stashed), Ok(new)) => {
+                let new_size: usize = new.iter().map(|(_, row, _)| row.byte_len()).sum();
+                self.stashed_result_size += new_size;
+
+                if self.stashed_result_size > max_result_size.cast_into() {
+                    self.stashed_updates = Err(format!(
+                        "total result exceeds max size of {}",
+                        ByteSize::b(max_result_size)
+                    ));
+                } else {
+                    stashed.extend(new);
+                }
+            }
         }
     }
 }
