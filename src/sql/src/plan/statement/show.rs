@@ -1224,7 +1224,6 @@ fn humanize_sql_for_show_create(
             stmt.with_options.retain_mut(|o| {
                 match o.name {
                     CreateSubsourceOptionName::TextColumns => true,
-                    CreateSubsourceOptionName::RetainHistory => true,
                     CreateSubsourceOptionName::ExcludeColumns => true,
                     // Drop details, which does not roundtrip.
                     CreateSubsourceOptionName::Details => false,

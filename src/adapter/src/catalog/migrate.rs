@@ -344,10 +344,6 @@ fn ast_rewrite_sources_to_tables(
                                 name: TableFromSourceOptionName::ExcludeColumns,
                                 value: option.value,
                             },
-                            CreateSubsourceOptionName::RetainHistory => TableFromSourceOption {
-                                name: TableFromSourceOptionName::RetainHistory,
-                                value: option.value,
-                            },
                             CreateSubsourceOptionName::Progress => {
                                 panic!("progress option should not exist on this subsource")
                             }

@@ -1124,10 +1124,8 @@ impl_display!(ExternalReferences);
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CreateSubsourceOptionName {
     Progress,
-    /// Tracks which item this subsource references in the primary source.
+    // Tracks which item this subsource references in the primary source.
     ExternalReference,
-    /// The `RETAIN HISTORY` option
-    RetainHistory,
     /// Columns whose types you want to unconditionally format as text
     TextColumns,
     /// Columns you want to exclude when ingesting data
@@ -1142,7 +1140,6 @@ impl AstDisplay for CreateSubsourceOptionName {
         f.write_str(match self {
             CreateSubsourceOptionName::Progress => "PROGRESS",
             CreateSubsourceOptionName::ExternalReference => "EXTERNAL REFERENCE",
-            CreateSubsourceOptionName::RetainHistory => "RETAIN HISTORY",
             CreateSubsourceOptionName::TextColumns => "TEXT COLUMNS",
             CreateSubsourceOptionName::ExcludeColumns => "EXCLUDE COLUMNS",
             CreateSubsourceOptionName::Details => "DETAILS",
@@ -1160,7 +1157,6 @@ impl WithOptionName for CreateSubsourceOptionName {
         match self {
             CreateSubsourceOptionName::Progress
             | CreateSubsourceOptionName::ExternalReference
-            | CreateSubsourceOptionName::RetainHistory
             | CreateSubsourceOptionName::Details
             | CreateSubsourceOptionName::TextColumns
             | CreateSubsourceOptionName::ExcludeColumns => false,
@@ -1658,8 +1654,6 @@ pub enum TableFromSourceOptionName {
     Details,
     /// Partition the given table by the provided columns.
     PartitionBy,
-    // The `RETAIN HISTORY` option
-    RetainHistory,
 }
 
 impl AstDisplay for TableFromSourceOptionName {
@@ -1669,7 +1663,6 @@ impl AstDisplay for TableFromSourceOptionName {
             TableFromSourceOptionName::ExcludeColumns => "EXCLUDE COLUMNS",
             TableFromSourceOptionName::Details => "DETAILS",
             TableFromSourceOptionName::PartitionBy => "PARTITION BY",
-            TableFromSourceOptionName::RetainHistory => "RETAIN HISTORY",
         })
     }
 }
@@ -1686,7 +1679,6 @@ impl WithOptionName for TableFromSourceOptionName {
             TableFromSourceOptionName::Details
             | TableFromSourceOptionName::TextColumns
             | TableFromSourceOptionName::ExcludeColumns
-            | TableFromSourceOptionName::RetainHistory
             | TableFromSourceOptionName::PartitionBy => false,
         }
     }

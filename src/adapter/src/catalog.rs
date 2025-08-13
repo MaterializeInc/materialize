@@ -80,6 +80,7 @@ use mz_sql::session::vars::SystemVars;
 use mz_sql_parser::ast::QualifiedReplica;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::connections::inline::{ConnectionResolver, InlinedConnection};
+use mz_storage_types::read_policy::ReadPolicy;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::OptimizerNotice;
 use smallvec::SmallVec;
@@ -354,6 +355,23 @@ impl Catalog {
         }
 
         dropped_notices
+    }
+
+    /// For the Sources ids in `ids`, return the read policies for all `ids` and additional ids that
+    /// propagate from them. Specifically, if `ids` contains a source, it and all of its source exports
+    /// will be added to the result.
+    pub fn source_read_policies(
+        &self,
+        id: CatalogItemId,
+    ) -> Vec<(CatalogItemId, ReadPolicy<mz_repr::Timestamp>)> {
+        let mut policies = Vec::new();
+        let cws = self.state.source_compaction_windows([id]);
+        for (cw, items) in cws {
+            for id in items {
+                policies.push((id, cw.into()));
+            }
+        }
+        policies
     }
 
     /// Return a set of [`GlobalId`]s for items that need to have their cache entries invalidated

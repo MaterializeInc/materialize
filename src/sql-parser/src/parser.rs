@@ -2811,7 +2811,7 @@ impl<'a> Parser<'a> {
 
     fn parse_create_subsource_option(&mut self) -> Result<CreateSubsourceOption<Raw>, ParserError> {
         let option = match self
-            .expect_one_of_keywords(&[EXTERNAL, PROGRESS, TEXT, EXCLUDE, IGNORE, DETAILS, RETAIN])?
+            .expect_one_of_keywords(&[EXTERNAL, PROGRESS, TEXT, EXCLUDE, IGNORE, DETAILS])?
         {
             EXTERNAL => {
                 self.expect_keyword(REFERENCE)?;
@@ -2851,13 +2851,6 @@ impl<'a> Parser<'a> {
                 name: CreateSubsourceOptionName::Details,
                 value: self.parse_optional_option_value()?,
             },
-            RETAIN => {
-                self.expect_keyword(HISTORY)?;
-                CreateSubsourceOption {
-                    name: CreateSubsourceOptionName::RetainHistory,
-                    value: self.parse_option_retain_history()?,
-                }
-            }
             _ => unreachable!(),
         };
         Ok(option)
