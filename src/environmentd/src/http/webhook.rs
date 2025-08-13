@@ -17,7 +17,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::retry::{Retry, RetryResult};
 use mz_ore::str::StrExt;
 use mz_repr::adt::jsonb::Jsonb;
-use mz_repr::{Datum, Diff, Row, RowPacker, ScalarType, Timestamp};
+use mz_repr::{Datum, Diff, Row, RowPacker, SqlScalarType, Timestamp};
 use mz_sql::plan::{WebhookBodyFormat, WebhookHeaderFilters, WebhookHeaders};
 use mz_storage_types::controller::StorageError;
 
@@ -320,7 +320,7 @@ pub enum WebhookError {
     #[error("headers of request were invalid: {0}")]
     InvalidHeaders(String),
     #[error("failed to deserialize body as {ty:?}: {msg}")]
-    InvalidBody { ty: ScalarType, msg: String },
+    InvalidBody { ty: SqlScalarType, msg: String },
     #[error("failed to validate the request")]
     ValidationFailed,
     #[error("error occurred while running validation")]
@@ -339,11 +339,11 @@ impl From<AppendWebhookError> for WebhookError {
             AppendWebhookError::MissingSecret => WebhookError::SecretMissing,
             AppendWebhookError::ValidationError => WebhookError::ValidationError,
             AppendWebhookError::InvalidUtf8Body { msg } => WebhookError::InvalidBody {
-                ty: ScalarType::String,
+                ty: SqlScalarType::String,
                 msg,
             },
             AppendWebhookError::InvalidJsonBody { msg } => WebhookError::InvalidBody {
-                ty: ScalarType::Jsonb,
+                ty: SqlScalarType::Jsonb,
                 msg,
             },
             AppendWebhookError::UnknownWebhook {

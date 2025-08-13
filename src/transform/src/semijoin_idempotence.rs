@@ -26,7 +26,7 @@
 //! which we will transfer to the columns of `D` thereby forming `C`.
 
 use itertools::Itertools;
-use mz_repr::RelationType;
+use mz_repr::SqlRelationType;
 use std::collections::BTreeMap;
 
 use mz_expr::{Id, JoinInputMapper, LocalId, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT};
@@ -493,7 +493,7 @@ fn list_replacements_join(
 }
 
 /// True iff some unique key of `typ` is contained in the keys of `map`.
-fn distinct_on_keys_of(typ: &RelationType, map: &BTreeMap<usize, usize>) -> bool {
+fn distinct_on_keys_of(typ: &SqlRelationType, map: &BTreeMap<usize, usize>) -> bool {
     typ.keys
         .iter()
         .any(|key| key.iter().all(|k| map.contains_key(k)))

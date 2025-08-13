@@ -12,7 +12,7 @@ use std::fmt;
 use mz_lowertest::MzReflect;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
 use mz_repr::adt::system::Oid;
-use mz_repr::{ColumnType, ScalarType, strconv};
+use mz_repr::{SqlColumnType, SqlScalarType, strconv};
 use serde::{Deserialize, Serialize};
 
 use crate::EvalError;
@@ -136,8 +136,8 @@ impl<'a> EagerUnaryFunc<'a> for CastInt64ToNumeric {
         Ok(a)
     }
 
-    fn output_type(&self, input: ColumnType) -> ColumnType {
-        ScalarType::Numeric { max_scale: self.0 }.nullable(input.nullable)
+    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+        SqlScalarType::Numeric { max_scale: self.0 }.nullable(input.nullable)
     }
 
     fn could_error(&self) -> bool {

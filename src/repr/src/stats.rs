@@ -41,7 +41,7 @@ use crate::adt::jsonb::{KeyClass, KeyClassifier, NumberParser};
 use crate::adt::numeric::{Numeric, PackedNumeric};
 use crate::adt::timestamp::{CheckedTimestamp, PackedNaiveDateTime};
 use crate::row::ProtoDatum;
-use crate::{Datum, RowArena, ScalarType};
+use crate::{Datum, RowArena, SqlScalarType};
 
 fn soft_expect_or_log<A, B: Debug>(result: Result<A, B>) -> Option<A> {
     match result {
@@ -98,7 +98,7 @@ pub fn fixed_stats_from_column(
 
 /// Returns a `(lower, upper)` bound from the provided [`ColumnStatKinds`], if applicable.
 pub fn col_values<'a>(
-    typ: &ScalarType,
+    typ: &SqlScalarType,
     stats: &'a ColumnStatKinds,
     arena: &'a RowArena,
 ) -> Option<(Datum<'a>, Datum<'a>)> {
@@ -114,44 +114,44 @@ pub fn col_values<'a>(
     }
 
     match (typ, stats) {
-        (ScalarType::Bool, ColumnStatKinds::Primitive(Bool(stats))) => {
+        (SqlScalarType::Bool, ColumnStatKinds::Primitive(Bool(stats))) => {
             let map_datum = |val| if val { Datum::True } else { Datum::False };
             map_stats(stats, map_datum)
         }
-        (ScalarType::PgLegacyChar, ColumnStatKinds::Primitive(U8(stats))) => {
+        (SqlScalarType::PgLegacyChar, ColumnStatKinds::Primitive(U8(stats))) => {
             map_stats(stats, Datum::UInt8)
         }
-        (ScalarType::UInt16, ColumnStatKinds::Primitive(U16(stats))) => {
+        (SqlScalarType::UInt16, ColumnStatKinds::Primitive(U16(stats))) => {
             map_stats(stats, Datum::UInt16)
         }
         (
-            ScalarType::UInt32
-            | ScalarType::Oid
-            | ScalarType::RegClass
-            | ScalarType::RegProc
-            | ScalarType::RegType,
+            SqlScalarType::UInt32
+            | SqlScalarType::Oid
+            | SqlScalarType::RegClass
+            | SqlScalarType::RegProc
+            | SqlScalarType::RegType,
             ColumnStatKinds::Primitive(U32(stats)),
         ) => map_stats(stats, Datum::UInt32),
-        (ScalarType::UInt64, ColumnStatKinds::Primitive(U64(stats))) => {
+        (SqlScalarType::UInt64, ColumnStatKinds::Primitive(U64(stats))) => {
             map_stats(stats, Datum::UInt64)
         }
-        (ScalarType::Int16, ColumnStatKinds::Primitive(I16(stats))) => {
+        (SqlScalarType::Int16, ColumnStatKinds::Primitive(I16(stats))) => {
             map_stats(stats, Datum::Int16)
         }
-        (ScalarType::Int32, ColumnStatKinds::Primitive(I32(stats))) => {
+        (SqlScalarType::Int32, ColumnStatKinds::Primitive(I32(stats))) => {
             map_stats(stats, Datum::Int32)
         }
-        (ScalarType::Int64, ColumnStatKinds::Primitive(I64(stats))) => {
+        (SqlScalarType::Int64, ColumnStatKinds::Primitive(I64(stats))) => {
             map_stats(stats, Datum::Int64)
         }
-        (ScalarType::Float32, ColumnStatKinds::Primitive(F32(stats))) => {
+        (SqlScalarType::Float32, ColumnStatKinds::Primitive(F32(stats))) => {
             map_stats(stats, |x| Datum::Float32(OrderedFloat(x)))
         }
-        (ScalarType::Float64, ColumnStatKinds::Primitive(F64(stats))) => {
+        (SqlScalarType::Float64, ColumnStatKinds::Primitive(F64(stats))) => {
             map_stats(stats, |x| Datum::Float64(OrderedFloat(x)))
         }
         (
-            ScalarType::Numeric { .. },
+            SqlScalarType::Numeric { .. },
             ColumnStatKinds::Bytes(BytesStats::FixedSize(FixedSizeBytesStats {
                 lower,
                 upper,
@@ -166,26 +166,26 @@ pub fn col_values<'a>(
             ))
         }
         (
-            ScalarType::String
-            | ScalarType::PgLegacyName
-            | ScalarType::Char { .. }
-            | ScalarType::VarChar { .. },
+            SqlScalarType::String
+            | SqlScalarType::PgLegacyName
+            | SqlScalarType::Char { .. }
+            | SqlScalarType::VarChar { .. },
             ColumnStatKinds::Primitive(String(stats)),
         ) => map_stats(stats, Datum::String),
-        (ScalarType::Bytes, ColumnStatKinds::Bytes(BytesStats::Primitive(stats))) => {
+        (SqlScalarType::Bytes, ColumnStatKinds::Bytes(BytesStats::Primitive(stats))) => {
             Some((Datum::Bytes(&stats.lower), Datum::Bytes(&stats.upper)))
         }
-        (ScalarType::Date, ColumnStatKinds::Primitive(I32(stats))) => {
+        (SqlScalarType::Date, ColumnStatKinds::Primitive(I32(stats))) => {
             let lower = soft_expect_or_log(Date::from_pg_epoch(stats.lower))?;
             let upper = soft_expect_or_log(Date::from_pg_epoch(stats.upper))?;
             Some((Datum::Date(lower), Datum::Date(upper)))
         }
-        (ScalarType::Time, ColumnStatKinds::Bytes(BytesStats::FixedSize(stats))) => {
+        (SqlScalarType::Time, ColumnStatKinds::Bytes(BytesStats::FixedSize(stats))) => {
             let lower = soft_expect_or_log(PackedNaiveTime::from_bytes(&stats.lower))?.into_value();
             let upper = soft_expect_or_log(PackedNaiveTime::from_bytes(&stats.upper))?.into_value();
             Some((Datum::Time(lower), Datum::Time(upper)))
         }
-        (ScalarType::Timestamp { .. }, ColumnStatKinds::Bytes(BytesStats::FixedSize(stats))) => {
+        (SqlScalarType::Timestamp { .. }, ColumnStatKinds::Bytes(BytesStats::FixedSize(stats))) => {
             let lower =
                 soft_expect_or_log(PackedNaiveDateTime::from_bytes(&stats.lower))?.into_value();
             let lower =
@@ -197,7 +197,10 @@ pub fn col_values<'a>(
 
             Some((Datum::Timestamp(lower), Datum::Timestamp(upper)))
         }
-        (ScalarType::TimestampTz { .. }, ColumnStatKinds::Bytes(BytesStats::FixedSize(stats))) => {
+        (
+            SqlScalarType::TimestampTz { .. },
+            ColumnStatKinds::Bytes(BytesStats::FixedSize(stats)),
+        ) => {
             let lower = soft_expect_or_log(PackedNaiveDateTime::from_bytes(&stats.lower))?
                 .into_value()
                 .and_utc();
@@ -209,41 +212,41 @@ pub fn col_values<'a>(
 
             Some((Datum::TimestampTz(lower), Datum::TimestampTz(upper)))
         }
-        (ScalarType::MzTimestamp, ColumnStatKinds::Primitive(U64(stats))) => {
+        (SqlScalarType::MzTimestamp, ColumnStatKinds::Primitive(U64(stats))) => {
             map_stats(stats, |x| Datum::MzTimestamp(crate::Timestamp::from(x)))
         }
-        (ScalarType::Interval, ColumnStatKinds::Bytes(BytesStats::FixedSize(stats))) => {
+        (SqlScalarType::Interval, ColumnStatKinds::Bytes(BytesStats::FixedSize(stats))) => {
             let lower = soft_expect_or_log(PackedInterval::from_bytes(&stats.lower))?.into_value();
             let upper = soft_expect_or_log(PackedInterval::from_bytes(&stats.upper))?.into_value();
             Some((Datum::Interval(lower), Datum::Interval(upper)))
         }
-        (ScalarType::Uuid, ColumnStatKinds::Bytes(BytesStats::FixedSize(stats))) => {
+        (SqlScalarType::Uuid, ColumnStatKinds::Bytes(BytesStats::FixedSize(stats))) => {
             let lower = soft_expect_or_log(Uuid::from_slice(&stats.lower))?;
             let upper = soft_expect_or_log(Uuid::from_slice(&stats.upper))?;
             Some((Datum::Uuid(lower), Datum::Uuid(upper)))
         }
         // JSON stats are handled elsewhere.
-        (ScalarType::Jsonb, ColumnStatKinds::Bytes(BytesStats::Json(_))) => None,
+        (SqlScalarType::Jsonb, ColumnStatKinds::Bytes(BytesStats::Json(_))) => None,
         // We don't maintain stats on any of these types.
         (
-            ScalarType::AclItem
-            | ScalarType::MzAclItem
-            | ScalarType::Range { .. }
-            | ScalarType::Array(_)
-            | ScalarType::Map { .. }
-            | ScalarType::List { .. }
-            | ScalarType::Record { .. }
-            | ScalarType::Int2Vector,
+            SqlScalarType::AclItem
+            | SqlScalarType::MzAclItem
+            | SqlScalarType::Range { .. }
+            | SqlScalarType::Array(_)
+            | SqlScalarType::Map { .. }
+            | SqlScalarType::List { .. }
+            | SqlScalarType::Record { .. }
+            | SqlScalarType::Int2Vector,
             ColumnStatKinds::None,
         ) => None,
         // V0 Columnar Stat Types that differ from the above.
         (
-            ScalarType::Numeric { .. }
-            | ScalarType::Time
-            | ScalarType::Timestamp { .. }
-            | ScalarType::TimestampTz { .. }
-            | ScalarType::Interval
-            | ScalarType::Uuid,
+            SqlScalarType::Numeric { .. }
+            | SqlScalarType::Time
+            | SqlScalarType::Timestamp { .. }
+            | SqlScalarType::TimestampTz { .. }
+            | SqlScalarType::Interval
+            | SqlScalarType::Uuid,
             ColumnStatKinds::Bytes(BytesStats::Atomic(AtomicBytesStats { lower, upper })),
         ) => {
             let lower = ProtoDatum::decode(lower.as_slice()).expect("should be a valid ProtoDatum");
@@ -586,7 +589,7 @@ mod tests {
     use proptest::prelude::*;
     use uuid::Uuid;
 
-    use crate::{Datum, RelationDesc, Row, RowArena, ScalarType};
+    use crate::{Datum, RelationDesc, Row, RowArena, SqlScalarType};
 
     fn datum_stats_roundtrip_trim<'a>(
         schema: &RelationDesc,
@@ -617,7 +620,7 @@ mod tests {
         }
     }
 
-    fn scalar_type_stats_roundtrip_trim(scalar_type: ScalarType) {
+    fn scalar_type_stats_roundtrip_trim(scalar_type: SqlScalarType) {
         let mut rows = Vec::new();
         for datum in scalar_type.interesting_datums() {
             rows.push(Row::pack(std::iter::once(datum)));
@@ -648,7 +651,7 @@ mod tests {
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // too slow
     fn all_scalar_types_stats_roundtrip_trim() {
-        proptest!(|(scalar_type in any::<ScalarType>())| {
+        proptest!(|(scalar_type in any::<SqlScalarType>())| {
             // The proptest! macro interferes with rustfmt.
             scalar_type_stats_roundtrip_trim(scalar_type)
         });
