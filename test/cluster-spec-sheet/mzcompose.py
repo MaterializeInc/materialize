@@ -755,6 +755,16 @@ def wait_for_cloud(c: Composition) -> None:
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
+    def process(name: str) -> None:
+        if name == "default":
+            return
+        with c.test_case(name):
+            c.workflow(name, *parser.args)
+
+    c.test_parts(list(c.workflows.keys()), process)
+
+
+def workflow_bench(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Deploy the current source to the cloud and run tests."""
 
     parser.add_argument(
