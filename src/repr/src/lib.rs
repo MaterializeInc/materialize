@@ -56,7 +56,7 @@ pub use crate::global_id::GlobalId;
 pub use crate::relation::{
     ColumnIndex, ColumnName, NotNullViolation, PropRelationDescDiff, ProtoColumnName,
     ProtoColumnType, ProtoRelationDesc, ProtoRelationType, RelationDesc, RelationDescBuilder,
-    RelationVersion, RelationVersionSelector, SqlColumnType, SqlRelationType,
+    RelationVersion, RelationVersionSelector, ReprColumnType, SqlColumnType, SqlRelationType,
     VersionedRelationDesc, arb_relation_desc_diff, arb_relation_desc_projection,
     arb_row_for_relation,
 };
@@ -68,7 +68,7 @@ pub use crate::row::{
 };
 pub use crate::scalar::{
     ArrayRustType, AsColumnType, Datum, DatumType, PropArray, PropDatum, PropDict, PropList,
-    ProtoScalarType, SqlScalarBaseType, SqlScalarType, arb_datum, arb_datum_for_column,
-    arb_datum_for_scalar, arb_range_type,
+    ProtoScalarType, ReprScalarType, SqlScalarBaseType, SqlScalarType, arb_datum,
+    arb_datum_for_column, arb_datum_for_scalar, arb_range_type,
 };
 pub use crate::timestamp::{Timestamp, TimestampManipulation};
