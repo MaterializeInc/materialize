@@ -144,7 +144,7 @@ use differential_dataflow::AsCollection;
 use futures::{StreamExt as _, TryStreamExt};
 use mz_ore::cast::CastFrom;
 use mz_ore::future::InTask;
-use mz_postgres_util::tunnel::PostgresFlavor;
+use mz_postgres_util::tunnel::{CancellingClient, PostgresFlavor};
 use mz_postgres_util::{Client, PostgresError, simple_query_opt};
 use mz_repr::{Datum, DatumVec, Diff, Row};
 use mz_sql_parser::ast::{Ident, display::AstDisplay};
@@ -280,10 +280,15 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 .await?;
             let task_name = format!("timely-{worker_id} PG snapshotter");
 
+            let ssh_tunnel_manager = &config.config.connection_context.ssh_tunnel_manager;
             let client = if is_snapshot_leader {
                 let client = connection_config
-                    .connect_replication(&config.config.connection_context.ssh_tunnel_manager)
+                    .connect_replication(ssh_tunnel_manager)
                     .await?;
+                let client = CancellingClient::from_client(
+                    client,
+                    connection_config.clone(),
+                    ssh_tunnel_manager.clone());
 
                 // Attempt to export the snapshot by creating the main replication slot. If that
                 // succeeds then there is no need for creating additional temporary slots.
@@ -315,12 +320,16 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 client
             } else {
                 // Only the snapshot leader needs a replication connection.
-                connection_config
+                let client = connection_config
                     .connect(
                         &task_name,
                         &config.config.connection_context.ssh_tunnel_manager,
                     )
-                    .await?
+                    .await?;
+                CancellingClient::from_client(
+                    client,
+                    connection_config.clone(),
+                    ssh_tunnel_manager.clone())
             };
             *slot_ready_cap_set = CapabilitySet::new();
 

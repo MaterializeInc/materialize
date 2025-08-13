@@ -120,6 +120,70 @@ impl DerefMut for Client {
     }
 }
 
+/// Wrapper for [`Client`] that will attempt to cancel the running query on drop. This must spawn
+/// an async task to cancel the running query, so avoid using in situations where a high volumne
+/// of connects/disconnects may happen.
+pub struct CancellingClient {
+    // Using an option allows us to easily implement Deref and DerefMut, and allows transfering
+    // ownership when it comes time to drop.
+    inner: Option<Client>,
+    // Option to avoid cloning on drop.
+    config: Option<Config>,
+    // This is already an Arc, so it isn't wrapped, just cloned for drop.
+    ssh_tunnel_manager: SshTunnelManager,
+}
+
+impl CancellingClient {
+    pub fn from_client(
+        client: Client,
+        config: Config,
+        ssh_tunnel_manager: SshTunnelManager,
+    ) -> Self {
+        Self {
+            inner: Some(client),
+            config: Some(config),
+            ssh_tunnel_manager,
+        }
+    }
+}
+
+impl Deref for CancellingClient {
+    type Target = Client;
+
+    fn deref(&self) -> &Self::Target {
+        self.inner.as_ref().expect("client exists")
+    }
+}
+
+impl DerefMut for CancellingClient {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.inner.as_mut().expect("client exists")
+    }
+}
+
+impl Drop for CancellingClient {
+    fn drop(&mut self) {
+        let inner_client = self.inner.take().expect("drop only happens once");
+        let config = self.config.take().expect("drop only happens once");
+        let ssh_tunnel_manager = self.ssh_tunnel_manager.clone();
+
+        // A cancel_query establishes a connection and sends a single short messages, so we expect
+        // this task to complete fairly quickly unless there are network connectivity issues.
+        // In the case of network connectivity, the task will have to wait for a connection timeout,
+        // at which point the cancel will fail.
+        task::spawn(|| "pg_cancel_query", async move {
+            tracing::info!("cancelling connection {:?}", config.address());
+            if let Err(error) = config
+                .cancel_query(inner_client.inner, ssh_tunnel_manager)
+                .await
+            {
+                // at this point, there isn't much else to do but log the failure
+                tracing::warn!(?error, "Failed to cancel query {:?}", config.address());
+            }
+        });
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Arbitrary)]
 pub enum PostgresFlavor {
     /// A normal PostgreSQL server.
@@ -366,6 +430,56 @@ impl Config {
                 let client = Client::new(client, &connection);
                 task::spawn(|| task_name, connection);
                 Ok(client)
+            }
+        }
+    }
+
+    // Cancels an in-progress query.
+    // Cancelling a Postgres query requires making a new connection, so it lives in the same place
+    // as connect logic.
+    //
+    // N.B. A cancellation request will only error if it fails to connect. The cancellation attempt
+    // won't return an error, by design.
+    //
+    // For more information on cancelling requests in PG, see:
+    // - <https://www.postgresql.org/docs/17/protocol-flow.html#PROTOCOL-FLOW-CANCELING-REQUESTS>
+    // - <https://docs.rs/tokio-postgres/latest/tokio_postgres/struct.CancelToken.html>
+    async fn cancel_query(
+        &self,
+        client: tokio_postgres::Client,
+        ssh_tunnel_manager: SshTunnelManager,
+    ) -> Result<(), PostgresError> {
+        let mut tls = mz_tls_util::make_tls(&self.inner).map_err(|tls_err| match tls_err {
+            mz_tls_util::TlsError::Generic(e) => PostgresError::Generic(e),
+            mz_tls_util::TlsError::OpenSsl(e) => PostgresError::PostgresSsl(e),
+        })?;
+        let cancel_token = client.cancel_token();
+
+        match &self.tunnel {
+            TunnelConfig::Direct { .. } | TunnelConfig::AwsPrivatelink { .. } => {
+                // For AwsPrivateLink, the addresses have already been overridden, and we are
+                // going to reuse the exist address that the client is already connected to.
+                Ok(cancel_token.cancel_query(tls).await?)
+            }
+            TunnelConfig::Ssh { config } => {
+                let (host, port) = self.address()?;
+                let tunnel = ssh_tunnel_manager
+                    .connect(
+                        config.clone(),
+                        host,
+                        port,
+                        self.ssh_timeout_config,
+                        InTask::No,
+                    )
+                    .await
+                    .map_err(PostgresError::Ssh)?;
+
+                let tls = MakeTlsConnect::<TokioTcpStream>::make_tls_connect(&mut tls, host)?;
+                let tcp_stream = TokioTcpStream::connect(tunnel.local_addr())
+                    .await
+                    .map_err(PostgresError::SshIo)?;
+
+                Ok(cancel_token.cancel_query_raw(tcp_stream, tls).await?)
             }
         }
     }
