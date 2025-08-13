@@ -296,15 +296,17 @@ impl LimiterMetrics {
     }
 }
 
-struct ProcStatus {
+/// Helper for reading and parsing `/proc/self/status` on Linux.
+pub struct ProcStatus {
     /// Resident Set Size (RSS) in bytes.
-    vm_rss: usize,
+    pub vm_rss: usize,
     /// Swap memory in bytes.
-    vm_swap: usize,
+    pub vm_swap: usize,
 }
 
 impl ProcStatus {
-    fn from_proc() -> anyhow::Result<Self> {
+    /// Populate a new `ProcStatus` with information in /proc/self/status.
+    pub fn from_proc() -> anyhow::Result<Self> {
         let contents = std::fs::read_to_string("/proc/self/status")?;
         let mut vm_rss = 0;
         let mut vm_swap = 0;
