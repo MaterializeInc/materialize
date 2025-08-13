@@ -26,17 +26,19 @@ import pandas as pd
 import pg8000
 import pg8000.native
 
-from materialize import MZ_ROOT
+from materialize import MZ_ROOT, buildkite
+from materialize.mzcompose import _wait_for_pg
 from materialize.mzcompose.composition import (
     Composition,
     WorkflowArgumentParser,
 )
 from materialize.mzcompose.services.mz import Mz
+from materialize.ui import UIError
 
-REGION = "aws/us-east-1"
-ENVIRONMENT = os.getenv("ENVIRONMENT", "staging")
-USERNAME = os.getenv("MZ_USERNAME", "infra+nightly-canary@materialize.com")
-APP_PASSWORD = os.getenv("MZ_APP_PASSWORD")
+REGION = "aws/us-west-2"
+ENVIRONMENT = os.getenv("ENVIRONMENT", "production")
+USERNAME = os.getenv("NIGHTLY_MZ_USERNAME", "infra+bot@materialize.com")
+APP_PASSWORD = os.getenv("MZ_CLI_APP_PASSWORD")
 
 SERVICES = [
     Mz(
@@ -726,6 +728,32 @@ class AuctionScenario(Scenario):
         )
 
 
+def disable_region(c: Composition) -> None:
+    print(f"Shutting down region {REGION} ...")
+
+    try:
+        c.run("mz", "region", "disable", "--hard")
+    except UIError:
+        # Can return: status 404 Not Found
+        pass
+
+
+def wait_for_cloud(c: Composition) -> None:
+    print(f"Waiting for cloud cluster to come up with username {USERNAME} ...")
+    _wait_for_pg(
+        host=c.cloud_hostname(),
+        user=USERNAME,
+        password=APP_PASSWORD,
+        port=6875,
+        query="SELECT 1",
+        expected=[(1,)],
+        timeout_secs=900,
+        dbname="materialize",
+        sslmode="require",
+        # print_result=True
+    )
+
+
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Deploy the current source to the cloud and run tests."""
 
@@ -736,43 +764,79 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         help="Destroy the region at the end of the workflow.",
     )
     parser.add_argument(
-        "--version-check",
-        default=False,
+        "--record",
+        default=f"results_{int(time.time())}.csv",
+        help="CSV file to store results.",
+    )
+    parser.add_argument(
+        "--analyze",
+        default=True,
         action=argparse.BooleanOptionalAction,
-        help="Perform a version check.",
+        help="Analyze results after completing test.",
     )
 
-    parser.parse_args()
+    args = parser.parse_args()
 
-    assert APP_PASSWORD is not None
-    connection = pg8000.native.Connection(
-        user=USERNAME, password=APP_PASSWORD, host=c.cloud_hostname(), port=6875
-    )
+    if args.cleanup:
+        disable_region(c)
 
-    with open(f"results_{int(time.time())}.csv", "w") as f:
-        f.write(
-            "scenario,scale,mode,category,test_name,cluster_size,repetition,size_bytes,time_ms\n"
+    test_failed = True
+    try:
+        print("Enabling region using Mz ...")
+        c.run("mz", "region", "enable")
+
+        time.sleep(10)
+
+        assert "materialize.cloud" in c.cloud_hostname()
+        wait_for_cloud(c)
+
+        # Create new app password.
+        new_app_password_name = "Materialize CLI (mz) - Cluster Spec Sheet"
+        output = c.run(
+            "mz", "app-password", "create", new_app_password_name, capture=True
         )
-        run_scenario_strong(
-            scenario=TpchScenario(1, replica_size_for_scale(1)),
-            results_file=f,
-            connection=connection,
+        new_app_password = output.stdout.strip()
+        assert "mzp_" in new_app_password
+
+        connection = pg8000.native.Connection(
+            user=USERNAME, password=new_app_password, host=c.cloud_hostname(), port=6875
         )
-        run_scenario_strong(
-            scenario=TpchScenarioMV(1, replica_size_for_scale(1)),
-            results_file=f,
-            connection=connection,
-        )
-        run_scenario_strong(
-            scenario=AuctionScenario(4, replica_size_for_scale(1)),
-            results_file=f,
-            connection=connection,
-        )
-        run_scenario_weak(
-            scenario=AuctionScenario(4, "none"),
-            results_file=f,
-            connection=connection,
-        )
+
+        with open(args.record, "w") as f:
+            f.write(
+                "scenario,scale,mode,category,test_name,cluster_size,repetition,size_bytes,time_ms\n"
+            )
+            run_scenario_strong(
+                scenario=TpchScenario(1, replica_size_for_scale(1)),
+                results_file=f,
+                connection=connection,
+            )
+            run_scenario_strong(
+                scenario=TpchScenarioMV(1, replica_size_for_scale(1)),
+                results_file=f,
+                connection=connection,
+            )
+            run_scenario_strong(
+                scenario=AuctionScenario(4, replica_size_for_scale(1)),
+                results_file=f,
+                connection=connection,
+            )
+            run_scenario_weak(
+                scenario=AuctionScenario(4, "none"),
+                results_file=f,
+                connection=connection,
+            )
+
+        test_failed = False
+    finally:
+        # Clean up
+        if args.cleanup:
+            disable_region(c)
+
+    if args.analyze:
+        analyze_file(args.record)
+
+    assert not test_failed
 
 
 def run_scenario_strong(
@@ -897,78 +961,114 @@ def analyze_file(file: str):
     plot_dir = os.path.join(MZ_ROOT, "test", "cluster-spec-sheet", "plots", base_name)
     os.makedirs(plot_dir, exist_ok=True)
 
+    all_files = []
+
+    def save_plot(data_frame: pd.DataFrame, benchmark: str, variant: str, unit: str):
+        base_file_name = os.path.join(plot_dir, f"{benchmark}_{variant}_{unit}")
+        file_path = f"{base_file_name}.png"
+        plt.savefig(file_path)
+        all_files.append(file_path)
+        file_path = f"{base_file_name}.html"
+        data_frame.to_html(file_path)
+        all_files.append(file_path)
+        print(f"+++ Plot for {benchmark} {variant} [{unit}]")
+        print(data_frame.to_string())
+
     # Plot the results
+
+    # TPCH create index
     df2 = plot_time_ms(
         df,
         'category != "peek_serving" and (scenario == "tpch" or scenario == "tpch_mv")',
         "TPCH create index/MV",
     )
-    plt.savefig(os.path.join(plot_dir, "tpch_time_ms.png"))
-    df2.to_html(os.path.join(plot_dir, "tpch_time_ms.html"))
+    save_plot(df2, "tpch", "create_index_mv", "time_ms")
 
     df2 = plot_credit_time(
         df,
         'category != "peek_serving" and (scenario == "tpch" or scenario == "tpch_mv")',
         "TPCH create index/MV",
     )
-    plt.savefig(os.path.join(plot_dir, "tpch_credits.png"))
-    df2.to_html(os.path.join(plot_dir, "tpch_credits.html"))
+    save_plot(df2, "tpch", "create_index_mv", "credits")
 
+    # Auction arrangement formation strong scaling
     df2 = plot_time_ms(
         df,
-        'category == "arrangement_formation" and scenario == "auction"',
+        'category == "arrangement_formation" and scenario == "auction" and mode == "strong"',
         "Auction arrangement formation",
     )
-    plt.savefig(os.path.join(plot_dir, "auction_arrangement_formation_time_ms.png"))
-    df2.to_html(os.path.join(plot_dir, "auction_arrangement_formation_time_ms.html"))
+    save_plot(df2, "auction", "arrangement_formation_strong", "time_ms")
 
     df2 = plot_credit_time(
         df,
-        'category == "arrangement_formation" and scenario == "auction"',
+        'category == "arrangement_formation" and scenario == "auction" and mode == "strong"',
         "Auction arrangement formation",
     )
-    plt.savefig(os.path.join(plot_dir, "auction_arrangement_formation_credits.png"))
-    df2.to_html(os.path.join(plot_dir, "auction_arrangement_formation_credits.html"))
+    save_plot(df2, "auction", "arrangement_formation_strong", "credits")
 
+    # Auction primitive operators strong scaling
     df2 = plot_time_ms(
         df,
         'category == "primitive_operators" and scenario == "auction" and mode == "strong"',
         "Auction primitive operators",
     )
-    plt.savefig(
-        os.path.join(plot_dir, "auction_primitive_operators_strong_time_ms.png")
-    )
-    df2.to_html(
-        os.path.join(plot_dir, "auction_primitive_operators_strong_time_ms.html")
-    )
+    save_plot(df2, "auction", "primitive_operators_strong", "time_ms")
 
     df2 = plot_credit_time(
         df,
         'category == "primitive_operators" and scenario == "auction" and mode == "strong"',
         "Auction primitive operators",
     )
-    plt.savefig(
-        os.path.join(plot_dir, "auction_primitive_operators_strong_credits.png")
-    )
-    df2.to_html(
-        os.path.join(plot_dir, "auction_primitive_operators_strong_credits.html")
-    )
+    save_plot(df2, "auction", "primitive_operators_strong", "credits")
 
+    # Auction arrangement formation strong scaling
+    df2 = plot_time_ms(
+        df,
+        'category == "arrangement_formation" and scenario == "auction" and mode == "weak"',
+        "Auction arrangement formation",
+    )
+    save_plot(df2, "auction", "arrangement_formation_weak", "time_ms")
+
+    df2 = plot_credit_time(
+        df,
+        'category == "arrangement_formation" and scenario == "auction" and mode == "weak"',
+        "Auction arrangement formation",
+    )
+    save_plot(df2, "auction", "arrangement_formation_weak", "credits")
+
+    # Auction primitive operators weak scaling
     df2 = plot_time_ms(
         df,
         'category == "primitive_operators" and scenario == "auction" and mode == "weak"',
         "Auction primitive operators",
     )
-    plt.savefig(os.path.join(plot_dir, "auction_primitive_operators_weak_time_ms.png"))
-    df2.to_html(os.path.join(plot_dir, "auction_primitive_operators_weak_time_ms.html"))
+    save_plot(df2, "auction", "primitive_operators_weak", "time_ms")
 
     df2 = plot_credit_time(
         df,
         'category == "primitive_operators" and scenario == "auction" and mode == "weak"',
         "Auction primitive operators",
     )
-    plt.savefig(os.path.join(plot_dir, "auction_primitive_operators_weak_credits.png"))
-    df2.to_html(os.path.join(plot_dir, "auction_primitive_operators_weak_credits.html"))
+    save_plot(df2, "auction", "primitive_operators_weak", "credits")
+
+
+def upload_file(
+    file_paths: list[str],
+    scenario_name: str,
+    variant: str,
+):
+    if buildkite.is_in_buildkite():
+        for file_path in file_paths:
+            buildkite.upload_artifact(file_path, cwd=MZ_ROOT, quiet=True)
+        print(f"+++ Plot for {scenario_name} ({variant})")
+        for file_path in file_paths:
+            print(
+                buildkite.inline_image(
+                    f"artifact://{file_path}", f"Plot for {scenario_name} ({variant})"
+                )
+            )
+    else:
+        print(f"Saving plots to {file_paths}")
 
 
 def plot_time_ms(data: pd.DataFrame, query: str, title: str) -> pd.DataFrame:
