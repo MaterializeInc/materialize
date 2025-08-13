@@ -41,7 +41,7 @@ use mz_storage_types::controller::StorageError;
 
 use crate::builtin::BuiltinLog;
 use crate::durable::initialize::{
-    ENABLE_0DT_DEPLOYMENT, ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT, SYSTEM_CONFIG_SYNCED_KEY,
+    ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT, SYSTEM_CONFIG_SYNCED_KEY,
     WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL, WITH_0DT_DEPLOYMENT_MAX_WAIT,
 };
 use crate::durable::objects::serialization::proto;
@@ -1940,15 +1940,6 @@ impl<'a> Transaction<'a> {
         )
     }
 
-    /// Updates the catalog `enable_0dt_deployment` "config" value to
-    /// match the `enable_0dt_deployment` "system var" value.
-    ///
-    /// These are mirrored so that we can toggle the flag with Launch Darkly,
-    /// but use it in boot before Launch Darkly is available.
-    pub fn set_enable_0dt_deployment(&mut self, value: bool) -> Result<(), CatalogError> {
-        self.set_config(ENABLE_0DT_DEPLOYMENT.into(), Some(u64::from(value)))
-    }
-
     /// Updates the catalog `with_0dt_deployment_max_wait` "config" value to
     /// match the `with_0dt_deployment_max_wait` "system var" value.
     ///
@@ -2000,15 +1991,6 @@ impl<'a> Transaction<'a> {
             ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT.into(),
             Some(u64::from(value)),
         )
-    }
-
-    /// Removes the catalog `enable_0dt_deployment` "config" value to
-    /// match the `enable_0dt_deployment` "system var" value.
-    ///
-    /// These are mirrored so that we can toggle the flag with LaunchDarkly,
-    /// but use it in boot before LaunchDarkly is available.
-    pub fn reset_enable_0dt_deployment(&mut self) -> Result<(), CatalogError> {
-        self.set_config(ENABLE_0DT_DEPLOYMENT.into(), None)
     }
 
     /// Removes the catalog `with_0dt_deployment_max_wait` "config" value to

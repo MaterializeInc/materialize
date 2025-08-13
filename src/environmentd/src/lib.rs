@@ -32,8 +32,8 @@ use mz_adapter::webhook::WebhookConcurrencyLimiter;
 use mz_adapter::{AdapterError, Client as AdapterClient, load_remote_system_parameters};
 use mz_adapter_types::bootstrap_builtin_cluster_config::BootstrapBuiltinClusterConfig;
 use mz_adapter_types::dyncfgs::{
-    ENABLE_0DT_DEPLOYMENT, ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT,
-    WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL, WITH_0DT_DEPLOYMENT_MAX_WAIT,
+    ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT, WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL,
+    WITH_0DT_DEPLOYMENT_MAX_WAIT,
 };
 use mz_auth::password::Password;
 use mz_authenticator::Authenticator;
@@ -502,37 +502,6 @@ impl Listeners {
         let preflight_checks_start = Instant::now();
         info!("startup: envd serve: preflight checks beginning");
 
-        // Determine whether we should perform a 0dt deployment.
-        let enable_0dt_deployment = {
-            let cli_default = config
-                .system_parameter_defaults
-                .get(ENABLE_0DT_DEPLOYMENT.name())
-                .map(|x| {
-                    strconv::parse_bool(x).map_err(|err| {
-                        anyhow!(
-                            "failed to parse default for {}: {}",
-                            ENABLE_0DT_DEPLOYMENT.name(),
-                            err
-                        )
-                    })
-                })
-                .transpose()?;
-            let compiled_default = ENABLE_0DT_DEPLOYMENT.default().clone();
-            let ld = get_ld_value("enable_0dt_deployment", &remote_system_parameters, |x| {
-                strconv::parse_bool(x).map_err(|x| x.to_string())
-            })?;
-            let catalog = openable_adapter_storage.get_enable_0dt_deployment().await?;
-            let computed = ld.or(catalog).or(cli_default).unwrap_or(compiled_default);
-            info!(
-                %computed,
-                ?ld,
-                ?catalog,
-                ?cli_default,
-                ?compiled_default,
-                "determined value for enable_0dt_deployment system parameter",
-            );
-            computed
-        };
         // Determine the maximum wait time when doing a 0dt deployment.
         let with_0dt_deployment_max_wait = {
             let cli_default = config
@@ -664,8 +633,6 @@ impl Listeners {
         // Perform preflight checks.
         //
         // Preflight checks determine whether to boot in read-only mode or not.
-        let mut read_only = false;
-        let mut caught_up_trigger = None;
         let bootstrap_args = BootstrapArgs {
             default_cluster_replica_size: config.bootstrap_default_cluster_replica_size.clone(),
             default_cluster_replication_factor: config.bootstrap_default_cluster_replication_factor,
@@ -685,16 +652,11 @@ impl Listeners {
             bootstrap_args,
             ddl_check_interval: with_0dt_deployment_ddl_check_interval,
         };
-        if enable_0dt_deployment {
-            PreflightOutput {
-                openable_adapter_storage,
-                read_only,
-                caught_up_trigger,
-            } = deployment::preflight::preflight_0dt(preflight_config).await?;
-        } else {
-            openable_adapter_storage =
-                deployment::preflight::preflight_legacy(preflight_config).await?;
-        };
+        let PreflightOutput {
+            openable_adapter_storage,
+            read_only,
+            caught_up_trigger,
+        } = deployment::preflight::preflight_0dt(preflight_config).await?;
 
         info!(
             "startup: envd serve: preflight checks complete in {:?}",
@@ -818,7 +780,6 @@ impl Listeners {
             http_host_name: config.http_host_name,
             tracing_handle: config.tracing_handle,
             read_only_controllers: read_only,
-            enable_0dt_deployment,
             caught_up_trigger,
             helm_chart_version: config.helm_chart_version.clone(),
             license_key: config.license_key,

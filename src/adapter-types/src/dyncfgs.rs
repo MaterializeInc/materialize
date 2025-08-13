@@ -21,12 +21,6 @@ pub const ALLOW_USER_SESSIONS: Config<bool> = Config::new(
     "Whether to allow user roles to create new sessions. When false, only system roles will be permitted to create new sessions.",
 );
 
-pub const ENABLE_0DT_DEPLOYMENT: Config<bool> = Config::new(
-    "enable_0dt_deployment",
-    true,
-    "Whether to enable zero-downtime deployments (experimental).",
-);
-
 // Slightly awkward with the WITH prefix, but we can't start with a 0.
 pub const WITH_0DT_DEPLOYMENT_MAX_WAIT: Config<Duration> = Config::new(
     "with_0dt_deployment_max_wait",
@@ -150,7 +144,6 @@ pub const FORCE_SWAP_FOR_CC_SIZES: Config<bool> = Config::new(
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
         .add(&ALLOW_USER_SESSIONS)
-        .add(&ENABLE_0DT_DEPLOYMENT)
         .add(&WITH_0DT_DEPLOYMENT_MAX_WAIT)
         .add(&WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL)
         .add(&ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT)

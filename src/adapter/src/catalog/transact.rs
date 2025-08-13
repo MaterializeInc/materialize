@@ -18,8 +18,8 @@ use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_adapter_types::dyncfgs::{
-    ENABLE_0DT_DEPLOYMENT, ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT,
-    WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL, WITH_0DT_DEPLOYMENT_MAX_WAIT,
+    ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT, WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL,
+    WITH_0DT_DEPLOYMENT_MAX_WAIT,
 };
 use mz_audit_log::{
     CreateOrDropClusterReplicaReasonV1, EventDetails, EventType, IdFullNameV1, IdNameV1,
@@ -2270,14 +2270,11 @@ impl Catalog {
             Op::UpdateSystemConfiguration { name, value } => {
                 let parsed_value = state.parse_system_configuration(&name, value.borrow())?;
                 tx.upsert_system_config(&name, parsed_value.clone())?;
-                // This mirrors the `enable_0dt_deployment` "system var" into the catalog
-                // storage "config" collection so that we can toggle the flag with
-                // Launch Darkly, but use it in boot before Launch Darkly is available.
-                if name == ENABLE_0DT_DEPLOYMENT.name() {
-                    let enable_0dt_deployment =
-                        strconv::parse_bool(&parsed_value).expect("parsing succeeded above");
-                    tx.set_enable_0dt_deployment(enable_0dt_deployment)?;
-                } else if name == WITH_0DT_DEPLOYMENT_MAX_WAIT.name() {
+                // This mirrors some "system vars" into the catalog storage
+                // "config" collection so that we can toggle the flag with
+                // Launch Darkly, but use it in boot before Launch Darkly is
+                // available.
+                if name == WITH_0DT_DEPLOYMENT_MAX_WAIT.name() {
                     let with_0dt_deployment_max_wait =
                         Duration::parse(VarInput::Flat(&parsed_value))
                             .expect("parsing succeeded above");
@@ -2311,12 +2308,11 @@ impl Catalog {
             }
             Op::ResetSystemConfiguration { name } => {
                 tx.remove_system_config(&name);
-                // This mirrors the `enable_0dt_deployment` "system var" into the catalog
-                // storage "config" collection so that we can toggle the flag with
-                // Launch Darkly, but use it in boot before Launch Darkly is available.
-                if name == ENABLE_0DT_DEPLOYMENT.name() {
-                    tx.reset_enable_0dt_deployment()?;
-                } else if name == WITH_0DT_DEPLOYMENT_MAX_WAIT.name() {
+                // This mirrors some "system vars" into the catalog storage
+                // "config" collection so that we can toggle the flag with
+                // Launch Darkly, but use it in boot before Launch Darkly is
+                // available.
+                if name == WITH_0DT_DEPLOYMENT_MAX_WAIT.name() {
                     tx.reset_0dt_deployment_max_wait()?;
                 } else if name == WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL.name() {
                     tx.reset_0dt_deployment_ddl_check_interval()?;
@@ -2335,7 +2331,6 @@ impl Catalog {
             }
             Op::ResetAllSystemConfiguration => {
                 tx.clear_system_configs();
-                tx.reset_enable_0dt_deployment()?;
                 tx.reset_0dt_deployment_max_wait()?;
                 tx.reset_0dt_deployment_ddl_check_interval()?;
 

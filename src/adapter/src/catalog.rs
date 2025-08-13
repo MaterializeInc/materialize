@@ -724,7 +724,6 @@ impl Catalog {
                 },
                 persist_client,
                 enable_expression_cache_override,
-                enable_0dt_deployment: true,
                 helm_chart_version: None,
                 external_login_password_mz_system: None,
                 license_key: ValidatedLicenseKey::for_tests(),
