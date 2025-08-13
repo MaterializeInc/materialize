@@ -718,7 +718,20 @@
     url: /sql/types/jsonb#to_jsonb
 
 - type: Table
-  description: Table functions evaluate to a set of rows, rather than a single expression.
+  description: |
+    Table functions evaluate to a set of rows rather than a single expression.
+
+    {{< annotation type="WITH ORDINALITY" >}}
+
+    You can also add `WITH ORDINALITY` after a table function call in a `FROM`
+    clause. This causes an `ordinality` column to appear, which is a 1-based
+    numbering of the output rows of each call of the table function.
+
+    For example, `SELECT * FROM unnest(LIST[5,10]) WITH ORDINALITY AS
+    list_item;` includes the `ordinality` column containing the 1-based
+    numbering of the unnested items.
+
+    {{</ annotation >}}
   functions:
   - signature: 'generate_series(start: int, stop: int) -> Col<int>'
     description: Generate all integer values between `start` and `stop`, inclusive.
