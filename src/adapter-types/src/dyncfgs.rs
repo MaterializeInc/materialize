@@ -53,12 +53,6 @@ pub const WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL: Config<Duration> = Confi
     "Interval at which to check whether clusters are caught up, when doing zero-downtime deployment.",
 );
 
-pub const ENABLE_0DT_CAUGHT_UP_CHECK: Config<bool> = Config::new(
-    "enable_0dt_caught_up_check",
-    true,
-    "Whether to determine rehydration using a more complicated method that compares collection write frontiers against an allowed lag behind wall-clock time.",
-);
-
 pub const WITH_0DT_CAUGHT_UP_CHECK_ALLOWED_LAG: Config<Duration> = Config::new(
     "with_0dt_caught_up_check_allowed_lag",
     Duration::from_secs(60),
@@ -161,7 +155,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL)
         .add(&ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT)
         .add(&WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL)
-        .add(&ENABLE_0DT_CAUGHT_UP_CHECK)
         .add(&WITH_0DT_CAUGHT_UP_CHECK_ALLOWED_LAG)
         .add(&WITH_0DT_CAUGHT_UP_CHECK_CUTOFF)
         .add(&ENABLE_0DT_CAUGHT_UP_REPLICA_STATUS_CHECK)

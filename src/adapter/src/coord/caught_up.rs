@@ -17,8 +17,8 @@ use differential_dataflow::lattice::Lattice as _;
 use futures::StreamExt;
 use itertools::Itertools;
 use mz_adapter_types::dyncfgs::{
-    ENABLE_0DT_CAUGHT_UP_CHECK, ENABLE_0DT_CAUGHT_UP_REPLICA_STATUS_CHECK,
-    WITH_0DT_CAUGHT_UP_CHECK_ALLOWED_LAG, WITH_0DT_CAUGHT_UP_CHECK_CUTOFF,
+    ENABLE_0DT_CAUGHT_UP_REPLICA_STATUS_CHECK, WITH_0DT_CAUGHT_UP_CHECK_ALLOWED_LAG,
+    WITH_0DT_CAUGHT_UP_CHECK_CUTOFF,
 };
 use mz_catalog::builtin::{MZ_CLUSTER_REPLICA_FRONTIERS, MZ_CLUSTER_REPLICA_STATUS_HISTORY};
 use mz_catalog::memory::objects::Cluster;
@@ -51,17 +51,6 @@ impl Coordinator {
     ///
     /// This method is a no-op when the trigger has already been fired.
     pub async fn maybe_check_caught_up(&mut self) {
-        let enable_caught_up_check =
-            ENABLE_0DT_CAUGHT_UP_CHECK.get(self.catalog().system_config().dyncfgs());
-
-        if enable_caught_up_check {
-            self.maybe_check_caught_up_new().await
-        } else {
-            self.maybe_check_caught_up_legacy().await
-        }
-    }
-
-    async fn maybe_check_caught_up_new(&mut self) {
         let Some(ctx) = &self.caught_up_check else {
             return;
         };
@@ -398,24 +387,6 @@ impl Coordinator {
         }
 
         Ok(all_caught_up)
-    }
-
-    async fn maybe_check_caught_up_legacy(&mut self) {
-        let Some(ctx) = &self.caught_up_check else {
-            return;
-        };
-
-        let compute_hydrated = self
-            .controller
-            .compute
-            .clusters_hydrated(&ctx.exclude_collections)
-            .await;
-        tracing::info!(%compute_hydrated, "checked hydration status of clusters");
-
-        if compute_hydrated {
-            let ctx = self.caught_up_check.take().expect("known to exist");
-            ctx.trigger.fire();
-        }
     }
 
     /// Analyzes replica status history to detect replicas that are
