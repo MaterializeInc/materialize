@@ -8,9 +8,7 @@
 # by the Apache License, Version 2.0.
 
 """Utilities for testing the source table migration"""
-from materialize.mz_version import MzVersion
 from materialize.mzcompose.composition import Composition
-from materialize.version_list import get_published_minor_mz_versions
 
 
 def verify_sources_after_source_table_migration(
@@ -54,25 +52,3 @@ def _verify_source(
 
         if fail:
             raise e
-
-
-_last_version: MzVersion | None = None
-
-
-def get_old_image_for_source_table_migration_test() -> str:
-    global _last_version
-    if _last_version is None:
-        current_version = MzVersion.parse_cargo()
-        minor_versions = [
-            v
-            for v in get_published_minor_mz_versions(
-                limit=4, exclude_current_minor_version=True
-            )
-            if v < current_version
-        ]
-        _last_version = minor_versions[0]
-    return f"materialize/materialized:{_last_version}"
-
-
-def get_new_image_for_source_table_migration_test() -> str | None:
-    return None

@@ -36,8 +36,6 @@ from materialize.mzcompose.services.postgres import (
 from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.source_table_migration import (
-    get_new_image_for_source_table_migration_test,
-    get_old_image_for_source_table_migration_test,
     verify_sources_after_source_table_migration,
 )
 
@@ -325,7 +323,6 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         mz_old = Materialized(
             name="materialized",
-            image=get_old_image_for_source_table_migration_test(),
             external_metadata_store=True,
             external_blob_store=True,
             additional_system_parameter_defaults={
@@ -336,7 +333,6 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         mz_new = Materialized(
             name="materialized",
-            image=get_new_image_for_source_table_migration_test(),
             external_metadata_store=True,
             external_blob_store=True,
             additional_system_parameter_defaults={
