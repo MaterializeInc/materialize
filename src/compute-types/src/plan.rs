@@ -25,7 +25,7 @@ use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::explain::text::text_string_at;
 use mz_repr::explain::{DummyHumanizer, ExplainConfig, ExprHumanizer, PlanRenderingContext};
 use mz_repr::optimize::OptimizerFeatures;
-use mz_repr::{ColumnType, Diff, GlobalId, Row};
+use mz_repr::{Diff, GlobalId, Row};
 use proptest::arbitrary::Arbitrary;
 use proptest::prelude::*;
 use proptest::strategy::Strategy;
@@ -34,7 +34,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::dataflows::DataflowDescription;
 use crate::plan::join::JoinPlan;
-use crate::plan::proto_available_collections::ProtoColumnTypes;
 use crate::plan::reduce::{KeyValPlan, ReducePlan};
 use crate::plan::threshold::ThresholdPlan;
 use crate::plan::top_k::TopKPlan;
@@ -87,24 +86,11 @@ pub(crate) fn any_arranged_thin()
     )
 }
 
-impl RustType<ProtoColumnTypes> for Vec<ColumnType> {
-    fn into_proto(&self) -> ProtoColumnTypes {
-        ProtoColumnTypes {
-            types: self.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoColumnTypes) -> Result<Self, TryFromProtoError> {
-        proto.types.into_rust()
-    }
-}
-
 impl RustType<ProtoAvailableCollections> for AvailableCollections {
     fn into_proto(&self) -> ProtoAvailableCollections {
         ProtoAvailableCollections {
             raw: self.raw,
             arranged: self.arranged.into_proto(),
-            types: None::<Vec<ColumnType>>.into_proto(),
         }
     }
 
