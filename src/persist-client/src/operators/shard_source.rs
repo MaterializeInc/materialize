@@ -21,6 +21,13 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
 
+use crate::batch::BLOB_TARGET_SIZE;
+use crate::cfg::{RetryParameters, USE_CRITICAL_SINCE_SOURCE};
+use crate::fetch::{ExchangeableBatchPart, FetchedBlob, Lease};
+use crate::internal::state::BatchPart;
+use crate::operators::time::{AsOfBounds, Bounds};
+use crate::stats::{STATS_AUDIT_PERCENT, STATS_FILTER_ENABLED};
+use crate::{Diagnostics, PersistClient, ShardId};
 use anyhow::anyhow;
 use arrow::array::ArrayRef;
 use differential_dataflow::Hashable;
@@ -29,6 +36,7 @@ use differential_dataflow::lattice::Lattice;
 use futures_util::StreamExt;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
+use mz_ore::soft_assert_or_log;
 use mz_persist_types::stats::PartStats;
 use mz_persist_types::{Codec, Codec64};
 use mz_timely_util::builder_async::{
@@ -44,13 +52,6 @@ use timely::order::TotalOrder;
 use timely::progress::frontier::AntichainRef;
 use timely::progress::{Antichain, Timestamp, timestamp::Refines};
 use tracing::{debug, trace};
-
-use crate::batch::BLOB_TARGET_SIZE;
-use crate::cfg::{RetryParameters, USE_CRITICAL_SINCE_SOURCE};
-use crate::fetch::{ExchangeableBatchPart, FetchedBlob, Lease};
-use crate::internal::state::BatchPart;
-use crate::stats::{STATS_AUDIT_PERCENT, STATS_FILTER_ENABLED};
-use crate::{Diagnostics, PersistClient, ShardId};
 
 /// The result of applying an MFP to a part, if we know it.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -144,7 +145,7 @@ pub fn shard_source<'g, K, V, T, D, DT, G, C>(
     name: &str,
     client: impl Fn() -> C,
     shard_id: ShardId,
-    as_of: Option<Antichain<G::Timestamp>>,
+    as_of: &AsOfBounds<G::Timestamp>,
     snapshot_mode: SnapshotMode,
     until: Antichain<G::Timestamp>,
     desc_transformer: Option<DT>,
@@ -297,7 +298,7 @@ pub(crate) fn shard_source_descs<K, V, D, G>(
     name: &str,
     client: impl Future<Output = PersistClient> + Send + 'static,
     shard_id: ShardId,
-    as_of: Option<Antichain<G::Timestamp>>,
+    as_of: &AsOfBounds<G::Timestamp>,
     snapshot_mode: SnapshotMode,
     until: Antichain<G::Timestamp>,
     completed_fetches_stream: Stream<G, Infallible>,
@@ -331,6 +332,7 @@ where
     // Create a shared slot between the operator to store the listen handle
     let listen_handle = Rc::new(RefCell::new(None));
     let return_listen_handle = Rc::clone(&listen_handle);
+    let as_of_bounds = as_of.bounds();
 
     // Create a oneshot channel to give the part returner a SubscriptionLeaseReturner
     let (tx, rx) = tokio::sync::oneshot::channel::<Rc<RefCell<LeaseManager<G::Timestamp>>>>();
@@ -361,6 +363,35 @@ where
         AsyncOperatorBuilder::new(format!("shard_source_descs({})", name), scope.clone());
     let (descs_output, descs_stream) = builder.new_output();
 
+    // Internally, the `open_leased_reader` call registers a new LeasedReaderId and then fires
+    // up a background tokio task to heartbeat it. It is possible that we might get a
+    // particularly adversarial scheduling where the CRDB query to register the id is sent and
+    // then our Future is not polled again for a long time, resulting is us never spawning the
+    // heartbeat task. Run reader creation in a task to attempt to defend against this.
+    //
+    // TODO: Really we likely need to swap the inners of all persist operators to be
+    // communicating with a tokio task over a channel, but that's much much harder, so for now
+    // we whack the moles as we see them.
+    let read = as_of.run({
+        let diagnostics = Diagnostics {
+            handle_purpose: format!("shard_source({})", name_owned),
+            shard_name: name_owned.clone(),
+        };
+        async move {
+            let client = client.await;
+            let reader = client
+                .open_leased_reader::<K, V, G::Timestamp, D>(
+                    shard_id,
+                    key_schema,
+                    val_schema,
+                    diagnostics,
+                    USE_CRITICAL_SINCE_SOURCE.get(client.dyncfgs()),
+                )
+                .await?;
+            Ok((Bounds::new_lower(reader.since().clone()), reader))
+        }
+    });
+
     #[allow(clippy::await_holding_refcell_ref)]
     let shutdown_button = builder.build(move |caps| async move {
         let mut cap_set = CapabilitySet::from_elem(caps.into_element());
@@ -374,46 +405,32 @@ where
             return;
         }
 
-        // Internally, the `open_leased_reader` call registers a new LeasedReaderId and then fires
-        // up a background tokio task to heartbeat it. It is possible that we might get a
-        // particularly adversarial scheduling where the CRDB query to register the id is sent and
-        // then our Future is not polled again for a long time, resulting is us never spawning the
-        // heartbeat task. Run reader creation in a task to attempt to defend against this.
-        //
-        // TODO: Really we likely need to swap the inners of all persist operators to be
-        // communicating with a tokio task over a channel, but that's much much harder, so for now
-        // we whack the moles as we see them.
-        let mut read = mz_ore::task::spawn(|| format!("shard_source_reader({})", name_owned), {
-            let diagnostics = Diagnostics {
-                handle_purpose: format!("shard_source({})", name_owned),
-                shard_name: name_owned.clone(),
-            };
-            async move {
-                let client = client.await;
-                client
-                    .open_leased_reader::<K, V, G::Timestamp, D>(
-                        shard_id,
-                        key_schema,
-                        val_schema,
-                        diagnostics,
-                        USE_CRITICAL_SINCE_SOURCE.get(client.dyncfgs()),
-                    )
-                    .await
-            }
-        })
-        .await
-        .expect("reader creation shouldn't panic")
-        .expect("could not open persist shard");
-
         // Wait for the start signal only after we have obtained a read handle. This makes "cannot
         // serve requested as_of" panics caused by (database-issues#8729) significantly less
         // likely.
         let () = start_signal.await;
 
+        let mut read = read.await;
         let cfg = read.cfg.clone();
         let metrics = Arc::clone(&read.metrics);
 
-        let as_of = as_of.unwrap_or_else(|| read.since().clone());
+        let bounds = as_of_bounds.await;
+        // FIXME: awkward!
+        let as_of = if bounds.upper().is_empty() {
+            bounds.lower()
+        } else {
+            bounds.upper()
+        };
+
+        if !PartialOrder::less_equal(bounds.lower(), &as_of) {
+            error_handler
+                .report_and_stop(anyhow!(
+                    "invalid lower bound: lower bound {lower:?} > as_of {as_of:?}",
+                    as_of = as_of.elements(),
+                    lower = bounds.lower().elements()
+                ))
+                .await;
+        }
 
         // Eagerly downgrade our frontier to the initial as_of. This makes sure
         // that the output frontier of the `persist_source` closely tracks the
@@ -754,7 +771,7 @@ mod tests {
                         "test_source",
                         move || std::future::ready(persist_client.clone()),
                         shard_id,
-                        None, // No explicit as_of!
+                        &None.into(), // No explicit as_of!
                         SnapshotMode::Include,
                         until,
                         Some(transformer),
@@ -823,7 +840,7 @@ mod tests {
                         "test_source",
                         move || std::future::ready(persist_client.clone()),
                         shard_id,
-                        Some(as_of), // We specify the as_of explicitly!
+                        &Some(as_of).into(), // We specify the as_of explicitly!
                         SnapshotMode::Include,
                         until,
                         Some(transformer),

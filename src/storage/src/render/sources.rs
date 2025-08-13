@@ -15,9 +15,15 @@ use std::collections::BTreeMap;
 use std::iter;
 use std::sync::Arc;
 
+use crate::decode::{render_decode_cdcv2, render_decode_delimited};
+use crate::healthcheck::{HealthStatusMessage, StatusNamespace};
+use crate::source::types::{DecodeResult, SourceOutput, SourceRender};
+use crate::source::{self, RawSourceCreationConfig, SourceExportCreationConfig};
+use crate::upsert::UpsertKey;
 use differential_dataflow::{AsCollection, Collection};
 use mz_ore::cast::CastLossy;
 use mz_persist_client::operators::shard_source::SnapshotMode;
+use mz_persist_client::operators::time::AsOfBounds;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker};
 use mz_storage_operators::persist_source;
 use mz_storage_operators::persist_source::Subtime;
@@ -38,12 +44,6 @@ use timely::dataflow::Stream;
 use timely::dataflow::operators::{ConnectLoop, Feedback, Leave, Map, OkErr};
 use timely::dataflow::scopes::{Child, Scope};
 use timely::progress::{Antichain, Timestamp};
-
-use crate::decode::{render_decode_cdcv2, render_decode_delimited};
-use crate::healthcheck::{HealthStatusMessage, StatusNamespace};
-use crate::source::types::{DecodeResult, SourceOutput, SourceRender};
-use crate::source::{self, RawSourceCreationConfig, SourceExportCreationConfig};
-use crate::upsert::UpsertKey;
 
 /// _Renders_ complete _differential_ [`Collection`]s
 /// that represent the final source and its errors
@@ -304,7 +304,7 @@ where
                             persist_clients,
                             storage_metadata,
                             None,
-                            Some(as_of),
+                            &AsOfBounds::new(error_handler.clone(), Some(as_of)),
                             SnapshotMode::Include,
                             Antichain::new(),
                             None,
