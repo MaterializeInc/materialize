@@ -11,7 +11,7 @@ use std::fmt;
 use std::str::FromStr;
 
 /// Identifies a supported cloud provider.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CloudProvider {
     /// A pseudo-provider value used by local development environments.
     Local,

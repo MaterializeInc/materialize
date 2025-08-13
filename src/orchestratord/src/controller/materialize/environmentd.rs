@@ -108,7 +108,7 @@ pub struct ConnectionInfo {
 pub struct Resources {
     pub generation: u64,
     pub environmentd_network_policies: Vec<NetworkPolicy>,
-    pub service_account: Box<ServiceAccount>,
+    pub service_account: Box<Option<ServiceAccount>>,
     pub role: Box<Role>,
     pub role_binding: Box<RoleBinding>,
     pub public_service: Box<Service>,
@@ -183,8 +183,10 @@ impl Resources {
             apply_resource(&environmentd_network_policy_api, policy).await?;
         }
 
-        trace!("applying environmentd service account");
-        apply_resource(&service_account_api, &*self.service_account).await?;
+        if let Some(service_account) = &*self.service_account {
+            trace!("applying environmentd service account");
+            apply_resource(&service_account_api, service_account).await?;
+        }
 
         trace!("applying environmentd role");
         apply_resource(&role_api, &*self.role).await?;
@@ -642,27 +644,29 @@ fn create_environmentd_network_policies(
 fn create_service_account_object(
     config: &super::MaterializeControllerArgs,
     mz: &Materialize,
-) -> ServiceAccount {
-    let annotations = if config.cloud_provider == CloudProvider::Aws {
-        let role_arn = mz
-            .spec
-            .environmentd_iam_role_arn
-            .as_deref()
-            .or(config.aws_info.environmentd_iam_role_arn.as_deref())
-            .unwrap()
-            .to_string();
-        Some(btreemap! {
-            "eks.amazonaws.com/role-arn".to_string() => role_arn
+) -> Option<ServiceAccount> {
+    if mz.create_service_account() {
+        let annotations = match (
+            config.cloud_provider,
+            mz.spec
+                .environmentd_iam_role_arn
+                .as_deref()
+                .or(config.aws_info.environmentd_iam_role_arn.as_deref()),
+        ) {
+            (CloudProvider::Aws, Some(role_arn)) => Some(btreemap! {
+                "eks.amazonaws.com/role-arn".to_string() => role_arn.to_string()
+            }),
+            _ => None,
+        };
+        Some(ServiceAccount {
+            metadata: ObjectMeta {
+                annotations,
+                ..mz.managed_resource_meta(mz.service_account_name())
+            },
+            ..Default::default()
         })
     } else {
         None
-    };
-    ServiceAccount {
-        metadata: ObjectMeta {
-            annotations,
-            ..mz.managed_resource_meta(mz.service_account_name())
-        },
-        ..Default::default()
     }
 }
 
