@@ -1710,3 +1710,50 @@ Source materialize.public.x
 Target cluster: quickstart
 
 EOF
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH (NO FAST PATH) FOR
+SELECT *
+FROM x, generate_series(1, x.a)
+WHERE x.a = 1;
+----
+Explained Query:
+  Project (#0, #1, #0)
+    Filter (#0{a} = 1)
+      ReadStorage materialize.public.x
+
+Source materialize.public.x
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH (NO FAST PATH) FOR
+SELECT *
+FROM x, generate_series(5, x.a)
+WHERE x.a = 1;
+----
+Explained Query:
+  Constant <empty>
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH (NO FAST PATH) FOR
+SELECT *
+FROM x, LATERAL (VALUES ((1), (x.a)))
+WHERE x.a = 1;
+----
+Explained Query:
+  Project (#0, #1, #0, #0)
+    Filter (#0{a} = 1)
+      ReadStorage materialize.public.x
+
+Source materialize.public.x
+
+Target cluster: quickstart
+
+EOF

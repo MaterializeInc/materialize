@@ -3792,19 +3792,16 @@ pub enum TableFunc {
     WithOrdinality(WithOrdinality),
 }
 
-/// Private enum variant of `TableFunc`. Don't construct this directly, but use
-/// `TableFunc::with_ordinality` instead.
-///
 /// Evaluates the inner table function, expands its results into unary (repeating each row as
 /// many times as the diff indicates), and appends an integer corresponding to the ordinal
 /// position (starting from 1). For example, it numbers the elements of a list when calling
 /// `unnest_list`.
 ///
-/// TODO(ggevay): This struct (and its field) is pub only temporarily, until we make
-/// `FlatMapElimination` not dive into it.
+/// Private enum variant of `TableFunc`. Don't construct this directly, but use
+/// `TableFunc::with_ordinality` instead.
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect)]
-pub struct WithOrdinality {
-    pub inner: Box<TableFunc>,
+struct WithOrdinality {
+    inner: Box<TableFunc>,
 }
 
 impl TableFunc {
