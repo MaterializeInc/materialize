@@ -211,7 +211,7 @@ mod tests {
     use mz_persist_client::rpc::PubSubClientConnection;
     use mz_persist_client::{Diagnostics, PersistClient, PersistLocation, ShardId};
     use mz_persist_types::codec_impls::UnitSchema;
-    use mz_repr::{GlobalId, RelationDesc, ScalarType, Timestamp};
+    use mz_repr::{GlobalId, RelationDesc, SqlScalarType, Timestamp};
     use mz_storage_client::util::remap_handle::RemapHandle;
     use mz_storage_types::StorageDiff;
     use mz_storage_types::controller::CollectionMetadata;
@@ -240,12 +240,12 @@ mod tests {
         RelationDesc::builder()
             .with_column(
                 "partition",
-                ScalarType::Range {
-                    element_type: Box::new(ScalarType::Numeric { max_scale: None }),
+                SqlScalarType::Range {
+                    element_type: Box::new(SqlScalarType::Numeric { max_scale: None }),
                 }
                 .nullable(false),
             )
-            .with_column("offset", ScalarType::UInt64.nullable(true))
+            .with_column("offset", SqlScalarType::UInt64.nullable(true))
             .finish()
     });
 

@@ -17,7 +17,7 @@ use mz_ore::str::StrExt;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::strconv::parse_jsonb;
-use mz_repr::{Datum, Row, RowArena, ScalarType};
+use mz_repr::{Datum, Row, RowArena, SqlScalarType};
 use proc_macro2::TokenTree;
 
 /* #endregion */
@@ -51,7 +51,7 @@ where
 /// * all flavors of numeric types
 pub fn test_spec_to_row<'a, I>(datum_iter: I) -> Result<Row, String>
 where
-    I: Iterator<Item = (&'a str, &'a ScalarType)>,
+    I: Iterator<Item = (&'a str, &'a SqlScalarType)>,
 {
     let temp_storage = RowArena::new();
     Row::try_pack(datum_iter.map(|(litval, littyp)| {
@@ -59,19 +59,19 @@ where
             Ok(Datum::Null)
         } else {
             match littyp {
-                ScalarType::Bool => Ok(Datum::from(parse_litval::<bool>(litval, "bool")?)),
-                ScalarType::Numeric { .. } => {
+                SqlScalarType::Bool => Ok(Datum::from(parse_litval::<bool>(litval, "bool")?)),
+                SqlScalarType::Numeric { .. } => {
                     Ok(Datum::from(parse_litval::<Numeric>(litval, "Numeric")?))
                 }
-                ScalarType::Int16 => Ok(Datum::from(parse_litval::<i16>(litval, "i16")?)),
-                ScalarType::Int32 => Ok(Datum::from(parse_litval::<i32>(litval, "i32")?)),
-                ScalarType::Int64 => Ok(Datum::from(parse_litval::<i64>(litval, "i64")?)),
-                ScalarType::Float32 => Ok(Datum::from(parse_litval::<f32>(litval, "f32")?)),
-                ScalarType::Float64 => Ok(Datum::from(parse_litval::<f64>(litval, "f64")?)),
-                ScalarType::String => Ok(Datum::from(
+                SqlScalarType::Int16 => Ok(Datum::from(parse_litval::<i16>(litval, "i16")?)),
+                SqlScalarType::Int32 => Ok(Datum::from(parse_litval::<i32>(litval, "i32")?)),
+                SqlScalarType::Int64 => Ok(Datum::from(parse_litval::<i64>(litval, "i64")?)),
+                SqlScalarType::Float32 => Ok(Datum::from(parse_litval::<f32>(litval, "f32")?)),
+                SqlScalarType::Float64 => Ok(Datum::from(parse_litval::<f64>(litval, "f64")?)),
+                SqlScalarType::String => Ok(Datum::from(
                     temp_storage.push_string(mz_lowertest::unquote(litval)),
                 )),
-                ScalarType::Timestamp { .. } => {
+                SqlScalarType::Timestamp { .. } => {
                     let datetime = if litval.contains('.') {
                         NaiveDateTime::parse_from_str(litval, "\"%Y-%m-%d %H:%M:%S%.f\"")
                     } else {
@@ -85,7 +85,7 @@ where
                         .unwrap(),
                     ))
                 }
-                ScalarType::Jsonb => parse_jsonb(&mz_lowertest::unquote(litval))
+                SqlScalarType::Jsonb => parse_jsonb(&mz_lowertest::unquote(litval))
                     .map(|jsonb| temp_storage.push_unary_row(jsonb.into_row()))
                     .map_err(|parse| format!("Invalid JSON literal: {:?}", parse)),
                 _ => Err(format!("Unsupported literal type {:?}", littyp)),
@@ -118,22 +118,23 @@ pub fn datum_to_test_spec(datum: Datum) -> String {
 pub fn get_scalar_type_or_default<I>(
     litval: &str,
     scalar_type_stream: &mut I,
-) -> Result<ScalarType, String>
+) -> Result<SqlScalarType, String>
 where
     I: Iterator<Item = TokenTree>,
 {
-    let typ: Option<ScalarType> = deserialize_optional_generic(scalar_type_stream, "ScalarType")?;
+    let typ: Option<SqlScalarType> =
+        deserialize_optional_generic(scalar_type_stream, "ScalarType")?;
     match typ {
         Some(typ) => Ok(typ),
         None => {
             if ["true", "false", "null"].contains(&litval) {
-                Ok(ScalarType::Bool)
+                Ok(SqlScalarType::Bool)
             } else if litval.starts_with('\"') {
-                Ok(ScalarType::String)
+                Ok(SqlScalarType::String)
             } else if litval.contains('.') {
-                Ok(ScalarType::Float64)
+                Ok(SqlScalarType::Float64)
             } else {
-                Ok(ScalarType::Int64)
+                Ok(SqlScalarType::Int64)
             }
         }
     }

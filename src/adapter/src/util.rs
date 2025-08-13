@@ -16,7 +16,7 @@ use mz_compute_client::controller::error::{
 use mz_controller_types::ClusterId;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{exit, soft_assert_no_log};
-use mz_repr::{RelationDesc, RowIterator, ScalarType};
+use mz_repr::{RelationDesc, RowIterator, SqlScalarType};
 use mz_sql::names::FullItemName;
 use mz_sql::plan::StatementDesc;
 use mz_sql::session::metadata::SessionMetadata;
@@ -229,7 +229,7 @@ pub fn index_sql(
 pub fn describe(
     catalog: &Catalog,
     stmt: Statement<Raw>,
-    param_types: &[Option<ScalarType>],
+    param_types: &[Option<SqlScalarType>],
     session: &Session,
 ) -> Result<StatementDesc, AdapterError> {
     match stmt {
