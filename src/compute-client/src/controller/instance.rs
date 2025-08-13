@@ -26,7 +26,8 @@ use mz_compute_types::sinks::{
 };
 use mz_compute_types::sources::SourceInstanceDesc;
 use mz_controller_types::dyncfgs::{
-    ENABLE_WALLCLOCK_LAG_HISTOGRAM_COLLECTION, WALLCLOCK_LAG_RECORDING_INTERVAL,
+    ENABLE_PAUSED_CLUSTER_READHOLD_DOWNGRADE, ENABLE_WALLCLOCK_LAG_HISTOGRAM_COLLECTION,
+    WALLCLOCK_LAG_RECORDING_INTERVAL,
 };
 use mz_dyncfg::ConfigSet;
 use mz_expr::RowSetFinishing;
@@ -2339,7 +2340,9 @@ where
     pub fn maintain(&mut self) {
         self.rehydrate_failed_replicas();
         self.downgrade_warmup_capabilities();
-        self.forward_implied_capabilities();
+        if ENABLE_PAUSED_CLUSTER_READHOLD_DOWNGRADE.get(&self.dyncfg) {
+            self.forward_implied_capabilities();
+        }
         self.schedule_collections();
         self.cleanup_collections();
         self.update_frontier_introspection();
