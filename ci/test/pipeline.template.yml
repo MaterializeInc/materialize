@@ -299,6 +299,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: sqllogictest
           run: fast-tests
+          args: [--parallelism=8]
     agents:
       queue: hetzner-aarch64-16cpu-32gb
 

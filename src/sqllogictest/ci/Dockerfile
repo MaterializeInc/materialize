@@ -12,3 +12,5 @@ MZFROM prod-base
 COPY clusterd sqllogictest /usr/local/bin/
 
 WORKDIR /workdir
+
+USER materialize
