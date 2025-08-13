@@ -25,7 +25,6 @@
 
 use mz_expr::{MirScalarExpr, permutation_for_arrangement};
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
-use mz_repr::ColumnType;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -92,10 +91,10 @@ impl ThresholdPlan {
     /// This is likely either an empty vector, for no arrangement,
     /// or a singleton vector containing the list of expressions
     /// that key a single arrangement.
-    pub fn keys(&self, types: Option<Vec<ColumnType>>) -> AvailableCollections {
+    pub fn keys(&self) -> AvailableCollections {
         match self {
             ThresholdPlan::Basic(plan) => {
-                AvailableCollections::new_arranged(vec![plan.ensure_arrangement.clone()], types)
+                AvailableCollections::new_arranged(vec![plan.ensure_arrangement.clone()])
             }
         }
     }

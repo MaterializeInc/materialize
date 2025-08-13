@@ -985,23 +985,6 @@ impl AvailableCollections {
             arrangement.fmt_text(f, ctx)?;
             writeln!(f, "")?;
         }
-        // types field
-        if let Some(types) = self.types.as_ref() {
-            if types.len() > 0 {
-                write!(f, "{}types=[", ctx.indent)?;
-                write!(
-                    f,
-                    "{}",
-                    separated(
-                        ", ",
-                        types
-                            .iter()
-                            .map(|c| ctx.humanizer.humanize_column_type(c, false))
-                    )
-                )?;
-                writeln!(f, "]")?;
-            }
-        }
         Ok(())
     }
 }

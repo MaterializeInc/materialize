@@ -82,22 +82,18 @@ Explained Query:
       raw=true
       arrangements[0]={ key=[#1{k1}], permutation={#0: #1, #1: #0}, thinning=(#0, #2) }
       arrangements[1]={ key=[#2{k2}], permutation={#0: #1, #1: #2, #2: #0}, thinning=(#0, #1) }
-      types=[text?, integer, integer]
       Get::Arrangement materialize.public.t1
         project=(#1, #0, #2)
         filter=((#0{k1}) IS NOT NULL AND (#2{k2}) IS NOT NULL)
         key=#1{k1}
         raw=false
         arrangements[0]={ key=[#1{k1}], permutation={#0: #1, #1: #0}, thinning=(#0, #2) }
-        types=[text?, integer?, integer?]
     Get::PassArrangements materialize.public.t2
       raw=false
       arrangements[0]={ key=[#1{k1}], permutation={#0: #1, #1: #0}, thinning=(#0) }
-      types=[text?, integer?]
     Get::PassArrangements materialize.public.t3
       raw=false
       arrangements[0]={ key=[#1{k2}], permutation={#0: #1, #1: #0}, thinning=(#0) }
-      types=[text?, integer?]
 
 Used Indexes:
   - materialize.public.i1 (*** full scan ***)

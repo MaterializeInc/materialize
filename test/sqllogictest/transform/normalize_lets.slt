@@ -579,7 +579,6 @@ Explained Query:
       Get::PassArrangements materialize.public.potato
         raw=false
         arrangements[0]={ key=[#0{a}], permutation=id, thinning=(#1) }
-        types=[text?, text?]
   Return
     With Mutually Recursive
       cte l1 =
@@ -599,11 +598,9 @@ Explained Query:
                 Get::PassArrangements l0
                   raw=false
                   arrangements[0]={ key=[#0{a}], permutation=id, thinning=(#1) }
-                  types=[text?, text?]
                 ArrangeBy
                   raw=true
                   arrangements[0]={ key=[#0], permutation=id, thinning=() }
-                  types=[text]
                   Constant
                     - ("russet")
               Join::Linear
@@ -614,11 +611,9 @@ Explained Query:
                 Get::PassArrangements l0
                   raw=false
                   arrangements[0]={ key=[#0{a}], permutation=id, thinning=(#1) }
-                  types=[text?, text?]
                 ArrangeBy
                   raw=true
                   arrangements[0]={ key=[#0{b}], permutation=id, thinning=() }
-                  types=[text]
                   Get::Collection l1
                     project=(#1)
                     filter=((#1{b}) IS NOT NULL)

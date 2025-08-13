@@ -330,7 +330,6 @@ Explained Query:
           ArrangeBy
             raw=false
             arrangements[0]={ key=[#0, #1], permutation=id, thinning=() }
-            types=[integer, integer?]
             Union consolidate_output=true
               Get::Collection materialize.public.t
                 project=(#0, #1)
@@ -414,7 +413,6 @@ Explained Query:
       Get::PassArrangements materialize.public.t
         raw=false
         arrangements[0]={ key=[#1{b}], permutation={#0: #1, #1: #0}, thinning=(#0) }
-        types=[integer?, integer?]
     cte l1 =
       Reduce::Hierarchical
         aggr_funcs=[max]
@@ -435,11 +433,9 @@ Explained Query:
           Get::PassArrangements l0
             raw=false
             arrangements[0]={ key=[#1{b}], permutation={#0: #1, #1: #0}, thinning=(#0) }
-            types=[integer?, integer?]
           Get::PassArrangements l0
             raw=false
             arrangements[0]={ key=[#1{b}], permutation={#0: #1, #1: #0}, thinning=(#0) }
-            types=[integer?, integer?]
   Return
     Union
       Get::Arrangement l1
@@ -532,7 +528,6 @@ Explained Query:
           ArrangeBy
             raw=true
             arrangements[0]={ key=[#0{b}], permutation=id, thinning=() }
-            types=[integer]
             Get::Collection materialize.public.t
               project=(#1)
               filter=((1 = (#0{a} % 2)))
@@ -540,7 +535,6 @@ Explained Query:
           ArrangeBy
             raw=true
             arrangements[0]={ key=[#0{b}], permutation=id, thinning=() }
-            types=[integer]
             Get::Collection materialize.public.t
               project=(#1)
               raw=true

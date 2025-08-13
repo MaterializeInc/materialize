@@ -92,7 +92,6 @@ impl Context {
                 .entry(Id::Global(index_desc.on_id))
                 .or_insert_with(AvailableCollections::default);
             index_keys.arranged.push((key, permutation, thinning));
-            index_keys.types = Some(typ.column_types.clone());
         }
         for id in desc.source_imports.keys() {
             self.arrangements
@@ -773,25 +772,16 @@ This is not expected to cause incorrect results, but could indicate a performanc
             }
             MirRelationExpr::Threshold { input } => {
                 let (plan, keys) = self.lower_mir_expr(input)?;
-                let arity = keys
-                    .types
-                    .as_ref()
-                    .map(|types| types.len())
-                    .unwrap_or_else(|| input.arity());
+                let arity = input.arity();
                 let (threshold_plan, required_arrangement) = ThresholdPlan::create_from(arity);
-                let mut types = keys.types.clone();
                 let plan = if !keys
                     .arranged
                     .iter()
                     .any(|(key, _, _)| key == &required_arrangement.0)
                 {
-                    types = Some(types.unwrap_or_else(|| input.typ().column_types));
                     self.arrange_by(
                         plan,
-                        AvailableCollections::new_arranged(
-                            vec![required_arrangement],
-                            types.clone(),
-                        ),
+                        AvailableCollections::new_arranged(vec![required_arrangement]),
                         &keys,
                         arity,
                     )
@@ -799,7 +789,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     plan
                 };
 
-                let output_keys = threshold_plan.keys(types);
+                let output_keys = threshold_plan.keys();
                 // Return the plan, and any produced keys.
                 let lir_id = self.allocate_lir_id();
                 (
@@ -847,10 +837,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 let input_mir = input;
                 let (input, mut input_keys) = self.lower_mir_expr(input)?;
                 // Fill the `types` in `input_keys` if not already present.
-                let input_types = input_keys
-                    .types
-                    .get_or_insert_with(|| input_mir.typ().column_types);
-                let arity = input_types.len();
+                let arity = input_mir.arity();
 
                 // Determine keys that are not present in `input_keys`.
                 let new_keys = keys
@@ -872,7 +859,6 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     let forms = AvailableCollections {
                         raw: input_keys.raw,
                         arranged: new_keys.clone(),
-                        types: Some(input_types.clone()),
                     };
                     let (input_key, input_mfp) = if let Some((input_key, permutation, thinning)) =
                         input_keys.arbitrary_arrangement()
@@ -1084,11 +1070,6 @@ This is not expected to cause incorrect results, but could indicate a performanc
             forms.arranged.extend(collections.arranged);
             forms.arranged.sort_by(|k1, k2| k1.0.cmp(&k2.0));
             forms.arranged.dedup_by(|k1, k2| k1.0 == k2.0);
-            if forms.types.is_none() {
-                forms.types = collections.types;
-            } else {
-                assert!(collections.types.is_none() || collections.types == forms.types);
-            }
             PlanNode::ArrangeBy {
                 input_key,
                 input,

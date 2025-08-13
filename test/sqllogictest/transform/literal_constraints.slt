@@ -177,11 +177,9 @@ Explained Query:
           Get::PassArrangements materialize.public.t1
             raw=false
             arrangements[0]={ key=[#0{a}, #1{b}], permutation=id, thinning=() }
-            types=[integer?, text?]
           ArrangeBy
             raw=true
             arrangements[0]={ key=[#0, #1], permutation=id, thinning=() }
-            types=[integer, text]
             Constant
               - (2, "l2")
               - (3, "l3")

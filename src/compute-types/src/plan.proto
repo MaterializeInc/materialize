@@ -23,13 +23,8 @@ import "repr/src/relation_and_scalar.proto";
 import "repr/src/row.proto";
 
 message ProtoAvailableCollections {
-  message ProtoColumnTypes {
-    repeated mz_repr.relation_and_scalar.ProtoColumnType types = 1;
-  }
-
   bool raw = 1;
   repeated mz_compute_types.plan.threshold.ProtoArrangement arranged = 2;
-  optional ProtoColumnTypes types = 3;
 }
 
 message ProtoGetPlan {
