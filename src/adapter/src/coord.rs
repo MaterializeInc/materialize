@@ -1053,8 +1053,6 @@ pub struct Config {
     /// meant for use during development of read-only clusters and 0dt upgrades
     /// and should go away once we have proper orchestration during upgrades.
     pub read_only_controllers: bool,
-    /// Whether to enable zero-downtime deployments.
-    pub enable_0dt_deployment: bool,
 
     /// A trigger that signals that the current deployment has caught up with a
     /// previous deployment. Only used during 0dt deployment, while in read-only
@@ -3951,7 +3949,6 @@ pub fn serve(
         http_host_name,
         tracing_handle,
         read_only_controllers,
-        enable_0dt_deployment,
         caught_up_trigger: clusters_caught_up_trigger,
         helm_chart_version,
         license_key,
@@ -4101,7 +4098,6 @@ pub fn serve(
                 builtin_item_migration_config,
                 persist_client: persist_client.clone(),
                 enable_expression_cache_override: None,
-                enable_0dt_deployment,
                 helm_chart_version,
                 external_login_password_mz_system,
                 license_key: license_key.clone(),
