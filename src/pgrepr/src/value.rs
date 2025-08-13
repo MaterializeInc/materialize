@@ -546,7 +546,7 @@ impl Value {
     }
 
     /// Static helper method to pre-validate that a given Datum corresponding to
-    /// the provided `ScalarType` can be converted into a `Value` and then encoded
+    /// the provided `SqlScalarType` can be converted into a `Value` and then encoded
     /// as binary using `encode_binary` without an error.
     pub fn can_encode_binary(typ: &SqlScalarType) -> bool {
         match typ {

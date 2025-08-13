@@ -39,7 +39,7 @@ where
 
 /// Constructs a `Row` from a sequence of `litval` and `littyp`.
 ///
-/// See [get_scalar_type_or_default] for creating a `ScalarType`.
+/// See [get_scalar_type_or_default] for creating a `SqlScalarType`.
 ///
 /// Generally, each `litval` can be parsed into a Datum in the manner you would
 /// imagine. Exceptions:
@@ -106,10 +106,10 @@ pub fn datum_to_test_spec(datum: Datum) -> String {
     }
 }
 
-/// Parses `ScalarType` from `scalar_type_stream` or infers it from `litval`
+/// Parses `SqlScalarType` from `scalar_type_stream` or infers it from `litval`
 ///
-/// See [mz_lowertest::to_json] for the syntax for specifying a `ScalarType`.
-/// If `scalar_type_stream` is empty, will attempt to guess a `ScalarType` for
+/// See [mz_lowertest::to_json] for the syntax for specifying a `SqlScalarType`.
+/// If `scalar_type_stream` is empty, will attempt to guess a `SqlScalarType` for
 /// the literal:
 /// * If `litval` is "true", "false", or "null", will return `Bool`.
 /// * Else if starts with `'"'`, will return String.
@@ -123,7 +123,7 @@ where
     I: Iterator<Item = TokenTree>,
 {
     let typ: Option<SqlScalarType> =
-        deserialize_optional_generic(scalar_type_stream, "ScalarType")?;
+        deserialize_optional_generic(scalar_type_stream, "SqlScalarType")?;
     match typ {
         Some(typ) => Ok(typ),
         None => {

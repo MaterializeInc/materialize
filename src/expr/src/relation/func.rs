@@ -1875,12 +1875,12 @@ pub enum AggregateFunc {
         order_by: Vec<ColumnOrder>,
         value_type: SqlScalarType,
     },
-    /// Accumulates `Datum::Array`s of `ScalarType::Record` whose first element is a `Datum::Array`
+    /// Accumulates `Datum::Array`s of `SqlScalarType::Record` whose first element is a `Datum::Array`
     /// into a single `Datum::Array` (the remaining fields are used by `order_by`).
     ArrayConcat {
         order_by: Vec<ColumnOrder>,
     },
-    /// Accumulates `Datum::List`s of `ScalarType::Record` whose first field is a `Datum::List`
+    /// Accumulates `Datum::List`s of `SqlScalarType::Record` whose first field is a `Datum::List`
     /// into a single `Datum::List` (the remaining fields are used by `order_by`).
     ListConcat {
         order_by: Vec<ColumnOrder>,

@@ -264,13 +264,13 @@ impl JoinInputMapper {
     /// # Examples
     ///
     /// ```
-    /// use mz_repr::{Datum, SqlColumnType, SqlRelationType, ScalarType};
+    /// use mz_repr::{Datum, SqlColumnType, SqlRelationType, SqlScalarType};
     /// use mz_expr::{JoinInputMapper, MirRelationExpr, MirScalarExpr};
     ///
     /// // A two-column schema common to each of the three inputs
     /// let schema = SqlRelationType::new(vec![
-    ///   ScalarType::Int32.nullable(false),
-    ///   ScalarType::Int32.nullable(false),
+    ///   SqlScalarType::Int32.nullable(false),
+    ///   SqlScalarType::Int32.nullable(false),
     /// ]);
     ///
     /// // the specific data are not important here.

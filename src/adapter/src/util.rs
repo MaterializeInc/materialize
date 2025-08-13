@@ -490,7 +490,7 @@ pub fn verify_datum_desc(
     }
 
     for (i, (d, t)) in datums.iter().zip(col_types).enumerate() {
-        if !d.is_instance_of(t) {
+        if !d.is_instance_of_sql(t) {
             let msg = format!(
                 "internal error: column {} is not of expected type {:?}: {:?}",
                 i, t, d

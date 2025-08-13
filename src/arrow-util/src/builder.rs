@@ -135,7 +135,7 @@ impl ArrowBuilder {
     }
 }
 
-/// Return the appropriate Arrow DataType for the given ScalarType, plus a string
+/// Return the appropriate Arrow DataType for the given SqlScalarType, plus a string
 /// that should be used as part of the Arrow 'Extension Type' name for fields using
 /// this type: <https://arrow.apache.org/docs/format/Columnar.html#extension-types>
 fn scalar_to_arrow_datatype(
@@ -230,7 +230,7 @@ fn scalar_to_arrow_datatype(
         }
         // arrow::datatypes::IntervalUnit::MonthDayNano is not yet implemented in the arrow parquet writer
         // https://github.com/apache/arrow-rs/blob/0d031cc8aa81296cb1bdfedea7a7cb4ec6aa54ea/parquet/src/arrow/arrow_writer/mod.rs#L859
-        // ScalarType::Interval => DataType::Interval(arrow::datatypes::IntervalUnit::DayTime)
+        // SqlScalarType::Interval => DataType::Interval(arrow::datatypes::IntervalUnit::DayTime)
         SqlScalarType::Array(inner) => {
             // Postgres / MZ Arrays are weird, since they can be multi-dimensional but this is not
             // enforced in the type system, so can change per-value.

@@ -15,7 +15,7 @@
 //! E.g. `plan_query` is responsible for handling `sqlparser::ast::Query`.
 //! plan_* functions which correspond to operations on relations typically return a `HirRelationExpr`.
 //! plan_* functions which correspond to operations on scalars typically return a `HirScalarExpr`
-//! and a `ScalarType`. (The latter is because it's not always possible to infer from a
+//! and a `SqlScalarType`. (The latter is because it's not always possible to infer from a
 //! `HirScalarExpr` what the intended type is - notably in the case of decimals where the
 //! scale/precision are encoded only in the type).
 
@@ -1007,7 +1007,7 @@ where
         let expr = HirScalarExpr::column(i);
         // We plan every cast and check the evaluated expressions rather than
         // checking the types directly because of some complex casting rules
-        // between types not expressed in `ScalarType` equality.
+        // between types not expressed in `SqlScalarType` equality.
         match typeconv::plan_cast(ecx, ccx, expr.clone(), target_typ) {
             Ok(cast_expr) => {
                 if expr == cast_expr {

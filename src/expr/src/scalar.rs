@@ -791,7 +791,7 @@ impl MirScalarExpr {
     ///
     /// ```rust
     /// use mz_expr::MirScalarExpr;
-    /// use mz_repr::{SqlColumnType, Datum, ScalarType};
+    /// use mz_repr::{SqlColumnType, Datum, SqlScalarType};
     ///
     /// let expr_0 = MirScalarExpr::column(0);
     /// let expr_t = MirScalarExpr::literal_true();
@@ -803,7 +803,7 @@ impl MirScalarExpr {
     ///     .and(expr_f.clone())
     ///     .if_then_else(expr_0, expr_t.clone());
     ///
-    /// let input_type = vec![ScalarType::Int32.nullable(false)];
+    /// let input_type = vec![SqlScalarType::Int32.nullable(false)];
     /// test.reduce(&input_type);
     /// assert_eq!(test, expr_t);
     /// ```

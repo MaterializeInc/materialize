@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Maintains a catalog of valid casts between [`mz_repr::ScalarType`]s, as well as
+//! Maintains a catalog of valid casts between [`mz_repr::SqlScalarType`]s, as well as
 //! other cast-related functions.
 
 use std::cell::RefCell;
@@ -254,15 +254,15 @@ static REGTYPE_TO_STRING: LazyLock<String> = LazyLock::new(|| {
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
 pub enum CastContext {
     /// Implicit casts are "no-brainer" casts that apply automatically in
-    /// expressions. They are typically lossless, such as `ScalarType::Int32` to
-    /// `ScalarType::Int64`.
+    /// expressions. They are typically lossless, such as `SqlScalarType::Int32` to
+    /// `SqlScalarType::Int64`.
     Implicit,
     /// Assignment casts are "reasonable" casts that make sense to apply
     /// automatically in `INSERT` statements, but are surprising enough that
     /// they don't apply implicitly in expressions.
     Assignment,
     /// Explicit casts are casts that are possible but may be surprising, like
-    /// casting `ScalarType::Json` to `ScalarType::Int32`, and therefore they do
+    /// casting `SqlScalarType::Json` to `SqlScalarType::Int32`, and therefore they do
     /// not happen unless explicitly requested by the user with a cast operator.
     Explicit,
     /// Coerced casts permit different behavior when a type is coerced from a
@@ -869,7 +869,7 @@ static VALID_CASTS: LazyLock<BTreeMap<(SqlScalarBaseType, SqlScalarBaseType), Ca
         }
     });
 
-/// Get casts directly between two [`ScalarType`]s, with control over the
+/// Get casts directly between two [`SqlScalarType`]s, with control over the
 /// allowed [`CastContext`].
 fn get_cast(
     ecx: &ExprContext,
@@ -892,7 +892,7 @@ fn get_cast(
     template.and_then(|template| (template.0)(ecx, ccx, from, to))
 }
 
-/// Converts an expression to `ScalarType::String`.
+/// Converts an expression to `SqlScalarType::String`.
 ///
 /// All types are convertible to string, so this never fails.
 pub fn to_string(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
@@ -900,10 +900,10 @@ pub fn to_string(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
         .expect("cast known to exist")
 }
 
-/// Converts an expression to `ScalarType::Jsonb`.
+/// Converts an expression to `SqlScalarType::Jsonb`.
 ///
 /// The rules are as follows:
-///   * `ScalarType::Boolean`s become JSON booleans.
+///   * `SqlScalarType::Boolean`s become JSON booleans.
 ///   * All numeric types are converted to `Float64`s, then become JSON numbers.
 ///   * Records are converted to a JSON object where the record's field names
 ///     are the keys of the object, and the record's fields are recursively
@@ -1006,7 +1006,7 @@ pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
     }
 }
 
-/// Guesses the most-common type among a set of [`ScalarType`]s that all members
+/// Guesses the most-common type among a set of [`SqlScalarType`]s that all members
 /// can be cast to. Returns `None` if a common type cannot be deduced.
 ///
 /// Note that this function implements the type-determination components of
@@ -1224,7 +1224,7 @@ pub fn plan_hypothetical_cast(
         .ok()
 }
 
-/// Plans a cast between [`ScalarType`]s, specifying which types of casts are
+/// Plans a cast between [`SqlScalarType`]s, specifying which types of casts are
 /// permitted using [`CastContext`].
 ///
 /// # Errors
@@ -1262,11 +1262,11 @@ pub fn plan_cast(
     let to_category = TypeCategory::from_type(to);
     if from_category == TypeCategory::String && to_category != TypeCategory::String {
         // Converting from stringlike to something non-stringlike. Handle as if
-        // `from` were a `ScalarType::String.
+        // `from` were a `SqlScalarType::String.
         cast_inner(&SqlScalarType::String, to, expr)
     } else if from_category != TypeCategory::String && to_category == TypeCategory::String {
         // Converting from non-stringlike to something stringlike. Convert to a
-        // `ScalarType::String` and then to the desired type.
+        // `SqlScalarType::String` and then to the desired type.
         let expr = cast_inner(&from, &SqlScalarType::String, expr)?;
         cast_inner(&SqlScalarType::String, to, expr)
     } else {

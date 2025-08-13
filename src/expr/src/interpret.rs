@@ -789,7 +789,7 @@ impl<'a> ColumnSpecs<'a> {
                 Err(error) => *literal = Err(error),
                 Ok(datum) => {
                     assert!(
-                        datum.is_instance_of(col_type),
+                        datum.is_instance_of_sql(col_type),
                         "{datum:?} must be an instance of {col_type:?}"
                     );
                     match literal {

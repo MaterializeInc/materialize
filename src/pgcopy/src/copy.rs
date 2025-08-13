@@ -1136,7 +1136,7 @@ mod tests {
         #[mz_ore::test]
         #[cfg_attr(miri, ignore)]
         fn proptest_csv_roundtrips(copy_csv_params: CopyCsvFormatParams)  {
-            // Given a ScalarType and Datum roundtrips it through the CSV COPY format.
+            // Given a SqlScalarType and Datum roundtrips it through the CSV COPY format.
             let try_roundtrip_datum = |scalar_type: &SqlScalarType, datum| {
                 let row = Row::pack_slice(&[datum]);
                 let typ = SqlRelationType::new(vec![

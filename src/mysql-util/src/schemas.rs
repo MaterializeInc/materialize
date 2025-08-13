@@ -391,7 +391,7 @@ fn parse_data_type(
         "time" => SqlScalarType::Time,
         "decimal" | "numeric" => {
             // validate the precision is within the bounds of our numeric type
-            // here since we don't use this precision on the ScalarType itself
+            // here since we don't use this precision on the SqlScalarType itself
             // whereas the scale will be bounds-checked in the TryFrom impl
             if info.numeric_precision.unwrap_or_default() > NUMERIC_DATUM_MAX_PRECISION.into() {
                 Err(UnsupportedDataType {

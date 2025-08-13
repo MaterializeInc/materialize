@@ -284,9 +284,9 @@ pub struct UnsupportedDataType {
     reason: String,
 }
 
-/// Parse a raw data type from SQL Server into a Materialize [`ScalarType`].
+/// Parse a raw data type from SQL Server into a Materialize [`SqlScalarType`].
 ///
-/// Returns the [`ScalarType`] that we'll map this column to and the [`SqlServerColumnDecodeType`]
+/// Returns the [`SqlScalarType`] that we'll map this column to and the [`SqlServerColumnDecodeType`]
 /// that we use to decode the raw value.
 fn parse_data_type(
     raw: &SqlServerColumnRaw,
@@ -439,7 +439,7 @@ fn parse_data_type(
         //
         // TODO(sql_server3): Support a "strict" mode where we're fail the creation of the
         // source if the scale is too large.
-        // TODO(sql_server3): Support specifying a precision for ScalarType::Time.
+        // TODO(sql_server3): Support specifying a precision for SqlScalarType::Time.
         //
         // See: <https://learn.microsoft.com/en-us/sql/t-sql/data-types/datetime2-transact-sql?view=sql-server-ver16>.
         "time" => (SqlScalarType::Time, SqlServerColumnDecodeType::NaiveTime),

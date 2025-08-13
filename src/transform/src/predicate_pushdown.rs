@@ -29,7 +29,7 @@
 //! ```rust
 //! use mz_expr::{BinaryFunc, MirRelationExpr, MirScalarExpr};
 //! use mz_ore::id_gen::IdGen;
-//! use mz_repr::{SqlColumnType, Datum, SqlRelationType, ScalarType};
+//! use mz_repr::{SqlColumnType, Datum, SqlRelationType, SqlScalarType};
 //! use mz_repr::optimize::OptimizerFeatures;
 //! use mz_transform::{typecheck, Transform, TransformCtx};
 //! use mz_transform::dataflow::DataflowMetainfo;
@@ -37,13 +37,13 @@
 //! use mz_transform::predicate_pushdown::PredicatePushdown;
 //!
 //! let input1 = MirRelationExpr::constant(vec![], SqlRelationType::new(vec![
-//!     ScalarType::Bool.nullable(false),
+//!     SqlScalarType::Bool.nullable(false),
 //! ]));
 //! let input2 = MirRelationExpr::constant(vec![], SqlRelationType::new(vec![
-//!     ScalarType::Bool.nullable(false),
+//!     SqlScalarType::Bool.nullable(false),
 //! ]));
 //! let input3 = MirRelationExpr::constant(vec![], SqlRelationType::new(vec![
-//!     ScalarType::Bool.nullable(false),
+//!     SqlScalarType::Bool.nullable(false),
 //! ]));
 //! let join = MirRelationExpr::join(
 //!     vec![input1.clone(), input2.clone(), input3.clone()],

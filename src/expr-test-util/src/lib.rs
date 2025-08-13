@@ -254,7 +254,7 @@ impl MirScalarExprDeserializeContext {
             TokenTree::Ident(i) if i.to_string().eq_ignore_ascii_case("err") => {
                 let error = deserialize_generic(rest_of_stream, "EvalError")?;
                 let typ: Option<SqlScalarType> =
-                    deserialize_optional_generic(rest_of_stream, "ScalarType")?;
+                    deserialize_optional_generic(rest_of_stream, "SqlScalarType")?;
                 Ok(Some(MirScalarExpr::literal(
                     Err(error),
                     typ.unwrap_or(SqlScalarType::Bool),
@@ -338,7 +338,7 @@ impl TestDeserializeContext for MirScalarExprDeserializeContext {
                                 datum_to_test_spec(row.unpack_first()),
                                 serialize::<SqlScalarType, _>(
                                     &serde_json::to_value(&column_type.scalar_type).unwrap(),
-                                    "ScalarType",
+                                    "SqlScalarType",
                                     self
                                 )
                             );
@@ -349,7 +349,7 @@ impl TestDeserializeContext for MirScalarExprDeserializeContext {
                                 serialize::<EvalError, _>(inner_data, "EvalError", self),
                                 serialize::<SqlScalarType, _>(
                                     &serde_json::to_value(&column_type.scalar_type).unwrap(),
-                                    "ScalarType",
+                                    "SqlScalarType",
                                     self
                                 ),
                             );
