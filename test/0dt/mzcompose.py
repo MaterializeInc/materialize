@@ -105,22 +105,7 @@ def workflow_read_only(c: Composition) -> None:
         "mz_old",
         Service("testdrive", idle=True),
     )
-
-    # Make sure cluster is owned by the system so it doesn't get dropped
-    # between testdrive runs.
-    c.sql(
-        """
-        DROP CLUSTER IF EXISTS cluster CASCADE;
-        CREATE CLUSTER cluster SIZE 'scale=2,workers=1';
-        GRANT ALL ON CLUSTER cluster TO materialize;
-        ALTER SYSTEM SET cluster = cluster;
-        CREATE CLUSTER cluster_singlereplica SIZE 'scale=1,workers=1', REPLICATION FACTOR 1;
-        GRANT ALL ON CLUSTER cluster_singlereplica TO materialize;
-    """,
-        service="mz_old",
-        port=6877,
-        user="mz_system",
-    )
+    setup(c)
 
     # Inserts should be reflected when writes are allowed.
     c.testdrive(
@@ -404,22 +389,7 @@ def workflow_basic(c: Composition) -> None:
         "mz_old",
         Service("testdrive", idle=True),
     )
-
-    # Make sure cluster is owned by the system so it doesn't get dropped
-    # between testdrive runs.
-    c.sql(
-        """
-        DROP CLUSTER IF EXISTS cluster CASCADE;
-        CREATE CLUSTER cluster SIZE 'scale=2,workers=1';
-        GRANT ALL ON CLUSTER cluster TO materialize;
-        ALTER SYSTEM SET cluster = cluster;
-        CREATE CLUSTER cluster_singlereplica SIZE 'scale=1,workers=1', REPLICATION FACTOR 1;
-        GRANT ALL ON CLUSTER cluster_singlereplica TO materialize;
-    """,
-        service="mz_old",
-        port=6877,
-        user="mz_system",
-    )
+    setup(c)
 
     # Inserts should be reflected when writes are allowed.
     c.testdrive(
@@ -906,25 +876,10 @@ def workflow_kafka_source_rehydration(c: Composition) -> None:
         "mz_old",
         Service("testdrive", idle=True),
     )
+    setup(c)
 
     count = 1000000
     repeats = 20
-
-    # Make sure cluster is owned by the system so it doesn't get dropped
-    # between testdrive runs.
-    c.sql(
-        """
-        DROP CLUSTER IF EXISTS cluster CASCADE;
-        CREATE CLUSTER cluster SIZE 'scale=1,workers=1';
-        GRANT ALL ON CLUSTER cluster TO materialize;
-        ALTER SYSTEM SET cluster = cluster;
-        CREATE CLUSTER cluster_singlereplica SIZE 'scale=1,workers=1', REPLICATION FACTOR 1;
-        GRANT ALL ON CLUSTER cluster_singlereplica TO materialize;
-    """,
-        service="mz_old",
-        port=6877,
-        user="mz_system",
-    )
 
     start_time = time.time()
     c.testdrive(
@@ -1053,25 +1008,10 @@ def workflow_kafka_source_rehydration_large_initial(c: Composition) -> None:
         "mz_old",
         Service("testdrive", idle=True),
     )
+    setup(c)
 
     count = 1000000
     repeats = 20
-
-    # Make sure cluster is owned by the system so it doesn't get dropped
-    # between testdrive runs.
-    c.sql(
-        """
-        DROP CLUSTER IF EXISTS cluster CASCADE;
-        CREATE CLUSTER cluster SIZE 'scale=1,workers=1';
-        GRANT ALL ON CLUSTER cluster TO materialize;
-        ALTER SYSTEM SET cluster = cluster;
-        CREATE CLUSTER cluster_singlereplica SIZE 'scale=1,workers=1', REPLICATION FACTOR 1;
-        GRANT ALL ON CLUSTER cluster_singlereplica TO materialize;
-    """,
-        service="mz_old",
-        port=6877,
-        user="mz_system",
-    )
 
     start_time = time.time()
     c.testdrive(
@@ -1197,25 +1137,10 @@ def workflow_pg_source_rehydration(c: Composition) -> None:
     """Verify Postgres source rehydration in 0dt deployment"""
     c.down(destroy_volumes=True)
     c.up("postgres", "mz_old", Service("testdrive", idle=True))
+    setup(c)
 
     count = 1000000
     repeats = 100
-
-    # Make sure cluster is owned by the system so it doesn't get dropped
-    # between testdrive runs.
-    c.sql(
-        """
-        DROP CLUSTER IF EXISTS cluster CASCADE;
-        CREATE CLUSTER cluster SIZE 'scale=1,workers=1';
-        GRANT ALL ON CLUSTER cluster TO materialize;
-        ALTER SYSTEM SET cluster = cluster;
-        CREATE CLUSTER cluster_singlereplica SIZE 'scale=1,workers=1', REPLICATION FACTOR 1;
-        GRANT ALL ON CLUSTER cluster_singlereplica TO materialize;
-    """,
-        service="mz_old",
-        port=6877,
-        user="mz_system",
-    )
 
     inserts = (
         "INSERT INTO postgres_source_table VALUES "
@@ -1348,25 +1273,10 @@ def workflow_mysql_source_rehydration(c: Composition) -> None:
     """Verify Postgres source rehydration in 0dt deployment"""
     c.down(destroy_volumes=True)
     c.up("mysql", "mz_old", Service("testdrive", idle=True))
+    setup(c)
 
     count = 1000000
     repeats = 100
-
-    # Make sure cluster is owned by the system so it doesn't get dropped
-    # between testdrive runs.
-    c.sql(
-        """
-        DROP CLUSTER IF EXISTS cluster CASCADE;
-        CREATE CLUSTER cluster SIZE 'scale=1,workers=1';
-        GRANT ALL ON CLUSTER cluster TO materialize;
-        ALTER SYSTEM SET cluster = cluster;
-        CREATE CLUSTER cluster_singlereplica SIZE 'scale=1,workers=1', REPLICATION FACTOR 1;
-        GRANT ALL ON CLUSTER cluster_singlereplica TO materialize;
-    """,
-        service="mz_old",
-        port=6877,
-        user="mz_system",
-    )
 
     inserts = (
         "INSERT INTO mysql_source_table VALUES "
@@ -1529,24 +1439,7 @@ def workflow_kafka_source_failpoint(c: Composition) -> None:
         )
     ):
         c.up("mz_old")
-
-        # Make sure cluster is owned by the system so it doesn't get dropped
-        # between testdrive runs.
-        c.sql(
-            dedent(
-                """
-                DROP CLUSTER IF EXISTS cluster CASCADE;
-                CREATE CLUSTER cluster SIZE 'scale=1,workers=1';
-                GRANT ALL ON CLUSTER cluster TO materialize;
-                ALTER SYSTEM SET cluster = cluster;
-                CREATE CLUSTER cluster_singlereplica SIZE 'scale=1,workers=1', REPLICATION FACTOR 1;
-                GRANT ALL ON CLUSTER cluster_singlereplica TO materialize;
-                """
-            ),
-            service="mz_old",
-            port=6877,
-            user="mz_system",
-        )
+        setup(c)
 
         c.testdrive(
             dedent(
@@ -1813,6 +1706,26 @@ def workflow_materialized_view_correction_pruning(c: Composition) -> None:
         )
 
 
+def setup(c: Composition) -> None:
+    # Make sure cluster is owned by the system so it doesn't get dropped
+    # between testdrive runs.
+    c.sql(
+        """
+        DROP CLUSTER IF EXISTS cluster CASCADE;
+        CREATE CLUSTER cluster SIZE 'scale=2,workers=4';
+        GRANT ALL ON CLUSTER cluster TO materialize;
+        ALTER SYSTEM SET cluster = cluster;
+        CREATE CLUSTER cluster_singlereplica SIZE 'scale=1,workers=4', REPLICATION FACTOR 1;
+        GRANT ALL ON CLUSTER cluster_singlereplica TO materialize;
+        ALTER SYSTEM SET max_sources = 100;
+        ALTER SYSTEM SET max_materialized_views = 100;
+    """,
+        service="mz_old",
+        port=6877,
+        user="mz_system",
+    )
+
+
 def workflow_upsert_sources(c: Composition) -> None:
     c.down(destroy_volumes=True)
     c.up(
@@ -1826,21 +1739,7 @@ def workflow_upsert_sources(c: Composition) -> None:
     )
     num_threads = 50
 
-    c.sql(
-        f"""
-        DROP CLUSTER IF EXISTS cluster CASCADE;
-        CREATE CLUSTER cluster SIZE 'scale=2,workers=1';
-        GRANT ALL ON CLUSTER cluster TO materialize;
-        ALTER SYSTEM SET cluster = cluster;
-        CREATE CLUSTER cluster_singlereplica SIZE 'scale=1,workers=1', REPLICATION FACTOR 1;
-        GRANT ALL ON CLUSTER cluster_singlereplica TO materialize;
-        ALTER SYSTEM SET max_sources = {num_threads * 2};
-        ALTER SYSTEM SET max_materialized_views = {num_threads * 2};
-    """,
-        service="mz_old",
-        port=6877,
-        user="mz_system",
-    )
+    setup(c)
 
     c.testdrive(
         dedent(
@@ -1946,21 +1845,7 @@ def workflow_ddl(c: Composition) -> None:
         Service("testdrive", idle=True),
     )
 
-    # Make sure cluster is owned by the system so it doesn't get dropped
-    # between testdrive runs.
-    c.sql(
-        """
-        DROP CLUSTER IF EXISTS cluster CASCADE;
-        CREATE CLUSTER cluster SIZE 'scale=2,workers=1';
-        GRANT ALL ON CLUSTER cluster TO materialize;
-        ALTER SYSTEM SET cluster = cluster;
-        CREATE CLUSTER cluster_singlereplica SIZE 'scale=1,workers=1', REPLICATION FACTOR 1;
-        GRANT ALL ON CLUSTER cluster_singlereplica TO materialize;
-    """,
-        service="mz_old",
-        port=6877,
-        user="mz_system",
-    )
+    setup(c)
 
     # Inserts should be reflected when writes are allowed.
     c.testdrive(

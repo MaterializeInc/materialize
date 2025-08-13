@@ -388,7 +388,7 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
     mz.testdrive.run(
         input=dedent(
             """
-            ! ALTER CLUSTER slow_hydration set (size='4') WITH (WAIT UNTIL READY (TIMEOUT='1s', ON TIMEOUT ROLLBACK))
+            ! ALTER CLUSTER slow_hydration set (size='scale=1,workers=4') WITH (WAIT UNTIL READY (TIMEOUT='1s', ON TIMEOUT ROLLBACK))
             contains: canceling statement, provided timeout lapsed
             """
         ),

@@ -78,6 +78,7 @@ ERROR_RE = re.compile(
     | (^|\ )fatal: # used in frontegg-mock
     | [Oo]ut\ [Oo]f\ [Mm]emory
     | memory\ allocation\ of\ [0-9]+\ bytes\ failed
+    | memory\ utilization\ exceeded\ configured\ limits
     | cannot\ migrate\ from\ catalog
     | halting\ process: # Rust unwrap
     | fatal\ runtime\ error: # stack overflow

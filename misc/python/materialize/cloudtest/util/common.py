@@ -14,6 +14,8 @@ from textwrap import dedent
 from time import sleep
 from typing import Any, cast
 
+from materialize.mzcompose.composition import filter_cmd
+
 LOGGER = logging.getLogger(__name__)
 
 
@@ -122,7 +124,7 @@ def log_subprocess_error(e: subprocess.CalledProcessError) -> None:
     LOGGER.error(
         dedent(
             f"""
-                cmd: {e.cmd}
+                cmd: {filter_cmd(e.cmd)}
                 returncode: {e.returncode}
                 stdout: {e.stdout}
                 stderr: {e.stderr}
