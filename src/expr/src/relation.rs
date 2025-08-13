@@ -1271,7 +1271,7 @@ impl MirRelationExpr {
         for (row, _diff) in &rows {
             for (datum, column_typ) in row.iter().zip(typ.column_types.iter()) {
                 assert!(
-                    datum.is_instance_of(column_typ),
+                    datum.is_instance_of_sql(column_typ),
                     "Expected datum of type {:?}, got value {:?}",
                     column_typ,
                     datum
@@ -1450,13 +1450,13 @@ impl MirRelationExpr {
     /// # Example
     ///
     /// ```rust
-    /// use mz_repr::{Datum, SqlColumnType, SqlRelationType, ScalarType};
+    /// use mz_repr::{Datum, SqlColumnType, SqlRelationType, SqlScalarType};
     /// use mz_expr::MirRelationExpr;
     ///
     /// // A common schema for each input.
     /// let schema = SqlRelationType::new(vec![
-    ///     ScalarType::Int32.nullable(false),
-    ///     ScalarType::Int32.nullable(false),
+    ///     SqlScalarType::Int32.nullable(false),
+    ///     SqlScalarType::Int32.nullable(false),
     /// ]);
     ///
     /// // the specific data are not important here.

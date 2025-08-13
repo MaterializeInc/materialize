@@ -146,7 +146,7 @@ pub enum UpsertStyle {
     /// `ENVELOPE DEBEZIUM UPSERT`
     Debezium { after_idx: usize },
     /// `ENVELOPE UPSERT` where any decode errors will get serialized into a
-    /// ScalarType::Record column named `error_column`, and all value columns are
+    /// SqlScalarType::Record column named `error_column`, and all value columns are
     /// nullable. The key shape depends on the independent `KeyEnvelope`.
     ValueErrInline {
         key_envelope: KeyEnvelope,
@@ -404,7 +404,7 @@ pub enum KeyEnvelope {
     /// Always use the given name for the key.
     ///
     /// * For a single-field key, this means that the column will get the given name.
-    /// * For a multi-column key, the columns will get packed into a [`ScalarType::Record`], and
+    /// * For a multi-column key, the columns will get packed into a [`SqlScalarType::Record`], and
     ///   that Record will get the given name.
     Named(String),
 }

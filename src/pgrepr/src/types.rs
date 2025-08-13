@@ -1145,25 +1145,25 @@ impl fmt::Display for TypeFromOidError {
 
 impl Error for TypeFromOidError {}
 
-/// An error that can occur when converting a [`Type`] to a [`ScalarType`].
+/// An error that can occur when converting a [`Type`] to a [`SqlScalarType`].
 #[derive(Debug, Clone)]
 pub enum TypeConversionError {
-    /// The source type is unsupported as a `ScalarType`.
+    /// The source type is unsupported as a `SqlScalarType`.
     UnsupportedType(Type),
     /// The source type contained an invalid max scale for a
-    /// [`ScalarType::Numeric`].
+    /// [`SqlScalarType::Numeric`].
     InvalidNumericMaxScale(InvalidNumericMaxScaleError),
     /// The source type contained an invalid constraint for a
-    /// [`ScalarType::Numeric`].
+    /// [`SqlScalarType::Numeric`].
     InvalidNumericConstraint(String),
     /// The source type contained an invalid length for a
-    /// [`ScalarType::Char`].
+    /// [`SqlScalarType::Char`].
     InvalidCharLength(InvalidCharLengthError),
     /// The source type contained an invalid max length for a
-    /// [`ScalarType::VarChar`].
+    /// [`SqlScalarType::VarChar`].
     InvalidVarCharMaxLength(InvalidVarCharMaxLengthError),
     /// The source type contained an invalid precision for a
-    /// [`ScalarType::Timestamp`] or [`ScalarType::TimestampTz`].
+    /// [`SqlScalarType::Timestamp`] or [`SqlScalarType::TimestampTz`].
     InvalidTimestampPrecision(InvalidTimestampPrecisionError),
 }
 

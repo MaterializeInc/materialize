@@ -251,7 +251,7 @@ enum DatumColumnEncoder {
         /// Number of values we've pushed into this builder thus far.
         length: usize,
     },
-    /// Special encoder for a [`ScalarType::Record`] that has no inner fields.
+    /// Special encoder for a [`SqlScalarType::Record`] that has no inner fields.
     ///
     /// We have a special case for this scenario because Arrow does not allow a
     /// [`StructArray`] (what normally use to encod a `Record`) with no fields.
@@ -1753,7 +1753,7 @@ fn array_to_decoder(
     Ok(decoder)
 }
 
-/// Small helper function to create a [`DatumColumnEncoder`] from a [`ScalarType`]
+/// Small helper function to create a [`DatumColumnEncoder`] from a [`SqlScalarType`]
 fn scalar_type_to_encoder(col_ty: &SqlScalarType) -> Result<DatumColumnEncoder, anyhow::Error> {
     let encoder = match &col_ty {
         SqlScalarType::Bool => DatumColumnEncoder::Bool(BooleanBuilder::new()),
@@ -1919,7 +1919,7 @@ impl Codec for Row {
     fn validate(row: &Self, desc: &Self::Schema) -> Result<(), String> {
         for x in Itertools::zip_longest(desc.iter_types(), row.iter()) {
             match x {
-                EitherOrBoth::Both(typ, datum) if datum.is_instance_of(typ) => continue,
+                EitherOrBoth::Both(typ, datum) if datum.is_instance_of_sql(typ) => continue,
                 _ => return Err(format!("row {:?} did not match desc {:?}", row, desc)),
             };
         }
