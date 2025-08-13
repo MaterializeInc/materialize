@@ -18,6 +18,7 @@ import os
 import re
 import time
 from abc import abstractmethod
+from collections.abc import Hashable
 from textwrap import dedent
 from typing import Any
 
@@ -64,7 +65,7 @@ class ScenarioRunner:
         mode: str,
         connection: pg8000.native.Connection,
         results_file: Any,
-        replica_size: int,
+        replica_size: Any,
     ) -> None:
         self.scenario = scenario
         self.scale = scale
@@ -74,7 +75,12 @@ class ScenarioRunner:
         self.replica_size = replica_size
 
     def add_result(
-        self, category: str, name: str, repetition: int, size_bytes: int, time: float
+        self,
+        category: str,
+        name: str,
+        repetition: int,
+        size_bytes: int | None,
+        time: float,
     ) -> None:
         self.results_file.write(
             f"{self.scenario},{self.scale},{self.mode},{category},{name},{self.replica_size},{repetition},{size_bytes},{int(time * 1_000)}\n"
@@ -859,7 +865,7 @@ def run_scenario_strong(
         "strong",
         connection,
         results_file,
-        replica_size="None",
+        replica_size=None,
     )
 
     for query in scenario.drop():
@@ -945,11 +951,18 @@ def workflow_plot(c: Composition, parser: WorkflowArgumentParser) -> None:
 
 
 def analyze_file(file: str):
+    def extract_cluster_size(s: str) -> float:
+        match = re.search(r"(\d+)(?:(cc)|(C))", s)
+        if match:
+            if match.group(2):  # 'cc' match
+                return float(match.group(1)) / 100.0
+            elif match.group(3):  # 'C' matches
+                return float(match.group(1))
+        raise ValueError(f"Invalid cluster size format: {s}")
+
     df = pd.read_csv(file)
     # Cluster replica size as credits/hour
-    df["credits_per_h"] = df["cluster_size"].map(
-        lambda s: float(re.search(r"\d+", s).group()) / 100.0
-    )
+    df["credits_per_h"] = df["cluster_size"].map(extract_cluster_size)
     # Cluster replica size as centi-credits/s
     df["ccredit_per_s"] = df["credits_per_h"] / 3600 * 100
     # Number of timely workers
@@ -1127,7 +1140,9 @@ def plot_credit_time(data: pd.DataFrame, query: str, title: str) -> pd.DataFrame
     return filtered
 
 
-def labels_to_drop(data: pd.DataFrame) -> (list[str | None], dict[str | None, str]):
+def labels_to_drop(
+    data: pd.DataFrame,
+) -> tuple[list[Hashable], dict[str, str]]:
     unique = []
     dropped = {}
     for level in range(data.columns.nlevels):
@@ -1135,4 +1150,4 @@ def labels_to_drop(data: pd.DataFrame) -> (list[str | None], dict[str | None, st
         if len(set(labels)) == 1:
             unique.append(data.columns.names[level])
             dropped[data.columns.names[level]] = labels[0]
-    return (unique, dropped)
+    return unique, dropped
