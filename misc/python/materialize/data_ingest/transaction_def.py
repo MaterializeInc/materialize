@@ -90,9 +90,7 @@ class RestartMz(TransactionDef):
                     external_blob_store=True,
                     blob_store_is_azure=self.azurite,
                     external_metadata_store=True,
-                    system_parameter_defaults=get_default_system_parameters(
-                        zero_downtime=True
-                    ),
+                    system_parameter_defaults=get_default_system_parameters(),
                     additional_system_parameter_defaults={
                         "unsafe_enable_table_keys": "true"
                     },
@@ -145,9 +143,7 @@ class ZeroDowntimeDeploy(TransactionDef):
                     external_blob_store=True,
                     blob_store_is_azure=self.azurite,
                     external_metadata_store=True,
-                    system_parameter_defaults=get_default_system_parameters(
-                        zero_downtime=True
-                    ),
+                    system_parameter_defaults=get_default_system_parameters(),
                     additional_system_parameter_defaults={
                         "unsafe_enable_table_keys": "true"
                     },

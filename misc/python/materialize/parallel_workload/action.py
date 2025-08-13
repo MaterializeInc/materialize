@@ -1939,9 +1939,7 @@ class ZeroDowntimeDeployAction(Action):
                 ports=ports,
                 sanity_restart=self.sanity_restart,
                 deploy_generation=self.deploy_generation,
-                system_parameter_defaults=get_default_system_parameters(
-                    zero_downtime=True
-                ),
+                system_parameter_defaults=get_default_system_parameters(),
                 restart="on-failure",
                 healthcheck=LEADER_STATUS_HEALTHCHECK,
                 metadata_store="cockroach",
