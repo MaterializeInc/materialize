@@ -11,16 +11,21 @@
 //! deployment.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::Duration;
 
 use differential_dataflow::lattice::Lattice as _;
+use futures::StreamExt;
 use itertools::Itertools;
 use mz_adapter_types::dyncfgs::{
-    ENABLE_0DT_CAUGHT_UP_CHECK, WITH_0DT_CAUGHT_UP_CHECK_ALLOWED_LAG,
-    WITH_0DT_CAUGHT_UP_CHECK_CUTOFF,
+    ENABLE_0DT_CAUGHT_UP_CHECK, ENABLE_0DT_CAUGHT_UP_REPLICA_STATUS_CHECK,
+    WITH_0DT_CAUGHT_UP_CHECK_ALLOWED_LAG, WITH_0DT_CAUGHT_UP_CHECK_CUTOFF,
 };
-use mz_catalog::builtin::MZ_CLUSTER_REPLICA_FRONTIERS;
+use mz_catalog::builtin::{MZ_CLUSTER_REPLICA_FRONTIERS, MZ_CLUSTER_REPLICA_STATUS_HISTORY};
 use mz_catalog::memory::objects::Cluster;
+use mz_controller_types::ReplicaId;
+use mz_orchestrator::OfflineReason;
 use mz_ore::channel::trigger::Trigger;
+use mz_ore::now::EpochMillis;
 use mz_repr::{GlobalId, Timestamp};
 use timely::PartialOrder;
 use timely::progress::{Antichain, Timestamp as _};
@@ -139,6 +144,18 @@ impl Coordinator {
 
         let now = self.now();
 
+        // Something might go wrong with querying the status collection, so we
+        // have an emergency flag for disabling it.
+        let replica_status_check_enabled =
+            ENABLE_0DT_CAUGHT_UP_REPLICA_STATUS_CHECK.get(self.catalog().system_config().dyncfgs());
+
+        // Analyze replica statuses to detect crash-looping or OOM-looping replicas
+        let problematic_replicas = if replica_status_check_enabled {
+            self.analyze_replica_looping(now).await
+        } else {
+            BTreeSet::new()
+        };
+
         let compute_caught_up = self
             .clusters_caught_up(
                 allowed_lag.into(),
@@ -146,6 +163,7 @@ impl Coordinator {
                 now.into(),
                 &live_collection_frontiers,
                 &ctx.exclude_collections,
+                &problematic_replicas,
             )
             .await;
 
@@ -176,6 +194,7 @@ impl Coordinator {
         now: Timestamp,
         live_frontiers: &BTreeMap<GlobalId, Antichain<Timestamp>>,
         exclude_collections: &BTreeSet<GlobalId>,
+        problematic_replicas: &BTreeSet<ReplicaId>,
     ) -> bool {
         let mut result = true;
         for cluster in self.catalog().clusters() {
@@ -187,6 +206,7 @@ impl Coordinator {
                     now.clone(),
                     live_frontiers,
                     exclude_collections,
+                    problematic_replicas,
                 )
                 .await;
 
@@ -229,8 +249,23 @@ impl Coordinator {
         now: Timestamp,
         live_frontiers: &BTreeMap<GlobalId, Antichain<Timestamp>>,
         exclude_collections: &BTreeSet<GlobalId>,
+        problematic_replicas: &BTreeSet<ReplicaId>,
     ) -> Result<bool, anyhow::Error> {
         if cluster.replicas().next().is_none() {
+            return Ok(true);
+        }
+
+        // Check if all replicas in this cluster are crash/OOM-looping. As long
+        // as there is at least  one healthy replica, the cluster is okay-ish.
+        let cluster_has_only_problematic_replicas = cluster
+            .replicas()
+            .all(|replica| problematic_replicas.contains(&replica.replica_id));
+
+        if cluster_has_only_problematic_replicas {
+            tracing::info!(
+                "ALL replicas of cluster {} crash/OOM-looping, ignoring for caught-up checks",
+                cluster.id
+            );
             return Ok(true);
         }
 
@@ -384,5 +419,148 @@ impl Coordinator {
             let ctx = self.caught_up_check.take().expect("known to exist");
             ctx.trigger.fire();
         }
+    }
+
+    /// Analyzes replica status history to detect replicas that are
+    /// crash-looping or OOM-looping.
+    ///
+    /// A replica is considered problematic if it has multiple OOM kills in a
+    /// short-ish window.
+    async fn analyze_replica_looping(&self, now: EpochMillis) -> BTreeSet<ReplicaId> {
+        // Look back 1 day for patterns.
+        let lookback_window: u64 = Duration::from_secs(24 * 60 * 60)
+            .as_millis()
+            .try_into()
+            .expect("fits into u64");
+        let min_timestamp = now.saturating_sub(lookback_window);
+        let min_timestamp_dt = mz_ore::now::to_datetime(min_timestamp);
+
+        // Get the replica status collection GlobalId
+        let replica_status_item_id = self
+            .catalog()
+            .resolve_builtin_storage_collection(&MZ_CLUSTER_REPLICA_STATUS_HISTORY);
+        let replica_status_gid = self
+            .catalog()
+            .get_entry(&replica_status_item_id)
+            .latest_global_id();
+
+        // Acquire a read hold to determine the as_of timestamp for snapshot_and_stream
+        let read_holds = self
+            .controller
+            .storage_collections
+            .acquire_read_holds(vec![replica_status_gid])
+            .expect("can't acquire read hold for mz_cluster_replica_status_history");
+        let read_hold = if let Some(read_hold) = read_holds.into_iter().next() {
+            read_hold
+        } else {
+            // Collection is not readable anymore, but we return an empty set
+            // instead of panicing.
+            return BTreeSet::new();
+        };
+
+        let as_of = read_hold
+            .since()
+            .iter()
+            .next()
+            .cloned()
+            .expect("since should not be empty");
+
+        let mut replica_statuses_stream = self
+            .controller
+            .storage_collections
+            .snapshot_and_stream(replica_status_gid, as_of)
+            .await
+            .expect("can't read mz_cluster_replica_status_history");
+
+        let mut replica_problem_counts: BTreeMap<ReplicaId, u32> = BTreeMap::new();
+
+        while let Some((source_data, _ts, diff)) = replica_statuses_stream.next().await {
+            // Only process inserts (positive diffs)
+            if diff <= 0 {
+                continue;
+            }
+
+            // Extract the Row from SourceData
+            let row = match source_data.0 {
+                Ok(row) => row,
+                Err(err) => {
+                    // This builtin collection shouldn't have errors, so we at
+                    // least log an error so that tests or sentry will notice.
+                    tracing::error!(
+                        collection = MZ_CLUSTER_REPLICA_STATUS_HISTORY.name,
+                        ?err,
+                        "unexpected error in builtin collection"
+                    );
+                    continue;
+                }
+            };
+
+            let mut iter = row.into_iter();
+
+            let replica_id: ReplicaId = iter
+                .next()
+                .expect("missing replica_id")
+                .unwrap_str()
+                .parse()
+                .expect("must parse as replica ID");
+            let _process_id = iter.next().expect("missing process_id").unwrap_uint64();
+            let status = iter
+                .next()
+                .expect("missing status")
+                .unwrap_str()
+                .to_string();
+            let reason_datum = iter.next().expect("missing reason");
+            let reason = if reason_datum.is_null() {
+                None
+            } else {
+                Some(reason_datum.unwrap_str().to_string())
+            };
+            let occurred_at = iter
+                .next()
+                .expect("missing occurred_at")
+                .unwrap_timestamptz();
+
+            // Only consider events within the time window and that are problematic
+            if occurred_at.naive_utc() >= min_timestamp_dt.naive_utc() {
+                if Self::is_problematic_status(&status, reason.as_deref()) {
+                    *replica_problem_counts.entry(replica_id).or_insert(0) += 1;
+                }
+            }
+        }
+
+        // Filter to replicas with 3 or more problematic events.
+        let result = replica_problem_counts
+            .into_iter()
+            .filter_map(|(replica_id, count)| {
+                if count >= 3 {
+                    tracing::info!(
+                        "Detected problematic cluster replica {}: {} problematic events in last {:?}",
+                        replica_id,
+                        count,
+                        Duration::from_millis(lookback_window)
+                    );
+                    Some(replica_id)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // Explicitly keep the read hold alive until this point.
+        drop(read_hold);
+
+        result
+    }
+
+    /// Determines if a replica status indicates a problematic state that could
+    /// indicate looping.
+    fn is_problematic_status(_status: &str, reason: Option<&str>) -> bool {
+        // For now, we only look at the reason, but we could change/expand this
+        // if/when needed.
+        if let Some(reason) = reason {
+            return reason == OfflineReason::OomKilled.to_string();
+        }
+
+        false
     }
 }

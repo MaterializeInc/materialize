@@ -71,6 +71,12 @@ pub const WITH_0DT_CAUGHT_UP_CHECK_CUTOFF: Config<Duration> = Config::new(
     "Collections whose write frontier is behind 'now' by more than the cutoff are ignored when doing caught-up checks for 0dt deployments.",
 );
 
+pub const ENABLE_0DT_CAUGHT_UP_REPLICA_STATUS_CHECK: Config<bool> = Config::new(
+    "enable_0dt_caught_up_replica_status_check",
+    true,
+    "Enable checking for crash/OOM-looping replicas during 0dt caught-up checks. Emergency break-glass flag to disable this feature if needed.",
+);
+
 /// Enable logging of statement lifecycle events in mz_internal.mz_statement_lifecycle_history.
 pub const ENABLE_STATEMENT_LIFECYCLE_LOGGING: Config<bool> = Config::new(
     "enable_statement_lifecycle_logging",
@@ -149,6 +155,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_0DT_CAUGHT_UP_CHECK)
         .add(&WITH_0DT_CAUGHT_UP_CHECK_ALLOWED_LAG)
         .add(&WITH_0DT_CAUGHT_UP_CHECK_CUTOFF)
+        .add(&ENABLE_0DT_CAUGHT_UP_REPLICA_STATUS_CHECK)
         .add(&ENABLE_STATEMENT_LIFECYCLE_LOGGING)
         .add(&ENABLE_INTROSPECTION_SUBSCRIBES)
         .add(&PLAN_INSIGHTS_NOTICE_FAST_PATH_CLUSTERS_OPTIMIZE_DURATION)
