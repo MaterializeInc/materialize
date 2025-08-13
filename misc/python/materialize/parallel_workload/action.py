@@ -1226,6 +1226,7 @@ class FlipFlagsAction(Action):
             "persist_enable_arrow_lgalloc_noncc_sizes",
             "controller_past_generation_replica_cleanup_retry_interval",
             "enable_0dt_deployment_sources",
+            "enable_0dt_caught_up_replica_status_check",
             "wallclock_lag_recording_interval",
             "enable_wallclock_lag_histogram_collection",
             "wallclock_lag_histogram_period_interval",
