@@ -11,7 +11,7 @@ use std::fmt;
 
 use mz_lowertest::MzReflect;
 use mz_repr::adt::array::ArrayDimension;
-use mz_repr::{ColumnType, Datum, Row, RowArena, RowPacker, ScalarType};
+use mz_repr::{Datum, Row, RowArena, RowPacker, SqlColumnType, SqlScalarType};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -51,9 +51,9 @@ impl LazyUnaryFunc for CastArrayToListOneDim {
         Ok(Datum::List(arr.elements()))
     }
 
-    /// The output ColumnType of this function
-    fn output_type(&self, input_type: ColumnType) -> ColumnType {
-        ScalarType::List {
+    /// The output SqlColumnType of this function
+    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
+        SqlScalarType::List {
             element_type: Box::new(input_type.scalar_type.unwrap_array_element_type().clone()),
             custom_id: None,
         }
@@ -94,7 +94,7 @@ impl fmt::Display for CastArrayToListOneDim {
     Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
 )]
 pub struct CastArrayToString {
-    pub ty: ScalarType,
+    pub ty: SqlScalarType,
 }
 
 impl LazyUnaryFunc for CastArrayToString {
@@ -113,8 +113,8 @@ impl LazyUnaryFunc for CastArrayToString {
         Ok(Datum::String(temp_storage.push_string(buf)))
     }
 
-    fn output_type(&self, input_type: ColumnType) -> ColumnType {
-        ScalarType::String.nullable(input_type.nullable)
+    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
+        SqlScalarType::String.nullable(input_type.nullable)
     }
 
     fn propagates_nulls(&self) -> bool {
@@ -207,8 +207,8 @@ impl LazyUnaryFunc for CastArrayToJsonb {
         Ok(temp_storage.push_unary_row(row))
     }
 
-    fn output_type(&self, input_type: ColumnType) -> ColumnType {
-        ScalarType::Jsonb.nullable(input_type.nullable)
+    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
+        SqlScalarType::Jsonb.nullable(input_type.nullable)
     }
 
     fn propagates_nulls(&self) -> bool {
@@ -247,7 +247,7 @@ impl fmt::Display for CastArrayToJsonb {
     Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
 )]
 pub struct CastArrayToArray {
-    pub return_ty: ScalarType,
+    pub return_ty: SqlScalarType,
     pub cast_expr: Box<MirScalarExpr>,
 }
 
@@ -275,7 +275,7 @@ impl LazyUnaryFunc for CastArrayToArray {
         Ok(temp_storage.try_make_datum(|packer| packer.try_push_array(&dims, casted_datums))?)
     }
 
-    fn output_type(&self, _input_type: ColumnType) -> ColumnType {
+    fn output_type(&self, _input_type: SqlColumnType) -> SqlColumnType {
         self.return_ty.clone().nullable(true)
     }
 

@@ -9,7 +9,7 @@
 
 //! Utilities for binary functions.
 
-use mz_repr::{ColumnType, Datum, DatumType, RowArena};
+use mz_repr::{Datum, DatumType, RowArena, SqlColumnType};
 
 use crate::{EvalError, MirScalarExpr};
 
@@ -25,8 +25,12 @@ pub(crate) trait LazyBinaryFunc {
         b: &'a MirScalarExpr,
     ) -> Result<Datum<'a>, EvalError>;
 
-    /// The output ColumnType of this function.
-    fn output_type(&self, input_type_a: ColumnType, input_type_b: ColumnType) -> ColumnType;
+    /// The output SqlColumnType of this function.
+    fn output_type(
+        &self,
+        input_type_a: SqlColumnType,
+        input_type_b: SqlColumnType,
+    ) -> SqlColumnType;
 
     /// Whether this function will produce NULL on NULL input.
     fn propagates_nulls(&self) -> bool;
@@ -69,8 +73,12 @@ pub(crate) trait EagerBinaryFunc<'a> {
 
     fn call(&self, a: Self::Input1, b: Self::Input2, temp_storage: &'a RowArena) -> Self::Output;
 
-    /// The output ColumnType of this function
-    fn output_type(&self, input_type_a: ColumnType, input_type_b: ColumnType) -> ColumnType;
+    /// The output SqlColumnType of this function
+    fn output_type(
+        &self,
+        input_type_a: SqlColumnType,
+        input_type_b: SqlColumnType,
+    ) -> SqlColumnType;
 
     /// Whether this function will produce NULL on NULL input
     fn propagates_nulls(&self) -> bool {
@@ -134,7 +142,11 @@ impl<T: for<'a> EagerBinaryFunc<'a>> LazyBinaryFunc for T {
         self.call(a, b, temp_storage).into_result(temp_storage)
     }
 
-    fn output_type(&self, input_type_a: ColumnType, input_type_b: ColumnType) -> ColumnType {
+    fn output_type(
+        &self,
+        input_type_a: SqlColumnType,
+        input_type_b: SqlColumnType,
+    ) -> SqlColumnType {
         self.output_type(input_type_a, input_type_b)
     }
 
@@ -166,8 +178,8 @@ impl<T: for<'a> EagerBinaryFunc<'a>> LazyBinaryFunc for T {
 #[cfg(test)]
 mod test {
     use mz_expr_derive::sqlfunc;
-    use mz_repr::ColumnType;
-    use mz_repr::ScalarType;
+    use mz_repr::SqlColumnType;
+    use mz_repr::SqlScalarType;
 
     use crate::scalar::func::binary::LazyBinaryFunc;
     use crate::{BinaryFunc, EvalError, func};
@@ -207,89 +219,89 @@ mod test {
     fn output_types_infallible() {
         assert_eq!(
             Infallible1.output_type(
-                ScalarType::Float32.nullable(true),
-                ScalarType::Float32.nullable(true)
+                SqlScalarType::Float32.nullable(true),
+                SqlScalarType::Float32.nullable(true)
             ),
-            ScalarType::Float32.nullable(true)
+            SqlScalarType::Float32.nullable(true)
         );
         assert_eq!(
             Infallible1.output_type(
-                ScalarType::Float32.nullable(true),
-                ScalarType::Float32.nullable(false)
+                SqlScalarType::Float32.nullable(true),
+                SqlScalarType::Float32.nullable(false)
             ),
-            ScalarType::Float32.nullable(true)
+            SqlScalarType::Float32.nullable(true)
         );
         assert_eq!(
             Infallible1.output_type(
-                ScalarType::Float32.nullable(false),
-                ScalarType::Float32.nullable(true)
+                SqlScalarType::Float32.nullable(false),
+                SqlScalarType::Float32.nullable(true)
             ),
-            ScalarType::Float32.nullable(true)
+            SqlScalarType::Float32.nullable(true)
         );
         assert_eq!(
             Infallible1.output_type(
-                ScalarType::Float32.nullable(false),
-                ScalarType::Float32.nullable(false)
+                SqlScalarType::Float32.nullable(false),
+                SqlScalarType::Float32.nullable(false)
             ),
-            ScalarType::Float32.nullable(false)
+            SqlScalarType::Float32.nullable(false)
         );
 
         assert_eq!(
             Infallible2.output_type(
-                ScalarType::Float32.nullable(true),
-                ScalarType::Float32.nullable(true)
+                SqlScalarType::Float32.nullable(true),
+                SqlScalarType::Float32.nullable(true)
             ),
-            ScalarType::Float32.nullable(false)
+            SqlScalarType::Float32.nullable(false)
         );
         assert_eq!(
             Infallible2.output_type(
-                ScalarType::Float32.nullable(true),
-                ScalarType::Float32.nullable(false)
+                SqlScalarType::Float32.nullable(true),
+                SqlScalarType::Float32.nullable(false)
             ),
-            ScalarType::Float32.nullable(false)
+            SqlScalarType::Float32.nullable(false)
         );
         assert_eq!(
             Infallible2.output_type(
-                ScalarType::Float32.nullable(false),
-                ScalarType::Float32.nullable(true)
+                SqlScalarType::Float32.nullable(false),
+                SqlScalarType::Float32.nullable(true)
             ),
-            ScalarType::Float32.nullable(false)
+            SqlScalarType::Float32.nullable(false)
         );
         assert_eq!(
             Infallible2.output_type(
-                ScalarType::Float32.nullable(false),
-                ScalarType::Float32.nullable(false)
+                SqlScalarType::Float32.nullable(false),
+                SqlScalarType::Float32.nullable(false)
             ),
-            ScalarType::Float32.nullable(false)
+            SqlScalarType::Float32.nullable(false)
         );
 
         assert_eq!(
             Infallible3.output_type(
-                ScalarType::Float32.nullable(true),
-                ScalarType::Float32.nullable(true)
+                SqlScalarType::Float32.nullable(true),
+                SqlScalarType::Float32.nullable(true)
             ),
-            ScalarType::Float32.nullable(true)
+            SqlScalarType::Float32.nullable(true)
         );
         assert_eq!(
             Infallible3.output_type(
-                ScalarType::Float32.nullable(true),
-                ScalarType::Float32.nullable(false)
+                SqlScalarType::Float32.nullable(true),
+                SqlScalarType::Float32.nullable(false)
             ),
-            ScalarType::Float32.nullable(true)
+            SqlScalarType::Float32.nullable(true)
         );
         assert_eq!(
             Infallible3.output_type(
-                ScalarType::Float32.nullable(false),
-                ScalarType::Float32.nullable(true)
+                SqlScalarType::Float32.nullable(false),
+                SqlScalarType::Float32.nullable(true)
             ),
-            ScalarType::Float32.nullable(true)
+            SqlScalarType::Float32.nullable(true)
         );
         assert_eq!(
             Infallible3.output_type(
-                ScalarType::Float32.nullable(false),
-                ScalarType::Float32.nullable(false)
+                SqlScalarType::Float32.nullable(false),
+                SqlScalarType::Float32.nullable(false)
             ),
-            ScalarType::Float32.nullable(true)
+            SqlScalarType::Float32.nullable(true)
         );
     }
 
@@ -327,89 +339,89 @@ mod test {
     fn output_types_fallible() {
         assert_eq!(
             Fallible1.output_type(
-                ScalarType::Float32.nullable(true),
-                ScalarType::Float32.nullable(true)
+                SqlScalarType::Float32.nullable(true),
+                SqlScalarType::Float32.nullable(true)
             ),
-            ScalarType::Float32.nullable(true)
+            SqlScalarType::Float32.nullable(true)
         );
         assert_eq!(
             Fallible1.output_type(
-                ScalarType::Float32.nullable(true),
-                ScalarType::Float32.nullable(false)
+                SqlScalarType::Float32.nullable(true),
+                SqlScalarType::Float32.nullable(false)
             ),
-            ScalarType::Float32.nullable(true)
+            SqlScalarType::Float32.nullable(true)
         );
         assert_eq!(
             Fallible1.output_type(
-                ScalarType::Float32.nullable(false),
-                ScalarType::Float32.nullable(true)
+                SqlScalarType::Float32.nullable(false),
+                SqlScalarType::Float32.nullable(true)
             ),
-            ScalarType::Float32.nullable(true)
+            SqlScalarType::Float32.nullable(true)
         );
         assert_eq!(
             Fallible1.output_type(
-                ScalarType::Float32.nullable(false),
-                ScalarType::Float32.nullable(false)
+                SqlScalarType::Float32.nullable(false),
+                SqlScalarType::Float32.nullable(false)
             ),
-            ScalarType::Float32.nullable(false)
+            SqlScalarType::Float32.nullable(false)
         );
 
         assert_eq!(
             Fallible2.output_type(
-                ScalarType::Float32.nullable(true),
-                ScalarType::Float32.nullable(true)
+                SqlScalarType::Float32.nullable(true),
+                SqlScalarType::Float32.nullable(true)
             ),
-            ScalarType::Float32.nullable(false)
+            SqlScalarType::Float32.nullable(false)
         );
         assert_eq!(
             Fallible2.output_type(
-                ScalarType::Float32.nullable(true),
-                ScalarType::Float32.nullable(false)
+                SqlScalarType::Float32.nullable(true),
+                SqlScalarType::Float32.nullable(false)
             ),
-            ScalarType::Float32.nullable(false)
+            SqlScalarType::Float32.nullable(false)
         );
         assert_eq!(
             Fallible2.output_type(
-                ScalarType::Float32.nullable(false),
-                ScalarType::Float32.nullable(true)
+                SqlScalarType::Float32.nullable(false),
+                SqlScalarType::Float32.nullable(true)
             ),
-            ScalarType::Float32.nullable(false)
+            SqlScalarType::Float32.nullable(false)
         );
         assert_eq!(
             Fallible2.output_type(
-                ScalarType::Float32.nullable(false),
-                ScalarType::Float32.nullable(false)
+                SqlScalarType::Float32.nullable(false),
+                SqlScalarType::Float32.nullable(false)
             ),
-            ScalarType::Float32.nullable(false)
+            SqlScalarType::Float32.nullable(false)
         );
 
         assert_eq!(
             Fallible3.output_type(
-                ScalarType::Float32.nullable(true),
-                ScalarType::Float32.nullable(true)
+                SqlScalarType::Float32.nullable(true),
+                SqlScalarType::Float32.nullable(true)
             ),
-            ScalarType::Float32.nullable(true)
+            SqlScalarType::Float32.nullable(true)
         );
         assert_eq!(
             Fallible3.output_type(
-                ScalarType::Float32.nullable(true),
-                ScalarType::Float32.nullable(false)
+                SqlScalarType::Float32.nullable(true),
+                SqlScalarType::Float32.nullable(false)
             ),
-            ScalarType::Float32.nullable(true)
+            SqlScalarType::Float32.nullable(true)
         );
         assert_eq!(
             Fallible3.output_type(
-                ScalarType::Float32.nullable(false),
-                ScalarType::Float32.nullable(true)
+                SqlScalarType::Float32.nullable(false),
+                SqlScalarType::Float32.nullable(true)
             ),
-            ScalarType::Float32.nullable(true)
+            SqlScalarType::Float32.nullable(true)
         );
         assert_eq!(
             Fallible3.output_type(
-                ScalarType::Float32.nullable(false),
-                ScalarType::Float32.nullable(false)
+                SqlScalarType::Float32.nullable(false),
+                SqlScalarType::Float32.nullable(false)
             ),
-            ScalarType::Float32.nullable(true)
+            SqlScalarType::Float32.nullable(true)
         );
     }
 
@@ -431,8 +443,8 @@ mod test {
         fn check<T: LazyBinaryFunc + std::fmt::Display + std::fmt::Debug>(
             new: T,
             old: BinaryFunc,
-            column_a_ty: &ColumnType,
-            column_b_ty: &ColumnType,
+            column_a_ty: &SqlColumnType,
+            column_b_ty: &SqlColumnType,
         ) {
             assert_eq!(
                 new.propagates_nulls(),
@@ -471,26 +483,26 @@ mod test {
             );
         }
 
-        let i32_ty = ColumnType {
+        let i32_ty = SqlColumnType {
             nullable: input_nullable,
-            scalar_type: ScalarType::Int32,
+            scalar_type: SqlScalarType::Int32,
         };
-        let ts_tz_ty = ColumnType {
+        let ts_tz_ty = SqlColumnType {
             nullable: input_nullable,
-            scalar_type: ScalarType::TimestampTz { precision: None },
+            scalar_type: SqlScalarType::TimestampTz { precision: None },
         };
-        let time_ty = ColumnType {
+        let time_ty = SqlColumnType {
             nullable: input_nullable,
-            scalar_type: ScalarType::Time,
+            scalar_type: SqlScalarType::Time,
         };
-        let interval_ty = ColumnType {
+        let interval_ty = SqlColumnType {
             nullable: input_nullable,
-            scalar_type: ScalarType::Interval,
+            scalar_type: SqlScalarType::Interval,
         };
-        let i32_map_ty = ColumnType {
+        let i32_map_ty = SqlColumnType {
             nullable: input_nullable,
-            scalar_type: ScalarType::Map {
-                value_type: Box::new(ScalarType::Int32),
+            scalar_type: SqlScalarType::Map {
+                value_type: Box::new(SqlScalarType::Int32),
                 custom_id: None,
             },
         };
@@ -710,7 +722,7 @@ mod test {
         check(
             func::RangeContainsI32,
             BF::RangeContainsElem {
-                elem_type: ScalarType::Int32,
+                elem_type: SqlScalarType::Int32,
                 rev: false,
             },
             &i32_ty,
@@ -719,7 +731,7 @@ mod test {
         check(
             func::RangeContainsI64,
             BF::RangeContainsElem {
-                elem_type: ScalarType::Int64,
+                elem_type: SqlScalarType::Int64,
                 rev: false,
             },
             &i32_ty,
@@ -728,7 +740,7 @@ mod test {
         check(
             func::RangeContainsDate,
             BF::RangeContainsElem {
-                elem_type: ScalarType::Date,
+                elem_type: SqlScalarType::Date,
                 rev: false,
             },
             &i32_ty,
@@ -737,7 +749,7 @@ mod test {
         check(
             func::RangeContainsNumeric,
             BF::RangeContainsElem {
-                elem_type: ScalarType::Numeric { max_scale: None },
+                elem_type: SqlScalarType::Numeric { max_scale: None },
                 rev: false,
             },
             &i32_ty,
@@ -746,7 +758,7 @@ mod test {
         check(
             func::RangeContainsTimestamp,
             BF::RangeContainsElem {
-                elem_type: ScalarType::Timestamp { precision: None },
+                elem_type: SqlScalarType::Timestamp { precision: None },
                 rev: false,
             },
             &i32_ty,
@@ -755,7 +767,7 @@ mod test {
         check(
             func::RangeContainsTimestampTz,
             BF::RangeContainsElem {
-                elem_type: ScalarType::TimestampTz { precision: None },
+                elem_type: SqlScalarType::TimestampTz { precision: None },
                 rev: false,
             },
             &i32_ty,
@@ -764,7 +776,7 @@ mod test {
         check(
             func::RangeContainsI32Rev,
             BF::RangeContainsElem {
-                elem_type: ScalarType::Int32,
+                elem_type: SqlScalarType::Int32,
                 rev: true,
             },
             &i32_ty,
@@ -773,7 +785,7 @@ mod test {
         check(
             func::RangeContainsI64Rev,
             BF::RangeContainsElem {
-                elem_type: ScalarType::Int64,
+                elem_type: SqlScalarType::Int64,
                 rev: true,
             },
             &i32_ty,
@@ -782,7 +794,7 @@ mod test {
         check(
             func::RangeContainsDateRev,
             BF::RangeContainsElem {
-                elem_type: ScalarType::Date,
+                elem_type: SqlScalarType::Date,
                 rev: true,
             },
             &i32_ty,
@@ -791,7 +803,7 @@ mod test {
         check(
             func::RangeContainsNumericRev,
             BF::RangeContainsElem {
-                elem_type: ScalarType::Numeric { max_scale: None },
+                elem_type: SqlScalarType::Numeric { max_scale: None },
                 rev: true,
             },
             &i32_ty,
@@ -800,7 +812,7 @@ mod test {
         check(
             func::RangeContainsTimestampRev,
             BF::RangeContainsElem {
-                elem_type: ScalarType::Timestamp { precision: None },
+                elem_type: SqlScalarType::Timestamp { precision: None },
                 rev: true,
             },
             &i32_ty,
@@ -809,7 +821,7 @@ mod test {
         check(
             func::RangeContainsTimestampTzRev,
             BF::RangeContainsElem {
-                elem_type: ScalarType::TimestampTz { precision: None },
+                elem_type: SqlScalarType::TimestampTz { precision: None },
                 rev: true,
             },
             &i32_ty,

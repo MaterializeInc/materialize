@@ -29,20 +29,20 @@
 //! ```rust
 //! use mz_expr::{BinaryFunc, MirRelationExpr, MirScalarExpr};
 //! use mz_ore::id_gen::IdGen;
-//! use mz_repr::{ColumnType, Datum, RelationType, ScalarType};
+//! use mz_repr::{SqlColumnType, Datum, SqlRelationType, ScalarType};
 //! use mz_repr::optimize::OptimizerFeatures;
 //! use mz_transform::{typecheck, Transform, TransformCtx};
 //! use mz_transform::dataflow::DataflowMetainfo;
 //!
 //! use mz_transform::predicate_pushdown::PredicatePushdown;
 //!
-//! let input1 = MirRelationExpr::constant(vec![], RelationType::new(vec![
+//! let input1 = MirRelationExpr::constant(vec![], SqlRelationType::new(vec![
 //!     ScalarType::Bool.nullable(false),
 //! ]));
-//! let input2 = MirRelationExpr::constant(vec![], RelationType::new(vec![
+//! let input2 = MirRelationExpr::constant(vec![], SqlRelationType::new(vec![
 //!     ScalarType::Bool.nullable(false),
 //! ]));
-//! let input3 = MirRelationExpr::constant(vec![], RelationType::new(vec![
+//! let input3 = MirRelationExpr::constant(vec![], SqlRelationType::new(vec![
 //!     ScalarType::Bool.nullable(false),
 //! ]));
 //! let join = MirRelationExpr::join(
@@ -92,7 +92,7 @@ use mz_expr::{
 };
 use mz_ore::soft_assert_eq_no_log;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
-use mz_repr::{ColumnType, Datum, ScalarType};
+use mz_repr::{Datum, SqlColumnType, SqlScalarType};
 
 use crate::{TransformCtx, TransformError};
 
@@ -329,7 +329,7 @@ impl PredicatePushdown {
                                             push_down.push(aggregates[0].expr.clone());
                                             aggregates[0].expr = MirScalarExpr::literal_ok(
                                                 Datum::True,
-                                                ScalarType::Bool,
+                                                SqlScalarType::Bool,
                                             );
                                         } else {
                                             retain.push(predicate);
@@ -1150,7 +1150,7 @@ impl PredicatePushdown {
     /// extract `expr1` and `expr2`.
     fn extract_equal_or_both_null(
         s: &mut MirScalarExpr,
-        column_types: &[ColumnType],
+        column_types: &[SqlColumnType],
     ) -> Option<(MirScalarExpr, MirScalarExpr)> {
         if let MirScalarExpr::CallVariadic {
             func: VariadicFunc::Or,
@@ -1171,7 +1171,7 @@ impl PredicatePushdown {
     fn extract_equal_or_both_null_inner(
         or_arg1: &MirScalarExpr,
         or_arg2: &MirScalarExpr,
-        column_types: &[ColumnType],
+        column_types: &[SqlColumnType],
     ) -> Option<(MirScalarExpr, MirScalarExpr)> {
         use mz_expr::BinaryFunc;
         if let MirScalarExpr::CallBinary {
@@ -1199,7 +1199,7 @@ impl PredicatePushdown {
     /// Reduces the given expression and returns its AND-ed terms.
     fn extract_reduced_conjunction_terms(
         mut s: MirScalarExpr,
-        column_types: &[ColumnType],
+        column_types: &[SqlColumnType],
     ) -> Vec<MirScalarExpr> {
         s.reduce(column_types);
 

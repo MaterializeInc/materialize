@@ -2018,7 +2018,7 @@ mod tests {
     use mz_persist_types::stats::{PartStats, PartStatsMetrics};
     use mz_repr::{
         ColumnIndex, DatumVec, PropRelationDescDiff, ProtoRelationDesc, RelationDescBuilder,
-        RowArena, ScalarType, arb_relation_desc_diff, arb_relation_desc_projection,
+        RowArena, SqlScalarType, arb_relation_desc_diff, arb_relation_desc_projection,
     };
     use proptest::prelude::*;
     use proptest::strategy::{Union, ValueTree};
@@ -2210,7 +2210,7 @@ mod tests {
         let desc = RelationDescBuilder::default()
             .with_column(
                 "ts",
-                ScalarType::TimestampTz { precision: None }.nullable(false),
+                SqlScalarType::TimestampTz { precision: None }.nullable(false),
             )
             .finish();
         let source_datas = vec![SourceData(Err(DataflowError::EvalError(
@@ -2270,7 +2270,7 @@ mod tests {
     #[mz_ore::test]
     fn backward_compatible_empty_add_column() {
         let old = RelationDesc::empty();
-        let new = RelationDesc::from_names_and_types([("a", ScalarType::Bool.nullable(true))]);
+        let new = RelationDesc::from_names_and_types([("a", SqlScalarType::Bool.nullable(true))]);
 
         let old_data_type = get_data_type(&old);
         let new_data_type = get_data_type(&new);
@@ -2281,7 +2281,7 @@ mod tests {
 
     #[mz_ore::test]
     fn backward_compatible_project_away_all() {
-        let old = RelationDesc::from_names_and_types([("a", ScalarType::Bool.nullable(true))]);
+        let old = RelationDesc::from_names_and_types([("a", SqlScalarType::Bool.nullable(true))]);
         let new = RelationDesc::empty();
 
         let old_data_type = get_data_type(&old);
@@ -2312,13 +2312,13 @@ mod tests {
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)]
     fn backward_compatible_migrate_from_common() {
-        use mz_repr::ColumnType;
+        use mz_repr::SqlColumnType;
         fn test_case(old: RelationDesc, diffs: Vec<PropRelationDescDiff>, datas: Vec<SourceData>) {
             // TODO(parkmycar): As we iterate on schema migrations more things should become compatible.
             let should_be_compatible = diffs.iter().all(|diff| match diff {
                 // We only support adding nullable columns.
                 PropRelationDescDiff::AddColumn {
-                    typ: ColumnType { nullable, .. },
+                    typ: SqlColumnType { nullable, .. },
                     ..
                 } => *nullable,
                 PropRelationDescDiff::DropColumn { .. } => true,

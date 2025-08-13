@@ -41,8 +41,8 @@ use mz_pgwire_common::{
 };
 use mz_repr::user::InternalUserMetadata;
 use mz_repr::{
-    CatalogItemId, ColumnIndex, Datum, RelationDesc, RelationType, RowArena, RowIterator, RowRef,
-    ScalarType,
+    CatalogItemId, ColumnIndex, Datum, RelationDesc, RowArena, RowIterator, RowRef,
+    SqlRelationType, SqlScalarType,
 };
 use mz_server_core::TlsMode;
 use mz_server_core::listeners::AllowedRoles;
@@ -892,7 +892,7 @@ where
         let mut param_types = vec![];
         for oid in param_oids {
             match mz_pgrepr::Type::from_oid(oid) {
-                Ok(ty) => match ScalarType::try_from(&ty) {
+                Ok(ty) => match SqlScalarType::try_from(&ty) {
                     Ok(ty) => param_types.push(Some(ty)),
                     Err(err) => {
                         return self
@@ -1070,7 +1070,7 @@ where
             if let Some(desc) = stmt.desc().relation_desc.clone() {
                 for (format, ty) in result_formats.iter().zip(desc.iter_types()) {
                     match (format, &ty.scalar_type) {
-                        (Format::Binary, mz_repr::ScalarType::List { .. }) => {
+                        (Format::Binary, mz_repr::SqlScalarType::List { .. }) => {
                             return self
                                 .error(ErrorResponse::error(
                                     SqlState::PROTOCOL_VIOLATION,
@@ -1078,7 +1078,7 @@ where
                                 ))
                                 .await;
                         }
-                        (Format::Binary, mz_repr::ScalarType::Map { .. }) => {
+                        (Format::Binary, mz_repr::SqlScalarType::Map { .. }) => {
                             return self
                                 .error(ErrorResponse::error(
                                     SqlState::PROTOCOL_VIOLATION,
@@ -1086,7 +1086,7 @@ where
                                 ))
                                 .await;
                         }
-                        (Format::Binary, mz_repr::ScalarType::AclItem) => {
+                        (Format::Binary, mz_repr::SqlScalarType::AclItem) => {
                             return self
                                 .error(ErrorResponse::error(
                                     SqlState::PROTOCOL_VIOLATION,
@@ -2156,7 +2156,7 @@ where
             }
         };
 
-        let encode_fn = |row: &RowRef, typ: &RelationType, out: &mut Vec<u8>| {
+        let encode_fn = |row: &RowRef, typ: &SqlRelationType, out: &mut Vec<u8>| {
             mz_pgcopy::encode_copy_format(&row_format, row, typ, out)
         };
 

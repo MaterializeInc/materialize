@@ -23,7 +23,7 @@ use mz_expr::MirScalarExpr;
 use mz_ore::cast::CastLossy;
 use mz_ore::soft_assert_eq_or_log;
 use mz_repr::explain::ExprHumanizer;
-use mz_repr::{GlobalId, RowArena, ScalarType, Timestamp, TimestampManipulation};
+use mz_repr::{GlobalId, RowArena, SqlScalarType, Timestamp, TimestampManipulation};
 use mz_sql::plan::QueryWhen;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::vars::IsolationLevel;
@@ -942,21 +942,21 @@ impl Coordinator {
         }
         let ty = timestamp.typ(&[]);
         Ok(match ty.scalar_type {
-            ScalarType::MzTimestamp => evaled.unwrap_mz_timestamp(),
-            ScalarType::Numeric { .. } => {
+            SqlScalarType::MzTimestamp => evaled.unwrap_mz_timestamp(),
+            SqlScalarType::Numeric { .. } => {
                 let n = evaled.unwrap_numeric().0;
                 n.try_into()?
             }
-            ScalarType::Int16 => i64::from(evaled.unwrap_int16()).try_into()?,
-            ScalarType::Int32 => i64::from(evaled.unwrap_int32()).try_into()?,
-            ScalarType::Int64 => evaled.unwrap_int64().try_into()?,
-            ScalarType::UInt16 => u64::from(evaled.unwrap_uint16()).into(),
-            ScalarType::UInt32 => u64::from(evaled.unwrap_uint32()).into(),
-            ScalarType::UInt64 => evaled.unwrap_uint64().into(),
-            ScalarType::TimestampTz { .. } => {
+            SqlScalarType::Int16 => i64::from(evaled.unwrap_int16()).try_into()?,
+            SqlScalarType::Int32 => i64::from(evaled.unwrap_int32()).try_into()?,
+            SqlScalarType::Int64 => evaled.unwrap_int64().try_into()?,
+            SqlScalarType::UInt16 => u64::from(evaled.unwrap_uint16()).into(),
+            SqlScalarType::UInt32 => u64::from(evaled.unwrap_uint32()).into(),
+            SqlScalarType::UInt64 => evaled.unwrap_uint64().into(),
+            SqlScalarType::TimestampTz { .. } => {
                 evaled.unwrap_timestamptz().timestamp_millis().try_into()?
             }
-            ScalarType::Timestamp { .. } => evaled
+            SqlScalarType::Timestamp { .. } => evaled
                 .unwrap_timestamp()
                 .and_utc()
                 .timestamp_millis()

@@ -107,7 +107,7 @@ impl TopK {
                         };
                         *limit = Some(mz_expr::MirScalarExpr::literal_ok(
                             mz_repr::Datum::Int64(new_limit),
-                            mz_repr::ScalarType::Int64,
+                            mz_repr::SqlScalarType::Int64,
                         ));
                     }
 
