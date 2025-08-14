@@ -1865,6 +1865,7 @@ checksum = "5b63caa9aa9397e2d9480a9b13673856c78d8ac123288526c37d7839f2a86990"
 [[package]]
 name = "columnar"
 version = "0.10.0"
+source = "git+https://github.com/antiguru/columnar?branch=box_support#c0207d187283e13f73d5743f220a5cf86602ec3c"
 dependencies = [
  "bytemuck",
  "columnar_derive",
@@ -1874,6 +1875,7 @@ dependencies = [
 [[package]]
 name = "columnar_derive"
 version = "0.10.0"
+source = "git+https://github.com/antiguru/columnar?branch=box_support#c0207d187283e13f73d5743f220a5cf86602ec3c"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -7546,6 +7548,7 @@ dependencies = [
  "bytesize",
  "chrono",
  "clap",
+ "columnar",
  "columnation",
  "crossbeam-channel",
  "csv-core",
@@ -7717,6 +7720,7 @@ dependencies = [
  "aws-types",
  "bytes",
  "bytesize",
+ "columnar",
  "csv-async",
  "derivative",
  "differential-dataflow",

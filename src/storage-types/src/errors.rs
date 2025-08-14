@@ -28,7 +28,9 @@ include!(concat!(env!("OUT_DIR"), "/mz_storage_types.errors.rs"));
 
 /// The underlying data was not decodable in the format we expected: eg.
 /// invalid JSON or Avro data that doesn't match a schema.
-#[derive(Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(
+    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, Columnar,
+)]
 pub struct DecodeError {
     pub kind: DecodeErrorKind,
     pub raw: Vec<u8>,
@@ -87,7 +89,9 @@ impl Display for DecodeError {
     }
 }
 
-#[derive(Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(
+    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, Columnar,
+)]
 pub enum DecodeErrorKind {
     Text(Box<str>),
     Bytes(Box<str>),
@@ -124,7 +128,9 @@ impl Display for DecodeErrorKind {
 }
 
 /// Errors arising during envelope processing.
-#[derive(Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, Deserialize, Serialize, PartialEq, Hash)]
+#[derive(
+    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, Deserialize, Serialize, PartialEq, Hash, Columnar,
+)]
 pub enum EnvelopeError {
     /// An error that can be retracted by a future message using upsert logic.
     Upsert(UpsertError),
@@ -170,7 +176,9 @@ impl Display for EnvelopeError {
 
 /// An error from a value in an upsert source. The corresponding key is included, allowing
 /// us to reconstruct their entry in the upsert map upon restart.
-#[derive(Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(
+    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, Columnar,
+)]
 pub struct UpsertValueError {
     /// The underlying error.
     pub inner: DecodeError,
@@ -208,7 +216,18 @@ impl Display for UpsertValueError {
 
 /// A source contained a record with a NULL key, which we don't support.
 #[derive(
-    Arbitrary, Ord, PartialOrd, Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash,
+    Arbitrary,
+    Ord,
+    PartialOrd,
+    Copy,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    Columnar,
 )]
 pub struct UpsertNullKeyError;
 
@@ -236,7 +255,9 @@ impl Display for UpsertNullKeyError {
 }
 
 /// An error that can be retracted by a future message using upsert logic.
-#[derive(Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(
+    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, Columnar,
+)]
 pub enum UpsertError {
     /// Wrapper around a key decoding error.
     /// We use this instead of emitting the underlying `DataflowError::DecodeError` because with only
@@ -296,7 +317,9 @@ impl Display for UpsertError {
 
 /// Source-wide durable errors; for example, a replication log being meaningless or corrupted.
 /// This should _not_ include transient source errors, like connection issues or misconfigurations.
-#[derive(Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(
+    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, Columnar,
+)]
 pub struct SourceError {
     pub error: SourceErrorDetails,
 }
@@ -385,7 +408,9 @@ impl Display for SourceErrorDetails {
 /// All of the variants are boxed to minimize the memory size of `DataflowError`. This type is
 /// likely to appear in `Result<Row, DataflowError>`s on high-throughput code paths, so keeping its
 /// size less than or equal to that of `Row` is important to ensure we are not wasting memory.
-#[derive(Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, Deserialize, Serialize, PartialEq, Hash)]
+#[derive(
+    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, Deserialize, Serialize, PartialEq, Hash, Columnar,
+)]
 pub enum DataflowError {
     DecodeError(Box<DecodeError>),
     EvalError(Box<EvalError>),
@@ -451,7 +476,11 @@ mod columnation {
     use std::iter::once;
 
     use differential_dataflow::containers::{Columnation, Region, StableRegion};
-    use mz_expr::EvalError;
+    use mz_expr::{
+        DateDiffOverflow, EvalError, IncompatibleArrayDimensions, IndexOutOfRange,
+        InvalidByteSequence, InvalidIdentifier, InvalidJsonbCast, InvalidLayer, StringValueTooLong,
+        Unsupported,
+    };
     use mz_repr::Row;
     use mz_repr::adt::range::InvalidRangeError;
     use mz_repr::strconv::ParseError;
@@ -610,10 +639,10 @@ mod columnation {
                         EvalError::IntervalOutOfRange(string) => {
                             EvalError::IntervalOutOfRange(self.string_region.copy(string))
                         }
-                        e @ EvalError::IndexOutOfRange {
+                        e @ EvalError::IndexOutOfRange(IndexOutOfRange {
                             provided,
                             valid_end,
-                        } => {
+                        }) => {
                             assert_copy(provided);
                             assert_copy(valid_end);
                             e.clone()
@@ -625,7 +654,7 @@ mod columnation {
                         EvalError::InvalidTimezone(x) => {
                             EvalError::InvalidTimezone(self.string_region.copy(x))
                         }
-                        e @ EvalError::InvalidLayer { max_layer, val } => {
+                        e @ EvalError::InvalidLayer(InvalidLayer { max_layer, val }) => {
                             assert_copy(max_layer);
                             assert_copy(val);
                             e.clone()
@@ -637,17 +666,19 @@ mod columnation {
                         EvalError::InvalidHashAlgorithm(x) => {
                             EvalError::InvalidHashAlgorithm(self.string_region.copy(x))
                         }
-                        EvalError::InvalidByteSequence {
+                        EvalError::InvalidByteSequence(InvalidByteSequence {
                             byte_sequence,
                             encoding_name,
-                        } => EvalError::InvalidByteSequence {
+                        }) => EvalError::InvalidByteSequence(InvalidByteSequence {
                             byte_sequence: self.string_region.copy(byte_sequence),
                             encoding_name: self.string_region.copy(encoding_name),
-                        },
-                        EvalError::InvalidJsonbCast { from, to } => EvalError::InvalidJsonbCast {
-                            from: self.string_region.copy(from),
-                            to: self.string_region.copy(to),
-                        },
+                        }),
+                        EvalError::InvalidJsonbCast(InvalidJsonbCast { from, to }) => {
+                            EvalError::InvalidJsonbCast(InvalidJsonbCast {
+                                from: self.string_region.copy(from),
+                                to: self.string_region.copy(to),
+                            })
+                        }
                         EvalError::InvalidRegex(x) => {
                             EvalError::InvalidRegex(self.string_region.copy(x))
                         }
@@ -704,14 +735,16 @@ mod columnation {
                             EvalError::ComplexOutOfRange(self.string_region.copy(x))
                         }
                         EvalError::Undefined(x) => EvalError::Undefined(self.string_region.copy(x)),
-                        EvalError::StringValueTooLong {
+                        EvalError::StringValueTooLong(StringValueTooLong {
                             target_type,
                             length,
-                        } => EvalError::StringValueTooLong {
+                        }) => EvalError::StringValueTooLong(StringValueTooLong {
                             target_type: self.string_region.copy(target_type),
                             length: *length,
-                        },
-                        e @ EvalError::IncompatibleArrayDimensions { dims } => {
+                        }),
+                        e @ EvalError::IncompatibleArrayDimensions(
+                            IncompatibleArrayDimensions { dims },
+                        ) => {
                             assert_copy(dims);
                             e.clone()
                         }
@@ -745,23 +778,25 @@ mod columnation {
                         EvalError::MustNotBeNull(x) => {
                             EvalError::MustNotBeNull(self.string_region.copy(x))
                         }
-                        EvalError::InvalidIdentifier { ident, detail } => {
-                            EvalError::InvalidIdentifier {
+                        EvalError::InvalidIdentifier(InvalidIdentifier { ident, detail }) => {
+                            EvalError::InvalidIdentifier(InvalidIdentifier {
                                 ident: self.string_region.copy(ident),
                                 detail: detail
                                     .as_ref()
                                     .map(|detail| self.string_region.copy(detail)),
-                            }
+                            })
                         }
                         e @ EvalError::MaxArraySizeExceeded(x) => {
                             assert_copy(x);
                             e.clone()
                         }
-                        EvalError::DateDiffOverflow { unit, a, b } => EvalError::DateDiffOverflow {
-                            unit: self.string_region.copy(unit),
-                            a: self.string_region.copy(a),
-                            b: self.string_region.copy(b),
-                        },
+                        EvalError::DateDiffOverflow(DateDiffOverflow { unit, a, b }) => {
+                            EvalError::DateDiffOverflow(DateDiffOverflow {
+                                unit: self.string_region.copy(unit),
+                                a: self.string_region.copy(a),
+                                b: self.string_region.copy(b),
+                            })
+                        }
                         EvalError::IfNullError(x) => {
                             EvalError::IfNullError(self.string_region.copy(x))
                         }

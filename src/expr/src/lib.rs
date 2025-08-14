@@ -10,6 +10,7 @@
 //! Core expression language.
 
 #![warn(missing_debug_implementations)]
+#![recursion_limit = "256"]
 
 use std::collections::BTreeSet;
 use std::ops::Deref;
@@ -51,8 +52,10 @@ pub use relation::{
 };
 pub use scalar::func::{self, BinaryFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc};
 pub use scalar::{
-    EvalError, FilterCharacteristics, MirScalarExpr, ProtoDomainLimit, ProtoEvalError,
-    ProtoMirScalarExpr, like_pattern,
+    DateDiffOverflow, EvalError, FilterCharacteristics, IncompatibleArrayDimensions,
+    IndexOutOfRange, InvalidByteSequence, InvalidIdentifier, InvalidJsonbCast, InvalidLayer,
+    MirScalarExpr, ProtoDomainLimit, ProtoEvalError, ProtoMirScalarExpr, StringValueTooLong,
+    Unsupported, like_pattern,
 };
 
 /// A [`MirRelationExpr`] that claims to have been optimized, e.g., by an

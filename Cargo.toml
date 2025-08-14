@@ -316,7 +316,7 @@ debug-assertions = true
 # merged), after which point it becomes impossible to build that historical
 # version of Materialize.
 [patch.crates-io]
-columnar = { path = "../columnar" }
+columnar = { git = "https://github.com/antiguru/columnar", branch = "box_support" }
 # Waiting on https://github.com/sfackler/rust-postgres/pull/752.
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
