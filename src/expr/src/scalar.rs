@@ -127,7 +127,7 @@ impl Arbitrary for MirScalarExpr {
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         let leaf = prop::strategy::Union::new(vec![
             (0..10_usize).prop_map(MirScalarExpr::column).boxed(),
-            (arb_datum(), any::<SqlScalarType>())
+            (arb_datum(true), any::<SqlScalarType>())
                 .prop_map(|(datum, typ)| MirScalarExpr::literal(Ok((&datum).into()), typ))
                 .boxed(),
             (any::<EvalError>(), any::<SqlScalarType>())
