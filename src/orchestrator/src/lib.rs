@@ -215,6 +215,11 @@ pub struct ServiceConfig {
     ///
     /// The orchestrator backend may apply a prefix to the key if appropriate.
     pub labels: BTreeMap<String, String>,
+    /// Arbitrary key–value pairs to attach to the service as annotations in the
+    /// orchestrator backend.
+    ///
+    /// The orchestrator backend may apply a prefix to the key if appropriate.
+    pub annotations: BTreeMap<String, String>,
     /// The availability zones the service can be run in. If no availability
     /// zones are specified, the orchestrator is free to choose one.
     pub availability_zones: Option<Vec<String>>,

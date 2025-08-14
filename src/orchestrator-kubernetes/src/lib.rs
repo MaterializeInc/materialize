@@ -560,6 +560,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             cpu_limit,
             scale,
             labels: labels_in,
+            annotations: annotations_in,
             availability_zones,
             other_replicas_selector,
             replicas_selector,
@@ -832,6 +833,10 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             // It's called do-not-disrupt in newer versions of karpenter, so adding for forward/backward compatibility
             "karpenter.sh/do-not-disrupt".to_owned() => "true".to_string(),
         };
+        for (key, value) in annotations_in {
+            // We want to use the same prefix as our labels keys
+            pod_annotations.insert(self.make_label_key(&key), value);
+        }
         if self.config.enable_prometheus_scrape_annotations {
             if let Some(internal_http_port) = ports_in
                 .iter()
