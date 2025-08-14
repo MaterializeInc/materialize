@@ -1385,7 +1385,7 @@ mod tests {
             Ok(())
         }
 
-        proptest!(|(datum in mz_repr::arb_datum())| {
+        proptest!(|(datum in mz_repr::arb_datum(true))| {
             check(datum)?;
         });
 
