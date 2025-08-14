@@ -10,6 +10,7 @@
 """Utility functions only useful in CI."""
 
 import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -55,12 +56,23 @@ def get_artifacts() -> Any:
         "includeDuplicates": "false",
     }
 
-    res = requests.get(
-        f"https://agent.buildkite.com/v3/builds/{build_id}/artifacts/search",
-        params=payload,
-        headers={"Authorization": f"Token {token}"},
-    )
+    attempts = 10
+    res = None
+    for attempt in range(attempts):
+        try:
+            res = requests.get(
+                f"https://agent.buildkite.com/v3/builds/{build_id}/artifacts/search",
+                params=payload,
+                headers={"Authorization": f"Token {token}"},
+            )
+            res.raise_for_status()
+            break
+        except:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(5)
 
+    assert res
     if res.status_code != 200:
         print(f"Failed to get artifacts: {res.status_code} {res.text}")
         return []

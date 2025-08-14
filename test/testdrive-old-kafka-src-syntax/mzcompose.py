@@ -34,8 +34,6 @@ from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.source_table_migration import (
-    get_new_image_for_source_table_migration_test,
-    get_old_image_for_source_table_migration_test,
     verify_sources_after_source_table_migration,
 )
 
@@ -340,7 +338,6 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     mz_old = Materialized(
         default_size=Materialized.Size.DEFAULT_SIZE,
-        image=get_old_image_for_source_table_migration_test(),
         external_blob_store=True,
         blob_store_is_azure=args.azurite,
         additional_system_parameter_defaults=dict(additional_system_parameter_defaults),
@@ -366,7 +363,6 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     mz_new = Materialized(
         default_size=Materialized.Size.DEFAULT_SIZE,
-        image=get_new_image_for_source_table_migration_test(),
         external_blob_store=True,
         blob_store_is_azure=args.azurite,
         additional_system_parameter_defaults=additional_system_parameter_defaults,

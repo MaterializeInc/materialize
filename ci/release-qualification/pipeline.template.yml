@@ -264,6 +264,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: mysql-cdc
               args: [ "--mysql-version=8.0.40" ]
+        skip: "Doesn't support new RESET BINARY LOGS AND GTIDS syntax"
 
   - group: "Postgres: other versions"
     key: postgres-versions
@@ -333,7 +334,7 @@ steps:
       - id: checks-backup-restore-before-manipulate
         label: "Checks backup + restore between the two manipulate()"
         depends_on: build-aarch64
-        timeout_in_minutes: 180
+        timeout_in_minutes: 30
         parallelism: 3
         agents:
           queue: hetzner-aarch64-16cpu-32gb
@@ -345,7 +346,7 @@ steps:
       - id: checks-backup-restore-after-manipulate
         label: "Checks backup + restore after manipulate()"
         depends_on: build-aarch64
-        timeout_in_minutes: 180
+        timeout_in_minutes: 30
         parallelism: 3
         agents:
           queue: hetzner-aarch64-16cpu-32gb
@@ -357,7 +358,7 @@ steps:
       - id: checks-backup-multi
         label: "Checks + multiple backups/restores"
         depends_on: build-aarch64
-        timeout_in_minutes: 180
+        timeout_in_minutes: 30
         parallelism: 4
         agents:
           queue: hetzner-aarch64-16cpu-32gb
