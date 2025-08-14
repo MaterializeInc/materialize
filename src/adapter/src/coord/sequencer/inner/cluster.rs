@@ -941,9 +941,13 @@ impl Coordinator {
             )
             .expect("creating cluster must not fail");
 
-        let replica_ids: Vec<_> = cluster.replicas().map(|r| r.replica_id).collect();
-        for replica_id in replica_ids {
-            self.create_cluster_replica(cluster_id, replica_id).await;
+        let replica_ids: Vec<_> = cluster
+            .replicas()
+            .map(|r| (r.replica_id, format!("{}.{}", cluster.name(), &r.name)))
+            .collect();
+        for (replica_id, replica_name) in replica_ids {
+            self.create_cluster_replica(cluster_id, replica_id, replica_name)
+                .await;
         }
 
         if !introspection_source_ids.is_empty() {
@@ -1074,12 +1078,18 @@ impl Coordinator {
             .resolve_replica_in_cluster(&cluster_id, &name)
             .expect("just created")
             .replica_id();
-        self.create_cluster_replica(cluster_id, id).await;
+
+        self.create_cluster_replica(cluster_id, id, name).await;
 
         Ok(ExecuteResponse::CreatedClusterReplica)
     }
 
-    async fn create_cluster_replica(&mut self, cluster_id: ClusterId, replica_id: ReplicaId) {
+    async fn create_cluster_replica(
+        &mut self,
+        cluster_id: ClusterId,
+        replica_id: ReplicaId,
+        replica_name: String,
+    ) {
         let cluster = self.catalog().get_cluster(cluster_id);
         let role = cluster.role();
         let replica_config = cluster
@@ -1095,6 +1105,8 @@ impl Coordinator {
             .create_replica(
                 cluster_id,
                 replica_id,
+                cluster.name.to_owned(),
+                replica_name,
                 role,
                 replica_config,
                 enable_worker_core_affinity,
@@ -1292,7 +1304,7 @@ impl Coordinator {
             NeedsFinalization::No => {
                 ops.push(catalog::Op::UpdateClusterConfig {
                     id: cluster_id,
-                    name,
+                    name: name.clone(),
                     config: new_config,
                 });
             }
@@ -1305,7 +1317,8 @@ impl Coordinator {
                 .resolve_replica_in_cluster(&cluster_id, &replica_name)
                 .expect("just created")
                 .replica_id();
-            self.create_cluster_replica(cluster_id, replica_id).await;
+            self.create_cluster_replica(cluster_id, replica_id, replica_name)
+                .await;
         }
         Ok(finalization_needed)
     }

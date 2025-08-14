@@ -1907,6 +1907,8 @@ impl Coordinator {
                 self.controller.create_replica(
                     instance.id,
                     replica.replica_id,
+                    instance.name.clone(),
+                    replica.name.clone(),
                     role,
                     replica.config.clone(),
                     enable_worker_core_affinity,
