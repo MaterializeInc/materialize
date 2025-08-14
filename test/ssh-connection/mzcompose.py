@@ -122,6 +122,29 @@ def workflow_pg(c: Composition) -> None:
     c.run_testdrive_files("--no-reset", "pg-source-after-ssh-restart.td")
 
 
+def workflow_pg_cancel_copy(c: Composition) -> None:
+    c.up("materialized", "ssh-bastion-host", "postgres")
+
+    c.run_testdrive_files("setup.td")
+
+    public_key = c.sql_query(
+        """
+        select public_key_1 from mz_ssh_tunnel_connections ssh \
+        join mz_connections c on c.id = ssh.id
+        where c.name = 'thancred';
+        """
+    )[0][0]
+
+    c.exec(
+        "ssh-bastion-host",
+        "bash",
+        "-c",
+        f"echo '{public_key}' > /etc/authorized_keys/mz",
+    )
+
+    c.run_testdrive_files("--no-reset", "pg-source-cancel-copy.td")
+
+
 def workflow_mysql(c: Composition) -> None:
     c.up("materialized", "ssh-bastion-host", "mysql")
 

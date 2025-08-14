@@ -163,8 +163,8 @@ impl DerefMut for CancellingClient {
 
 impl Drop for CancellingClient {
     fn drop(&mut self) {
-        let inner_client = self.inner.take().expect("drop only happens once");
         let config = self.config.take().expect("drop only happens once");
+        let inner_client = self.inner.take().expect("drop only happens once");
         let ssh_tunnel_manager = self.ssh_tunnel_manager.clone();
 
         // A cancel_query establishes a connection and sends a single short messages, so we expect
@@ -172,7 +172,10 @@ impl Drop for CancellingClient {
         // In the case of network connectivity, the task will have to wait for a connection timeout,
         // at which point the cancel will fail.
         task::spawn(|| "pg_cancel_query", async move {
-            tracing::info!("cancelling connection {:?}", config.address());
+            let Ok(address) = config.address() else {
+                return;
+            };
+            tracing::debug!("cancelling connection {:?}", address);
             if let Err(error) = config
                 .cancel_query(inner_client.inner, ssh_tunnel_manager)
                 .await
