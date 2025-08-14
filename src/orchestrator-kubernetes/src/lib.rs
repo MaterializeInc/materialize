@@ -73,6 +73,8 @@ pub struct KubernetesOrchestratorConfig {
     pub context: String,
     /// The name of a non-default Kubernetes scheduler to use, if any.
     pub scheduler_name: Option<String>,
+    /// Annotations to install on every service created by the orchestrator.
+    pub service_annotations: BTreeMap<String, String>,
     /// Labels to install on every service created by the orchestrator.
     pub service_labels: BTreeMap<String, String>,
     /// Node selector to install on every service created by the orchestrator.
@@ -844,6 +846,9 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 pod_annotations.insert("prometheus.io/path".to_owned(), "/metrics".to_string());
                 pod_annotations.insert("prometheus.io/scheme".to_owned(), "http".to_string());
             }
+        }
+        for (key, value) in &self.config.service_annotations {
+            pod_annotations.insert(key.clone(), value.clone());
         }
 
         let default_node_selector = if disk {
