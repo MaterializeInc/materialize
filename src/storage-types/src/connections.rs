@@ -376,8 +376,10 @@ pub enum IcebergCatalogType {
 pub struct IcebergCatalogConnection<C: ConnectionAccess = InlinedConnection> {
     pub catalog_type: IcebergCatalogType,
     pub uri: String,
-    pub warehouse: String,
+    pub warehouse: Option<String>,
+    pub credential: Option<StringOrSecret>,
     pub aws_connection: Option<AwsConnectionReference<C>>,
+    pub scope: Option<String>,
 }
 
 impl AlterCompatible for IcebergCatalogConnection {
@@ -395,6 +397,8 @@ impl<R: ConnectionResolver> IntoInlineConnection<IcebergCatalogConnection, R>
             catalog_type: self.catalog_type,
             uri: self.uri,
             warehouse: self.warehouse,
+            credential: self.credential,
+            scope: self.scope,
             aws_connection: self
                 .aws_connection
                 .map(|aws| aws.into_inline_connection(&r)),
@@ -414,38 +418,84 @@ impl IcebergCatalogConnection<InlinedConnection> {
         storage_configuration: &StorageConfiguration,
         in_task: InTask,
     ) -> Result<Arc<dyn Catalog>, anyhow::Error> {
-        let aws_config = match &self.aws_connection {
-            Some(aws) => {
-                aws.connection
-                    .load_sdk_config(
-                        &storage_configuration.connection_context,
-                        aws.connection_id,
-                        in_task,
-                    )
-                    .await?
+        match self.catalog_type {
+            IcebergCatalogType::S3TablesRest => {
+                self.connect_s3tables(storage_configuration, in_task).await
             }
-            None => {
-                bail!("IcebergCatalogConnection requires an AWS connection");
-            }
-        };
+            IcebergCatalogType::Rest => self.connect_rest(storage_configuration, in_task).await,
+        }
+    }
+
+    async fn connect_s3tables(
+        &self,
+        storage_configuration: &StorageConfiguration,
+        in_task: InTask,
+    ) -> Result<Arc<dyn Catalog>, anyhow::Error> {
+        let mut props = BTreeMap::from([(REST_CATALOG_PROP_URI.to_string(), self.uri.clone())]);
+
+        let aws_ref = self
+            .aws_connection
+            .as_ref()
+            .ok_or_else(|| anyhow!("IcebergCatalogConnection requires an AWS connection"))?;
+        let aws_config = aws_ref
+            .connection
+            .load_sdk_config(
+                &storage_configuration.connection_context,
+                aws_ref.connection_id,
+                in_task,
+            )
+            .await?;
+
+        props.insert(
+            REST_CATALOG_PROP_WAREHOUSE.to_string(),
+            self.warehouse.clone().ok_or_else(|| {
+                anyhow!(
+                    "IcebergCatalogConnection with S3TablesRest catalog type requires a warehouse"
+                )
+            })?,
+        );
 
         let catalog = RestCatalogBuilder::default()
             .with_aws_client(aws_config)
-            .load(
-                "IcebergCatalog",
-                BTreeMap::from([
-                    (REST_CATALOG_PROP_URI.to_string(), self.uri.clone()),
-                    (
-                        REST_CATALOG_PROP_WAREHOUSE.to_string(),
-                        self.warehouse.clone(),
-                    ),
-                ])
-                .into_iter()
-                .collect(),
-            )
+            .load("IcebergCatalog", props.into_iter().collect())
             .await
             .map_err(|e| anyhow!("failed to create Iceberg catalog: {e}"))?;
+        Ok(Arc::new(catalog))
+    }
 
+    async fn connect_rest(
+        &self,
+        storage_configuration: &StorageConfiguration,
+        in_task: InTask,
+    ) -> Result<Arc<dyn Catalog>, anyhow::Error> {
+        let mut props = BTreeMap::from([(REST_CATALOG_PROP_URI.to_string(), self.uri.clone())]);
+
+        if let Some(warehouse) = &self.warehouse {
+            props.insert(REST_CATALOG_PROP_WAREHOUSE.to_string(), warehouse.clone());
+        }
+
+        let credential = self
+            .credential
+            .clone()
+            .ok_or_else(|| {
+                anyhow!("IcebergCatalogConnection with Rest catalog type requires a credential")
+            })?
+            .get_string(
+                in_task,
+                &storage_configuration.connection_context.secrets_reader,
+            )
+            .await
+            .map_err(|e| anyhow!("failed to read Iceberg catalog credential: {e}"))?;
+        props.insert("credential".to_string(), credential);
+
+        if let Some(scope) = &self.scope {
+            props.insert("scope".to_string(), scope.clone());
+        }
+
+        let catalog = RestCatalogBuilder::default()
+            .load("IcebergCatalog", props.into_iter().collect())
+            .await
+            .map_err(|e| anyhow!("failed to create Iceberg catalog: {e}"))?;
         Ok(Arc::new(catalog))
     }
 

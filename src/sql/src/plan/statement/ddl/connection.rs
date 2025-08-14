@@ -56,6 +56,7 @@ generate_extracted_config!(
     // (AwsPrivatelink, with_options::Object),
     (Broker, Vec<KafkaBroker<Aug>>),
     (Brokers, Vec<KafkaBroker<Aug>>),
+    (Credential, StringOrSecret),
     (Database, String),
     (Endpoint, String),
     (Host, String),
@@ -69,6 +70,7 @@ generate_extracted_config!(
     (SaslMechanisms, String),
     (SaslPassword, with_options::Secret),
     (SaslUsername, StringOrSecret),
+    (Scope, String),
     (SecretAccessKey, with_options::Secret),
     (SecurityProtocol, String),
     (ServiceName, String),
@@ -181,7 +183,14 @@ pub(super) fn validate_options_per_connection_type(
             SslMode,
             User,
         ],
-        CreateConnectionType::IcebergCatalog => &[CatalogType, Url, AwsConnection, Warehouse],
+        CreateConnectionType::IcebergCatalog => &[
+            AwsConnection,
+            CatalogType,
+            Credential,
+            Scope,
+            Url,
+            Warehouse,
+        ],
     };
 
     for o in permitted_options {
@@ -617,11 +626,9 @@ impl ConnectionOptionExtracted {
                 })
             }
             CreateConnectionType::IcebergCatalog => {
-                if !matches!(self.catalog_type, Some(IcebergCatalogType::S3TablesRest)) {
-                    sql_bail!(
-                        "invalid CONNECTION: ICEBERG connections currently only support CATALOG TYPE 's3tables'"
-                    );
-                }
+                let catalog_type = self.catalog_type.clone().ok_or_else(|| {
+                    sql_err!("invalid CONNECTION: ICEBERG connections must specify CATALOG TYPE")
+                })?;
 
                 let uri: reqwest::Url = match &self.url {
                     Some(url) => url
@@ -630,25 +637,39 @@ impl ConnectionOptionExtracted {
                     None => sql_bail!("invalid CONNECTION: must specify URL"),
                 };
 
-                let warehouse = self
-                    .warehouse
-                    .as_ref()
-                    .cloned()
-                    .ok_or_else(|| sql_err!("WAREHOUSE option is required"))?;
-
+                let warehouse = self.warehouse.clone();
+                let credential = self.credential.clone();
                 let aws_connection = get_aws_connection_reference(scx, &self)?;
 
-                if aws_connection.is_none() {
-                    sql_bail!(
-                        "invalid CONNECTION: ICEBERG s3tables connections require an AWS connection"
-                    );
+                match catalog_type {
+                    IcebergCatalogType::S3TablesRest => {
+                        if warehouse.is_none() {
+                            sql_bail!(
+                                "invalid CONNECTION: ICEBERG s3tables connections must specify WAREHOUSE"
+                            );
+                        }
+                        if aws_connection.is_none() {
+                            sql_bail!(
+                                "invalid CONNECTION: ICEBERG s3tables connections require an AWS connection"
+                            );
+                        }
+                    }
+                    IcebergCatalogType::Rest => {
+                        if credential.is_none() {
+                            sql_bail!(
+                                "invalid CONNECTION: ICEBERG rest connections require a CREDENTIAL"
+                            );
+                        }
+                    }
                 }
 
                 ConnectionDetails::IcebergCatalog(IcebergCatalogConnection {
-                    catalog_type: IcebergCatalogType::S3TablesRest,
+                    catalog_type,
                     uri: uri.to_string(),
                     warehouse,
+                    credential,
                     aws_connection,
+                    scope: self.scope.clone(),
                 })
             }
         };
