@@ -335,13 +335,11 @@ impl Catalog {
         // We wait until after the `pre_item_updates` to open the cache so we can get accurate
         // dyncfgs because the `pre_item_updates` contains `SystemConfiguration` updates.
         let enable_expr_cache_dyncfg = ENABLE_EXPRESSION_CACHE.get(state.system_config().dyncfgs());
-        let expr_cache_enabled = config.enable_0dt_deployment
-            && config
-                .enable_expression_cache_override
-                .unwrap_or(enable_expr_cache_dyncfg);
+        let expr_cache_enabled = config
+            .enable_expression_cache_override
+            .unwrap_or(enable_expr_cache_dyncfg);
         let (expr_cache_handle, cached_local_exprs, cached_global_exprs) = if expr_cache_enabled {
             info!(
-                ?config.enable_0dt_deployment,
                 ?config.enable_expression_cache_override,
                 ?enable_expr_cache_dyncfg,
                 "using expression cache for startup"

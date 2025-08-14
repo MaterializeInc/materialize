@@ -60,12 +60,6 @@ pub const USER_VERSION_KEY: &str = "user_version";
 pub(crate) const SYSTEM_CONFIG_SYNCED_KEY: &str = "system_config_synced";
 
 /// The key used within the "config" collection where we store a mirror of the
-/// `enable_0dt_deployment` "system var" value. This is mirrored so that we can
-/// toggle the flag with LaunchDarkly, but use it in boot before LaunchDarkly is
-/// available.
-pub(crate) const ENABLE_0DT_DEPLOYMENT: &str = "enable_0dt_deployment";
-
-/// The key used within the "config" collection where we store a mirror of the
 /// `with_0dt_deployment_max_wait` "system var" value. This is mirrored so that
 /// we can toggle the flag with LaunchDarkly, but use it in boot before
 /// LaunchDarkly is available.
