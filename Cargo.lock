@@ -1865,8 +1865,7 @@ checksum = "5b63caa9aa9397e2d9480a9b13673856c78d8ac123288526c37d7839f2a86990"
 [[package]]
 name = "columnar"
 version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d21bd4fd3428271da95e0c5b727cfed00f2a4f3d3e1d84ba34b6d0d2e594c97"
+source = "git+https://github.com/antiguru/columnar?branch=box_support#c0207d187283e13f73d5743f220a5cf86602ec3c"
 dependencies = [
  "bytemuck",
  "columnar_derive",
@@ -1876,8 +1875,7 @@ dependencies = [
 [[package]]
 name = "columnar_derive"
 version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "609b8b923e13d799572a49901aadd717f37a29e76cbab7d8e359aa21b6b25553"
+source = "git+https://github.com/antiguru/columnar?branch=box_support#c0207d187283e13f73d5743f220a5cf86602ec3c"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5953,6 +5951,7 @@ dependencies = [
  "bytesize",
  "chrono",
  "chrono-tz",
+ "columnar",
  "crc32fast",
  "criterion",
  "csv",
@@ -7549,6 +7548,7 @@ dependencies = [
  "bytesize",
  "chrono",
  "clap",
+ "columnar",
  "columnation",
  "crossbeam-channel",
  "csv-core",
@@ -7720,6 +7720,7 @@ dependencies = [
  "aws-types",
  "bytes",
  "bytesize",
+ "columnar",
  "csv-async",
  "derivative",
  "differential-dataflow",
@@ -7773,6 +7774,7 @@ dependencies = [
  "aws-types",
  "base64 0.22.1",
  "bytes",
+ "columnar",
  "columnation",
  "criterion",
  "dec",

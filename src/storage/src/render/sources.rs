@@ -313,12 +313,7 @@ where
                             async {},
                             error_handler,
                         );
-                        (
-                            stream.as_collection(),
-                            Some(tok),
-                            feedback_handle,
-                            backpressure_metrics,
-                        )
+                        (stream, Some(tok), feedback_handle, backpressure_metrics)
                     };
 
                     let export_statistics = storage_state
