@@ -2127,6 +2127,16 @@ steps:
           composition: sqllogictest
           run: slow-tests
           args: [--replicas=4, --parallelism=8]
+  
+  - id: iceberg
+    label: "Iceberg tests"
+    depends_on: build-aarch64
+    timeout_in_minutes: 30
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: iceberg
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
 
   - group: "Race Condition"
     key: race-condition
