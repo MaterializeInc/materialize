@@ -95,9 +95,6 @@ EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'table_nvarc
 > CREATE SECRET IF NOT EXISTS sql_server_pass AS '${arg.default-sql-server-password}'
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_sql_server_source = true;
-
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET log_filter = 'mz_storage::source::sql_server=debug,mz_sql_server_util=debug,info';
 
 > CREATE CONNECTION sql_server_test_40_connection TO SQL SERVER (
