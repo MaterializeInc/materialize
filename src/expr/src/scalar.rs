@@ -2571,6 +2571,7 @@ impl FilterCharacteristics {
     Deserialize,
     Hash,
     MzReflect,
+    Columnar,
 )]
 pub enum DomainLimit {
     None,
@@ -2636,6 +2637,159 @@ pub struct Unsupported {
     MzReflect,
     Columnar,
 )]
+pub struct IndexOutOfRange {
+    pub provided: i32,
+    // The last valid index position, i.e. `v.len() - 1`
+    pub valid_end: i32,
+}
+
+#[derive(
+    Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect,
+    Columnar,
+)]
+pub struct InvalidLayer {
+    pub max_layer: usize,
+    pub val: i64,
+}
+
+#[derive(
+    Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect,
+    Columnar,
+)]
+pub struct InvalidByteSequence {
+    pub byte_sequence: Box<str>,
+    pub encoding_name: Box<str>,
+}
+
+#[derive(
+    Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect,
+    Columnar,
+)]
+pub struct InvalidJsonbCast {
+    pub from: Box<str>,
+    pub to: Box<str>,
+}
+
+#[derive(
+    Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect,
+    Columnar,
+)]
+pub struct StringValueTooLong {
+    pub target_type: Box<str>,
+    pub length: usize,
+}
+
+#[derive(
+    Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect,
+    Columnar,
+)]
+pub struct IncompatibleArrayDimensions {
+    pub dims: Option<(usize, usize)>,
+}
+
+#[derive(
+    Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect,
+    Columnar,
+)]
+pub struct InvalidIdentifier {
+    pub ident: Box<str>,
+    pub detail: Option<Box<str>>,
+}
+
+#[derive(
+    Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect,
+    Columnar,
+)]
+pub struct DateDiffOverflow {
+    pub unit: Box<str>,
+    pub a: Box<str>,
+    pub b: Box<str>,
+}
+
+#[derive(
+    Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect,
+    Columnar,
+)]
 pub enum EvalError {
     CharacterNotValidForEncoding(i32),
     CharacterTooLargeForEncoding(i32),
@@ -2661,11 +2815,7 @@ pub enum EvalError {
     TimestampOutOfRange,
     DateOutOfRange,
     CharOutOfRange,
-    IndexOutOfRange {
-        provided: i32,
-        // The last valid index position, i.e. `v.len() - 1`
-        valid_end: i32,
-    },
+    IndexOutOfRange(IndexOutOfRange),
     InvalidBase64Equals,
     InvalidBase64Symbol(char),
     InvalidBase64EndSequence,
@@ -2673,21 +2823,12 @@ pub enum EvalError {
     InvalidTimezoneInterval,
     InvalidTimezoneConversion,
     InvalidIanaTimezoneId(Box<str>),
-    InvalidLayer {
-        max_layer: usize,
-        val: i64,
-    },
+    InvalidLayer(InvalidLayer),
     InvalidArray(InvalidArrayError),
     InvalidEncodingName(Box<str>),
     InvalidHashAlgorithm(Box<str>),
-    InvalidByteSequence {
-        byte_sequence: Box<str>,
-        encoding_name: Box<str>,
-    },
-    InvalidJsonbCast {
-        from: Box<str>,
-        to: Box<str>,
-    },
+    InvalidByteSequence(InvalidByteSequence),
+    InvalidJsonbCast(InvalidJsonbCast),
     InvalidRegex(Box<str>),
     InvalidRegexFlag(char),
     InvalidParameterValue(Box<str>),
@@ -2711,14 +2852,9 @@ pub enum EvalError {
     Undefined(Box<str>),
     LikePatternTooLong,
     LikeEscapeTooLong,
-    StringValueTooLong {
-        target_type: Box<str>,
-        length: usize,
-    },
+    StringValueTooLong(StringValueTooLong),
     MultidimensionalArrayRemovalNotSupported,
-    IncompatibleArrayDimensions {
-        dims: Option<(usize, usize)>,
-    },
+    IncompatibleArrayDimensions(IncompatibleArrayDimensions),
     TypeFromOid(Box<str>),
     InvalidRange(InvalidRangeError),
     InvalidRoleId(Box<str>),
@@ -2726,18 +2862,11 @@ pub enum EvalError {
     LetRecLimitExceeded(Box<str>),
     MultiDimensionalArraySearch,
     MustNotBeNull(Box<str>),
-    InvalidIdentifier {
-        ident: Box<str>,
-        detail: Option<Box<str>>,
-    },
+    InvalidIdentifier(InvalidIdentifier),
     ArrayFillWrongArraySubscripts,
     // TODO: propagate this check more widely throughout the expr crate
     MaxArraySizeExceeded(usize),
-    DateDiffOverflow {
-        unit: Box<str>,
-        a: Box<str>,
-        b: Box<str>,
-    },
+    DateDiffOverflow(DateDiffOverflow),
     // The error for ErrorIfNull; this should not be used in other contexts as a generic error
     // printer.
     IfNullError(Box<str>),
@@ -2797,10 +2926,10 @@ impl fmt::Display for EvalError {
             EvalError::TimestampOutOfRange => f.write_str("timestamp out of range"),
             EvalError::DateOutOfRange => f.write_str("date out of range"),
             EvalError::CharOutOfRange => f.write_str("\"char\" out of range"),
-            EvalError::IndexOutOfRange {
+            EvalError::IndexOutOfRange(IndexOutOfRange {
                 provided,
                 valid_end,
-            } => write!(f, "index {provided} out of valid range, 0..{valid_end}",),
+            }) => write!(f, "index {provided} out of valid range, 0..{valid_end}",),
             EvalError::InvalidBase64Equals => {
                 f.write_str("unexpected \"=\" while decoding base64 sequence")
             }
@@ -2810,7 +2939,7 @@ impl fmt::Display for EvalError {
                 c.escape_default()
             ),
             EvalError::InvalidBase64EndSequence => f.write_str("invalid base64 end sequence"),
-            EvalError::InvalidJsonbCast { from, to } => {
+            EvalError::InvalidJsonbCast(InvalidJsonbCast { from, to }) => {
                 write!(f, "cannot cast jsonb {} to type {}", from, to)
             }
             EvalError::InvalidTimezone(tz) => write!(f, "invalid time zone '{}'", tz),
@@ -2821,7 +2950,7 @@ impl fmt::Display for EvalError {
             EvalError::InvalidIanaTimezoneId(tz) => {
                 write!(f, "invalid IANA Time Zone Database identifier: '{}'", tz)
             }
-            EvalError::InvalidLayer { max_layer, val } => write!(
+            EvalError::InvalidLayer(InvalidLayer { max_layer, val }) => write!(
                 f,
                 "invalid layer: {}; must use value within [1, {}]",
                 val, max_layer
@@ -2829,10 +2958,10 @@ impl fmt::Display for EvalError {
             EvalError::InvalidArray(e) => e.fmt(f),
             EvalError::InvalidEncodingName(name) => write!(f, "invalid encoding name '{}'", name),
             EvalError::InvalidHashAlgorithm(alg) => write!(f, "invalid hash algorithm '{}'", alg),
-            EvalError::InvalidByteSequence {
+            EvalError::InvalidByteSequence(InvalidByteSequence {
                 byte_sequence,
                 encoding_name,
-            } => write!(
+            }) => write!(
                 f,
                 "invalid byte sequence '{}' for encoding '{}'",
                 byte_sequence, encoding_name
@@ -2899,10 +3028,10 @@ impl fmt::Display for EvalError {
             EvalError::LikeEscapeTooLong => {
                 write!(f, "invalid escape string")
             }
-            EvalError::StringValueTooLong {
+            EvalError::StringValueTooLong(StringValueTooLong {
                 target_type,
                 length,
-            } => {
+            }) => {
                 write!(f, "value too long for type {}({})", target_type, length)
             }
             EvalError::MultidimensionalArrayRemovalNotSupported => {
@@ -2911,7 +3040,7 @@ impl fmt::Display for EvalError {
                     "removing elements from multidimensional arrays is not supported"
                 )
             }
-            EvalError::IncompatibleArrayDimensions { dims: _ } => {
+            EvalError::IncompatibleArrayDimensions(IncompatibleArrayDimensions { dims: _ }) => {
                 write!(f, "cannot concatenate incompatible arrays")
             }
             EvalError::TypeFromOid(msg) => write!(f, "{msg}"),
@@ -2932,7 +3061,7 @@ impl fmt::Display for EvalError {
                 "searching for elements in multidimensional arrays is not supported"
             ),
             EvalError::MustNotBeNull(v) => write!(f, "{v} must not be null"),
-            EvalError::InvalidIdentifier { ident, .. } => {
+            EvalError::InvalidIdentifier(InvalidIdentifier { ident, .. }) => {
                 write!(f, "string is not a valid identifier: {}", ident.quoted())
             }
             EvalError::ArrayFillWrongArraySubscripts => {
@@ -2944,7 +3073,7 @@ impl fmt::Display for EvalError {
                     "array size exceeds the maximum allowed ({max_size} bytes)"
                 )
             }
-            EvalError::DateDiffOverflow { unit, a, b } => {
+            EvalError::DateDiffOverflow(DateDiffOverflow { unit, a, b }) => {
                 write!(f, "datediff overflow, {unit} of {a}, {b}")
             }
             EvalError::IfNullError(s) => f.write_str(s),
@@ -2960,16 +3089,20 @@ impl fmt::Display for EvalError {
 impl EvalError {
     pub fn detail(&self) -> Option<String> {
         match self {
-            EvalError::IncompatibleArrayDimensions { dims: None } => Some(
-                "Arrays with differing dimensions are not compatible for concatenation.".into(),
-            ),
-            EvalError::IncompatibleArrayDimensions {
+            EvalError::IncompatibleArrayDimensions(IncompatibleArrayDimensions { dims: None }) => {
+                Some(
+                    "Arrays with differing dimensions are not compatible for concatenation.".into(),
+                )
+            }
+            EvalError::IncompatibleArrayDimensions(IncompatibleArrayDimensions {
                 dims: Some((a_dims, b_dims)),
-            } => Some(format!(
+            }) => Some(format!(
                 "Arrays of {} and {} dimensions are not compatible for concatenation.",
                 a_dims, b_dims
             )),
-            EvalError::InvalidIdentifier { detail, .. } => detail.as_deref().map(Into::into),
+            EvalError::InvalidIdentifier(InvalidIdentifier { detail, .. }) => {
+                detail.as_deref().map(Into::into)
+            }
             EvalError::ArrayFillWrongArraySubscripts => {
                 Some("Low bound array has different size than dimensions array.".into())
             }
@@ -3109,10 +3242,10 @@ impl RustType<ProtoEvalError> for EvalError {
             EvalError::TimestampOutOfRange => Kind::TimestampOutOfRange(()),
             EvalError::DateOutOfRange => Kind::DateOutOfRange(()),
             EvalError::CharOutOfRange => Kind::CharOutOfRange(()),
-            EvalError::IndexOutOfRange {
+            EvalError::IndexOutOfRange(IndexOutOfRange {
                 provided,
                 valid_end,
-            } => Kind::IndexOutOfRange(ProtoIndexOutOfRange {
+            }) => Kind::IndexOutOfRange(ProtoIndexOutOfRange {
                 provided: *provided,
                 valid_end: *valid_end,
             }),
@@ -3122,21 +3255,23 @@ impl RustType<ProtoEvalError> for EvalError {
             EvalError::InvalidTimezone(tz) => Kind::InvalidTimezone(tz.into_proto()),
             EvalError::InvalidTimezoneInterval => Kind::InvalidTimezoneInterval(()),
             EvalError::InvalidTimezoneConversion => Kind::InvalidTimezoneConversion(()),
-            EvalError::InvalidLayer { max_layer, val } => Kind::InvalidLayer(ProtoInvalidLayer {
-                max_layer: max_layer.into_proto(),
-                val: *val,
-            }),
+            EvalError::InvalidLayer(InvalidLayer { max_layer, val }) => {
+                Kind::InvalidLayer(ProtoInvalidLayer {
+                    max_layer: max_layer.into_proto(),
+                    val: *val,
+                })
+            }
             EvalError::InvalidArray(error) => Kind::InvalidArray(error.into_proto()),
             EvalError::InvalidEncodingName(v) => Kind::InvalidEncodingName(v.into_proto()),
             EvalError::InvalidHashAlgorithm(v) => Kind::InvalidHashAlgorithm(v.into_proto()),
-            EvalError::InvalidByteSequence {
+            EvalError::InvalidByteSequence(InvalidByteSequence {
                 byte_sequence,
                 encoding_name,
-            } => Kind::InvalidByteSequence(ProtoInvalidByteSequence {
+            }) => Kind::InvalidByteSequence(ProtoInvalidByteSequence {
                 byte_sequence: byte_sequence.into_proto(),
                 encoding_name: encoding_name.into_proto(),
             }),
-            EvalError::InvalidJsonbCast { from, to } => {
+            EvalError::InvalidJsonbCast(InvalidJsonbCast { from, to }) => {
                 Kind::InvalidJsonbCast(ProtoInvalidJsonbCast {
                     from: from.into_proto(),
                     to: to.into_proto(),
@@ -3175,17 +3310,17 @@ impl RustType<ProtoEvalError> for EvalError {
             EvalError::Undefined(v) => Kind::Undefined(v.into_proto()),
             EvalError::LikePatternTooLong => Kind::LikePatternTooLong(()),
             EvalError::LikeEscapeTooLong => Kind::LikeEscapeTooLong(()),
-            EvalError::StringValueTooLong {
+            EvalError::StringValueTooLong(StringValueTooLong {
                 target_type,
                 length,
-            } => Kind::StringValueTooLong(ProtoStringValueTooLong {
+            }) => Kind::StringValueTooLong(ProtoStringValueTooLong {
                 target_type: target_type.into_proto(),
                 length: length.into_proto(),
             }),
             EvalError::MultidimensionalArrayRemovalNotSupported => {
                 Kind::MultidimensionalArrayRemovalNotSupported(())
             }
-            EvalError::IncompatibleArrayDimensions { dims } => {
+            EvalError::IncompatibleArrayDimensions(IncompatibleArrayDimensions { dims }) => {
                 Kind::IncompatibleArrayDimensions(ProtoIncompatibleArrayDimensions {
                     dims: dims.into_proto(),
                 })
@@ -3197,7 +3332,7 @@ impl RustType<ProtoEvalError> for EvalError {
             EvalError::LetRecLimitExceeded(v) => Kind::WmrRecursionLimitExceeded(v.into_proto()),
             EvalError::MultiDimensionalArraySearch => Kind::MultiDimensionalArraySearch(()),
             EvalError::MustNotBeNull(v) => Kind::MustNotBeNull(v.into_proto()),
-            EvalError::InvalidIdentifier { ident, detail } => {
+            EvalError::InvalidIdentifier(InvalidIdentifier { ident, detail }) => {
                 Kind::InvalidIdentifier(ProtoInvalidIdentifier {
                     ident: ident.into_proto(),
                     detail: detail.into_proto(),
@@ -3207,7 +3342,7 @@ impl RustType<ProtoEvalError> for EvalError {
             EvalError::MaxArraySizeExceeded(max_size) => {
                 Kind::MaxArraySizeExceeded(u64::cast_from(*max_size))
             }
-            EvalError::DateDiffOverflow { unit, a, b } => {
+            EvalError::DateDiffOverflow(DateDiffOverflow { unit, a, b }) => {
                 Kind::DateDiffOverflow(ProtoDateDiffOverflow {
                     unit: unit.into_proto(),
                     a: a.into_proto(),
@@ -3262,10 +3397,10 @@ impl RustType<ProtoEvalError> for EvalError {
                 Kind::TimestampOutOfRange(()) => Ok(EvalError::TimestampOutOfRange),
                 Kind::DateOutOfRange(()) => Ok(EvalError::DateOutOfRange),
                 Kind::CharOutOfRange(()) => Ok(EvalError::CharOutOfRange),
-                Kind::IndexOutOfRange(v) => Ok(EvalError::IndexOutOfRange {
+                Kind::IndexOutOfRange(v) => Ok(EvalError::IndexOutOfRange(IndexOutOfRange {
                     provided: v.provided,
                     valid_end: v.valid_end,
-                }),
+                })),
                 Kind::InvalidBase64Equals(()) => Ok(EvalError::InvalidBase64Equals),
                 Kind::InvalidBase64Symbol(v) => {
                     char::from_proto(v).map(EvalError::InvalidBase64Symbol)
@@ -3274,21 +3409,23 @@ impl RustType<ProtoEvalError> for EvalError {
                 Kind::InvalidTimezone(v) => Ok(EvalError::InvalidTimezone(v.into())),
                 Kind::InvalidTimezoneInterval(()) => Ok(EvalError::InvalidTimezoneInterval),
                 Kind::InvalidTimezoneConversion(()) => Ok(EvalError::InvalidTimezoneConversion),
-                Kind::InvalidLayer(v) => Ok(EvalError::InvalidLayer {
+                Kind::InvalidLayer(v) => Ok(EvalError::InvalidLayer(InvalidLayer {
                     max_layer: usize::from_proto(v.max_layer)?,
                     val: v.val,
-                }),
+                })),
                 Kind::InvalidArray(error) => Ok(EvalError::InvalidArray(error.into_rust()?)),
                 Kind::InvalidEncodingName(v) => Ok(EvalError::InvalidEncodingName(v.into())),
                 Kind::InvalidHashAlgorithm(v) => Ok(EvalError::InvalidHashAlgorithm(v.into())),
-                Kind::InvalidByteSequence(v) => Ok(EvalError::InvalidByteSequence {
-                    byte_sequence: v.byte_sequence.into(),
-                    encoding_name: v.encoding_name.into(),
-                }),
-                Kind::InvalidJsonbCast(v) => Ok(EvalError::InvalidJsonbCast {
+                Kind::InvalidByteSequence(v) => {
+                    Ok(EvalError::InvalidByteSequence(InvalidByteSequence {
+                        byte_sequence: v.byte_sequence.into(),
+                        encoding_name: v.encoding_name.into(),
+                    }))
+                }
+                Kind::InvalidJsonbCast(v) => Ok(EvalError::InvalidJsonbCast(InvalidJsonbCast {
                     from: v.from.into(),
                     to: v.to.into(),
-                }),
+                })),
                 Kind::InvalidRegex(v) => Ok(EvalError::InvalidRegex(v.into())),
                 Kind::InvalidRegexFlag(v) => Ok(EvalError::InvalidRegexFlag(char::from_proto(v)?)),
                 Kind::InvalidParameterValue(v) => Ok(EvalError::InvalidParameterValue(v.into())),
@@ -3320,18 +3457,20 @@ impl RustType<ProtoEvalError> for EvalError {
                 Kind::Undefined(v) => Ok(EvalError::Undefined(v.into())),
                 Kind::LikePatternTooLong(()) => Ok(EvalError::LikePatternTooLong),
                 Kind::LikeEscapeTooLong(()) => Ok(EvalError::LikeEscapeTooLong),
-                Kind::StringValueTooLong(v) => Ok(EvalError::StringValueTooLong {
-                    target_type: v.target_type.into(),
-                    length: usize::from_proto(v.length)?,
-                }),
+                Kind::StringValueTooLong(v) => {
+                    Ok(EvalError::StringValueTooLong(StringValueTooLong {
+                        target_type: v.target_type.into(),
+                        length: usize::from_proto(v.length)?,
+                    }))
+                }
                 Kind::MultidimensionalArrayRemovalNotSupported(()) => {
                     Ok(EvalError::MultidimensionalArrayRemovalNotSupported)
                 }
-                Kind::IncompatibleArrayDimensions(v) => {
-                    Ok(EvalError::IncompatibleArrayDimensions {
+                Kind::IncompatibleArrayDimensions(v) => Ok(EvalError::IncompatibleArrayDimensions(
+                    IncompatibleArrayDimensions {
                         dims: v.dims.into_rust()?,
-                    })
-                }
+                    },
+                )),
                 Kind::TypeFromOid(v) => Ok(EvalError::TypeFromOid(v.into())),
                 Kind::InvalidRange(e) => Ok(EvalError::InvalidRange(e.into_rust()?)),
                 Kind::InvalidRoleId(v) => Ok(EvalError::InvalidRoleId(v.into())),
@@ -3339,21 +3478,21 @@ impl RustType<ProtoEvalError> for EvalError {
                 Kind::WmrRecursionLimitExceeded(v) => Ok(EvalError::LetRecLimitExceeded(v.into())),
                 Kind::MultiDimensionalArraySearch(()) => Ok(EvalError::MultiDimensionalArraySearch),
                 Kind::MustNotBeNull(v) => Ok(EvalError::MustNotBeNull(v.into())),
-                Kind::InvalidIdentifier(v) => Ok(EvalError::InvalidIdentifier {
+                Kind::InvalidIdentifier(v) => Ok(EvalError::InvalidIdentifier(InvalidIdentifier {
                     ident: v.ident.into(),
                     detail: v.detail.into_rust()?,
-                }),
+                })),
                 Kind::ArrayFillWrongArraySubscripts(()) => {
                     Ok(EvalError::ArrayFillWrongArraySubscripts)
                 }
                 Kind::MaxArraySizeExceeded(max_size) => {
                     Ok(EvalError::MaxArraySizeExceeded(usize::cast_from(max_size)))
                 }
-                Kind::DateDiffOverflow(v) => Ok(EvalError::DateDiffOverflow {
+                Kind::DateDiffOverflow(v) => Ok(EvalError::DateDiffOverflow(DateDiffOverflow {
                     unit: v.unit.into(),
                     a: v.a.into(),
                     b: v.b.into(),
-                }),
+                })),
                 Kind::IfNullError(v) => Ok(EvalError::IfNullError(v.into())),
                 Kind::LengthTooLarge(()) => Ok(EvalError::LengthTooLarge),
                 Kind::AclArrayNullElement(()) => Ok(EvalError::AclArrayNullElement),
