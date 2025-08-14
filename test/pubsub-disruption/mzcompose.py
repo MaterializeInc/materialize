@@ -136,6 +136,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             input=SCHEMA
             + dedent(
                 """
+                $ set-sql-timeout duration=120s
+
                 > UPDATE t1 SET f2 = 3;
                 $ kafka-ingest format=avro key-format=avro topic=pubsub-disruption schema=${schema} key-schema=${keyschema} start-iteration=1 repeat=1000000
                 {"f1": ${kafka-ingest.iteration}} {"f2": 3}
@@ -167,6 +169,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             input=SCHEMA
             + dedent(
                 """
+                $ set-sql-timeout duration=120s
                 > UPDATE t1 SET f2 = 4;
                 $ kafka-ingest format=avro key-format=avro topic=pubsub-disruption schema=${schema} key-schema=${keyschema} start-iteration=1 repeat=1000000
                 {"f1": ${kafka-ingest.iteration}} {"f2": 4}

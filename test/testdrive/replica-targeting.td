@@ -12,6 +12,7 @@
 # These tests rely on testdrive's retry feature, as they query introspection
 # sources whose data might not be immediately available.
 
+$ set-sql-timeout duration=60s
 $ set-regex match=\d{13} replacement=<TIMESTAMP>
 
 # Test that replica-targeted queries return results from the target replica.

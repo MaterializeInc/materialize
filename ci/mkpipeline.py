@@ -82,6 +82,7 @@ mkpipeline creates a Buildkite pipeline based on a template file and uploads it
 so it is executed.""",
     )
 
+    parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--coverage", action="store_true")
     parser.add_argument(
         "--sanitizer",
@@ -193,6 +194,7 @@ so it is executed.""",
                 args.bazel_remote_cache,
                 bazel_lto,
             )
+    truncate_skip_length(pipeline)
     handle_sanitizer_skip(pipeline, args.sanitizer)
     increase_agents_timeouts(pipeline, args.sanitizer, args.coverage)
     prioritize_pipeline(pipeline, args.priority)
@@ -221,9 +223,10 @@ so it is executed.""",
 
     print("--- Uploading new pipeline:")
     print(yaml.dump(pipeline))
-    spawn.runv(
-        ["buildkite-agent", "pipeline", "upload"], stdin=yaml.dump(pipeline).encode()
-    )
+    cmd = ["buildkite-agent", "pipeline", "upload"]
+    if args.dry_run:
+        cmd.append("--dry-run")
+    spawn.runv(cmd, stdin=yaml.dump(pipeline).encode())
 
     return 0
 
@@ -264,56 +267,48 @@ def prioritize_pipeline(pipeline: Any, priority: int) -> None:
     if build_author == "Dependabot":
         priority -= 40
 
-    def visit(config: Any) -> None:
+    for step in steps(pipeline):
+        if "trigger" in step or "wait" in step or "group" in step:
+            # Trigger and Wait steps do not allow priorities.
+            continue
         # Increase priority for larger Hetzner-based tests so that they get
         # preferential treatment on the agents which also accept smaller jobs.
         agent_priority = 0
-        if "agents" in config:
-            agent = config["agents"].get("queue", None)
+        if "agents" in step:
+            agent = step["agents"].get("queue", None)
             if agent == "hetzner-aarch64-8cpu-16gb":
                 agent_priority = 1
             if agent == "hetzner-aarch64-16cpu-32gb":
                 agent_priority = 2
-        config["priority"] = config.get("priority", 0) + priority + agent_priority
+        step["priority"] = step.get("priority", 0) + priority + agent_priority
 
-    for config in pipeline["steps"]:
-        if "trigger" in config or "wait" in config:
-            # Trigger and Wait steps do not allow priorities.
-            continue
-        if "group" in config:
-            for inner_config in config.get("steps", []):
-                visit(inner_config)
-            continue
-        visit(config)
+
+def truncate_skip_length(pipeline: Any) -> None:
+    for step in steps(pipeline):
+        if len(str(step.get("skip", ""))) > 70:
+            step["skip"] = step["skip"][:70]
 
 
 def handle_sanitizer_skip(pipeline: Any, sanitizer: Sanitizer) -> None:
     if sanitizer != Sanitizer.none:
         pipeline.setdefault("env", {})["CI_SANITIZER"] = sanitizer.value
 
-        def visit(step: dict[str, Any]) -> None:
+        for step in steps(pipeline):
             if step.get("sanitizer") == "skip":
                 step["skip"] = True
 
     else:
 
-        def visit(step: dict[str, Any]) -> None:
+        for step in steps(pipeline):
             if step.get("sanitizer") == "only":
                 step["skip"] = True
-
-    for step in pipeline["steps"]:
-        visit(step)
-        if "group" in step:
-            for inner_step in step.get("steps", []):
-                visit(inner_step)
 
 
 def increase_agents_timeouts(
     pipeline: Any, sanitizer: Sanitizer, coverage: bool
 ) -> None:
     if sanitizer != Sanitizer.none or os.getenv("CI_SYSTEM_PARAMETERS", "") == "random":
-
-        def visit(step: dict[str, Any]) -> None:
+        for step in steps(pipeline):
             # Most sanitizer runs, as well as random permutations of system
             # parameters, are slower and need more memory. The default system
             # parameters in CI are chosen to be efficient for execution, while
@@ -358,13 +353,6 @@ def increase_agents_timeouts(
                 elif agent == "hetzner-x86-64-dedi-32cpu-128gb":
                     agent = "hetzner-x86-64-dedi-48cpu-192gb"
                 step["agents"] = {"queue": agent}
-
-        for step in pipeline["steps"]:
-            visit(step)
-            # Groups can't be nested, so handle them explicitly here instead of recursing
-            if "group" in step:
-                for inner_step in step.get("steps", []):
-                    visit(inner_step)
 
     if coverage:
         pipeline["env"]["CI_COVERAGE_ENABLED"] = 1
@@ -487,92 +475,81 @@ def switch_jobs_to_aws(pipeline: Any, priority: int) -> None:
 
     print(f"Queues stuck in Hetzner, switching to AWS or another arch: {stuck}")
 
-    def visit(config: Any) -> None:
-        if "agents" not in config:
-            return
+    for step in steps(pipeline):
+        # Trigger and Wait steps don't have agents
+        if "trigger" in step or "wait" in step or "group" in step:
+            continue
 
-        agent = config["agents"].get("queue", None)
+        if "agents" not in step:
+            continue
+
+        agent = step["agents"].get("queue", None)
         if not agent in stuck:
-            return
+            continue
 
         if agent == "hetzner-aarch64-2cpu-4gb":
             if "hetzner-x86-64-2cpu-4gb" not in stuck:
-                config["agents"]["queue"] = "hetzner-x86-64-2cpu-4gb"
-                if config.get("depends_on") == "build-aarch64":
-                    config["depends_on"] = "build-x86_64"
+                step["agents"]["queue"] = "hetzner-x86-64-2cpu-4gb"
+                if step.get("depends_on") == "build-aarch64":
+                    step["depends_on"] = "build-x86_64"
             else:
-                config["agents"]["queue"] = "linux-aarch64"
+                step["agents"]["queue"] = "linux-aarch64"
         elif agent == "hetzner-aarch64-4cpu-8gb":
             if "hetzner-x86-64-4cpu-8gb" not in stuck:
-                config["agents"]["queue"] = "hetzner-x86-64-4cpu-8gb"
-                if config.get("depends_on") == "build-aarch64":
-                    config["depends_on"] = "build-x86_64"
+                step["agents"]["queue"] = "hetzner-x86-64-4cpu-8gb"
+                if step.get("depends_on") == "build-aarch64":
+                    step["depends_on"] = "build-x86_64"
             else:
-                config["agents"]["queue"] = "linux-aarch64"
+                step["agents"]["queue"] = "linux-aarch64"
         elif agent == "hetzner-aarch64-8cpu-16gb":
             if "hetzner-x86-64-8cpu-16gb" not in stuck:
-                config["agents"]["queue"] = "hetzner-x86-64-8cpu-16gb"
-                if config.get("depends_on") == "build-aarch64":
-                    config["depends_on"] = "build-x86_64"
+                step["agents"]["queue"] = "hetzner-x86-64-8cpu-16gb"
+                if step.get("depends_on") == "build-aarch64":
+                    step["depends_on"] = "build-x86_64"
             else:
-                config["agents"]["queue"] = "linux-aarch64-medium"
+                step["agents"]["queue"] = "linux-aarch64-medium"
 
         elif agent == "hetzner-aarch64-16cpu-32gb":
             if "hetzner-x86-64-16cpu-32gb" not in stuck:
-                config["agents"]["queue"] = "hetzner-x86-64-16cpu-32gb"
-                if config.get("depends_on") == "build-aarch64":
-                    config["depends_on"] = "build-x86_64"
+                step["agents"]["queue"] = "hetzner-x86-64-16cpu-32gb"
+                if step.get("depends_on") == "build-aarch64":
+                    step["depends_on"] = "build-x86_64"
             else:
-                config["agents"]["queue"] = "linux-aarch64-medium"
+                step["agents"]["queue"] = "linux-aarch64-medium"
 
         elif agent in ("hetzner-x86-64-4cpu-8gb", "hetzner-x86-64-2cpu-4gb"):
-            config["agents"]["queue"] = "linux-x86_64"
+            step["agents"]["queue"] = "linux-x86_64"
         elif agent in ("hetzner-x86-64-8cpu-16gb", "hetzner-x86-64-16cpu-32gb"):
-            config["agents"]["queue"] = "linux-x86_64-medium"
+            step["agents"]["queue"] = "linux-x86_64-medium"
         elif agent == "hetzner-x86-64-dedi-2cpu-8gb":
-            config["agents"]["queue"] = "linux-x86_64"
+            step["agents"]["queue"] = "linux-x86_64"
         elif agent == "hetzner-x86-64-dedi-4cpu-16gb":
-            config["agents"]["queue"] = "linux-x86_64-medium"
+            step["agents"]["queue"] = "linux-x86_64-medium"
         elif agent in (
             "hetzner-x86-64-dedi-8cpu-32gb",
             "hetzner-x86-64-dedi-16cpu-64gb",
         ):
-            config["agents"]["queue"] = "linux-x86_64-large"
+            step["agents"]["queue"] = "linux-x86_64-large"
         elif agent in (
             "hetzner-x86-64-dedi-32cpu-128gb",
             "hetzner-x86-64-dedi-48cpu-192gb",
         ):
-            config["agents"]["queue"] = "builder-linux-x86_64"
-
-    for config in pipeline["steps"]:
-        if "trigger" in config or "wait" in config:
-            # Trigger and Wait steps don't have agents
-            continue
-        if "group" in config:
-            for inner_config in config.get("steps", []):
-                visit(inner_config)
-            continue
-        visit(config)
+            step["agents"]["queue"] = "builder-linux-x86_64"
 
 
 def permit_rerunning_successful_steps(pipeline: Any) -> None:
-    def visit(step: Any) -> None:
+    for step in steps(pipeline):
+        if "trigger" in step or "wait" in step or "group" in step or "block" in step:
+            continue
         step.setdefault("retry", {}).setdefault("manual", {}).setdefault(
             "permit_on_passed", True
         )
 
-    for config in pipeline["steps"]:
-        if "trigger" in config or "wait" in config or "block" in config:
-            continue
-        if "group" in config:
-            for inner_config in config.get("steps", []):
-                visit(inner_config)
-            continue
-        visit(config)
-
 
 def set_retry_on_agent_lost(pipeline: Any) -> None:
-    def visit(step: Any) -> None:
+    for step in steps(pipeline):
+        if "trigger" in step or "wait" in step or "group" in step or "block" in step:
+            continue
         step.setdefault("retry", {}).setdefault("automatic", []).extend(
             [
                 {
@@ -591,15 +568,6 @@ def set_retry_on_agent_lost(pipeline: Any) -> None:
             ]
         )
 
-    for config in pipeline["steps"]:
-        if "trigger" in config or "wait" in config or "block" in config:
-            continue
-        if "group" in config:
-            for inner_config in config.get("steps", []):
-                visit(inner_config)
-            continue
-        visit(config)
-
 
 def set_default_agents_queue(pipeline: Any) -> None:
     for step in steps(pipeline):
@@ -614,18 +582,9 @@ def set_default_agents_queue(pipeline: Any) -> None:
 
 
 def set_parallelism_name(pipeline: Any) -> None:
-    def visit(step: Any) -> None:
+    for step in steps(pipeline):
         if step.get("parallelism", 1) > 1:
             step["label"] += " %N"
-
-    for config in pipeline["steps"]:
-        if "trigger" in config or "wait" in config or "block" in config:
-            continue
-        if "group" in config:
-            for inner_config in config.get("steps", []):
-                visit(inner_config)
-            continue
-        visit(config)
 
 
 def check_depends_on(pipeline: Any, pipeline_name: str) -> None:
@@ -639,7 +598,7 @@ def check_depends_on(pipeline: Any, pipeline_name: str) -> None:
         # has completed, without waiting for block or wait steps unless those
         # are also explicit dependencies.
         if step.get("id") in ("analyze", "deploy", "coverage-pr-analyze"):
-            return
+            continue
 
         if (
             "depends_on" not in step

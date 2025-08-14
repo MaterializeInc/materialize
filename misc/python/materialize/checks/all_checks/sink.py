@@ -709,6 +709,9 @@ class SinkComments(Check):
 
                 # We check the contents of the sink topics by re-ingesting them.
 
+                # Still needs to sleep some before the topic exists
+                $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="5s"
+
                 > CREATE SOURCE sink_view_comments1_src
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'sink-sink-comments1')
                 > CREATE TABLE sink_view_comments1 FROM SOURCE sink_view_comments1_src (REFERENCE "sink-sink-comments1")
