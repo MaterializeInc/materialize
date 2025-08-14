@@ -33,6 +33,7 @@ use std::sync::LazyLock;
 
 use chrono::offset::{Offset, TimeZone};
 use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
+use columnar::Columnar;
 use dec::OrderedDecimal;
 use mz_lowertest::MzReflect;
 use mz_ore::cast::ReinterpretCast;
@@ -1929,7 +1930,18 @@ where
 
 /// An error while parsing an input as a type.
 #[derive(
-    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
+    Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect,
+    Columnar,
 )]
 pub struct ParseError {
     pub kind: ParseErrorKind,
@@ -1951,6 +1963,7 @@ pub struct ParseError {
     Deserialize,
     Hash,
     MzReflect,
+    Columnar,
 )]
 pub enum ParseErrorKind {
     OutOfRange,
@@ -2072,6 +2085,7 @@ impl RustType<ProtoParseError> for ParseError {
     Deserialize,
     Hash,
     MzReflect,
+    Columnar,
 )]
 pub enum ParseHexError {
     InvalidHexDigit(char),

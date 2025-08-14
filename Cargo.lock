@@ -2018,9 +2018,9 @@ checksum = "5b63caa9aa9397e2d9480a9b13673856c78d8ac123288526c37d7839f2a86990"
 
 [[package]]
 name = "columnar"
-version = "0.10.1"
+version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f0342a00e5e34da4ef8c48b7ef9cc6fbe16ac2967456382738e21fe662ece796"
+checksum = "03315bde8779a20f3dd80d2ef267e22c4be4bd869846ec00b2dd75d0c7c67c4c"
 dependencies = [
  "bytemuck",
  "columnar_derive",
@@ -2029,9 +2029,9 @@ dependencies = [
 
 [[package]]
 name = "columnar_derive"
-version = "0.10.1"
+version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a1852d06353d9f8d6032581b3e61169d54c98204f9fb681ddcfb3c974f447255"
+checksum = "b2f0cf8b4fdf0324ae0cdce3f4c3dea78c53f4a54a2d81603ce7107e19288da7"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -6403,6 +6403,7 @@ dependencies = [
  "bytesize",
  "chrono",
  "chrono-tz",
+ "columnar",
  "crc32fast",
  "criterion",
  "csv",
@@ -8010,6 +8011,7 @@ dependencies = [
  "bytesize",
  "chrono",
  "clap",
+ "columnar",
  "columnation",
  "crossbeam-channel",
  "csv-core",
@@ -8167,6 +8169,7 @@ dependencies = [
  "aws-types",
  "bytes",
  "bytesize",
+ "columnar",
  "csv-async",
  "derivative",
  "differential-dataflow",
@@ -8220,6 +8223,7 @@ dependencies = [
  "aws-types",
  "base64 0.22.1",
  "bytes",
+ "columnar",
  "columnation",
  "criterion",
  "dec",
@@ -9872,7 +9876,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be769465445e8c1474e9c5dac2018218498557af32d9ed057325ec9a41ae81bf"
 dependencies = [
  "heck",
- "itertools 0.10.5",
+ "itertools 0.14.0",
  "log",
  "multimap",
  "once_cell",
@@ -9892,7 +9896,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
 dependencies = [
  "anyhow",
- "itertools 0.10.5",
+ "itertools 0.14.0",
  "proc-macro2",
  "quote",
  "syn 2.0.104",

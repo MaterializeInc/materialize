@@ -10,6 +10,7 @@
 //! Materialize's storage layer.
 
 #![warn(missing_docs)]
+#![recursion_limit = "256"]
 
 pub mod decode;
 pub mod internal_control;

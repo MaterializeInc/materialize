@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(output_type = \"i32\", propagates_nulls = true)]\nfn get_bit<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {\n    let bytes = a.unwrap_bytes();\n    let index = b.unwrap_int32();\n    let err = EvalError::IndexOutOfRange {\n        provided: index,\n        valid_end: i32::try_from(bytes.len().saturating_mul(8)).unwrap() - 1,\n    };\n    let index = usize::try_from(index).map_err(|_| err.clone())?;\n    let byte_index = index / 8;\n    let bit_index = index % 8;\n    let i = bytes.get(byte_index).map(|b| (*b >> bit_index) & 1).ok_or(err)?;\n    assert!(i == 0 || i == 1);\n    Ok(Datum::from(i32::from(i)))\n}\n"
+expression: "#[sqlfunc(output_type = \"i32\", propagates_nulls = true)]\nfn get_bit<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {\n    let bytes = a.unwrap_bytes();\n    let index = b.unwrap_int32();\n    let err = EvalError::IndexOutOfRange(IndexOutOfRange {\n        provided: index,\n        valid_end: i32::try_from(bytes.len().saturating_mul(8)).unwrap() - 1,\n    });\n    let index = usize::try_from(index).map_err(|_| err.clone())?;\n    let byte_index = index / 8;\n    let bit_index = index % 8;\n    let i = bytes.get(byte_index).map(|b| (*b >> bit_index) & 1).ok_or(err)?;\n    assert!(i == 0 || i == 1);\n    Ok(Datum::from(i32::from(i)))\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -61,10 +61,10 @@ impl std::fmt::Display for GetBit {
 fn get_bit<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let bytes = a.unwrap_bytes();
     let index = b.unwrap_int32();
-    let err = EvalError::IndexOutOfRange {
+    let err = EvalError::IndexOutOfRange(IndexOutOfRange {
         provided: index,
         valid_end: i32::try_from(bytes.len().saturating_mul(8)).unwrap() - 1,
-    };
+    });
     let index = usize::try_from(index).map_err(|_| err.clone())?;
     let byte_index = index / 8;
     let bit_index = index % 8;

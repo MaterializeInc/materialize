@@ -15,6 +15,7 @@ use std::hash::{Hash, Hasher};
 
 use bitflags::bitflags;
 use chrono::{DateTime, NaiveDateTime, Utc};
+use columnar::Columnar;
 use dec::OrderedDecimal;
 use mz_lowertest::MzReflect;
 use mz_proto::{RustType, TryFromProtoError};
@@ -739,7 +740,18 @@ impl<'a, const UPPER: bool> RangeBound<Datum<'a>, UPPER> {
 }
 
 #[derive(
-    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
+    Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect,
+    Columnar,
 )]
 pub enum InvalidRangeError {
     MisorderedRangeBounds,

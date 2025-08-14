@@ -39,11 +39,11 @@ use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::capture::Event;
 use timely::dataflow::operators::{Broadcast, Capture, Leave, Map, Probe};
-use timely::dataflow::{ProbeHandle, Scope, Stream};
+use timely::dataflow::{ProbeHandle, Scope, Stream, StreamCore};
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use timely::worker::Worker;
-use timely::{Data, PartialOrder, WorkerConfig};
+use timely::{Container, Data, PartialOrder, WorkerConfig};
 use tracing::debug;
 
 use crate::TxnsCodecDefault;
@@ -93,7 +93,7 @@ use crate::txn_read::{DataListenNext, DataRemapEntry, TxnsRead};
 ///   on data from its input until the input has progressed to 10, at which
 ///   point it can itself downgrade to 10.
 pub fn txns_progress<K, V, T, D, P, C, F, G>(
-    passthrough: Stream<G, P>,
+    passthrough: StreamCore<G, P>,
     name: &str,
     ctx: &TxnsContext,
     worker_dyncfgs: &ConfigSet,
@@ -104,20 +104,20 @@ pub fn txns_progress<K, V, T, D, P, C, F, G>(
     until: Antichain<T>,
     data_key_schema: Arc<K::Schema>,
     data_val_schema: Arc<V::Schema>,
-) -> (Stream<G, P>, Vec<PressOnDropButton>)
+) -> (StreamCore<G, P>, Vec<PressOnDropButton>)
 where
     K: Debug + Codec + Send + Sync,
     V: Debug + Codec + Send + Sync,
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
     D: Debug + Data + Semigroup + Ord + Codec64 + Send + Sync,
-    P: Debug + Data,
+    P: Container + Data,
     C: TxnsCodec + 'static,
     F: Future<Output = PersistClient> + Send + 'static,
     G: Scope<Timestamp = T>,
 {
     let unique_id = (name, passthrough.scope().addr()).hashed();
     let (remap, source_button) = if USE_GLOBAL_TXN_CACHE_SOURCE.get(worker_dyncfgs) {
-        txns_progress_source_global::<K, V, T, D, P, C, G>(
+        txns_progress_source_global::<K, V, T, D, C, G>(
             passthrough.scope(),
             name,
             ctx.clone(),
@@ -130,7 +130,7 @@ where
             unique_id,
         )
     } else {
-        txns_progress_source_local::<K, V, T, D, P, C, G>(
+        txns_progress_source_local::<K, V, T, D, C, G>(
             passthrough.scope(),
             name,
             client_fn(),
@@ -158,7 +158,7 @@ where
 
 /// An alternative implementation of [`txns_progress_source_global`] that opens
 /// a new [`TxnsCache`] local to the operator.
-fn txns_progress_source_local<K, V, T, D, P, C, G>(
+fn txns_progress_source_local<K, V, T, D, C, G>(
     scope: G,
     name: &str,
     client: impl Future<Output = PersistClient> + 'static,
@@ -174,7 +174,6 @@ where
     V: Debug + Codec + Send + Sync,
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
     D: Debug + Data + Semigroup + Ord + Codec64 + Send + Sync,
-    P: Debug + Data,
     C: TxnsCodec + 'static,
     G: Scope<Timestamp = T>,
 {
@@ -273,7 +272,7 @@ where
 ///
 /// [reclocking design doc]:
 ///     https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/20210714_reclocking.md
-fn txns_progress_source_global<K, V, T, D, P, C, G>(
+fn txns_progress_source_global<K, V, T, D, C, G>(
     scope: G,
     name: &str,
     ctx: TxnsContext,
@@ -290,7 +289,6 @@ where
     V: Debug + Codec + Send + Sync,
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
     D: Debug + Data + Semigroup + Ord + Codec64 + Send + Sync,
-    P: Debug + Data,
     C: TxnsCodec + 'static,
     G: Scope<Timestamp = T>,
 {
@@ -351,18 +349,18 @@ where
 
 fn txns_progress_frontiers<K, V, T, D, P, C, G>(
     remap: Stream<G, DataRemapEntry<T>>,
-    passthrough: Stream<G, P>,
+    passthrough: StreamCore<G, P>,
     name: &str,
     data_id: ShardId,
     until: Antichain<T>,
     unique_id: u64,
-) -> (Stream<G, P>, PressOnDropButton)
+) -> (StreamCore<G, P>, PressOnDropButton)
 where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
     D: Data + Semigroup + Codec64 + Send + Sync,
-    P: Debug + Data,
+    P: Container + Data,
     C: TxnsCodec,
     G: Scope<Timestamp = T>,
 {
@@ -434,7 +432,6 @@ where
                     // `shard_source` (before this operator) and
                     // `mfp_and_decode` (after this operator) do the necessary
                     // filtering.
-                    debug!("{} emitting data {:?}", name, data);
                     passthrough_output.give_container(&cap, &mut data);
                 }
                 AsyncEvent::Progress(new_progress) => {

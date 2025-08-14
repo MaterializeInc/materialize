@@ -15,6 +15,7 @@ use mz_repr::{ColumnType, Datum, Row, RowArena, RowPacker, ScalarType};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
+use crate::scalar::Unsupported;
 use crate::scalar::func::{LazyUnaryFunc, stringify_datum};
 use crate::{EvalError, MirScalarExpr};
 
@@ -38,14 +39,14 @@ impl LazyUnaryFunc for CastArrayToListOneDim {
         let arr = a.unwrap_array();
         let ndims = arr.dims().ndims();
         if ndims > 1 {
-            return Err(EvalError::Unsupported {
+            return Err(EvalError::Unsupported(Unsupported {
                 feature: format!(
                     "casting multi-dimensional array to list; got array with {} dimensions",
                     ndims
                 )
                 .into(),
                 discussion_no: None,
-            });
+            }));
         }
 
         Ok(Datum::List(arr.elements()))
