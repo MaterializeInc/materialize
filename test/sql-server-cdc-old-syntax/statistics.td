@@ -155,5 +155,3 @@ alt true
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('alt')
 0
-
-# TODO(guswynn): consider adding an envd restart test for pg statistics, not just kafka ones like in test/cluster.
