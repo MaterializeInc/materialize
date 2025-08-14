@@ -12,6 +12,7 @@ use std::error::Error;
 use std::fmt::Display;
 
 use bytes::BufMut;
+use columnar::Columnar;
 use mz_expr::EvalError;
 use mz_kafka_util::client::TunnelingClientContext;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
@@ -320,7 +321,9 @@ impl Display for SourceError {
     }
 }
 
-#[derive(Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(
+    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, Columnar,
+)]
 pub enum SourceErrorDetails {
     Initialization(Box<str>),
     Other(Box<str>),
@@ -567,13 +570,13 @@ mod columnation {
                         | e @ EvalError::LengthTooLarge
                         | e @ EvalError::AclArrayNullElement
                         | e @ EvalError::MzAclArrayNullElement => e.clone(),
-                        EvalError::Unsupported {
+                        EvalError::Unsupported(Unsupported {
                             feature,
                             discussion_no,
-                        } => EvalError::Unsupported {
+                        }) => EvalError::Unsupported(Unsupported {
                             feature: self.string_region.copy(feature),
                             discussion_no: *discussion_no,
-                        },
+                        }),
                         EvalError::Float32OutOfRange(string) => {
                             EvalError::Float32OutOfRange(self.string_region.copy(string))
                         }

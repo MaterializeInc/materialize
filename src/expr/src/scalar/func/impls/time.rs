@@ -21,6 +21,7 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use crate::EvalError;
+use crate::scalar::Unsupported;
 use crate::scalar::func::EagerUnaryFunc;
 
 sqlfunc!(
@@ -79,10 +80,10 @@ where
             "time".into(),
         )),
         DateTimeUnits::Timezone | DateTimeUnits::TimezoneHour | DateTimeUnits::TimezoneMinute => {
-            Err(EvalError::Unsupported {
+            Err(EvalError::Unsupported(Unsupported {
                 feature: format!("'{}' timestamp units", units).into(),
                 discussion_no: None,
-            })
+            }))
         }
     }
 }

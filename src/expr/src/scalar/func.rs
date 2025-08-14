@@ -65,7 +65,7 @@ use subtle::ConstantTimeEq;
 
 use crate::scalar::func::format::DateTimeFormat;
 use crate::scalar::{
-    ProtoBinaryFunc, ProtoUnaryFunc, ProtoUnmaterializableFunc, ProtoVariadicFunc,
+    ProtoBinaryFunc, ProtoUnaryFunc, ProtoUnmaterializableFunc, ProtoVariadicFunc, Unsupported,
 };
 use crate::{EvalError, MirScalarExpr, like_pattern};
 
@@ -8942,10 +8942,10 @@ fn make_acl_item<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
         .map_err(|e: anyhow::Error| EvalError::InvalidPrivileges(e.to_string().into()))?;
     let is_grantable = datums[3].unwrap_bool();
     if is_grantable {
-        return Err(EvalError::Unsupported {
+        return Err(EvalError::Unsupported(Unsupported {
             feature: "GRANT OPTION".into(),
             discussion_no: None,
-        });
+        }));
     }
 
     Ok(Datum::AclItem(AclItem {
@@ -8990,10 +8990,10 @@ fn array_fill<'a>(
 
     let fill = datums[0];
     if matches!(fill, Datum::Array(_)) {
-        return Err(EvalError::Unsupported {
+        return Err(EvalError::Unsupported(Unsupported {
             feature: "array_fill with arrays".into(),
             discussion_no: None,
-        });
+        }));
     }
 
     let arr = match datums[1] {

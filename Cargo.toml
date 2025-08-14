@@ -316,6 +316,7 @@ debug-assertions = true
 # merged), after which point it becomes impossible to build that historical
 # version of Materialize.
 [patch.crates-io]
+columnar = { git = "https://github.com/antiguru/columnar", branch = "box_support" }
 # Waiting on https://github.com/sfackler/rust-postgres/pull/752.
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
@@ -346,7 +347,7 @@ reqwest-retry = { git = "https://github.com/MaterializeInc/reqwest-middleware.gi
 # Need to upstream a few PRs related to test builders.
 #
 # Note: All changes in our fork of tiberius should be pushed to the `mz_changes` branch.
-tiberius = { git = "https://github.com/MaterializeInc/tiberius", rev="64ca594cc22ed67d072c2d0110455da50539e1cd" }
+tiberius = { git = "https://github.com/MaterializeInc/tiberius", rev = "64ca594cc22ed67d072c2d0110455da50539e1cd" }
 
 # Allows us to use bzip2-sys rather than the rust reimpl.
 # All changes should go to the `mz_changes` branch.
