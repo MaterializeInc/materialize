@@ -17,13 +17,12 @@ from __future__ import annotations
 
 import argparse
 import os
-import threading
 from argparse import Namespace
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from queue import Queue
 
-from materialize import buildkite, ci_util, file_util
+from materialize import MZ_ROOT, buildkite, ci_util, file_util, spawn, ui
 from materialize.cli.run import update_sqlite_repo
 from materialize.mzcompose.composition import (
     Composition,
@@ -35,8 +34,8 @@ from materialize.mzcompose.services.postgres import CockroachOrPostgresMetadata
 from materialize.mzcompose.services.sql_logic_test import SqlLogicTest
 from materialize.ui import CommandFailureCausedUIError
 
-NUM_SLTS = 8
-SLTS = [f"slt_{i+1}" for i in range(NUM_SLTS)]
+MAX_SLTS = 8
+SLTS = [f"slt_{i+1}" for i in range(MAX_SLTS)]
 
 SERVICES = [CockroachOrPostgresMetadata(), Mz(app_password="")] + [
     SqlLogicTest(name=slt) for slt in SLTS
@@ -101,10 +100,14 @@ def run_sqllogictest(
 ) -> None:
     parser.add_argument("--replica-size", default="scale=1,workers=2", type=str)
     parser.add_argument("--replicas", default=1, type=int)
+    parser.add_argument("--parallelism", default=MAX_SLTS, type=int)
     args = parser.parse_args()
 
+    assert (
+        1 <= args.parallelism <= MAX_SLTS
+    ), f"Parallelism has to be between 1 and {MAX_SLTS}"
+
     work_queue = Queue()
-    stop_event = threading.Event()
 
     for step in run_config.steps:
         step.configure(args)
@@ -112,31 +115,35 @@ def run_sqllogictest(
             buildkite.shard_list(step.file_list, lambda file: file)
         )
         for file in sharded_files:
-            work_queue.put((step, file))
+            work_queue.put((step, file, False))
 
     # Hacky way to make sure we have downloaded the image
     c.up(Service("slt_1", idle=True))
     # Keep them all up to prevent container startups from taking a long time
     c.up(
-        c.metadata_store(), *[Service(f"slt_{i+1}", idle=True) for i in range(NUM_SLTS)]
+        c.metadata_store(),
+        *[Service(f"slt_{i+1}", idle=True) for i in range(args.parallelism)],
     )
+
+    failed_files = []
 
     def worker(container_name: str):
         exception: Exception | None = None
         while True:
-            if stop_event.is_set():
-                return
-
             try:
-                step, file = work_queue.get_nowait()
+                step, file, rewrite_results = work_queue.get_nowait()
             except Exception:
                 break  # Queue is empty
 
             if "singlereplica_" in file and args.replicas > 1:
                 continue
 
-            junit_report_path = ci_util.junit_report_filename(
-                f"{c.name}-{file.replace('.', '_').replace('/', '_')}"
+            junit_report_path = (
+                None
+                if rewrite_results
+                else ci_util.junit_report_filename(
+                    f"{c.name}-{file.replace('.', '_').replace('/', '_')}"
+                )
             )
             cmd = step.to_command(
                 container_name,
@@ -145,27 +152,53 @@ def run_sqllogictest(
                 args.replica_size,
                 junit_report_path,
                 c.metadata_store(),
+                rewrite_results=rewrite_results,
             )
             try:
                 c.exec(container_name, *cmd, capture=True, capture_stderr=True)
                 # Uploading successful junit files wastes time and contains no useful information
-                os.remove(junit_report_path)
+                if junit_report_path:
+                    os.remove(junit_report_path)
             except CommandFailureCausedUIError as e:
-                print(f"+++ {file} failed, STDOUT:\n{e.stdout}\nSTDERR:\n{e.stderr}")
+                print(f"STDERR:\n{e.stderr}")
+                if not rewrite_results:
+                    failed_files.append((step, file))
+                    if ui.env_is_truthy("CI"):
+                        work_queue.put((step, file, True))
                 exception = e
             finally:
                 work_queue.task_done()
         if exception:
             raise exception
 
-    with ThreadPoolExecutor(max_workers=len(SLTS)) as executor:
-        futures = [executor.submit(worker, container_name) for container_name in SLTS]
-        try:
-            for future in as_completed(futures):
+    errors: list[Exception] = []
+    with ThreadPoolExecutor(max_workers=args.parallelism) as executor:
+        futures = [
+            executor.submit(worker, container_name)
+            for container_name in SLTS[: args.parallelism]
+        ]
+        for future in as_completed(futures):
+            try:
                 future.result()
-        except Exception:
-            stop_event.set()
-            raise
+            except Exception as e:
+                errors.append(e)
+        if failed_files:
+            if ui.env_is_truthy("CI"):
+                diff = spawn.capture(["git", "diff", "-C", MZ_ROOT])
+                if diff:
+                    with open(
+                        MZ_ROOT / f"slt{buildkite.get_parallelism_index() + 1}.diff",
+                        "w",
+                    ) as f:
+                        f.write(diff)
+                else:
+                    print("Rewriting results did not result in a diff")
+                print(
+                    f"Rewrite SLT files locally with: bin/sqllogictest --optimized -- --rewrite-results {' '.join([file for step, file in failed_files])}"
+                )
+                print(f"Or apply directly: git apply <<'EOF'\n{diff}EOF")
+        if errors:
+            raise errors[0]
 
 
 class SltRunConfig:
@@ -189,12 +222,15 @@ class SltRunStepConfig:
         file: str,
         replicas: int,
         replica_size: int,
-        junit_report_path: Path,
+        junit_report_path: Path | None,
         metadata_store: str,
         metadata_store_port: int = COCKROACH_DEFAULT_PORT,
+        rewrite_results: bool = False,
     ) -> list[str]:
+        assert not (junit_report_path and rewrite_results)
         sqllogictest_config = [
-            f"--junit-report={junit_report_path}",
+            *([f"--junit-report={junit_report_path}"] if junit_report_path else []),
+            *(["--rewrite-results"] if rewrite_results else []),
             f"--postgres-url=postgres://root@{metadata_store}:{metadata_store_port}",
             f"--prefix={container_name}",
             f"--replica-size={replica_size}",
@@ -203,7 +239,7 @@ class SltRunStepConfig:
         command = [
             "sqllogictest",
             "-v",
-            *self.flags,
+            *([] if rewrite_results else self.flags),
             *sqllogictest_config,
             file,
         ]

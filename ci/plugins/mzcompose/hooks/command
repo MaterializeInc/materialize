@@ -171,7 +171,7 @@ cleanup() {
   echo "Compressing parallel-workload-queries.log"
   bin/ci-builder run "$builder" zstd --rm parallel-workload-queries.log || true
 
-  mapfile -t artifacts < <(printf "run.log\nservices.log\njournalctl-merge.log\nnetstat-ant.log\nnetstat-panelot.log\nps-aux.log\ndocker-inspect.log\n"; find . -name 'junit_*.xml'; find mz_debug_* -name '*.log')
+  mapfile -t artifacts < <(printf "run.log\nservices.log\njournalctl-merge.log\nnetstat-ant.log\nnetstat-panelot.log\nps-aux.log\ndocker-inspect.log\n"; find . -name 'junit_*.xml' -printf '%P\n'; find . -maxdepth 1 -name 'mz_debug_*.log' -printf '%P\n'; find . -maxdepth 1 -name 'slt*.diff' -printf '%P\n')
   artifacts_str=$(IFS=";"; echo "${artifacts[*]}")
 
   echo "--- Running trufflehog to scan artifacts for secrets & uploading artifacts"

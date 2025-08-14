@@ -105,6 +105,8 @@ ERROR_RE = re.compile(
     | worker_.*\ still\ running: [\s\S]* Threads\ have\ not\ stopped\ within\ 5\ minutes,\ exiting\ hard
     # source-table migration
     | source-table-migration\ issue
+    # sql logic tests
+    | Rewrite\ SLT\ files\ locally\ with:\ [\s\S]*? ^EOF$
     )
     .* $
     """,

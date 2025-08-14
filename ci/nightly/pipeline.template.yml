@@ -2081,7 +2081,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: sqllogictest
           run: slow-tests
-          args: [--replicas=4]
+          args: [--replicas=4, --parallelism=8]
 
   - group: "Race Condition"
     key: race-condition
