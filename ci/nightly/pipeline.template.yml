@@ -695,6 +695,16 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
         # the mzbuild postgres version will be used, which depends on the Dockerfile specification
 
+      - id: sql-server-cdc-old-syntax
+        label: SQL Server CDC tests (before source versioning)
+        depends_on: build-x86_64
+        timeout_in_minutes: 60
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: sql-server-cdc-old-syntax
+        agents:
+          queue: hetzner-x86-64-4cpu-8gb
+
       - id: pg-cdc-migration
         label: Postgres CDC source-versioning migration tests
         depends_on: build-aarch64

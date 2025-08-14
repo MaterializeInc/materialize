@@ -185,7 +185,7 @@ def workflow_snapshot_consistency(
     update_val_offset = 100000
     insert_delete = lambda i: dedent(
         f"""
-        INSERT INTO t1 VALUES (999999999,666666666), ({i+update_id_offset}, {i+update_val_offset});
+        INSERT INTO t1 VALUES (999999999,666666666), ({i + update_id_offset}, {i + update_val_offset});
         DELETE FROM t1 WHERE id = 999999999;
         """
     )
@@ -234,7 +234,7 @@ def workflow_snapshot_consistency(
         args=["--no-reset"],
         input=dedent(
             f"""
-            > SELECT COUNT(*) >= {update_rows+initial_rows}, MIN(id), MAX(id) >= {update_rows + update_id_offset - 1} FROM t1;
+            > SELECT COUNT(*) >= {update_rows + initial_rows}, MIN(id), MAX(id) >= {update_rows + update_id_offset - 1} FROM t1;
             true 1 true
             """
         ),
