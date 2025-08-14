@@ -4372,6 +4372,7 @@ pub(crate) mod tests {
     /// This golden will have to be updated each time we change State, but
     /// that's a feature, not a bug.
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
     fn state_inspect_serde_json() {
         const STATE_SERDE_JSON: &str = include_str!("state_serde.json");
         let mut runner = proptest::test_runner::TestRunner::deterministic();

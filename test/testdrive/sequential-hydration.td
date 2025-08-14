@@ -12,6 +12,8 @@
 # Test that dataflows that are unable to hydrate because their source data is
 # not yet available don't block hydration of other dataflows.
 
+$ set-sql-timeout duration=60s
+
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET compute_hydration_concurrency = 1;
 

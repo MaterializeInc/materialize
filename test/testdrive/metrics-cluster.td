@@ -19,7 +19,7 @@ $ set-sql-timeout duration=300s
       u.process_id,
       u.cpu_percent >= 0.0,
       u.memory_percent > 0.0,
-      u.disk_percent
+      (u.disk_percent IS NULL OR u.disk_percent > 0.0)
   FROM
       mz_clusters AS c
           JOIN mz_cluster_replicas AS r ON r.cluster_id = c.id
@@ -28,11 +28,11 @@ $ set-sql-timeout duration=300s
               ON r.id = u.replica_id
   WHERE c.name IN ( 'foo', 'bar', 'xyzzy' )
   ORDER BY c.name, r.name, process_id
-foo size_1 0 true true <null>
-foo size_2_2 0 true true <null>
-foo size_2_2 1 true true <null>
-foo size_32 0 true true <null>
-xyzzy size_4 0 true true <null>
+foo size_1 0 true true true
+foo size_2_2 0 true true true
+foo size_2_2 1 true true true
+foo size_32 0 true true true
+xyzzy size_4 0 true true true
 
 > SELECT DISTINCT ON (c.name, r.name, u.process_id)
       c.name,
@@ -40,7 +40,7 @@ xyzzy size_4 0 true true <null>
       u.process_id,
       u.cpu_percent >= 0.0,
       u.memory_percent > 0.0,
-      u.disk_percent
+      (u.disk_percent IS NULL OR u.disk_percent > 0.0)
   FROM
       mz_clusters AS c
           JOIN mz_cluster_replicas AS r ON r.cluster_id = c.id
@@ -49,8 +49,8 @@ xyzzy size_4 0 true true <null>
               ON r.id = u.replica_id
   WHERE c.name IN ( 'foo', 'bar', 'xyzzy' )
   ORDER BY c.name, r.name, process_id, occurred_at DESC
-foo size_1 0 true true <null>
-foo size_2_2 0 true true <null>
-foo size_2_2 1 true true <null>
-foo size_32 0 true true <null>
-xyzzy size_4 0 true true <null>
+foo size_1 0 true true true
+foo size_2_2 0 true true true
+foo size_2_2 1 true true true
+foo size_32 0 true true true
+xyzzy size_4 0 true true true

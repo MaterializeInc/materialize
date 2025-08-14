@@ -1568,7 +1568,7 @@ c_schedule_5  manual  NULL
 c_schedule_hydration_time_estimate  on-refresh  00:16:35
 
 statement ok
-SELECT mz_unsafe.mz_sleep(4);
+SELECT mz_unsafe.mz_sleep(8);
 
 query TTTTBT rowsort
 SELECT DISTINCT

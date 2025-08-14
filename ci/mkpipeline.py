@@ -478,14 +478,14 @@ def switch_jobs_to_aws(pipeline: Any, priority: int) -> None:
     for step in steps(pipeline):
         # Trigger and Wait steps don't have agents
         if "trigger" in step or "wait" in step or "group" in step:
-            return
+            continue
 
         if "agents" not in step:
-            return
+            continue
 
         agent = step["agents"].get("queue", None)
         if not agent in stuck:
-            return
+            continue
 
         if agent == "hetzner-aarch64-2cpu-4gb":
             if "hetzner-x86-64-2cpu-4gb" not in stuck:
@@ -540,7 +540,7 @@ def switch_jobs_to_aws(pipeline: Any, priority: int) -> None:
 def permit_rerunning_successful_steps(pipeline: Any) -> None:
     for step in steps(pipeline):
         if "trigger" in step or "wait" in step or "group" in step or "block" in step:
-            return
+            continue
         step.setdefault("retry", {}).setdefault("manual", {}).setdefault(
             "permit_on_passed", True
         )
@@ -549,7 +549,7 @@ def permit_rerunning_successful_steps(pipeline: Any) -> None:
 def set_retry_on_agent_lost(pipeline: Any) -> None:
     for step in steps(pipeline):
         if "trigger" in step or "wait" in step or "group" in step or "block" in step:
-            return
+            continue
         step.setdefault("retry", {}).setdefault("automatic", []).extend(
             [
                 {
@@ -583,8 +583,6 @@ def set_default_agents_queue(pipeline: Any) -> None:
 
 def set_parallelism_name(pipeline: Any) -> None:
     for step in steps(pipeline):
-        if "trigger" in step or "wait" in step or "group" in step or "block" in step:
-            return
         if step.get("parallelism", 1) > 1:
             step["label"] += " %N"
 
@@ -600,7 +598,7 @@ def check_depends_on(pipeline: Any, pipeline_name: str) -> None:
         # has completed, without waiting for block or wait steps unless those
         # are also explicit dependencies.
         if step.get("id") in ("analyze", "deploy", "coverage-pr-analyze"):
-            return
+            continue
 
         if (
             "depends_on" not in step
