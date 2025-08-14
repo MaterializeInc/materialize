@@ -25,6 +25,7 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use crate::EvalError;
+use crate::scalar::Unsupported;
 use crate::scalar::func::format::DateTimeFormat;
 use crate::scalar::func::{EagerUnaryFunc, TimestampLike};
 
@@ -312,10 +313,10 @@ where
         | DateTimeUnits::DayOfWeek
         | DateTimeUnits::DayOfYear
         | DateTimeUnits::IsoDayOfWeek
-        | DateTimeUnits::IsoDayOfYear => Err(EvalError::Unsupported {
+        | DateTimeUnits::IsoDayOfYear => Err(EvalError::Unsupported(Unsupported {
             feature: format!("'{}' timestamp units", units).into(),
             discussion_no: None,
-        }),
+        })),
     }
 }
 
@@ -393,10 +394,10 @@ where
         DateTimeUnits::Timezone
         | DateTimeUnits::TimezoneHour
         | DateTimeUnits::TimezoneMinute
-        | DateTimeUnits::IsoDayOfYear => Err(EvalError::Unsupported {
+        | DateTimeUnits::IsoDayOfYear => Err(EvalError::Unsupported(Unsupported {
             feature: format!("'{}' timestamp units", units).into(),
             discussion_no: None,
-        }),
+        })),
     }
 }
 
@@ -542,10 +543,10 @@ pub fn date_trunc_inner<T: TimestampLike>(units: DateTimeUnits, ts: &T) -> Resul
         | DateTimeUnits::DayOfWeek
         | DateTimeUnits::DayOfYear
         | DateTimeUnits::IsoDayOfWeek
-        | DateTimeUnits::IsoDayOfYear => Err(EvalError::Unsupported {
+        | DateTimeUnits::IsoDayOfYear => Err(EvalError::Unsupported(Unsupported {
             feature: format!("'{}' timestamp units", units).into(),
             discussion_no: None,
-        }),
+        })),
     }
 }
 
