@@ -2620,6 +2620,7 @@ impl<'a> Parser<'a> {
                 AWS,
                 BROKER,
                 BROKERS,
+                CREDENTIAL,
                 DATABASE,
                 ENDPOINT,
                 HOST,
@@ -2630,6 +2631,7 @@ impl<'a> Parser<'a> {
                 REGION,
                 ROLE,
                 SASL,
+                SCOPE,
                 SECRET,
                 SECURITY,
                 SERVICE,
@@ -2668,6 +2670,7 @@ impl<'a> Parser<'a> {
                 },
                 BROKER => ConnectionOptionName::Broker,
                 BROKERS => ConnectionOptionName::Brokers,
+                CREDENTIAL => ConnectionOptionName::Credential,
                 DATABASE => ConnectionOptionName::Database,
                 ENDPOINT => ConnectionOptionName::Endpoint,
                 HOST => ConnectionOptionName::Host,
@@ -2699,6 +2702,7 @@ impl<'a> Parser<'a> {
                     USERNAME => ConnectionOptionName::SaslUsername,
                     _ => unreachable!(),
                 },
+                SCOPE => ConnectionOptionName::Scope,
                 SECRET => {
                     self.expect_keywords(&[ACCESS, KEY])?;
                     ConnectionOptionName::SecretAccessKey

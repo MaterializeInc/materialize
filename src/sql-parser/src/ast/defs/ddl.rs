@@ -758,6 +758,7 @@ pub enum ConnectionOptionName {
     AwsPrivatelink,
     Broker,
     Brokers,
+    Credential,
     Database,
     Endpoint,
     Host,
@@ -771,6 +772,7 @@ pub enum ConnectionOptionName {
     SaslMechanisms,
     SaslPassword,
     SaslUsername,
+    Scope,
     SecretAccessKey,
     SecurityProtocol,
     ServiceName,
@@ -795,6 +797,7 @@ impl AstDisplay for ConnectionOptionName {
             ConnectionOptionName::AwsPrivatelink => "AWS PRIVATELINK",
             ConnectionOptionName::Broker => "BROKER",
             ConnectionOptionName::Brokers => "BROKERS",
+            ConnectionOptionName::Credential => "CREDENTIAL",
             ConnectionOptionName::Database => "DATABASE",
             ConnectionOptionName::Endpoint => "ENDPOINT",
             ConnectionOptionName::Host => "HOST",
@@ -812,6 +815,7 @@ impl AstDisplay for ConnectionOptionName {
             ConnectionOptionName::SaslMechanisms => "SASL MECHANISMS",
             ConnectionOptionName::SaslPassword => "SASL PASSWORD",
             ConnectionOptionName::SaslUsername => "SASL USERNAME",
+            ConnectionOptionName::Scope => "SCOPE",
             ConnectionOptionName::SecurityProtocol => "SECURITY PROTOCOL",
             ConnectionOptionName::SecretAccessKey => "SECRET ACCESS KEY",
             ConnectionOptionName::ServiceName => "SERVICE NAME",
@@ -844,6 +848,7 @@ impl WithOptionName for ConnectionOptionName {
             | ConnectionOptionName::AwsPrivatelink
             | ConnectionOptionName::Broker
             | ConnectionOptionName::Brokers
+            | ConnectionOptionName::Credential
             | ConnectionOptionName::Database
             | ConnectionOptionName::Endpoint
             | ConnectionOptionName::Host
@@ -859,6 +864,7 @@ impl WithOptionName for ConnectionOptionName {
             | ConnectionOptionName::SaslMechanisms
             | ConnectionOptionName::SaslPassword
             | ConnectionOptionName::SaslUsername
+            | ConnectionOptionName::Scope
             | ConnectionOptionName::SecurityProtocol
             | ConnectionOptionName::SecretAccessKey
             | ConnectionOptionName::ServiceName

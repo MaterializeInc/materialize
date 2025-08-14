@@ -30,7 +30,7 @@ rust_library(
     rustc_env = {},
     rustc_flags = [],
     version = "0.1.0",
-    deps = [] + all_crate_deps(normal = True),
+    deps = ["//src/ore:mz_ore"] + all_crate_deps(normal = True),
 )
 
 alias(
@@ -60,7 +60,7 @@ rust_test(
     rustc_env = {},
     rustc_flags = [],
     version = "0.1.0",
-    deps = [] + all_crate_deps(
+    deps = ["//src/ore:mz_ore"] + all_crate_deps(
         normal = True,
         normal_dev = True,
     ),
@@ -69,7 +69,7 @@ rust_test(
 rust_doc_test(
     name = "mz_iceberg_rest_doc_test",
     crate = ":mz_iceberg_rest",
-    deps = [] + all_crate_deps(
+    deps = ["//src/ore:mz_ore"] + all_crate_deps(
         normal = True,
         normal_dev = True,
     ),

@@ -116,6 +116,7 @@ Createdb
 Createnetworkpolicy
 Createrole
 Creation
+Credential
 Cross
 Cse
 Csv
@@ -408,6 +409,7 @@ Scale
 Schedule
 Schema
 Schemas
+Scope
 Second
 Seconds
 Secret
