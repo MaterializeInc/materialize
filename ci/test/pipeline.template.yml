@@ -401,10 +401,10 @@ steps:
         depends_on: build-x86_64
         timeout_in_minutes: 30
         inputs: [test/sql-server-cdc-old-syntax]
-        parallelism: 2
+        parallelism: 3
         plugins:
           - ./ci/plugins/mzcompose:
-              composition: sql-server-cdc
+              composition: sql-server-cdc-old-syntax
         agents:
           # The SQL Server Docker image isn't available on ARM.
           #
