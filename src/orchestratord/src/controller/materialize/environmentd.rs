@@ -45,7 +45,7 @@ use reqwest::StatusCode;
 use semver::{BuildMetadata, Prerelease, Version};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tracing::trace;
+use tracing::{trace, warn};
 
 use super::matching_image_from_environmentd_image_ref;
 use crate::controller::materialize::tls::{create_certificate, issuer_ref_defined};
@@ -68,6 +68,13 @@ const V144: Version = Version::new(0, 144, 0);
 static V147_DEV0: LazyLock<Version> = LazyLock::new(|| Version {
     major: 0,
     minor: 147,
+    patch: 0,
+    pre: Prerelease::new("dev.0").expect("dev.0 is valid prerelease"),
+    build: BuildMetadata::new("").expect("empty string is valid buildmetadata"),
+});
+static V154_DEV0: LazyLock<Version> = LazyLock::new(|| Version {
+    major: 0,
+    minor: 154,
     patch: 0,
     pre: Prerelease::new("dev.0").expect("dev.0 is valid prerelease"),
     build: BuildMetadata::new("").expect("empty string is valid buildmetadata"),
@@ -642,21 +649,34 @@ fn create_service_account_object(
     mz: &Materialize,
 ) -> Option<ServiceAccount> {
     if mz.create_service_account() {
-        let annotations = match (
+        let mut annotations: BTreeMap<String, String> = mz
+            .spec
+            .service_account_annotations
+            .clone()
+            .unwrap_or_default();
+        if let (CloudProvider::Aws, Some(role_arn)) = (
             config.cloud_provider,
             mz.spec
                 .environmentd_iam_role_arn
                 .as_deref()
                 .or(config.aws_info.environmentd_iam_role_arn.as_deref()),
         ) {
-            (CloudProvider::Aws, Some(role_arn)) => Some(btreemap! {
-                "eks.amazonaws.com/role-arn".to_string() => role_arn.to_string()
-            }),
-            _ => None,
+            warn!(
+                "Use of Materialize.spec.environmentd_iam_role_arn is deprecated. Please set \"eks.amazonaws.com/role-arn\" in Materialize.spec.service_account_annotations instead."
+            );
+            annotations.insert(
+                "eks.amazonaws.com/role-arn".to_string(),
+                role_arn.to_string(),
+            );
         };
+
+        let mut labels = mz.default_labels();
+        labels.extend(mz.spec.service_account_labels.clone().unwrap_or_default());
+
         Some(ServiceAccount {
             metadata: ObjectMeta {
-                annotations,
+                annotations: Some(annotations),
+                labels: Some(labels),
                 ..mz.managed_resource_meta(mz.service_account_name())
             },
             ..Default::default()
@@ -1111,11 +1131,30 @@ fn create_environmentd_statefulset_object(
             scheduler_name
         ));
     }
-    for (key, val) in mz.default_labels() {
-        args.push(format!(
-            "--orchestrator-kubernetes-service-label={key}={val}"
-        ));
+    if mz.meets_minimum_version(&V154_DEV0) {
+        args.extend(
+            mz.spec
+                .pod_annotations
+                .as_ref()
+                .map(|annotations| annotations.iter())
+                .unwrap_or_default()
+                .map(|(key, val)| {
+                    format!("--orchestrator-kubernetes-service-annotation={key}={val}")
+                }),
+        );
     }
+    args.extend(
+        mz.default_labels()
+            .iter()
+            .chain(
+                mz.spec
+                    .pod_labels
+                    .as_ref()
+                    .map(|labels| labels.iter())
+                    .unwrap_or_default(),
+            )
+            .map(|(key, val)| format!("--orchestrator-kubernetes-service-label={key}={val}")),
+    );
     if let Some(status) = &mz.status {
         args.push(format!(
             "--orchestrator-kubernetes-name-prefix=mz{}-",
@@ -1425,6 +1464,14 @@ fn create_environmentd_statefulset_object(
         mz.environmentd_app_name(),
     );
     pod_template_labels.insert("app".to_owned(), "environmentd".to_string());
+    pod_template_labels.extend(
+        mz.spec
+            .pod_labels
+            .as_ref()
+            .map(|labels| labels.iter())
+            .unwrap_or_default()
+            .map(|(key, value)| (key.clone(), value.clone())),
+    );
 
     let mut pod_template_annotations = btreemap! {
         // We can re-enable eviction once we have HA
@@ -1460,6 +1507,14 @@ fn create_environmentd_statefulset_object(
             "/metrics/mz_storage".to_string(),
         );
     }
+    pod_template_annotations.extend(
+        mz.spec
+            .pod_annotations
+            .as_ref()
+            .map(|annotations| annotations.iter())
+            .unwrap_or_default()
+            .map(|(key, value)| (key.clone(), value.clone())),
+    );
 
     let mut tolerations = vec![
         // When the node becomes `NotReady` it indicates there is a problem with the node,

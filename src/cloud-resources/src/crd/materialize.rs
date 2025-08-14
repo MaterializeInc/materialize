@@ -82,8 +82,11 @@ pub mod v1alpha1 {
         pub environmentd_extra_args: Option<Vec<String>>,
         // Extra environment variables to pass to the environmentd binary
         pub environmentd_extra_env: Option<Vec<EnvVar>>,
+        // DEPRECATED
         // If running in AWS, override the IAM role to use to give
-        // environmentd access to the persist S3 bucket
+        // environmentd access to the persist S3 bucket.
+        // DEPRECATED
+        // Use `service_account_annotations` to set "eks.amazonaws.com/role-arn" instead.
         pub environmentd_iam_role_arn: Option<String>,
         // If running in AWS, override the IAM role to use to support
         // the CREATE CONNECTION feature
@@ -100,6 +103,19 @@ pub mod v1alpha1 {
         // Name of the kubernetes service account to use.
         // If not set, we will create one with the same name as this Materialize object.
         pub service_account_name: Option<String>,
+        // Annotations to apply to the service account
+        //
+        // Annotations on service accounts are commonly used by cloud providers for IAM.
+        // AWS uses "eks.amazonaws.com/role-arn".
+        // Azure uses "azure.workload.identity/client-id", but
+        // additionally requires "azure.workload.identity/use": "true" on the pods.
+        pub service_account_annotations: Option<BTreeMap<String, String>>,
+        // Labels to apply to the service account
+        pub service_account_labels: Option<BTreeMap<String, String>>,
+        // Annotations to apply to the pods
+        pub pod_annotations: Option<BTreeMap<String, String>>,
+        // Labels to apply to the pods
+        pub pod_labels: Option<BTreeMap<String, String>>,
 
         // When changes are made to the environmentd resources (either via
         // modifying fields in the spec here or by deploying a new
