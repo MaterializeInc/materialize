@@ -311,14 +311,18 @@ where
             //         segmenting the sequence at elements where the partial order on `FromTime` is
             //         violated.
             let mut stash = Vec::new();
+            // Consolidate progress updates before applying them to `source_frontier`, to avoid quadratic
+            // behavior in overload scenarios.
+            let mut change_batch = ChangeBatch::<FromTime, 2>::default();
             while let Some(event) = events.pull() {
                 match event {
                     Event::Progress(changes) => {
-                        source_frontier.update_iter(changes.drain(..));
+                        change_batch.extend(changes.drain(..));
                     }
                     Event::Messages(_, data) => stash.append(data),
                 }
             }
+            source_frontier.update_iter(change_batch.drain());
             stash.sort_unstable_by(|(_, t1, _): &(D, FromTime, R), (_, t2, _)| t1.cmp(t2));
             let mut new_source_updates = ChainBatch::from_iter(stash);
 
