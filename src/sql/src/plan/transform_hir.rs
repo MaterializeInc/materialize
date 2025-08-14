@@ -18,7 +18,7 @@ use mz_expr::WindowFrame;
 use mz_expr::visit::Visit;
 use mz_expr::{ColumnOrder, UnaryFunc, VariadicFunc};
 use mz_ore::stack::RecursionLimitError;
-use mz_repr::{ColumnName, ColumnType, RelationType, ScalarType};
+use mz_repr::{ColumnName, SqlColumnType, SqlRelationType, SqlScalarType};
 
 use crate::plan::hir::{
     AbstractExpr, AggregateFunc, AggregateWindowExpr, HirRelationExpr, HirScalarExpr,
@@ -179,7 +179,7 @@ pub fn try_simplify_quantified_comparisons(
 ) -> Result<(), RecursionLimitError> {
     fn walk_relation(
         expr: &mut HirRelationExpr,
-        outers: &[RelationType],
+        outers: &[SqlRelationType],
     ) -> Result<(), RecursionLimitError> {
         match expr {
             HirRelationExpr::Map { scalars, input } => {
@@ -205,7 +205,7 @@ pub fn try_simplify_quantified_comparisons(
             }
             HirRelationExpr::CallTable { exprs, .. } => {
                 let mut outers = outers.to_vec();
-                outers.insert(0, RelationType::empty());
+                outers.insert(0, SqlRelationType::empty());
                 for scalar in exprs {
                     walk_scalar(scalar, &outers, false)?;
                 }
@@ -228,7 +228,7 @@ pub fn try_simplify_quantified_comparisons(
 
     fn walk_scalar(
         expr: &mut HirScalarExpr,
-        outers: &[RelationType],
+        outers: &[SqlRelationType],
         mut in_filter: bool,
     ) -> Result<(), RecursionLimitError> {
         expr.try_visit_mut_pre(&mut |e| {
@@ -301,13 +301,13 @@ pub fn try_simplify_quantified_comparisons(
 ///
 /// These transformations are expected to run after parameters are bound, so
 /// there is no need to provide any parameter type information.
-static NO_PARAMS: LazyLock<BTreeMap<usize, ScalarType>> = LazyLock::new(BTreeMap::new);
+static NO_PARAMS: LazyLock<BTreeMap<usize, SqlScalarType>> = LazyLock::new(BTreeMap::new);
 
 fn column_type(
-    outers: &[RelationType],
+    outers: &[SqlRelationType],
     inner: &HirRelationExpr,
     expr: &HirScalarExpr,
-) -> ColumnType {
+) -> SqlColumnType {
     let inner_type = inner.typ(outers, &NO_PARAMS);
     expr.typ(outers, &inner_type, &NO_PARAMS)
 }

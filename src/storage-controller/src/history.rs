@@ -247,7 +247,7 @@ mod tests {
     use mz_ore::metrics::MetricsRegistry;
     use mz_ore::url::SensitiveUrl;
     use mz_persist_types::PersistLocation;
-    use mz_repr::{CatalogItemId, GlobalId, RelationDesc, RelationType};
+    use mz_repr::{CatalogItemId, GlobalId, RelationDesc, SqlRelationType};
     use mz_storage_client::client::{RunIngestionCommand, RunSinkCommand};
     use mz_storage_client::metrics::StorageControllerMetrics;
     use mz_storage_types::connections::inline::InlinedConnection;
@@ -299,7 +299,7 @@ mod tests {
                         remap_shard: Default::default(),
                         data_shard: Default::default(),
                         relation_desc: RelationDesc::new(
-                            RelationType {
+                            SqlRelationType {
                                 column_types: Default::default(),
                                 keys: Default::default(),
                             },
@@ -345,7 +345,7 @@ mod tests {
                 remap_shard: Default::default(),
                 data_shard: Default::default(),
                 relation_desc: RelationDesc::new(
-                    RelationType {
+                    SqlRelationType {
                         column_types: Default::default(),
                         keys: Default::default(),
                     },
@@ -363,7 +363,7 @@ mod tests {
         StorageSinkDesc {
             from: GlobalId::System(1),
             from_desc: RelationDesc::new(
-                RelationType {
+                SqlRelationType {
                     column_types: Default::default(),
                     keys: Default::default(),
                 },
@@ -388,7 +388,7 @@ mod tests {
                 key_desc_and_indices: Default::default(),
                 headers_index: Default::default(),
                 value_desc: RelationDesc::new(
-                    RelationType {
+                    SqlRelationType {
                         column_types: Default::default(),
                         keys: Default::default(),
                     },
@@ -414,7 +414,7 @@ mod tests {
                 remap_shard: Default::default(),
                 data_shard: Default::default(),
                 relation_desc: RelationDesc::new(
-                    RelationType {
+                    SqlRelationType {
                         column_types: Default::default(),
                         keys: Default::default(),
                     },
@@ -430,7 +430,7 @@ mod tests {
                 remap_shard: Default::default(),
                 data_shard: Default::default(),
                 relation_desc: RelationDesc::new(
-                    RelationType {
+                    SqlRelationType {
                         column_types: Default::default(),
                         keys: Default::default(),
                     },

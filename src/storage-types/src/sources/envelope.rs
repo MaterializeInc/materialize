@@ -11,7 +11,7 @@
 
 use anyhow::{anyhow, bail};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use mz_repr::{ColumnType, RelationDesc, RelationType, ScalarType};
+use mz_repr::{RelationDesc, SqlColumnType, SqlRelationType, SqlScalarType};
 use proptest::prelude::any;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -146,7 +146,7 @@ pub enum UpsertStyle {
     /// `ENVELOPE DEBEZIUM UPSERT`
     Debezium { after_idx: usize },
     /// `ENVELOPE UPSERT` where any decode errors will get serialized into a
-    /// ScalarType::Record column named `error_column`, and all value columns are
+    /// SqlScalarType::Record column named `error_column`, and all value columns are
     /// nullable. The key shape depends on the independent `KeyEnvelope`.
     ValueErrInline {
         key_envelope: KeyEnvelope,
@@ -299,9 +299,9 @@ impl UnplannedSourceEnvelope {
                             // if the key has multiple objects, nest them as a record inside of a single name
                             if key_arity > 1 {
                                 let key_type = key_desc.typ();
-                                let key_as_record = RelationType::new(vec![ColumnType {
+                                let key_as_record = SqlRelationType::new(vec![SqlColumnType {
                                     nullable: false,
-                                    scalar_type: ScalarType::Record {
+                                    scalar_type: SqlScalarType::Record {
                                         fields: key_desc
                                             .iter_names()
                                             .zip(key_type.column_types.iter())
@@ -345,7 +345,7 @@ impl UnplannedSourceEnvelope {
                 style: UpsertStyle::Debezium { after_idx },
                 ..
             } => match &value_desc.typ().column_types[*after_idx].scalar_type {
-                ScalarType::Record { fields, .. } => {
+                SqlScalarType::Record { fields, .. } => {
                     let mut desc = RelationDesc::from_names_and_types(fields.clone());
                     let key = key_desc.map(|k| match_key_indices(&k, &desc)).transpose()?;
                     if let Some(key) = key.clone() {
@@ -372,11 +372,11 @@ impl UnplannedSourceEnvelope {
 
                 // CdcV2 row data are in a record in a record in a list
                 match &value_desc.typ().column_types[0].scalar_type {
-                    ScalarType::List { element_type, .. } => match &**element_type {
-                        ScalarType::Record { fields, .. } => {
+                    SqlScalarType::List { element_type, .. } => match &**element_type {
+                        SqlScalarType::Record { fields, .. } => {
                             // TODO maybe check this by name
                             match &fields[0].1.scalar_type {
-                                ScalarType::Record { fields, .. } => (
+                                SqlScalarType::Record { fields, .. } => (
                                     self.into_source_envelope(None, None, None),
                                     RelationDesc::from_names_and_types(fields.clone()),
                                 ),
@@ -404,7 +404,7 @@ pub enum KeyEnvelope {
     /// Always use the given name for the key.
     ///
     /// * For a single-field key, this means that the column will get the given name.
-    /// * For a multi-column key, the columns will get packed into a [`ScalarType::Record`], and
+    /// * For a multi-column key, the columns will get packed into a [`SqlScalarType::Record`], and
     ///   that Record will get the given name.
     Named(String),
 }
@@ -454,14 +454,14 @@ fn compute_envelope_value_desc(
             names.extend(value_desc.iter_names().cloned());
 
             let mut types = Vec::with_capacity(value_desc.arity() + 1);
-            types.push(ColumnType {
+            types.push(SqlColumnType {
                 nullable: true,
-                scalar_type: ScalarType::Record {
+                scalar_type: SqlScalarType::Record {
                     fields: [(
                         "description".into(),
-                        ColumnType {
+                        SqlColumnType {
                             nullable: true,
-                            scalar_type: ScalarType::String,
+                            scalar_type: SqlScalarType::String,
                         },
                     )]
                     .into(),
@@ -469,7 +469,7 @@ fn compute_envelope_value_desc(
                 },
             });
             types.extend(value_desc.iter_types().map(|t| t.clone().nullable(true)));
-            let relation_type = RelationType::new(types);
+            let relation_type = SqlRelationType::new(types);
             RelationDesc::new(relation_type, names)
         }
         _ => value_desc,

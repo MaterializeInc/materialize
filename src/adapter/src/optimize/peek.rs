@@ -19,7 +19,7 @@ use mz_compute_types::plan::Plan;
 use mz_expr::{MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_ore::soft_assert_or_log;
 use mz_repr::explain::trace_plan;
-use mz_repr::{GlobalId, RelationType, Timestamp};
+use mz_repr::{GlobalId, SqlRelationType, Timestamp};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::HirRelationExpr;
 use mz_sql::session::metadata::SessionMetadata;
@@ -161,7 +161,7 @@ pub struct Resolved<'s> {
 pub struct GlobalLirPlan {
     peek_plan: PeekPlan,
     df_meta: DataflowMetainfo,
-    typ: RelationType,
+    typ: SqlRelationType,
 }
 
 impl Optimize<HirRelationExpr> for Optimizer {
@@ -450,7 +450,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
 
 impl GlobalLirPlan {
     /// Unwraps the parts of the final result of the optimization pipeline.
-    pub fn unapply(self) -> (PeekPlan, DataflowMetainfo, RelationType) {
+    pub fn unapply(self) -> (PeekPlan, DataflowMetainfo, SqlRelationType) {
         (self.peek_plan, self.df_meta, self.typ)
     }
 }
