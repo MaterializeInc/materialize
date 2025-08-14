@@ -10,13 +10,13 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.98"
+anyhow = "1.0.99"
 axum = "0.7.5"
 clap = { version = "4.5.23", features = ["derive", "env"] }
 fail = { version = "0.5.1", features = ["failpoints"] }
 futures = "0.3.31"
 hyper = "1.4.1"
-hyper-util = "0.1.15"
+hyper-util = "0.1.16"
 mz-alloc = { path = "../alloc" }
 mz-alloc-default = { path = "../alloc-default", optional = true }
 mz-build-info = { path = "../build-info" }
