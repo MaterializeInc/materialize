@@ -219,7 +219,7 @@ steps:
         depends_on: []
         timeout_in_minutes: 30
         agents:
-          queue: mac
+          queue: mac-aarch64
         coverage: skip
         sanitizer: skip
 
