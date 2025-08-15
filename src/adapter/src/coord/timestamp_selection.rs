@@ -228,13 +228,13 @@ pub trait TimestampProvider {
     }
 
     /// Returns true if-and-only-if the given configuration needs a linearized
-    /// read timetamp from a timestamp oracle.
+    /// read timestamp from a timestamp oracle.
     ///
     /// This assumes that the query happens in the context of a timeline. If
     /// there is no timeline, we cannot and don't have to get a linearized read
     /// timestamp.
     fn needs_linearized_read_ts(isolation_level: &IsolationLevel, when: &QueryWhen) -> bool {
-        // When we're in the context of a timline (assumption) and one of these
+        // When we're in the context of a timeline (assumption) and one of these
         // scenarios hold, we need to use a linearized read timestamp:
         // - The isolation level is Strict Serializable and the `when` allows us to use the
         //   the timestamp oracle (ex: queries with no AS OF).
@@ -436,7 +436,7 @@ pub trait TimestampProvider {
             // TODO: Refine the detail about which identifiers are binding and which are not.
             // TODO(dov): It's not entirely clear to me that there ever would be a non
             // binding constraint introduced by the `id_bundle`. We should revisit this.
-            let since = self.least_valid_read(read_holds);
+            let since = read_holds.least_valid_read();
             let storage = id_bundle
                 .storage_ids
                 .iter()
@@ -625,7 +625,7 @@ pub trait TimestampProvider {
         let read_holds = self.acquire_read_holds(id_bundle);
         let timeline = Self::get_timeline(timeline_context);
 
-        let since = self.least_valid_read(&read_holds);
+        let since = read_holds.least_valid_read();
         let upper = self.least_valid_write(id_bundle);
         let largest_not_in_advance_of_upper = Coordinator::largest_not_in_advance_of_upper(&upper);
 
@@ -732,15 +732,6 @@ pub trait TimestampProvider {
         };
 
         Ok((determination, read_holds))
-    }
-
-    /// The smallest common valid read frontier among times in the given
-    /// [ReadHolds].
-    fn least_valid_read(
-        &self,
-        read_holds: &ReadHolds<mz_repr::Timestamp>,
-    ) -> Antichain<mz_repr::Timestamp> {
-        read_holds.least_valid_read()
     }
 
     /// Acquires [ReadHolds], for the given `id_bundle` at the earliest possible
