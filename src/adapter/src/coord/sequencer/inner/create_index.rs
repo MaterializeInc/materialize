@@ -33,7 +33,7 @@ use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::optimize::dataflows::dataflow_import_id_bundle;
 use crate::optimize::{self, Optimize};
 use crate::session::Session;
-use crate::{AdapterNotice, ExecuteContext, TimestampProvider, catalog};
+use crate::{AdapterNotice, ExecuteContext, catalog};
 
 impl Staged for CreateIndexStage {
     type Ctx = ExecuteContext;
@@ -484,7 +484,7 @@ impl Coordinator {
                     // TODO: Maybe in the future, pass those holds on to compute, to
                     // hold on to them and downgrade when possible?
                     let read_holds = coord.acquire_read_holds(&id_bundle);
-                    let since = coord.least_valid_read(&read_holds);
+                    let since = read_holds.least_valid_read();
                     df_desc.set_as_of(since);
 
                     coord

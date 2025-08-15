@@ -762,7 +762,7 @@ impl Coordinator {
 
         // For non-REFRESH MVs both the `dataflow_as_of` and the `storage_as_of` should be simply
         // `least_valid_read`.
-        let least_valid_read = self.least_valid_read(read_holds);
+        let least_valid_read = read_holds.least_valid_read();
         let mut dataflow_as_of = least_valid_read.clone();
         let mut storage_as_of = least_valid_read.clone();
 
