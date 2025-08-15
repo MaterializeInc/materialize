@@ -14,13 +14,12 @@ use std::time::Duration;
 
 use mz_cluster_client::ReplicaId;
 use mz_cluster_client::metrics::{ControllerMetrics, WallclockLagMetrics};
-use mz_ore::cast::{CastFrom, TryCastFrom};
+use mz_ore::cast::CastFrom;
 use mz_ore::metric;
 use mz_ore::metrics::{
-    CounterVec, DeleteOnDropCounter, DeleteOnDropGauge, DeleteOnDropHistogram, IntCounterVec,
-    MetricVecExt, MetricsRegistry, UIntGaugeVec,
+    CounterVec, DeleteOnDropCounter, DeleteOnDropGauge, IntCounterVec, MetricsRegistry,
+    UIntGaugeVec,
 };
-use mz_ore::stats::HISTOGRAM_BYTE_BUCKETS;
 use mz_repr::GlobalId;
 use mz_service::codec::StatsCollector;
 use mz_service::transport;
@@ -29,13 +28,18 @@ use prometheus::core::{AtomicF64, AtomicU64};
 
 use crate::client::{ProtoStorageCommand, ProtoStorageResponse, StorageCommand, StorageResponse};
 
+type IntCounter = DeleteOnDropCounter<AtomicU64, Vec<String>>;
 pub type UIntGauge = DeleteOnDropGauge<AtomicU64, Vec<String>>;
 
 /// Storage controller metrics
 #[derive(Debug, Clone)]
 pub struct StorageControllerMetrics {
-    messages_sent_bytes: prometheus::HistogramVec,
-    messages_received_bytes: prometheus::HistogramVec,
+    // storage protocol
+    commands_total: IntCounterVec,
+    command_message_bytes_total: IntCounterVec,
+    responses_total: IntCounterVec,
+    response_message_bytes_total: IntCounterVec,
+
     regressed_offset_known: IntCounterVec,
     history_command_count: UIntGaugeVec,
 
@@ -51,17 +55,25 @@ pub struct StorageControllerMetrics {
 impl StorageControllerMetrics {
     pub fn new(metrics_registry: &MetricsRegistry, shared: ControllerMetrics) -> Self {
         Self {
-            messages_sent_bytes: metrics_registry.register(metric!(
-                name: "mz_storage_messages_sent_bytes",
-                help: "size of storage messages sent",
-                var_labels: ["instance_id", "replica_id"],
-                buckets: HISTOGRAM_BYTE_BUCKETS.to_vec()
+            commands_total: metrics_registry.register(metric!(
+                name: "mz_storage_commands_total",
+                help: "The total number of storage commands sent.",
+                var_labels: ["instance_id", "replica_id", "command_type"],
             )),
-            messages_received_bytes: metrics_registry.register(metric!(
-                name: "mz_storage_messages_received_bytes",
-                help: "size of storage messages received",
+            command_message_bytes_total: metrics_registry.register(metric!(
+                name: "mz_storage_command_message_bytes_total",
+                help: "The total number of bytes sent in storage command messages.",
                 var_labels: ["instance_id", "replica_id"],
-                buckets: HISTOGRAM_BYTE_BUCKETS.to_vec()
+            )),
+            responses_total: metrics_registry.register(metric!(
+                name: "mz_storage_responses_total",
+                help: "The total number of storage responses received.",
+                var_labels: ["instance_id", "replica_id", "response_type"],
+            )),
+            response_message_bytes_total: metrics_registry.register(metric!(
+                name: "mz_storage_response_message_bytes_total",
+                help: "The total number of bytes received in storage response messages.",
+                var_labels: ["instance_id", "replica_id"],
             )),
             regressed_offset_known: metrics_registry.register(metric!(
                 name: "mz_storage_regressed_offset_known",
@@ -134,15 +146,35 @@ pub struct InstanceMetrics {
 impl InstanceMetrics {
     pub fn for_replica(&self, id: ReplicaId) -> ReplicaMetrics {
         let labels = vec![self.instance_id.to_string(), id.to_string()];
+        let extended_labels = |extra: &str| {
+            labels
+                .iter()
+                .cloned()
+                .chain([extra.into()])
+                .collect::<Vec<_>>()
+        };
+
         ReplicaMetrics {
             inner: Arc::new(ReplicaMetricsInner {
-                messages_sent_bytes: self
+                commands_total: CommandMetrics::build(|typ| {
+                    let labels = extended_labels(typ);
+                    self.metrics
+                        .commands_total
+                        .get_delete_on_drop_metric(labels)
+                }),
+                responses_total: ResponseMetrics::build(|typ| {
+                    let labels = extended_labels(typ);
+                    self.metrics
+                        .responses_total
+                        .get_delete_on_drop_metric(labels)
+                }),
+                command_message_bytes_total: self
                     .metrics
-                    .messages_sent_bytes
+                    .command_message_bytes_total
                     .get_delete_on_drop_metric(labels.clone()),
-                messages_received_bytes: self
+                response_message_bytes_total: self
                     .metrics
-                    .messages_received_bytes
+                    .response_message_bytes_total
                     .get_delete_on_drop_metric(labels.clone()),
                 replica_connects_total: self
                     .metrics
@@ -178,8 +210,10 @@ impl InstanceMetrics {
 
 #[derive(Debug)]
 struct ReplicaMetricsInner {
-    messages_sent_bytes: DeleteOnDropHistogram<Vec<String>>,
-    messages_received_bytes: DeleteOnDropHistogram<Vec<String>>,
+    commands_total: CommandMetrics<IntCounter>,
+    command_message_bytes_total: IntCounter,
+    responses_total: ResponseMetrics<IntCounter>,
+    response_message_bytes_total: IntCounter,
     /// Counter tracking the total number of (re-)connects.
     replica_connects_total: DeleteOnDropCounter<AtomicU64, Vec<String>>,
     /// Counter tracking the total time spent waiting for (re-)connects.
@@ -208,48 +242,165 @@ impl ReplicaMetrics {
 
 /// Make [`ReplicaMetrics`] pluggable into the gRPC connection.
 impl StatsCollector<ProtoStorageCommand, ProtoStorageResponse> for ReplicaMetrics {
-    fn send_event(&self, _item: &ProtoStorageCommand, size: usize) {
-        match f64::try_cast_from(u64::cast_from(size)) {
-            Some(x) => self.inner.messages_sent_bytes.observe(x),
-            None => tracing::warn!(
-                "{} has no precise representation as f64, ignoring message",
-                size
-            ),
-        }
+    fn send_event(&self, item: &ProtoStorageCommand, size: usize) {
+        self.inner.commands_total.for_proto_command(item).inc();
+        self.inner
+            .command_message_bytes_total
+            .inc_by(u64::cast_from(size));
     }
 
-    fn receive_event(&self, _item: &ProtoStorageResponse, size: usize) {
-        match f64::try_cast_from(u64::cast_from(size)) {
-            Some(x) => self.inner.messages_received_bytes.observe(x),
-            None => tracing::warn!(
-                "{} has no precise representation as f64, ignoring message",
-                size
-            ),
-        }
+    fn receive_event(&self, item: &ProtoStorageResponse, size: usize) {
+        self.inner.responses_total.for_proto_response(item).inc();
+        self.inner
+            .response_message_bytes_total
+            .inc_by(u64::cast_from(size));
     }
 }
 
 impl<T> transport::Metrics<StorageCommand<T>, StorageResponse<T>> for ReplicaMetrics {
     fn bytes_sent(&mut self, len: usize) {
-        match f64::try_cast_from(u64::cast_from(len)) {
-            Some(x) => self.inner.messages_sent_bytes.observe(x),
-            None => {
-                tracing::warn!("{len} has no precise representation as f64, ignoring message");
-            }
-        }
+        self.inner
+            .command_message_bytes_total
+            .inc_by(u64::cast_from(len));
     }
 
     fn bytes_received(&mut self, len: usize) {
-        match f64::try_cast_from(u64::cast_from(len)) {
-            Some(x) => self.inner.messages_received_bytes.observe(x),
-            None => {
-                tracing::warn!("{len} has no precise representation as f64, ignoring message");
-            }
+        self.inner
+            .response_message_bytes_total
+            .inc_by(u64::cast_from(len));
+    }
+
+    fn message_sent(&mut self, msg: &StorageCommand<T>) {
+        self.inner.commands_total.for_command(msg).inc();
+    }
+
+    fn message_received(&mut self, msg: &StorageResponse<T>) {
+        self.inner.responses_total.for_response(msg).inc();
+    }
+}
+
+/// Metrics keyed by `StorageCommand` type.
+#[derive(Clone, Debug)]
+pub struct CommandMetrics<M> {
+    /// Metrics for `Hello`.
+    pub hello: M,
+    /// Metrics for `InitializationComplete`.
+    pub initialization_complete: M,
+    /// Metrics for `AllowWrites`.
+    pub allow_writes: M,
+    /// Metrics for `UpdateConfiguration`.
+    pub update_configuration: M,
+    /// Metrics for `RunIngestion`.
+    pub run_ingestion: M,
+    /// Metrics for `AllowCompaction`.
+    pub allow_compaction: M,
+    /// Metrics for `RunSink`.
+    pub run_sink: M,
+    /// Metrics for `RunOneshotIngestion`.
+    pub run_oneshot_ingestion: M,
+    /// Metrics for `CancelOneshotIngestion`.
+    pub cancel_oneshot_ingestion: M,
+}
+
+impl<M> CommandMetrics<M> {
+    fn build<F>(build_metric: F) -> Self
+    where
+        F: Fn(&str) -> M,
+    {
+        Self {
+            hello: build_metric("hello"),
+            initialization_complete: build_metric("initialization_complete"),
+            allow_writes: build_metric("allow_writes"),
+            update_configuration: build_metric("update_configuration"),
+            run_ingestion: build_metric("run_ingestion"),
+            allow_compaction: build_metric("allow_compaction"),
+            run_sink: build_metric("run_sink"),
+            run_oneshot_ingestion: build_metric("run_oneshot_ingestion"),
+            cancel_oneshot_ingestion: build_metric("cancel_oneshot_ingestion"),
         }
     }
 
-    fn message_sent(&mut self, _msg: &StorageCommand<T>) {}
-    fn message_received(&mut self, _msg: &StorageResponse<T>) {}
+    fn for_command<T>(&self, command: &StorageCommand<T>) -> &M {
+    pub fn for_command<T>(&self, command: &StorageCommand<T>) -> &M {
+        use StorageCommand::*;
+
+        match command {
+            Hello { .. } => &self.hello,
+            InitializationComplete => &self.initialization_complete,
+            AllowWrites => &self.allow_writes,
+            UpdateConfiguration(..) => &self.update_configuration,
+            RunIngestion(..) => &self.run_ingestion,
+            AllowCompaction(..) => &self.allow_compaction,
+            RunSink(..) => &self.run_sink,
+            RunOneshotIngestion(..) => &self.run_oneshot_ingestion,
+            CancelOneshotIngestion(..) => &self.cancel_oneshot_ingestion,
+        }
+    }
+
+    fn for_proto_command(&self, proto: &ProtoStorageCommand) -> &M {
+        use crate::client::proto_storage_command::Kind::*;
+
+        match proto.kind.as_ref().unwrap() {
+            Hello(..) => &self.hello,
+            AllowCompaction(..) => &self.allow_compaction,
+            InitializationComplete(..) => &self.initialization_complete,
+            UpdateConfiguration(..) => &self.update_configuration,
+            RunIngestion(..) => &self.run_ingestion,
+            AllowWrites(..) => &self.allow_writes,
+            RunSink(..) => &self.run_sink,
+            RunOneshotIngestion(..) => &self.run_oneshot_ingestion,
+            CancelOneshotIngestion(..) => &self.cancel_oneshot_ingestion,
+        }
+    }
+}
+
+/// Metrics keyed by `StorageResponse` type.
+#[derive(Debug)]
+struct ResponseMetrics<M> {
+    frontier_upper: M,
+    dropped_id: M,
+    staged_batches: M,
+    statistics_updates: M,
+    status_update: M,
+}
+
+impl<M> ResponseMetrics<M> {
+    fn build<F>(build_metric: F) -> Self
+    where
+        F: Fn(&str) -> M,
+    {
+        Self {
+            frontier_upper: build_metric("frontier_upper"),
+            dropped_id: build_metric("dropped_id"),
+            staged_batches: build_metric("staged_batches"),
+            statistics_updates: build_metric("statistics_updates"),
+            status_update: build_metric("status_update"),
+        }
+    }
+
+    fn for_response<T>(&self, response: &StorageResponse<T>) -> &M {
+        use StorageResponse::*;
+
+        match response {
+            FrontierUpper(..) => &self.frontier_upper,
+            DroppedId(..) => &self.dropped_id,
+            StagedBatches(..) => &self.staged_batches,
+            StatisticsUpdates(..) => &self.statistics_updates,
+            StatusUpdate(..) => &self.status_update,
+        }
+    }
+
+    fn for_proto_response(&self, proto: &ProtoStorageResponse) -> &M {
+        use crate::client::proto_storage_response::Kind::*;
+
+        match proto.kind.as_ref().unwrap() {
+            FrontierUpper(..) => &self.frontier_upper,
+            DroppedId(..) => &self.dropped_id,
+            Stats(..) => &self.statistics_updates,
+            StatusUpdate(..) => &self.status_update,
+            StagedBatches(..) => &self.staged_batches,
+        }
+    }
 }
 
 /// Metrics tracked by the command history.
