@@ -1191,8 +1191,9 @@ impl Coordinator {
                 .iter()
                 .any(materialized_view_option_contains_temporal)
             {
-                let timeline_context =
-                    self.validate_timeline_context(resolved_ids.collections().copied())?;
+                let timeline_context = self
+                    .catalog()
+                    .validate_timeline_context(resolved_ids.collections().copied())?;
 
                 // We default to EpochMilliseconds, similarly to `determine_timestamp_for`,
                 // but even in the TimestampIndependent case.

@@ -522,6 +522,7 @@ impl Coordinator {
             clusters_to_drop.clone(),
         );
         let timeline_associations: BTreeMap<_, _> = self
+            .catalog()
             .partition_ids_by_timeline_context(&collection_id_bundle)
             .filter_map(|(context, bundle)| {
                 let TimelineContext::TimelineDependent(timeline) = context else {

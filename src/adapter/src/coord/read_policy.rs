@@ -253,7 +253,9 @@ impl crate::coord::Coordinator {
         compaction_window: CompactionWindow,
     ) {
         // Install read holds in the Coordinator's timeline state.
-        for (timeline_context, id_bundle) in self.partition_ids_by_timeline_context(id_bundle) {
+        for (timeline_context, id_bundle) in
+            self.catalog().partition_ids_by_timeline_context(id_bundle)
+        {
             if let TimelineContext::TimelineDependent(timeline) = timeline_context {
                 let TimelineState { oracle, .. } = self.ensure_timeline_state(&timeline).await;
                 let read_ts = oracle.read_ts().await;
