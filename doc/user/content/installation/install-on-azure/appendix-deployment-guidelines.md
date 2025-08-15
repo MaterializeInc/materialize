@@ -70,6 +70,22 @@ Associated with this change:
 has changed from `Standard_E8ps_v6` to `Standard_E4pds_v6`. See [Recommended
 instance types](#recommended-instance-types).
 
+## Recommended Azure Blob Storage
+
+Materialize writes **block** blobs on Azure. As a general guideline, we
+recommend **Premium block blob** storage accounts.
+
+## CPU affinity
+
+It is strongly recommended to enable the Kubernetes `static` [CPU management policy](https://kubernetes.io/docs/tasks/administer-cluster/cpu-management-policies/#static-policy).
+This ensures that each worker thread of Materialize is given exclusively access to a vCPU. Our benchmarks have shown this
+to substantially improve the performance of compute-bound workloads.
+
+## TLS
+
+When running with TLS in production, run with certificates from an official
+Certificate Authority (CA) rather than self-signed certificates.
+
 ## See also
 
 - [Configuration](/installation/configuration/)
@@ -83,14 +99,3 @@ instance types](#recommended-instance-types).
 
 [`disk_setup_image`]:
     https://github.com/MaterializeInc/terraform-azurerm-materialize?tab=readme-ov-file#input_disk_setup_image
-
-## CPU affinity
-
-It is strongly recommended to enable the Kubernetes `static` [CPU management policy](https://kubernetes.io/docs/tasks/administer-cluster/cpu-management-policies/#static-policy).
-This ensures that each worker thread of Materialize is given exclusively access to a vCPU. Our benchmarks have shown this
-to substantially improve the performance of compute-bound workloads.
-
-## TLS
-
-When running with TLS in production, run with certificates from an official
-Certificate Authority (CA) rather than self-signed certificates.
