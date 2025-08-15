@@ -26,7 +26,7 @@ RUN bash -c '\
   while ! curl -sf localhost:6878/api/readyz; do \
     sleep 0.1; \
     now=$(date +%s); \
-    if (( now - start_time > 30 )); then \
+    if (( now - start_time > 60 )); then \
       echo "Timed out, failing build"; \
       exit 1; \
     fi; \
