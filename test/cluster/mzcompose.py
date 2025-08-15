@@ -2404,11 +2404,17 @@ class Metrics:
             "mz_storage_controller_history_command_count", command_type
         )
 
-    def get_commands_total(self, command_type: str) -> float:
+    def get_compute_commands_total(self, command_type: str) -> float:
         return self.get_command_count("mz_compute_commands_total", command_type)
 
-    def get_responses_total(self, response_type: str) -> float:
+    def get_compute_responses_total(self, response_type: str) -> float:
         return self.get_response_count("mz_compute_responses_total", response_type)
+
+    def get_storage_commands_total(self, command_type: str) -> float:
+        return self.get_command_count("mz_storage_commands_total", command_type)
+
+    def get_storage_responses_total(self, response_type: str) -> float:
+        return self.get_response_count("mz_storage_responses_total", response_type)
 
     def get_peeks_total(self, result: str) -> float:
         metrics = self.with_name("mz_compute_peeks_total")
@@ -2634,29 +2640,35 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
     metrics = fetch_metrics()
 
     # mz_compute_commands_total
-    count = metrics.get_commands_total("hello")
+    count = metrics.get_compute_commands_total("hello")
     assert count == 1, f"got {count}"
-    count = metrics.get_commands_total("create_instance")
+    count = metrics.get_compute_commands_total("create_instance")
     assert count == 1, f"got {count}"
-    count = metrics.get_commands_total("allow_compaction")
+    count = metrics.get_compute_commands_total("allow_compaction")
     assert count > 0, f"got {count}"
-    count = metrics.get_commands_total("create_dataflow")
+    count = metrics.get_compute_commands_total("create_dataflow")
     assert count >= 3, f"got {count}"
-    count = metrics.get_commands_total("peek")
+    count = metrics.get_compute_commands_total("peek")
     assert count == 2, f"got {count}"
-    count = metrics.get_commands_total("cancel_peek")
+    count = metrics.get_compute_commands_total("cancel_peek")
     assert count == 2, f"got {count}"
-    count = metrics.get_commands_total("initialization_complete")
+    count = metrics.get_compute_commands_total("initialization_complete")
     assert count == 1, f"got {count}"
-    count = metrics.get_commands_total("update_configuration")
+    count = metrics.get_compute_commands_total("update_configuration")
+    assert count == 1, f"got {count}"
+    count = metrics.get_compute_commands_total("schedule")
+    assert count > 0, f"got {count}"
+    count = metrics.get_compute_commands_total("allow_writes")
     assert count == 1, f"got {count}"
 
     # mz_compute_responses_total
-    count = metrics.get_responses_total("frontiers")
+    count = metrics.get_compute_responses_total("frontiers")
     assert count > 0, f"got {count}"
-    count = metrics.get_responses_total("peek_response")
+    count = metrics.get_compute_responses_total("peek_response")
     assert count == 2, f"got {count}"
-    count = metrics.get_responses_total("subscribe_response")
+    count = metrics.get_compute_responses_total("subscribe_response")
+    assert count > 0, f"got {count}"
+    count = metrics.get_compute_responses_total("status")
     assert count > 0, f"got {count}"
 
     count = metrics.get_value("mz_compute_command_message_bytes_total")
@@ -2830,9 +2842,31 @@ def workflow_test_storage_controller_metrics(c: Composition) -> None:
     metrics_u2 = metrics.for_instance("u2")
     metrics_ux = metrics.for_instance("")
 
-    count = metrics_u2.get_summed_value("mz_storage_messages_sent_bytes")
+    # mz_storage_commands_total
+    count = metrics_u2.get_storage_commands_total("hello")
+    assert count == 1, f"got {count}"
+    count = metrics_u2.get_storage_commands_total("initialization_complete")
+    assert count == 1, f"got {count}"
+    count = metrics_u2.get_storage_commands_total("allow_writes")
+    assert count == 1, f"got {count}"
+    count = metrics_u2.get_storage_commands_total("update_configuration")
+    assert count == 1, f"got {count}"
+    count = metrics_u2.get_storage_commands_total("run_ingestion")
+    assert count == 1, f"got {count}"
+    count = metrics_u2.get_storage_commands_total("allow_compaction")
     assert count > 0, f"got {count}"
-    count = metrics_u2.get_summed_value("mz_storage_messages_received_bytes")
+    count = metrics_u2.get_storage_commands_total("run_sink")
+    assert count == 1, f"got {count}"
+
+    # mz_storage_responses_total
+    count = metrics_u2.get_storage_responses_total("frontier_upper")
+    assert count > 0, f"got {count}"
+    count = metrics_u2.get_storage_responses_total("status_update")
+    assert count > 0, f"got {count}"
+
+    count = metrics_u2.get_value("mz_storage_command_message_bytes_total")
+    assert count > 0, f"got {count}"
+    count = metrics_u2.get_value("mz_storage_response_message_bytes_total")
     assert count > 0, f"got {count}"
 
     # mz_storage_controller_history_command_count
@@ -2840,9 +2874,9 @@ def workflow_test_storage_controller_metrics(c: Composition) -> None:
     assert count == 1, f"got {count}"
     count = metrics_u2.get_storage_controller_history_command_count("allow_compaction")
     assert count > 0, f"got {count}"
-    count = metrics_u2.get_storage_controller_history_command_count("run_ingestions")
+    count = metrics_u2.get_storage_controller_history_command_count("run_ingestion")
     assert count == 1, f"got {count}"
-    count = metrics_u2.get_storage_controller_history_command_count("run_sinks")
+    count = metrics_u2.get_storage_controller_history_command_count("run_sink")
     assert count == 1, f"got {count}"
     count = metrics_u2.get_storage_controller_history_command_count(
         "initialization_complete"
@@ -2855,12 +2889,12 @@ def workflow_test_storage_controller_metrics(c: Composition) -> None:
     count = metrics_u2.get_storage_controller_history_command_count("allow_writes")
     assert count == 1, f"got {count}"
 
-    count = metrics_u2.get_value("mz_compute_controller_connected_replica_count")
+    count = metrics_u2.get_value("mz_storage_controller_connected_replica_count")
     assert count == 1, f"got {count}"
-    count = metrics_u2.get_value("mz_compute_controller_replica_connects_total")
+    count = metrics_u2.get_value("mz_storage_controller_replica_connects_total")
     assert count == 1, f"got {count}"
     duration = metrics_u2.get_value(
-        "mz_compute_controller_replica_connect_wait_time_seconds_total"
+        "mz_storage_controller_replica_connect_wait_time_seconds_total"
     )
     assert duration > 0, f"got {duration}"
 
