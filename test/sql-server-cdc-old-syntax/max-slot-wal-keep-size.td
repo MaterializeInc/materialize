@@ -52,5 +52,6 @@ UPDATE t1 SET f2 = CONCAT(f2, pk);
 # Resume the ingestion by adding a replica to the cluster.
 > CREATE CLUSTER REPLICA storage.r1 SIZE = 'scale=1,workers=1';
 
+$ set-sql-timeout duration=60s
 > SELECT count(*) FROM t1;
 200000
