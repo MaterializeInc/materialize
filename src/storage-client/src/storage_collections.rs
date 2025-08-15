@@ -27,7 +27,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::task::AbortOnDropHandle;
-use mz_ore::{assert_none, instrument, soft_assert_or_log};
+use mz_ore::{assert_none, halt, instrument, soft_assert_or_log};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_SNAPSHOT;
 use mz_persist_client::critical::SinceHandle;
@@ -1381,6 +1381,11 @@ where
         let new_collections: BTreeSet<GlobalId> =
             init_ids.difference(&existing_metadata).cloned().collect();
 
+        tracing::debug!(
+            new_collections = new_collections.iter().map(|id| id.to_string()).join(","),
+            "initialize_state"
+        );
+
         self.prepare_state(
             txn,
             new_collections,
@@ -1738,10 +1743,19 @@ where
         ids_to_drop: BTreeSet<GlobalId>,
         ids_to_register: BTreeMap<GlobalId, ShardId>,
     ) -> Result<(), StorageError<T>> {
+        if self.read_only && !ids_to_add.is_empty() {
+            halt!(
+                "cannot mint new shard IDs in read-only mode; this likely means that the catalog is not yet fully set up so we restart and try again"
+            );
+        }
         txn.insert_collection_metadata(
             ids_to_add
                 .into_iter()
-                .map(|id| (id, ShardId::new()))
+                .map(|id| {
+                    let shard_id = ShardId::new();
+                    tracing::debug!(collection_id = %id, %shard_id, "minting new shard_id");
+                    (id, shard_id)
+                })
                 .collect(),
         )?;
         txn.insert_collection_metadata(ids_to_register)?;
