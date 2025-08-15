@@ -544,6 +544,8 @@ steps:
         label: Cluster spec sheet
         depends_on: build-aarch64
         timeout_in_minutes: 3600
+        concurrency: 1
+        concurrency_group: 'cloud-canary'
         plugins:
           - ./ci/plugins/mzcompose:
               composition: cluster-spec-sheet
