@@ -401,7 +401,7 @@ steps:
         depends_on: build-x86_64
         timeout_in_minutes: 30
         inputs: [test/sql-server-cdc-old-syntax]
-        parallelism: 3
+        parallelism: 6
         plugins:
           - ./ci/plugins/mzcompose:
               composition: sql-server-cdc-old-syntax
