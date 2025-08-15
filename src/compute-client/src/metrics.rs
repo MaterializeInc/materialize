@@ -551,6 +551,7 @@ impl<M> CommandMetrics<M> {
         f(&self.allow_compaction);
         f(&self.peek);
         f(&self.cancel_peek);
+        f(&self.allow_writes);
     }
 
     /// TODO(database-issues#7533): Add documentation.
