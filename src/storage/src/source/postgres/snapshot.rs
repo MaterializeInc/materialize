@@ -281,10 +281,10 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             let task_name = format!("timely-{worker_id} PG snapshotter");
 
             let client = if is_snapshot_leader {
-                let client = connection_config
+                let mut client = connection_config
                     .connect_replication(&config.config.connection_context.ssh_tunnel_manager)
                     .await?;
-
+                client.set_abort_connection_on_drop(true);
                 // Attempt to export the snapshot by creating the main replication slot. If that
                 // succeeds then there is no need for creating additional temporary slots.
                 let main_slot = &connection.publication_details.slot;
@@ -315,12 +315,14 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 client
             } else {
                 // Only the snapshot leader needs a replication connection.
-                connection_config
+                let mut client = connection_config
                     .connect(
                         &task_name,
                         &config.config.connection_context.ssh_tunnel_manager,
                     )
-                    .await?
+                    .await?;
+                client.set_abort_connection_on_drop(true);
+                client
             };
             *slot_ready_cap_set = CapabilitySet::new();
 
