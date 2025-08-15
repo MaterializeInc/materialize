@@ -9,11 +9,11 @@ menu:
     weight: 30
 ---
 
-{{% self-managed/materialize-components-sentence %}}
+{{% self-managed/materialize-components-sentence blobstorage="blob storage; specifically **block** blob storage on Azure" %}}
 
 The tutorial deploys Materialize to Azure Kubernetes Service (AKS) with a
-PostgreSQL database as the metadata database and Azure Blob Storage for blob
-storage. The tutorial uses [Materialize on Azure Terraform
+PostgreSQL database as the metadata database and Azure premium block blob
+storage for blob storage. The tutorial uses [Materialize on Azure Terraform
 modules](https://github.com/MaterializeInc/terraform-azurerm-materialize) to:
 
 - Set up the Azure Kubernetes environment
