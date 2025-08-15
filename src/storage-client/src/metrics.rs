@@ -189,22 +189,14 @@ impl InstanceMetrics {
     }
 
     pub fn for_history(&self) -> HistoryMetrics {
-        let command_gauge = |name: &str| {
-            let labels = vec![self.instance_id.to_string(), name.to_string()];
+        let command_counts = CommandMetrics::build(|typ| {
+            let labels = vec![self.instance_id.to_string(), typ.to_string()];
             self.metrics
                 .history_command_count
                 .get_delete_on_drop_metric(labels)
-        };
+        });
 
-        HistoryMetrics {
-            hello_count: command_gauge("hello"),
-            run_ingestions_count: command_gauge("run_ingestions"),
-            run_sinks_count: command_gauge("run_sinks"),
-            allow_compaction_count: command_gauge("allow_compaction"),
-            initialization_complete_count: command_gauge("initialization_complete"),
-            allow_writes_count: command_gauge("allow_writes"),
-            update_configuration_count: command_gauge("update_configuration"),
-        }
+        HistoryMetrics { command_counts }
     }
 }
 
@@ -320,7 +312,21 @@ impl<M> CommandMetrics<M> {
         }
     }
 
-    fn for_command<T>(&self, command: &StorageCommand<T>) -> &M {
+    fn for_all<F>(&self, f: F)
+    where
+        F: Fn(&M),
+    {
+        f(&self.hello);
+        f(&self.initialization_complete);
+        f(&self.allow_writes);
+        f(&self.update_configuration);
+        f(&self.run_ingestion);
+        f(&self.allow_compaction);
+        f(&self.run_sink);
+        f(&self.run_oneshot_ingestion);
+        f(&self.cancel_oneshot_ingestion);
+    }
+
     pub fn for_command<T>(&self, command: &StorageCommand<T>) -> &M {
         use StorageCommand::*;
 
@@ -406,30 +412,12 @@ impl<M> ResponseMetrics<M> {
 /// Metrics tracked by the command history.
 #[derive(Debug)]
 pub struct HistoryMetrics {
-    /// Number of `Hello` commands.
-    pub hello_count: UIntGauge,
-    /// Number of `RunIngestion` commands.
-    pub run_ingestions_count: UIntGauge,
-    /// Number of `RunSink` commands.
-    pub run_sinks_count: UIntGauge,
-    /// Number of `AllowCompaction` commands.
-    pub allow_compaction_count: UIntGauge,
-    /// Number of `InitializationComplete` commands.
-    pub initialization_complete_count: UIntGauge,
-    /// Number of `AllowWrites` commands.
-    pub allow_writes_count: UIntGauge,
-    /// Number of `UpdateConfiguration` commands.
-    pub update_configuration_count: UIntGauge,
+    /// Metrics tracking command counts.
+    pub command_counts: CommandMetrics<UIntGauge>,
 }
 
 impl HistoryMetrics {
     pub fn reset(&self) {
-        self.hello_count.set(0);
-        self.run_ingestions_count.set(0);
-        self.run_sinks_count.set(0);
-        self.allow_compaction_count.set(0);
-        self.initialization_complete_count.set(0);
-        self.allow_writes_count.set(0);
-        self.update_configuration_count.set(0);
+        self.command_counts.for_all(|m| m.set(0));
     }
 }

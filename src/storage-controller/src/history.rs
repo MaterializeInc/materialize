@@ -58,8 +58,6 @@ impl<T: timely::progress::Timestamp + TotalOrder> CommandHistory<T> {
     ///
     /// This action will reduce the history every time it doubles.
     pub fn push(&mut self, command: StorageCommand<T>) {
-        use StorageCommand::*;
-
         self.commands.push(command);
 
         if self.commands.len() > 2 * self.reduced_count {
@@ -68,19 +66,7 @@ impl<T: timely::progress::Timestamp + TotalOrder> CommandHistory<T> {
             // Refresh reported metrics. `reduce` already refreshes metrics, so we only need to do
             // that here in the non-reduce case.
             let command = self.commands.last().expect("pushed above");
-            let metrics = &self.metrics;
-            match command {
-                Hello { .. } => metrics.hello_count.inc(),
-                InitializationComplete => metrics.initialization_complete_count.inc(),
-                AllowWrites => metrics.allow_writes_count.inc(),
-                UpdateConfiguration(_) => metrics.update_configuration_count.inc(),
-                RunIngestion(_) => metrics.run_ingestions_count.inc(),
-                RunSink(_) => metrics.run_sinks_count.inc(),
-                AllowCompaction(_, _) => metrics.allow_compaction_count.inc(),
-                RunOneshotIngestion(_) | CancelOneshotIngestion { .. } => {
-                    // TODO(cf2): Add metrics for oneshot ingestions.
-                }
-            }
+            self.metrics.command_counts.for_command(command).inc();
         }
     }
 
@@ -180,15 +166,16 @@ impl<T: timely::progress::Timestamp + TotalOrder> CommandHistory<T> {
         // counts, as they would be observable by other threads. For example, we should not call
         // `metrics.reset()` here, since otherwise the command history would appear empty for a
         // brief amount of time.
+        let command_counts = &self.metrics.command_counts;
 
         let count = u64::from(hello_command.is_some());
-        self.metrics.hello_count.set(count);
+        command_counts.hello.set(count);
         if let Some(hello) = hello_command {
             self.commands.push(hello);
         }
 
         let count = u64::from(!final_configuration.all_unset());
-        self.metrics.update_configuration_count.set(count);
+        command_counts.update_configuration.set(count);
         if !final_configuration.all_unset() {
             let config = Box::new(final_configuration);
             self.commands
@@ -196,41 +183,43 @@ impl<T: timely::progress::Timestamp + TotalOrder> CommandHistory<T> {
         }
 
         let count = u64::cast_from(run_ingestions.len());
-        self.metrics.run_ingestions_count.set(count);
+        command_counts.run_ingestion.set(count);
         for ingestion in run_ingestions {
             self.commands.push(StorageCommand::RunIngestion(ingestion));
         }
 
         let count = u64::cast_from(run_sinks.len());
-        self.metrics.run_ingestions_count.set(count);
+        command_counts.run_sink.set(count);
         for sink in run_sinks {
             self.commands.push(StorageCommand::RunSink(sink));
         }
 
         // Note: RunOneshotIngestion commands are reduced, as we receive
         // CancelOneshotIngestion commands.
-        //
-        // TODO(cf2): Record metrics on the number of OneshotIngestion commands.
+        let count = u64::cast_from(final_oneshot_ingestions.len());
+        command_counts.run_oneshot_ingestion.set(count);
         for ingestion in final_oneshot_ingestions.into_values() {
             self.commands
                 .push(StorageCommand::RunOneshotIngestion(ingestion));
         }
 
+        command_counts.cancel_oneshot_ingestion.set(0);
+
         let count = u64::cast_from(allow_compaction.len());
-        self.metrics.allow_compaction_count.set(count);
+        command_counts.allow_compaction.set(count);
         for (id, since) in allow_compaction {
             self.commands
                 .push(StorageCommand::AllowCompaction(id, since));
         }
 
         let count = u64::from(initialization_complete);
-        self.metrics.initialization_complete_count.set(count);
+        command_counts.initialization_complete.set(count);
         if initialization_complete {
             self.commands.push(StorageCommand::InitializationComplete);
         }
 
         let count = u64::from(allow_writes);
-        self.metrics.allow_writes_count.set(count);
+        command_counts.allow_writes.set(count);
         if allow_writes {
             self.commands.push(StorageCommand::AllowWrites);
         }
