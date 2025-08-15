@@ -61,8 +61,8 @@ use mz_ssh_util::keys::SshKeyPair;
 use mz_storage_types::connections::aws::AwsConnection;
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::connections::{
-    AwsPrivatelinkConnection, CsrConnection, KafkaConnection, MySqlConnection, PostgresConnection,
-    SqlServerConnectionDetails, SshConnection,
+    AwsPrivatelinkConnection, CsrConnection, IcebergCatalogConnection, KafkaConnection,
+    MySqlConnection, PostgresConnection, SqlServerConnectionDetails, SshConnection,
 };
 use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::sinks::{S3SinkFormat, SinkEnvelope, StorageSinkConnection};
@@ -1628,6 +1628,7 @@ pub enum ConnectionDetails {
     AwsPrivatelink(AwsPrivatelinkConnection),
     MySql(MySqlConnection<ReferencedConnection>),
     SqlServer(SqlServerConnectionDetails<ReferencedConnection>),
+    IcebergCatalog(IcebergCatalogConnection<ReferencedConnection>),
 }
 
 impl ConnectionDetails {
@@ -1652,6 +1653,9 @@ impl ConnectionDetails {
             }
             ConnectionDetails::SqlServer(c) => {
                 mz_storage_types::connections::Connection::SqlServer(c.clone())
+            }
+            ConnectionDetails::IcebergCatalog(c) => {
+                mz_storage_types::connections::Connection::IcebergCatalog(c.clone())
             }
         }
     }

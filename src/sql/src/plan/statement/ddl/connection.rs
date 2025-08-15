@@ -34,14 +34,14 @@ use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::connections::string_or_secret::StringOrSecret;
 use mz_storage_types::connections::{
     AwsPrivatelink, AwsPrivatelinkConnection, CsrConnection, CsrConnectionHttpAuth,
-    KafkaConnection, KafkaSaslConfig, KafkaTlsConfig, KafkaTopicOptions, MySqlConnection,
-    MySqlSslMode, PostgresConnection, SqlServerConnectionDetails, SshConnection, SshTunnel,
-    TlsIdentity, Tunnel,
+    IcebergCatalogConnection, IcebergCatalogType, KafkaConnection, KafkaSaslConfig, KafkaTlsConfig,
+    KafkaTopicOptions, MySqlConnection, MySqlSslMode, PostgresConnection,
+    SqlServerConnectionDetails, SshConnection, SshTunnel, TlsIdentity, Tunnel,
 };
 
 use crate::names::Aug;
 use crate::plan::statement::{Connection, ResolvedItemName};
-use crate::plan::with_options;
+use crate::plan::with_options::{self};
 use crate::plan::{ConnectionDetails, PlanError, SshKey, StatementContext};
 use crate::session::vars::{self, ENABLE_AWS_MSK_IAM_AUTH};
 
@@ -56,6 +56,7 @@ generate_extracted_config!(
     // (AwsPrivatelink, with_options::Object),
     (Broker, Vec<KafkaBroker<Aug>>),
     (Brokers, Vec<KafkaBroker<Aug>>),
+    (Credential, StringOrSecret),
     (Database, String),
     (Endpoint, String),
     (Host, String),
@@ -69,6 +70,7 @@ generate_extracted_config!(
     (SaslMechanisms, String),
     (SaslPassword, with_options::Secret),
     (SaslUsername, StringOrSecret),
+    (Scope, String),
     (SecretAccessKey, with_options::Secret),
     (SecurityProtocol, String),
     (ServiceName, String),
@@ -78,8 +80,10 @@ generate_extracted_config!(
     (SslKey, with_options::Secret),
     (SslMode, String),
     (SessionToken, StringOrSecret),
+    (CatalogType, IcebergCatalogType),
     (Url, String),
-    (User, StringOrSecret)
+    (User, StringOrSecret),
+    (Warehouse, String)
 );
 
 generate_extracted_config!(
@@ -178,6 +182,14 @@ pub(super) fn validate_options_per_connection_type(
             SslKey,
             SslMode,
             User,
+        ],
+        CreateConnectionType::IcebergCatalog => &[
+            AwsConnection,
+            CatalogType,
+            Credential,
+            Scope,
+            Url,
+            Warehouse,
         ],
     };
 
@@ -611,6 +623,53 @@ impl ConnectionOptionExtracted {
                     encryption,
                     certificate_validation_policy,
                     tls_root_cert: self.ssl_certificate_authority,
+                })
+            }
+            CreateConnectionType::IcebergCatalog => {
+                let catalog_type = self.catalog_type.clone().ok_or_else(|| {
+                    sql_err!("invalid CONNECTION: ICEBERG connections must specify CATALOG TYPE")
+                })?;
+
+                let uri: reqwest::Url = match &self.url {
+                    Some(url) => url
+                        .parse()
+                        .map_err(|e| sql_err!("parsing Iceberg catalog url: {e}"))?,
+                    None => sql_bail!("invalid CONNECTION: must specify URL"),
+                };
+
+                let warehouse = self.warehouse.clone();
+                let credential = self.credential.clone();
+                let aws_connection = get_aws_connection_reference(scx, &self)?;
+
+                match catalog_type {
+                    IcebergCatalogType::S3TablesRest => {
+                        if warehouse.is_none() {
+                            sql_bail!(
+                                "invalid CONNECTION: ICEBERG s3tables connections must specify WAREHOUSE"
+                            );
+                        }
+                        if aws_connection.is_none() {
+                            sql_bail!(
+                                "invalid CONNECTION: ICEBERG s3tables connections require an AWS connection"
+                            );
+                        }
+                    }
+                    IcebergCatalogType::Rest => {
+                        if credential.is_none() {
+                            sql_bail!(
+                                "invalid CONNECTION: ICEBERG rest connections require a CREDENTIAL"
+                            );
+                        }
+                    }
+                }
+
+                ConnectionDetails::IcebergCatalog(IcebergCatalogConnection {
+                    catalog_type,
+                    uri: uri.to_string(),
+                    warehouse,
+                    credential,
+                    aws_connection,
+                    scope: self.scope.clone(),
                 })
             }
         };

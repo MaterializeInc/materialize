@@ -19,6 +19,7 @@ use mz_sql_parser::ast::{
     ClusterAlterOptionValue, ClusterScheduleOptionValue, ConnectionDefaultAwsPrivatelink, Expr,
     Ident, KafkaBroker, NetworkPolicyRuleDefinition, RefreshOptionValue, ReplicaDefinition,
 };
+use mz_storage_types::connections::IcebergCatalogType;
 use mz_storage_types::connections::string_or_secret::StringOrSecret;
 use serde::{Deserialize, Serialize};
 
@@ -37,6 +38,33 @@ pub trait TryFromValue<T>: Sized {
 
 pub trait ImpliedValue: Sized {
     fn implied_value() -> Result<Self, PlanError>;
+}
+
+impl TryFromValue<WithOptionValue<Aug>> for IcebergCatalogType {
+    fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
+        match String::try_from_value(v)? {
+            s if s.eq_ignore_ascii_case("rest") => Ok(IcebergCatalogType::Rest),
+            s if s.eq_ignore_ascii_case("s3tablesrest") => Ok(IcebergCatalogType::S3TablesRest),
+            _ => sql_bail!("invalid iceberg catalog type"),
+        }
+    }
+
+    fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<WithOptionValue<Aug>> {
+        Some(WithOptionValue::Value(Value::String(match self {
+            IcebergCatalogType::Rest => "rest".to_string(),
+            IcebergCatalogType::S3TablesRest => "s3tables".to_string(),
+        })))
+    }
+
+    fn name() -> String {
+        "iceberg catalog type".to_string()
+    }
+}
+
+impl ImpliedValue for IcebergCatalogType {
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("must provide an iceberg catalog type")
+    }
 }
 
 #[derive(Copy, Clone, Debug)]
