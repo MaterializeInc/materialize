@@ -90,6 +90,8 @@ These environments are later swapped transparently.
     deployment, which transparently handles running that subset of models
     against the deployment environment.
 
+    You must [exclude sources and sinks](/manage/dbt/development-workflows/#exclude-sources-and-sinks) when running the dbt project.
+
     {{< callout >}}
   If you encounter an error like `String 'deploy:' is not valid YAML`, you
   might need to use an alternative syntax depending on your terminal environment.
