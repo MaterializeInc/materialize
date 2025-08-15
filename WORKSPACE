@@ -502,12 +502,6 @@ crates_repository(
             gen_build_script = False,
             deps = ["@bzip2"],
         )],
-        "lzma-sys": [crate.annotation(
-            additive_build_file = "@//misc/bazel/c_deps:rust-sys/BUILD.lzma-sys.bazel",
-            gen_build_script = False,
-            # Note: This is a target we add from the additive build file above.
-            deps = [":xz"],
-        )],
         "openssl-sys": [crate.annotation(
             build_script_data = [
                 "@openssl//:openssl_lib",
@@ -635,7 +629,6 @@ crates_repository(
         "//:src/frontegg-client/Cargo.toml",
         "//:src/frontegg-mock/Cargo.toml",
         "//:src/http-util/Cargo.toml",
-        "//:src/iceberg-rest/Cargo.toml",
         "//:src/interchange/Cargo.toml",
         "//:src/kafka-util/Cargo.toml",
         "//:src/license-keys/Cargo.toml",

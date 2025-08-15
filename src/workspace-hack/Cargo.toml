@@ -19,23 +19,25 @@ workspace = true
 [dependencies]
 ahash = { version = "0.8.12" }
 aho-corasick = { version = "1.1.3" }
-async-compression = { version = "0.4.19", default-features = false, features = ["brotli", "bzip2", "gzip", "tokio", "xz", "zlib", "zstd"] }
+arrayvec = { version = "0.7.6" }
+async-compression = { git = "https://github.com/MaterializeInc/async-compression.git", rev = "fe7411eb6104a02a89e2c3a76ab326dd6594214d", default-features = false, features = ["brotli", "bzip2-sys", "gzip", "tokio", "xz", "zlib", "zstd"] }
 aws-config = { version = "1.2.1", default-features = false, features = ["sso"] }
-aws-credential-types = { version = "1.2.4", default-features = false, features = ["hardcoded-credentials", "test-util"] }
+aws-credential-types = { version = "1.2.5", default-features = false, features = ["hardcoded-credentials", "test-util"] }
 aws-runtime = { version = "1.5.9", default-features = false, features = ["event-stream", "http-02x"] }
 aws-sdk-sts = { version = "1.41.0", default-features = false, features = ["rt-tokio"] }
 aws-sigv4 = { version = "1.3.3", features = ["http0-compat", "sign-eventstream"] }
 aws-smithy-async = { version = "1.2.5", default-features = false, features = ["rt-tokio"] }
 aws-smithy-http = { version = "0.60.12", default-features = false, features = ["event-stream"] }
 aws-smithy-runtime = { version = "1.8.4", default-features = false, features = ["client", "connector-hyper-0-14-x"] }
-aws-smithy-runtime-api = { version = "1.8.3", features = ["client", "http-02x", "http-auth", "test-util"] }
+aws-smithy-runtime-api = { version = "1.8.7", features = ["client", "http-02x", "http-auth", "test-util"] }
 aws-smithy-types = { version = "1.3.2", default-features = false, features = ["byte-stream-poll-next", "http-body-0-4-x", "http-body-1-x", "rt-tokio", "test-util"] }
 axum = { version = "0.7.9", features = ["ws"] }
 axum-core = { version = "0.4.5", default-features = false, features = ["tracing"] }
+base16ct = { version = "0.2.0", default-features = false, features = ["alloc"] }
 bit-set = { version = "0.8.0" }
 bit-vec = { version = "0.8.0" }
 bitflags = { version = "2.9.0", default-features = false, features = ["std"] }
-brotli = { version = "7.0.0" }
+brotli = { version = "8.0.2" }
 bstr = { version = "1.12.0" }
 bytemuck = { version = "1.23.1", default-features = false, features = ["latest_stable_rust"] }
 byteorder = { version = "1.5.0" }
@@ -50,17 +52,16 @@ crossbeam-deque = { version = "0.8.6" }
 crossbeam-epoch = { version = "0.9.18" }
 crossbeam-queue = { version = "0.3.12" }
 crossbeam-utils = { version = "0.8.21" }
-crypto-common = { version = "0.1.6", default-features = false, features = ["std"] }
 csv-async = { version = "1.3.1", features = ["tokio"] }
 darling_core = { version = "0.20.11", default-features = false, features = ["suggestions"] }
 dec = { version = "0.4.11", default-features = false, features = ["num-traits", "serde"] }
 deranged = { version = "0.3.11", default-features = false, features = ["powerfmt", "quickcheck", "serde", "std"] }
-digest = { version = "0.10.7", features = ["mac", "std"] }
+digest = { version = "0.10.7", features = ["mac", "oid", "std"] }
 either = { version = "1.15.0", features = ["use_std"] }
 event-listener = { version = "5.4.0" }
 event-listener-strategy = { version = "0.5.4" }
 fastrand = { version = "2.3.0" }
-flate2 = { version = "1.1.2", features = ["zlib"] }
+flate2 = { version = "1.1.2", features = ["zlib", "zlib-rs"] }
 form_urlencoded = { version = "1.2.1" }
 futures-channel = { version = "0.3.31", features = ["sink"] }
 futures-core = { version = "0.3.31" }
@@ -75,7 +76,7 @@ half = { version = "2.6.0", features = ["num-traits"] }
 hashbrown-3575ec1268b04181 = { package = "hashbrown", version = "0.15.3" }
 hashbrown-582f2526e08bb6a0 = { package = "hashbrown", version = "0.14.5", default-features = false, features = ["allocator-api2", "inline-more", "raw"] }
 hyper = { version = "0.14.27", features = ["client", "http1", "http2", "stream", "tcp"] }
-hyper-util = { version = "0.1.15", features = ["client-legacy", "server-auto", "service", "tracing"] }
+hyper-util = { version = "0.1.16", features = ["client-legacy", "server-auto", "service", "tracing"] }
 insta = { version = "1.43.1", features = ["json"] }
 libc = { version = "0.2.174", features = ["extra_traits", "use_std"] }
 libz-sys = { version = "1.1.22", features = ["static"] }
@@ -92,11 +93,12 @@ native-tls = { version = "0.2.14", default-features = false, features = ["alpn"]
 nix = { version = "0.30.1", features = ["fs", "signal"] }
 nom = { version = "7.1.3" }
 num = { version = "0.4.3" }
-num-bigint = { version = "0.4.6" }
+num-bigint = { version = "0.4.6", features = ["serde"] }
 num-integer = { version = "0.1.46", features = ["i128"] }
 num-traits = { version = "0.2.19", features = ["i128", "libm"] }
+once_cell = { version = "1.21.3" }
 parking_lot = { version = "0.12.4", features = ["serde"] }
-parquet = { version = "54.3.1", default-features = false, features = ["arrow", "async", "brotli", "flate2", "lz4", "snap", "zstd"] }
+parquet = { version = "55.2.0", features = ["async"] }
 percent-encoding = { version = "2.3.1" }
 phf = { version = "0.11.3", features = ["uncased"] }
 phf_shared = { version = "0.11.3", features = ["uncased"] }
@@ -110,7 +112,7 @@ prost = { version = "0.13.5", features = ["no-recursion-limit", "prost-derive"] 
 prost-reflect = { version = "0.15.3", default-features = false, features = ["serde"] }
 prost-types = { version = "0.13.5" }
 quote = { version = "1.0.40" }
-rand-274715c4dabd11b0 = { package = "rand", version = "0.9.0" }
+rand-274715c4dabd11b0 = { package = "rand", version = "0.9.2" }
 rand-c38e5c1d305a1b54 = { package = "rand", version = "0.8.5", features = ["small_rng"] }
 rand_chacha-274715c4dabd11b0 = { package = "rand_chacha", version = "0.9.0", default-features = false, features = ["std"] }
 rand_chacha-468e82937335b1c9 = { package = "rand_chacha", version = "0.3.0" }
@@ -118,23 +120,25 @@ rand_core = { version = "0.6.4", default-features = false, features = ["std"] }
 rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features = ["cmake-build", "libz-static", "ssl-vendored", "zstd"] }
 regex = { version = "1.11.1" }
 regex-automata = { version = "0.4.9", default-features = false, features = ["dfa", "hybrid", "meta", "nfa", "perf", "unicode"] }
+regex-lite = { version = "0.1.6" }
 regex-syntax = { version = "0.8.5" }
-reqwest-5ef9efb8ec2df382 = { package = "reqwest", version = "0.12.15", features = ["blocking", "cookies", "json", "native-tls-vendored", "stream"] }
+reqwest-5ef9efb8ec2df382 = { package = "reqwest", version = "0.12.23", features = ["blocking", "cookies", "json", "native-tls-vendored", "stream"] }
 reqwest-a6292c17cd707f01 = { package = "reqwest", version = "0.11.24", features = ["blocking", "json", "multipart", "native-tls-vendored", "stream"] }
 schemars = { version = "0.8.22", features = ["uuid1"] }
 scopeguard = { version = "1.2.0" }
 semver = { version = "1.0.26", features = ["serde"] }
 serde = { version = "1.0.219", features = ["alloc", "derive", "rc"] }
-serde_json = { version = "1.0.140", features = ["alloc", "arbitrary_precision", "float_roundtrip", "preserve_order", "raw_value", "unbounded_depth"] }
-sha2 = { version = "0.10.9", features = ["asm"] }
+serde_json = { version = "1.0.142", features = ["alloc", "arbitrary_precision", "float_roundtrip", "preserve_order", "raw_value", "unbounded_depth"] }
+sha2 = { version = "0.10.9", features = ["asm", "oid"] }
 similar = { version = "2.7.0", features = ["inline", "unicode"] }
 smallvec = { version = "1.15.1", default-features = false, features = ["const_new", "serde", "union"] }
 subtle = { version = "2.6.1" }
 syn-dff4ba8e3ae991db = { package = "syn", version = "1.0.107", features = ["extra-traits", "full", "visit", "visit-mut"] }
 syn-f595c2ba2a3f28df = { package = "syn", version = "2.0.104", features = ["extra-traits", "full", "visit", "visit-mut"] }
+thrift = { version = "0.17.0" }
 time = { version = "0.3.37", features = ["local-offset", "macros", "quickcheck", "serde-well-known"] }
 timely = { version = "0.22.0" }
-tokio = { version = "1.44.2", features = ["full", "test-util", "tracing"] }
+tokio = { version = "1.47.1", features = ["full", "test-util", "tracing"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde", "with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 tokio-stream = { version = "0.1.17", features = ["net", "sync"] }
 tokio-util = { version = "0.7.15", features = ["codec", "compat", "io", "time"] }
@@ -151,7 +155,7 @@ uncased = { version = "0.9.10" }
 unicode-bidi = { version = "0.3.18" }
 unicode-normalization = { version = "0.1.24" }
 url = { version = "2.5.4", features = ["serde"] }
-uuid = { version = "1.17.0", features = ["serde", "v4", "v5", "v7"] }
+uuid = { version = "1.18.0", features = ["serde", "v4", "v5", "v7"] }
 zeroize = { version = "1.8.1", features = ["serde"] }
 zstd = { version = "0.13.3" }
 zstd-safe = { version = "7.2.1", default-features = false, features = ["arrays", "legacy", "std", "zdict_builder"] }
@@ -160,23 +164,25 @@ zstd-sys = { version = "2.0.13", features = ["std"] }
 [build-dependencies]
 ahash = { version = "0.8.12" }
 aho-corasick = { version = "1.1.3" }
-async-compression = { version = "0.4.19", default-features = false, features = ["brotli", "bzip2", "gzip", "tokio", "xz", "zlib", "zstd"] }
+arrayvec = { version = "0.7.6" }
+async-compression = { git = "https://github.com/MaterializeInc/async-compression.git", rev = "fe7411eb6104a02a89e2c3a76ab326dd6594214d", default-features = false, features = ["brotli", "bzip2-sys", "gzip", "tokio", "xz", "zlib", "zstd"] }
 aws-config = { version = "1.2.1", default-features = false, features = ["sso"] }
-aws-credential-types = { version = "1.2.4", default-features = false, features = ["hardcoded-credentials", "test-util"] }
+aws-credential-types = { version = "1.2.5", default-features = false, features = ["hardcoded-credentials", "test-util"] }
 aws-runtime = { version = "1.5.9", default-features = false, features = ["event-stream", "http-02x"] }
 aws-sdk-sts = { version = "1.41.0", default-features = false, features = ["rt-tokio"] }
 aws-sigv4 = { version = "1.3.3", features = ["http0-compat", "sign-eventstream"] }
 aws-smithy-async = { version = "1.2.5", default-features = false, features = ["rt-tokio"] }
 aws-smithy-http = { version = "0.60.12", default-features = false, features = ["event-stream"] }
 aws-smithy-runtime = { version = "1.8.4", default-features = false, features = ["client", "connector-hyper-0-14-x"] }
-aws-smithy-runtime-api = { version = "1.8.3", features = ["client", "http-02x", "http-auth", "test-util"] }
+aws-smithy-runtime-api = { version = "1.8.7", features = ["client", "http-02x", "http-auth", "test-util"] }
 aws-smithy-types = { version = "1.3.2", default-features = false, features = ["byte-stream-poll-next", "http-body-0-4-x", "http-body-1-x", "rt-tokio", "test-util"] }
 axum = { version = "0.7.9", features = ["ws"] }
 axum-core = { version = "0.4.5", default-features = false, features = ["tracing"] }
+base16ct = { version = "0.2.0", default-features = false, features = ["alloc"] }
 bit-set = { version = "0.8.0" }
 bit-vec = { version = "0.8.0" }
 bitflags = { version = "2.9.0", default-features = false, features = ["std"] }
-brotli = { version = "7.0.0" }
+brotli = { version = "8.0.2" }
 bstr = { version = "1.12.0" }
 bytemuck = { version = "1.23.1", default-features = false, features = ["latest_stable_rust"] }
 byteorder = { version = "1.5.0" }
@@ -192,17 +198,16 @@ crossbeam-deque = { version = "0.8.6" }
 crossbeam-epoch = { version = "0.9.18" }
 crossbeam-queue = { version = "0.3.12" }
 crossbeam-utils = { version = "0.8.21" }
-crypto-common = { version = "0.1.6", default-features = false, features = ["std"] }
 csv-async = { version = "1.3.1", features = ["tokio"] }
 darling_core = { version = "0.20.11", default-features = false, features = ["suggestions"] }
 dec = { version = "0.4.11", default-features = false, features = ["num-traits", "serde"] }
 deranged = { version = "0.3.11", default-features = false, features = ["powerfmt", "quickcheck", "serde", "std"] }
-digest = { version = "0.10.7", features = ["mac", "std"] }
+digest = { version = "0.10.7", features = ["mac", "oid", "std"] }
 either = { version = "1.15.0", features = ["use_std"] }
 event-listener = { version = "5.4.0" }
 event-listener-strategy = { version = "0.5.4" }
 fastrand = { version = "2.3.0" }
-flate2 = { version = "1.1.2", features = ["zlib"] }
+flate2 = { version = "1.1.2", features = ["zlib", "zlib-rs"] }
 form_urlencoded = { version = "1.2.1" }
 futures-channel = { version = "0.3.31", features = ["sink"] }
 futures-core = { version = "0.3.31" }
@@ -217,7 +222,7 @@ half = { version = "2.6.0", features = ["num-traits"] }
 hashbrown-3575ec1268b04181 = { package = "hashbrown", version = "0.15.3" }
 hashbrown-582f2526e08bb6a0 = { package = "hashbrown", version = "0.14.5", default-features = false, features = ["allocator-api2", "inline-more", "raw"] }
 hyper = { version = "0.14.27", features = ["client", "http1", "http2", "stream", "tcp"] }
-hyper-util = { version = "0.1.15", features = ["client-legacy", "server-auto", "service", "tracing"] }
+hyper-util = { version = "0.1.16", features = ["client-legacy", "server-auto", "service", "tracing"] }
 insta = { version = "1.43.1", features = ["json"] }
 libc = { version = "0.2.174", features = ["extra_traits", "use_std"] }
 libz-sys = { version = "1.1.22", features = ["static"] }
@@ -234,11 +239,12 @@ native-tls = { version = "0.2.14", default-features = false, features = ["alpn"]
 nix = { version = "0.30.1", features = ["fs", "signal"] }
 nom = { version = "7.1.3" }
 num = { version = "0.4.3" }
-num-bigint = { version = "0.4.6" }
+num-bigint = { version = "0.4.6", features = ["serde"] }
 num-integer = { version = "0.1.46", features = ["i128"] }
 num-traits = { version = "0.2.19", features = ["i128", "libm"] }
+once_cell = { version = "1.21.3" }
 parking_lot = { version = "0.12.4", features = ["serde"] }
-parquet = { version = "54.3.1", default-features = false, features = ["arrow", "async", "brotli", "flate2", "lz4", "snap", "zstd"] }
+parquet = { version = "55.2.0", features = ["async"] }
 percent-encoding = { version = "2.3.1" }
 phf = { version = "0.11.3", features = ["uncased"] }
 phf_shared = { version = "0.11.3", features = ["uncased"] }
@@ -253,7 +259,7 @@ prost = { version = "0.13.5", features = ["no-recursion-limit", "prost-derive"] 
 prost-reflect = { version = "0.15.3", default-features = false, features = ["serde"] }
 prost-types = { version = "0.13.5" }
 quote = { version = "1.0.40" }
-rand-274715c4dabd11b0 = { package = "rand", version = "0.9.0" }
+rand-274715c4dabd11b0 = { package = "rand", version = "0.9.2" }
 rand-c38e5c1d305a1b54 = { package = "rand", version = "0.8.5", features = ["small_rng"] }
 rand_chacha-274715c4dabd11b0 = { package = "rand_chacha", version = "0.9.0", default-features = false, features = ["std"] }
 rand_chacha-468e82937335b1c9 = { package = "rand_chacha", version = "0.3.0" }
@@ -261,24 +267,26 @@ rand_core = { version = "0.6.4", default-features = false, features = ["std"] }
 rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features = ["cmake-build", "libz-static", "ssl-vendored", "zstd"] }
 regex = { version = "1.11.1" }
 regex-automata = { version = "0.4.9", default-features = false, features = ["dfa", "hybrid", "meta", "nfa", "perf", "unicode"] }
+regex-lite = { version = "0.1.6" }
 regex-syntax = { version = "0.8.5" }
-reqwest-5ef9efb8ec2df382 = { package = "reqwest", version = "0.12.15", features = ["blocking", "cookies", "json", "native-tls-vendored", "stream"] }
+reqwest-5ef9efb8ec2df382 = { package = "reqwest", version = "0.12.23", features = ["blocking", "cookies", "json", "native-tls-vendored", "stream"] }
 reqwest-a6292c17cd707f01 = { package = "reqwest", version = "0.11.24", features = ["blocking", "json", "multipart", "native-tls-vendored", "stream"] }
 schemars = { version = "0.8.22", features = ["uuid1"] }
 scopeguard = { version = "1.2.0" }
 semver = { version = "1.0.26", features = ["serde"] }
 serde = { version = "1.0.219", features = ["alloc", "derive", "rc"] }
-serde_json = { version = "1.0.140", features = ["alloc", "arbitrary_precision", "float_roundtrip", "preserve_order", "raw_value", "unbounded_depth"] }
-sha2 = { version = "0.10.9", features = ["asm"] }
+serde_json = { version = "1.0.142", features = ["alloc", "arbitrary_precision", "float_roundtrip", "preserve_order", "raw_value", "unbounded_depth"] }
+sha2 = { version = "0.10.9", features = ["asm", "oid"] }
 similar = { version = "2.7.0", features = ["inline", "unicode"] }
 smallvec = { version = "1.15.1", default-features = false, features = ["const_new", "serde", "union"] }
 subtle = { version = "2.6.1" }
 syn-dff4ba8e3ae991db = { package = "syn", version = "1.0.107", features = ["extra-traits", "full", "visit", "visit-mut"] }
 syn-f595c2ba2a3f28df = { package = "syn", version = "2.0.104", features = ["extra-traits", "full", "visit", "visit-mut"] }
+thrift = { version = "0.17.0" }
 time = { version = "0.3.37", features = ["local-offset", "macros", "quickcheck", "serde-well-known"] }
 time-macros = { version = "0.2.19", default-features = false, features = ["formatting", "parsing", "serde"] }
 timely = { version = "0.22.0" }
-tokio = { version = "1.44.2", features = ["full", "test-util", "tracing"] }
+tokio = { version = "1.47.1", features = ["full", "test-util", "tracing"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde", "with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 tokio-stream = { version = "0.1.17", features = ["net", "sync"] }
 tokio-util = { version = "0.7.15", features = ["codec", "compat", "io", "time"] }
@@ -295,7 +303,7 @@ uncased = { version = "0.9.10" }
 unicode-bidi = { version = "0.3.18" }
 unicode-normalization = { version = "0.1.24" }
 url = { version = "2.5.4", features = ["serde"] }
-uuid = { version = "1.17.0", features = ["serde", "v4", "v5", "v7"] }
+uuid = { version = "1.18.0", features = ["serde", "v4", "v5", "v7"] }
 zeroize = { version = "1.8.1", features = ["serde"] }
 zstd = { version = "0.13.3" }
 zstd-safe = { version = "7.2.1", default-features = false, features = ["arrays", "legacy", "std", "zdict_builder"] }
@@ -304,6 +312,7 @@ zstd-sys = { version = "2.0.13", features = ["std"] }
 [target.x86_64-unknown-linux-gnu.dependencies]
 camino = { version = "1.1.10", default-features = false, features = ["serde1"] }
 hyper = { version = "0.14.27", default-features = false, features = ["runtime"] }
+hyper-util = { version = "0.1.16", default-features = false, features = ["client-proxy", "client-proxy-system"] }
 idna = { version = "1.0.3" }
 linux-raw-sys-274715c4dabd11b0 = { package = "linux-raw-sys", version = "0.9.4", default-features = false, features = ["elf", "errno", "general", "ioctl", "no_std", "prctl"] }
 linux-raw-sys-9fbad63c4bcf4a8f = { package = "linux-raw-sys", version = "0.4.15", default-features = false, features = ["elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "std", "xdp"] }
@@ -315,10 +324,12 @@ pathdiff = { version = "0.2.3", default-features = false, features = ["camino"] 
 ring = { version = "0.17.14", features = ["std"] }
 rustix-d585fab2519d2d1 = { package = "rustix", version = "0.38.44", features = ["fs", "net", "process", "termios"] }
 rustix-dff4ba8e3ae991db = { package = "rustix", version = "1.0.5", features = ["event", "fs", "pipe", "process", "time"] }
+tower-http = { version = "0.6.6", default-features = false, features = ["follow-redirect"] }
 
 [target.x86_64-unknown-linux-gnu.build-dependencies]
 camino = { version = "1.1.10", default-features = false, features = ["serde1"] }
 hyper = { version = "0.14.27", default-features = false, features = ["runtime"] }
+hyper-util = { version = "0.1.16", default-features = false, features = ["client-proxy", "client-proxy-system"] }
 idna = { version = "1.0.3" }
 linux-raw-sys-274715c4dabd11b0 = { package = "linux-raw-sys", version = "0.9.4", default-features = false, features = ["elf", "errno", "general", "ioctl", "no_std", "prctl"] }
 linux-raw-sys-9fbad63c4bcf4a8f = { package = "linux-raw-sys", version = "0.4.15", default-features = false, features = ["elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "std", "xdp"] }
@@ -330,10 +341,12 @@ pathdiff = { version = "0.2.3", default-features = false, features = ["camino"] 
 ring = { version = "0.17.14", features = ["std"] }
 rustix-d585fab2519d2d1 = { package = "rustix", version = "0.38.44", features = ["fs", "net", "process", "termios"] }
 rustix-dff4ba8e3ae991db = { package = "rustix", version = "1.0.5", features = ["event", "fs", "pipe", "process", "time"] }
+tower-http = { version = "0.6.6", default-features = false, features = ["follow-redirect"] }
 
 [target.x86_64-apple-darwin.dependencies]
 camino = { version = "1.1.10", default-features = false, features = ["serde1"] }
 hyper = { version = "0.14.27", default-features = false, features = ["runtime"] }
+hyper-util = { version = "0.1.16", default-features = false, features = ["client-proxy", "client-proxy-system"] }
 idna = { version = "1.0.3" }
 miniz_oxide = { version = "0.8.9", default-features = false, features = ["with-alloc"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }
@@ -342,10 +355,12 @@ ring = { version = "0.17.14", features = ["std"] }
 rustix-d585fab2519d2d1 = { package = "rustix", version = "0.38.44", features = ["fs", "net", "process", "termios"] }
 rustix-dff4ba8e3ae991db = { package = "rustix", version = "1.0.5", features = ["event", "fs", "pipe", "process", "time"] }
 security-framework = { version = "2.10.0", features = ["alpn"] }
+tower-http = { version = "0.6.6", default-features = false, features = ["follow-redirect"] }
 
 [target.x86_64-apple-darwin.build-dependencies]
 camino = { version = "1.1.10", default-features = false, features = ["serde1"] }
 hyper = { version = "0.14.27", default-features = false, features = ["runtime"] }
+hyper-util = { version = "0.1.16", default-features = false, features = ["client-proxy", "client-proxy-system"] }
 idna = { version = "1.0.3" }
 miniz_oxide = { version = "0.8.9", default-features = false, features = ["with-alloc"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }
@@ -354,5 +369,6 @@ ring = { version = "0.17.14", features = ["std"] }
 rustix-d585fab2519d2d1 = { package = "rustix", version = "0.38.44", features = ["fs", "net", "process", "termios"] }
 rustix-dff4ba8e3ae991db = { package = "rustix", version = "1.0.5", features = ["event", "fs", "pipe", "process", "time"] }
 security-framework = { version = "2.10.0", features = ["alpn"] }
+tower-http = { version = "0.6.6", default-features = false, features = ["follow-redirect"] }
 
 ### END HAKARI SECTION

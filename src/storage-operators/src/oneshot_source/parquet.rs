@@ -71,7 +71,7 @@ impl OneshotFormat for ParquetFormat {
         checksum: S::Checksum,
     ) -> Result<Vec<Self::WorkRequest<S>>, StorageErrorX> {
         let mut adapter = ParquetReaderAdapter::new(source, object.clone(), checksum.clone());
-        let parquet_metadata = adapter.get_metadata().await?;
+        let parquet_metadata = adapter.get_metadata(None).await?;
 
         tracing::info!(
             object = object.name(),
@@ -169,18 +169,24 @@ impl<S: OneshotSource> ParquetReaderAdapter<S> {
 impl<S: OneshotSource> MetadataFetch for ParquetReaderAdapter<S> {
     fn fetch(
         &mut self,
-        range: std::ops::Range<usize>,
+        range: std::ops::Range<u64>,
     ) -> BoxFuture<'_, parquet::errors::Result<Bytes>> {
         let inclusive_end = std::cmp::max(range.start, range.end.saturating_sub(1));
 
         Box::pin(async move {
+            let range_start = range.start.try_into().map_err(|_| {
+                ParquetError::General("Range start is too large to fit in a usize".to_string())
+            })?;
+            let inclusive_end = inclusive_end.try_into().map_err(|_| {
+                ParquetError::General("Range end is too large to fit in a usize".to_string())
+            })?;
             // Fetch the specified range.
             let result: Result<Vec<_>, _> = self
                 .source
                 .get(
                     self.object.clone(),
                     self.checksum.clone(),
-                    Some(range.start..=inclusive_end),
+                    Some(range_start..=inclusive_end),
                 )
                 .try_collect()
                 .await;
@@ -190,7 +196,7 @@ impl<S: OneshotSource> MetadataFetch for ParquetReaderAdapter<S> {
             };
 
             // Join the stream into a single chunk.
-            let total_length = inclusive_end.saturating_sub(range.start);
+            let total_length = inclusive_end.saturating_sub(range_start);
             let mut joined_bytes = BytesMut::with_capacity(total_length);
             joined_bytes.extend(bytes);
 
@@ -202,15 +208,21 @@ impl<S: OneshotSource> MetadataFetch for ParquetReaderAdapter<S> {
 impl<S: OneshotSource> AsyncFileReader for ParquetReaderAdapter<S> {
     fn get_bytes(
         &mut self,
-        range: std::ops::Range<usize>,
+        range: std::ops::Range<u64>,
     ) -> BoxFuture<'_, parquet::errors::Result<Bytes>> {
         MetadataFetch::fetch(self, range)
     }
 
-    fn get_metadata(&mut self) -> BoxFuture<'_, parquet::errors::Result<Arc<ParquetMetaData>>> {
+    fn get_metadata<'a>(
+        &'a mut self,
+        _options: Option<&'a parquet::arrow::arrow_reader::ArrowReaderOptions>,
+    ) -> BoxFuture<'a, parquet::errors::Result<Arc<ParquetMetaData>>> {
         Box::pin(async move {
             let mut reader = ParquetMetaDataReader::new();
             let object_size = self.object.size();
+            let object_size = object_size.try_into().map_err(|_| {
+                ParquetError::General("Object size is too large to fit in a u64".to_string())
+            })?;
             reader.try_load(self, object_size).await?;
             reader.finish().map(Arc::new)
         })
