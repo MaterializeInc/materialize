@@ -21,7 +21,8 @@ use futures::StreamExt;
 use mz_ore::cast::CastFrom;
 use mz_ore::future::InTask;
 use mz_repr::{Diff, GlobalId, Row, RowArena};
-use mz_sql_server_util::cdc::{CdcEvent, Lsn, Operation as CdcOperation};
+use mz_sql_server_util::SqlServerError;
+use mz_sql_server_util::cdc::{CdcEvent, Lsn, Operation as CdcOperation, SnapshotEvent};
 use mz_storage_types::errors::{DataflowError, DecodeError, DecodeErrorKind};
 use mz_storage_types::sources::SqlServerSource;
 use mz_storage_types::sources::sql_server::{
@@ -130,7 +131,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
 
             // Snapshot any instance that requires it.
             // The LSN returned here will be the max LSN for any capture instance on the SQL server.
-            let snapshot_lsn = {
+            let snapshot_lsn: Lsn = {
                 // Small helper closure.
                 let emit_stats = |cap, known: usize, total: usize| {
                     let update = ProgressStatisticsUpdate::Snapshot {
@@ -148,78 +149,101 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                     emit_stats(&stats_cap[0], 0, 0);
                 }
 
-                let (snapshot_lsn, snapshot_stats, snapshot_streams) = cdc_handle
+                let capture_instance_snapshots = cdc_handle
                     .snapshot(Some(capture_instances_to_snapshot), config.worker_id, config.id)
                     .await?;
-                let snapshot_cap = data_cap_set.delayed(&snapshot_lsn);
 
-                // As we stream rows for the snapshot we'll track the total we've seen.
-                let mut records_total: usize = 0;
-                let records_known = snapshot_stats.values().sum();
                 let report_interval =
                     SNAPSHOT_PROGRESS_REPORT_INTERVAL.handle(config.config.config_set());
                 let mut last_report = Instant::now();
-                if !snapshot_stats.is_empty() {
-                    emit_stats(&stats_cap[0], records_known, 0);
-                }
+                let mut records_known: usize = 0;
+                let mut records_total: usize = 0;
+                let mut max_lsn = Lsn::minimum();
 
-                // Begin streaming our snapshots!
-                let mut snapshot_streams = std::pin::pin!(snapshot_streams);
-                while let Some((capture_instance, data)) = snapshot_streams.next().await {
-                    let sql_server_row = data.map_err(TransientError::from)?;
-                    records_total = records_total.saturating_add(1);
+                let mut capture_instance_snapshots = std::pin::pin!(capture_instance_snapshots);
+                while let Some(capture_instance_snapshot_result) = capture_instance_snapshots.next().await {
+                    let (capture_instance, snapshot) = capture_instance_snapshot_result?;
 
-                    if last_report.elapsed() > report_interval.get() {
-                        last_report = Instant::now();
-                        emit_stats(&stats_cap[0], records_known, records_total);
+                    let mut snapshot = std::pin::pin!(snapshot);
+                    let Some(result) = snapshot.next().await else {
+                        return Err(TransientError::from(SqlServerError::InvariantViolated(format!("snapshot stream empty for {capture_instance}"))));
+                    };
+
+                    let SnapshotEvent::Metadata { lsn: snapshot_lsn, size } = result.map_err(TransientError::from)? else {
+                        return Err(TransientError::from(SqlServerError::InvariantViolated(format!("first element row not metadata in snapshot stream for {capture_instance}"))));
+                    };
+
+                    let snapshot_cap = data_cap_set.delayed(&snapshot_lsn);
+
+                    if snapshot_lsn > max_lsn {
+                        max_lsn = snapshot_lsn;
                     }
 
-                    // Decode the SQL Server row into an MZ one.
-                    let mut mz_row = Row::default();
-                    let arena = RowArena::default();
+                    // SMELL: we were emitting the size of all the tables before but now we are
+                    // emitting per table.
+                    records_known = records_known.saturating_add(size);
+                    emit_stats(&stats_cap[0], records_known, records_total);
 
-                    let partition_indexes = export_ids_to_snapshot.get(&capture_instance)
-                        .ok_or_else(|| {
-                            let msg = format!("no snapshot outputs for capture instance: '{capture_instance}'");
-                            TransientError::ProgrammingError(msg)
-                        })?;
-
-                    for (partition_idx, _) in partition_indexes {
-                        let decoder = decoder_map.get(partition_idx).expect("decoder for output");
-                        // Try to decode a row, returning a SourceError if it fails.
-                        let message = match decoder.decode(&sql_server_row, &mut mz_row, &arena) {
-                            Ok(()) => Ok(SourceMessage {
-                                key: Row::default(),
-                                value: mz_row.clone(),
-                                metadata: Row::default(),
-                            }),
-                            Err(e) => {
-                                let kind = DecodeErrorKind::Text(e.to_string().into());
-                                // TODO(sql_server2): Get the raw bytes from `tiberius`.
-                                let raw = format!("{sql_server_row:?}");
-                                Err(DataflowError::DecodeError(Box::new(DecodeError {
-                                    kind,
-                                    raw: raw.as_bytes().to_vec(),
-                                })))
-                            }
+                    while let Some(snapshot_event) = snapshot.next().await {
+                        let SnapshotEvent::Row(data) = snapshot_event.map_err(TransientError::from)? else {
+                            return Err(TransientError::from(SqlServerError::InvariantViolated(format!("Metadata found after first element of stream in snapshot stream for {capture_instance}"))));
                         };
-                        data_output
-                            .give_fueled(
-                                &snapshot_cap,
-                                ((*partition_idx, message), snapshot_lsn, Diff::ONE),
-                            )
-                            .await;
+
+                        let sql_server_row = data;
+                        records_total = records_total.saturating_add(1);
+
+                        if last_report.elapsed() > report_interval.get() {
+                            last_report = Instant::now();
+                            emit_stats(&stats_cap[0], records_known, records_total);
+                        }
+
+                        // Decode the SQL Server row into an MZ one.
+                        let mut mz_row = Row::default();
+                        let arena = RowArena::default();
+
+                        let partition_indexes = export_ids_to_snapshot.get(&capture_instance)
+                            .ok_or_else(|| {
+                                let msg = format!("no snapshot outputs for capture instance: '{capture_instance}'");
+                                TransientError::ProgrammingError(msg)
+                            })?;
+
+                        for (partition_idx, _) in partition_indexes {
+                            let decoder = decoder_map.get(partition_idx).expect("decoder for output");
+                            // Try to decode a row, returning a SourceError if it fails.
+                            let message = match decoder.decode(&sql_server_row, &mut mz_row, &arena) {
+                                Ok(()) => Ok(SourceMessage {
+                                    key: Row::default(),
+                                    value: mz_row.clone(),
+                                    metadata: Row::default(),
+                                }),
+                                Err(e) => {
+                                    let kind = DecodeErrorKind::Text(e.to_string().into());
+                                    // TODO(sql_server2): Get the raw bytes from `tiberius`.
+                                    let raw = format!("{sql_server_row:?}");
+                                    Err(DataflowError::DecodeError(Box::new(DecodeError {
+                                        kind,
+                                        raw: raw.as_bytes().to_vec(),
+                                    })))
+                                }
+                            };
+                            data_output
+                                .give_fueled(
+                                    &snapshot_cap,
+                                    ((*partition_idx, message), snapshot_lsn, Diff::ONE),
+                                )
+                                .await;
+                        }
                     }
+
+                    mz_ore::soft_assert_eq_or_log!(
+                        records_known,
+                        records_total,
+                        "snapshot size did not match total records received",
+                    );
+                    emit_stats(&stats_cap[0], records_known, records_total);
                 }
 
-                mz_ore::soft_assert_eq_or_log!(
-                    records_known,
-                    records_total,
-                    "snapshot size did not match total records received",
-                );
-                emit_stats(&stats_cap[0], records_known, records_total);
-
-                snapshot_lsn
+                max_lsn
             };
 
             // Rewinds need to keep track of 2 timestamps to ensure that
@@ -259,7 +283,6 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
             tracing::debug!("rewinds to process: {rewinds:?}");
 
             export_ids_to_snapshot.clear();
-
 
             // Resumption point is the minimum LSN that has been observed per capture instance.
             let resume_lsns:BTreeMap<_, _> = outputs

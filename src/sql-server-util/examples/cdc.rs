@@ -37,9 +37,10 @@
 
 use futures::StreamExt;
 use mz_ore::future::InTask;
-use mz_sql_server_util::cdc::CdcEvent;
+use mz_sql_server_util::cdc::{CdcEvent, Lsn, SnapshotEvent};
 use mz_sql_server_util::config::TunnelConfig;
 use mz_sql_server_util::{Client, Config};
+use timely::progress::Timestamp;
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -69,22 +70,37 @@ async fn main() -> Result<(), anyhow::Error> {
     let mut client_2 = Client::connect(mz_config).await?;
     tracing::info!("connection 2 successful!");
 
+    let mut max_lsn: Lsn = Lsn::minimum();
     // Get an initial snapshot of the table.
-    let (lsn, stats, snapshot) = cdc_handle
+    let capture_instance_snapshots = cdc_handle
         .snapshot(None, 1, mz_repr::GlobalId::User(1))
         .await?;
-    tracing::info!("snapshot stats: {stats:?}");
     {
-        let mut snapshot = std::pin::pin!(snapshot);
-        while let Some((capture_instance, result)) = snapshot.next().await {
-            let row = result?;
-            tracing::info!("snapshot: {capture_instance} {row:?}");
+        let mut capture_instance_snapshots = std::pin::pin!(capture_instance_snapshots);
+        while let Some(capture_instance_snapshot) = capture_instance_snapshots.next().await {
+            let (capture_instance, snapshot) = capture_instance_snapshot?;
+            let mut snapshot = std::pin::pin!(snapshot);
+            while let Some(snapshot_event) = snapshot.next().await {
+                match snapshot_event? {
+                    SnapshotEvent::Metadata { lsn, size } => {
+                        tracing::info!(
+                            "snapshotting {capture_instance} of size {size} at LSN {lsn}"
+                        );
+                        if lsn > max_lsn {
+                            max_lsn = lsn;
+                        }
+                    }
+                    SnapshotEvent::Row(data) => {
+                        tracing::info!("snapshot: {capture_instance} {data:?}");
+                    }
+                }
+            }
         }
     }
 
     // Initialize all capture instances at the LSN we just snapshotted.
     for instance in capture_instances {
-        cdc_handle = cdc_handle.start_lsn(instance, lsn);
+        cdc_handle = cdc_handle.start_lsn(instance, max_lsn);
     }
     // Get a stream of changes from the table.
     let changes = cdc_handle.into_stream();

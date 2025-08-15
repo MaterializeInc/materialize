@@ -147,17 +147,27 @@ impl<'a> CdcStream<'a> {
     /// replicating changes from.
     ///
     /// An optional `instances` parameter can be provided to only snapshot the specified instances.
+    ///
+    /// The outer stream will output a capture instance with an innner stream that will will output
+    /// a [`SnapshotEvent::Metadata`] event followed by N [`SnapshotEvent::Row`].
+    ///
+    /// We use the outer stream to ensure the stream will only ever have two connections open at a time.
+    /// Assuming that the consumer will consume the outer stream then consume the entire inner stream.
     pub async fn snapshot<'b>(
         &'b mut self,
         instances: Option<BTreeSet<Arc<str>>>,
         worker_id: usize,
         source_id: GlobalId,
     ) -> Result<
-        (
-            Lsn,
-            BTreeMap<Arc<str>, usize>,
-            impl Stream<Item = (Arc<str>, Result<tiberius::Row, SqlServerError>)> + use<'b, 'a>,
-        ),
+        impl Stream<
+            Item = Result<
+                (
+                    Arc<str>,
+                    impl Stream<Item = Result<SnapshotEvent, SqlServerError>>,
+                ),
+                SqlServerError,
+            >,
+        > + 'b,
         SqlServerError,
     > {
         static SAVEPOINT_NAME: &str = "_mz_snap_";
@@ -185,98 +195,89 @@ impl<'a> CdcStream<'a> {
         // knowing where stall/hang might be happening.
         tracing::info!(%source_id, "timely-{worker_id} upstream is ready");
 
-        // The client that will be used for fencing does not need any special isolation level
-        // as it will be just be locking the table(s).
-        let mut fencing_client = self.client.new_connection().await?;
-        let mut fence_txn = fencing_client.transaction().await?;
+        let config = self.client.config.clone();
 
-        // TODO improve table locking: https://github.com/MaterializeInc/database-issues/issues/9512
-        for (_capture_instance, schema, table) in &tables {
-            tracing::trace!(%source_id, %schema, %table, "timely-{worker_id} locking table");
-            fence_txn.lock_table_shared(&*schema, &*table).await?;
-        }
+        let snapshots = async_stream::try_stream! {
+            for (capture_instance, schema, table) in tables {
+                let returned_capture_instance = Arc::clone(&capture_instance);
+                // SMELL(ptravers): can we do better here? Double check that this will be dropped
+                // s.t. we do not leak connections for large numbers of capture instances.
+                let mut client = Client::connect(config.clone()).await?;
+                let stream = async_stream::try_stream! {
+                    // The client and transaction are created and owned entirely inside this stream.
+                    // This resolves all borrow checker and lifetime errors.
+                    let mut fencing_client = client.new_connection().await?;
 
-        // So we know that we locked that tables and roughly how long that took based on the time diff
-        // from the last message.
-        tracing::info!(%source_id, "timely-{worker_id} locked tables");
+                    let mut fence_txn = fencing_client.transaction().await?;
+                    fence_txn.lock_table_shared(&*schema, &*table).await?;
 
-        self.client
-            .set_transaction_isolation(TransactionIsolationLevel::Snapshot)
-            .await?;
-        let mut txn = self.client.transaction().await?;
+                    client
+                        .set_transaction_isolation(TransactionIsolationLevel::Snapshot)
+                        .await?;
+                    let mut txn = client.transaction().await?;
+                    // Creating a savepoint forces a write to the transaction log, which will
+                    // assign an LSN, but it does not force a transaction sequence number to be
+                    // assigned as far as I can tell.  I have not observed any entries added to
+                    // `sys.dm_tran_active_snapshot_database_transactions` when creating a savepoint
+                    // or when reading system views to retrieve the LSN.
+                    //
+                    // We choose cdc.change_tables because it is a system table that will exist
+                    // when CDC is enabled, it has a well known schema, and as a CDC client,
+                    // we should be able to read from it already.
+                    let res = txn
+                        .simple_query("SELECT TOP 1 object_id FROM cdc.change_tables")
+                        .await?;
+                    if res.len() != 1 {
+                        Err(SqlServerError::InvariantViolated(
+                            "No objects found in cdc.change_tables".into(),
+                        ))?
+                    }
 
-        // Creating a savepoint forces a write to the transaction log, which will
-        // assign an LSN, but it does not force a transaction sequence number to be
-        // assigned as far as I can tell.  I have not observed any entries added to
-        // `sys.dm_tran_active_snapshot_database_transactions` when creating a savepoint
-        // or when reading system views to retrieve the LSN.
-        //
-        // We choose cdc.change_tables because it is a system table that will exist
-        // when CDC is enabled, it has a well known schema, and as a CDC client,
-        // we should be able to read from it already.
-        let res = txn
-            .simple_query("SELECT TOP 1 object_id FROM cdc.change_tables")
-            .await?;
-        if res.len() != 1 {
-            Err(SqlServerError::InvariantViolated(
-                "No objects found in cdc.change_tables".into(),
-            ))?
-        }
+                    // Because the table are locked, any write operation has either
+                    // completed, or is blocked. The LSN and XSN acquired now will represent a
+                    // consistent point-in-time view, such that any committed write will be
+                    // visible to this snapshot and the LSN of such a write will be less than
+                    // or equal to the LSN captured here. Creating the savepoint sets the LSN,
+                    // we can read it after rolling back the locks.
+                    txn.create_savepoint(SAVEPOINT_NAME).await?;
+                    tracing::info!(%source_id, %SAVEPOINT_NAME, "timely-{worker_id} created savepoint");
 
-        // Because the tables are locked, any write operation has either
-        // completed, or is blocked. The LSN and XSN acquired now will represent a
-        // consistent point-in-time view, such that any committed write will be
-        // visible to this snapshot and the LSN of such a write will be less than
-        // or equal to the LSN captured here. Creating the savepoint sets the LSN,
-        // we can read it after rolling back the locks.
-        txn.create_savepoint(SAVEPOINT_NAME).await?;
-        tracing::info!(%source_id, %SAVEPOINT_NAME, "timely-{worker_id} created savepoint");
+                    // Once the XSN is esablished and the LSN captured, the tables no longer
+                    // need to be locked.  Any writes that happen to the upstream tables
+                    // will have an LSN higher than our captured LSN, and will be read from CDC.
+                    fence_txn.rollback().await?;
 
-        // Once the XSN is esablished and the LSN captured, the tables no longer
-        // need to be locked.  Any writes that happen to the upstream tables
-        // will have an LSN higher than our captured LSN, and will be read from CDC.
-        fence_txn.rollback().await?;
+                    let lsn = txn.get_lsn().await?;
 
-        let lsn = txn.get_lsn().await?;
+                    tracing::info!(%source_id, ?lsn, "timely-{worker_id} starting snapshot");
 
-        tracing::info!(%source_id, ?lsn, "timely-{worker_id} starting snapshot");
+                    tracing::trace!(%capture_instance, %schema, %table, "snapshot stats start");
 
-        // Get the size of each table we're about to snapshot.
-        //
-        // TODO(sql_server3): To expose a more "generic" interface it would be nice to
-        // make it configurable about whether or not we take a count first.
-        let mut snapshot_stats = BTreeMap::default();
-        for (capture_instance, schema, table) in &tables {
-            tracing::trace!(%capture_instance, %schema, %table, "snapshot stats start");
-            let size = crate::inspect::snapshot_size(txn.client, &*schema, &*table).await?;
-            snapshot_stats.insert(Arc::clone(capture_instance), size);
-            tracing::trace!(%source_id, %capture_instance, %schema, %table, "timely-{worker_id} snapshot stats end");
-        }
+                    // Establish the consistent point-in-time and release the lock.
+                    let size = crate::inspect::snapshot_size(txn.client, &*schema, &*table).await?;
 
-        // Run a `SELECT` query to snapshot the entire table.
-        let stream = async_stream::stream! {
-            // TODO(sql_server3): A stream of streams would be better here than
-            // returning the name with each result, but the lifetimes are tricky.
-            for (capture_instance, schema_name, table_name) in tables {
-                tracing::trace!(%source_id, %capture_instance, %schema_name, %table_name, "timely-{worker_id} snapshot start");
+                    yield SnapshotEvent::Metadata {
+                        lsn,
+                        size,
+                    };
 
-                let snapshot = crate::inspect::snapshot(txn.client, &*schema_name, &*table_name);
-                let mut snapshot = std::pin::pin!(snapshot);
-                while let Some(result) = snapshot.next().await {
-                    yield (Arc::clone(&capture_instance), result);
-                }
+                    let snapshot_stream = crate::inspect::snapshot(txn.client, &*schema, &*table);
+                    tokio::pin!(snapshot_stream);
 
-                tracing::trace!(%source_id, %capture_instance, %schema_name, %table_name, "timely-{worker_id} snapshot end");
-            }
+                    while let Some(result) = snapshot_stream.next().await {
+                        // We must map the Result<Row, Error> to our enum.
+                        match result {
+                            Ok(row) => yield SnapshotEvent::Row(row),
+                            Err(e) => Err(e)?, // Propagate the error
+                        }
+                    }
+                };
 
-            // Slightly awkward, but if the rollback fails we need to conform to
-            // type of the stream.
-            if let Err(e) = txn.rollback().await {
-                yield ("rollback".into(), Err(e));
+                yield (returned_capture_instance, stream);
             }
         };
 
-        Ok((lsn, snapshot_stats, stream))
+        Ok(snapshots)
     }
 
     /// Consume `self` returning a [`Stream`] of [`CdcEvent`]s.
@@ -449,6 +450,22 @@ impl<'a> CdcStream<'a> {
 
         Ok(())
     }
+}
+
+/// Output of the snapshot stream.
+///
+/// The [`SnapshotEvent::Metadata`] event details the LSN at which the snapshot
+/// is taking place.
+///
+/// The [`SnapshotEvent::Row`] is a wrapper for a row of data yielded from a
+/// SQL Server connection.
+//FIXME(ptravers): do we actually need this to be implemented? I mostly cribbed from
+// CDCEvent.
+#[derive(Derivative)]
+#[derivative(Debug)]
+pub enum SnapshotEvent {
+    Metadata { lsn: Lsn, size: usize },
+    Row(tiberius::Row),
 }
 
 /// A change event from a [`CdcStream`].
