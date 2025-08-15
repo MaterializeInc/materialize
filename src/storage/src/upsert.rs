@@ -48,7 +48,7 @@ use crate::metrics::upsert::UpsertMetrics;
 use crate::storage_state::StorageInstanceContext;
 use crate::upsert_continual_feedback;
 use types::{
-    BincodeOpts, StateValue, UpsertState, UpsertStateBackend, Value, consolidating_merge_function,
+    BincodeOpts, StateValue, UpsertState, UpsertStateBackend, consolidating_merge_function,
     upsert_bincode_opts,
 };
 
@@ -58,7 +58,7 @@ pub(crate) mod rocksdb;
 // TODO(aljoscha): Move next to upsert module, rename to upsert_types.
 pub(crate) mod types;
 
-pub type UpsertValue = Result<Row, UpsertError>;
+pub type UpsertValue = Result<Row, Box<UpsertError>>;
 
 #[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct UpsertKey([u8; 32]);
@@ -508,7 +508,7 @@ enum DrainStyle<'a, T> {
 async fn drain_staged_input<S, G, T, FromTime, E>(
     stash: &mut Vec<(T, UpsertKey, Reverse<FromTime>, Option<UpsertValue>)>,
     commands_state: &mut indexmap::IndexMap<UpsertKey, types::UpsertValueAndSize<T, FromTime>>,
-    output_updates: &mut Vec<(Result<Row, UpsertError>, T, Diff)>,
+    output_updates: &mut Vec<(UpsertValue, T, Diff)>,
     multi_get_scratch: &mut Vec<UpsertKey>,
     drain_style: DrainStyle<'_, T>,
     error_emitter: &mut E,
@@ -607,7 +607,7 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
                 if let Some(old_value) =
                     existing_value.replace(StateValue::finalized_value(value.clone()))
                 {
-                    if let Value::FinalizedValue(old_value) = old_value.into_decoded() {
+                    if let Some(old_value) = old_value.into_decoded().finalized {
                         output_updates.push((old_value, ts.clone(), Diff::MINUS_ONE));
                     }
                 }
@@ -615,7 +615,7 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
             }
             None => {
                 if let Some(old_value) = existing_value.take() {
-                    if let Value::FinalizedValue(old_value) = old_value.into_decoded() {
+                    if let Some(old_value) = old_value.into_decoded().finalized {
                         output_updates.push((old_value, ts, Diff::MINUS_ONE));
                     }
                 }
@@ -691,12 +691,16 @@ where
         let value = match result {
             Ok(ok) => Ok(ok),
             Err(DataflowError::EnvelopeError(err)) => match *err {
-                EnvelopeError::Upsert(err) => Err(err),
+                EnvelopeError::Upsert(err) => Err(Box::new(err)),
                 _ => return None,
             },
             Err(_) => return None,
         };
-        Some((UpsertKey::from_value(value.as_ref(), &key_indices), value))
+        let value_ref = match value {
+            Ok(ref row) => Ok(row),
+            Err(ref err) => Err(&**err),
+        };
+        Some((UpsertKey::from_value(value_ref, &key_indices), value))
     });
     let (output_handle, output) = builder.new_output();
 
@@ -931,7 +935,7 @@ where
     (
         output.as_collection().map(|result| match result {
             Ok(ok) => Ok(ok),
-            Err(err) => Err(DataflowError::from(EnvelopeError::Upsert(err))),
+            Err(err) => Err(DataflowError::from(EnvelopeError::Upsert(*err))),
         }),
         health_stream,
         snapshot_stream,
