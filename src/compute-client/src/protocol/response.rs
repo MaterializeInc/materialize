@@ -334,6 +334,17 @@ pub enum PeekResponse {
     Canceled,
 }
 
+impl PeekResponse {
+    /// Return the size of row bytes stored inline in this response.
+    pub fn inline_byte_len(&self) -> usize {
+        match self {
+            Self::Rows(rows) => rows.byte_len(),
+            Self::Stashed(stashed) => stashed.inline_rows.byte_len(),
+            Self::Error(_) | Self::Canceled => 0,
+        }
+    }
+}
+
 impl RustType<ProtoPeekResponse> for PeekResponse {
     fn into_proto(&self) -> ProtoPeekResponse {
         use proto_peek_response::Kind::*;
