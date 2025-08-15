@@ -107,6 +107,8 @@ ERROR_RE = re.compile(
     | source-table-migration\ issue
     # sql logic tests
     | Rewrite\ SLT\ files\ locally\ with:\ [\s\S]*? ^EOF$
+    # rdkafka assertions
+    | Assertion\ `.*'\ failed\.
     )
     .* $
     """,

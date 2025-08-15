@@ -53,7 +53,7 @@ steps:
 
       - id: build-x86_64-no-lto
         label: ":rust: Build x86_64 (no LTO)"
-        command: bin/ci-builder run min bin/pyactivate -m ci.test.build
+        command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
         inputs:
           - "*"
         artifact_paths: bazel-explain.log
@@ -67,7 +67,7 @@ steps:
 
       - id: build-aarch64-no-lto
         label: ":rust: Build aarch64 (no LTO)"
-        command: bin/ci-builder run min bin/pyactivate -m ci.test.build
+        command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
         inputs:
           - "*"
         artifact_paths: bazel-explain.log

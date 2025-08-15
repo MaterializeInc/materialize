@@ -21,7 +21,7 @@ steps:
     steps:
       - id: build-aarch64
         label: ":rust: Build aarch64"
-        command: bin/ci-builder run min bin/pyactivate -m ci.test.build
+        command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
         inputs:
           - "*"
         artifact_paths: bazel-explain.log
@@ -38,7 +38,7 @@ steps:
 
       - id: build-x86_64
         label: ":rust: Build x86_64"
-        command: bin/ci-builder run min bin/pyactivate -m ci.test.build
+        command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
         inputs:
           - "*"
         artifact_paths: bazel-explain.log
