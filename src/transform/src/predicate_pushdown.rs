@@ -163,7 +163,7 @@ impl PredicatePushdown {
                     // whether they are literal errors before working with them.
                     let input_type = input.typ();
                     for predicate in predicates.iter_mut() {
-                        predicate.reduce(&input_type.column_types);
+                        predicate.reduce::<true>(&input_type.column_types);
                     }
 
                     // It can be helpful to know if there are any non-literal errors,
@@ -1201,7 +1201,7 @@ impl PredicatePushdown {
         mut s: MirScalarExpr,
         column_types: &[ColumnType],
     ) -> Vec<MirScalarExpr> {
-        s.reduce(column_types);
+        s.reduce::<true>(column_types);
 
         if let MirScalarExpr::CallVariadic {
             func: VariadicFunc::And,
