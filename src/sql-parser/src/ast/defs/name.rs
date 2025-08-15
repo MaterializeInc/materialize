@@ -275,7 +275,7 @@ impl Ident {
     }
 
     /// An identifier can be printed in bare mode if
-    ///  * it matches the regex [a-z_][a-z0-9_]* and
+    ///  * it matches the regex `[a-z_][a-z0-9_]*` and
     ///  * it is not a "reserved keyword."
     pub fn can_be_printed_bare(&self) -> bool {
         let mut chars = self.0.chars();

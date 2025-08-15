@@ -18,7 +18,7 @@
 //!
 //! It contains three variants:
 //! * [`Error::Auth`]: represents an authentication error from the
-//!   [`mz-frontegg-auth`] crate.
+//!   `mz-frontegg-auth` crate.
 //! * [`Error::Transport`]: represents a transport error from the `reqwest`
 //!   crate during a network request.
 //! * [`Error::Api`]: represents an Frontegg API error from a request.

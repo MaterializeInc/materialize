@@ -89,7 +89,7 @@ where
     /// Invariant: role_metadata must be `Some` after the user has
     /// successfully connected to and authenticated with Materialize.
     ///
-    /// Prefer using this value over [`Self.user.name`].
+    /// Prefer using this value over [`SessionConfig::user`].
     //
     // It would be better for this not to be an Option, but the
     // `Session` is initialized before the user has connected to

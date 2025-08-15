@@ -11,7 +11,7 @@
 //!
 //! For example, many crates have a build script that depends on the Protobuf
 //! compiler, `protoc`. If we're building with Cargo we'll bootstrap `protoc`
-//! by compiling it with [`protobuf-src`], but if we're building with Bazel
+//! by compiling it with `protobuf-src`, but if we're building with Bazel
 //! then we'll use the version of `protoc` included in the runfiles.
 
 use cfg_if::cfg_if;
