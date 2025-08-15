@@ -398,6 +398,8 @@ where
         &mut self,
         cluster_id: ClusterId,
         replica_id: ReplicaId,
+        cluster_name: String,
+        replica_name: String,
         role: ClusterRole,
         config: ReplicaConfig,
         enable_worker_core_affinity: bool,
@@ -437,6 +439,8 @@ where
                 let (service, metrics_task_join_handle) = self.provision_replica(
                     cluster_id,
                     replica_id,
+                    cluster_name,
+                    replica_name,
                     role,
                     m,
                     enable_worker_core_affinity,
@@ -625,6 +629,8 @@ where
         &self,
         cluster_id: ClusterId,
         replica_id: ReplicaId,
+        cluster_name: String,
+        replica_name: String,
         role: ClusterRole,
         location: ManagedReplicaLocation,
         enable_worker_core_affinity: bool,
@@ -778,6 +784,10 @@ where
                             .replace("=", "-")
                             .replace(",", "_"),
                     ),
+                ]),
+                annotations: BTreeMap::from([
+                    ("replica-name".into(), replica_name),
+                    ("cluster-name".into(), cluster_name),
                 ]),
                 availability_zones: match location.availability_zones {
                     ManagedReplicaAvailabilityZones::FromCluster(azs) => azs,
