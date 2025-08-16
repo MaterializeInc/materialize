@@ -94,7 +94,7 @@ SERVICES = [
     Materialized(
         volumes_extra=["secrets:/share/secrets"],
         additional_system_parameter_defaults={
-            "log_filter": "mz_storage::source::postgres=trace,mz_postgres_util::tunnel=debug,debug,info,warn,error"
+            "log_filter": "mz_storage::source::postgres=trace,debug,info,warn,error"
         },
         default_replication_factor=2,
     ),
@@ -443,17 +443,3 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         f"Workflows in shard with index {buildkite.get_parallelism_index()}: {sharded_workflows}"
     )
     c.test_parts(sharded_workflows, process)
-
-
-def workflow_snapshot_drop(c: Composition, parser: WorkflowArgumentParser) -> None:
-    pg_version = get_targeted_pg_version(parser)
-    # Unfortunately, this is the best we can do to validate the logic that closes the connection.
-    # The actual COPY command runs extremely quickly in the test environment (by design), even
-    # against a million rows. Even with a background python thread constantly polling
-    # pg_stat_activity, I wasn't able to write a failing test.
-    with c.override(create_postgres(pg_version=pg_version)):
-        c.up("materialized", "postgres")
-        c.run_testdrive_files("interrupt-snapshot.td")
-        logs = c.invoke("logs", "materialized", capture=True)
-
-        assert "aborting postgres connection on drop" in logs.stdout

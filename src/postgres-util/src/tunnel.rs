@@ -15,7 +15,7 @@ use std::time::Duration;
 use mz_ore::future::{InTask, OreFutureExt};
 use mz_ore::netio::DUMMY_DNS_PORT;
 use mz_ore::option::OptionExt;
-use mz_ore::task::{self};
+use mz_ore::task::{self, AbortOnDropHandle, JoinHandle};
 use mz_proto::{RustType, TryFromProtoError};
 use mz_repr::CatalogItemId;
 use mz_ssh_util::tunnel::{SshTimeoutConfig, SshTunnelConfig};
@@ -24,7 +24,6 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream as TokioTcpStream;
-use tokio::task::JoinHandle;
 use tokio_postgres::config::{Host, ReplicationMode};
 use tokio_postgres::tls::MakeTlsConnect;
 use tracing::{info, warn};
@@ -75,8 +74,7 @@ pub struct Client {
     // Holds a handle to the task with the connection to ensure that when
     // the client is dropped, the task can be aborted to close the connection.
     // This is also useful for maintaining the lifetimes of dependent object (e.g. ssh tunnel).
-    connection_handle: JoinHandle<()>,
-    abort_connection_on_drop: bool,
+    _connection_handle: AbortOnDropHandle<()>,
 }
 
 impl Client {
@@ -96,8 +94,7 @@ impl Client {
         Client {
             inner: client,
             server_version,
-            connection_handle: connection_handle_fn(connection),
-            abort_connection_on_drop: false,
+            _connection_handle: connection_handle_fn(connection).abort_on_drop(),
         }
     }
 
@@ -114,11 +111,6 @@ impl Client {
             _ => PostgresFlavor::Vanilla,
         }
     }
-
-    /// Flag that controls whether connection will be aborted when this `Client` is dropped.
-    pub fn set_abort_connection_on_drop(&mut self, abort: bool) {
-        self.abort_connection_on_drop = abort;
-    }
 }
 
 impl Deref for Client {
@@ -132,15 +124,6 @@ impl Deref for Client {
 impl DerefMut for Client {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.inner
-    }
-}
-
-impl Drop for Client {
-    fn drop(&mut self) {
-        if self.abort_connection_on_drop {
-            tracing::debug!("aborting postgres connection on drop");
-            self.connection_handle.abort();
-        }
     }
 }
 
@@ -318,7 +301,6 @@ impl Config {
                             warn!("postgres direct connection failed: {e}");
                         }
                     })
-                    .into_tokio_handle()
                 });
                 Ok(client)
             }
@@ -357,7 +339,6 @@ impl Config {
                             warn!("postgres via SSH tunnel connection failed: {e}");
                         }
                     })
-                    .into_tokio_handle()
                 });
                 Ok(client)
             }
@@ -400,7 +381,6 @@ impl Config {
                             warn!("postgres AWS link connection failed: {e}");
                         }
                     })
-                    .into_tokio_handle()
                 });
                 Ok(client)
             }
