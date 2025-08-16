@@ -14,6 +14,7 @@ documentation][user-docs].
 
 [user-docs]: https://github.com/MaterializeInc/materialize/blob/main/doc/developer/mzbuild.md
 """
+
 from collections.abc import Sequence
 from typing import (
     Any,
@@ -173,6 +174,9 @@ class ServiceConfig(TypedDict, total=False):
 
     network_mode: str | None
     """Network mode."""
+
+    user: str | None
+    """The user for the container."""
 
 
 class Service:

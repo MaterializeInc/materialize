@@ -167,6 +167,7 @@ class Composition:
                 "mzdata": None,
                 "pgdata": None,
                 "mysqldata": None,
+                "mssqldata": None,
                 # Used for certain pg-cdc scenarios. The memory will not be
                 # allocated for compositions that do not require this volume.
                 "sourcedata_512Mb": {
@@ -1120,7 +1121,7 @@ class Composition:
                 if i == NUM_RETRIES:
                     raise ValueError(error)
                 # Sources and cluster replicas need a few seconds to start up
-                print(f"Retrying ({i+1}/{NUM_RETRIES})...")
+                print(f"Retrying ({i + 1}/{NUM_RETRIES})...")
                 time.sleep(1)
 
             # In case the test has to continue, reset state
@@ -1160,7 +1161,7 @@ class Composition:
                 if i == NUM_RETRIES:
                     raise ValueError(error)
                 # Sources and cluster replicas need a few seconds to start up
-                print(f"Retrying ({i+1}/{NUM_RETRIES})...")
+                print(f"Retrying ({i + 1}/{NUM_RETRIES})...")
                 time.sleep(1)
         else:
             ui.header(
