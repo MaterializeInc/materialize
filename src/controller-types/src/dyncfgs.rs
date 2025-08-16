@@ -74,6 +74,12 @@ pub const ENABLE_CTP_CLUSTER_PROTOCOLS: Config<bool> = Config::new(
     "Enable CTP (instead of gRPC) for the compute and storage cluster protocols.",
 );
 
+pub const ENABLE_PAUSED_CLUSTER_READHOLD_DOWNGRADE: Config<bool> = Config::new(
+    "enable_paused_cluster_readhold_downgrade",
+    true,
+    "Aggressively downgrade input read holds for indexes on zero-replica clusters.",
+);
+
 /// Adds the full set of all controller `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -87,4 +93,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&TIMELY_ZERO_COPY_LIMIT)
         .add(&ARRANGEMENT_EXERT_PROPORTIONALITY)
         .add(&ENABLE_CTP_CLUSTER_PROTOCOLS)
+        .add(&ENABLE_PAUSED_CLUSTER_READHOLD_DOWNGRADE)
 }
