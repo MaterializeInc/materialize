@@ -15,14 +15,13 @@ use std::time::Duration;
 use mz_ore::future::{InTask, OreFutureExt};
 use mz_ore::netio::DUMMY_DNS_PORT;
 use mz_ore::option::OptionExt;
-use mz_ore::task::{self, AbortOnDropHandle, JoinHandle};
+use mz_ore::task::{self, AbortOnDropHandle};
 use mz_proto::{RustType, TryFromProtoError};
 use mz_repr::CatalogItemId;
 use mz_ssh_util::tunnel::{SshTimeoutConfig, SshTunnelConfig};
 use mz_ssh_util::tunnel_manager::SshTunnelManager;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream as TokioTcpStream;
 use tokio_postgres::config::{Host, ReplicationMode};
 use tokio_postgres::tls::MakeTlsConnect;
@@ -78,26 +77,6 @@ pub struct Client {
 }
 
 impl Client {
-    fn new<F, S, T>(
-        client: tokio_postgres::Client,
-        connection: tokio_postgres::Connection<S, T>,
-        connection_handle_fn: F,
-    ) -> Client
-    where
-        F: FnOnce(tokio_postgres::Connection<S, T>) -> JoinHandle<()>,
-        S: AsyncRead + AsyncWrite + Unpin,
-        T: AsyncRead + AsyncWrite + Unpin,
-    {
-        let server_version = connection
-            .parameter("server_version")
-            .map(|v| v.to_string());
-        Client {
-            inner: client,
-            server_version,
-            _connection_handle: connection_handle_fn(connection).abort_on_drop(),
-        }
-    }
-
     /// Reports the value of the `server_version` parameter reported by the
     /// server.
     pub fn server_version(&self) -> Option<&str> {
@@ -295,13 +274,19 @@ impl Config {
                 let (client, connection) = async move { postgres_config.connect(tls).await }
                     .run_in_task_if(self.in_task, || "pg_connect".to_string())
                     .await?;
-                let client = Client::new(client, connection, |c| {
-                    task::spawn(|| task_name, async {
-                        if let Err(e) = c.await {
+
+                let client = Client {
+                    inner: client,
+                    server_version: connection
+                        .parameter("server_version")
+                        .map(|v| v.to_string()),
+                    _connection_handle: task::spawn(|| task_name, async {
+                        if let Err(e) = connection.await {
                             warn!("postgres direct connection failed: {e}");
                         }
                     })
-                });
+                    .abort_on_drop(),
+                };
                 Ok(client)
             }
             TunnelConfig::Ssh { config } => {
@@ -332,14 +317,20 @@ impl Config {
                     async move { postgres_config.connect_raw(tcp_stream, tls).await }
                         .run_in_task_if(self.in_task, || "pg_connect".to_string())
                         .await?;
-                let client = Client::new(client, connection, |c| {
-                    task::spawn(|| task_name, async {
+
+                let client = Client {
+                    inner: client,
+                    server_version: connection
+                        .parameter("server_version")
+                        .map(|v| v.to_string()),
+                    _connection_handle: task::spawn(|| task_name, async {
                         let _tunnel = tunnel; // Keep SSH tunnel alive for duration of connection.
-                        if let Err(e) = c.await {
+                        if let Err(e) = connection.await {
                             warn!("postgres via SSH tunnel connection failed: {e}");
                         }
                     })
-                });
+                    .abort_on_drop(),
+                };
                 Ok(client)
             }
             TunnelConfig::AwsPrivatelink { connection_id } => {
@@ -375,13 +366,19 @@ impl Config {
                 let (client, connection) = async move { postgres_config.connect(tls).await }
                     .run_in_task_if(self.in_task, || "pg_connect".to_string())
                     .await?;
-                let client = Client::new(client, connection, |c| {
-                    task::spawn(|| task_name, async {
-                        if let Err(e) = c.await {
+
+                let client = Client {
+                    inner: client,
+                    server_version: connection
+                        .parameter("server_version")
+                        .map(|v| v.to_string()),
+                    _connection_handle: task::spawn(|| task_name, async {
+                        if let Err(e) = connection.await {
                             warn!("postgres AWS link connection failed: {e}");
                         }
                     })
-                });
+                    .abort_on_drop(),
+                };
                 Ok(client)
             }
         }
