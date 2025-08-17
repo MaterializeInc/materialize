@@ -15,12 +15,12 @@ path = "benches/benches.rs"
 harness = false
 
 [dependencies]
-anyhow = "1.0.98"
+anyhow = "1.0.99"
 byteorder = "1.4.3"
 bytes = "1.10.1"
 chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 clap = { version = "4.5.23", features = ["derive"] }
-differential-dataflow = "0.16.0"
+differential-dataflow = "0.16.1"
 itertools = "0.14.0"
 maplit = "1.0.2"
 mz-avro = { path = "../avro", features = ["snappy"] }

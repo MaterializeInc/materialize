@@ -10,9 +10,9 @@ publish = false
 workspace = true
 
 [dependencies]
-columnar = "0.10.0"
+columnar = "0.10.1"
 columnation = "0.1.0"
-differential-dataflow = "0.16.0"
+differential-dataflow = "0.16.1"
 itertools = "0.14.0"
 mz-dyncfg = { path = "../dyncfg" }
 mz-expr = { path = "../expr" }

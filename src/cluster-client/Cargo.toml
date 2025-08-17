@@ -10,7 +10,7 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.98"
+anyhow = "1.0.99"
 mz-ore = { path = "../ore", features = ["tracing"] }
 mz-repr = { path = "../repr" }
 prometheus = { version = "0.13.4", default-features = false }
