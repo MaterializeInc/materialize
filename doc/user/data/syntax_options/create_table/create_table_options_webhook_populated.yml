@@ -1,0 +1,47 @@
+columns:
+  - column: "Parameter"
+  - column: "Description"
+rows:
+  - "Parameter": "`<table_name>`"
+    "Description": |
+
+      The name of the table to create. Names for tables must follow the [naming
+      guidelines](/sql/identifiers/#naming-restrictions).
+
+  - "Parameter": |
+      **BODY FORMAT \<format\>**
+    "Description": |
+
+      The mesage body format. The following `<format>`s are supported:
+
+      | Format      | Type   | Description |
+      |-------------|--------|-------------|
+      | `BYTES`     | `bytea` | Does **no parsing** of the request, and stores the body of a request as it was received. |
+      | `JSON`      | `jsonb` | Parses the body of a request as JSON. Also accepts events batched as newline-delimited JSON (`NDJSON`). If the body is not valid JSON, a response of `400 Bad Request` will be returned. |
+      | `JSON ARRAY`| `jsonb` | Parses the body of a request as a list of JSON objects, automatically expanding the list of objects to individual rows. Also accepts a single JSON object. If the body is not valid JSON, a response of `400 Bad Request` will be returned. |
+      | `TEXT`      | `text`  | Parses the body of a request as `UTF-8` text. If the body is not valid `UTF-8`, a response of `400 Bad Request` will be returned. |
+
+  - "Parameter": |
+      **INCLUDE <header_option\>**
+    "Description": |
+
+      Optional. If specified, include the header information in the table.
+
+      | header_option | Description |
+      |---------------|-------------|
+      | `INCLUDE HEADER <header_name> AS <col_name> [BYTES] [,...]` | Include the specified header in a column named `<col_name>`. |
+      | `INCLUDE HEADERS [([NOT] <header_name> [, [NOT] <header_name> ... ])]`| Include a column named `headers` of type `map[text => text]`: <ul><li>`INCLUDE HEADERS` to include all headers of the request.</li><li>`INCLUDE HEADERS (<header_name>, ...)` to only include the specified headers.</li><li>`INCLUDE HEADERS (NOT <header_name>, ...)` to include all headers except those specified with the `NOT` options.</li></ul>|
+
+  - "Parameter": |
+      **CHECK( [ WITH (...)] <check_expression>)**
+    "Description": |
+
+      Optional. If specified, validate each request received using the boolean
+      `<check_expression>`. To reference the body, headers, or secret in the
+      check expression, use the `WITH` clause.
+
+      | WITH options      | Description
+      | ------------------|-----------------
+      | `BODY [AS <alias>] [BYTES]` | Makes available the `body` column -- typed as `text` -- to the check expression. The column can be renamed with the optional **AS** _alias_ statement. The data type can be changed to `bytea` with the optional **BYTES** keyword.
+      | `HEADERS [AS <alias>] [BYTES]` | Makes available the `headers` column -- typed as `map[text => text]` -- to the check expression. The column can be renamed with the optional **AS** _alias_ statement. The data type can be changed to `map[text => bytea]` with the optional **BYTES** keyword.
+      | `SECRET <secret_name> [AS <alias>] [BYTES]` | Securely makes available a [`SECRET`](/sql/create-secret) -- typed as `text` -- to the check expression. The column can be renamed with the optional **AS** _alias_ statement. The data type can be changed to `map[text => bytea]` with the optional **BYTES** keyword. When used with the [`constant_time_eq` function](/sql/functions/#constant_time_eq), if the secret is in a different namespace to the source, rename the column with the **AS** _alias_ statement since the function **does not support** fully qualified secret names.

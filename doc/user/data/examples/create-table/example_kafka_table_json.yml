@@ -1,0 +1,134 @@
+- name: "create-table"
+  description: |
+    Materialize supports ingesting Kafka messages that are JSON records.
+
+    To create new **read-only** tables from Kafka messages that are JSON
+    records, use the `CREATE TABLE ... FROM SOURCE ... FORMAT JSON` statement.
+    The following example creates a **read-only** table `purchases` from the
+    Kafka topic `purchasess`.
+
+    {{< note >}}
+
+    You can create multiple tables that reference the same topic.
+
+    {{< /note >}}
+
+  code: |
+    /* This example assumes:
+      - In the upstream Kafka:
+        - You have configured Kafka with:
+          - SASL SCRAM-SHA-256 authentication
+          - A user and password with the appropriate access
+        - Your Kafka producer uses JSON format for the topic `purchases`
+      - In Materialize:
+        - You have created a secret for the Kafka password.
+        - You have defined the connection to the upstream Kafka.
+        - You have used the connection to create a source.
+
+        For example (substitute with your configuration):
+
+          CREATE SECRET kafka_secret AS '<password>';
+          CREATE CONNECTION kafka_connection TO KAFKA (
+            BROKER '<broker host>:9092',
+            SECURITY PROTOCOL = 'SASL_PLAINTEXT',
+            SASL MECHANISMS = 'SCRAM-SHA-256',
+            SASL USERNAME = '<username>',
+            SASL PASSWORD = SECRET kafka_secret
+          );
+
+          CREATE SOURCE kafka_json_source
+          FROM KAFKA CONNECTION kafka_connection (TOPIC 'purchases');
+    */
+
+    CREATE TABLE purchases
+    FROM SOURCE kafka_json_source
+    FORMAT JSON
+    ;
+  results: |
+    By default, the command creates a table `purchases` with 1 column named
+    `data` of type [`jsonb`](/sql/types/jsonb/). You can include additional
+    columns using the `INCLUDE` options.
+
+- name: "show-tables"
+  description: |
+    To verify that the table has been created, you can run [`SHOW
+    TABLES`](/sql/show-tables/) to list all tables in the current [schema](/sql/namespaces/#namespace-hierarchy):
+  code: |
+    SHOW TABLES;
+  results: |
+    The results should include the table `purchases`:
+
+    ```hc {hl_lines="3"}
+    | name        | comment |
+    | ----------- | ------- |
+    | purchases   |         |
+    ```
+
+- name: "show-columns"
+  description: |
+    Inspect the table columns using the [`SHOW COLUMNS`](/sql/show-columns/) command:
+  code: |
+    SHOW COLUMNS FROM purchases;
+  results: |
+    The results should display information on the table column(s). For JSON
+    messages, the command creates a table `purchases` with 1 column named
+    `data` of type [`jsonb`](/sql/types/jsonb/).
+
+    {{< tip >}}
+    You can create a view on the table to parse the JSON data into a more structured
+    format. See [Create a view from JSON data](#create-a-view-from-table).
+    {{</ tip >}}
+
+- name: "read-from-table"
+  code: |
+    SELECT * FROM purchases;
+  results: |
+    The query from the table returns with 1 column named `data` of type jsonb:
+
+    ```
+    | data                                                                                                                              |
+    | --------------------------------------------------------------------------------------------------------------------------------- |
+    | {"customerid":"abc123","purchaseDetails":{"item":"marker","purchaseDate":"2025-02-01T17:00:00.000Z","units":500},"shipped":false} |
+    | {"customerid":"xyz123","purchaseDetails":{"item":"eraser","purchaseDate":"2025-04-01T17:00:00.000Z","units":100},"shipped":true}  |
+    ```
+
+    {{< tip >}}
+    You can create a view on the table to parse the JSON data into a
+    more structured format. See [Create a view from JSON
+    data](#create-a-view-from-table).
+    {{</ tip >}}
+
+- name: "create-a-view-from-table"
+  description: |
+    You can create a view on the table to parse the JSON data into a more
+    structured format. That is, create a view that parses each field into a
+    separate column.
+
+    For example, if `data` column contains records like:
+
+    ```
+    {"customerid":"abc123","purchaseDetails":{"item":"marker","purchaseDate":"2025-02-01T17:00:00.000Z","units":500},"shipped":false}
+    ```
+
+    You can create a view to parse the data withe the following statement:
+
+  code: |
+    CREATE VIEW my_parsed_json_view AS SELECT
+      data->>'customerid' AS customerid,
+      data->'purchaseDetails'->>'item' AS item,
+      try_parse_monotonic_iso8601_timestamp(data->'purchaseDetails'->>'purchaseDate') AS purchaseDate,
+      (data->'purchaseDetails'->>'units')::numeric AS units,
+      (data->>'shipped')::bool AS shipped
+    FROM purchases;
+
+  results: |
+
+    {{< tip >}}
+    To help with view definition, you can use the [JSON parsing
+    widget](/sql/types/jsonb/#parsing) to create the view.
+    {{</ tip >}}
+
+    After creating the view, you can read from the view to get the parsed data:
+    ```mzsql
+    SELECT * FROM my_parsed_json_view;
+    ```

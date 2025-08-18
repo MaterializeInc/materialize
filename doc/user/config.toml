@@ -140,6 +140,11 @@ weight = 30
 # allow <a name="link-target">, the old syntax no longer works
 unsafe = true
 
+[markup]
+  [markup.highlight]
+    noClasses = false
+    style = "monokai"
+
 [[deployment.targets]]
 name = "production"
 url = "s3://materialize-website?region=us-east-1"

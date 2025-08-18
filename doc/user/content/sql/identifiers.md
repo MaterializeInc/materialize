@@ -8,28 +8,33 @@ menu:
     weight: 125
 ---
 
-In Materialize, identifiers are used to refer to columns and database objects
-like sources, views, and indexes.
+In Materialize, identifiers are names used to refer to columns and database
+objects like sources, views, and indexes.
 
 ## Naming restrictions
 
-- The first character of an identifier must be an ASCII letter
-  (`a`-`z` and `A`-`Z`), an underscore (`_`), or any non-ASCII character.
+Materialize has the following naming restrictions for identifiers:
 
-- The remaining characters of an identifier must be ASCII letters
-  (`a`-`z` and `A`-`Z`), ASCII digits (`0`-`9`), underscores (`_`),
-  dollar signs (`$`), or any non-ASCII characters.
+- The first character must be either an ASCII letter (`a`-`z` and `A`-`Z`), an
+  underscore (`_`), or any non-ASCII character.
 
-You can circumvent any of the above rules by double-quoting the identifier,
-e.g. `"123_source"` or `"fun_source_@"`. All characters inside a quoted
-identifier are taken literally, except that double-quotes must be escaped by
-writing two adjacent double-quotes, as in `"includes""quote"`.
+- The remaining characters can be ASCII letters (`a`-`z` and `A`-`Z`), ASCII
+  digits (`0`-`9`), underscores (`_`), dollar signs (`$`), or any non-ASCII
+  characters.
 
-Additionally, the identifiers `"."` and `".."` are not permitted.
+To override these restrictions, you can enclose the identifier in double quotes;
+e.g., `"123_source"` or `"fun_source_@"`. When enclosed in double-quotes, all
+characters in the identifier are interpreted literally with the exception double
+quotes. To include double quotes within a double-quoted identifier, you can
+escape them by writing two adjacent double-quotes, as in `"includes""quote"`.
+
+{{< note >}}
+The identifiers `"."` and `".."` are not allowed.
+{{</ note >}}
 
 ## Case sensitivity
 
-Materialize performs case folding (the caseless comparison of text) for identifiers, which means that identifiers are effectively case-insensitive (`foo` is the same as `FOO` is the same as `fOo`). This can cause issues when column names come from data sources which do support case-sensitive names, such as Avro-formatted sources or CSV headers.
+Materialize performs case folding (the caseless comparison of text) for identifiers, which means that identifiers are effectively case-insensitive (`foo` is the same as `FOO` is the same as `fOo`). This can cause issues when column names come from data sources which do support case-sensitive names, such as Avro-formatted sources.
 
 To avoid conflicts, double-quote all field names (`"field_name"`) when working with case-sensitive sources.
 

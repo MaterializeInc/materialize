@@ -760,13 +760,15 @@ p+p {
             margin: 0 rem(0.1);
             padding: 0;
             position: relative;
-            bottom: -1px;
+
             background: var(--gray-lightest);
+            border-radius: 8px 8px 0 0;
+
 
             a {
                 color: var(--body);
                 display: block;
-                padding: rem(0.8) rem(1.6);
+                padding: rem(0.8) rem(1.5);
                 font-size: rem(1.4);
                 text-decoration: none;
                 font-weight: 500;
@@ -787,7 +789,6 @@ p+p {
 
             &.active {
                 background: var(--bg);
-                border-radius: 2px 2px 0 0;
                 border: 1px solid #9c86e0;
                 border-bottom-color: var(--bg);
 
