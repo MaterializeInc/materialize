@@ -911,6 +911,9 @@ def run_scenario_strong(
     for replica_size in [
         replica_size_for_scale(scale) for scale in [1, 2, 4, 8, 16, 32]
     ]:
+        print(
+            f"+++ Running strong scenario {scenario.name()} with replica size {replica_size}"
+        )
         # Create a cluster with the specified size
         runner.run_query("DROP CLUSTER IF EXISTS c CASCADE")
         runner.run_query(f"CREATE CLUSTER c SIZE '{replica_size}'")
@@ -934,6 +937,9 @@ def run_scenario_weak(
 
     for replica_scale in [1, 2, 4, 8, 16, 32]:
         replica_size = replica_size_for_scale(replica_scale)
+        print(
+            f"+++ Running weak scenario {scenario.name()} with replica size {replica_size}"
+        )
         scenario.replica_size = replica_size
         scenario.scale = initial_scale * replica_scale
         runner = ScenarioRunner(
@@ -954,6 +960,7 @@ def run_scenario_weak(
             runner.run_query(f"SELECT COUNT(*) > 0 FROM {name};")
 
         # Create a cluster with the specified size
+        print(f"+++ Loading complete; creating cluster with size {replica_size}")
         runner.run_query("DROP CLUSTER IF EXISTS c CASCADE")
         runner.run_query(f"CREATE CLUSTER c SIZE '{replica_size}'")
         runner.run_query("SET cluster = 'c';")
