@@ -29,7 +29,6 @@ use mz_ore::collections::{CollectionExt, HashSet};
 use mz_ore::num::NonNeg;
 use mz_ore::soft_panic_or_log;
 use mz_ore::str::StrExt;
-use mz_ore::vec::VecExt;
 use mz_postgres_util::tunnel::PostgresFlavor;
 use mz_proto::RustType;
 use mz_repr::adt::interval::Interval;
@@ -7002,7 +7001,7 @@ pub fn plan_alter_sink(
             // And then we find the existing version of the sink and increase it by one
             let cur_version = stmt
                 .with_options
-                .drain_filter_swapping(|o| o.name == CreateSinkOptionName::Version)
+                .extract_if(.., |o| o.name == CreateSinkOptionName::Version)
                 .map(|o| u64::try_from_value(o.value).expect("invalid sink create_sql"))
                 .max()
                 .unwrap_or(0);

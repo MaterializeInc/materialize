@@ -18,7 +18,6 @@ use differential_dataflow::hashable::Hashable;
 use differential_dataflow::{AsCollection, Collection};
 use indexmap::map::Entry;
 use itertools::Itertools;
-use mz_ore::vec::VecExt;
 use mz_repr::{Diff, GlobalId, Row};
 use mz_storage_types::errors::{DataflowError, EnvelopeError};
 use mz_timely_util::builder_async::{
@@ -620,7 +619,7 @@ where
     let mut min_remaining_time = Antichain::new();
 
     let mut eligible_updates = stash
-        .drain_filter_swapping(|(ts, _, _, _)| {
+        .extract_if(.., |(ts, _, _, _)| {
             let eligible = match &drain_style {
                 DrainStyle::ToUpper {
                     input_upper,

@@ -23,7 +23,6 @@ use futures::{StreamExt, future::Either};
 use mz_expr::{ColumnSpecs, Interpreter, MfpPlan, ResultSpec, UnmaterializableFunc};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
-use mz_ore::vec::VecExt;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::{PersistConfig, RetryParameters};
 use mz_persist_client::fetch::{ExchangeableBatchPart, ShardSourcePart};
@@ -811,22 +810,11 @@ where
                     }
                 }
                 Some(Event::Progress(prog)) => {
-                    let mut i = 0;
                     parts.sort_by_key(|val| val.0.clone());
-                    // This can be replaced with `Vec::drain_filter` when it stabilizes.
-                    // `drain_filter_swapping` doesn't work as it reorders the vec.
-                    while i < parts.len() {
-                        if !prog.less_equal(&parts[i].0) {
-                            let (part_time, d) = parts.remove(i);
-                            let (part_time, frontier, next_frontier) = synthesize_frontiers(
-                                prog.clone(),
-                                part_time.clone(),
-                                &mut part_number,
-                            );
-                            yield Either::Right((part_time, d, frontier, next_frontier))
-                        } else {
-                            i += 1;
-                        }
+                    for (part_time, d) in parts.extract_if(.., |p| !prog.less_equal(&p.0)) {
+                        let (part_time, frontier, next_frontier) =
+                            synthesize_frontiers(prog.clone(), part_time.clone(), &mut part_number);
+                        yield Either::Right((part_time, d, frontier, next_frontier))
                     }
                     yield Either::Left(prog)
                 }
@@ -962,7 +950,7 @@ where
 
                 // Retire parts that are processed downstream.
                 let retired_parts = inflight_parts
-                    .drain_filter_swapping(|(ts, _size)| !flow_control_frontier.less_equal(ts));
+                    .extract_if(.., |(ts, _size)| !flow_control_frontier.less_equal(ts));
                 let (retired_size, retired_count): (usize, usize) = retired_parts
                     .fold((0, 0), |(accum_size, accum_count), (_ts, size)| {
                         (accum_size + size, accum_count + 1)

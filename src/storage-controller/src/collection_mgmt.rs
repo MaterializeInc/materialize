@@ -80,7 +80,6 @@ use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::retry::Retry;
 use mz_ore::soft_panic_or_log;
 use mz_ore::task::AbortOnDropHandle;
-use mz_ore::vec::VecExt;
 use mz_persist_client::read::ReadHandle;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_types::Codec64;
@@ -864,7 +863,7 @@ where
                 self.to_write.extend(updates);
             }
             StorageWriteOp::Delete { filter } => {
-                let to_delete = self.desired.drain_filter_swapping(|(row, _)| filter(row));
+                let to_delete = self.desired.extract_if(.., |(row, _)| filter(row));
                 let retractions = to_delete.map(|(row, diff)| (row, -diff));
                 self.to_write.extend(retractions);
             }
