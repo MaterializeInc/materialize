@@ -13,10 +13,9 @@ use std::sync::LazyLock;
 use std::time::Duration;
 
 use mz_ore::now::NowFn;
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::{CatalogItemId, Diff, GlobalId, RelationDesc, Row, ScalarType};
-use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
@@ -42,7 +41,7 @@ pub enum Event<F: IntoIterator, D> {
     Message(F::Item, D),
 }
 
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct LoadGeneratorSourceConnection {
     pub load_generator: LoadGenerator,
     pub tick_micros: Option<u64>,
@@ -175,7 +174,7 @@ impl SourceConnection for LoadGeneratorSourceConnection {
 
 impl crate::AlterCompatible for LoadGeneratorSourceConnection {}
 
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum LoadGenerator {
     Auction,
     Clock,
@@ -513,7 +512,7 @@ impl LoadGenerator {
 // Used to identify a view of a load-generator source
 // such that the source dataflow can output data to the correct
 // data output for a source-export using this view
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary, PartialOrd, Ord)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, PartialOrd, Ord)]
 pub enum LoadGeneratorOutput {
     // Used for outputting to the primary source output
     Default,
@@ -522,7 +521,7 @@ pub enum LoadGeneratorOutput {
     Tpch(TpchView),
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary, PartialOrd, Ord)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, PartialOrd, Ord)]
 pub enum AuctionView {
     Organizations,
     Users,
@@ -531,7 +530,7 @@ pub enum AuctionView {
     Bids,
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary, PartialOrd, Ord)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, PartialOrd, Ord)]
 pub enum MarketingView {
     Customers,
     Impressions,
@@ -541,7 +540,7 @@ pub enum MarketingView {
     ConversionPredictions,
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary, PartialOrd, Ord)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, PartialOrd, Ord)]
 pub enum TpchView {
     Supplier,
     Part,
@@ -723,25 +722,9 @@ impl RustType<ProtoLoadGeneratorOutput> for LoadGeneratorOutput {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct LoadGeneratorSourceExportDetails {
     pub output: LoadGeneratorOutput,
-}
-
-impl RustType<ProtoLoadGeneratorSourceExportDetails> for LoadGeneratorSourceExportDetails {
-    fn into_proto(&self) -> ProtoLoadGeneratorSourceExportDetails {
-        ProtoLoadGeneratorSourceExportDetails {
-            output: self.output.into_proto().into(),
-        }
-    }
-
-    fn from_proto(proto: ProtoLoadGeneratorSourceExportDetails) -> Result<Self, TryFromProtoError> {
-        Ok(LoadGeneratorSourceExportDetails {
-            output: proto
-                .output
-                .into_rust_if_some("ProtoLoadGeneratorSourceExportDetails::output")?,
-        })
-    }
 }
 
 impl AlterCompatible for LoadGeneratorSourceExportDetails {
@@ -769,78 +752,7 @@ pub trait Generator {
     ) -> Box<dyn Iterator<Item = (LoadGeneratorOutput, Event<Option<MzOffset>, (Row, Diff)>)>>;
 }
 
-impl RustType<ProtoLoadGeneratorSourceConnection> for LoadGeneratorSourceConnection {
-    fn into_proto(&self) -> ProtoLoadGeneratorSourceConnection {
-        use proto_load_generator_source_connection::Kind;
-        ProtoLoadGeneratorSourceConnection {
-            kind: Some(match &self.load_generator {
-                LoadGenerator::Auction => Kind::Auction(()),
-                LoadGenerator::Clock => Kind::Clock(()),
-                LoadGenerator::Counter { max_cardinality } => {
-                    Kind::Counter(ProtoCounterLoadGenerator {
-                        max_cardinality: *max_cardinality,
-                    })
-                }
-                LoadGenerator::Marketing => Kind::Marketing(()),
-                LoadGenerator::Tpch {
-                    count_supplier,
-                    count_part,
-                    count_customer,
-                    count_orders,
-                    count_clerk,
-                } => Kind::Tpch(ProtoTpchLoadGenerator {
-                    count_supplier: *count_supplier,
-                    count_part: *count_part,
-                    count_customer: *count_customer,
-                    count_orders: *count_orders,
-                    count_clerk: *count_clerk,
-                }),
-                LoadGenerator::Datums => Kind::Datums(()),
-                LoadGenerator::KeyValue(kv) => Kind::KeyValue(kv.into_proto()),
-            }),
-            tick_micros: self.tick_micros,
-            as_of: self.as_of,
-            up_to: self.up_to,
-        }
-    }
-
-    fn from_proto(proto: ProtoLoadGeneratorSourceConnection) -> Result<Self, TryFromProtoError> {
-        use proto_load_generator_source_connection::Kind;
-        let kind = proto.kind.ok_or_else(|| {
-            TryFromProtoError::missing_field("ProtoLoadGeneratorSourceConnection::kind")
-        })?;
-        Ok(LoadGeneratorSourceConnection {
-            load_generator: match kind {
-                Kind::Auction(()) => LoadGenerator::Auction,
-                Kind::Clock(()) => LoadGenerator::Clock,
-                Kind::Counter(ProtoCounterLoadGenerator { max_cardinality }) => {
-                    LoadGenerator::Counter { max_cardinality }
-                }
-                Kind::Marketing(()) => LoadGenerator::Marketing,
-                Kind::Tpch(ProtoTpchLoadGenerator {
-                    count_supplier,
-                    count_part,
-                    count_customer,
-                    count_orders,
-                    count_clerk,
-                }) => LoadGenerator::Tpch {
-                    count_supplier,
-                    count_part,
-                    count_customer,
-                    count_orders,
-                    count_clerk,
-                },
-                Kind::Datums(()) => LoadGenerator::Datums,
-                Kind::KeyValue(kv) => LoadGenerator::KeyValue(kv.into_rust()?),
-            },
-            tick_micros: proto.tick_micros,
-            as_of: proto.as_of,
-            up_to: proto.up_to,
-        })
-    }
-}
-
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Default)]
 pub struct KeyValueLoadGenerator {
     /// The keyspace of the source.
     pub keys: u64,
@@ -885,35 +797,5 @@ impl KeyValueLoadGenerator {
         } else {
             self.snapshot_rounds
         }
-    }
-}
-
-impl RustType<ProtoKeyValueLoadGenerator> for KeyValueLoadGenerator {
-    fn into_proto(&self) -> ProtoKeyValueLoadGenerator {
-        ProtoKeyValueLoadGenerator {
-            keys: self.keys,
-            snapshot_rounds: self.snapshot_rounds,
-            transactional_snapshot: self.transactional_snapshot,
-            value_size: self.value_size,
-            partitions: self.partitions,
-            tick_interval: self.tick_interval.into_proto(),
-            batch_size: self.batch_size,
-            seed: self.seed,
-            include_offset: self.include_offset.clone(),
-        }
-    }
-
-    fn from_proto(proto: ProtoKeyValueLoadGenerator) -> Result<Self, TryFromProtoError> {
-        Ok(Self {
-            keys: proto.keys,
-            snapshot_rounds: proto.snapshot_rounds,
-            transactional_snapshot: proto.transactional_snapshot,
-            value_size: proto.value_size,
-            partitions: proto.partitions,
-            tick_interval: proto.tick_interval.into_rust()?,
-            batch_size: proto.batch_size,
-            seed: proto.seed,
-            include_offset: proto.include_offset,
-        })
     }
 }

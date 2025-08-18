@@ -9,7 +9,6 @@
 
 //! Description of how a dataflow follows wall-clock time, independent of a specific point in time.
 
-use mz_proto::{RustType, TryFromProtoError};
 use mz_repr::Timestamp;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use proptest::arbitrary::{Arbitrary, any};
@@ -19,11 +18,6 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::instances::StorageInstanceId;
-
-include!(concat!(
-    env!("OUT_DIR"),
-    "/mz_storage_types.time_dependence.rs"
-));
 
 /// Description of how a dataflow follows time.
 ///
@@ -125,29 +119,6 @@ pub enum TimeDependenceError {
     /// One of the imported collections does not exist.
     #[error("collection does not exist: {0}")]
     CollectionMissing(mz_repr::GlobalId),
-}
-
-impl RustType<ProtoTimeDependence> for TimeDependence {
-    fn into_proto(&self) -> ProtoTimeDependence {
-        ProtoTimeDependence {
-            schedule: self.schedule.as_ref().map(|s| s.into_proto()),
-            dependence: self.dependence.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoTimeDependence) -> Result<Self, TryFromProtoError> {
-        Ok(TimeDependence {
-            schedule: proto
-                .schedule
-                .map(RefreshSchedule::from_proto)
-                .transpose()?,
-            dependence: proto
-                .dependence
-                .into_iter()
-                .map(TimeDependence::from_proto)
-                .collect::<Result<_, _>>()?,
-        })
-    }
 }
 
 impl Arbitrary for TimeDependence {
