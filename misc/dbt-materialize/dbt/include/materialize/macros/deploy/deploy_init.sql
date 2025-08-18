@@ -20,8 +20,6 @@
 {% set target_config = deployment[current_target_name] %}
 
 
--- Check if the target-specific configuration exists
-
 {% if not target_config %}
     {{ exceptions.raise_compiler_error("No deployment configuration found for target " ~ current_target_name) }}
 {% endif %}
@@ -31,8 +29,7 @@
 {% set clusters = target_config.get('clusters', []) %}
 {% set schemas = target_config.get('schemas', []) %}
 
--- Check that all production schemas
--- and clusters already exist
+
 {% for schema in schemas %}
     {% if not schema_exists(schema) %}
         {{ exceptions.raise_compiler_error("Production schema " ~ schema ~ " does not exist") }}
