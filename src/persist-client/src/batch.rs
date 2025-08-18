@@ -353,7 +353,6 @@ pub struct BatchBuilderConfig {
     pub(crate) stats_budget: usize,
     pub(crate) stats_untrimmable_columns: Arc<UntrimmableColumns>,
     pub(crate) encoding_config: EncodingConfig,
-    pub(crate) preferred_order: RunOrder,
     pub(crate) structured_key_lower_len: usize,
     pub(crate) run_length_limit: usize,
     pub(crate) enable_incremental_compaction: bool,
@@ -435,8 +434,6 @@ impl BatchBuilderConfig {
     pub fn new(value: &PersistConfig, _shard_id: ShardId) -> Self {
         let writer_key = WriterKey::for_version(&value.build_version);
 
-        let preferred_order = RunOrder::Structured;
-
         BatchBuilderConfig {
             writer_key,
             blob_target_size: BLOB_TARGET_SIZE.get(value).clamp(1, usize::MAX),
@@ -450,7 +447,6 @@ impl BatchBuilderConfig {
                 use_dictionary: ENCODING_ENABLE_DICTIONARY.get(value),
                 compression: CompressionFormat::from_str(&ENCODING_COMPRESSION_FORMAT.get(value)),
             },
-            preferred_order,
             structured_key_lower_len: STRUCTURED_KEY_LOWER_LEN.get(value),
             run_length_limit: MAX_RUN_LEN.get(value).clamp(2, usize::MAX),
             max_runs: match MAX_RUNS.get(value) {
