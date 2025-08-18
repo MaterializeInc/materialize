@@ -31,11 +31,9 @@ use uuid::Uuid;
 use crate::controller::ComputeControllerTimestamp;
 use crate::protocol::command::ComputeCommand;
 use crate::protocol::response::{
-    ComputeResponse, CopyToResponse, FrontiersResponse, PeekResponse,
-    StashedPeekResponse, SubscribeBatch, SubscribeResponse,
+    ComputeResponse, CopyToResponse, FrontiersResponse, PeekResponse, StashedPeekResponse,
+    SubscribeBatch, SubscribeResponse,
 };
-
-include!(concat!(env!("OUT_DIR"), "/mz_compute_client.service.rs"));
 
 /// A client to a compute server.
 pub trait ComputeClient<T = mz_repr::Timestamp>:
