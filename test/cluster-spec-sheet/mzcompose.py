@@ -101,7 +101,7 @@ class ScenarioRunner:
         size_of_index: str | None = None,
     ) -> None:
         print(
-            f"Running {name} for {self.replica_size} with {repetitions} repetitions..."
+            f"--- Running {name} for {self.replica_size} with {repetitions} repetitions..."
         )
         for repetition in range(repetitions):
             start_time = time.time()
@@ -839,6 +839,7 @@ def workflow_bench(c: Composition, parser: WorkflowArgumentParser) -> None:
             f.write(
                 "scenario,scale,mode,category,test_name,cluster_size,repetition,size_bytes,time_ms\n"
             )
+            print("+++ Running TPC-H Index strong scaling")
             run_with_retries(
                 lambda conn: run_scenario_strong(
                     scenario=TpchScenario(1, replica_size_for_scale(1)),
@@ -846,6 +847,7 @@ def workflow_bench(c: Composition, parser: WorkflowArgumentParser) -> None:
                     connection=conn,
                 )
             )
+            print("+++ Running TPC-H Materialized view strong scaling")
             run_with_retries(
                 lambda conn: run_scenario_strong(
                     scenario=TpchScenarioMV(1, replica_size_for_scale(1)),
@@ -853,6 +855,7 @@ def workflow_bench(c: Composition, parser: WorkflowArgumentParser) -> None:
                     connection=conn,
                 )
             )
+            print("+++ Running Auction strong scaling")
             run_with_retries(
                 lambda conn: run_scenario_strong(
                     scenario=AuctionScenario(4, replica_size_for_scale(1)),
@@ -860,6 +863,7 @@ def workflow_bench(c: Composition, parser: WorkflowArgumentParser) -> None:
                     connection=conn,
                 )
             )
+            print("+++ Running Auction weak scaling")
             run_with_retries(
                 lambda conn: run_scenario_weak(
                     scenario=AuctionScenario(4, "none"),
