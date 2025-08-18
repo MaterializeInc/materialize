@@ -94,8 +94,6 @@ pub struct StateConfig {
     /// Overrides the current value of the [`mz_adapter_types::dyncfgs::ENABLE_EXPRESSION_CACHE`]
     /// feature flag.
     pub enable_expression_cache_override: Option<bool>,
-    /// Whether to enable zero-downtime deployments.
-    pub enable_0dt_deployment: bool,
     /// Helm chart version
     pub helm_chart_version: Option<String>,
     pub external_login_password_mz_system: Option<Password>,
