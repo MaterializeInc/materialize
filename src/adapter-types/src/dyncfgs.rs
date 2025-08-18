@@ -67,8 +67,8 @@ pub const WITH_0DT_CAUGHT_UP_CHECK_ALLOWED_LAG: Config<Duration> = Config::new(
 
 pub const WITH_0DT_CAUGHT_UP_CHECK_CUTOFF: Config<Duration> = Config::new(
     "with_0dt_caught_up_check_cutoff",
-    Duration::from_secs(2 * 60 * 60), // 2 hours
-    "Collections whose write frontier is behind 'now' by more than the cutoff are ignored when doing caught-up checks for 0dt deployments.",
+    Duration::from_secs(10 * 60), // 10 minutes
+    "During a 0dt deployment, if a cluster has only 'problematic' (crash-looping) replicas _and_ any collection that is behind by more than this cutoff, the cluster will be ignored in caught-up checks.",
 );
 
 pub const ENABLE_0DT_CAUGHT_UP_REPLICA_STATUS_CHECK: Config<bool> = Config::new(

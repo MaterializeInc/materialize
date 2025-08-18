@@ -261,14 +261,6 @@ impl Coordinator {
             .replicas()
             .all(|replica| problematic_replicas.contains(&replica.replica_id));
 
-        if cluster_has_only_problematic_replicas {
-            tracing::info!(
-                "ALL replicas of cluster {} crash/OOM-looping, ignoring for caught-up checks",
-                cluster.id
-            );
-            return Ok(true);
-        }
-
         enum CollectionType {
             Storage,
             Compute,
@@ -329,13 +321,18 @@ impl Coordinator {
 
             let beyond_all_hope = live_write_frontier_plus_cutoff.less_equal(&now);
 
-            if beyond_all_hope {
+            if beyond_all_hope && cluster_has_only_problematic_replicas {
                 tracing::info!(
                     ?live_write_frontier,
+                    ?cutoff,
                     ?now,
-                    "live write frontier of collection {id} is too far behind 'now', ignoring for caught-up checks"
+                    "live write frontier of collection {id} is too far behind 'now'"
                 );
-                continue;
+                tracing::info!(
+                    "ALL replicas of cluster {} are crash/OOM-looping and it has at least one collection that is too far behind 'now', ignoring cluster for caught-up checks",
+                    cluster.id
+                );
+                return Ok(true);
             }
 
             // We can't do easy comparisons and subtractions, so we bump up the
