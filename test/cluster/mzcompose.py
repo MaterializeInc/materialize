@@ -4000,12 +4000,13 @@ def workflow_test_refresh_mv_warmup(
         )
 
 
-def check_read_frontier_not_stuck(c: Composition, object_name: str):
+def check_read_frontiers_not_stuck(c: Composition, object_names: list[str]):
+    name_filter = ",".join(f"'{n}'" for n in object_names)
     query = f"""
-        SELECT f.read_frontier
+        SELECT o.name, f.read_frontier
         FROM mz_internal.mz_frontiers f
         JOIN mz_objects o ON o.id = f.object_id
-        WHERE o.name = '{object_name}';
+        WHERE o.name in ({name_filter});
         """
 
     # Because `mz_frontiers` isn't a linearizable relation it's possible that
@@ -4015,12 +4016,18 @@ def check_read_frontier_not_stuck(c: Composition, object_name: str):
         time.sleep(2)
         result = c.sql_query(query)
 
-    before = int(result[0][0])
+    before = {r[0]: int(r[1]) for r in result}
     time.sleep(3)
-    after = int(c.sql_query(query)[0][0])
-    assert (
-        before < after
-    ), f"read frontier of {object_name} is stuck, {before} >= {after}"
+
+    result = c.sql_query(query)
+    after = {r[0]: int(r[1]) for r in result}
+
+    for name in object_names:
+        before_ = before[name]
+        after_ = after[name]
+        assert (
+            before_ < after_
+        ), f"read frontier of {name} is stuck, {before_} >= {after_}"
 
 
 def workflow_test_refresh_mv_restart(
@@ -4285,7 +4292,7 @@ def workflow_test_refresh_mv_restart(
         c.up("materialized")
         check_introspection()
         c.testdrive(input=after_restart)
-        check_read_frontier_not_stuck(c, "t")
+        check_read_frontiers_not_stuck(c, ["t"])
         check_introspection()
 
         # Reset the testing context.
@@ -4300,7 +4307,7 @@ def workflow_test_refresh_mv_restart(
         c.up("materialized")
         check_introspection()
         c.testdrive(input=after_restart)
-        check_read_frontier_not_stuck(c, "t")
+        check_read_frontiers_not_stuck(c, ["t"])
         check_introspection()
 
         # Reset the testing context.
@@ -4450,7 +4457,7 @@ def workflow_test_refresh_mv_restart(
                 """
             )
         )
-        check_read_frontier_not_stuck(c, "t")
+        check_read_frontiers_not_stuck(c, ["t"])
         check_introspection()
 
         # Drop some MVs and check that this is reflected in the introspection objects.
@@ -4503,7 +4510,7 @@ def workflow_test_github_8734(c: Composition) -> None:
             """
         )
 
-        check_read_frontier_not_stuck(c, "t")
+        check_read_frontiers_not_stuck(c, ["t"])
 
         # Restart envd, then verify that the table's frontier still advances.
         c.kill("materialized")
@@ -4511,7 +4518,7 @@ def workflow_test_github_8734(c: Composition) -> None:
 
         c.sql("SELECT * FROM mv")
 
-        check_read_frontier_not_stuck(c, "t")
+        check_read_frontiers_not_stuck(c, ["t"])
 
 
 def workflow_test_github_7798(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -5697,3 +5704,54 @@ def workflow_test_memory_limiter(c: Composition) -> None:
         c.testdrive("> SELECT count(*) FROM mv\n1000000")
 
         c.kill("clusterd1")
+
+
+def workflow_test_paused_cluster_readhold_downgrade(c: Composition):
+    """
+    Test that in a paused cluster the read frontiers of indexes keep
+    periodically advancing, instead of blocking compaction of the index inputs.
+    """
+
+    c.up("materialized")
+
+    # Create a pause-able cluster, with indexes with different kinds of inputs.
+    c.sql(
+        """
+        CREATE CLUSTER test SIZE 'scale=1,workers=1';
+        SET cluster = test;
+
+        -- index on a storage collection
+        CREATE TABLE t (a int);
+        CREATE INDEX idx1 ON t (a);
+
+        -- index on an index
+        CREATE INDEX idx2 ON t (a + 1);
+
+        -- index on a REFRESH MV
+        CREATE MATERIALIZED VIEW mv WITH (REFRESH EVERY '1d') AS SELECT a FROM t;
+        CREATE INDEX idx3 ON mv (a);
+
+        SELECT a FROM t;
+        SELECT a + 1 FROM t;
+        SELECT a FROM mv;
+        """
+    )
+
+    # Sanity check.
+    check_read_frontiers_not_stuck(c, ["idx1", "idx2", "idx3"])
+
+    # Pause the cluster; read frontiers should still advance.
+    c.sql("ALTER CLUSTER test SET (REPLICATION FACTOR 0)")
+    check_read_frontiers_not_stuck(c, ["idx1", "idx2", "idx3"])
+
+    # Unpause the cluster; indexes should still be queryable.
+    c.sql(
+        """
+        ALTER CLUSTER test SET (REPLICATION FACTOR 1);
+        SET cluster = test;
+
+        SELECT a FROM t;
+        SELECT a + 1 FROM t;
+        SELECT a FROM mv;
+        """
+    )

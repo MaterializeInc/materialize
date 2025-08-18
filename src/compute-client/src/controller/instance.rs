@@ -26,7 +26,8 @@ use mz_compute_types::sinks::{
 };
 use mz_compute_types::sources::SourceInstanceDesc;
 use mz_controller_types::dyncfgs::{
-    ENABLE_WALLCLOCK_LAG_HISTOGRAM_COLLECTION, WALLCLOCK_LAG_RECORDING_INTERVAL,
+    ENABLE_PAUSED_CLUSTER_READHOLD_DOWNGRADE, ENABLE_WALLCLOCK_LAG_HISTOGRAM_COLLECTION,
+    WALLCLOCK_LAG_RECORDING_INTERVAL,
 };
 use mz_dyncfg::ConfigSet;
 use mz_expr::RowSetFinishing;
@@ -1287,6 +1288,10 @@ where
             self.finish_peek(uuid, response);
         }
 
+        // We might have a chance to forward implied capabilities and reduce the cost of bringing
+        // up the next replica, if the dropped replica was the only one in the cluster.
+        self.forward_implied_capabilities();
+
         Ok(())
     }
 
@@ -2181,6 +2186,51 @@ where
         }
     }
 
+    /// Return the write frontiers of the dependencies of the given collection.
+    fn dependency_write_frontiers<'b>(
+        &'b self,
+        collection: &'b CollectionState<T>,
+    ) -> impl Iterator<Item = Antichain<T>> + 'b {
+        let compute_frontiers = collection.compute_dependency_ids().filter_map(|dep_id| {
+            let collection = self.collections.get(&dep_id);
+            collection.map(|c| c.write_frontier())
+        });
+        let storage_frontiers = collection.storage_dependency_ids().filter_map(|dep_id| {
+            let frontiers = self.storage_collections.collection_frontiers(dep_id).ok();
+            frontiers.map(|f| f.write_frontier)
+        });
+
+        compute_frontiers.chain(storage_frontiers)
+    }
+
+    /// Return the write frontiers of transitive storage dependencies of the given collection.
+    fn transitive_storage_dependency_write_frontiers<'b>(
+        &'b self,
+        collection: &'b CollectionState<T>,
+    ) -> impl Iterator<Item = Antichain<T>> + 'b {
+        let mut storage_ids: BTreeSet<_> = collection.storage_dependency_ids().collect();
+        let mut todo: Vec<_> = collection.compute_dependency_ids().collect();
+        let mut done = BTreeSet::new();
+
+        while let Some(id) = todo.pop() {
+            if done.contains(&id) {
+                continue;
+            }
+            if let Some(dep) = self.collections.get(&id) {
+                storage_ids.extend(dep.storage_dependency_ids());
+                todo.extend(dep.compute_dependency_ids())
+            }
+            done.insert(id);
+        }
+
+        let storage_frontiers = storage_ids.into_iter().filter_map(|id| {
+            let frontiers = self.storage_collections.collection_frontiers(id).ok();
+            frontiers.map(|f| f.write_frontier)
+        });
+
+        storage_frontiers
+    }
+
     /// Downgrade the warmup capabilities of collections as much as possible.
     ///
     /// The only requirement we have for a collection's warmup capability is that it is for a time
@@ -2206,19 +2256,10 @@ where
                 continue;
             }
 
-            let compute_frontiers = collection.compute_dependency_ids().filter_map(|dep_id| {
-                let collection = self.collections.get(&dep_id);
-                collection.map(|c| c.write_frontier())
-            });
-            let storage_frontiers = collection.storage_dependency_ids().filter_map(|dep_id| {
-                let frontiers = self.storage_collections.collection_frontiers(dep_id).ok();
-                frontiers.map(|f| f.write_frontier)
-            });
-
             let mut new_capability = Antichain::new();
-            for frontier in compute_frontiers.chain(storage_frontiers) {
-                for time in frontier.iter() {
-                    new_capability.insert(time.step_back().unwrap_or_else(|| time.clone()));
+            for frontier in self.dependency_write_frontiers(collection) {
+                for time in frontier {
+                    new_capability.insert(time.step_back().unwrap_or(time));
                 }
             }
 
@@ -2231,6 +2272,68 @@ where
         }
     }
 
+    /// Forward the implied capabilities of collections, if possible.
+    ///
+    /// The implied capability of a collection controls (a) which times are still readable (for
+    /// indexes) and (b) with which as-of the collection gets installed on a new replica. We are
+    /// usually not allowed to advance an implied capability beyond the frontier that follows from
+    /// the collection's read policy applied to its write frontier:
+    ///
+    ///  * For sink collections, some external consumer might rely on seeing all distinct times in
+    ///    the input reflected in the output. If we'd forward the implied capability of a sink,
+    ///    we'd risk skipping times in the output across replica restarts.
+    ///  * For index collections, we might make the index unreadable by advancing its read frontier
+    ///    beyond its write frontier.
+    ///
+    /// There is one case where forwarding an implied capability is fine though: an index installed
+    /// on a cluster that has no replicas. Such indexes are not readable anyway until a new replica
+    /// is added, so advancing its read frontier can't make it unreadable. We can thus advance the
+    /// implied capability as long as we make sure that when a new replica is added, the expected
+    /// relationship between write frontier, read policy, and implied capability can be restored
+    /// immediately (modulo computation time).
+    ///
+    /// Forwarding implied capabilities is not necessary for the correct functioning of the
+    /// controller but an optimization that is beneficial in two ways:
+    ///
+    ///  * It relaxes read holds on inputs to forwarded collections, allowing their compaction.
+    ///  * It reduces the amount of historical detail new replicas need to process when computing
+    ///    forwarded collections, as forwarding the implied capability also forwards the corresponding
+    ///    dataflow as-of.
+    fn forward_implied_capabilities(&mut self) {
+        if !ENABLE_PAUSED_CLUSTER_READHOLD_DOWNGRADE.get(&self.dyncfg) {
+            return;
+        }
+        if !self.replicas.is_empty() {
+            return;
+        }
+
+        let mut new_capabilities = BTreeMap::new();
+        for (id, collection) in &self.collections {
+            let Some(read_policy) = &collection.read_policy else {
+                // Collection is write-only, i.e. a sink.
+                continue;
+            };
+
+            // When a new replica is started, it will immediately be able to compute all collection
+            // output up to the write frontier of its transitive storage inputs. So the new implied
+            // read capability should be the read policy applied to that frontier.
+            let mut dep_frontier = Antichain::new();
+            for frontier in self.transitive_storage_dependency_write_frontiers(collection) {
+                dep_frontier.extend(frontier);
+            }
+
+            let new_capability = read_policy.frontier(dep_frontier.borrow());
+            if PartialOrder::less_than(collection.implied_read_hold.since(), &new_capability) {
+                new_capabilities.insert(*id, new_capability);
+            }
+        }
+
+        for (id, new_capability) in new_capabilities {
+            let collection = self.expect_collection_mut(id);
+            let _ = collection.implied_read_hold.try_downgrade(new_capability);
+        }
+    }
+
     /// Process pending maintenance work.
     ///
     /// This method is invoked periodically by the global controller.
@@ -2240,6 +2343,7 @@ where
     pub fn maintain(&mut self) {
         self.rehydrate_failed_replicas();
         self.downgrade_warmup_capabilities();
+        self.forward_implied_capabilities();
         self.schedule_collections();
         self.cleanup_collections();
         self.update_frontier_introspection();
