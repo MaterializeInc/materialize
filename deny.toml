@@ -215,7 +215,6 @@ wrappers = [
     "globset",
     "launchdarkly-server-sdk",
     "launchdarkly-server-sdk-evaluation",
-    "mockito",
     "native-tls",
     "opendal",
     "os_info",

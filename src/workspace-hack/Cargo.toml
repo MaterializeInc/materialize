@@ -96,7 +96,6 @@ num = { version = "0.4.3" }
 num-bigint = { version = "0.4.6", features = ["serde"] }
 num-integer = { version = "0.1.46", features = ["i128"] }
 num-traits = { version = "0.2.19", features = ["i128", "libm"] }
-once_cell = { version = "1.21.3" }
 parking_lot = { version = "0.12.4", features = ["serde"] }
 parquet = { version = "55.2.0", features = ["async"] }
 percent-encoding = { version = "2.3.1" }
@@ -120,7 +119,6 @@ rand_core = { version = "0.6.4", default-features = false, features = ["std"] }
 rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features = ["cmake-build", "libz-static", "ssl-vendored", "zstd"] }
 regex = { version = "1.11.1" }
 regex-automata = { version = "0.4.9", default-features = false, features = ["dfa", "hybrid", "meta", "nfa", "perf", "unicode"] }
-regex-lite = { version = "0.1.6" }
 regex-syntax = { version = "0.8.5" }
 reqwest-5ef9efb8ec2df382 = { package = "reqwest", version = "0.12.23", features = ["blocking", "cookies", "json", "native-tls-vendored", "stream"] }
 reqwest-a6292c17cd707f01 = { package = "reqwest", version = "0.11.24", features = ["blocking", "json", "multipart", "native-tls-vendored", "stream"] }
@@ -242,7 +240,6 @@ num = { version = "0.4.3" }
 num-bigint = { version = "0.4.6", features = ["serde"] }
 num-integer = { version = "0.1.46", features = ["i128"] }
 num-traits = { version = "0.2.19", features = ["i128", "libm"] }
-once_cell = { version = "1.21.3" }
 parking_lot = { version = "0.12.4", features = ["serde"] }
 parquet = { version = "55.2.0", features = ["async"] }
 percent-encoding = { version = "2.3.1" }
@@ -267,7 +264,6 @@ rand_core = { version = "0.6.4", default-features = false, features = ["std"] }
 rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features = ["cmake-build", "libz-static", "ssl-vendored", "zstd"] }
 regex = { version = "1.11.1" }
 regex-automata = { version = "0.4.9", default-features = false, features = ["dfa", "hybrid", "meta", "nfa", "perf", "unicode"] }
-regex-lite = { version = "0.1.6" }
 regex-syntax = { version = "0.8.5" }
 reqwest-5ef9efb8ec2df382 = { package = "reqwest", version = "0.12.23", features = ["blocking", "cookies", "json", "native-tls-vendored", "stream"] }
 reqwest-a6292c17cd707f01 = { package = "reqwest", version = "0.11.24", features = ["blocking", "json", "multipart", "native-tls-vendored", "stream"] }

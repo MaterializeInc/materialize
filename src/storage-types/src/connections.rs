@@ -16,11 +16,14 @@ use std::sync::Arc;
 
 use anyhow::{Context, anyhow, bail};
 use iceberg::{Catalog, CatalogBuilder};
+use iceberg_catalog_rest::{
+    REST_CATALOG_PROP_URI, REST_CATALOG_PROP_WAREHOUSE, RestCatalogBuilder,
+};
 use itertools::Itertools;
 use mz_ccsr::tls::{Certificate, Identity};
 use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceReader, vpc_endpoint_host};
 use mz_dyncfg::ConfigSet;
-use mz_iceberg_rest::{REST_CATALOG_PROP_URI, REST_CATALOG_PROP_WAREHOUSE, RestCatalogBuilder};
+// use mz_iceberg_rest::{REST_CATALOG_PROP_URI, REST_CATALOG_PROP_WAREHOUSE, RestCatalogBuilder};
 use mz_kafka_util::client::{
     BrokerAddr, BrokerRewrite, MzClientContext, MzKafkaError, TunnelConfig, TunnelingClientContext,
 };
