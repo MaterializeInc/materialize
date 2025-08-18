@@ -30,7 +30,6 @@
 use std::collections::BTreeMap;
 
 use mz_expr::{MapFilterProject, MirScalarExpr};
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Datum, Row, RowArena};
 use proptest::prelude::*;
 use proptest_derive::Arbitrary;
@@ -42,8 +41,6 @@ pub mod linear_join;
 pub use delta_join::DeltaJoinPlan;
 pub use linear_join::LinearJoinPlan;
 
-include!(concat!(env!("OUT_DIR"), "/mz_compute_types.plan.join.rs"));
-
 /// A complete enumeration of possible join plans to render.
 #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub enum JoinPlan {
@@ -51,29 +48,6 @@ pub enum JoinPlan {
     Linear(LinearJoinPlan),
     /// A join implemented by a delta join.
     Delta(DeltaJoinPlan),
-}
-
-impl RustType<ProtoJoinPlan> for JoinPlan {
-    fn into_proto(&self) -> ProtoJoinPlan {
-        use proto_join_plan::Kind::*;
-        ProtoJoinPlan {
-            kind: Some(match self {
-                JoinPlan::Linear(inner) => Linear(inner.into_proto()),
-                JoinPlan::Delta(inner) => Delta(inner.into_proto()),
-            }),
-        }
-    }
-
-    fn from_proto(value: ProtoJoinPlan) -> Result<Self, TryFromProtoError> {
-        use proto_join_plan::Kind::*;
-        let kind = value
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoJoinPlan::kind"))?;
-        Ok(match kind {
-            Linear(inner) => JoinPlan::Linear(inner.into_rust()?),
-            Delta(inner) => JoinPlan::Delta(inner.into_rust()?),
-        })
-    }
 }
 
 /// A manual closure implementation of filtering and logic application.
@@ -104,22 +78,6 @@ impl Arbitrary for JoinClosure {
                 before,
             })
             .boxed()
-    }
-}
-
-impl RustType<ProtoJoinClosure> for JoinClosure {
-    fn into_proto(&self) -> ProtoJoinClosure {
-        ProtoJoinClosure {
-            ready_equivalences: self.ready_equivalences.into_proto(),
-            before: Some(self.before.into_proto()),
-        }
-    }
-
-    fn from_proto(proto: ProtoJoinClosure) -> Result<Self, TryFromProtoError> {
-        Ok(Self {
-            ready_equivalences: proto.ready_equivalences.into_rust()?,
-            before: proto.before.into_rust_if_some("ProtoJoinClosure::before")?,
-        })
     }
 }
 
@@ -417,25 +375,5 @@ impl JoinBuildState {
             permutation,
             thinned_arity_with_key,
         )
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use mz_ore::assert_ok;
-    use mz_proto::protobuf_roundtrip;
-
-    use super::*;
-
-    proptest! {
-        #![proptest_config(ProptestConfig::with_cases(32))]
-
-        #[mz_ore::test]
-        #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
-        fn join_plan_protobuf_roundtrip(expect in any::<JoinPlan>() ) {
-            let actual = protobuf_roundtrip::<_, ProtoJoinPlan>(&expect);
-            assert_ok!(actual);
-            assert_eq!(actual.unwrap(), expect);
-        }
     }
 }

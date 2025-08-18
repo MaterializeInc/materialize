@@ -66,15 +66,12 @@ use mz_expr::{
     AggregateExpr, AggregateFunc, MapFilterProject, MirScalarExpr, permutation_for_arrangement,
 };
 use mz_ore::{assert_none, soft_assert_or_log};
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use proptest::prelude::{Arbitrary, BoxedStrategy, any};
 use proptest::strategy::Strategy;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use crate::plan::{AvailableCollections, bucketing_of_expected_group_size};
-
-include!(concat!(env!("OUT_DIR"), "/mz_compute_types.plan.reduce.rs"));
 
 /// This enum represents the three potential types of aggregations.
 #[derive(Copy, Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -95,31 +92,6 @@ pub enum ReductionType {
 
 impl columnation::Columnation for ReductionType {
     type InnerRegion = columnation::CopyRegion<ReductionType>;
-}
-
-impl RustType<ProtoReductionType> for ReductionType {
-    fn into_proto(&self) -> ProtoReductionType {
-        use proto_reduction_type::Kind;
-        ProtoReductionType {
-            kind: Some(match self {
-                ReductionType::Accumulable => Kind::Accumulable(()),
-                ReductionType::Hierarchical => Kind::Hierarchical(()),
-                ReductionType::Basic => Kind::Basic(()),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoReductionType) -> Result<Self, TryFromProtoError> {
-        use proto_reduction_type::Kind;
-        let kind = proto
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("kind"))?;
-        Ok(match kind {
-            Kind::Accumulable(()) => ReductionType::Accumulable,
-            Kind::Hierarchical(()) => ReductionType::Hierarchical,
-            Kind::Basic(()) => ReductionType::Basic,
-        })
-    }
 }
 
 impl TryFrom<&ReducePlan> for ReductionType {
@@ -226,35 +198,6 @@ impl Arbitrary for ReducePlan {
     }
 }
 
-impl RustType<ProtoReducePlan> for ReducePlan {
-    fn into_proto(&self) -> ProtoReducePlan {
-        use proto_reduce_plan::Kind::*;
-        ProtoReducePlan {
-            kind: Some(match self {
-                ReducePlan::Distinct => Distinct(()),
-                ReducePlan::Accumulable(plan) => Accumulable(plan.into_proto()),
-                ReducePlan::Hierarchical(plan) => Hierarchical(plan.into_proto()),
-                ReducePlan::Basic(plan) => Basic(plan.into_proto()),
-                ReducePlan::Collation(plan) => Collation(plan.into_proto()),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoReducePlan) -> Result<Self, TryFromProtoError> {
-        use proto_reduce_plan::Kind::*;
-        let kind = proto
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoReducePlan::kind"))?;
-        Ok(match kind {
-            Distinct(()) => ReducePlan::Distinct,
-            Accumulable(plan) => ReducePlan::Accumulable(plan.into_rust()?),
-            Hierarchical(plan) => ReducePlan::Hierarchical(plan.into_rust()?),
-            Basic(plan) => ReducePlan::Basic(plan.into_rust()?),
-            Collation(plan) => ReducePlan::Collation(plan.into_rust()?),
-        })
-    }
-}
-
 /// Plan for computing a set of accumulable aggregations.
 ///
 /// We fuse all of the accumulable aggregations together
@@ -276,42 +219,6 @@ pub struct AccumulablePlan {
     pub simple_aggrs: Vec<(usize, usize, AggregateExpr)>,
     /// Same as above but for all of the `DISTINCT` accumulable aggregations.
     pub distinct_aggrs: Vec<(usize, usize, AggregateExpr)>,
-}
-
-impl RustType<proto_accumulable_plan::ProtoAggr> for (usize, usize, AggregateExpr) {
-    fn into_proto(&self) -> proto_accumulable_plan::ProtoAggr {
-        proto_accumulable_plan::ProtoAggr {
-            index_agg: self.0.into_proto(),
-            index_inp: self.1.into_proto(),
-            expr: Some(self.2.into_proto()),
-        }
-    }
-
-    fn from_proto(proto: proto_accumulable_plan::ProtoAggr) -> Result<Self, TryFromProtoError> {
-        Ok((
-            proto.index_agg.into_rust()?,
-            proto.index_inp.into_rust()?,
-            proto.expr.into_rust_if_some("ProtoAggr::expr")?,
-        ))
-    }
-}
-
-impl RustType<ProtoAccumulablePlan> for AccumulablePlan {
-    fn into_proto(&self) -> ProtoAccumulablePlan {
-        ProtoAccumulablePlan {
-            full_aggrs: self.full_aggrs.into_proto(),
-            simple_aggrs: self.simple_aggrs.into_proto(),
-            distinct_aggrs: self.distinct_aggrs.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoAccumulablePlan) -> Result<Self, TryFromProtoError> {
-        Ok(Self {
-            full_aggrs: proto.full_aggrs.into_rust()?,
-            simple_aggrs: proto.simple_aggrs.into_rust()?,
-            distinct_aggrs: proto.distinct_aggrs.into_rust()?,
-        })
-    }
 }
 
 /// Plan for computing a set of hierarchical aggregations.
@@ -354,29 +261,6 @@ impl HierarchicalPlan {
     }
 }
 
-impl RustType<ProtoHierarchicalPlan> for HierarchicalPlan {
-    fn into_proto(&self) -> ProtoHierarchicalPlan {
-        use proto_hierarchical_plan::Kind;
-        ProtoHierarchicalPlan {
-            kind: Some(match self {
-                HierarchicalPlan::Monotonic(plan) => Kind::Monotonic(plan.into_proto()),
-                HierarchicalPlan::Bucketed(plan) => Kind::Bucketed(plan.into_proto()),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoHierarchicalPlan) -> Result<Self, TryFromProtoError> {
-        use proto_hierarchical_plan::Kind;
-        let kind = proto
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoHierarchicalPlan::Kind"))?;
-        Ok(match kind {
-            Kind::Monotonic(plan) => HierarchicalPlan::Monotonic(plan.into_rust()?),
-            Kind::Bucketed(plan) => HierarchicalPlan::Bucketed(plan.into_rust()?),
-        })
-    }
-}
-
 /// Plan for computing a set of hierarchical aggregations with a
 /// monotonic input.
 ///
@@ -400,24 +284,6 @@ pub struct MonotonicPlan {
     ///
     /// [^1]: <https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/20230421_stabilize_monotonic_select.md>
     pub must_consolidate: bool,
-}
-
-impl RustType<ProtoMonotonicPlan> for MonotonicPlan {
-    fn into_proto(&self) -> ProtoMonotonicPlan {
-        ProtoMonotonicPlan {
-            aggr_funcs: self.aggr_funcs.into_proto(),
-            skips: self.skips.into_proto(),
-            must_consolidate: self.must_consolidate.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoMonotonicPlan) -> Result<Self, TryFromProtoError> {
-        Ok(Self {
-            aggr_funcs: proto.aggr_funcs.into_rust()?,
-            skips: proto.skips.into_rust()?,
-            must_consolidate: proto.must_consolidate.into_rust()?,
-        })
-    }
 }
 
 /// Plan for computing a set of hierarchical aggregations
@@ -452,24 +318,6 @@ impl BucketedPlan {
             skips: self.skips,
             must_consolidate,
         }
-    }
-}
-
-impl RustType<ProtoBucketedPlan> for BucketedPlan {
-    fn into_proto(&self) -> ProtoBucketedPlan {
-        ProtoBucketedPlan {
-            aggr_funcs: self.aggr_funcs.into_proto(),
-            skips: self.skips.into_proto(),
-            buckets: self.buckets.clone(),
-        }
-    }
-
-    fn from_proto(proto: ProtoBucketedPlan) -> Result<Self, TryFromProtoError> {
-        Ok(Self {
-            aggr_funcs: proto.aggr_funcs.into_rust()?,
-            skips: proto.skips.into_rust()?,
-            buckets: proto.buckets,
-        })
     }
 }
 
@@ -510,73 +358,6 @@ pub struct SingleBasicPlan {
     pub fused_unnest_list: bool,
 }
 
-impl RustType<proto_basic_plan::ProtoSimpleSingleBasicPlan> for (usize, AggregateExpr) {
-    fn into_proto(&self) -> proto_basic_plan::ProtoSimpleSingleBasicPlan {
-        proto_basic_plan::ProtoSimpleSingleBasicPlan {
-            index: self.0.into_proto(),
-            expr: Some(self.1.into_proto()),
-        }
-    }
-
-    fn from_proto(
-        proto: proto_basic_plan::ProtoSimpleSingleBasicPlan,
-    ) -> Result<Self, TryFromProtoError> {
-        Ok((
-            proto.index.into_rust()?,
-            proto
-                .expr
-                .into_rust_if_some("ProtoSimpleSingleBasicPlan::expr")?,
-        ))
-    }
-}
-
-impl RustType<proto_basic_plan::ProtoSingleBasicPlan> for SingleBasicPlan {
-    fn into_proto(&self) -> proto_basic_plan::ProtoSingleBasicPlan {
-        proto_basic_plan::ProtoSingleBasicPlan {
-            index: self.index.into_proto(),
-            expr: Some(self.expr.into_proto()),
-            fused_unnest_list: self.fused_unnest_list.into_proto(),
-        }
-    }
-
-    fn from_proto(
-        proto: proto_basic_plan::ProtoSingleBasicPlan,
-    ) -> Result<Self, TryFromProtoError> {
-        Ok(SingleBasicPlan {
-            index: proto.index.into_rust()?,
-            expr: proto.expr.into_rust_if_some("ProtoSingleBasicPlan::expr")?,
-            fused_unnest_list: proto.fused_unnest_list.into_rust()?,
-        })
-    }
-}
-
-impl RustType<ProtoBasicPlan> for BasicPlan {
-    fn into_proto(&self) -> ProtoBasicPlan {
-        use proto_basic_plan::*;
-
-        ProtoBasicPlan {
-            kind: Some(match self {
-                BasicPlan::Single(plan) => Kind::Single(plan.into_proto()),
-                BasicPlan::Multiple(aggrs) => Kind::Multiple(ProtoMultipleBasicPlan {
-                    aggrs: aggrs.into_proto(),
-                }),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoBasicPlan) -> Result<Self, TryFromProtoError> {
-        use proto_basic_plan::Kind;
-        let kind = proto
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoBasicPlan::kind"))?;
-
-        Ok(match kind {
-            Kind::Single(plan) => BasicPlan::Single(plan.into_rust()?),
-            Kind::Multiple(x) => BasicPlan::Multiple(x.aggrs.into_rust()?),
-        })
-    }
-}
-
 /// Plan for collating the results of computing multiple aggregation
 /// types.
 ///
@@ -604,26 +385,6 @@ impl CollationPlan {
         self.hierarchical
             .as_mut()
             .map(|plan| plan.as_monotonic(must_consolidate));
-    }
-}
-
-impl RustType<ProtoCollationPlan> for CollationPlan {
-    fn into_proto(&self) -> ProtoCollationPlan {
-        ProtoCollationPlan {
-            accumulable: self.accumulable.into_proto(),
-            hierarchical: self.hierarchical.into_proto(),
-            basic: self.basic.into_proto(),
-            aggregate_types: self.aggregate_types.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoCollationPlan) -> Result<Self, TryFromProtoError> {
-        Ok(Self {
-            accumulable: proto.accumulable.into_rust()?,
-            hierarchical: proto.hierarchical.into_rust()?,
-            basic: proto.basic.into_rust()?,
-            aggregate_types: proto.aggregate_types.into_rust()?,
-        })
     }
 }
 
@@ -895,26 +656,6 @@ pub struct KeyValPlan {
     pub val_plan: mz_expr::SafeMfpPlan,
 }
 
-impl RustType<ProtoKeyValPlan> for KeyValPlan {
-    fn into_proto(&self) -> ProtoKeyValPlan {
-        ProtoKeyValPlan {
-            key_plan: Some(self.key_plan.into_proto()),
-            val_plan: Some(self.val_plan.into_proto()),
-        }
-    }
-
-    fn from_proto(proto: ProtoKeyValPlan) -> Result<Self, TryFromProtoError> {
-        Ok(Self {
-            key_plan: proto
-                .key_plan
-                .into_rust_if_some("ProtoKeyValPlan::key_plan")?,
-            val_plan: proto
-                .val_plan
-                .into_rust_if_some("ProtoKeyValPlan::val_plan")?,
-        })
-    }
-}
-
 impl KeyValPlan {
     /// Create a new [KeyValPlan] from aggregation arguments.
     pub fn new(
@@ -1061,26 +802,5 @@ pub fn reduction_type(func: &AggregateFunc) -> ReductionType {
         | AggregateFunc::WindowAggregate { .. }
         | AggregateFunc::FusedValueWindowFunc { .. }
         | AggregateFunc::FusedWindowAggregate { .. } => ReductionType::Basic,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use mz_ore::assert_ok;
-    use mz_proto::protobuf_roundtrip;
-    use proptest::prelude::*;
-
-    use super::*;
-
-    // This test causes stack overflows if not run with --release,
-    // ignore by default.
-    proptest! {
-        #[mz_ore::test]
-        #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
-        fn reduce_plan_protobuf_roundtrip(expect in any::<ReducePlan>() ) {
-            let actual = protobuf_roundtrip::<_, ProtoReducePlan>(&expect);
-            assert_ok!(actual);
-            assert_eq!(actual.unwrap(), expect);
-        }
     }
 }
