@@ -9,21 +9,17 @@
 
 use std::error::Error;
 use std::fmt::{self, Debug, Display};
-use std::str::FromStr;
 
 use itertools::Itertools;
 use mz_ore::assert_none;
-use mz_ore::url::SensitiveUrl;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::schema::SchemaId;
 use mz_persist_types::stats::PartStats;
 use mz_persist_types::txn::{TxnsCodec, TxnsEntry};
 use mz_persist_types::{PersistLocation, ShardId};
-use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
 use mz_repr::{Datum, GlobalId, RelationDesc, Row, ScalarType};
 use mz_sql_parser::ast::UnresolvedItemName;
 use mz_timely_util::antichain::AntichainExt;
-use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
 use tracing::error;
@@ -32,10 +28,8 @@ use crate::errors::DataflowError;
 use crate::instances::StorageInstanceId;
 use crate::sources::SourceData;
 
-include!(concat!(env!("OUT_DIR"), "/mz_storage_types.controller.rs"));
-
 /// Metadata required by a storage instance to read a storage collection
-#[derive(Arbitrary, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CollectionMetadata {
     /// The persist location where the shards are located.
     pub persist_location: PersistLocation,
@@ -90,64 +84,10 @@ impl crate::AlterCompatible for CollectionMetadata {
     }
 }
 
-impl RustType<ProtoCollectionMetadata> for CollectionMetadata {
-    fn into_proto(&self) -> ProtoCollectionMetadata {
-        ProtoCollectionMetadata {
-            blob_uri: self.persist_location.blob_uri.to_string_unredacted(),
-            consensus_uri: self.persist_location.consensus_uri.to_string_unredacted(),
-            data_shard: self.data_shard.to_string(),
-            remap_shard: self.remap_shard.map(|s| s.to_string()),
-            relation_desc: Some(self.relation_desc.into_proto()),
-            txns_shard: self.txns_shard.map(|x| x.to_string()),
-        }
-    }
-
-    fn from_proto(value: ProtoCollectionMetadata) -> Result<Self, TryFromProtoError> {
-        Ok(CollectionMetadata {
-            persist_location: PersistLocation {
-                blob_uri: SensitiveUrl::from_str(&value.blob_uri)?,
-                consensus_uri: SensitiveUrl::from_str(&value.consensus_uri)?,
-            },
-            remap_shard: value
-                .remap_shard
-                .map(|s| s.parse().map_err(TryFromProtoError::InvalidShardId))
-                .transpose()?,
-            data_shard: value
-                .data_shard
-                .parse()
-                .map_err(TryFromProtoError::InvalidShardId)?,
-            relation_desc: value
-                .relation_desc
-                .into_rust_if_some("ProtoCollectionMetadata::relation_desc")?,
-            txns_shard: value
-                .txns_shard
-                .map(|s| s.parse().map_err(TryFromProtoError::InvalidShardId))
-                .transpose()?,
-        })
-    }
-}
-
 /// The subset of [`CollectionMetadata`] that must be durable stored.
-#[derive(Arbitrary, Clone, Debug, PartialEq, PartialOrd, Ord, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, PartialOrd, Ord, Eq, Serialize, Deserialize)]
 pub struct DurableCollectionMetadata {
     pub data_shard: ShardId,
-}
-
-impl RustType<ProtoDurableCollectionMetadata> for DurableCollectionMetadata {
-    fn into_proto(&self) -> ProtoDurableCollectionMetadata {
-        ProtoDurableCollectionMetadata {
-            data_shard: self.data_shard.to_string(),
-        }
-    }
-
-    fn from_proto(value: ProtoDurableCollectionMetadata) -> Result<Self, TryFromProtoError> {
-        Ok(DurableCollectionMetadata {
-            data_shard: value
-                .data_shard
-                .parse()
-                .map_err(TryFromProtoError::InvalidShardId)?,
-        })
-    }
 }
 
 #[derive(Debug)]

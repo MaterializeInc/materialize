@@ -11,16 +11,8 @@
 
 use anyhow::{anyhow, bail};
 use itertools::Itertools;
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{ColumnType, RelationDesc, RelationType, ScalarType};
-use proptest::prelude::any;
-use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
-
-include!(concat!(
-    env!("OUT_DIR"),
-    "/mz_storage_types.sources.envelope.rs"
-));
 
 /// `SourceEnvelope`s describe how to turn a stream of messages from `SourceDesc`s
 /// into a _differential stream_, that is, a stream of (data, time, diff)
@@ -28,7 +20,7 @@ include!(concat!(
 ///
 /// PostgreSQL sources skip any explicit envelope handling, effectively
 /// asserting that `SourceEnvelope` is `None` with `KeyEnvelope::None`.
-#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub enum SourceEnvelope {
     /// The most trivial version is `None`, which typically produces triples where the diff
     /// is `1`. However, some sources are able to produce values with more exotic diff's,
@@ -47,31 +39,6 @@ pub enum SourceEnvelope {
     CdcV2,
 }
 
-impl RustType<ProtoSourceEnvelope> for SourceEnvelope {
-    fn into_proto(&self) -> ProtoSourceEnvelope {
-        use proto_source_envelope::Kind;
-        ProtoSourceEnvelope {
-            kind: Some(match self {
-                SourceEnvelope::None(e) => Kind::None(e.into_proto()),
-                SourceEnvelope::Upsert(e) => Kind::Upsert(e.into_proto()),
-                SourceEnvelope::CdcV2 => Kind::CdcV2(()),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoSourceEnvelope) -> Result<Self, TryFromProtoError> {
-        use proto_source_envelope::Kind;
-        let kind = proto
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoSourceEnvelope::kind"))?;
-        Ok(match kind {
-            Kind::None(e) => SourceEnvelope::None(e.into_rust()?),
-            Kind::Upsert(e) => SourceEnvelope::Upsert(e.into_rust()?),
-            Kind::CdcV2(()) => SourceEnvelope::CdcV2,
-        })
-    }
-}
-
 /// `UnplannedSourceEnvelope` is a `SourceEnvelope` missing some information. This information
 /// is obtained in `UnplannedSourceEnvelope::desc`, where
 /// `UnplannedSourceEnvelope::into_source_envelope`
@@ -83,31 +50,13 @@ pub enum UnplannedSourceEnvelope {
     CdcV2,
 }
 
-#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct NoneEnvelope {
     pub key_envelope: KeyEnvelope,
     pub key_arity: usize,
 }
 
-impl RustType<ProtoNoneEnvelope> for NoneEnvelope {
-    fn into_proto(&self) -> ProtoNoneEnvelope {
-        ProtoNoneEnvelope {
-            key_envelope: Some(self.key_envelope.into_proto()),
-            key_arity: self.key_arity.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoNoneEnvelope) -> Result<Self, TryFromProtoError> {
-        Ok(NoneEnvelope {
-            key_envelope: proto
-                .key_envelope
-                .into_rust_if_some("ProtoNoneEnvelope::key_envelope")?,
-            key_arity: proto.key_arity.into_rust()?,
-        })
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Arbitrary)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct UpsertEnvelope {
     /// Full arity, including the key columns
     pub source_arity: usize,
@@ -115,31 +64,10 @@ pub struct UpsertEnvelope {
     pub style: UpsertStyle,
     /// The indices of the keys in the full value row, used
     /// to deduplicate data in `upsert_core`
-    #[proptest(strategy = "proptest::collection::vec(any::<usize>(), 0..4)")]
     pub key_indices: Vec<usize>,
 }
 
-impl RustType<ProtoUpsertEnvelope> for UpsertEnvelope {
-    fn into_proto(&self) -> ProtoUpsertEnvelope {
-        ProtoUpsertEnvelope {
-            source_arity: self.source_arity.into_proto(),
-            style: Some(self.style.into_proto()),
-            key_indices: self.key_indices.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoUpsertEnvelope) -> Result<Self, TryFromProtoError> {
-        Ok(UpsertEnvelope {
-            source_arity: proto.source_arity.into_rust()?,
-            style: proto
-                .style
-                .into_rust_if_some("ProtoUpsertEnvelope::style")?,
-            key_indices: proto.key_indices.into_rust()?,
-        })
-    }
-}
-
-#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub enum UpsertStyle {
     /// `ENVELOPE UPSERT`, where the key shape depends on the independent
     /// `KeyEnvelope`
@@ -153,49 +81,6 @@ pub enum UpsertStyle {
         key_envelope: KeyEnvelope,
         error_column: String,
     },
-}
-
-impl RustType<ProtoUpsertStyle> for UpsertStyle {
-    fn into_proto(&self) -> ProtoUpsertStyle {
-        use proto_upsert_style::{Kind, ProtoDebezium, ProtoValueErrInline};
-        ProtoUpsertStyle {
-            kind: Some(match self {
-                UpsertStyle::Default(e) => Kind::Default(e.into_proto()),
-                UpsertStyle::Debezium { after_idx } => Kind::Debezium(ProtoDebezium {
-                    after_idx: after_idx.into_proto(),
-                }),
-                UpsertStyle::ValueErrInline {
-                    key_envelope,
-                    error_column,
-                } => Kind::ValueErrorInline(ProtoValueErrInline {
-                    key_envelope: Some(key_envelope.into_proto()),
-                    error_column: error_column.clone(),
-                }),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoUpsertStyle) -> Result<Self, TryFromProtoError> {
-        use proto_upsert_style::Kind;
-        let kind = proto
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoUpsertStyle::kind"))?;
-        Ok(match kind {
-            Kind::Default(e) => UpsertStyle::Default(e.into_rust()?),
-            Kind::Debezium(d) => UpsertStyle::Debezium {
-                after_idx: d.after_idx.into_rust()?,
-            },
-            Kind::ValueErrorInline(e) => UpsertStyle::ValueErrInline {
-                key_envelope: e
-                    .key_envelope
-                    .ok_or_else(|| {
-                        TryFromProtoError::missing_field("ProtoValueErrInline::key_envelope")
-                    })?
-                    .into_rust()?,
-                error_column: e.error_column.clone(),
-            },
-        })
-    }
 }
 
 /// Computes the indices of the value's relation description that appear in the key.
@@ -396,7 +281,7 @@ impl UnplannedSourceEnvelope {
 }
 
 /// Whether and how to include the decoded key of a stream in dataflows
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum KeyEnvelope {
     /// Never include the key in the output row
     None,
@@ -408,31 +293,6 @@ pub enum KeyEnvelope {
     /// * For a multi-column key, the columns will get packed into a [`ScalarType::Record`], and
     ///   that Record will get the given name.
     Named(String),
-}
-
-impl RustType<ProtoKeyEnvelope> for KeyEnvelope {
-    fn into_proto(&self) -> ProtoKeyEnvelope {
-        use proto_key_envelope::Kind;
-        ProtoKeyEnvelope {
-            kind: Some(match self {
-                KeyEnvelope::None => Kind::None(()),
-                KeyEnvelope::Flattened => Kind::Flattened(()),
-                KeyEnvelope::Named(name) => Kind::Named(name.clone()),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoKeyEnvelope) -> Result<Self, TryFromProtoError> {
-        use proto_key_envelope::Kind;
-        let kind = proto
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoKeyEnvelope::kind"))?;
-        Ok(match kind {
-            Kind::None(()) => KeyEnvelope::None,
-            Kind::Flattened(()) => KeyEnvelope::Flattened,
-            Kind::Named(name) => KeyEnvelope::Named(name),
-        })
-    }
 }
 
 /// Compute the resulting value relation given the decoded value relation and the envelope

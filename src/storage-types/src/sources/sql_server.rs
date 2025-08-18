@@ -14,10 +14,9 @@ use std::time::Duration;
 
 use mz_dyncfg::Config;
 use mz_ore::future::InTask;
-use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
+use mz_proto::RustType;
 use mz_repr::{CatalogItemId, Datum, GlobalId, RelationDesc, Row, ScalarType};
 use mz_sql_server_util::cdc::Lsn;
-use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
 
@@ -86,7 +85,7 @@ pub static SQL_SERVER_PROGRESS_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
 });
 
 /// Details about how to create a Materialize Source that reads from Microsoft SQL Server.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SqlServerSource<C: ConnectionAccess = InlinedConnection> {
     /// ID of this SQL `SOURCE` object in the Catalog.
     pub catalog_id: CatalogItemId,
@@ -211,30 +210,6 @@ impl<C: ConnectionAccess> AlterCompatible for SqlServerSource<C> {
     }
 }
 
-impl RustType<ProtoSqlServerSource> for SqlServerSource {
-    fn into_proto(&self) -> ProtoSqlServerSource {
-        ProtoSqlServerSource {
-            catalog_id: Some(self.catalog_id.into_proto()),
-            connection: Some(self.connection.into_proto()),
-            extras: Some(self.extras.into_proto()),
-        }
-    }
-
-    fn from_proto(proto: ProtoSqlServerSource) -> Result<Self, mz_proto::TryFromProtoError> {
-        Ok(SqlServerSource {
-            catalog_id: proto
-                .catalog_id
-                .into_rust_if_some("ProtoSqlServerSource::catalog_id")?,
-            connection: proto
-                .connection
-                .into_rust_if_some("ProtoSqlServerSource::connection")?,
-            extras: proto
-                .extras
-                .into_rust_if_some("ProtoSqlServerSource::extras")?,
-        })
-    }
-}
-
 /// Extra information that is pertinent to creating a SQL Server specific
 /// Materialize source.
 ///
@@ -244,7 +219,7 @@ impl RustType<ProtoSqlServerSource> for SqlServerSource {
 ///
 /// It's currently unused but we keep the struct around to maintain conformity
 /// with other sources.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SqlServerSourceExtras {
     /// The most recent `restore_history_id` field from msdb.dbo.restorehistory. A change in this
     /// value indicates the upstream SQL server has been restored.
@@ -277,7 +252,7 @@ impl RustType<ProtoSqlServerSourceExtras> for SqlServerSourceExtras {
 }
 
 /// Specifies the details of a SQL Server source export.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SqlServerSourceExportDetails {
     /// Name of the SQL Server capture instance we replicate changes from.
     pub capture_instance: Arc<str>,
@@ -291,33 +266,6 @@ pub struct SqlServerSourceExportDetails {
     /// This is used as a consistent snapshot point for this export to ensure
     /// correctness in the case of multiple replicas.
     pub initial_lsn: mz_sql_server_util::cdc::Lsn,
-}
-
-impl RustType<ProtoSqlServerSourceExportDetails> for SqlServerSourceExportDetails {
-    fn into_proto(&self) -> ProtoSqlServerSourceExportDetails {
-        ProtoSqlServerSourceExportDetails {
-            capture_instance: self.capture_instance.to_string(),
-            table: Some(self.table.into_proto()),
-            text_columns: self.text_columns.clone(),
-            exclude_columns: self.exclude_columns.clone(),
-            initial_lsn: self.initial_lsn.as_bytes().to_vec(),
-        }
-    }
-
-    fn from_proto(
-        proto: ProtoSqlServerSourceExportDetails,
-    ) -> Result<Self, mz_proto::TryFromProtoError> {
-        Ok(SqlServerSourceExportDetails {
-            capture_instance: proto.capture_instance.into(),
-            table: proto
-                .table
-                .into_rust_if_some("ProtoSqlServerSourceExportDetails::table")?,
-            text_columns: proto.text_columns,
-            exclude_columns: proto.exclude_columns,
-            initial_lsn: mz_sql_server_util::cdc::Lsn::try_from(proto.initial_lsn.as_ref())
-                .map_err(|e| TryFromProtoError::InvalidFieldError(e.to_string()))?,
-        })
-    }
 }
 
 impl SourceTimestamp for Lsn {

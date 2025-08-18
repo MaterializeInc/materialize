@@ -19,7 +19,6 @@ use aws_types::SdkConfig;
 use aws_types::region::Region;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::{InTask, OreFutureExt};
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{CatalogItemId, GlobalId};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -36,11 +35,6 @@ use crate::{
     connections::{ConnectionContext, StringOrSecret},
 };
 
-include!(concat!(
-    env!("OUT_DIR"),
-    "/mz_storage_types.connections.aws.rs"
-));
-
 /// AWS connection configuration.
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct AwsConnection {
@@ -52,42 +46,6 @@ pub struct AwsConnection {
     pub region: Option<String>,
     /// The custom AWS endpoint to use, if any.
     pub endpoint: Option<String>,
-}
-
-impl RustType<ProtoAwsConnection> for AwsConnection {
-    fn into_proto(&self) -> ProtoAwsConnection {
-        let auth = match &self.auth {
-            AwsAuth::Credentials(credentials) => {
-                proto_aws_connection::Auth::Credentials(credentials.into_proto())
-            }
-            AwsAuth::AssumeRole(assume_role) => {
-                proto_aws_connection::Auth::AssumeRole(assume_role.into_proto())
-            }
-        };
-
-        ProtoAwsConnection {
-            auth: Some(auth),
-            region: self.region.clone(),
-            endpoint: self.endpoint.clone(),
-        }
-    }
-
-    fn from_proto(proto: ProtoAwsConnection) -> Result<Self, TryFromProtoError> {
-        let auth = match proto.auth.expect("auth expected") {
-            proto_aws_connection::Auth::Credentials(credentials) => {
-                AwsAuth::Credentials(credentials.into_rust()?)
-            }
-            proto_aws_connection::Auth::AssumeRole(assume_role) => {
-                AwsAuth::AssumeRole(assume_role.into_rust()?)
-            }
-        };
-
-        Ok(AwsConnection {
-            auth,
-            region: proto.region,
-            endpoint: proto.endpoint,
-        })
-    }
 }
 
 impl AlterCompatible for AwsConnection {
@@ -151,28 +109,6 @@ impl AwsCredentials {
                 None => None,
             },
         ))
-    }
-}
-
-impl RustType<ProtoAwsCredentials> for AwsCredentials {
-    fn into_proto(&self) -> ProtoAwsCredentials {
-        ProtoAwsCredentials {
-            access_key_id: Some(self.access_key_id.into_proto()),
-            secret_access_key: Some(self.secret_access_key.into_proto()),
-            session_token: self.session_token.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoAwsCredentials) -> Result<Self, TryFromProtoError> {
-        Ok(AwsCredentials {
-            access_key_id: proto
-                .access_key_id
-                .into_rust_if_some("ProtoAwsCredentials::access_key_id")?,
-            secret_access_key: proto
-                .secret_access_key
-                .into_rust_if_some("ProtoAwsCredentials::secret_access_key")?,
-            session_token: proto.session_token.into_rust()?,
-        })
     }
 }
 
@@ -300,22 +236,6 @@ impl AwsAssumeRole {
             ]
           }
         ))
-    }
-}
-
-impl RustType<ProtoAwsAssumeRole> for AwsAssumeRole {
-    fn into_proto(&self) -> ProtoAwsAssumeRole {
-        ProtoAwsAssumeRole {
-            arn: self.arn.clone(),
-            session_name: self.session_name.clone(),
-        }
-    }
-
-    fn from_proto(proto: ProtoAwsAssumeRole) -> Result<Self, TryFromProtoError> {
-        Ok(AwsAssumeRole {
-            arn: proto.arn,
-            session_name: proto.session_name,
-        })
     }
 }
 
@@ -447,7 +367,7 @@ impl AwsConnectionValidationError {
 }
 
 /// References an AWS connection.
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct AwsConnectionReference<C: ConnectionAccess = InlinedConnection> {
     /// ID of the AWS connection.
     pub connection_id: CatalogItemId,
@@ -468,25 +388,5 @@ impl<R: ConnectionResolver> IntoInlineConnection<AwsConnectionReference, R>
             connection: r.resolve_connection(connection).unwrap_aws(),
             connection_id,
         }
-    }
-}
-
-impl RustType<ProtoAwsConnectionReference> for AwsConnectionReference<InlinedConnection> {
-    fn into_proto(&self) -> ProtoAwsConnectionReference {
-        ProtoAwsConnectionReference {
-            connection_id: Some(self.connection_id.into_proto()),
-            connection: Some(self.connection.into_proto()),
-        }
-    }
-
-    fn from_proto(proto: ProtoAwsConnectionReference) -> Result<Self, TryFromProtoError> {
-        Ok(AwsConnectionReference {
-            connection_id: proto
-                .connection_id
-                .into_rust_if_some("ProtoAwsConnectionReference::connection_id")?,
-            connection: proto
-                .connection
-                .into_rust_if_some("ProtoAwsConnectionReference::connection")?,
-        })
     }
 }

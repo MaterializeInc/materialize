@@ -32,9 +32,6 @@ use mz_ore::future::{InTask, OreFutureExt};
 use mz_ore::netio::DUMMY_DNS_PORT;
 use mz_ore::netio::resolve_address;
 use mz_ore::num::NonNeg;
-use mz_proto::tokio_postgres::any_ssl_mode;
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use mz_repr::url::any_url;
 use mz_repr::{CatalogItemId, GlobalId};
 use mz_secrets::SecretsReader;
 use mz_ssh_util::keys::SshKeyPair;
@@ -42,9 +39,6 @@ use mz_ssh_util::tunnel::SshTunnelConfig;
 use mz_ssh_util::tunnel_manager::{ManagedSshTunnelHandle, SshTunnelManager};
 use mz_tls_util::Pkcs12Archive;
 use mz_tracing::CloneableEnvFilter;
-use proptest::prelude::{Arbitrary, BoxedStrategy};
-use proptest::strategy::Strategy;
-use proptest_derive::Arbitrary;
 use rdkafka::ClientContext;
 use rdkafka::config::FromClientConfigAndContext;
 use rdkafka::consumer::{BaseConsumer, Consumer};
@@ -72,8 +66,6 @@ use crate::errors::{ContextCreationError, CsrConnectError};
 pub mod aws;
 pub mod inline;
 pub mod string_or_secret;
-
-include!(concat!(env!("OUT_DIR"), "/mz_storage_types.connections.rs"));
 
 const REST_CATALOG_PROP_SCOPE: &str = "scope";
 const REST_CATALOG_PROP_CREDENTIAL: &str = "credential";
@@ -199,7 +191,7 @@ impl ConnectionContext {
     }
 }
 
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum Connection<C: ConnectionAccess = InlinedConnection> {
     Kafka(KafkaConnection<C>),
     Csr(CsrConnection<C>),
@@ -371,7 +363,7 @@ impl<C: ConnectionAccess> AlterCompatible for Connection<C> {
     }
 }
 
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct RestIcebergCatalog {
     /// For REST catalogs, the oauth2 credential in a `CLIENT_ID:CLIENT_SECRET` format
     pub credential: StringOrSecret,
@@ -381,7 +373,7 @@ pub struct RestIcebergCatalog {
     pub warehouse: Option<String>,
 }
 
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct S3TablesRestIcebergCatalog<C: ConnectionAccess = InlinedConnection> {
     /// The AWS connection details, for s3tables
     pub aws_connection: AwsConnectionReference<C>,
@@ -400,13 +392,13 @@ impl<R: ConnectionResolver> IntoInlineConnection<S3TablesRestIcebergCatalog, R>
     }
 }
 
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum IcebergCatalogType {
     Rest,
     S3TablesRest,
 }
 
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum IcebergCatalogImpl<C: ConnectionAccess = InlinedConnection> {
     Rest(RestIcebergCatalog),
     S3TablesRest(S3TablesRestIcebergCatalog<C>),
@@ -431,23 +423,6 @@ pub struct IcebergCatalogConnection<C: ConnectionAccess = InlinedConnection> {
     pub catalog: IcebergCatalogImpl<C>,
     /// Where the catalog is located
     pub uri: reqwest::Url,
-}
-
-impl<C: ConnectionAccess> Arbitrary for IcebergCatalogConnection<C> {
-    type Parameters = ();
-    type Strategy = BoxedStrategy<Self>;
-
-    fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
-        (
-            IcebergCatalogImpl::arbitrary(),
-            proptest::sample::select(vec![
-                reqwest::Url::parse("https://example.com/catalog").unwrap(),
-                reqwest::Url::parse("https://catalog.example.org").unwrap(),
-            ]),
-        )
-            .prop_map(|(catalog, uri)| IcebergCatalogConnection { catalog, uri })
-            .boxed()
-    }
 }
 
 impl AlterCompatible for IcebergCatalogConnection {
@@ -582,7 +557,7 @@ impl IcebergCatalogConnection<InlinedConnection> {
     }
 }
 
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct AwsPrivatelinkConnection {
     pub service_name: String,
     pub availability_zones: Vec<String>,
@@ -595,13 +570,13 @@ impl AlterCompatible for AwsPrivatelinkConnection {
     }
 }
 
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct KafkaTlsConfig {
     pub identity: Option<TlsIdentity>,
     pub root_cert: Option<StringOrSecret>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Arbitrary)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct KafkaSaslConfig<C: ConnectionAccess = InlinedConnection> {
     pub mechanism: String,
     pub username: StringOrSecret,
@@ -623,7 +598,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSaslConfig, R>
 }
 
 /// Specifies a Kafka broker in a [`KafkaConnection`].
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct KafkaBroker<C: ConnectionAccess = InlinedConnection> {
     /// The address of the Kafka broker.
     pub address: String,
@@ -643,25 +618,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaBroker, R>
     }
 }
 
-impl RustType<ProtoKafkaBroker> for KafkaBroker {
-    fn into_proto(&self) -> ProtoKafkaBroker {
-        ProtoKafkaBroker {
-            address: self.address.into_proto(),
-            tunnel: Some(self.tunnel.into_proto()),
-        }
-    }
-
-    fn from_proto(proto: ProtoKafkaBroker) -> Result<Self, TryFromProtoError> {
-        Ok(KafkaBroker {
-            address: proto.address.into_rust()?,
-            tunnel: proto
-                .tunnel
-                .into_rust_if_some("ProtoKafkaConnection::tunnel")?,
-        })
-    }
-}
-
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Default)]
 pub struct KafkaTopicOptions {
     /// The replication factor for the topic.
     /// If `None`, the broker default will be used.
@@ -673,25 +630,7 @@ pub struct KafkaTopicOptions {
     pub topic_config: BTreeMap<String, String>,
 }
 
-impl RustType<ProtoKafkaTopicOptions> for KafkaTopicOptions {
-    fn into_proto(&self) -> ProtoKafkaTopicOptions {
-        ProtoKafkaTopicOptions {
-            replication_factor: self.replication_factor.map(|f| *f),
-            partition_count: self.partition_count.map(|f| *f),
-            topic_config: self.topic_config.clone(),
-        }
-    }
-
-    fn from_proto(proto: ProtoKafkaTopicOptions) -> Result<Self, TryFromProtoError> {
-        Ok(KafkaTopicOptions {
-            replication_factor: proto.replication_factor.map(NonNeg::try_from).transpose()?,
-            partition_count: proto.partition_count.map(NonNeg::try_from).transpose()?,
-            topic_config: proto.topic_config,
-        })
-    }
-}
-
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct KafkaConnection<C: ConnectionAccess = InlinedConnection> {
     pub brokers: Vec<KafkaBroker<C>>,
     /// A tunnel through which to route traffic,
@@ -1148,88 +1087,10 @@ impl<C: ConnectionAccess> AlterCompatible for KafkaConnection<C> {
     }
 }
 
-impl RustType<ProtoKafkaConnectionTlsConfig> for KafkaTlsConfig {
-    fn into_proto(&self) -> ProtoKafkaConnectionTlsConfig {
-        ProtoKafkaConnectionTlsConfig {
-            identity: self.identity.into_proto(),
-            root_cert: self.root_cert.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoKafkaConnectionTlsConfig) -> Result<Self, TryFromProtoError> {
-        Ok(KafkaTlsConfig {
-            root_cert: proto.root_cert.into_rust()?,
-            identity: proto.identity.into_rust()?,
-        })
-    }
-}
-
-impl RustType<ProtoKafkaConnectionSaslConfig> for KafkaSaslConfig {
-    fn into_proto(&self) -> ProtoKafkaConnectionSaslConfig {
-        ProtoKafkaConnectionSaslConfig {
-            mechanism: self.mechanism.into_proto(),
-            username: Some(self.username.into_proto()),
-            password: self.password.into_proto(),
-            aws: self.aws.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoKafkaConnectionSaslConfig) -> Result<Self, TryFromProtoError> {
-        Ok(KafkaSaslConfig {
-            mechanism: proto.mechanism,
-            username: proto
-                .username
-                .into_rust_if_some("ProtoKafkaConnectionSaslConfig::username")?,
-            password: proto.password.into_rust()?,
-            aws: proto.aws.into_rust()?,
-        })
-    }
-}
-
-impl RustType<ProtoKafkaConnection> for KafkaConnection {
-    fn into_proto(&self) -> ProtoKafkaConnection {
-        ProtoKafkaConnection {
-            brokers: self.brokers.into_proto(),
-            default_tunnel: Some(self.default_tunnel.into_proto()),
-            progress_topic: self.progress_topic.into_proto(),
-            progress_topic_options: Some(self.progress_topic_options.into_proto()),
-            options: self
-                .options
-                .iter()
-                .map(|(k, v)| (k.clone(), v.into_proto()))
-                .collect(),
-            tls: self.tls.into_proto(),
-            sasl: self.sasl.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoKafkaConnection) -> Result<Self, TryFromProtoError> {
-        Ok(KafkaConnection {
-            brokers: proto.brokers.into_rust()?,
-            default_tunnel: proto
-                .default_tunnel
-                .into_rust_if_some("ProtoKafkaConnection::default_tunnel")?,
-            progress_topic: proto.progress_topic,
-            progress_topic_options: match proto.progress_topic_options {
-                Some(progress_topic_options) => progress_topic_options.into_rust()?,
-                None => Default::default(),
-            },
-            options: proto
-                .options
-                .into_iter()
-                .map(|(k, v)| StringOrSecret::from_proto(v).map(|v| (k, v)))
-                .collect::<Result<_, _>>()?,
-            tls: proto.tls.into_rust()?,
-            sasl: proto.sasl.into_rust()?,
-        })
-    }
-}
-
 /// A connection to a Confluent Schema Registry.
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Arbitrary)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct CsrConnection<C: ConnectionAccess = InlinedConnection> {
     /// The URL of the schema registry.
-    #[proptest(strategy = "any_url()")]
     pub url: Url,
     /// Trusted root TLS certificate in PEM format.
     pub tls_root_cert: Option<StringOrSecret>,
@@ -1433,30 +1294,6 @@ impl CsrConnection {
     }
 }
 
-impl RustType<ProtoCsrConnection> for CsrConnection {
-    fn into_proto(&self) -> ProtoCsrConnection {
-        ProtoCsrConnection {
-            url: Some(self.url.into_proto()),
-            tls_root_cert: self.tls_root_cert.into_proto(),
-            tls_identity: self.tls_identity.into_proto(),
-            http_auth: self.http_auth.into_proto(),
-            tunnel: Some(self.tunnel.into_proto()),
-        }
-    }
-
-    fn from_proto(proto: ProtoCsrConnection) -> Result<Self, TryFromProtoError> {
-        Ok(CsrConnection {
-            url: proto.url.into_rust_if_some("ProtoCsrConnection::url")?,
-            tls_root_cert: proto.tls_root_cert.into_rust()?,
-            tls_identity: proto.tls_identity.into_rust()?,
-            http_auth: proto.http_auth.into_rust()?,
-            tunnel: proto
-                .tunnel
-                .into_rust_if_some("ProtoCsrConnection::tunnel")?,
-        })
-    }
-}
-
 impl<C: ConnectionAccess> AlterCompatible for CsrConnection<C> {
     fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
         let CsrConnection {
@@ -1486,7 +1323,7 @@ impl<C: ConnectionAccess> AlterCompatible for CsrConnection<C> {
 }
 
 /// A TLS key pair used for client identity.
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct TlsIdentity {
     /// The client's TLS public certificate in PEM format.
     pub cert: StringOrSecret,
@@ -1495,24 +1332,8 @@ pub struct TlsIdentity {
     pub key: CatalogItemId,
 }
 
-impl RustType<ProtoTlsIdentity> for TlsIdentity {
-    fn into_proto(&self) -> ProtoTlsIdentity {
-        ProtoTlsIdentity {
-            cert: Some(self.cert.into_proto()),
-            key: Some(self.key.into_proto()),
-        }
-    }
-
-    fn from_proto(proto: ProtoTlsIdentity) -> Result<Self, TryFromProtoError> {
-        Ok(TlsIdentity {
-            cert: proto.cert.into_rust_if_some("ProtoTlsIdentity::cert")?,
-            key: proto.key.into_rust_if_some("ProtoTlsIdentity::key")?,
-        })
-    }
-}
-
 /// HTTP authentication credentials in a [`CsrConnection`].
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct CsrConnectionHttpAuth {
     /// The username.
     pub username: StringOrSecret,
@@ -1520,26 +1341,8 @@ pub struct CsrConnectionHttpAuth {
     pub password: Option<CatalogItemId>,
 }
 
-impl RustType<ProtoCsrConnectionHttpAuth> for CsrConnectionHttpAuth {
-    fn into_proto(&self) -> ProtoCsrConnectionHttpAuth {
-        ProtoCsrConnectionHttpAuth {
-            username: Some(self.username.into_proto()),
-            password: self.password.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoCsrConnectionHttpAuth) -> Result<Self, TryFromProtoError> {
-        Ok(CsrConnectionHttpAuth {
-            username: proto
-                .username
-                .into_rust_if_some("ProtoCsrConnectionHttpAuth::username")?,
-            password: proto.password.into_rust()?,
-        })
-    }
-}
-
 /// A connection to a PostgreSQL server.
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Arbitrary)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct PostgresConnection<C: ConnectionAccess = InlinedConnection> {
     /// The hostname of the server.
     pub host: String,
@@ -1554,7 +1357,6 @@ pub struct PostgresConnection<C: ConnectionAccess = InlinedConnection> {
     /// A tunnel through which to route traffic.
     pub tunnel: Tunnel<C>,
     /// Whether to use TLS for encryption, authentication, or both.
-    #[proptest(strategy = "any_ssl_mode()")]
     pub tls_mode: SslMode,
     /// An optional root TLS certificate in PEM format, to verify the server's
     /// identity.
@@ -1793,44 +1595,8 @@ impl<C: ConnectionAccess> AlterCompatible for PostgresConnection<C> {
     }
 }
 
-impl RustType<ProtoPostgresConnection> for PostgresConnection {
-    fn into_proto(&self) -> ProtoPostgresConnection {
-        ProtoPostgresConnection {
-            host: self.host.into_proto(),
-            port: self.port.into_proto(),
-            database: self.database.into_proto(),
-            user: Some(self.user.into_proto()),
-            password: self.password.into_proto(),
-            tls_mode: Some(self.tls_mode.into_proto()),
-            tls_root_cert: self.tls_root_cert.into_proto(),
-            tls_identity: self.tls_identity.into_proto(),
-            tunnel: Some(self.tunnel.into_proto()),
-        }
-    }
-
-    fn from_proto(proto: ProtoPostgresConnection) -> Result<Self, TryFromProtoError> {
-        Ok(PostgresConnection {
-            host: proto.host,
-            port: proto.port.into_rust()?,
-            database: proto.database,
-            user: proto
-                .user
-                .into_rust_if_some("ProtoPostgresConnection::user")?,
-            password: proto.password.into_rust()?,
-            tunnel: proto
-                .tunnel
-                .into_rust_if_some("ProtoPostgresConnection::tunnel")?,
-            tls_mode: proto
-                .tls_mode
-                .into_rust_if_some("ProtoPostgresConnection::tls_mode")?,
-            tls_root_cert: proto.tls_root_cert.into_rust()?,
-            tls_identity: proto.tls_identity.into_rust()?,
-        })
-    }
-}
-
 /// Specifies how to tunnel a connection.
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum Tunnel<C: ConnectionAccess = InlinedConnection> {
     /// No tunneling.
     Direct,
@@ -1847,29 +1613,6 @@ impl<R: ConnectionResolver> IntoInlineConnection<Tunnel, R> for Tunnel<Reference
             Tunnel::Ssh(ssh) => Tunnel::Ssh(ssh.into_inline_connection(r)),
             Tunnel::AwsPrivatelink(awspl) => Tunnel::AwsPrivatelink(awspl),
         }
-    }
-}
-
-impl RustType<ProtoTunnel> for Tunnel<InlinedConnection> {
-    fn into_proto(&self) -> ProtoTunnel {
-        use proto_tunnel::Tunnel as ProtoTunnelField;
-        ProtoTunnel {
-            tunnel: Some(match &self {
-                Tunnel::Direct => ProtoTunnelField::Direct(()),
-                Tunnel::Ssh(ssh) => ProtoTunnelField::Ssh(ssh.into_proto()),
-                Tunnel::AwsPrivatelink(aws) => ProtoTunnelField::AwsPrivatelink(aws.into_proto()),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoTunnel) -> Result<Self, TryFromProtoError> {
-        use proto_tunnel::Tunnel as ProtoTunnelField;
-        Ok(match proto.tunnel {
-            None => return Err(TryFromProtoError::missing_field("ProtoTunnel::tunnel")),
-            Some(ProtoTunnelField::Direct(())) => Tunnel::Direct,
-            Some(ProtoTunnelField::Ssh(ssh)) => Tunnel::Ssh(ssh.into_rust()?),
-            Some(ProtoTunnelField::AwsPrivatelink(aws)) => Tunnel::AwsPrivatelink(aws.into_rust()?),
-        })
     }
 }
 
@@ -1897,7 +1640,7 @@ impl<C: ConnectionAccess> AlterCompatible for Tunnel<C> {
 /// Specifies which MySQL SSL Mode to use:
 /// <https://dev.mysql.com/doc/refman/8.0/en/connection-options.html#option_general_ssl-mode>
 /// This is not available as an enum in the mysql-async crate, so we define our own.
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum MySqlSslMode {
     Disabled,
     Required,
@@ -1905,42 +1648,8 @@ pub enum MySqlSslMode {
     VerifyIdentity,
 }
 
-impl RustType<i32> for MySqlSslMode {
-    fn into_proto(&self) -> i32 {
-        match self {
-            MySqlSslMode::Disabled => ProtoMySqlSslMode::Disabled.into(),
-            MySqlSslMode::Required => ProtoMySqlSslMode::Required.into(),
-            MySqlSslMode::VerifyCa => ProtoMySqlSslMode::VerifyCa.into(),
-            MySqlSslMode::VerifyIdentity => ProtoMySqlSslMode::VerifyIdentity.into(),
-        }
-    }
-
-    fn from_proto(proto: i32) -> Result<Self, TryFromProtoError> {
-        Ok(match ProtoMySqlSslMode::try_from(proto) {
-            Ok(ProtoMySqlSslMode::Disabled) => MySqlSslMode::Disabled,
-            Ok(ProtoMySqlSslMode::Required) => MySqlSslMode::Required,
-            Ok(ProtoMySqlSslMode::VerifyCa) => MySqlSslMode::VerifyCa,
-            Ok(ProtoMySqlSslMode::VerifyIdentity) => MySqlSslMode::VerifyIdentity,
-            Err(_) => {
-                return Err(TryFromProtoError::UnknownEnumVariant(
-                    "tls_mode".to_string(),
-                ));
-            }
-        })
-    }
-}
-
-pub fn any_mysql_ssl_mode() -> impl Strategy<Value = MySqlSslMode> {
-    proptest::sample::select(vec![
-        MySqlSslMode::Disabled,
-        MySqlSslMode::Required,
-        MySqlSslMode::VerifyCa,
-        MySqlSslMode::VerifyIdentity,
-    ])
-}
-
 /// A connection to a MySQL server.
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, Arbitrary)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct MySqlConnection<C: ConnectionAccess = InlinedConnection> {
     /// The hostname of the server.
     pub host: String,
@@ -1953,7 +1662,6 @@ pub struct MySqlConnection<C: ConnectionAccess = InlinedConnection> {
     /// A tunnel through which to route traffic.
     pub tunnel: Tunnel<C>,
     /// Whether to use TLS for encryption, verify the server's certificate, and identity.
-    #[proptest(strategy = "any_mysql_ssl_mode()")]
     pub tls_mode: MySqlSslMode,
     /// An optional root TLS certificate in PEM format, to verify the server's
     /// identity.
@@ -2165,38 +1873,6 @@ impl MySqlConnection<InlinedConnection> {
     }
 }
 
-impl RustType<ProtoMySqlConnection> for MySqlConnection {
-    fn into_proto(&self) -> ProtoMySqlConnection {
-        ProtoMySqlConnection {
-            host: self.host.into_proto(),
-            port: self.port.into_proto(),
-            user: Some(self.user.into_proto()),
-            password: self.password.into_proto(),
-            tls_mode: self.tls_mode.into_proto(),
-            tls_root_cert: self.tls_root_cert.into_proto(),
-            tls_identity: self.tls_identity.into_proto(),
-            tunnel: Some(self.tunnel.into_proto()),
-            aws_connection: self.aws_connection.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoMySqlConnection) -> Result<Self, TryFromProtoError> {
-        Ok(MySqlConnection {
-            host: proto.host,
-            port: proto.port.into_rust()?,
-            user: proto.user.into_rust_if_some("ProtoMySqlConnection::user")?,
-            password: proto.password.into_rust()?,
-            tunnel: proto
-                .tunnel
-                .into_rust_if_some("ProtoMySqlConnection::tunnel")?,
-            tls_mode: proto.tls_mode.into_rust()?,
-            tls_root_cert: proto.tls_root_cert.into_rust()?,
-            tls_identity: proto.tls_identity.into_rust()?,
-            aws_connection: proto.aws_connection.into_rust()?,
-        })
-    }
-}
-
 impl<C: ConnectionAccess> AlterCompatible for MySqlConnection<C> {
     fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
         let MySqlConnection {
@@ -2235,7 +1911,7 @@ impl<C: ConnectionAccess> AlterCompatible for MySqlConnection<C> {
 /// Materialize Source, see [`SqlServerSource`] which wraps this type.
 ///
 /// [`SqlServerSource`]: crate::sources::SqlServerSource
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct SqlServerConnectionDetails<C: ConnectionAccess = InlinedConnection> {
     /// The hostname of the server.
     pub host: String,
@@ -2462,109 +2138,8 @@ impl<C: ConnectionAccess> AlterCompatible for SqlServerConnectionDetails<C> {
     }
 }
 
-impl RustType<ProtoSqlServerConnectionDetails> for SqlServerConnectionDetails {
-    fn into_proto(&self) -> ProtoSqlServerConnectionDetails {
-        ProtoSqlServerConnectionDetails {
-            host: self.host.into_proto(),
-            port: self.port.into_proto(),
-            database: self.database.into_proto(),
-            user: Some(self.user.into_proto()),
-            password: Some(self.password.into_proto()),
-            tunnel: Some(self.tunnel.into_proto()),
-            encryption: self.encryption.into_proto().into(),
-            certificate_validation_policy: self.certificate_validation_policy.into_proto().into(),
-            tls_root_cert: self.tls_root_cert.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoSqlServerConnectionDetails) -> Result<Self, TryFromProtoError> {
-        Ok(SqlServerConnectionDetails {
-            host: proto.host,
-            port: proto.port.into_rust()?,
-            database: proto.database.into_rust()?,
-            user: proto
-                .user
-                .into_rust_if_some("ProtoSqlServerConnectionDetails::user")?,
-            password: proto
-                .password
-                .into_rust_if_some("ProtoSqlServerConnectionDetails::password")?,
-            tunnel: proto
-                .tunnel
-                .into_rust_if_some("ProtoSqlServerConnectionDetails::tunnel")?,
-            encryption: ProtoSqlServerEncryptionLevel::try_from(proto.encryption)?.into_rust()?,
-            certificate_validation_policy: ProtoSqlServerCertificateValidationPolicy::try_from(
-                proto.certificate_validation_policy,
-            )?
-            .into_rust()?,
-            tls_root_cert: proto.tls_root_cert.into_rust()?,
-        })
-    }
-}
-
-impl RustType<ProtoSqlServerEncryptionLevel> for mz_sql_server_util::config::EncryptionLevel {
-    fn into_proto(&self) -> ProtoSqlServerEncryptionLevel {
-        match self {
-            Self::None => ProtoSqlServerEncryptionLevel::SqlServerNone,
-            Self::Login => ProtoSqlServerEncryptionLevel::SqlServerLogin,
-            Self::Preferred => ProtoSqlServerEncryptionLevel::SqlServerPreferred,
-            Self::Required => ProtoSqlServerEncryptionLevel::SqlServerRequired,
-        }
-    }
-
-    fn from_proto(proto: ProtoSqlServerEncryptionLevel) -> Result<Self, TryFromProtoError> {
-        Ok(match proto {
-            ProtoSqlServerEncryptionLevel::SqlServerNone => {
-                mz_sql_server_util::config::EncryptionLevel::None
-            }
-            ProtoSqlServerEncryptionLevel::SqlServerLogin => {
-                mz_sql_server_util::config::EncryptionLevel::Login
-            }
-            ProtoSqlServerEncryptionLevel::SqlServerPreferred => {
-                mz_sql_server_util::config::EncryptionLevel::Preferred
-            }
-            ProtoSqlServerEncryptionLevel::SqlServerRequired => {
-                mz_sql_server_util::config::EncryptionLevel::Required
-            }
-        })
-    }
-}
-
-impl RustType<ProtoSqlServerCertificateValidationPolicy>
-    for mz_sql_server_util::config::CertificateValidationPolicy
-{
-    fn into_proto(&self) -> ProtoSqlServerCertificateValidationPolicy {
-        match self {
-            mz_sql_server_util::config::CertificateValidationPolicy::TrustAll => {
-                ProtoSqlServerCertificateValidationPolicy::SqlServerTrustAll
-            }
-            mz_sql_server_util::config::CertificateValidationPolicy::VerifySystem => {
-                ProtoSqlServerCertificateValidationPolicy::SqlServerVerifySystem
-            }
-            mz_sql_server_util::config::CertificateValidationPolicy::VerifyCA => {
-                ProtoSqlServerCertificateValidationPolicy::SqlServerVerifyCa
-            }
-        }
-    }
-
-    fn from_proto(
-        proto: ProtoSqlServerCertificateValidationPolicy,
-    ) -> Result<Self, TryFromProtoError> {
-        Ok(match proto {
-            ProtoSqlServerCertificateValidationPolicy::SqlServerTrustAll => {
-                mz_sql_server_util::config::CertificateValidationPolicy::TrustAll
-            }
-            ProtoSqlServerCertificateValidationPolicy::SqlServerVerifySystem => {
-                mz_sql_server_util::config::CertificateValidationPolicy::VerifySystem
-            }
-            ProtoSqlServerCertificateValidationPolicy::SqlServerVerifyCa => {
-                mz_sql_server_util::config::CertificateValidationPolicy::VerifyCA
-            }
-        })
-    }
-}
-
 /// A connection to an SSH tunnel.
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct SshConnection {
     pub host: String,
     pub port: u16,
@@ -2576,24 +2151,6 @@ use self::inline::{
     ReferencedConnection,
 };
 
-impl RustType<ProtoSshConnection> for SshConnection {
-    fn into_proto(&self) -> ProtoSshConnection {
-        ProtoSshConnection {
-            host: self.host.into_proto(),
-            port: self.port.into_proto(),
-            user: self.user.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoSshConnection) -> Result<Self, TryFromProtoError> {
-        Ok(SshConnection {
-            host: proto.host,
-            port: proto.port.into_rust()?,
-            user: proto.user,
-        })
-    }
-}
-
 impl AlterCompatible for SshConnection {
     fn alter_compatible(&self, _id: GlobalId, _other: &Self) -> Result<(), AlterError> {
         // Every element of the SSH connection is configurable.
@@ -2602,7 +2159,7 @@ impl AlterCompatible for SshConnection {
 }
 
 /// Specifies an AWS PrivateLink service for a [`Tunnel`].
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct AwsPrivatelink {
     /// The ID of the connection to the AWS PrivateLink service.
     pub connection_id: CatalogItemId,
@@ -2611,26 +2168,6 @@ pub struct AwsPrivatelink {
     /// The port to use when connecting to the AWS PrivateLink service, if
     /// different from the port in [`KafkaBroker::address`].
     pub port: Option<u16>,
-}
-
-impl RustType<ProtoAwsPrivatelink> for AwsPrivatelink {
-    fn into_proto(&self) -> ProtoAwsPrivatelink {
-        ProtoAwsPrivatelink {
-            connection_id: Some(self.connection_id.into_proto()),
-            availability_zone: self.availability_zone.into_proto(),
-            port: self.port.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoAwsPrivatelink) -> Result<Self, TryFromProtoError> {
-        Ok(AwsPrivatelink {
-            connection_id: proto
-                .connection_id
-                .into_rust_if_some("ProtoAwsPrivatelink::connection_id")?,
-            availability_zone: proto.availability_zone.into_rust()?,
-            port: proto.port.into_rust()?,
-        })
-    }
 }
 
 impl AlterCompatible for AwsPrivatelink {
@@ -2660,7 +2197,7 @@ impl AlterCompatible for AwsPrivatelink {
 }
 
 /// Specifies an SSH tunnel connection.
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct SshTunnel<C: ConnectionAccess = InlinedConnection> {
     /// id of the ssh connection
     pub connection_id: CatalogItemId,
@@ -2679,26 +2216,6 @@ impl<R: ConnectionResolver> IntoInlineConnection<SshTunnel, R> for SshTunnel<Ref
             connection: r.resolve_connection(connection).unwrap_ssh(),
             connection_id,
         }
-    }
-}
-
-impl RustType<ProtoSshTunnel> for SshTunnel<InlinedConnection> {
-    fn into_proto(&self) -> ProtoSshTunnel {
-        ProtoSshTunnel {
-            connection_id: Some(self.connection_id.into_proto()),
-            connection: Some(self.connection.into_proto()),
-        }
-    }
-
-    fn from_proto(proto: ProtoSshTunnel) -> Result<Self, TryFromProtoError> {
-        Ok(SshTunnel {
-            connection_id: proto
-                .connection_id
-                .into_rust_if_some("ProtoSshTunnel::connection_id")?,
-            connection: proto
-                .connection
-                .into_rust_if_some("ProtoSshTunnel::connection")?,
-        })
     }
 }
 

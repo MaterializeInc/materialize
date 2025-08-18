@@ -11,78 +11,18 @@ syntax = "proto3";
 
 package mz_storage_types.sources;
 
-import "google/protobuf/empty.proto";
-import "proto/src/proto.proto";
-import "repr/src/global_id.proto";
 import "repr/src/row.proto";
-import "storage-types/src/controller.proto";
 import "storage-types/src/errors.proto";
-import "storage-types/src/instances.proto";
-import "storage-types/src/sources/encoding.proto";
-import "storage-types/src/sources/envelope.proto";
 import "storage-types/src/sources/kafka.proto";
 import "storage-types/src/sources/load_generator.proto";
 import "storage-types/src/sources/mysql.proto";
 import "storage-types/src/sources/postgres.proto";
 import "storage-types/src/sources/sql_server.proto";
 
-message ProtoMzOffset {
-  uint64 offset = 1;
-}
-
-message ProtoTimeline {
-  oneof kind {
-    google.protobuf.Empty epoch_milliseconds = 1;
-    string external = 2;
-    string user = 3;
-  }
-}
-
-message ProtoSourceExportDataConfig {
-  mz_storage_types.sources.encoding.ProtoSourceDataEncoding encoding = 1;
-  mz_storage_types.sources.envelope.ProtoSourceEnvelope envelope = 2;
-}
-
-message ProtoSourceDesc {
-  reserved 2, 3, 4;
-  ProtoSourceConnection connection = 1;
-  mz_proto.ProtoDuration timestamp_interval = 5;
-  ProtoSourceExportDataConfig primary_export = 6;
-  ProtoSourceExportDetails primary_export_details = 7;
-}
-
-message ProtoSourceConnection {
-  reserved 2, 3, 5, 7;
-  oneof kind {
-    mz_storage_types.sources.kafka.ProtoKafkaSourceConnection kafka = 1;
-    mz_storage_types.sources.postgres.ProtoPostgresSourceConnection postgres = 4;
-    mz_storage_types.sources.load_generator.ProtoLoadGeneratorSourceConnection loadgen = 6;
-    mz_storage_types.sources.mysql.ProtoMySqlSourceConnection mysql = 8;
-    mz_storage_types.sources.sql_server.ProtoSqlServerSource sql_server = 9;
-  }
-}
-
 message ProtoSourceData {
   oneof kind {
     mz_repr.row.ProtoRow ok = 1;
     errors.ProtoDataflowError err = 2;
-  }
-}
-
-message ProtoCompression {
-  oneof kind {
-    google.protobuf.Empty gzip = 1;
-    google.protobuf.Empty none = 2;
-  }
-}
-
-message ProtoSourceExportDetails {
-  oneof kind {
-    mz_storage_types.sources.kafka.ProtoKafkaSourceExportDetails kafka = 1;
-    mz_storage_types.sources.postgres.ProtoPostgresSourceExportDetails postgres = 2;
-    mz_storage_types.sources.mysql.ProtoMySqlSourceExportDetails mysql = 3;
-    mz_storage_types.sources.sql_server.ProtoSqlServerSourceExportDetails sql_server = 5;
-    mz_storage_types.sources.load_generator.ProtoLoadGeneratorSourceExportDetails loadgen = 4;
   }
 }
 
@@ -97,31 +37,4 @@ message ProtoSourceExportStatementDetails {
     mz_storage_types.sources.load_generator.ProtoLoadGeneratorSourceExportStatementDetails loadgen = 3;
     mz_storage_types.sources.kafka.ProtoKafkaSourceExportStatementDetails kafka = 4;
   }
-}
-
-message ProtoIngestionDescription {
-  message ProtoSourceImport {
-    mz_repr.global_id.ProtoGlobalId id = 1;
-    mz_storage_types.controller.ProtoCollectionMetadata storage_metadata = 2;
-  }
-  message ProtoSourceExport {
-    reserved 2, 4;
-    reserved "output_index";
-    reserved "ingestion_output";
-
-    mz_repr.global_id.ProtoGlobalId id = 1;
-    mz_storage_types.controller.ProtoCollectionMetadata storage_metadata = 3;
-    ProtoSourceExportDetails details = 5;
-    ProtoSourceExportDataConfig data_config = 6;
-  }
-
-  reserved 1;
-  reserved "source_imports";
-  // repeated ProtoSourceImport source_imports = 1;
-  repeated ProtoSourceExport source_exports = 2;
-  mz_storage_types.controller.ProtoCollectionMetadata ingestion_metadata = 3;
-  ProtoSourceDesc desc = 4;
-  reserved 5;
-  mz_storage_types.instances.ProtoStorageInstanceId instance_id = 6;
-  mz_repr.global_id.ProtoGlobalId remap_collection_id = 7;
 }

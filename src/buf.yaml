@@ -45,12 +45,6 @@ breaking:
     - expr/src/scalar.proto
     # reason: we very carefully evolve these protobuf definitions
     - persist-client/src/internal/state.proto
-    # reason: currently does not require backward-compatibility
-    - storage-types/src/connections/aws.proto
-    # reason: currently does not require backward-compatibility
-    - storage-types/src/connections/string_or_secret.proto
-    # reason: does currently not require backward-compatibility
-    - storage-types/src/parameters.proto
 lint:
   use:
     - DEFAULT

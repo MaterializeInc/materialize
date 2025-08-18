@@ -11,26 +11,10 @@ syntax = "proto3";
 
 package mz_storage_types.sources.sql_server;
 
-import "repr/src/catalog_item_id.proto";
 import "sql-server-util/src/desc.proto";
-import "storage-types/src/connections.proto";
-
-message ProtoSqlServerSource {
-  mz_repr.catalog_item_id.ProtoCatalogItemId catalog_id = 1;
-  mz_storage_types.connections.ProtoSqlServerConnectionDetails connection = 2;
-  ProtoSqlServerSourceExtras extras = 3;
-}
 
 message ProtoSqlServerSourceExtras {
   optional int32 restore_history_id = 1;
-}
-
-message ProtoSqlServerSourceExportDetails {
-  string capture_instance = 1;
-  mz_sql_server_util.ProtoSqlServerTableDesc table = 2;
-  repeated string text_columns = 3;
-  repeated string exclude_columns = 4;
-  bytes initial_lsn = 5;
 }
 
 message ProtoSqlServerSourceExportStatementDetails {
