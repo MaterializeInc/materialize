@@ -639,6 +639,20 @@ steps:
         agents:
           queue: hetzner-aarch64-8cpu-16gb
 
+      - id: sql-server-resumption-old-syntax
+        label: "SQL Server CDC resumption old syntax tests"
+        depends_on: build-x86_64
+        timeout_in_minutes: 60
+        inputs: [test/sql-server-resumption-old-syntax]
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: sql-server-resumption-old-syntax
+        agents:
+          # The SQL Server Docker image isn't available on ARM.
+          #
+          # See: <https://github.com/microsoft/mssql-docker/issues/864>
+          queue: hetzner-x86-64-8cpu-16gb
+
   - group: CDC with old source syntax
     key: cdc-old-source-syntax
     steps:

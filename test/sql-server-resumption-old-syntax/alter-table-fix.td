@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# This test "reverts" a schema change that causes a PG subsource to
+# This test "reverts" a schema change that causes a SQL Server subsource to
 # enter a failed state.
 $ sql-server-connect name=sql-server
 server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID=${arg.default-sql-server-user};Password=${arg.default-sql-server-password};Database=test

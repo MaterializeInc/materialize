@@ -15,8 +15,7 @@ The following failures are injected:
 
 This test suite additionally checks the failure logic for SQL Server
 sources by verifying that a source is put into a failed state
-upon detecting a restore to a point-in-time backup of the Postgres
-server
+upon detecting a restore to a point-in-time backup of the SQL Server.
 
 To run:
 

@@ -14,5 +14,6 @@ $ sql-server-execute name=sql-server split-lines=false
 IF EXISTS (SELECT name FROM sys.databases WHERE name = N'test')
 BEGIN
     ALTER DATABASE test SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
-    BACKUP DATABASE test TO DISK = N'${arg.backup-directory}/test.bak'
+    BACKUP DATABASE test TO DISK = N'${arg.backup-directory}/test.bak';
+    ALTER DATABASE test SET MULTI_USER;
 END;
