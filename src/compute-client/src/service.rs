@@ -26,20 +26,16 @@ use mz_ore::soft_panic_or_log;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{Diff, GlobalId, Row};
 use mz_service::client::{GenericClient, Partitionable, PartitionedState};
-use mz_service::grpc::{GrpcClient, GrpcServer, ProtoServiceTypes, ResponseStream};
 use timely::PartialOrder;
 use timely::progress::frontier::{Antichain, MutableAntichain};
-use tonic::{Request, Status, Streaming};
 use uuid::Uuid;
 
 use crate::controller::ComputeControllerTimestamp;
-use crate::metrics::ReplicaMetrics;
-use crate::protocol::command::{ComputeCommand, ProtoComputeCommand};
+use crate::protocol::command::ComputeCommand;
 use crate::protocol::response::{
-    ComputeResponse, CopyToResponse, FrontiersResponse, PeekResponse, ProtoComputeResponse,
-    StashedPeekResponse, SubscribeBatch, SubscribeResponse,
+    ComputeResponse, CopyToResponse, FrontiersResponse, PeekResponse, StashedPeekResponse,
+    SubscribeBatch, SubscribeResponse,
 };
-use crate::service::proto_compute_server::ProtoCompute;
 
 include!(concat!(env!("OUT_DIR"), "/mz_compute_client.service.rs"));
 
@@ -65,36 +61,6 @@ impl<T: Send> GenericClient<ComputeCommand<T>, ComputeResponse<T>> for Box<dyn C
     async fn recv(&mut self) -> Result<Option<ComputeResponse<T>>, anyhow::Error> {
         // `GenericClient::recv` is required to be cancel safe.
         (**self).recv().await
-    }
-}
-
-/// TODO(database-issues#7533): Add documentation.
-#[derive(Debug, Clone)]
-pub enum ComputeProtoServiceTypes {}
-
-impl ProtoServiceTypes for ComputeProtoServiceTypes {
-    type PC = ProtoComputeCommand;
-    type PR = ProtoComputeResponse;
-    type STATS = ReplicaMetrics;
-    const URL: &'static str = "/mz_compute_client.service.ProtoCompute/CommandResponseStream";
-}
-
-/// TODO(database-issues#7533): Add documentation.
-pub type ComputeGrpcClient = GrpcClient<ComputeProtoServiceTypes>;
-
-#[async_trait]
-impl<F, G> ProtoCompute for GrpcServer<F>
-where
-    F: Fn() -> G + Send + Sync + 'static,
-    G: ComputeClient + 'static,
-{
-    type CommandResponseStreamStream = ResponseStream<ProtoComputeResponse>;
-
-    async fn command_response_stream(
-        &self,
-        request: Request<Streaming<ProtoComputeCommand>>,
-    ) -> Result<tonic::Response<Self::CommandResponseStreamStream>, Status> {
-        self.forward_bidi_stream(request).await
     }
 }
 

@@ -38,7 +38,6 @@ use crate::metrics::IntCounter;
 use crate::metrics::ReplicaMetrics;
 use crate::protocol::command::ComputeCommand;
 use crate::protocol::response::ComputeResponse;
-use crate::service::{ComputeClient, ComputeGrpcClient};
 
 type Client<T> = SequentialHydration<T>;
 
@@ -70,7 +69,6 @@ pub(super) struct ReplicaClient<T> {
 impl<T> ReplicaClient<T>
 where
     T: ComputeControllerTimestamp,
-    ComputeGrpcClient: ComputeClient<T>,
 {
     pub(super) fn spawn(
         id: ReplicaId,
@@ -163,7 +161,6 @@ struct ReplicaTask<T> {
 impl<T> ReplicaTask<T>
 where
     T: ComputeControllerTimestamp,
-    ComputeGrpcClient: ComputeClient<T>,
 {
     /// Asynchronously forwards commands to and responses from a single replica.
     async fn run(self) {
@@ -242,7 +239,6 @@ where
     async fn run_message_loop(mut self, mut client: Client<T>) -> Result<(), anyhow::Error>
     where
         T: ComputeControllerTimestamp,
-        ComputeGrpcClient: ComputeClient<T>,
     {
         loop {
             select! {

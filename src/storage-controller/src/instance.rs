@@ -30,8 +30,7 @@ use mz_service::client::{GenericClient, Partitioned};
 use mz_service::params::GrpcClientParameters;
 use mz_service::transport;
 use mz_storage_client::client::{
-    RunIngestionCommand, RunSinkCommand, Status, StatusUpdate, StorageClient, StorageCommand,
-    StorageGrpcClient, StorageResponse,
+    RunIngestionCommand, RunSinkCommand, Status, StatusUpdate, StorageCommand, StorageResponse,
 };
 use mz_storage_client::metrics::{InstanceMetrics, ReplicaMetrics};
 use mz_storage_types::sinks::StorageSinkDesc;
@@ -50,7 +49,7 @@ use crate::history::CommandHistory;
 /// Encapsulates communication with replicas in this instance, and their rehydration.
 ///
 /// Note that storage objects (sources and sinks) don't currently support replication (database-issues#5051).
-/// An instance can have muliple replicas connected, but only if it has no storage objects
+/// An instance can have multiple replicas connected, but only if it has no storage objects
 /// installed. Attempting to install storage objects on multi-replica instances, or attempting to
 /// add more than one replica to instances that have storage objects installed, is illegal and will
 /// lead to panics.
@@ -106,7 +105,6 @@ struct ActiveExport {
 impl<T> Instance<T>
 where
     T: Timestamp + Lattice + TotalOrder + Sync,
-    StorageGrpcClient: StorageClient<T>,
 {
     /// Creates a new [`Instance`].
     pub fn new(
@@ -763,7 +761,6 @@ pub struct Replica<T> {
 impl<T> Replica<T>
 where
     T: Timestamp + Lattice + Sync,
-    StorageGrpcClient: StorageClient<T>,
 {
     /// Creates a new [`Replica`].
     fn new(
@@ -836,7 +833,6 @@ struct ReplicaTask<T> {
 impl<T> ReplicaTask<T>
 where
     T: Timestamp + Lattice + Sync,
-    StorageGrpcClient: StorageClient<T>,
 {
     /// Runs the replica task.
     async fn run(self) {
