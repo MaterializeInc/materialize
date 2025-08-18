@@ -248,7 +248,6 @@ where
         let mut source_frontier = MutableAntichain::new_bottom(FromTime::minimum());
 
         let mut binding_buffer = Vec::new();
-        let mut interesting_times = Vec::new();
 
         // Accumulation buffer for `remap_input` updates.
         use timely::progress::ChangeBatch;
@@ -365,13 +364,22 @@ where
                 // updates.
                 let mut min_time = IntoTime::minimum();
                 min_time.advance_by(remap_since.borrow());
-                interesting_times.push(min_time);
-                interesting_times.extend(remap_trace.iter().map(|(_, t, _)| t.clone()));
-                interesting_times.dedup();
-                for cur_time in interesting_times.drain(..) {
+                let mut prev_cur_time = None;
+                for cur_time in [min_time]
+                    .iter()
+                    .chain(remap_trace.iter().map(|(_, t, _)| t))
+                    .filter(|&v| {
+                        if prev_cur_time.is_some_and(|pv| pv == v) {
+                            false
+                        } else {
+                            prev_cur_time = Some(v);
+                            true
+                        }
+                    })
+                {
                     // 4.0. Load updates of `cur_time` from the trace into `cur_binding` to
                     //      construct the `[FromTime]` frontier that `cur_time` maps to.
-                    while let Some((t_from, _, diff)) = remap.next_if(|(_, t, _)| t == &cur_time) {
+                    while let Some((t_from, _, diff)) = remap.next_if(|(_, t, _)| t == cur_time) {
                         binding_buffer.push((t_from.clone(), *diff));
                     }
                     cur_binding.update_iter(binding_buffer.drain(..));
@@ -387,7 +395,7 @@ where
                     //      reclocked with the bindings until `prev_remap_upper`. For this reason
                     //      we only need to reconsider these updates when we start looking at new
                     //      bindings, i.e bindings that are beyond `prev_remap_upper`.
-                    if prev_remap_upper.less_equal(&cur_time) {
+                    if prev_remap_upper.less_equal(cur_time) {
                         deferred_source_updates.retain_mut(|batch| {
                             for (data, _, diff) in batch.extract(cur_binding) {
                                 session.give((data, cur_time.clone(), diff));
@@ -406,7 +414,7 @@ where
                         .iter()
                         .any(|t| !cur_binding.less_equal(t))
                     {
-                        reclocked_source_frontier.insert(cur_time);
+                        reclocked_source_frontier.insert(cur_time.clone());
                     }
                 }
 
@@ -419,6 +427,13 @@ where
                 consolidation::consolidate_updates(&mut remap_trace);
                 remap_trace
                     .sort_unstable_by(|(_, t1, _): &(_, IntoTime, _), (_, t2, _)| t1.cmp(t2));
+
+                // If using less than a quarter of the capacity, shrink the container. To avoid having
+                // to resize the container on a subsequent push, shrink to 2x the length, which is
+                // what push would grow it to.
+                if remap_trace.len() < remap_trace.capacity() / 4 {
+                    remap_trace.shrink_to(remap_trace.len() * 2);
+                }
             }
 
             // STEP 6. Tidy up deferred updates
@@ -435,6 +450,13 @@ where
                 let a = dsu.pop().unwrap();
                 let b = dsu.pop().unwrap();
                 dsu.push(a.merge_with(b));
+            }
+
+            // If using less than a quarter of the capacity, shrink the container. To avoid having
+            // to resize the container on a subsequent push, shrink to 2x the length, which is
+            // what push would grow it to.
+            if deferred_source_updates.len() < deferred_source_updates.capacity() / 4 {
+                deferred_source_updates.shrink_to(deferred_source_updates.len() * 2);
             }
         }
     });
