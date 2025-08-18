@@ -77,7 +77,7 @@ tokio = { version = "1.44.1", features = ["process"] }
 tokio-postgres = { version = "0.7.8", features = ["with-chrono-0_4", "with-serde_json-1"] }
 tokio-stream = "0.1.17"
 tokio-util = { version = "0.7.15", features = ["compat"] }
-tonic = "0.12.1"
+tonic = "0.14.1"
 url = "2.3.1"
 uuid = "1.17.0"
 walkdir = "2.5.0"

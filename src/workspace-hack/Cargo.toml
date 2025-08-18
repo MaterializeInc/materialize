@@ -140,7 +140,7 @@ tokio-stream = { version = "0.1.17", features = ["net", "sync"] }
 tokio-util = { version = "0.7.15", features = ["codec", "compat", "io", "time"] }
 toml_datetime = { version = "0.6.11", default-features = false, features = ["serde"] }
 toml_edit = { version = "0.22.26", features = ["serde"] }
-tonic = { version = "0.12.3", features = ["gzip"] }
+tonic = { version = "0.14.1", features = ["gzip"] }
 tower = { version = "0.5.2", default-features = false, features = ["balance", "buffer", "filter", "limit", "load-shed", "log", "retry", "timeout"] }
 tower-http = { version = "0.6.6", features = ["auth", "cors", "decompression-br", "decompression-deflate", "decompression-gzip", "decompression-zstd", "map-response-body", "trace", "util"] }
 tracing = { version = "0.1.41", features = ["log"] }
@@ -284,7 +284,7 @@ tokio-stream = { version = "0.1.17", features = ["net", "sync"] }
 tokio-util = { version = "0.7.15", features = ["codec", "compat", "io", "time"] }
 toml_datetime = { version = "0.6.11", default-features = false, features = ["serde"] }
 toml_edit = { version = "0.22.26", features = ["serde"] }
-tonic = { version = "0.12.3", features = ["gzip"] }
+tonic = { version = "0.14.1", features = ["gzip"] }
 tower = { version = "0.5.2", default-features = false, features = ["balance", "buffer", "filter", "limit", "load-shed", "log", "retry", "timeout"] }
 tower-http = { version = "0.6.6", features = ["auth", "cors", "decompression-br", "decompression-deflate", "decompression-gzip", "decompression-zstd", "map-response-body", "trace", "util"] }
 tracing = { version = "0.1.41", features = ["log"] }

@@ -57,7 +57,7 @@ tokio = { version = "1.44.1", features = [
     "time",
 ] }
 tokio-stream = "0.1.17"
-tonic = "0.12.1"
+tonic = "0.14.1"
 tracing = "0.1.37"
 uuid = "1.17.0"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
