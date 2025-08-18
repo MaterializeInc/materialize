@@ -345,6 +345,13 @@ RUN curl -fsSL https://github.com/mikefarah/yq/releases/download/v4.45.1/yq_linu
     && chmod +x yq \
     && mv yq /usr/local/bin
 
+RUN curl -fsSL https://amazon-inspector-sbomgen.s3.amazonaws.com/1.4.0/linux/$ARCH_GO/inspector-sbomgen.zip > inspector-sbomgen.zip \
+    && if [ $ARCH_GO = amd64 ]; then echo 'c8ca73761afd742e1deb98b04eb5714c9c2a574b652a763b18e23560e66aea24 inspector-sbomgen.zip' | sha256sum --check; fi \
+    && if [ $ARCH_GO = arm64 ]; then echo '188d9757782278653e65605aaf186feda104345ba2f9de438873e568f1ff6204 inspector-sbomgen.zip' | sha256sum --check; fi \
+    && unzip inspector-sbomgen.zip \
+    && mv inspector-sbomgen-1.4.0/linux/$ARCH_GO/inspector-sbomgen /usr/local/bin \
+    && chmod +x /usr/local/bin/inspector-sbomgen
+
 # Hardcode some known SSH hosts, or else SSH will ask whether the host is
 # trustworthy on the first connection.
 
