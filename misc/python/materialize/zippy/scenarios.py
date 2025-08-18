@@ -382,7 +382,10 @@ class BackupAndRestoreLarge(Scenario):
             CreateViewParameterized(
                 max_views=5, expensive_aggregates=True, max_inputs=5
             ): 10,
-            CreateSinkParameterized(max_sinks=10): 10,
+            # Sinks don't make sense in this test since we don't record the
+            # state of a sink after a backup&restore cycle, see for example
+            # https://github.com/MaterializeInc/database-issues/issues/9589
+            # CreateSinkParameterized(max_sinks=10): 10,
             ValidateView: 10,
             DML: 50,
             BackupAndRestore: 0.1,

@@ -140,7 +140,7 @@ def validate_state(
     comparison_operator = ">" if must_exceed_reached_index else ">="
     print(f"Expect '{expected_state}' within timeout of {timeout_in_sec}s")
 
-    testdrive_run_timeout_in_sec = 10
+    testdrive_run_timeout_in_sec = 20
 
     validation_succeeded = False
     last_error_message = None

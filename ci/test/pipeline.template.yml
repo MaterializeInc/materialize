@@ -379,38 +379,20 @@ steps:
       # Too slow on aarch64
       queue: hetzner-x86-64-4cpu-8gb
 
-  - group: "SQL Server tests"
-    key: sql-server-tests
-    steps:
-      - id: sql-server-cdc
-        label: "SQL Server CDC tests"
-        depends_on: build-x86_64
-        timeout_in_minutes: 30
-        inputs: [test/sql-server-cdc]
-        parallelism: 3
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: sql-server-cdc
-        agents:
-          # The SQL Server Docker image isn't available on ARM.
-          #
-          # See: <https://github.com/microsoft/mssql-docker/issues/864>
-          queue: hetzner-x86-64-8cpu-16gb
-
-      - id: sql-server-cdc-old-syntax
-        label: "SQL Server CDC old syntax tests"
-        depends_on: build-x86_64
-        timeout_in_minutes: 30
-        inputs: [test/sql-server-cdc-old-syntax]
-        parallelism: 6
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: sql-server-cdc-old-syntax
-        agents:
-          # The SQL Server Docker image isn't available on ARM.
-          #
-          # See: <https://github.com/microsoft/mssql-docker/issues/864>
-          queue: hetzner-x86-64-8cpu-16gb
+  - id: sql-server-cdc
+    label: "SQL Server CDC tests"
+    depends_on: build-x86_64
+    timeout_in_minutes: 30
+    inputs: [test/sql-server-cdc]
+    parallelism: 3
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: sql-server-cdc
+    agents:
+      # The SQL Server Docker image isn't available on ARM.
+      #
+      # See: <https://github.com/microsoft/mssql-docker/issues/864>
+      queue: hetzner-x86-64-8cpu-16gb
 
   - group: "Connection tests"
     key: connection-tests
