@@ -50,7 +50,6 @@ pub(super) struct ReplicaConfig {
     pub grpc_client: GrpcClientParameters,
     /// The offset to use for replica expiration, if any.
     pub expiration_offset: Option<Duration>,
-    pub enable_ctp: bool,
 }
 
 /// A client for a replica task.
@@ -186,39 +185,24 @@ where
         let try_connect = async |retry: RetryState| {
             let version = self.build_info.semver_version();
             let client_params = &self.config.grpc_client;
+            let connect_timeout = client_params.connect_timeout.unwrap_or(Duration::MAX);
+            let keepalive_timeout = client_params
+                .http2_keep_alive_timeout
+                .unwrap_or(Duration::MAX);
 
             let connect_start = Instant::now();
-            let connect_result = if self.config.enable_ctp {
-                let connect_timeout = client_params.connect_timeout.unwrap_or(Duration::MAX);
-                let keepalive_timeout = client_params
-                    .http2_keep_alive_timeout
-                    .unwrap_or(Duration::MAX);
-
-                ComputeCtpClient::<T>::connect_partitioned(
-                    self.config.location.ctl_addrs.clone(),
-                    version,
-                    connect_timeout,
-                    keepalive_timeout,
-                    self.metrics.clone(),
-                )
-                .await
-                .map(|client| {
-                    let dyncfg = Arc::clone(&self.dyncfg);
-                    SequentialHydration::new(client, dyncfg, self.metrics.clone())
-                })
-            } else {
-                let addrs = &self.config.location.ctl_addrs;
-                let dests = addrs
-                    .iter()
-                    .map(|addr| (addr.clone(), self.metrics.clone()))
-                    .collect();
-                ComputeGrpcClient::connect_partitioned(dests, version, client_params)
-                    .await
-                    .map(|client| {
-                        let dyncfg = Arc::clone(&self.dyncfg);
-                        SequentialHydration::new(client, dyncfg, self.metrics.clone())
-                    })
-            };
+            let connect_result = ComputeCtpClient::<T>::connect_partitioned(
+                self.config.location.ctl_addrs.clone(),
+                version,
+                connect_timeout,
+                keepalive_timeout,
+                self.metrics.clone(),
+            )
+            .await
+            .map(|client| {
+                let dyncfg = Arc::clone(&self.dyncfg);
+                SequentialHydration::new(client, dyncfg, self.metrics.clone())
+            });
 
             self.metrics.observe_connect_time(connect_start.elapsed());
 

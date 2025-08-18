@@ -720,7 +720,6 @@ where
         replica_id: ReplicaId,
         location: ClusterReplicaLocation,
         config: ComputeReplicaConfig,
-        enable_ctp: bool,
     ) -> Result<(), ReplicaCreationError> {
         use ReplicaCreationError::*;
 
@@ -748,7 +747,6 @@ where
             },
             grpc_client: self.config.grpc_client.clone(),
             expiration_offset: (!expiration_offset.is_zero()).then_some(expiration_offset),
-            enable_ctp,
         };
 
         let instance = self.instance_mut(instance_id).expect("validated");

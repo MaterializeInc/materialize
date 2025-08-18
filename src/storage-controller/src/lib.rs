@@ -560,7 +560,6 @@ where
         instance_id: StorageInstanceId,
         replica_id: ReplicaId,
         location: ClusterReplicaLocation,
-        enable_ctp: bool,
     ) {
         let instance = self
             .instances
@@ -571,7 +570,6 @@ where
             build_info: self.build_info,
             location,
             grpc_client: self.config.parameters.grpc_client.clone(),
-            enable_ctp,
         };
         instance.add_replica(replica_id, config);
     }
