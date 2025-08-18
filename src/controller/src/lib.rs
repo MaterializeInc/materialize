@@ -49,12 +49,8 @@ use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::PersistLocation;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_types::Codec64;
-use mz_proto::RustType;
 use mz_repr::{Datum, GlobalId, Row, TimestampManipulation};
 use mz_service::secrets::SecretsReaderCliArgs;
-use mz_storage_client::client::{
-    ProtoStorageCommand, ProtoStorageResponse, StorageCommand, StorageResponse,
-};
 use mz_storage_client::controller::{
     IntrospectionType, StorageController, StorageMetadata, StorageTxn,
 };
@@ -634,8 +630,6 @@ where
         + TimestampManipulation
         + std::fmt::Display
         + Into<mz_repr::Timestamp>,
-    StorageCommand<T>: RustType<ProtoStorageCommand>,
-    StorageResponse<T>: RustType<ProtoStorageResponse>,
     // Bounds needed by `ComputeController`:
     T: ComputeControllerTimestamp,
 {

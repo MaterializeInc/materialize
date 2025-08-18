@@ -15,9 +15,7 @@ async-trait = "0.1.88"
 chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 differential-dataflow = "0.17.0"
 futures = "0.3.31"
-http = "1.2.0"
 itertools = { version = "0.14.0" }
-maplit = "1.0.2"
 mz-ccsr = { path = "../ccsr" }
 mz-cluster-client = { path = "../cluster-client" }
 mz-controller-types = { path = "../controller-types" }
@@ -27,17 +25,11 @@ mz-kafka-util = { path = "../kafka-util" }
 mz-ore = { path = "../ore", features = ["async", "chrono", "process", "tracing"] }
 mz-persist-client = { path = "../persist-client" }
 mz-persist-types = { path = "../persist-types" }
-mz-proto = { path = "../proto", features = ["tokio-postgres"] }
 mz-repr = { path = "../repr" }
 mz-service = { path = "../service" }
-mz-sql-parser = { path = "../sql-parser" }
 mz-storage-types = { path = "../storage-types" }
-mz-timely-util = { path = "../timely-util" }
 mz-txn-wal = { path = "../txn-wal" }
-proptest = { version = "1.7.0", default-features = false, features = ["std"] }
-proptest-derive = { version = "0.5.1", features = ["boxed_union"] }
 prometheus = { version = "0.13.4", default-features = false }
-prost = { version = "0.13.5", features = ["no-recursion-limit"] }
 rdkafka = { version = "0.29.0", features = [
     "cmake-build",
     "ssl-vendored",
@@ -47,7 +39,6 @@ rdkafka = { version = "0.29.0", features = [
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = { version = "1.0.127" }
 smallvec = { version = "1.15.1", features = ["serde", "union"] }
-static_assertions = "1.1"
 timely = "0.24.0"
 tokio = { version = "1.44.1", features = [
     "fs",
@@ -56,24 +47,16 @@ tokio = { version = "1.44.1", features = [
     "test-util",
     "time",
 ] }
-tokio-stream = "0.1.17"
-tonic = "0.12.1"
 tracing = "0.1.37"
 uuid = "1.17.0"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
-[build-dependencies]
-mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
-prost-build = "0.13.5"
-tonic-build = "0.12.3"
-
 [dev-dependencies]
 mz-build-info = { path = "../build-info" }
 mz-secrets = { path = "../secrets" }
-mz-dyncfg = { path = "../dyncfg" }
 
 [features]
-default = ["mz-build-tools/default", "workspace-hack"]
+default = ["workspace-hack"]
 
 [package.metadata.cargo-udeps.ignore]
 # only used on linux
