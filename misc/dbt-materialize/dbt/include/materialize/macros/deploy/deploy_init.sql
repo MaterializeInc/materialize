@@ -15,8 +15,10 @@
 
 {% macro deploy_init(ignore_existing_objects=False) %}
 
+-- current target name is the name of the existing profile
 {% set current_target_name = target.name %}
 {% set deployment = var('deployment') %}
+-- this pulls all the clusters and schemas for the target you are deploying to
 {% set target_config = deployment[current_target_name] %}
 
 -- Check if the target-specific configuration exists
