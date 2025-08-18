@@ -270,6 +270,23 @@ enum ConsolidationPart<T, D> {
 }
 
 impl<T: Timestamp + Codec64 + Lattice, D: Codec64> ConsolidationPart<T, D> {
+    pub(crate) fn live_bytes(&self) -> usize {
+        match self {
+            // If we haven't fetched anything yet, we don't count any bytes against our memory budget.
+            ConsolidationPart::Queued { task: None, .. } => 0,
+            // If the fetch is in progress, we may have the encoded bytes in memory.
+            ConsolidationPart::Queued {
+                data,
+                task: Some(_),
+                ..
+            } => data.part.max_part_bytes(),
+            // If we've fetched and decoded parquet, count the actual bytes of data for the part.
+            // This does not include metadata, so it's a little off... but it's close, and better
+            // than using the parquet-encoded size which might be off due to compression etc.
+            ConsolidationPart::Encoded { part, .. } => part.data.goodbytes(),
+        }
+    }
+
     pub(crate) fn from_encoded(
         part: EncodedPart<T>,
         force_reconsolidation: bool,
@@ -343,7 +360,7 @@ pub(crate) struct Consolidator<T, D, Sort: RowSort<T, D>> {
     metrics: Arc<Metrics>,
     shard_metrics: Arc<ShardMetrics>,
     read_metrics: Arc<ReadMetrics>,
-    runs: Vec<VecDeque<(ConsolidationPart<T, D>, usize)>>,
+    runs: Vec<VecDeque<ConsolidationPart<T, D>>>,
     filter: FetchBatchFilter<T>,
     budget: usize,
     /// An optional exclusive lower bound for the KVTs that this consolidator will return.
@@ -436,29 +453,25 @@ where
     ) {
         let run = parts
             .into_iter()
-            .map(|part| {
-                let bytes = part.encoded_size_bytes();
-                let c_part = ConsolidationPart::Queued {
-                    data: FetchData {
-                        run_meta: run_meta.clone(),
-                        part_desc: desc.clone(),
-                        structured_lower: part.structured_key_lower(),
-                        part,
-                    },
-                    task: None,
-                    _diff: Default::default(),
-                };
-                (c_part, bytes)
+            .map(|part| ConsolidationPart::Queued {
+                data: FetchData {
+                    run_meta: run_meta.clone(),
+                    part_desc: desc.clone(),
+                    structured_lower: part.structured_key_lower(),
+                    part,
+                },
+                task: None,
+                _diff: Default::default(),
             })
             .collect();
         self.push_run(run);
     }
 
-    fn push_run(&mut self, run: VecDeque<(ConsolidationPart<T, D>, usize)>) {
+    fn push_run(&mut self, run: VecDeque<ConsolidationPart<T, D>>) {
         // Normally unconsolidated parts are in their own run, but we can end up with unconsolidated
         // runs if we change our sort order or have bugs, for example. Defend against this by
         // splitting up a run if it contains possibly-unconsolidated parts.
-        let wrong_sort = run.iter().any(|(p, _)| match p {
+        let wrong_sort = run.iter().any(|p| match p {
             ConsolidationPart::Queued { data, .. } => {
                 data.run_meta.order != Some(RunOrder::Structured)
             }
@@ -481,7 +494,7 @@ where
     /// Tidy up: discard any empty parts, and discard any runs that have no parts left.
     fn trim(&mut self) {
         self.runs.retain_mut(|run| {
-            while run.front_mut().map_or(false, |(part, _)| part.is_empty()) {
+            while run.front_mut().map_or(false, |part| part.is_empty()) {
                 run.pop_front();
             }
             !run.is_empty()
@@ -501,13 +514,11 @@ where
         // run to the list every iteration... but since this part has the smallest tuples
         // of any run, it should be fully processed by the next consolidation step.
         if let Some(part) = self.drop_stash.take() {
-            self.runs.push(VecDeque::from_iter([(
-                ConsolidationPart::Encoded {
+            self.runs
+                .push(VecDeque::from_iter([ConsolidationPart::Encoded {
                     part,
                     cursor: PartIndices::default(),
-                },
-                0,
-            )]));
+                }]));
         }
 
         if self.runs.is_empty() {
@@ -520,7 +531,7 @@ where
 
         for run in &mut self.runs {
             let last_in_run = run.len() < 2;
-            if let Some((part, _)) = run.front_mut() {
+            if let Some(part) = run.front_mut() {
                 match part {
                     ConsolidationPart::Encoded { part, cursor } => {
                         iter.push(part, cursor, last_in_run);
@@ -549,14 +560,14 @@ where
             return Ok(());
         }
         self.runs
-            .sort_by(|a, b| a[0].0.kvt_lower().cmp(&b[0].0.kvt_lower()));
+            .sort_by(|a, b| a[0].kvt_lower().cmp(&b[0].kvt_lower()));
 
         let first_larger = {
             let run = &self.runs[0];
-            let min_lower = run[0].0.kvt_lower();
+            let min_lower = run[0].kvt_lower();
             self.runs
                 .iter()
-                .position(|q| q[0].0.kvt_lower() > min_lower)
+                .position(|q| q[0].kvt_lower() > min_lower)
                 .unwrap_or(self.runs.len())
         };
 
@@ -568,10 +579,10 @@ where
                 // to consolidate. So: we loop, and bail out of the loop when either the first part in the run is available or we
                 // hit some unrecoverable error.
                 loop {
-                    let (mut part, size) = run.pop_front().expect("trimmed run should be nonempty");
+                    let mut part = run.pop_front().expect("trimmed run should be nonempty");
 
                     let ConsolidationPart::Queued { data, task, .. } = &mut part else {
-                        run.push_front((part, size));
+                        run.push_front(part);
                         return Ok(true);
                     };
 
@@ -603,7 +614,7 @@ where
                     };
                     match fetch_result {
                         Err(err) => {
-                            run.push_front((part, size));
+                            run.push_front(part);
                             return Err(err);
                         }
                         Ok(Err(run_part)) => {
@@ -611,31 +622,24 @@ where
                             // iterate in reverse order.
                             for part in run_part.parts.into_iter().rev() {
                                 let structured_lower = part.structured_key_lower();
-                                let size = part.max_part_bytes();
-                                run.push_front((
-                                    ConsolidationPart::Queued {
-                                        data: FetchData {
-                                            run_meta: data.run_meta.clone(),
-                                            part_desc: data.part_desc.clone(),
-                                            part,
-                                            structured_lower,
-                                        },
-                                        task: None,
-                                        _diff: Default::default(),
+                                run.push_front(ConsolidationPart::Queued {
+                                    data: FetchData {
+                                        run_meta: data.run_meta.clone(),
+                                        part_desc: data.part_desc.clone(),
+                                        part,
+                                        structured_lower,
                                     },
-                                    size,
-                                ));
+                                    task: None,
+                                    _diff: Default::default(),
+                                });
                             }
                         }
                         Ok(Ok(part)) => {
-                            run.push_front((
-                                ConsolidationPart::from_encoded(
-                                    part,
-                                    wrong_sort,
-                                    &self.metrics.columnar,
-                                    &self.sort,
-                                ),
-                                size,
+                            run.push_front(ConsolidationPart::from_encoded(
+                                part,
+                                wrong_sort,
+                                &self.metrics.columnar,
+                                &self.sort,
                             ));
                         }
                     }
@@ -717,13 +721,7 @@ where
     fn live_bytes(&self) -> usize {
         self.runs
             .iter()
-            .flat_map(|run| {
-                run.iter().map(|(part, size)| match part {
-                    ConsolidationPart::Queued { task: None, .. } => 0,
-                    ConsolidationPart::Queued { task: Some(_), .. }
-                    | ConsolidationPart::Encoded { .. } => *size,
-                })
-            })
+            .flat_map(|run| run.iter().map(|part| part.live_bytes()))
             .sum()
     }
 
@@ -757,10 +755,11 @@ where
         let max_run_len = self.runs.iter().map(|x| x.len()).max().unwrap_or_default();
         for idx in 0..max_run_len {
             for run in self.runs.iter_mut() {
-                if let Some((c_part, size)) = run.get_mut(idx) {
+                if let Some(c_part) = run.get_mut(idx) {
                     let (data, task) = match c_part {
                         ConsolidationPart::Queued { data, task, .. } if task.is_none() => {
-                            check_budget(*size)?;
+                            let size = data.part.max_part_bytes();
+                            check_budget(size)?;
                             (data, task)
                         }
                         _ => continue,
@@ -799,7 +798,7 @@ where
 impl<T, D, Sort: RowSort<T, D>> Drop for Consolidator<T, D, Sort> {
     fn drop(&mut self) {
         for run in &self.runs {
-            for (part, _) in run {
+            for part in run {
                 match part {
                     ConsolidationPart::Queued { task: None, .. } => {
                         self.metrics.consolidation.parts_skipped.inc();
@@ -1156,14 +1155,12 @@ mod tests {
                                             ),
                                         },
                                     );
-                                    (
-                                        ConsolidationPart::from_encoded(
-                                            part,
-                                            true,
-                                            &metrics.columnar,
-                                            &sort,
-                                        ),
-                                        0,
+
+                                    ConsolidationPart::from_encoded(
+                                        part,
+                                        true,
+                                        &metrics.columnar,
+                                        &sort,
                                     )
                                 })
                                 .collect::<VecDeque<_>>()
