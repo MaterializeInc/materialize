@@ -18,13 +18,10 @@
 //! * A [BasicTopKPlan] maintains up to K rows per key and can handle retractions.
 
 use mz_expr::ColumnOrder;
-use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use crate::plan::bucketing_of_expected_group_size;
-
-include!(concat!(env!("OUT_DIR"), "/mz_compute_types.plan.top_k.rs"));
 
 /// A plan encapsulating different variants to compute a TopK operation.
 #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
@@ -154,31 +151,6 @@ impl TopKPlan {
     }
 }
 
-impl RustType<ProtoTopKPlan> for TopKPlan {
-    fn into_proto(&self) -> ProtoTopKPlan {
-        use crate::plan::top_k::proto_top_k_plan::Kind::*;
-
-        ProtoTopKPlan {
-            kind: match self {
-                TopKPlan::Basic(plan) => Some(Basic(plan.into_proto())),
-                TopKPlan::MonotonicTop1(plan) => Some(MonotonicTop1(plan.into_proto())),
-                TopKPlan::MonotonicTopK(plan) => Some(MonotonicTopK(plan.into_proto())),
-            },
-        }
-    }
-
-    fn from_proto(proto: ProtoTopKPlan) -> Result<Self, TryFromProtoError> {
-        use crate::plan::top_k::proto_top_k_plan::Kind::*;
-
-        match proto.kind {
-            Some(Basic(plan)) => Ok(TopKPlan::Basic(plan.into_rust()?)),
-            Some(MonotonicTop1(plan)) => Ok(TopKPlan::MonotonicTop1(plan.into_rust()?)),
-            Some(MonotonicTopK(plan)) => Ok(TopKPlan::MonotonicTopK(plan.into_rust()?)),
-            None => Err(TryFromProtoError::missing_field("ProtoTopKPlan::kind")),
-        }
-    }
-}
-
 /// A plan for monotonic TopKs with an offset of 0 and a limit of 1.
 ///
 /// If the input to a TopK is monotonic (aka append-only aka no retractions) then we
@@ -210,24 +182,6 @@ pub struct MonotonicTop1Plan {
     pub must_consolidate: bool,
 }
 
-impl RustType<ProtoMonotonicTop1Plan> for MonotonicTop1Plan {
-    fn into_proto(&self) -> ProtoMonotonicTop1Plan {
-        ProtoMonotonicTop1Plan {
-            group_key: self.group_key.into_proto(),
-            order_key: self.order_key.into_proto(),
-            must_consolidate: self.must_consolidate.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoMonotonicTop1Plan) -> Result<Self, TryFromProtoError> {
-        Ok(MonotonicTop1Plan {
-            group_key: proto.group_key.into_rust()?,
-            order_key: proto.order_key.into_rust()?,
-            must_consolidate: proto.must_consolidate.into_rust()?,
-        })
-    }
-}
-
 /// A plan for monotonic TopKs with an offset of 0 and an arbitrary limit.
 #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct MonotonicTopKPlan {
@@ -250,28 +204,6 @@ pub struct MonotonicTopKPlan {
     pub must_consolidate: bool,
 }
 
-impl RustType<ProtoMonotonicTopKPlan> for MonotonicTopKPlan {
-    fn into_proto(&self) -> ProtoMonotonicTopKPlan {
-        ProtoMonotonicTopKPlan {
-            group_key: self.group_key.into_proto(),
-            order_key: self.order_key.into_proto(),
-            limit: self.limit.into_proto(),
-            arity: self.arity.into_proto(),
-            must_consolidate: self.must_consolidate.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoMonotonicTopKPlan) -> Result<Self, TryFromProtoError> {
-        Ok(MonotonicTopKPlan {
-            group_key: proto.group_key.into_rust()?,
-            order_key: proto.order_key.into_rust()?,
-            limit: proto.limit.into_rust()?,
-            arity: proto.arity.into_rust()?,
-            must_consolidate: proto.must_consolidate.into_rust()?,
-        })
-    }
-}
-
 /// A plan for generic TopKs that don't fit any more specific category.
 #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct BasicTopKPlan {
@@ -291,46 +223,4 @@ pub struct BasicTopKPlan {
     pub arity: usize,
     /// Bucket sizes for hierarchical stages of TopK.  Should be decreasing.
     pub buckets: Vec<u64>,
-}
-
-impl RustType<ProtoBasicTopKPlan> for BasicTopKPlan {
-    fn into_proto(&self) -> ProtoBasicTopKPlan {
-        ProtoBasicTopKPlan {
-            group_key: self.group_key.into_proto(),
-            order_key: self.order_key.into_proto(),
-            limit: self.limit.into_proto(),
-            offset: self.offset.into_proto(),
-            arity: self.arity.into_proto(),
-            buckets: self.buckets.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoBasicTopKPlan) -> Result<Self, TryFromProtoError> {
-        Ok(BasicTopKPlan {
-            group_key: proto.group_key.into_rust()?,
-            order_key: proto.order_key.into_rust()?,
-            limit: proto.limit.into_rust()?,
-            offset: proto.offset.into_rust()?,
-            arity: proto.arity.into_rust()?,
-            buckets: proto.buckets.into_rust()?,
-        })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use mz_ore::assert_ok;
-    use mz_proto::protobuf_roundtrip;
-    use proptest::prelude::*;
-
-    use super::*;
-
-    proptest! {
-        #[mz_ore::test]
-        fn top_k_plan_protobuf_roundtrip(expect in any::<TopKPlan>()) {
-            let actual = protobuf_roundtrip::<_, ProtoTopKPlan>(&expect);
-            assert_ok!(actual);
-            assert_eq!(actual.unwrap(), expect);
-        }
-    }
 }
