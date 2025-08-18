@@ -747,6 +747,21 @@ steps:
         agents:
           queue: hetzner-aarch64-16cpu-32gb
 
+      - id: sql-server-cdc-old-syntax
+        label: "SQL Server CDC old syntax tests"
+        depends_on: build-x86_64
+        timeout_in_minutes: 120
+        inputs: [test/sql-server-cdc-old-syntax]
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: sql-server-cdc-old-syntax
+        agents:
+          # The SQL Server Docker image isn't available on ARM.
+          #
+          # See: <https://github.com/microsoft/mssql-docker/issues/864>
+          queue: hetzner-x86-64-8cpu-16gb
+
+
   - group: AWS
     key: aws
     steps:
@@ -1486,7 +1501,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 60
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          queue: hetzner-aarch64-8cpu-16gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: sqlsmith
@@ -1523,7 +1538,7 @@ steps:
         timeout_in_minutes: 40
         agents:
           # Ran out of memory retrieving query results.
-          queue: hetzner-aarch64-4cpu-8gb
+          queue: hetzner-aarch64-8cpu-16gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: sqlancer

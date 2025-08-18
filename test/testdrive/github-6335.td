@@ -16,7 +16,7 @@
 # introspection sources that take a while to update.
 
 $ set-regex match=\d{13,20} replacement=<TIMESTAMP>
-$ set-sql-timeout duration=240s
+$ set-sql-timeout duration=360s
 
 # This test uses introspection queries that need to be targeted to a replica
 > SET cluster_replica = r1

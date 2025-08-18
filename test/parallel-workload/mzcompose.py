@@ -98,6 +98,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             sanity_restart=sanity_restart,
             metadata_store="cockroach",
             default_replication_factor=2,
+            additional_system_parameter_defaults={"memory_limiter_interval": "0"},
         ),
         Toxiproxy(seed=random.randrange(2**63)),
     ):

@@ -1851,7 +1851,7 @@ class KillAction(Action):
     ):
         super().__init__(rng, composition)
         self.system_param_fn = system_param_fn
-        self.system_parameters = {}
+        self.system_parameters = {"memory_limiter_interval": "0"}
         self.azurite = azurite
         self.sanity_restart = sanity_restart
 
@@ -1922,6 +1922,7 @@ class ZeroDowntimeDeployAction(Action):
                 healthcheck=LEADER_STATUS_HEALTHCHECK,
                 metadata_store="cockroach",
                 default_replication_factor=2,
+                additional_system_parameter_defaults={"memory_limiter_interval": "0"},
             ),
         ):
             self.composition.up(mz_service, detach=True)

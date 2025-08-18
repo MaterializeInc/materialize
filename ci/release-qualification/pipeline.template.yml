@@ -57,7 +57,7 @@ steps:
       # 48h
       timeout_in_minutes: 2880
       agents:
-        queue: hetzner-aarch64-8cpu-16gb
+        queue: hetzner-aarch64-16cpu-32gb
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
@@ -70,7 +70,7 @@ steps:
       # 24h
       timeout_in_minutes: 1440
       agents:
-        queue: hetzner-aarch64-8cpu-16gb
+        queue: hetzner-aarch64-16cpu-32gb
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
@@ -82,7 +82,7 @@ steps:
       depends_on: build-aarch64
       timeout_in_minutes: 2880
       agents:
-        queue: hetzner-aarch64-8cpu-16gb
+        queue: hetzner-aarch64-16cpu-32gb
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
@@ -95,7 +95,7 @@ steps:
       depends_on: build-aarch64
       timeout_in_minutes: 1440
       agents:
-        queue: hetzner-aarch64-8cpu-16gb
+        queue: hetzner-aarch64-16cpu-32gb
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
@@ -106,7 +106,7 @@ steps:
       depends_on: build-aarch64
       timeout_in_minutes: 2880
       agents:
-        queue: hetzner-aarch64-8cpu-16gb
+        queue: hetzner-aarch64-16cpu-32gb
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
@@ -118,7 +118,7 @@ steps:
       depends_on: build-aarch64
       timeout_in_minutes: 2880
       agents:
-        queue: hetzner-aarch64-8cpu-16gb
+        queue: hetzner-aarch64-16cpu-32gb
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
@@ -129,7 +129,7 @@ steps:
       depends_on: build-aarch64
       timeout_in_minutes: 1440
       agents:
-        queue: hetzner-aarch64-8cpu-16gb
+        queue: hetzner-aarch64-16cpu-32gb
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
@@ -153,7 +153,7 @@ steps:
       depends_on: build-aarch64
       timeout_in_minutes: 1440
       agents:
-        queue: hetzner-aarch64-8cpu-16gb
+        queue: hetzner-aarch64-16cpu-32gb
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
