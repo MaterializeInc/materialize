@@ -556,7 +556,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     let mut datum_vec = DatumVec::new();
     let mut next_worker = (0..u64::cast_from(scope.peers()))
         // Round robin on 1000-records basis to avoid creating tiny containers when there are a
-        // small number of updates ana a large number of workers.
+        // small number of updates and a large number of workers.
         .flat_map(|w| std::iter::repeat_n(w, 1000))
         .cycle();
     let round_robin = Exchange::new(move |_| next_worker.next().unwrap());
