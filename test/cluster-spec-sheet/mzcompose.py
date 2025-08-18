@@ -24,7 +24,7 @@ from typing import Any
 
 import matplotlib.pyplot as plt
 import pandas as pd
-import pg8000
+import pg8000.native
 from pg8000.exceptions import InterfaceError
 
 from materialize import MZ_ROOT, buildkite
@@ -63,7 +63,7 @@ class ScenarioRunner:
         scenario: str,
         scale: int,
         mode: str,
-        connection: pg8000.Connection,
+        connection: pg8000.native.Connection,
         results_file: Any,
         replica_size: Any,
     ) -> None:
@@ -815,18 +815,17 @@ def workflow_bench(c: Composition, parser: WorkflowArgumentParser) -> None:
         assert "mzp_" in new_app_password
 
         def run_with_retries(
-            func: Callable[[pg8000.Connection], None], max_retries: int = 3
+            func: Callable[[pg8000.native.Connection], None], max_retries: int = 3
         ) -> None:
             for attempt in range(max_retries):
                 try:
-                    conn = pg8000.connect(
+                    conn = pg8000.native.Connection(
                         user=USERNAME,
                         password=new_app_password,
                         host=c.cloud_hostname(),
                         port=6875,
                     )
                     func(conn)
-                    conn.close()
                     return
                 except InterfaceError as e:
                     print(
@@ -884,7 +883,7 @@ def workflow_bench(c: Composition, parser: WorkflowArgumentParser) -> None:
 
 
 def run_scenario_strong(
-    scenario: Scenario, results_file: Any, connection: pg8000.Connection
+    scenario: Scenario, results_file: Any, connection: pg8000.native.Connection
 ) -> None:
 
     runner = ScenarioRunner(
@@ -924,7 +923,7 @@ def run_scenario_strong(
 
 
 def run_scenario_weak(
-    scenario: Scenario, results_file: Any, connection: pg8000.Connection
+    scenario: Scenario, results_file: Any, connection: pg8000.native.Connection
 ) -> None:
 
     connection.run("DROP TABLE IF EXISTS t CASCADE;")
