@@ -40,7 +40,7 @@ use mz_sql_parser::ast::visit_mut::{VisitMut, visit_expr_mut};
 use mz_sql_parser::ast::{
     AlterSourceAction, AlterSourceAddSubsourceOptionName, AlterSourceStatement, AvroDocOn,
     ColumnName, CreateMaterializedViewStatement, CreateSinkConnection, CreateSinkOptionName,
-    CreateSinkStatement, CreateSubsourceOption, CreateSubsourceOptionName,
+    CreateSinkStatement, CreateSourceOptionName, CreateSubsourceOption, CreateSubsourceOptionName,
     CreateTableFromSourceStatement, CsrConfigOption, CsrConfigOptionName, CsrConnection,
     CsrSeedAvro, CsrSeedProtobuf, CsrSeedProtobufSchema, DeferredItemName, DocOnIdentifier,
     DocOnSchema, Expr, Function, FunctionArgs, Ident, KafkaSourceConfigOption,
@@ -627,6 +627,7 @@ async fn purify_create_source(
         include_metadata,
         external_references,
         progress_subsource,
+        with_options,
         ..
     } = &mut create_source_stmt;
 
@@ -1312,6 +1313,20 @@ async fn purify_create_source(
     let (columns, constraints) = scx.relation_desc_into_table_defs(progress_desc)?;
 
     // Create the subsource statement
+    let mut progress_with_options: Vec<_> = with_options
+        .iter()
+        .filter_map(|opt| match opt.name {
+            CreateSourceOptionName::TimestampInterval => None,
+            CreateSourceOptionName::RetainHistory => Some(CreateSubsourceOption {
+                name: CreateSubsourceOptionName::RetainHistory,
+                value: opt.value.clone(),
+            }),
+        })
+        .collect();
+    progress_with_options.push(CreateSubsourceOption {
+        name: CreateSubsourceOptionName::Progress,
+        value: Some(WithOptionValue::Value(Value::Boolean(true))),
+    });
     let create_progress_subsource_stmt = CreateSubsourceStatement {
         name,
         columns,
@@ -1321,10 +1336,7 @@ async fn purify_create_source(
         of_source: None,
         constraints,
         if_not_exists: false,
-        with_options: vec![CreateSubsourceOption {
-            name: CreateSubsourceOptionName::Progress,
-            value: Some(WithOptionValue::Value(Value::Boolean(true))),
-        }],
+        with_options: progress_with_options,
     };
 
     purify_source_format(
@@ -1817,6 +1829,7 @@ async fn purify_create_table_from_source(
     let crate::plan::statement::ddl::TableFromSourceOptionExtracted {
         text_columns,
         exclude_columns,
+        retain_history: _,
         details,
         partition_by: _,
         seen: _,

@@ -1538,6 +1538,7 @@ generate_extracted_config!(
     CreateSubsourceOption,
     (Progress, bool, Default(false)),
     (ExternalReference, UnresolvedItemName),
+    (RetainHistory, OptionalDuration),
     (TextColumns, Vec::<Ident>, Default(vec![])),
     (ExcludeColumns, Vec::<Ident>, Default(vec![])),
     (Details, String)
@@ -1558,6 +1559,7 @@ pub fn plan_create_subsource(
 
     let CreateSubsourceOptionExtracted {
         progress,
+        retain_history,
         external_reference,
         text_columns,
         exclude_columns,
@@ -1670,11 +1672,12 @@ pub fn plan_create_subsource(
 
     let create_sql = normalize::create_statement(scx, Statement::CreateSubsource(stmt))?;
 
+    let compaction_window = plan_retain_history_option(scx, retain_history)?;
     let source = Source {
         create_sql,
         data_source,
         desc,
-        compaction_window: None,
+        compaction_window,
     };
 
     Ok(Plan::CreateSource(CreateSourcePlan {
@@ -1691,6 +1694,7 @@ generate_extracted_config!(
     (TextColumns, Vec::<Ident>, Default(vec![])),
     (ExcludeColumns, Vec::<Ident>, Default(vec![])),
     (PartitionBy, Vec<Ident>),
+    (RetainHistory, OptionalDuration),
     (Details, String)
 );
 
@@ -1720,6 +1724,7 @@ pub fn plan_create_table_from_source(
     let TableFromSourceOptionExtracted {
         text_columns,
         exclude_columns,
+        retain_history,
         partition_by,
         details,
         seen: _,
@@ -1938,11 +1943,12 @@ pub fn plan_create_table_from_source(
 
     let create_sql = normalize::create_statement(scx, Statement::CreateTableFromSource(stmt))?;
 
+    let compaction_window = plan_retain_history_option(scx, retain_history)?;
     let table = Table {
         create_sql,
         desc: VersionedRelationDesc::new(desc),
         temporary: false,
-        compaction_window: None,
+        compaction_window,
         data_source: TableDataSource::DataSource {
             desc: data_source,
             timeline,

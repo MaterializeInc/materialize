@@ -47,7 +47,8 @@ use mz_repr::{
     RelationVersionSelector, Row, RowArena, RowIterator, Timestamp,
 };
 use mz_sql::ast::{
-    AlterSourceAddSubsourceOption, SqlServerConfigOption, SqlServerConfigOptionName,
+    AlterSourceAddSubsourceOption, CreateSourceOptionName, CreateSubsourceOption,
+    CreateSubsourceOptionName, SqlServerConfigOption, SqlServerConfigOptionName,
 };
 use mz_sql::ast::{CreateSubsourceStatement, MySqlConfigOptionName, UnresolvedItemName};
 use mz_sql::catalog::{
@@ -559,6 +560,18 @@ impl Coordinator {
         let catalog = self.catalog().for_session(ctx.session());
         let resolved_ids = mz_sql::names::visit_dependencies(&catalog, &source_stmt);
 
+        let propagated_with_options: Vec<_> = source_stmt
+            .with_options
+            .iter()
+            .filter_map(|opt| match opt.name {
+                CreateSourceOptionName::TimestampInterval => None,
+                CreateSourceOptionName::RetainHistory => Some(CreateSubsourceOption {
+                    name: CreateSubsourceOptionName::RetainHistory,
+                    value: opt.value.clone(),
+                }),
+            })
+            .collect();
+
         // 2. Then plan the main source.
         let source_plan = match self.plan_statement(
             ctx.session(),
@@ -587,7 +600,13 @@ impl Coordinator {
         let pcx = plan::PlanContext::zero();
         let scx = StatementContext::new(Some(&pcx), &conn_catalog);
 
-        let subsource_stmts = generate_subsource_statements(&scx, of_source, subsources)?;
+        let mut subsource_stmts = generate_subsource_statements(&scx, of_source, subsources)?;
+
+        for subsource_stmt in subsource_stmts.iter_mut() {
+            subsource_stmt
+                .with_options
+                .extend(propagated_with_options.iter().cloned())
+        }
 
         create_source_plans.push(CreateSourcePlanBundle {
             item_id,
@@ -3337,13 +3356,9 @@ impl Coordinator {
             let cluster = match catalog_item {
                 CatalogItem::Table(_)
                 | CatalogItem::MaterializedView(_)
+                | CatalogItem::Source(_)
                 | CatalogItem::ContinualTask(_) => None,
                 CatalogItem::Index(index) => Some(index.cluster_id),
-                CatalogItem::Source(_) => {
-                    let read_policies = coord.catalog().source_read_policies(plan.id);
-                    coord.update_storage_read_policies(read_policies);
-                    return;
-                }
                 CatalogItem::Log(_)
                 | CatalogItem::View(_)
                 | CatalogItem::Sink(_)
