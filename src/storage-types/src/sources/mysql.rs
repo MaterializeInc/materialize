@@ -14,15 +14,12 @@ use std::io;
 use std::num::NonZeroU64;
 use std::sync::LazyLock;
 
-use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
+use mz_proto::{RustType, TryFromProtoError};
 use mz_repr::CatalogItemId;
 use mz_repr::GlobalId;
 use mz_repr::{Datum, RelationDesc, Row, ScalarType};
 use mz_timely_util::order::Partitioned;
 use mz_timely_util::order::Step;
-use proptest::prelude::any;
-use proptest::strategy::Strategy;
-use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::Antichain;
@@ -44,7 +41,7 @@ include!(concat!(
     "/mz_storage_types.sources.mysql.rs"
 ));
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct MySqlSourceConnection<C: ConnectionAccess = InlinedConnection> {
     pub connection_id: CatalogItemId,
     pub connection: C::MySql,
@@ -187,34 +184,10 @@ impl<C: ConnectionAccess> AlterCompatible for MySqlSourceConnection<C> {
     }
 }
 
-impl RustType<ProtoMySqlSourceConnection> for MySqlSourceConnection {
-    fn into_proto(&self) -> ProtoMySqlSourceConnection {
-        ProtoMySqlSourceConnection {
-            connection: Some(self.connection.into_proto()),
-            connection_id: Some(self.connection_id.into_proto()),
-            details: Some(self.details.into_proto()),
-        }
-    }
-
-    fn from_proto(proto: ProtoMySqlSourceConnection) -> Result<Self, TryFromProtoError> {
-        Ok(MySqlSourceConnection {
-            connection: proto
-                .connection
-                .into_rust_if_some("ProtoMySqlSourceConnection::connection")?,
-            connection_id: proto
-                .connection_id
-                .into_rust_if_some("ProtoMySqlSourceConnection::connection_id")?,
-            details: proto
-                .details
-                .into_rust_if_some("ProtoMySqlSourceConnection::details")?,
-        })
-    }
-}
-
 /// This struct allows storing any mysql-specific details for a source, serialized as
 /// an option in the `CREATE SOURCE` statement. It was previously used but is not currently
 /// necessary, though we keep it around to maintain conformity with other sources.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct MySqlSourceDetails {}
 
 impl RustType<ProtoMySqlSourceDetails> for MySqlSourceDetails {
@@ -237,44 +210,17 @@ impl AlterCompatible for MySqlSourceDetails {
     }
 }
 
-fn any_gtidset() -> impl Strategy<Value = String> {
-    any::<(u128, u64)>().prop_map(|(uuid, tx_id)| format!("{}:{}", Uuid::from_u128(uuid), tx_id))
-}
-
 /// Specifies the details of a MySQL source export.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct MySqlSourceExportDetails {
     pub table: mz_mysql_util::MySqlTableDesc,
     /// The initial 'gtid_executed' set for this export.
     /// This is used as the effective snapshot point for this export to ensure correctness
     /// if the source is interrupted but commits one or more tables before the initial snapshot
     /// of all tables is complete.
-    #[proptest(strategy = "any_gtidset()")]
     pub initial_gtid_set: String,
     pub text_columns: Vec<String>,
     pub exclude_columns: Vec<String>,
-}
-
-impl RustType<ProtoMySqlSourceExportDetails> for MySqlSourceExportDetails {
-    fn into_proto(&self) -> ProtoMySqlSourceExportDetails {
-        ProtoMySqlSourceExportDetails {
-            table: Some(self.table.into_proto()),
-            initial_gtid_set: self.initial_gtid_set.clone(),
-            text_columns: self.text_columns.clone(),
-            exclude_columns: self.exclude_columns.clone(),
-        }
-    }
-
-    fn from_proto(proto: ProtoMySqlSourceExportDetails) -> Result<Self, TryFromProtoError> {
-        Ok(MySqlSourceExportDetails {
-            table: proto
-                .table
-                .into_rust_if_some("ProtoMySqlSourceExportDetails::table")?,
-            initial_gtid_set: proto.initial_gtid_set,
-            text_columns: proto.text_columns,
-            exclude_columns: proto.exclude_columns,
-        })
-    }
 }
 
 impl AlterCompatible for MySqlSourceExportDetails {

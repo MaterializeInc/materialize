@@ -10,18 +10,12 @@
 use std::sync::Arc;
 
 use mz_ore::future::InTask;
-use mz_proto::{RustType, TryFromProtoError};
 use mz_repr::CatalogItemId;
 use mz_secrets::SecretsReader;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use crate::connections::SecretsReaderExt;
-
-include!(concat!(
-    env!("OUT_DIR"),
-    "/mz_storage_types.connections.string_or_secret.rs"
-));
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum StringOrSecret {
@@ -57,29 +51,6 @@ impl StringOrSecret {
             StringOrSecret::String(_) => panic!("StringOrSecret::unwrap_secret called on a string"),
             StringOrSecret::Secret(id) => *id,
         }
-    }
-}
-
-impl RustType<ProtoStringOrSecret> for StringOrSecret {
-    fn into_proto(&self) -> ProtoStringOrSecret {
-        use proto_string_or_secret::Kind;
-        ProtoStringOrSecret {
-            kind: Some(match self {
-                StringOrSecret::String(s) => Kind::String(s.clone()),
-                StringOrSecret::Secret(id) => Kind::Secret(id.into_proto()),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoStringOrSecret) -> Result<Self, TryFromProtoError> {
-        use proto_string_or_secret::Kind;
-        let kind = proto
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoStringOrSecret::kind"))?;
-        Ok(match kind {
-            Kind::String(s) => StringOrSecret::String(s),
-            Kind::Secret(id) => StringOrSecret::Secret(CatalogItemId::from_proto(id)?),
-        })
     }
 }
 
