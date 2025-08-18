@@ -13,6 +13,7 @@ use futures::StreamExt;
 use k8s_openapi::api::core::v1::ServicePort;
 use reqwest::header::{HeaderMap, HeaderValue};
 use std::path::Path;
+use std::sync::Arc;
 use tokio::fs::{File, create_dir_all};
 use tokio::io::AsyncWriteExt;
 use tracing::{info, warn};
@@ -21,27 +22,94 @@ use url::Url;
 use crate::kubectl_port_forwarder::{
     KubectlPortForwarder, find_cluster_services, find_environmentd_service,
 };
-use crate::{Context, EmulatorContext, SelfManagedContext};
+use crate::{AuthMode, Context, EmulatorContext, PasswordAuthCredentials, SelfManagedContext};
 
 static HEAP_PROFILES_DIR: &str = "profiles";
 static PROM_METRICS_DIR: &str = "prom_metrics";
 static PROM_METRICS_ENDPOINT: &str = "metrics";
 static ENVD_HEAP_PROFILE_ENDPOINT: &str = "prof/heap";
 static CLUSTERD_HEAP_PROFILE_ENDPOINT: &str = "heap";
-static INTERNAL_HOST_ADDRESS: &str = "127.0.0.1";
-static INTERNAL_HTTP_PORT: i32 = 6878;
+/// The default port for the external HTTP endpoint.
+static DEFAULT_EXTERNAL_HTTP_PORT: i32 = 6877;
+/// The default port for the internal HTTP endpoint.
+static DEFAULT_INTERNAL_HTTP_PORT: i32 = 6878;
+
+/// The label for the internal HTTP port.
+const INTERNAL_HTTP_PORT_LABEL: &str = "internal-http";
+/// The label for the external HTTP port.
+// Even when not using TLS, the external HTTP port is labeled as "https".
+const EXTERNAL_HTTP_PORT_LABEL: &str = "https";
+
+enum ServiceType {
+    Clusterd,
+    Environmentd,
+}
+
+fn get_profile_endpoint(service_type: &ServiceType) -> &'static str {
+    match service_type {
+        ServiceType::Clusterd => CLUSTERD_HEAP_PROFILE_ENDPOINT,
+        ServiceType::Environmentd => ENVD_HEAP_PROFILE_ENDPOINT,
+    }
+}
+
+#[derive(Debug, Clone)]
+struct HttpPortLabels {
+    heap_profile_port_label: &'static str,
+    prom_metrics_port_label: &'static str,
+}
+
+fn get_port_labels(auth_mode: &AuthMode, service_type: &ServiceType) -> HttpPortLabels {
+    match (auth_mode, service_type) {
+        (AuthMode::None, ServiceType::Clusterd)
+        | (AuthMode::None, ServiceType::Environmentd)
+        // Even if in the password listener config, the heap profile port is specified as external, clusterd will
+        // still use the internal port.
+        | (AuthMode::Password(_), ServiceType::Clusterd) => HttpPortLabels {
+            heap_profile_port_label: INTERNAL_HTTP_PORT_LABEL,
+            prom_metrics_port_label: INTERNAL_HTTP_PORT_LABEL,
+        },
+        (AuthMode::Password(_), ServiceType::Environmentd) => HttpPortLabels {
+            heap_profile_port_label: EXTERNAL_HTTP_PORT_LABEL,
+            prom_metrics_port_label: INTERNAL_HTTP_PORT_LABEL,
+        },
+    }
+}
+
+struct HttpDefaultPorts {
+    heap_profile_port: i32,
+    prom_metrics_port: i32,
+}
+
+fn get_default_port(auth_mode: &AuthMode) -> HttpDefaultPorts {
+    match auth_mode {
+        AuthMode::None => HttpDefaultPorts {
+            heap_profile_port: DEFAULT_INTERNAL_HTTP_PORT,
+            prom_metrics_port: DEFAULT_INTERNAL_HTTP_PORT,
+        },
+        AuthMode::Password(_) => HttpDefaultPorts {
+            heap_profile_port: DEFAULT_EXTERNAL_HTTP_PORT,
+            prom_metrics_port: DEFAULT_INTERNAL_HTTP_PORT,
+        },
+    }
+}
 
 /// A struct that handles downloading and saving profile data from HTTP endpoints.
-pub struct InternalHttpDumpClient<'n> {
+pub struct HttpDumpClient<'n> {
     context: &'n Context,
+    auth_mode: &'n AuthMode,
     http_client: &'n reqwest::Client,
 }
 
 /// A struct that handles downloading and exporting data from our internal HTTP endpoints.
-impl<'n> InternalHttpDumpClient<'n> {
-    pub fn new(context: &'n Context, http_client: &'n reqwest::Client) -> Self {
+impl<'n> HttpDumpClient<'n> {
+    pub fn new(
+        context: &'n Context,
+        auth_mode: &'n AuthMode,
+        http_client: &'n reqwest::Client,
+    ) -> Self {
         Self {
             context,
+            auth_mode,
             http_client,
         }
     }
@@ -52,27 +120,33 @@ impl<'n> InternalHttpDumpClient<'n> {
         headers: HeaderMap,
         output_path: &Path,
     ) -> Result<(), anyhow::Error> {
+        let create_request = |url: &Url| {
+            let mut request_builder = self
+                .http_client
+                .get(url.to_string())
+                .headers(headers.clone());
+
+            if let AuthMode::Password(PasswordAuthCredentials { username, password }) =
+                self.auth_mode
+            {
+                request_builder = request_builder.basic_auth(&username, Some(&password));
+            }
+
+            request_builder
+        };
         // Try HTTPS first, then fall back to HTTP if that fails
         let mut url = Url::parse(&format!("https://{}", relative_url))
             .with_context(|| format!("Failed to parse URL: https://{}", relative_url))?;
 
-        let mut response = self
-            .http_client
-            .get(url.to_string())
-            .headers(headers.clone())
-            .send()
-            .await;
+        let request = create_request(&url);
+
+        let mut response = request.send().await;
 
         if response.is_err() {
             // Fall back to HTTP if HTTPS fails
             let _ = url.set_scheme("http");
 
-            response = self
-                .http_client
-                .get(url.to_string())
-                .headers(headers)
-                .send()
-                .await;
+            response = create_request(&url).send().await;
         }
 
         let response = response.with_context(|| format!("Failed to send request to {}", url))?;
@@ -168,7 +242,11 @@ pub async fn dump_emulator_http_resources(
     emulator_context: &EmulatorContext,
 ) -> Result<()> {
     let http_client = reqwest::Client::new();
-    let dump_task = InternalHttpDumpClient::new(context, &http_client);
+    let dump_task = HttpDumpClient::new(
+        context,
+        &emulator_context.http_connection_auth_mode,
+        &http_client,
+    );
 
     if context.dump_heap_profiles {
         let resource_name = "environmentd".to_string();
@@ -178,7 +256,9 @@ pub async fn dump_emulator_http_resources(
             .dump_heap_profile(
                 &format!(
                     "{}:{}/{}",
-                    emulator_context.container_ip, INTERNAL_HTTP_PORT, ENVD_HEAP_PROFILE_ENDPOINT
+                    emulator_context.container_ip,
+                    get_default_port(&emulator_context.http_connection_auth_mode).heap_profile_port,
+                    ENVD_HEAP_PROFILE_ENDPOINT
                 ),
                 &resource_name,
             )
@@ -191,13 +271,13 @@ pub async fn dump_emulator_http_resources(
     if context.dump_prometheus_metrics {
         let resource_name = "environmentd".to_string();
 
-        let dump_task = InternalHttpDumpClient::new(context, &http_client);
-
         if let Err(e) = dump_task
             .dump_prometheus_metrics(
                 &format!(
                     "{}:{}/{}",
-                    emulator_context.container_ip, INTERNAL_HTTP_PORT, PROM_METRICS_ENDPOINT
+                    emulator_context.container_ip,
+                    get_default_port(&emulator_context.http_connection_auth_mode).prom_metrics_port,
+                    PROM_METRICS_ENDPOINT
                 ),
                 &resource_name,
             )
@@ -215,6 +295,11 @@ pub async fn dump_self_managed_http_resources(
     self_managed_context: &SelfManagedContext,
 ) -> Result<()> {
     let http_client = reqwest::Client::new();
+    let dump_task = HttpDumpClient::new(
+        context,
+        &self_managed_context.http_connection_auth_mode,
+        &http_client,
+    );
 
     let cluster_services = find_cluster_services(
         &self_managed_context.k8s_client,
@@ -229,83 +314,134 @@ pub async fn dump_self_managed_http_resources(
     )
     .await
     .with_context(|| "Failed to find environmentd service")?;
-    // TODO (debug_tool3): Allow user to override temporary local address for http port forwarding
-    let prom_metrics_endpoint = format!(
-        "{}:{}/{}",
-        INTERNAL_HOST_ADDRESS, INTERNAL_HTTP_PORT, PROM_METRICS_ENDPOINT
-    );
-
-    let clusterd_heap_profile_endpoint = format!(
-        "{}:{}/{}",
-        INTERNAL_HOST_ADDRESS, INTERNAL_HTTP_PORT, CLUSTERD_HEAP_PROFILE_ENDPOINT
-    );
-
-    let envd_heap_profile_endpoint = format!(
-        "{}:{}/{}",
-        INTERNAL_HOST_ADDRESS, INTERNAL_HTTP_PORT, ENVD_HEAP_PROFILE_ENDPOINT
-    );
 
     let services = cluster_services
         .iter()
-        .map(|service| (service, &clusterd_heap_profile_endpoint))
+        .map(|service| (service, ServiceType::Clusterd))
         .chain(std::iter::once((
             &environmentd_service,
-            &envd_heap_profile_endpoint,
+            ServiceType::Environmentd,
         )));
 
     // Scrape each service
-    for (service_info, profiling_endpoint) in services {
-        let maybe_internal_http_port = service_info
-            .service_ports
-            .iter()
-            .find_map(find_internal_http_port);
+    for (service_info, service_type) in services {
+        let profiling_endpoint = get_profile_endpoint(&service_type);
+        let heap_profile_port_label = get_port_labels(
+            &self_managed_context.http_connection_auth_mode,
+            &service_type,
+        )
+        .heap_profile_port_label;
 
-        if let Some(internal_http_port) = maybe_internal_http_port {
-            let port_forwarder = KubectlPortForwarder {
-                context: self_managed_context.k8s_context.clone(),
-                namespace: service_info.namespace.clone(),
-                service_name: service_info.service_name.clone(),
-                target_port: internal_http_port.port,
-                local_address: INTERNAL_HOST_ADDRESS.to_string(),
-                local_port: INTERNAL_HTTP_PORT,
-            };
+        let prom_metrics_port_label = get_port_labels(
+            &self_managed_context.http_connection_auth_mode,
+            &service_type,
+        )
+        .prom_metrics_port_label;
 
-            let _internal_http_connection =
-                port_forwarder.spawn_port_forward().await.with_context(|| {
-                    format!(
-                        "Failed to spawn port forwarder for service {}",
-                        service_info.service_name
-                    )
-                })?;
-
-            let dump_task = InternalHttpDumpClient::new(context, &http_client);
-
-            if context.dump_heap_profiles {
-                info!(
-                    "Dumping heap profile for service {}",
-                    service_info.service_name
+        let (heap_profile_http_connection, prom_metrics_http_connection) = {
+            let maybe_heap_profile_port = service_info
+                .service_ports
+                .iter()
+                .find_map(|port_info| find_http_port_by_label(port_info, heap_profile_port_label));
+            let maybe_prom_metrics_port = service_info
+                .service_ports
+                .iter()
+                .find_map(|port_info| find_http_port_by_label(port_info, prom_metrics_port_label));
+            if let (Some(heap_profile_port), Some(prom_metrics_port)) =
+                (maybe_heap_profile_port, maybe_prom_metrics_port)
+            {
+                let heap_profile_port_forwarder = KubectlPortForwarder {
+                    context: self_managed_context.k8s_context.clone(),
+                    namespace: service_info.namespace.clone(),
+                    service_name: service_info.service_name.clone(),
+                    target_port: heap_profile_port.port,
+                };
+                let heap_profile_http_connection = Arc::new(
+                    heap_profile_port_forwarder
+                        .spawn_port_forward()
+                        .await
+                        .with_context(|| {
+                            format!(
+                                "Failed to spawn port forwarder for service {}",
+                                service_info.service_name
+                            )
+                        })?,
                 );
-                dump_task
-                    .dump_heap_profile(profiling_endpoint, &service_info.service_name)
-                    .await
-                    .with_context(|| {
-                        format!(
-                            "Failed to dump heap profile for service {}",
-                            service_info.service_name
-                        )
-                    })?;
-            }
+                let prom_metrics_http_connection = if heap_profile_port == prom_metrics_port {
+                    Arc::clone(&heap_profile_http_connection)
+                } else {
+                    let prom_metrics_port_forwarder = KubectlPortForwarder {
+                        context: self_managed_context.k8s_context.clone(),
+                        namespace: service_info.namespace.clone(),
+                        service_name: service_info.service_name.clone(),
+                        target_port: prom_metrics_port.port,
+                    };
+                    Arc::new(
+                        prom_metrics_port_forwarder
+                            .spawn_port_forward()
+                            .await
+                            .with_context(|| {
+                                format!(
+                                    "Failed to spawn port forwarder for service {}",
+                                    service_info.service_name
+                                )
+                            })?,
+                    )
+                };
 
-            if context.dump_prometheus_metrics {
-                dump_task
-                    .dump_prometheus_metrics(&prom_metrics_endpoint, &service_info.service_name)
-                    .await
-                    .with_context(|| {
-                        format!(
-                            "Failed to dump prometheus metrics for service {}",
-                            service_info.service_name
-                        )
-                    })?;
+                (heap_profile_http_connection, prom_metrics_http_connection)
+            } else {
+                return Err(anyhow::anyhow!(
+                    "Failed to find HTTP port for service {}, heap_profile_port_label={}, prom_metrics_port_label={}",
+                    service_info.service_name,
+                    heap_profile_port_label,
+                    prom_metrics_port_label
+                ));
+            }
+        };
+
+        if context.dump_heap_profiles {
+            let profiling_endpoint = format!(
+                "{}:{}/{}",
+                heap_profile_http_connection.local_address,
+                heap_profile_http_connection.local_port,
+                profiling_endpoint
+            );
+
+            info!(
+                "Dumping heap profile for service {}",
+                service_info.service_name
+            );
+            if let Err(e) = dump_task
+                .dump_heap_profile(&profiling_endpoint, &service_info.service_name)
+                .await
+            {
+                warn!(
+                    "Failed to dump heap profile for service {}: {:#}",
+                    service_info.service_name, e
+                );
+            }
+        }
+
+        if context.dump_prometheus_metrics {
+            let prom_metrics_endpoint = format!(
+                "{}:{}/{}",
+                prom_metrics_http_connection.local_address,
+                prom_metrics_http_connection.local_port,
+                PROM_METRICS_ENDPOINT
+            );
+            info!(
+                "Dumping prometheus metrics for service {}",
+                service_info.service_name
+            );
+            if let Err(e) = dump_task
+                .dump_prometheus_metrics(&prom_metrics_endpoint, &service_info.service_name)
+                .await
+            {
+                warn!(
+                    "Failed to dump prometheus metrics for service {}: {:#}",
+                    service_info.service_name, e
+                );
             }
         }
     }
@@ -313,10 +449,13 @@ pub async fn dump_self_managed_http_resources(
     Ok(())
 }
 
-fn find_internal_http_port(port_info: &ServicePort) -> Option<&ServicePort> {
+fn find_http_port_by_label<'a>(
+    port_info: &'a ServicePort,
+    target_port_label: &'static str,
+) -> Option<&'a ServicePort> {
     if let Some(port_name) = &port_info.name {
         let port_name = port_name.to_lowercase();
-        if port_name == "internal-http" {
+        if port_name == target_port_label {
             return Some(port_info);
         }
     }

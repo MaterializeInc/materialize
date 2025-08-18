@@ -30,7 +30,8 @@ use crate::internal_http_dumper::{dump_emulator_http_resources, dump_self_manage
 use crate::k8s_dumper::K8sDumper;
 use crate::kubectl_port_forwarder::{PortForwardConnection, create_pg_wire_port_forwarder};
 use crate::utils::{
-    create_tracing_log_file, format_base_path, validate_pg_connection_string, zip_debug_folder,
+    create_tracing_log_file, format_base_path, get_k8s_auth_mode, validate_pg_connection_string,
+    zip_debug_folder,
 };
 
 mod docker_dumper;
@@ -43,6 +44,7 @@ mod utils;
 const BUILD_INFO: BuildInfo = build_info!();
 static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version(None));
 static ENV_FILTER: &str = "mz_debug=info";
+pub static DEFAULT_MZ_ENVIRONMENTD_PORT: i32 = 6875;
 
 #[derive(Parser, Debug, Clone)]
 pub struct SelfManagedDebugModeArgs {
@@ -65,16 +67,6 @@ pub struct SelfManagedDebugModeArgs {
     /// If true, the tool will dump the values of secrets in the Kubernetes cluster.
     #[clap(long, default_value = "false", action = clap::ArgAction::Set)]
     k8s_dump_secret_values: bool,
-    /// If true, the tool will automatically port-forward the external SQL port in the Kubernetes cluster.
-    /// If dump_k8s is false however, we will not automatically port-forward.
-    #[clap(long, default_value = "true", action = clap::ArgAction::Set)]
-    auto_port_forward: bool,
-    /// The address to listen on for the port-forward.
-    #[clap(long, default_value = "127.0.0.1")]
-    port_forward_local_address: String,
-    /// The port to listen on for the port-forward.
-    #[clap(long, default_value = "6875")]
-    port_forward_local_port: i32,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -109,11 +101,17 @@ pub struct Args {
     /// If true, the tool will dump the prometheus metrics in Materialize.
     #[clap(long, default_value = "true", action = clap::ArgAction::Set, global = true)]
     dump_prometheus_metrics: bool,
+    /// The username to use to connect to Materialize,
+    #[clap(long, env = "MZ_USERNAME", global = true)]
+    mz_username: Option<String>,
+    /// The password to use to connect to Materialize if the authenticator kind is Password.
+    #[clap(long, env = "MZ_PASSWORD", global = true)]
+    mz_password: Option<String>,
     /// The URL of the Materialize SQL connection used to dump the system catalog.
     /// An example URL is `postgres://root@127.0.0.1:6875/materialize?sslmode=disable`.
-    /// By default, we will create a connection URL based on `port_forward_local_address:port_forward_local_port` for self-managed
-    /// or `docker_container_ip:6875` for the emulator.
-    // TODO(debug_tool3): Allow users to specify the pgconfig via separate variables
+    /// This acts as an override. By default, we will connect to the auto-port-forwarded connection for self-managed
+    /// or `<docker_container_ip>:6875` for the emulator.
+    /// If defined, `mz_username` and `mz_password` flags are ignored.
     #[clap(
         long,
         env = "MZ_CONNECTION_URL",
@@ -127,20 +125,58 @@ pub trait ContainerDumper {
     fn dump_container_resources(&self) -> impl std::future::Future<Output = ()>;
 }
 
+#[derive(Debug, Clone)]
+pub struct PasswordAuthCredentials {
+    pub username: String,
+    pub password: String,
+}
+
+#[derive(Debug, Clone)]
+pub enum AuthMode {
+    None,
+    Password(PasswordAuthCredentials),
+}
+
+struct PortForwardConnectionInfo {
+    connection: PortForwardConnection,
+    auth_mode: AuthMode,
+}
+
+enum SelfManagedMzConnectionInfo {
+    PortForward(PortForwardConnectionInfo),
+    ConnectionUrlOverride(String),
+}
+
 struct SelfManagedContext {
     dump_k8s: bool,
     k8s_client: KubernetesClient,
     k8s_context: Option<String>,
     k8s_namespaces: Vec<String>,
     k8s_dump_secret_values: bool,
-
-    _mz_port_forward_process: Option<PortForwardConnection>,
+    mz_connection_info: SelfManagedMzConnectionInfo,
+    http_connection_auth_mode: AuthMode,
 }
-#[derive(Clone)]
+
+#[derive(Debug, Clone)]
+struct ContainerIpInfo {
+    local_address: String,
+    local_port: i32,
+    auth_mode: AuthMode,
+}
+
+#[derive(Debug, Clone)]
+enum EmulatorMzConnectionInfo {
+    ContainerIp(ContainerIpInfo),
+    ConnectionUrlOverride(String),
+}
+
+#[derive(Debug, Clone)]
 struct EmulatorContext {
     dump_docker: bool,
     docker_container_id: String,
     container_ip: String,
+    mz_connection_info: EmulatorMzConnectionInfo,
+    http_connection_auth_mode: AuthMode,
 }
 
 enum DebugModeContext {
@@ -151,8 +187,6 @@ enum DebugModeContext {
 pub struct Context {
     base_path: PathBuf,
     debug_mode_context: DebugModeContext,
-
-    mz_connection_url: String,
     dump_system_catalog: bool,
     dump_heap_profiles: bool,
     dump_prometheus_metrics: bool,
@@ -212,19 +246,24 @@ async fn main() {
 fn create_mz_connection_url(
     local_address: String,
     local_port: i32,
-    connection_url_override: Option<String>,
+    credentials: Option<PasswordAuthCredentials>,
 ) -> String {
-    if let Some(connection_url_override) = connection_url_override {
-        return connection_url_override;
-    }
-    format!("postgres://{}:{}?sslmode=prefer", local_address, local_port)
+    let password_auth_segment = if let Some(credentials) = credentials {
+        format!("{}:{}@", credentials.username, credentials.password)
+    } else {
+        "".to_string()
+    };
+    format!(
+        "postgres://{}{}:{}?sslmode=prefer",
+        password_auth_segment, local_address, local_port
+    )
 }
 
 async fn initialize_context(
     global_args: Args,
     base_path: PathBuf,
 ) -> Result<Context, anyhow::Error> {
-    let (debug_mode_context, mz_connection_url) = match &global_args.debug_mode_args {
+    let debug_mode_context = match &global_args.debug_mode_args {
         DebugModeArgs::SelfManaged(args) => {
             let k8s_client = match create_k8s_client(args.k8s_context.clone()).await {
                 Ok(k8s_client) => k8s_client,
@@ -234,42 +273,62 @@ async fn initialize_context(
                 }
             };
 
-            let mz_port_forward_process = if args.auto_port_forward {
-                let port_forwarder = create_pg_wire_port_forwarder(
-                    &k8s_client,
-                    &args.k8s_context,
-                    &args.k8s_namespaces,
-                    &args.port_forward_local_address,
-                    args.port_forward_local_port,
-                )
-                .await?;
-
-                match port_forwarder.spawn_port_forward().await {
-                    Ok(process) => Some(process),
-                    Err(err) => {
-                        warn!("{:#}", err);
-                        None
-                    }
-                }
-            } else {
-                None
-            };
-            let mz_connection_url = create_mz_connection_url(
-                args.port_forward_local_address.clone(),
-                args.port_forward_local_port,
-                global_args.mz_connection_url.clone(),
-            );
-            (
-                DebugModeContext::SelfManaged(SelfManagedContext {
-                    dump_k8s: args.dump_k8s,
-                    k8s_client,
-                    k8s_context: args.k8s_context.clone(),
-                    k8s_namespaces: args.k8s_namespaces.clone(),
-                    k8s_dump_secret_values: args.k8s_dump_secret_values,
-                    _mz_port_forward_process: mz_port_forward_process,
-                }),
-                mz_connection_url,
+            let auth_mode = match get_k8s_auth_mode(
+                global_args.mz_username,
+                global_args.mz_password,
+                &k8s_client,
+                &args.k8s_namespaces,
             )
+            .await
+            {
+                Ok(auth_mode) => auth_mode,
+                Err(e) => {
+                    warn!("Failed to get auth mode from k8s: {:#}", e);
+                    // By default, set auth mode to None.
+                    AuthMode::None
+                }
+            };
+
+            let mz_connection_info = if let Some(mz_connection_url) = global_args.mz_connection_url
+            {
+                // If the user provides a connection URL, don't bother port forwarding.
+                SelfManagedMzConnectionInfo::ConnectionUrlOverride(mz_connection_url)
+            } else {
+                let create_port_forward_connection = async || {
+                    let port_forwarder = create_pg_wire_port_forwarder(
+                        &k8s_client,
+                        &args.k8s_context,
+                        &args.k8s_namespaces,
+                    )
+                    .await?;
+                    port_forwarder.spawn_port_forward().await
+                };
+
+                let port_forward_connection = match create_port_forward_connection().await {
+                    Ok(port_forward_connection) => port_forward_connection,
+                    Err(e) => {
+                        warn!(
+                            "Failed to create port forward connection. Set --mz-connection-url to to a Materialize instance",
+                        );
+                        return Err(e);
+                    }
+                };
+
+                SelfManagedMzConnectionInfo::PortForward(PortForwardConnectionInfo {
+                    connection: port_forward_connection,
+                    auth_mode: auth_mode.clone(),
+                })
+            };
+
+            DebugModeContext::SelfManaged(SelfManagedContext {
+                dump_k8s: args.dump_k8s,
+                k8s_client,
+                k8s_context: args.k8s_context.clone(),
+                k8s_namespaces: args.k8s_namespaces.clone(),
+                k8s_dump_secret_values: args.k8s_dump_secret_values,
+                mz_connection_info,
+                http_connection_auth_mode: auth_mode,
+            })
         }
         DebugModeArgs::Emulator(args) => {
             let container_ip = docker_dumper::get_container_ip(&args.docker_container_id)
@@ -281,27 +340,44 @@ async fn initialize_context(
                     )
                 })?;
 
-            let mz_connection_url = create_mz_connection_url(
-                container_ip.clone(),
-                6875,
-                global_args.mz_connection_url.clone(),
-            );
+            // For the emulator, we assume if a user provides a username and password, they
+            // want to use password authentication.
+            // TODO (debug_tool3): Figure out the auth mode from arguments using docker inspect.
+            let auth_mode = if let (Some(mz_username), Some(mz_password)) =
+                (&global_args.mz_username, &global_args.mz_password)
+            {
+                AuthMode::Password(PasswordAuthCredentials {
+                    username: mz_username.clone(),
+                    password: mz_password.clone(),
+                })
+            } else {
+                AuthMode::None
+            };
 
-            (
-                DebugModeContext::Emulator(EmulatorContext {
-                    dump_docker: args.dump_docker,
-                    docker_container_id: args.docker_container_id.clone(),
-                    container_ip,
-                }),
-                mz_connection_url,
-            )
+            let mz_connection_info = if let Some(mz_connection_url) = global_args.mz_connection_url
+            {
+                EmulatorMzConnectionInfo::ConnectionUrlOverride(mz_connection_url)
+            } else {
+                EmulatorMzConnectionInfo::ContainerIp(ContainerIpInfo {
+                    local_address: container_ip.clone(),
+                    local_port: DEFAULT_MZ_ENVIRONMENTD_PORT,
+                    auth_mode: auth_mode.clone(),
+                })
+            };
+
+            DebugModeContext::Emulator(EmulatorContext {
+                dump_docker: args.dump_docker,
+                docker_container_id: args.docker_container_id.clone(),
+                container_ip,
+                mz_connection_info,
+                http_connection_auth_mode: auth_mode,
+            })
         }
     };
 
     Ok(Context {
         base_path,
         debug_mode_context,
-        mz_connection_url,
         dump_system_catalog: global_args.dump_system_catalog,
         dump_heap_profiles: global_args.dump_heap_profiles,
         dump_prometheus_metrics: global_args.dump_prometheus_metrics,
@@ -357,9 +433,46 @@ async fn run(context: Context) -> Result<(), anyhow::Error> {
     };
 
     if context.dump_system_catalog {
-        // Dump the system catalog.
+        let connection_url = match &context.debug_mode_context {
+            DebugModeContext::SelfManaged(self_managed_context) => {
+                match &self_managed_context.mz_connection_info {
+                    SelfManagedMzConnectionInfo::PortForward(port_forward) => {
+                        let credentials = match &port_forward.auth_mode {
+                            AuthMode::Password(credentials) => Some(credentials.clone()),
+                            AuthMode::None => None,
+                        };
+                        create_mz_connection_url(
+                            port_forward.connection.local_address.clone(),
+                            port_forward.connection.local_port,
+                            credentials,
+                        )
+                    }
+                    SelfManagedMzConnectionInfo::ConnectionUrlOverride(connection_url) => {
+                        connection_url.clone()
+                    }
+                }
+            }
+            DebugModeContext::Emulator(emulator_context) => {
+                match &emulator_context.mz_connection_info {
+                    EmulatorMzConnectionInfo::ContainerIp(container_ip) => {
+                        let credentials = match &container_ip.auth_mode {
+                            AuthMode::Password(credentials) => Some(credentials.clone()),
+                            AuthMode::None => None,
+                        };
+                        create_mz_connection_url(
+                            container_ip.local_address.clone(),
+                            container_ip.local_port,
+                            credentials,
+                        )
+                    }
+                    EmulatorMzConnectionInfo::ConnectionUrlOverride(connection_url) => {
+                        connection_url.clone()
+                    }
+                }
+            }
+        };
         let catalog_dumper = match system_catalog_dumper::SystemCatalogDumper::new(
-            &context.mz_connection_url,
+            &connection_url,
             context.base_path.clone(),
         )
         .await

@@ -1212,7 +1212,12 @@ class DependencySet:
             max_retries = (
                 90
                 if os.getenv("CI_WAITING_FOR_BUILD")
-                else 5 if ui.env_is_truthy("CI") else 1
+                else (
+                    5
+                    if ui.env_is_truthy("CI")
+                    and not ui.env_is_truthy("CI_ALLOW_LOCAL_BUILD")
+                    else 1
+                )
             )
         assert max_retries > 0
 
@@ -1231,7 +1236,7 @@ class DependencySet:
                         deps_to_build.append(dep)
 
         # Don't attempt to build in CI, as our timeouts and small machines won't allow it anyway
-        if ui.env_is_truthy("CI"):
+        if ui.env_is_truthy("CI") and not ui.env_is_truthy("CI_ALLOW_LOCAL_BUILD"):
             expected_deps = [dep for dep in deps_to_build if dep.publish]
             if expected_deps:
                 print(

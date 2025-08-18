@@ -12,15 +12,21 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
+use anyhow::Context as AnyhowContext;
 use std::fs::{File, create_dir_all, remove_dir_all};
 use std::io::{BufWriter, copy};
 use std::path::PathBuf;
 use std::str::FromStr;
 
 use chrono::{DateTime, Utc};
+use kube::api::ListParams;
+use kube::{Api, Client};
+use mz_cloud_resources::crd::materialize::v1alpha1::Materialize;
+use mz_server_core::listeners::AuthenticatorKind;
 use zip::ZipWriter;
 use zip::write::SimpleFileOptions;
+
+use crate::{AuthMode, PasswordAuthCredentials};
 
 /// Formats the base path for the output of the debug tool.
 pub fn format_base_path(date_time: DateTime<Utc>) -> PathBuf {
@@ -65,4 +71,49 @@ pub fn zip_debug_folder(zip_file_name: PathBuf, folder_path: &PathBuf) -> std::i
 
     zip_writer.finish()?;
     Ok(())
+}
+
+pub async fn get_k8s_auth_mode(
+    mz_username: Option<String>,
+    mz_password: Option<String>,
+    k8s_client: &Client,
+    k8s_namespaces: &Vec<String>,
+) -> Result<AuthMode, anyhow::Error> {
+    for namespace in k8s_namespaces.iter() {
+        let materialize_api = Api::<Materialize>::namespaced(k8s_client.clone(), namespace);
+        let object_list = materialize_api
+            .list(&ListParams::default())
+            .await
+            .with_context(|| format!("Failed to get Materialize CR in namespace: {}", namespace))?;
+
+        if !object_list.items.is_empty() {
+            let materialize_cr = &object_list.items[0];
+            let authenticator_kind = materialize_cr.spec.authenticator_kind;
+
+            match authenticator_kind {
+                AuthenticatorKind::None => return Ok(AuthMode::None),
+                AuthenticatorKind::Password => {
+                    if let (Some(mz_username), Some(mz_password)) = (&mz_username, &mz_password) {
+                        return Ok(AuthMode::Password(PasswordAuthCredentials {
+                            username: mz_username.clone(),
+                            password: mz_password.clone(),
+                        }));
+                    } else {
+                        return Err(anyhow::anyhow!(
+                            "mz_username and mz_password are required for password authentication"
+                        ));
+                    }
+                }
+                _ => {
+                    return Err(anyhow::anyhow!(
+                        "Unsupported authenticator kind: {:?}",
+                        authenticator_kind
+                    ));
+                }
+            }
+        }
+    }
+    Err(anyhow::anyhow!(
+        "Could not find AuthenticatorKind in Materialize CR"
+    ))
 }
