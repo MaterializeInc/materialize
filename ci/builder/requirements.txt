@@ -5,8 +5,8 @@
 # wheels for a wide variety of platforms, including M1 Macs.
 
 black==24.4.2
-boto3-stubs[ec2,iam,kinesis,s3,sqs,ssm,sts]==1.40.6
-boto3==1.40.6
+boto3-stubs[ec2,iam,kinesis,s3,sqs,ssm,sts]==1.40.11
+boto3==1.40.11
 click==8.1.3
 cryptography==45.0.6
 colored==2.3.1
@@ -18,13 +18,13 @@ ipympl==0.9.7
 ipywidgets==8.1.7
 junit-xml==1.9
 junitparser==4.0.2
-jupyterlab==4.4.5
+jupyterlab==4.4.6
 jupyter-black==0.4.0
 kubernetes==25.3.0
 kubernetes-stubs==22.6.0.post1
 launchdarkly-api==17.2.0
 matplotlib==3.10.1
-matplotlib-stubs==0.2.0
+matplotlib-stubs==0.3.2
 networkx==3.4.2
 networkx-stubs==0.0.1
 numpy==1.26.4
@@ -76,6 +76,6 @@ pyarrow-stubs==19.4
 # macOS x86-64 agent doesn't support pyarrow 20.0 currently, only upgrade once fixed or we get rid of it
 pyarrow==19.0.1
 minio==7.2.15
-zstandard==0.23.0
+zstandard==0.24.0
 build==1.3.0
 hatchling==1.27.0
