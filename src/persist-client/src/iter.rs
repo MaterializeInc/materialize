@@ -733,9 +733,11 @@ where
 
         let mut check_budget = |size| {
             // Subtract the amount from the budget, returning None if the budget is exhausted.
-            prefetch_budget_bytes
-                .checked_sub(size)
-                .map(|remaining| prefetch_budget_bytes = remaining)
+            let remaining = prefetch_budget_bytes.checked_sub(size);
+            if let Some(remaining) = remaining {
+                prefetch_budget_bytes = remaining;
+            }
+            remaining
         };
 
         // First account for how much budget has already been used
