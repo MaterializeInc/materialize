@@ -46,13 +46,11 @@ use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, PersistLocation, ShardId};
 use mz_persist_types::Codec64;
 use mz_persist_types::codec_impls::UnitSchema;
-use mz_proto::RustType;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationVersion, Row, TimestampManipulation};
 use mz_storage_client::client::{
-    AppendOnlyUpdate, ProtoStorageCommand, ProtoStorageResponse, RunIngestionCommand,
-    RunOneshotIngestion, RunSinkCommand, Status, StatusUpdate, StorageCommand, StorageResponse,
-    TableData,
+    AppendOnlyUpdate, RunIngestionCommand, RunOneshotIngestion, RunSinkCommand, Status,
+    StatusUpdate, StorageCommand, StorageResponse, TableData,
 };
 use mz_storage_client::controller::{
     BoxFuture, CollectionDescription, DataSource, ExportDescription, ExportState,
@@ -288,8 +286,6 @@ where
         + TimestampManipulation
         + Into<Datum<'static>>
         + Display,
-    StorageCommand<T>: RustType<ProtoStorageCommand>,
-    StorageResponse<T>: RustType<ProtoStorageResponse>,
 {
     type Timestamp = T;
 
@@ -2687,8 +2683,6 @@ where
         + From<EpochMillis>
         + TimestampManipulation
         + Into<Datum<'static>>,
-    StorageCommand<T>: RustType<ProtoStorageCommand>,
-    StorageResponse<T>: RustType<ProtoStorageResponse>,
     Self: StorageController<Timestamp = T>,
 {
     /// Create a new storage controller from a client it should wrap.

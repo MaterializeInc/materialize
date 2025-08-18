@@ -27,7 +27,6 @@ use mz_ore::assert_none;
 use mz_persist_client::batch::{BatchBuilder, ProtoBatch};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_types::{Codec, Codec64, StepForward};
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Diff, GlobalId, Row, TimestampManipulation};
 use mz_service::client::{GenericClient, Partitionable, PartitionedState};
 use mz_storage_types::controller::CollectionMetadata;
@@ -35,9 +34,6 @@ use mz_storage_types::oneshot_sources::OneshotIngestionRequest;
 use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::sinks::StorageSinkDesc;
 use mz_storage_types::sources::IngestionDescription;
-use mz_timely_util::progress::any_antichain;
-use proptest::prelude::{Arbitrary, any};
-use proptest::strategy::{BoxedStrategy, Strategy, Union};
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use timely::PartialOrder;
@@ -46,8 +42,6 @@ use timely::progress::frontier::{Antichain, MutableAntichain};
 use uuid::Uuid;
 
 use crate::statistics::{SinkStatisticsUpdate, SourceStatisticsUpdate};
-
-include!(concat!(env!("OUT_DIR"), "/mz_storage_client.client.rs"));
 
 /// A client to a storage server.
 pub trait StorageClient<T = mz_repr::Timestamp>:
@@ -146,38 +140,6 @@ pub struct RunIngestionCommand {
     pub description: IngestionDescription<CollectionMetadata>,
 }
 
-impl Arbitrary for RunIngestionCommand {
-    type Strategy = BoxedStrategy<Self>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        (
-            any::<GlobalId>(),
-            any::<IngestionDescription<CollectionMetadata>>(),
-        )
-            .prop_map(|(id, description)| Self { id, description })
-            .boxed()
-    }
-}
-
-impl RustType<ProtoRunIngestionCommand> for RunIngestionCommand {
-    fn into_proto(&self) -> ProtoRunIngestionCommand {
-        ProtoRunIngestionCommand {
-            id: Some(self.id.into_proto()),
-            description: Some(self.description.into_proto()),
-        }
-    }
-
-    fn from_proto(proto: ProtoRunIngestionCommand) -> Result<Self, TryFromProtoError> {
-        Ok(RunIngestionCommand {
-            id: proto.id.into_rust_if_some("ProtoRunIngestionCommand::id")?,
-            description: proto
-                .description
-                .into_rust_if_some("ProtoRunIngestionCommand::description")?,
-        })
-    }
-}
-
 /// A command that starts ingesting the given ingestion description
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct RunOneshotIngestion {
@@ -191,168 +153,11 @@ pub struct RunOneshotIngestion {
     pub request: OneshotIngestionRequest,
 }
 
-impl RustType<ProtoRunOneshotIngestion> for RunOneshotIngestion {
-    fn into_proto(&self) -> ProtoRunOneshotIngestion {
-        ProtoRunOneshotIngestion {
-            ingestion_id: Some(self.ingestion_id.into_proto()),
-            collection_id: Some(self.collection_id.into_proto()),
-            storage_metadata: Some(self.collection_meta.into_proto()),
-            request: Some(self.request.into_proto()),
-        }
-    }
-
-    fn from_proto(proto: ProtoRunOneshotIngestion) -> Result<Self, TryFromProtoError> {
-        Ok(RunOneshotIngestion {
-            ingestion_id: proto
-                .ingestion_id
-                .into_rust_if_some("ProtoRunOneshotIngestion::ingestion_id")?,
-            collection_id: proto
-                .collection_id
-                .into_rust_if_some("ProtoRunOneshotIngestion::collection_id")?,
-            collection_meta: proto
-                .storage_metadata
-                .into_rust_if_some("ProtoRunOneshotIngestion::storage_metadata")?,
-            request: proto
-                .request
-                .into_rust_if_some("ProtoRunOneshotIngestion::request")?,
-        })
-    }
-}
-
-impl RustType<ProtoRunSinkCommand> for RunSinkCommand<mz_repr::Timestamp> {
-    fn into_proto(&self) -> ProtoRunSinkCommand {
-        ProtoRunSinkCommand {
-            id: Some(self.id.into_proto()),
-            description: Some(self.description.into_proto()),
-        }
-    }
-
-    fn from_proto(proto: ProtoRunSinkCommand) -> Result<Self, TryFromProtoError> {
-        Ok(RunSinkCommand {
-            id: proto.id.into_rust_if_some("ProtoRunSinkCommand::id")?,
-            description: proto
-                .description
-                .into_rust_if_some("ProtoRunSinkCommand::description")?,
-        })
-    }
-}
-
 /// A command that starts exporting the given sink description
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct RunSinkCommand<T> {
     pub id: GlobalId,
     pub description: StorageSinkDesc<CollectionMetadata, T>,
-}
-
-impl Arbitrary for RunSinkCommand<mz_repr::Timestamp> {
-    type Strategy = BoxedStrategy<Self>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        (
-            any::<GlobalId>(),
-            any::<StorageSinkDesc<CollectionMetadata, mz_repr::Timestamp>>(),
-        )
-            .prop_map(|(id, description)| Self { id, description })
-            .boxed()
-    }
-}
-
-impl RustType<ProtoStorageCommand> for StorageCommand<mz_repr::Timestamp> {
-    fn into_proto(&self) -> ProtoStorageCommand {
-        use proto_storage_command::Kind::*;
-        use proto_storage_command::*;
-        ProtoStorageCommand {
-            kind: Some(match self {
-                StorageCommand::Hello { nonce } => Hello(ProtoHello {
-                    nonce: Some(nonce.into_proto()),
-                }),
-                StorageCommand::InitializationComplete => InitializationComplete(()),
-                StorageCommand::AllowWrites => AllowWrites(()),
-                StorageCommand::UpdateConfiguration(params) => {
-                    UpdateConfiguration(*params.into_proto())
-                }
-                StorageCommand::AllowCompaction(id, frontier) => AllowCompaction(ProtoCompaction {
-                    id: Some(id.into_proto()),
-                    frontier: Some(frontier.into_proto()),
-                }),
-                StorageCommand::RunIngestion(ingestion) => RunIngestion(*ingestion.into_proto()),
-                StorageCommand::RunSink(sink) => RunSink(*sink.into_proto()),
-                StorageCommand::RunOneshotIngestion(ingestion) => {
-                    RunOneshotIngestion(*ingestion.into_proto())
-                }
-                StorageCommand::CancelOneshotIngestion(uuid) => {
-                    CancelOneshotIngestion(uuid.into_proto())
-                }
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoStorageCommand) -> Result<Self, TryFromProtoError> {
-        use proto_storage_command::Kind::*;
-        use proto_storage_command::*;
-        match proto.kind {
-            Some(Hello(ProtoHello { nonce })) => Ok(StorageCommand::Hello {
-                nonce: nonce.into_rust_if_some("ProtoHello::nonce")?,
-            }),
-            Some(InitializationComplete(())) => Ok(StorageCommand::InitializationComplete),
-            Some(AllowWrites(())) => Ok(StorageCommand::AllowWrites),
-            Some(UpdateConfiguration(params)) => {
-                let params = Box::new(params.into_rust()?);
-                Ok(StorageCommand::UpdateConfiguration(params))
-            }
-            Some(RunIngestion(ingestion)) => {
-                let ingestion = Box::new(ingestion.into_rust()?);
-                Ok(StorageCommand::RunIngestion(ingestion))
-            }
-            Some(AllowCompaction(ProtoCompaction { id, frontier })) => {
-                Ok(StorageCommand::AllowCompaction(
-                    id.into_rust_if_some("ProtoCompaction::id")?,
-                    frontier.into_rust_if_some("ProtoCompaction::frontier")?,
-                ))
-            }
-            Some(RunSink(sink)) => {
-                let sink = Box::new(sink.into_rust()?);
-                Ok(StorageCommand::RunSink(sink))
-            }
-            Some(RunOneshotIngestion(ingestion)) => {
-                let ingestion = Box::new(ingestion.into_rust()?);
-                Ok(StorageCommand::RunOneshotIngestion(ingestion))
-            }
-            Some(CancelOneshotIngestion(uuid)) => {
-                Ok(StorageCommand::CancelOneshotIngestion(uuid.into_rust()?))
-            }
-            None => Err(TryFromProtoError::missing_field(
-                "ProtoStorageCommand::kind",
-            )),
-        }
-    }
-}
-
-impl Arbitrary for StorageCommand<mz_repr::Timestamp> {
-    type Strategy = Union<BoxedStrategy<Self>>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        Union::new(vec![
-            any::<u128>()
-                .prop_map(|n| StorageCommand::Hello {
-                    nonce: Uuid::from_u128(n),
-                })
-                .boxed(),
-            any::<RunIngestionCommand>()
-                .prop_map(Box::new)
-                .prop_map(StorageCommand::RunIngestion)
-                .boxed(),
-            any::<RunSinkCommand<mz_repr::Timestamp>>()
-                .prop_map(Box::new)
-                .prop_map(StorageCommand::RunSink)
-                .boxed(),
-            (any::<GlobalId>(), any_antichain())
-                .prop_map(|(id, frontier)| StorageCommand::AllowCompaction(id, frontier))
-                .boxed(),
-        ])
-    }
 }
 
 /// A "kind" enum for statuses tracked by the health operator
@@ -491,73 +296,6 @@ impl From<StatusUpdate> for Row {
     }
 }
 
-impl RustType<proto_storage_response::ProtoStatus> for Status {
-    fn into_proto(&self) -> proto_storage_response::ProtoStatus {
-        use proto_storage_response::proto_status::*;
-
-        proto_storage_response::ProtoStatus {
-            kind: Some(match self {
-                Status::Starting => Kind::Starting(()),
-                Status::Running => Kind::Running(()),
-                Status::Paused => Kind::Paused(()),
-                Status::Stalled => Kind::Stalled(()),
-                Status::Ceased => Kind::Ceased(()),
-                Status::Dropped => Kind::Dropped(()),
-            }),
-        }
-    }
-
-    fn from_proto(proto: proto_storage_response::ProtoStatus) -> Result<Self, TryFromProtoError> {
-        use proto_storage_response::proto_status::*;
-        let kind = proto
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoStatus::kind"))?;
-
-        Ok(match kind {
-            Kind::Starting(()) => Status::Starting,
-            Kind::Running(()) => Status::Running,
-            Kind::Paused(()) => Status::Paused,
-            Kind::Stalled(()) => Status::Stalled,
-            Kind::Ceased(()) => Status::Ceased,
-            Kind::Dropped(()) => Status::Dropped,
-        })
-    }
-}
-
-impl RustType<proto_storage_response::ProtoStatusUpdate> for StatusUpdate {
-    fn into_proto(&self) -> proto_storage_response::ProtoStatusUpdate {
-        proto_storage_response::ProtoStatusUpdate {
-            id: Some(self.id.into_proto()),
-            status: Some(self.status.into_proto()),
-            timestamp: Some(self.timestamp.into_proto()),
-            error: self.error.clone(),
-            hints: self.hints.iter().cloned().collect(),
-            namespaced_errors: self.namespaced_errors.clone(),
-            replica_id: self.replica_id.map(|id| id.to_string().into_proto()),
-        }
-    }
-
-    fn from_proto(
-        proto: proto_storage_response::ProtoStatusUpdate,
-    ) -> Result<Self, TryFromProtoError> {
-        Ok(StatusUpdate {
-            id: proto.id.into_rust_if_some("ProtoStatusUpdate::id")?,
-            timestamp: proto
-                .timestamp
-                .into_rust_if_some("ProtoStatusUpdate::timestamp")?,
-            status: proto
-                .status
-                .into_rust_if_some("ProtoStatusUpdate::status")?,
-            error: proto.error,
-            hints: proto.hints.into_iter().collect(),
-            namespaced_errors: proto.namespaced_errors,
-            replica_id: proto
-                .replica_id
-                .map(|replica_id: String| replica_id.parse().expect("must be a valid replica id")),
-        })
-    }
-}
-
 /// An update to an append only collection.
 pub enum AppendOnlyUpdate {
     Row((Row, Diff)),
@@ -599,137 +337,6 @@ pub enum StorageResponse<T = mz_repr::Timestamp> {
     /// A status update for a source or a sink. Periodically sent from
     /// storage workers to convey the latest status information about an object.
     StatusUpdate(StatusUpdate),
-}
-
-impl RustType<ProtoStorageResponse> for StorageResponse<mz_repr::Timestamp> {
-    fn into_proto(&self) -> ProtoStorageResponse {
-        use proto_storage_response::Kind::*;
-        use proto_storage_response::{
-            ProtoDroppedId, ProtoFrontierUpper, ProtoStagedBatches, ProtoStatisticsUpdates,
-        };
-        ProtoStorageResponse {
-            kind: Some(match self {
-                StorageResponse::FrontierUpper(id, upper) => FrontierUpper(ProtoFrontierUpper {
-                    id: Some(id.into_proto()),
-                    upper: Some(upper.into_proto()),
-                }),
-                StorageResponse::DroppedId(id) => DroppedId(ProtoDroppedId {
-                    id: Some(id.into_proto()),
-                }),
-                StorageResponse::StatisticsUpdates(source_stats, sink_stats) => {
-                    Stats(ProtoStatisticsUpdates {
-                        source_updates: source_stats
-                            .iter()
-                            .map(|update| update.into_proto())
-                            .collect(),
-                        sink_updates: sink_stats
-                            .iter()
-                            .map(|update| update.into_proto())
-                            .collect(),
-                    })
-                }
-                StorageResponse::StatusUpdate(update) => StatusUpdate(update.into_proto()),
-                StorageResponse::StagedBatches(staged) => {
-                    let batches = staged
-                        .into_iter()
-                        .map(|(collection_id, batches)| {
-                            let batches = batches
-                                .into_iter()
-                                .map(|result| {
-                                    use proto_storage_response::proto_staged_batches::batch_result::Value;
-                                    let value = match result {
-                                        Ok(batch) => Value::Batch(batch.clone()),
-                                        Err(err) => Value::Error(err.clone()),
-                                    };
-                                    proto_storage_response::proto_staged_batches::BatchResult { value: Some(value) }
-                                })
-                                .collect();
-                            proto_storage_response::proto_staged_batches::Inner {
-                                id: Some(collection_id.into_proto()),
-                                batches,
-                            }
-                        })
-                        .collect();
-                    StagedBatches(ProtoStagedBatches { batches })
-                }
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoStorageResponse) -> Result<Self, TryFromProtoError> {
-        use proto_storage_response::Kind::*;
-        use proto_storage_response::{ProtoDroppedId, ProtoFrontierUpper};
-        match proto.kind {
-            Some(DroppedId(ProtoDroppedId { id })) => Ok(StorageResponse::DroppedId(
-                id.into_rust_if_some("ProtoDroppedId::id")?,
-            )),
-            Some(FrontierUpper(ProtoFrontierUpper { id, upper })) => {
-                Ok(StorageResponse::FrontierUpper(
-                    id.into_rust_if_some("ProtoFrontierUpper::id")?,
-                    upper.into_rust_if_some("ProtoFrontierUpper::upper")?,
-                ))
-            }
-            Some(Stats(stats)) => Ok(StorageResponse::StatisticsUpdates(
-                stats
-                    .source_updates
-                    .into_iter()
-                    .map(|update| update.into_rust())
-                    .collect::<Result<Vec<_>, TryFromProtoError>>()?,
-                stats
-                    .sink_updates
-                    .into_iter()
-                    .map(|update| update.into_rust())
-                    .collect::<Result<Vec<_>, TryFromProtoError>>()?,
-            )),
-            Some(StatusUpdate(update)) => Ok(StorageResponse::StatusUpdate(update.into_rust()?)),
-            Some(StagedBatches(staged)) => {
-                let batches: BTreeMap<_, _> = staged
-                    .batches
-                    .into_iter()
-                    .map(|inner| {
-                        let id = inner
-                            .id
-                            .into_rust_if_some("ProtoStagedBatches::Inner::id")?;
-
-                        let mut batches = Vec::with_capacity(inner.batches.len());
-                        for maybe_batch in inner.batches {
-                            use proto_storage_response::proto_staged_batches::batch_result::Value;
-
-                            let value = maybe_batch.value.ok_or_else(|| {
-                                TryFromProtoError::missing_field("BatchResult::value")
-                            })?;
-                            let batch = match value {
-                                Value::Batch(batch) => Ok(batch),
-                                Value::Error(err) => Err(err),
-                            };
-                            batches.push(batch);
-                        }
-
-                        Ok::<_, TryFromProtoError>((id, batches))
-                    })
-                    .collect::<Result<_, _>>()?;
-
-                Ok(StorageResponse::StagedBatches(batches))
-            }
-            None => Err(TryFromProtoError::missing_field(
-                "ProtoStorageResponse::kind",
-            )),
-        }
-    }
-}
-
-impl Arbitrary for StorageResponse<mz_repr::Timestamp> {
-    type Strategy = Union<BoxedStrategy<Self>>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        // TODO(guswynn): test `SourceStatisticsUpdates`
-        Union::new(vec![
-            (any::<GlobalId>(), any_antichain())
-                .prop_map(|(id, upper)| StorageResponse::FrontierUpper(id, upper))
-                .boxed(),
-        ])
-    }
 }
 
 /// Maintained state for partitioned storage clients.
@@ -1010,24 +617,6 @@ where
     }
 }
 
-impl RustType<ProtoCompaction> for (GlobalId, Antichain<mz_repr::Timestamp>) {
-    fn into_proto(&self) -> ProtoCompaction {
-        ProtoCompaction {
-            id: Some(self.0.into_proto()),
-            frontier: Some(self.1.into_proto()),
-        }
-    }
-
-    fn from_proto(proto: ProtoCompaction) -> Result<Self, TryFromProtoError> {
-        Ok((
-            proto.id.into_rust_if_some("ProtoCompaction::id")?,
-            proto
-                .frontier
-                .into_rust_if_some("ProtoCompaction::frontier")?,
-        ))
-    }
-}
-
 impl TryIntoProtocolNonce for StorageCommand {
     fn try_into_protocol_nonce(self) -> Result<Uuid, Self> {
         match self {
@@ -1039,11 +628,6 @@ impl TryIntoProtocolNonce for StorageCommand {
 
 #[cfg(test)]
 mod tests {
-    use mz_ore::assert_ok;
-    use mz_proto::protobuf_roundtrip;
-    use proptest::prelude::ProptestConfig;
-    use proptest::proptest;
-
     use super::*;
 
     /// Test to ensure the size of the `StorageCommand` enum doesn't regress.
@@ -1056,25 +640,5 @@ mod tests {
     #[mz_ore::test]
     fn test_storage_response_size() {
         assert_eq!(std::mem::size_of::<StorageResponse>(), 120);
-    }
-
-    proptest! {
-        #![proptest_config(ProptestConfig::with_cases(32))]
-
-        #[mz_ore::test]
-        #[cfg_attr(miri, ignore)] // too slow
-        fn storage_command_protobuf_roundtrip(expect in any::<StorageCommand<mz_repr::Timestamp>>() ) {
-            let actual = protobuf_roundtrip::<_, ProtoStorageCommand>(&expect);
-            assert_ok!(actual);
-            assert_eq!(actual.unwrap(), expect);
-        }
-
-        #[mz_ore::test]
-        #[cfg_attr(miri, ignore)] // too slow
-        fn storage_response_protobuf_roundtrip(expect in any::<StorageResponse<mz_repr::Timestamp>>() ) {
-            let actual = protobuf_roundtrip::<_, ProtoStorageResponse>(&expect);
-            assert_ok!(actual);
-            assert_eq!(actual.unwrap(), expect);
-        }
     }
 }
