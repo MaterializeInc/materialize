@@ -394,10 +394,17 @@ where
             panic!("attempting blind write to {} while in read-only mode", id);
         }
 
-        if !updates.is_empty() {
-            let update_tx = self.append_only_write_sender(id);
-            let (tx, _rx) = oneshot::channel();
-            update_tx.send((updates, tx)).expect("rx hung up");
+        if updates.is_empty() {
+            return;
+        }
+
+        let collections = self.append_only_collections.lock().expect("poisoned");
+        match collections.get(&id) {
+            Some((update_tx, _, _)) => {
+                let (tx, _rx) = oneshot::channel();
+                update_tx.send((updates, tx)).expect("rx hung up");
+            }
+            None => panic!("missing append-only collection: {id}"),
         }
     }
 
@@ -409,10 +416,17 @@ where
     /// - If `id` does not belong to a differential collection.
     /// - If the collection closed.
     pub(super) fn differential_write(&self, id: GlobalId, op: StorageWriteOp) {
-        if !op.is_empty_append() {
-            let update_tx = self.differential_write_sender(id);
-            let (tx, _rx) = oneshot::channel();
-            update_tx.send((op, tx)).expect("rx hung up");
+        if op.is_empty_append() {
+            return;
+        }
+
+        let collections = self.differential_collections.lock().expect("poisoned");
+        match collections.get(&id) {
+            Some((update_tx, _, _)) => {
+                let (tx, _rx) = oneshot::channel();
+                update_tx.send((op, tx)).expect("rx hung up");
+            }
+            None => panic!("missing differential collection: {id}"),
         }
     }
 
