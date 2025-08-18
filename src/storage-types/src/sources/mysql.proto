@@ -12,25 +12,9 @@ syntax = "proto3";
 package mz_storage_types.sources.mysql;
 
 import "mysql-util/src/desc.proto";
-import "repr/src/catalog_item_id.proto";
-import "storage-types/src/connections.proto";
-
-message ProtoMySqlSourceConnection {
-  reserved 4, 5;
-  mz_repr.catalog_item_id.ProtoCatalogItemId connection_id = 1;
-  mz_storage_types.connections.ProtoMySqlConnection connection = 2;
-  ProtoMySqlSourceDetails details = 3;
-}
 
 message ProtoMySqlSourceDetails {
   reserved 1, 2, 3;
-}
-
-message ProtoMySqlSourceExportDetails {
-  mz_mysql_util.ProtoMySqlTableDesc table = 1;
-  string initial_gtid_set = 2;
-  repeated string text_columns = 3;
-  repeated string exclude_columns = 4;
 }
 
 // NOTE: this message is encoded and stored as part of source export

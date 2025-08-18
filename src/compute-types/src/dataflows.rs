@@ -14,10 +14,8 @@ use std::fmt;
 
 use mz_expr::{CollectionPlan, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::soft_assert_or_log;
-use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{GlobalId, RelationType};
-use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::time_dependence::TimeDependence;
 use proptest::prelude::{Arbitrary, any};
 use proptest::strategy::{BoxedStrategy, Strategy};
@@ -25,15 +23,10 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
 
-use crate::dataflows::proto_dataflow_description::{
-    ProtoIndexExport, ProtoIndexImport, ProtoSinkExport, ProtoSourceImport,
-};
 use crate::plan::Plan;
 use crate::plan::render_plan::RenderPlan;
 use crate::sinks::{ComputeSinkConnection, ComputeSinkDesc};
 use crate::sources::{SourceInstanceArguments, SourceInstanceDesc};
-
-include!(concat!(env!("OUT_DIR"), "/mz_compute_types.dataflows.rs"));
 
 /// A description of a dataflow to construct and results to surface.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
@@ -572,186 +565,6 @@ where
     }
 }
 
-impl RustType<ProtoDataflowDescription> for DataflowDescription<RenderPlan, CollectionMetadata> {
-    fn into_proto(&self) -> ProtoDataflowDescription {
-        ProtoDataflowDescription {
-            source_imports: self.source_imports.into_proto(),
-            index_imports: self.index_imports.into_proto(),
-            objects_to_build: self.objects_to_build.into_proto(),
-            index_exports: self.index_exports.into_proto(),
-            sink_exports: self.sink_exports.into_proto(),
-            as_of: self.as_of.into_proto(),
-            until: Some(self.until.into_proto()),
-            initial_storage_as_of: self.initial_storage_as_of.into_proto(),
-            refresh_schedule: self.refresh_schedule.into_proto(),
-            debug_name: self.debug_name.clone(),
-            time_dependence: self.time_dependence.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoDataflowDescription) -> Result<Self, TryFromProtoError> {
-        Ok(DataflowDescription {
-            source_imports: proto.source_imports.into_rust()?,
-            index_imports: proto.index_imports.into_rust()?,
-            objects_to_build: proto.objects_to_build.into_rust()?,
-            index_exports: proto.index_exports.into_rust()?,
-            sink_exports: proto.sink_exports.into_rust()?,
-            as_of: proto.as_of.map(|x| x.into_rust()).transpose()?,
-            until: proto
-                .until
-                .map(|x| x.into_rust())
-                .transpose()?
-                .unwrap_or_else(Antichain::new),
-            initial_storage_as_of: proto
-                .initial_storage_as_of
-                .map(|x| x.into_rust())
-                .transpose()?,
-            refresh_schedule: proto.refresh_schedule.into_rust()?,
-            debug_name: proto.debug_name,
-            time_dependence: proto.time_dependence.into_rust()?,
-        })
-    }
-}
-
-impl
-    ProtoMapEntry<
-        GlobalId,
-        (
-            SourceInstanceDesc<CollectionMetadata>,
-            bool,
-            Antichain<mz_repr::Timestamp>,
-        ),
-    > for ProtoSourceImport
-{
-    fn from_rust<'a>(
-        entry: (
-            &'a GlobalId,
-            &'a (
-                SourceInstanceDesc<CollectionMetadata>,
-                bool,
-                Antichain<mz_repr::Timestamp>,
-            ),
-        ),
-    ) -> Self {
-        ProtoSourceImport {
-            id: Some(entry.0.into_proto()),
-            source_instance_desc: Some((entry.1).0.into_proto()),
-            monotonic: (entry.1).1.into_proto(),
-            upper: Some((entry.1).2.into_proto()),
-        }
-    }
-
-    fn into_rust(
-        self,
-    ) -> Result<
-        (
-            GlobalId,
-            (
-                SourceInstanceDesc<CollectionMetadata>,
-                bool,
-                Antichain<mz_repr::Timestamp>,
-            ),
-        ),
-        TryFromProtoError,
-    > {
-        Ok((
-            self.id.into_rust_if_some("ProtoSourceImport::id")?,
-            (
-                self.source_instance_desc
-                    .into_rust_if_some("ProtoSourceImport::source_instance_desc")?,
-                self.monotonic.into_rust()?,
-                self.upper.into_rust_if_some("ProtoSourceImport::upper")?,
-            ),
-        ))
-    }
-}
-
-impl ProtoMapEntry<GlobalId, IndexImport> for ProtoIndexImport {
-    fn from_rust<'a>(
-        (
-            id,
-            IndexImport {
-                desc,
-                typ,
-                monotonic,
-            },
-        ): (&'a GlobalId, &'a IndexImport),
-    ) -> Self {
-        ProtoIndexImport {
-            id: Some(id.into_proto()),
-            index_desc: Some(desc.into_proto()),
-            typ: Some(typ.into_proto()),
-            monotonic: monotonic.into_proto(),
-        }
-    }
-
-    fn into_rust(self) -> Result<(GlobalId, IndexImport), TryFromProtoError> {
-        Ok((
-            self.id.into_rust_if_some("ProtoIndex::id")?,
-            IndexImport {
-                desc: self
-                    .index_desc
-                    .into_rust_if_some("ProtoIndexImport::index_desc")?,
-                typ: self.typ.into_rust_if_some("ProtoIndexImport::typ")?,
-                monotonic: self.monotonic.into_rust()?,
-            },
-        ))
-    }
-}
-
-impl ProtoMapEntry<GlobalId, (IndexDesc, RelationType)> for ProtoIndexExport {
-    fn from_rust<'a>(
-        (id, (index_desc, typ)): (&'a GlobalId, &'a (IndexDesc, RelationType)),
-    ) -> Self {
-        ProtoIndexExport {
-            id: Some(id.into_proto()),
-            index_desc: Some(index_desc.into_proto()),
-            typ: Some(typ.into_proto()),
-        }
-    }
-
-    fn into_rust(self) -> Result<(GlobalId, (IndexDesc, RelationType)), TryFromProtoError> {
-        Ok((
-            self.id.into_rust_if_some("ProtoIndexExport::id")?,
-            (
-                self.index_desc
-                    .into_rust_if_some("ProtoIndexExport::index_desc")?,
-                self.typ.into_rust_if_some("ProtoIndexExport::typ")?,
-            ),
-        ))
-    }
-}
-
-impl ProtoMapEntry<GlobalId, ComputeSinkDesc<CollectionMetadata>> for ProtoSinkExport {
-    fn from_rust<'a>(
-        (id, sink_desc): (&'a GlobalId, &'a ComputeSinkDesc<CollectionMetadata>),
-    ) -> Self {
-        ProtoSinkExport {
-            id: Some(id.into_proto()),
-            sink_desc: Some(sink_desc.into_proto()),
-        }
-    }
-
-    fn into_rust(
-        self,
-    ) -> Result<(GlobalId, ComputeSinkDesc<CollectionMetadata>), TryFromProtoError> {
-        Ok((
-            self.id.into_rust_if_some("ProtoSinkExport::id")?,
-            self.sink_desc
-                .into_rust_if_some("ProtoSinkExport::sink_desc")?,
-        ))
-    }
-}
-
-impl Arbitrary for DataflowDescription<RenderPlan, CollectionMetadata, mz_repr::Timestamp> {
-    type Strategy = BoxedStrategy<Self>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        any_dataflow_description(any_source_import_collection_metadata()).boxed()
-    }
-}
-
 impl Arbitrary for DataflowDescription<OptimizedMirRelationExpr, (), mz_repr::Timestamp> {
     type Strategy = BoxedStrategy<Self>;
     type Parameters = ();
@@ -843,24 +656,6 @@ where
         )
 }
 
-fn any_source_import_collection_metadata() -> impl Strategy<
-    Value = (
-        GlobalId,
-        (
-            SourceInstanceDesc<CollectionMetadata>,
-            bool,
-            Antichain<mz_repr::Timestamp>,
-        ),
-    ),
-> {
-    (
-        any::<GlobalId>(),
-        any::<(SourceInstanceDesc<CollectionMetadata>, bool)>().prop_map(
-            |(source_instance_desc, monotonic)| (source_instance_desc, monotonic, Antichain::new()),
-        ),
-    )
-}
-
 fn any_source_import() -> impl Strategy<
     Value = (
         GlobalId,
@@ -905,28 +700,11 @@ pub struct IndexDesc {
     /// Identity of the collection the index is on.
     pub on_id: GlobalId,
     /// Expressions to be arranged, in order of decreasing primacy.
-    #[proptest(strategy = "proptest::collection::vec(any::<MirScalarExpr>(), 1..3)")]
     pub key: Vec<MirScalarExpr>,
 }
 
-impl RustType<ProtoIndexDesc> for IndexDesc {
-    fn into_proto(&self) -> ProtoIndexDesc {
-        ProtoIndexDesc {
-            on_id: Some(self.on_id.into_proto()),
-            key: self.key.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoIndexDesc) -> Result<Self, TryFromProtoError> {
-        Ok(IndexDesc {
-            on_id: proto.on_id.into_rust_if_some("ProtoIndexDesc::on_id")?,
-            key: proto.key.into_rust()?,
-        })
-    }
-}
-
 /// Information about an imported index, and how it will be used by the dataflow.
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Arbitrary)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct IndexImport {
     /// Description of index.
     pub desc: IndexDesc,
@@ -943,44 +721,4 @@ pub struct BuildDesc<P> {
     pub id: GlobalId,
     /// TODO(database-issues#7533): Add documentation.
     pub plan: P,
-}
-
-impl RustType<ProtoBuildDesc> for BuildDesc<RenderPlan> {
-    fn into_proto(&self) -> ProtoBuildDesc {
-        ProtoBuildDesc {
-            id: Some(self.id.into_proto()),
-            plan: Some(self.plan.into_proto()),
-        }
-    }
-
-    fn from_proto(x: ProtoBuildDesc) -> Result<Self, TryFromProtoError> {
-        Ok(BuildDesc {
-            id: x.id.into_rust_if_some("ProtoBuildDesc::id")?,
-            plan: x.plan.into_rust_if_some("ProtoBuildDesc::plan")?,
-        })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use mz_ore::assert_ok;
-    use mz_proto::protobuf_roundtrip;
-    use proptest::prelude::ProptestConfig;
-    use proptest::proptest;
-
-    use crate::dataflows::DataflowDescription;
-
-    use super::*;
-
-    proptest! {
-        #![proptest_config(ProptestConfig::with_cases(32))]
-
-
-        #[mz_ore::test]
-        fn dataflow_description_protobuf_roundtrip(expect in any::<DataflowDescription<RenderPlan, CollectionMetadata, mz_repr::Timestamp>>()) {
-            let actual = protobuf_roundtrip::<_, ProtoDataflowDescription>(&expect);
-            assert_ok!(actual);
-            assert_eq!(actual.unwrap(), expect);
-        }
-    }
 }

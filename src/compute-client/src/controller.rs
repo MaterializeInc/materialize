@@ -77,7 +77,6 @@ use crate::logging::{LogVariant, LoggingConfig};
 use crate::metrics::ComputeControllerMetrics;
 use crate::protocol::command::{ComputeParameters, PeekTarget};
 use crate::protocol::response::{PeekResponse, SubscribeBatch};
-use crate::service::{ComputeClient, ComputeGrpcClient};
 
 mod instance;
 mod introspection;
@@ -538,7 +537,6 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
 impl<T> ComputeController<T>
 where
     T: ComputeControllerTimestamp,
-    ComputeGrpcClient: ComputeClient<T>,
 {
     /// Create a compute instance.
     pub fn create_instance(
@@ -720,7 +718,6 @@ where
         replica_id: ReplicaId,
         location: ClusterReplicaLocation,
         config: ComputeReplicaConfig,
-        enable_ctp: bool,
     ) -> Result<(), ReplicaCreationError> {
         use ReplicaCreationError::*;
 
@@ -748,7 +745,6 @@ where
             },
             grpc_client: self.config.grpc_client.clone(),
             expiration_offset: (!expiration_offset.is_zero()).then_some(expiration_offset),
-            enable_ctp,
         };
 
         let instance = self.instance_mut(instance_id).expect("validated");

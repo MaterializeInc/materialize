@@ -10,7 +10,7 @@
 # by the Apache License, Version 2.0.
 
 load("@crates_io//:defs.bzl", "aliases", "all_crate_deps")
-load("@rules_rust//cargo:defs.bzl", "cargo_build_script", "extract_cargo_lints")
+load("@rules_rust//cargo:defs.bzl", "extract_cargo_lints")
 load("@rules_rust//rust:defs.bzl", "rust_doc_test", "rust_library", "rust_test")
 
 package(default_visibility = ["//visibility:public"])
@@ -31,11 +31,9 @@ rust_library(
     rustc_flags = [],
     version = "0.0.0",
     deps = [
-        ":mz_compute_types_build_script",
         "//src/dyncfg:mz_dyncfg",
         "//src/expr:mz_expr",
         "//src/ore:mz_ore",
-        "//src/proto:mz_proto",
         "//src/repr:mz_repr",
         "//src/storage-types:mz_storage_types",
     ] + all_crate_deps(normal = True),
@@ -72,7 +70,6 @@ rust_test(
         "//src/dyncfg:mz_dyncfg",
         "//src/expr:mz_expr",
         "//src/ore:mz_ore",
-        "//src/proto:mz_proto",
         "//src/repr:mz_repr",
         "//src/storage-types:mz_storage_types",
     ] + all_crate_deps(
@@ -88,44 +85,12 @@ rust_doc_test(
         "//src/dyncfg:mz_dyncfg",
         "//src/expr:mz_expr",
         "//src/ore:mz_ore",
-        "//src/proto:mz_proto",
         "//src/repr:mz_repr",
         "//src/storage-types:mz_storage_types",
     ] + all_crate_deps(
         normal = True,
         normal_dev = True,
     ),
-)
-
-filegroup(
-    name = "all_protos",
-    srcs = [
-        "src/dataflows.proto",
-        "src/plan.proto",
-        "src/plan/join.proto",
-        "src/plan/reduce.proto",
-        "src/plan/render_plan.proto",
-        "src/plan/threshold.proto",
-        "src/plan/top_k.proto",
-        "src/sinks.proto",
-        "src/sources.proto",
-        "//src/expr:all_protos",
-        "//src/proto:all_protos",
-        "//src/repr:all_protos",
-        "//src/storage-types:all_protos",
-    ],
-)
-
-cargo_build_script(
-    name = "mz_compute_types_build_script",
-    srcs = ["build.rs"],
-    build_script_env = {},
-    compile_data = [],
-    data = [":all_protos"],
-    proc_macro_deps = [] + all_crate_deps(build_proc_macro = True),
-    rustc_env = {},
-    rustc_flags = [],
-    deps = ["//src/build-tools:mz_build_tools"] + all_crate_deps(build = True),
 )
 
 extract_cargo_lints(

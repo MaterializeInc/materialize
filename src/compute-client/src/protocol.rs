@@ -34,11 +34,8 @@
 //! # Message Transport and Encoding
 //!
 //! To initiate communication, the replica starts listening on a known host and port, to which the
-//! compute controller then connects. We use the gRPC framework for transmitting Protobuf-encoded
-//! messages. The replica exposes a single gRPC service (`ProtoCompute`) which contains a single
-//! RPC (`CommandResponseStream`). The compute controller invokes this RPC to finalize the
-//! connection setup. After the streams have been established, compute commands and responses are
-//! transmitted over these streams.
+//! compute controller then connects. A Cluster Transport Protocol (CTP) connection is established
+//! that allows both peers to stream bincode-encoded messages.
 //!
 //! # Protocol Stages
 //!
@@ -52,7 +49,7 @@
 //! ## Creation Stage
 //!
 //! The creation stage is the first stage of the compute protocol. It is initiated by the
-//! successful establishment of a gRPC connection between compute controller and replica. In this
+//! successful establishment of a CTP connection between compute controller and replica. In this
 //! stage, the compute controller must send two creation commands in order:
 //!
 //!   1. A [`Hello`] command, which provides the replica with connection metadata.

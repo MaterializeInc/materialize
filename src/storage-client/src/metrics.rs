@@ -21,12 +21,11 @@ use mz_ore::metrics::{
     UIntGaugeVec,
 };
 use mz_repr::GlobalId;
-use mz_service::codec::StatsCollector;
 use mz_service::transport;
 use mz_storage_types::instances::StorageInstanceId;
 use prometheus::core::{AtomicF64, AtomicU64};
 
-use crate::client::{ProtoStorageCommand, ProtoStorageResponse, StorageCommand, StorageResponse};
+use crate::client::{StorageCommand, StorageResponse};
 
 type IntCounter = DeleteOnDropCounter<AtomicU64, Vec<String>>;
 pub type UIntGauge = DeleteOnDropGauge<AtomicU64, Vec<String>>;
@@ -232,23 +231,6 @@ impl ReplicaMetrics {
     }
 }
 
-/// Make [`ReplicaMetrics`] pluggable into the gRPC connection.
-impl StatsCollector<ProtoStorageCommand, ProtoStorageResponse> for ReplicaMetrics {
-    fn send_event(&self, item: &ProtoStorageCommand, size: usize) {
-        self.inner.commands_total.for_proto_command(item).inc();
-        self.inner
-            .command_message_bytes_total
-            .inc_by(u64::cast_from(size));
-    }
-
-    fn receive_event(&self, item: &ProtoStorageResponse, size: usize) {
-        self.inner.responses_total.for_proto_response(item).inc();
-        self.inner
-            .response_message_bytes_total
-            .inc_by(u64::cast_from(size));
-    }
-}
-
 impl<T> transport::Metrics<StorageCommand<T>, StorageResponse<T>> for ReplicaMetrics {
     fn bytes_sent(&mut self, len: usize) {
         self.inner
@@ -342,22 +324,6 @@ impl<M> CommandMetrics<M> {
             CancelOneshotIngestion(..) => &self.cancel_oneshot_ingestion,
         }
     }
-
-    fn for_proto_command(&self, proto: &ProtoStorageCommand) -> &M {
-        use crate::client::proto_storage_command::Kind::*;
-
-        match proto.kind.as_ref().unwrap() {
-            Hello(..) => &self.hello,
-            AllowCompaction(..) => &self.allow_compaction,
-            InitializationComplete(..) => &self.initialization_complete,
-            UpdateConfiguration(..) => &self.update_configuration,
-            RunIngestion(..) => &self.run_ingestion,
-            AllowWrites(..) => &self.allow_writes,
-            RunSink(..) => &self.run_sink,
-            RunOneshotIngestion(..) => &self.run_oneshot_ingestion,
-            CancelOneshotIngestion(..) => &self.cancel_oneshot_ingestion,
-        }
-    }
 }
 
 /// Metrics keyed by `StorageResponse` type.
@@ -393,18 +359,6 @@ impl<M> ResponseMetrics<M> {
             StagedBatches(..) => &self.staged_batches,
             StatisticsUpdates(..) => &self.statistics_updates,
             StatusUpdate(..) => &self.status_update,
-        }
-    }
-
-    fn for_proto_response(&self, proto: &ProtoStorageResponse) -> &M {
-        use crate::client::proto_storage_response::Kind::*;
-
-        match proto.kind.as_ref().unwrap() {
-            FrontierUpper(..) => &self.frontier_upper,
-            DroppedId(..) => &self.dropped_id,
-            Stats(..) => &self.statistics_updates,
-            StatusUpdate(..) => &self.status_update,
-            StagedBatches(..) => &self.staged_batches,
         }
     }
 }
