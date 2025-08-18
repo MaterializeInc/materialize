@@ -784,6 +784,9 @@ async fn raw_stream<'a>(
         // Ensure we don't pre-drop the task
         let _max_lsn_task_handle = max_lsn_task_handle;
 
+        // ensure we don't drop the replication client!
+        let _replication_client = replication_client;
+
         let mut uppers = pin!(uppers);
         let mut last_committed_upper = resume_lsn;
 
