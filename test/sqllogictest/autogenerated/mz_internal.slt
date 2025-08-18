@@ -60,8 +60,9 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 26  statement_type  text
 27  throttled_count  uint8
 28  initial_application_name  text
-29  authenticated_user  text
-30  sql  text
+29  connected_at  timestamp␠with␠time␠zone
+30  authenticated_user  text
+31  sql  text
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_aws_connections' ORDER BY position
