@@ -15,24 +15,5 @@ IF EXISTS (SELECT name FROM sys.databases WHERE name = N'test')
 BEGIN
     ALTER DATABASE test SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
     RESTORE DATABASE test FROM DISK = N'${arg.backup-directory}/test.bak' WITH MOVE N'test' TO N'${arg.backup-directory}/test.mdf', REPLACE, STATS = 5
-END;
-
-DECLARE @counter int = 0;
-WHILE @counter < 30
-BEGIN
-    IF EXISTS (
-        SELECT 1 FROM sys.databases 
-        WHERE name = 'test' 
-            AND state_desc = 'ONLINE' 
-            AND user_access_desc = 'MULTI_USER'
-    )
-    BEGIN
-        -- Try to access the database
-        USE test;
-        SELECT 'Database is ready' as status;
-        BREAK;
-    END
-    
-    SET @counter = @counter + 1;
-    WAITFOR DELAY '00:00:01';
+    ALTER DATABASE test SET MULTI_USER;
 END;

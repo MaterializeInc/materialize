@@ -92,11 +92,11 @@ def workflow_backup_restore(c: Composition) -> None:
         f"Scenarios in shard with index {buildkite.get_parallelism_index()}: {[s.__name__ for s in scenarios]}"
     )
 
-    # Create a custom SqlServer service that runs as root to fix permissions
+    # Create a custom SqlServer service that runs as root to fix disk permissions for backup.
     class SqlServerWithPermissionFix(SqlServer):
         def __init__(self, **kwargs):
             super().__init__(**kwargs)
-            # Override to run as root and fix permissions before starting mssql
+            # Override to run as root and fix permissions before starting mssql.
             self.config["user"] = "root"
             self.config["command"] = [
                 "bash",
@@ -334,6 +334,6 @@ def backup_restore_sql_server(c: Composition) -> None:
         "sql-server-restore.td",
         "sql-server-restart-dummy-writing.td",
         "verify-sql-server-select.td",
-        # FIXME(ptravers): https://github.com/MaterializeInc/database-issues/issues/9584
+        # FIXME(ptravers): https://github.com/MaterializeInc/database-issues/issues/9591
         # "verify-source-failed.td",
     )
