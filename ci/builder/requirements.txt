@@ -31,7 +31,7 @@ numpy==1.26.4
 pandas==2.3.1
 pandas-stubs==2.2.3.250308
 parameterized==0.9.0
-paramiko==3.5.1
+paramiko==4.0.0
 pdoc==15.0.4
 # We can revert back to standard pg8000 versions once https://github.com/tlocke/pg8000/pull/161 is released
 pg8000@git+https://github.com/tlocke/pg8000@46c00021ade1d19466b07ed30392386c5f0a6b8e
