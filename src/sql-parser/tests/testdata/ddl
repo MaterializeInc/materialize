@@ -2683,7 +2683,7 @@ CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("my
 parse-statement
 CREATE CONNECTION my_ssh_tunnel FOR SSH TUNNEL (PUBLIC KEY 3 = nope)
 ----
-error: Expected one of ACCESS or ASSUME or AVAILABILITY or AWS or BROKER or BROKERS or DATABASE or ENDPOINT or HOST or PASSWORD or PORT or PUBLIC or PROGRESS or REGION or ROLE or SASL or SECRET or SECURITY or SERVICE or SESSION or SSH or SSL or TYPE or URL or USER or USERNAME or WAREHOUSE, found left parenthesis
+error: Expected one of ACCESS or ASSUME or AVAILABILITY or AWS or BROKER or BROKERS or CREDENTIAL or DATABASE or ENDPOINT or HOST or PASSWORD or PORT or PUBLIC or PROGRESS or REGION or ROLE or SASL or SCOPE or SECRET or SECURITY or SERVICE or SESSION or SSH or SSL or TYPE or URL or USER or USERNAME or WAREHOUSE, found left parenthesis
 CREATE CONNECTION my_ssh_tunnel FOR SSH TUNNEL (PUBLIC KEY 3 = nope)
                                                ^
 

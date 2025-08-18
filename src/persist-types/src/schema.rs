@@ -169,7 +169,12 @@ impl ArrayMigration {
                 }
                 assert_eq!(fields.len(), arrays.len(), "invalid migration");
 
-                Arc::new(StructArray::new(fields, arrays, nulls))
+                let array = if arrays.is_empty() {
+                    StructArray::new_empty_fields(len, nulls)
+                } else {
+                    StructArray::new(fields, arrays, nulls)
+                };
+                Arc::new(array)
             }
             List(field, entry_migration) => {
                 let list_array: ListArray = if let Some(list_array) = array.as_list_opt() {
