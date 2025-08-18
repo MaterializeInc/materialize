@@ -122,6 +122,20 @@ steps:
         coverage: skip
         sanitizer: skip
 
+      - id: sbomgen
+        timeout_in_minutes: 30
+        label: Generate SBOM and upload to AWS
+        command: bin/ci-builder run stable bin/sbomgen
+        depends_on: []
+        agents:
+          # Because of scratch-aws-access
+          queue: linux-aarch64-small
+        branches: "main v*.*"
+        sanitizer: skip
+        plugins:
+          - ./ci/plugins/scratch-aws-access: ~
+        artifact_paths: [sbom.json, inspector-results.json]
+
   - id: miri-test
     label: ":rust: Miri test (full)"
     depends_on: []
