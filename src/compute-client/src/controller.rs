@@ -77,7 +77,6 @@ use crate::logging::{LogVariant, LoggingConfig};
 use crate::metrics::ComputeControllerMetrics;
 use crate::protocol::command::{ComputeParameters, PeekTarget};
 use crate::protocol::response::{PeekResponse, SubscribeBatch};
-use crate::service::{ComputeClient, ComputeGrpcClient};
 
 mod instance;
 mod introspection;
@@ -538,7 +537,6 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
 impl<T> ComputeController<T>
 where
     T: ComputeControllerTimestamp,
-    ComputeGrpcClient: ComputeClient<T>,
 {
     /// Create a compute instance.
     pub fn create_instance(
