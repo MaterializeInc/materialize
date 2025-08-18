@@ -16,9 +16,9 @@ mz-dyncfg = { path = "../dyncfg" }
 mz-ore = { path = "../ore", features = ["metrics"] }
 paste = "1.0"
 prometheus = { version = "0.13.4", default-features = false }
-thiserror = "2.0.12"
+thiserror = "2.0.15"
 tokio = { version = "1.44.1", features = ["sync", "time"] }
-tokio-util = { version = "0.7.15" }
+tokio-util = { version = "0.7.16" }
 tracing = "0.1.37"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 

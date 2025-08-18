@@ -37,7 +37,7 @@ mz-txn-wal = { path = "../txn-wal" }
 proptest = { version = "1.7.0", default-features = false, features = ["std"] }
 prost = { version = "0.13.5", features = ["no-recursion-limit"] }
 serde = { version = "1.0.219", features = ["derive"] }
-serde_json = { version = "1.0.140" }
+serde_json = { version = "1.0.142" }
 timely = "0.22.0"
 tokio = { version = "1.44.1", features = ["fs", "rt", "sync", "test-util", "time"] }
 tokio-postgres = { version = "0.7.8", features = ["serde"] }
