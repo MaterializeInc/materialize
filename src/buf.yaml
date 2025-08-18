@@ -40,14 +40,6 @@ breaking:
     # reason: does currently not require backward-compatibility
     - catalog-protos/protos/objects_v77.proto
     # reason: does currently not require backward-compatibility
-    - compute-client/src/logging.proto
-    # reason: does currently not require backward-compatibility
-    - compute-client/src/protocol/command.proto
-    # reason: does currently not require backward-compatibility
-    - compute-client/src/protocol/response.proto
-    # reason: does currently not require backward-compatibility
-    - compute-client/src/service.proto
-    # reason: does currently not require backward-compatibility
     - compute-types/src/dataflows.proto
     # reason: does currently not require backward-compatibility
     - compute-types/src/plan.proto

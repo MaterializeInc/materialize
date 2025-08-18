@@ -14,11 +14,9 @@ anyhow = "1.0.98"
 async-trait = "0.1.88"
 bytesize = "1.3.0"
 chrono = { version = "0.4.39", default-features = false, features = ["std"] }
-crossbeam-channel = "0.5.15"
 derivative = "2.2.0"
 differential-dataflow = "0.17.0"
 futures = "0.3.31"
-http = "1.2.0"
 mz-build-info = { path = "../build-info" }
 mz-cluster-client = { path = "../cluster-client" }
 mz-compute-types = { path = "../compute-types" }
@@ -27,38 +25,25 @@ mz-dyncfg = { path = "../dyncfg" }
 mz-dyncfgs = { path = "../dyncfgs" }
 mz-expr = { path = "../expr" }
 mz-ore = { path = "../ore", features = ["tracing", "chrono", "differential-dataflow"] }
-mz-persist = { path = "../persist" }
 mz-persist-client = { path = "../persist-client" }
 mz-persist-types = { path = "../persist-types" }
-mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr", features = ["tracing"] }
 mz-service = { path = "../service" }
 mz-storage-client = { path = "../storage-client" }
 mz-storage-types = { path = "../storage-types" }
-mz-timely-util = { path = "../timely-util" }
 mz-tracing = { path = "../tracing" }
 prometheus = { version = "0.13.4", default-features = false }
-proptest = { version = "1.7.0", default-features = false, features = ["std"] }
-proptest-derive = { version = "0.5.1", features = ["boxed_union"] }
-prost = { version = "0.13.5", features = ["no-recursion-limit"] }
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.127"
 thiserror = "2.0.12"
 timely = "0.24.0"
 tokio = "1.44.1"
-tokio-stream = "0.1.17"
-tonic = "0.12.1"
 tracing = "0.1.37"
 uuid = { version = "1.17.0", features = ["serde", "v4"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
-[build-dependencies]
-mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
-prost-build = "0.13.5"
-tonic-build = "0.12.3"
-
 [features]
-default = ["mz-build-tools/default", "workspace-hack"]
+default = ["workspace-hack"]
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
