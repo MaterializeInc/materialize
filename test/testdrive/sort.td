@@ -23,12 +23,14 @@ $ kafka-create-topic topic=foobar
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE foobar
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-foobar-${testdrive.seed}')
 
 > CREATE TABLE foobar_tbl FROM SOURCE foobar (REFERENCE "testdrive-foobar-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}'
+> COMMIT
 
 $ kafka-ingest format=avro topic=foobar schema=${schema} timestamp=42
 {"quote": "I have a theory that it's impossible to prove anything, but I can't prove it.", "val": 2079}

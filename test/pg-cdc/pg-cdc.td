@@ -161,11 +161,13 @@ $ postgres-execute connection=mz_system
 ALTER SYSTEM SET pg_source_snapshot_statement_timeout = 1000;
 ALTER SYSTEM SET pg_source_wal_sender_timeout = 0;
 
+> BEGIN
 > CREATE SOURCE "test_slot_source"
   IN CLUSTER cdc_cluster
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
 
 > CREATE TABLE pk_table FROM SOURCE "test_slot_source" (REFERENCE pk_table);
+> COMMIT
 
 # TODO: enable once we land database-issues#7327
 # $ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=materialize_% active=true
@@ -783,6 +785,7 @@ true
 #
 # Check schema scoped tables
 
+> BEGIN
 > CREATE SOURCE another_source
   IN CLUSTER cdc_cluster
   FROM POSTGRES CONNECTION pg (
@@ -790,6 +793,7 @@ true
   );
 
 > CREATE TABLE another_table FROM SOURCE another_source (REFERENCE another_schema.another_table);
+> COMMIT
 
 > SHOW SOURCES
 another_source          postgres  cdc_cluster  ""

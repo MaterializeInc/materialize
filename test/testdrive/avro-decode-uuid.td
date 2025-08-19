@@ -23,6 +23,7 @@ $ kafka-ingest format=avro topic=avro-types-uuid schema=${uuid} timestamp=1
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE avro_types_uuid
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-types-uuid-${testdrive.seed}')
@@ -30,6 +31,7 @@ $ kafka-ingest format=avro topic=avro-types-uuid schema=${uuid} timestamp=1
 > CREATE TABLE avro_types_uuid_tbl FROM SOURCE avro_types_uuid (REFERENCE "testdrive-avro-types-uuid-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${uuid}'
   ENVELOPE NONE
+> COMMIT
 
 > SELECT pg_typeof(f1), f1 FROM avro_types_uuid_tbl
 uuid a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11

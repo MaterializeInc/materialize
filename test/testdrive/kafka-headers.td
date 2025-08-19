@@ -39,6 +39,7 @@ $ kafka-ingest format=avro topic=headers_src key-format=avro key-schema=${keysch
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
 > CREATE CLUSTER headers_src_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE headers_src
   IN CLUSTER headers_src_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC
@@ -49,6 +50,7 @@ $ kafka-ingest format=avro topic=headers_src key-format=avro key-schema=${keysch
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE HEADERS
   ENVELOPE UPSERT
+> COMMIT
 
 # empty case + has headers case
 > SELECT key, f1, f2, list_length(headers), headers::text from headers_src_tbl
@@ -107,6 +109,7 @@ $ kafka-ingest format=avro topic=headers_also key-format=avro key-schema=${keysc
 {"key": "fish"} {"f1": "fishval", "f2": 1000}
 
 > CREATE CLUSTER headers_also_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE headers_also
   IN CLUSTER headers_also_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC
@@ -117,6 +120,7 @@ $ kafka-ingest format=avro topic=headers_also key-format=avro key-schema=${keysc
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE HEADERS, PARTITION
   ENVELOPE UPSERT
+> COMMIT
 
 > SELECT key, f1, f2, list_length(headers), partition from headers_also_tbl
 key     f1       f2     list_length    partition
@@ -175,6 +179,7 @@ $ kafka-ingest format=avro topic=headers_conflict key-format=avro key-schema=${k
 
 # using AS to resolve it!
 > CREATE CLUSTER headers_conflict2_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE headers_conflict2
   IN CLUSTER headers_conflict2_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC
@@ -185,6 +190,7 @@ $ kafka-ingest format=avro topic=headers_conflict key-format=avro key-schema=${k
   VALUE FORMAT AVRO USING SCHEMA '${schemaheaders}'
   INCLUDE HEADERS AS kafka_headers
   ENVELOPE UPSERT
+> COMMIT
 
 > SELECT key, headers, kafka_headers[1].value as gus from headers_conflict2_tbl
 key     headers  gus
@@ -202,6 +208,7 @@ $ kafka-ingest format=avro topic=individual_headers key-format=avro key-schema=$
 {"key": "message_2"} {"f1": "fishval", "f2": 1000}
 
 > CREATE CLUSTER individual_headers_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE individual_headers
   IN CLUSTER individual_headers_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC
@@ -212,6 +219,7 @@ $ kafka-ingest format=avro topic=individual_headers key-format=avro key-schema=$
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE HEADER 'header1' AS header1
   ENVELOPE UPSERT
+> COMMIT
 
 > SELECT key, header1 from individual_headers_tbl
 key          header1
@@ -222,6 +230,7 @@ message_2    message_2_header_1
 
 # test exposing header as byte array
 > CREATE CLUSTER individual_headers_bytes_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE individual_headers_bytes
   IN CLUSTER individual_headers_bytes_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC
@@ -232,6 +241,7 @@ message_2    message_2_header_1
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE HEADER 'header1' AS header1 BYTES
   ENVELOPE UPSERT
+> COMMIT
 
 > SELECT key, header1::text from individual_headers_bytes_tbl
 key          header1
@@ -247,6 +257,7 @@ $ kafka-ingest format=avro topic=duplicate_individual_headers key-format=avro ke
 {"key": "message_3"} {"f1": "fishval", "f2": 1000}
 
 > CREATE CLUSTER duplicate_individual_headers_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE duplicate_individual_headers
   IN CLUSTER duplicate_individual_headers_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC
@@ -257,6 +268,7 @@ $ kafka-ingest format=avro topic=duplicate_individual_headers key-format=avro ke
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE HEADERS, HEADER 'duplicates' AS duplicates
   ENVELOPE UPSERT
+> COMMIT
 
 > SELECT key, duplicates, headers::text from duplicate_individual_headers_tbl
 key          duplicates                 headers
@@ -300,6 +312,7 @@ $ kafka-ingest format=avro topic=ill_formed_header key-format=avro key-schema=${
 {"key": "message_2"} {"f1": "fishval", "f2": 1000}
 
 > CREATE CLUSTER ill_formed_header_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE ill_formed_header
   IN CLUSTER ill_formed_header_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC
@@ -310,6 +323,7 @@ $ kafka-ingest format=avro topic=ill_formed_header key-format=avro key-schema=${
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE HEADERS, HEADER 'header1' AS header1
   ENVELOPE UPSERT
+> COMMIT
 
 > SELECT key, header1 from ill_formed_header_tbl
 key          header1
@@ -327,6 +341,7 @@ contains:Found ill-formed byte sequence in header 'header1' that cannot be decod
 # Verify that the source is bricked when messages have missing headers
 
 > CREATE CLUSTER missing_headers_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE missing_headers
   IN CLUSTER missing_headers_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC
@@ -337,6 +352,7 @@ contains:Found ill-formed byte sequence in header 'header1' that cannot be decod
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE HEADER 'header2' AS header2
   ENVELOPE UPSERT
+> COMMIT
 
 ! SELECT key, header2 from missing_headers_tbl
 contains:A header with key 'header2' was not found in the message headers

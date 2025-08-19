@@ -40,8 +40,10 @@ INSERT INTO schema2.t1 VALUES (2);
 INSERT INTO schema1.t1 SELECT * FROM schema1.t1;
 INSERT INTO schema2.t1 SELECT * FROM schema2.t1;
 
+> BEGIN
 > CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
 
+> COMMIT
 > CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE schema1.t1);
 ! CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE schema2.t1);
 contains:catalog item 't1' already exists
@@ -57,9 +59,11 @@ contains:catalog item 't1' already exists
 
 > DROP SOURCE mz_source CASCADE;
 
+> BEGIN
 > CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
 > CREATE TABLE t1_1 FROM SOURCE mz_source (REFERENCE schema1.t1);
 > CREATE TABLE t1_2 FROM SOURCE mz_source (REFERENCE schema2.t1);
+> COMMIT
 
 > SELECT * FROM t1_1;
 1

@@ -11,12 +11,14 @@ $ schema-registry-wait topic=sql-server.test.dbo.update_table_pk
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE update_table_pk
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'sql-server.test.dbo.update_table_pk');
 
 > CREATE TABLE update_table_pk_tbl FROM SOURCE update_table_pk (REFERENCE "sql-server.test.dbo.update_table_pk")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
+> COMMIT
 
 # $ schema-registry-wait topic=sql-server.dbo.update_table_nopk
 

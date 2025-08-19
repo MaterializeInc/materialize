@@ -34,12 +34,14 @@ $ kafka-ingest format=avro topic=data schema=${schema}
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE data
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
 
 > CREATE TABLE data_tbl FROM SOURCE data (REFERENCE "testdrive-data-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}'
+> COMMIT
 
 $ set-regex match=u\d+ replacement=UID
 
@@ -258,12 +260,14 @@ $ kafka-ingest format=avro topic=data2 schema=${schema}
 {"a": {"long": 3}, "b": {"long": 2}, "c": null, "d": {"long": 4}}
 {"a": {"long": 2}, "b": {"long": 1}, "c": {"long": 5}, "d": null}
 
+> BEGIN
 > CREATE SOURCE data2
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data2-${testdrive.seed}')
 
 > CREATE TABLE data2_tbl FROM SOURCE data2 (REFERENCE "testdrive-data2-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}'
+> COMMIT
 
 > CREATE VIEW v as SELECT a, c FROM data_tbl EXCEPT ALL SELECT a, c FROM data2_tbl where d is null
 

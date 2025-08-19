@@ -37,6 +37,7 @@ $ kafka-ingest format=avro topic=non-dbz-data schema=${non-dbz-schema} timestamp
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE non_dbz_data
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-non-dbz-data-${testdrive.seed}')
@@ -44,6 +45,7 @@ $ kafka-ingest format=avro topic=non-dbz-data schema=${non-dbz-schema} timestamp
 > CREATE TABLE non_dbz_data_tbl FROM SOURCE non_dbz_data (REFERENCE "testdrive-non-dbz-data-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
   ENVELOPE NONE
+> COMMIT
 
 > CREATE MATERIALIZED VIEW monotonic_min AS SELECT a, min(b) FROM non_dbz_data_tbl group by a
 
@@ -96,6 +98,7 @@ Used Indexes:
 
 Target cluster: quickstart
 
+> BEGIN
 > CREATE SOURCE non_dbz_data_indexed
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-non-dbz-data-${testdrive.seed}')
@@ -103,6 +106,7 @@ Target cluster: quickstart
 > CREATE TABLE non_dbz_data_indexed_tbl FROM SOURCE non_dbz_data_indexed (REFERENCE "testdrive-non-dbz-data-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
   ENVELOPE NONE
+> COMMIT
 
 > CREATE DEFAULT INDEX ON non_dbz_data_indexed
 

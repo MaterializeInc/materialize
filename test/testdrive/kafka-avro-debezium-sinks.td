@@ -124,12 +124,14 @@ $ kafka-create-topic topic=input
 # input is processed in consistency batches and not all at once
 
 > CREATE CLUSTER input_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE input
   IN CLUSTER input_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-${testdrive.seed}')
 
 > CREATE TABLE input_tbl FROM SOURCE input (REFERENCE "testdrive-input-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
+> COMMIT
 
 > CREATE CLUSTER non_keyed_sink_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK non_keyed_sink

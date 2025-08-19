@@ -18,12 +18,14 @@ one
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE data
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}');
 
 > CREATE TABLE data_tbl FROM SOURCE data (REFERENCE "testdrive-data-${testdrive.seed}")
   FORMAT TEXT;
+> COMMIT
 
 > SELECT * from data_tbl
 one
@@ -42,6 +44,7 @@ $ set-regex match=(\s{12}0|\d{13,20}|u\d{1,5}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d\.\
 "                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n              session wall time: <> <>\n\nsource materialize.public.data_progress (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n\nbinding constraints:\nlower:\n  (IsolationLevel(StrictSerializable)): [<> <>]\n"
 
 
+> BEGIN
 > CREATE SOURCE d
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
@@ -49,6 +52,7 @@ $ set-regex match=(\s{12}0|\d{13,20}|u\d{1,5}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d\.\
 
 > CREATE TABLE d_tbl FROM SOURCE d (REFERENCE "testdrive-data-${testdrive.seed}")
   FORMAT TEXT;
+> COMMIT
 
 > SELECT partition::text, "offset" FROM exposed_progress_data
 [0,0] 1

@@ -36,12 +36,14 @@ INSERT INTO t1 (f2) SELECT @i:=@i+1 FROM mysql.time_zone t1, mysql.time_zone t2 
     PASSWORD SECRET mysqlpass
   )
 
+> BEGIN
 > CREATE SOURCE mz_source
   IN CLUSTER storage
   FROM MYSQL CONNECTION mysql_conn
   WITH (RETAIN HISTORY = FOR '365000 days');
 
 > CREATE TABLE t1 FROM SOURCE mz_source (REFERENCE public.t1);
+> COMMIT
 
 # Grab a cursor at timestamp 0
 > BEGIN

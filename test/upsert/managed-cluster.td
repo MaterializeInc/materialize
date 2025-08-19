@@ -50,6 +50,7 @@ ALTER SYSTEM SET enable_disk_cluster_replicas = true
 
 > CREATE CLUSTER storage_cluster SIZE 'scale=2,workers=2', REPLICATION FACTOR 1, DISK = true
 
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER storage_cluster
   FROM KAFKA CONNECTION conn (TOPIC
@@ -59,6 +60,7 @@ ALTER SYSTEM SET enable_disk_cluster_replicas = true
 > CREATE TABLE upsert_tbl FROM SOURCE upsert (REFERENCE "testdrive-upsert-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION c_conn
   ENVELOPE UPSERT
+> COMMIT
 
 > SELECT * from upsert_tbl
 key           f1       f2

@@ -24,12 +24,14 @@ $ schema-registry-wait topic=postgres.public.char_varchar_type
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE char_varchar_type
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.char_varchar_type');
 
 > CREATE TABLE char_varchar_type_tbl FROM SOURCE char_varchar_type (REFERENCE "postgres.public.char_varchar_type")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
+> COMMIT
 
 # Type information is not carried over as the AVRO protocol does not have CHAR/VARCHAR
 > SELECT pg_typeof(char_col), pg_typeof(varchar_col) FROM char_varchar_type_tbl;

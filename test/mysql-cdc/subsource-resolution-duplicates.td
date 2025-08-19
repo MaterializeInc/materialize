@@ -32,8 +32,10 @@ INSERT INTO t VALUES (1);
 CREATE TABLE other.t (f1 INT);
 INSERT INTO other.t VALUES (1);
 
+> BEGIN
 > CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
 
+> COMMIT
 > CREATE TABLE t FROM SOURCE mz_source (REFERENCE public.t);
 ! CREATE TABLE t FROM SOURCE mz_source (REFERENCE other.t);
 contains:catalog item 't' already exists

@@ -25,12 +25,14 @@ $ schema-registry-wait topic=postgres.public.hstore_type
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE hstore_type
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.hstore_type');
 
 > CREATE TABLE hstore_type_tbl FROM SOURCE hstore_type (REFERENCE "postgres.public.hstore_type")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
+> COMMIT
 
 > SELECT f1, f1 ->> 'a', pg_typeof(f1) FROM hstore_type_tbl;
 <null> <null> jsonb

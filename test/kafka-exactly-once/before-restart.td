@@ -91,11 +91,13 @@ $ kafka-create-topic topic=input
     URL '${testdrive.schema-registry-url}'
   );
 
+> BEGIN
 > CREATE SOURCE input
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-input-${testdrive.seed}')
 
 > CREATE TABLE input_tbl FROM SOURCE input (REFERENCE "testdrive-input-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE MATERIALIZE
+> COMMIT
 
 > CREATE SINK output
   IN CLUSTER quickstart

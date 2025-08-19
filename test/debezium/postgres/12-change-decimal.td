@@ -25,12 +25,14 @@ $ schema-registry-wait topic=postgres.public.alter_change_decimal
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE alter_change_decimal
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.alter_change_decimal');
 
 > CREATE TABLE alter_change_decimal_tbl FROM SOURCE alter_change_decimal (REFERENCE "postgres.public.alter_change_decimal")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
+> COMMIT
 
 > SELECT f1 FROM alter_change_decimal_tbl;
 <null>

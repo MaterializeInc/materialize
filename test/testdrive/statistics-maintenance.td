@@ -34,6 +34,7 @@ $ kafka-create-topic topic=upsert partitions=1
 $ kafka-ingest format=bytes topic=upsert key-format=bytes key-terminator=:
 one:two
 
+> BEGIN
 > CREATE SOURCE upsert1
   IN CLUSTER cluster1
   FROM KAFKA CONNECTION kafka_conn (TOPIC
@@ -44,6 +45,7 @@ one:two
   KEY FORMAT BYTES
   VALUE FORMAT BYTES
   ENVELOPE UPSERT
+> COMMIT
 
 > SELECT * FROM upsert1_tbl
 one two

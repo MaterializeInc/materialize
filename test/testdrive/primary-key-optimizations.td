@@ -49,6 +49,7 @@ $ kafka-ingest format=avro topic=t1 key-format=avro key-schema=${keyschema-2keys
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE t1
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC
@@ -57,6 +58,7 @@ $ kafka-ingest format=avro topic=t1 key-format=avro key-schema=${keyschema-2keys
 > CREATE TABLE t1_tbl FROM SOURCE t1 (REFERENCE "testdrive-t1-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT;
+> COMMIT
 
 > CREATE DEFAULT INDEX ON t1_tbl
 

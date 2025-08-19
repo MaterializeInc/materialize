@@ -1515,7 +1515,7 @@ impl Coordinator {
 
     pub(crate) async fn sequence_alter_cluster_rename(
         &mut self,
-        session: &mut Session,
+        ctx: &mut ExecuteContext,
         AlterClusterRenamePlan { id, name, to_name }: AlterClusterRenamePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let op = Op::RenameCluster {
@@ -1525,7 +1525,7 @@ impl Coordinator {
             check_reserved_names: true,
         };
         match self
-            .catalog_transact_with_ddl_transaction(session, vec![op])
+            .catalog_transact_with_ddl_transaction(ctx, vec![op], |_, _| Box::pin(async {}))
             .await
         {
             Ok(()) => Ok(ExecuteResponse::AlteredObject(ObjectType::Cluster)),
@@ -1535,7 +1535,7 @@ impl Coordinator {
 
     pub(crate) async fn sequence_alter_cluster_swap(
         &mut self,
-        session: &mut Session,
+        ctx: &mut ExecuteContext,
         AlterClusterSwapPlan {
             id_a,
             id_b,
@@ -1564,7 +1564,9 @@ impl Coordinator {
         };
 
         match self
-            .catalog_transact_with_ddl_transaction(session, vec![op_a, op_b, op_temp])
+            .catalog_transact_with_ddl_transaction(ctx, vec![op_a, op_b, op_temp], |_, _| {
+                Box::pin(async {})
+            })
             .await
         {
             Ok(()) => Ok(ExecuteResponse::AlteredObject(ObjectType::Cluster)),

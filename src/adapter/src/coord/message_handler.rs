@@ -576,7 +576,7 @@ impl Coordinator {
 
         let result = self
             .sequence_create_connection_stage_finish(
-                ctx.session_mut(),
+                &mut ctx,
                 connection_id,
                 connection_gid,
                 plan,

@@ -26,12 +26,14 @@ INSERT INTO alter_remove_nullability VALUES (123),(234);
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE alter_remove_nullability
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.alter_remove_nullability');
 
 > CREATE TABLE alter_remove_nullability_tbl FROM SOURCE alter_remove_nullability (REFERENCE "postgres.public.alter_remove_nullability")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
+> COMMIT
 
 > SELECT * FROM alter_remove_nullability_tbl;
 123

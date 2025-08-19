@@ -27,6 +27,7 @@ goofus,gallant
   );
 
 > CREATE CLUSTER src_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE src
   IN CLUSTER src_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-test-${testdrive.seed}')
@@ -34,8 +35,10 @@ goofus,gallant
 > CREATE TABLE src_tbl (a, b) FROM SOURCE src (REFERENCE "testdrive-test-${testdrive.seed}")
   FORMAT CSV WITH 2 COLUMNS
   INCLUDE OFFSET
+> COMMIT
 
 > CREATE CLUSTER src_materialized_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE src_materialized
   IN CLUSTER src_materialized_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-test-${testdrive.seed}')
@@ -43,6 +46,7 @@ goofus,gallant
 > CREATE TABLE src_materialized_tbl (a, b) FROM SOURCE src_materialized (REFERENCE "testdrive-test-${testdrive.seed}")
   FORMAT CSV WITH 2 COLUMNS
   INCLUDE OFFSET
+> COMMIT
 
 > CREATE VIEW v1 AS
   SELECT a || b AS c FROM src_tbl

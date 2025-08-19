@@ -24,20 +24,24 @@ $ schema-registry-wait topic=sql-server.transaction
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE sqlserver_tx_metadata
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'sql-server.transaction');
 
 > CREATE TABLE sqlserver_tx_metadata_tbl FROM SOURCE sqlserver_tx_metadata (REFERENCE "sql-server.transaction")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE;
+> COMMIT
 
 # TODO: make sqlserver debezium tx_metadata work.  It doesn't send the END message
+> BEGIN
 > CREATE SOURCE t1
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'sql-server.test.dbo.t1');
 
 > CREATE TABLE t1_tbl FROM SOURCE t1 (REFERENCE "sql-server.test.dbo.t1")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
+> COMMIT
 
 $ sql-server-execute name=sql-server
 INSERT INTO t1 VALUES (456);

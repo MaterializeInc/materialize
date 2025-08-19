@@ -44,6 +44,7 @@ $ kafka-ingest format=bytes topic=upsert key-format=bytes key-terminator=:
 one:two
 
 > CREATE CLUSTER upsert_size_cluster SIZE 'scale=1,workers=2';
+> BEGIN
 > CREATE SOURCE upsert_size
   IN CLUSTER upsert_size_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC
@@ -54,7 +55,9 @@ one:two
   KEY FORMAT BYTES
   VALUE FORMAT BYTES
   ENVELOPE UPSERT
+> COMMIT
 
+> BEGIN
 > CREATE SOURCE upsert_cluster
   IN CLUSTER cluster1
   FROM KAFKA CONNECTION kafka_conn (TOPIC
@@ -65,6 +68,7 @@ one:two
   KEY FORMAT BYTES
   VALUE FORMAT BYTES
   ENVELOPE UPSERT
+> COMMIT
 
 > SELECT * FROM upsert_size_tbl
 one two
@@ -76,6 +80,7 @@ one two
 > CREATE SCHEMA subsources_cluster;
 > CREATE CLUSTER subsource_size_s_cluster SIZE 'scale=1,workers=2';
 > CREATE SOURCE subsources_size.s IN CLUSTER subsource_size_s_cluster FROM LOAD GENERATOR AUCTION (UP TO 100);
+> BEGIN
 > CREATE SOURCE subsources_cluster.s IN CLUSTER cluster1 FROM LOAD GENERATOR AUCTION (UP TO 100);
 
 > CREATE TABLE subsources_size.accounts FROM SOURCE subsources_size.s (REFERENCE accounts);
@@ -89,6 +94,7 @@ one two
 > CREATE TABLE subsources_cluster.bids FROM SOURCE subsources_cluster.s (REFERENCE bids);
 > CREATE TABLE subsources_cluster.organizations FROM SOURCE subsources_cluster.s (REFERENCE organizations);
 > CREATE TABLE subsources_cluster.users FROM SOURCE subsources_cluster.s (REFERENCE users);
+> COMMIT
 
 # The `CREATE TABLE ... FROM SOURCE` commands caused a recreation of the
 # respective source dataflows, during which we might have lost the statistics

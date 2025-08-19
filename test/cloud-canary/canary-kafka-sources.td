@@ -34,6 +34,7 @@ abc:abc
   SASL PASSWORD = SECRET confluent_password
   );
 
+> BEGIN
 > CREATE SOURCE kafka_bytes
   IN CLUSTER canary_sources
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-bytes-${testdrive.seed}');
@@ -41,6 +42,7 @@ abc:abc
 > CREATE TABLE kafka_bytes_tbl FROM SOURCE kafka_bytes (REFERENCE "testdrive-bytes-${testdrive.seed}")
   FORMAT BYTES
   ENVELOPE NONE;
+> COMMIT
 
 > CREATE MATERIALIZED VIEW kafka_bytes_view AS SELECT COUNT(*) AS cnt FROM kafka_bytes_tbl;
 

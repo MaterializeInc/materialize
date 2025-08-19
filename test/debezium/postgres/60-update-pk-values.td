@@ -25,12 +25,14 @@ $ schema-registry-wait topic=postgres.public.update_pk_values
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE update_pk_values
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'postgres.public.update_pk_values');
 
 > CREATE TABLE update_pk_values_tbl FROM SOURCE update_pk_values (REFERENCE "postgres.public.update_pk_values")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
+> COMMIT
 
 $ postgres-connect name=conn1 url=postgres://postgres:postgres@postgres
 

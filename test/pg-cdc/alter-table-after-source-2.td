@@ -110,6 +110,7 @@ INSERT INTO drop_table (f1, f2) VALUES (1, 1);
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 
+> BEGIN
 > CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
 
 > CREATE TABLE add_columns FROM SOURCE mz_source (REFERENCE add_columns);
@@ -132,6 +133,7 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
 > CREATE TABLE truncate_table FROM SOURCE mz_source (REFERENCE truncate_table);
 > CREATE TABLE drop_table FROM SOURCE mz_source (REFERENCE drop_table);
 
+> COMMIT
 
 #
 # Alter table rename

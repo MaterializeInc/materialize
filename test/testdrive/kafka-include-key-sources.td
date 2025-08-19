@@ -57,6 +57,7 @@ contains:INCLUDE KEY requires specifying KEY FORMAT .. VALUE FORMAT, got bare FO
 
 # "Bare" format works when the key format is in a registry
 > CREATE CLUSTER bareformatconfluent_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE bareformatconfluent
   IN CLUSTER bareformatconfluent_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC
@@ -66,6 +67,7 @@ contains:INCLUDE KEY requires specifying KEY FORMAT .. VALUE FORMAT, got bare FO
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   INCLUDE KEY AS named
   ENVELOPE UPSERT
+> COMMIT
 
 > SELECT * from bareformatconfluent_tbl
 named         id       b
@@ -83,6 +85,7 @@ named         id       b
 # contains: column "id" specified more than once
 
 > CREATE CLUSTER avro_data_explicit_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE avro_data_explicit
   IN CLUSTER avro_data_explicit_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-${testdrive.seed}')
@@ -91,6 +94,7 @@ named         id       b
   KEY FORMAT AVRO USING SCHEMA '${conflictkeyschema}'
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE KEY
+> COMMIT
 
 > SELECT key_id, id, b FROM avro_data_explicit_tbl
 key_id id b
@@ -98,6 +102,7 @@ key_id id b
 1 2 3
 
 > CREATE CLUSTER include_partition_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE include_partition
   IN CLUSTER include_partition_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-${testdrive.seed}')
@@ -105,6 +110,7 @@ key_id id b
 > CREATE TABLE include_partition_tbl FROM SOURCE include_partition (REFERENCE "testdrive-avro-data-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE PARTITION
+> COMMIT
 
 > SELECT * FROM include_partition_tbl
 id b partition
@@ -112,6 +118,7 @@ id b partition
 2 3 0
 
 > CREATE CLUSTER avro_data_as_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE avro_data_as
   IN CLUSTER avro_data_as_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-${testdrive.seed}')
@@ -120,6 +127,7 @@ id b partition
   KEY FORMAT AVRO USING SCHEMA '${conflictkeyschema}'
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE KEY AS renamed_id
+> COMMIT
 
 > SELECT * FROM avro_data_as_tbl
 renamed_id id b
@@ -127,6 +135,7 @@ renamed_id id b
 1 2 3
 
 > CREATE CLUSTER avro_avro_data_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE avro_avro_data
   IN CLUSTER avro_avro_data_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-${testdrive.seed}')
@@ -135,8 +144,10 @@ renamed_id id b
   KEY FORMAT AVRO USING SCHEMA '${conflictkeyschema}'
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE KEY
+> COMMIT
 
 > CREATE CLUSTER avro_data_upsert_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE avro_data_upsert
   IN CLUSTER avro_data_upsert_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-${testdrive.seed}')
@@ -146,6 +157,7 @@ renamed_id id b
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE KEY AS renamed
   ENVELOPE UPSERT
+> COMMIT
 
 > SELECT * FROM avro_data_upsert_tbl
 renamed id b
@@ -176,6 +188,7 @@ $ kafka-ingest format=avro topic=avro-data-record schema=${noconflictschema} tim
 {"a": 88}
 
 > CREATE CLUSTER avro_key_record_flattened_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE avro_key_record_flattened
   IN CLUSTER avro_key_record_flattened_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-record-${testdrive.seed}')
@@ -185,6 +198,7 @@ $ kafka-ingest format=avro topic=avro-data-record schema=${noconflictschema} tim
   VALUE FORMAT AVRO USING SCHEMA '${noconflictschema}'
   INCLUDE KEY
   ENVELOPE NONE
+> COMMIT
 
 > SELECT * FROM avro_key_record_flattened_tbl ORDER BY a ASC
 id     geo    a
@@ -193,6 +207,7 @@ id     geo    a
 1      nyc    99
 
 > CREATE CLUSTER avro_key_record_renamed_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE avro_key_record_renamed
   IN CLUSTER avro_key_record_renamed_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-avro-data-record-${testdrive.seed}')
@@ -202,6 +217,7 @@ id     geo    a
   VALUE FORMAT AVRO USING SCHEMA '${noconflictschema}'
   INCLUDE KEY AS named
   ENVELOPE NONE
+> COMMIT
 
 > SELECT (named).id as named_id, (named).geo as named_geo, a FROM avro_key_record_renamed_tbl ORDER BY a ASC
 named_id named_geo a
@@ -230,6 +246,7 @@ two,2:bee,honey
 :cow,grass
 
 > CREATE CLUSTER textsrc_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE textsrc
   IN CLUSTER textsrc_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-textsrc-${testdrive.seed}')
@@ -238,6 +255,7 @@ two,2:bee,honey
   KEY FORMAT TEXT
   VALUE FORMAT TEXT
   INCLUDE KEY
+> COMMIT
 
 > SELECT * FROM textsrc_tbl
 key    text
@@ -326,6 +344,7 @@ $ kafka-ingest topic=proto format=protobuf descriptor-file=test.proto message=Va
 {"measurement": 11}
 
 > CREATE CLUSTER input_proto_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE input_proto
   IN CLUSTER input_proto_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-proto-${testdrive.seed}')
@@ -334,6 +353,7 @@ $ kafka-ingest topic=proto format=protobuf descriptor-file=test.proto message=Va
   KEY FORMAT PROTOBUF MESSAGE '.Key' USING SCHEMA '${test-schema}'
   VALUE FORMAT PROTOBUF MESSAGE '.Value' USING SCHEMA '${test-schema}'
   INCLUDE KEY
+> COMMIT
 
 > SELECT * FROM input_proto_tbl
 id     measurement
@@ -349,6 +369,7 @@ $ kafka-ingest topic=proto-structured
 {"id1": 1, "id2": 2} {"measurement": 10}
 
 > CREATE CLUSTER input_proto_structured_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE input_proto_structured
   IN CLUSTER input_proto_structured_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-proto-structured-${testdrive.seed}')
@@ -357,6 +378,7 @@ $ kafka-ingest topic=proto-structured
   KEY FORMAT PROTOBUF MESSAGE '.KeyComplex' USING SCHEMA '${test-schema}'
   VALUE FORMAT PROTOBUF MESSAGE '.Value' USING SCHEMA '${test-schema}'
   INCLUDE KEY AS key
+> COMMIT
 
 > SELECT key::text, (key).id1, (key).id2, measurement FROM input_proto_structured_tbl
 key    id1  id2  measurement
@@ -392,6 +414,7 @@ Used Indexes:
 Target cluster: quickstart
 
 > CREATE CLUSTER envelope_none_with_key_cluster SIZE '${arg.default-storage-size}';
+> BEGIN
 > CREATE SOURCE envelope_none_with_key
   IN CLUSTER envelope_none_with_key_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC
@@ -402,6 +425,7 @@ Target cluster: quickstart
   VALUE FORMAT AVRO USING SCHEMA '${schema}'
   INCLUDE KEY AS named
   ENVELOPE NONE
+> COMMIT
 
 # For ENVELOPE NONE with INCLUDE KEY, uniqueness is not guaranteed,
 # so we expect that query plans will contain an explicit Distinct on

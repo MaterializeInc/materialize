@@ -57,6 +57,7 @@ goofus,gallant
 
 > CREATE CLUSTER stats_cluster SIZE '${arg.default-replica-size}'
 
+> BEGIN
 > CREATE SOURCE upsert
   IN CLUSTER stats_cluster
   FROM KAFKA CONNECTION kafka_conn (TOPIC
@@ -67,6 +68,7 @@ goofus,gallant
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   INCLUDE OFFSET
   ENVELOPE UPSERT
+> COMMIT
 
 # Adding a select here so that the ingests after this
 # triggers lookup from the upsert state

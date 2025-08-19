@@ -102,6 +102,7 @@ $ kafka-create-topic topic=nums
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE nums
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-nums-${testdrive.seed}')
@@ -109,6 +110,7 @@ $ kafka-create-topic topic=nums
 > CREATE TABLE nums_tbl FROM SOURCE nums (REFERENCE "testdrive-nums-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${nums-schema}'
   ENVELOPE MATERIALIZE
+> COMMIT
 
 > CREATE DEFAULT INDEX ON nums_tbl
 

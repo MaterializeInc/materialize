@@ -44,6 +44,7 @@ banana
 # The default group ID prefix is not usable by the `materialize_lockdown`
 # user.
 
+> BEGIN
 > CREATE SOURCE broken
   FROM KAFKA CONNECTION kafka_good_progress_topic (
     TOPIC 'testdrive-data-${testdrive.seed}'
@@ -51,6 +52,7 @@ banana
 
 > CREATE TABLE broken_tbl FROM SOURCE broken (REFERENCE "testdrive-data-${testdrive.seed}")
   FORMAT TEXT
+> COMMIT
 
 > SELECT EXISTS (
     SELECT 1
@@ -66,6 +68,7 @@ true
 # The default group ID prefix *is* writeable by the `materialize_lockdown` user.
 # Ensure that offsets are committed.
 
+> BEGIN
 > CREATE SOURCE working_source
   FROM KAFKA CONNECTION kafka_good_progress_topic (
     TOPIC 'testdrive-data-${testdrive.seed}',
@@ -74,6 +77,7 @@ true
 
 > CREATE TABLE working_source_tbl FROM SOURCE working_source (REFERENCE "testdrive-data-${testdrive.seed}")
   FORMAT TEXT
+> COMMIT
 
 > SELECT * FROM working_source_tbl
 banana

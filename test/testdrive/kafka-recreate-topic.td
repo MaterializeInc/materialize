@@ -16,10 +16,12 @@
 
 $ kafka-create-topic topic=topic0 partitions=4
 
+> BEGIN
 > CREATE SOURCE source0 IN CLUSTER to_recreate
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-topic0-${testdrive.seed}')
 > CREATE TABLE source0_tbl FROM SOURCE source0 (REFERENCE "testdrive-topic0-${testdrive.seed}")
   FORMAT TEXT ENVELOPE NONE
+> COMMIT
 
 > SELECT * FROM source0_tbl
 
@@ -40,10 +42,12 @@ contains:topic was deleted
 
 $ kafka-create-topic topic=topic1 partitions=4
 
+> BEGIN
 > CREATE SOURCE source1 IN CLUSTER to_recreate
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-topic1-${testdrive.seed}')
 > CREATE TABLE source1_tbl FROM SOURCE source1 (REFERENCE "testdrive-topic1-${testdrive.seed}")
   FORMAT TEXT ENVELOPE NONE
+> COMMIT
 
 > SELECT * FROM source1_tbl
 
@@ -78,10 +82,12 @@ $ kafka-create-topic topic=topic2 partitions=4
 $ kafka-ingest format=bytes topic=topic2
 1
 
+> BEGIN
 > CREATE SOURCE source2 IN CLUSTER to_recreate
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-topic2-${testdrive.seed}')
 > CREATE TABLE source2_tbl FROM SOURCE source2 (REFERENCE "testdrive-topic2-${testdrive.seed}")
   FORMAT TEXT ENVELOPE NONE
+> COMMIT
 
 > SELECT * FROM source2_tbl
 1
@@ -113,6 +119,7 @@ contains:topic was recreated
 # Ensure we don't panic after we restart due to the above finished ingestions.
 $ kafka-create-topic topic=good-topic
 
+> BEGIN
 > CREATE SOURCE good_source
   IN CLUSTER to_recreate
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-good-topic-${testdrive.seed}')
@@ -120,6 +127,7 @@ $ kafka-create-topic topic=good-topic
 > CREATE TABLE good_source_tbl FROM SOURCE good_source (REFERENCE "testdrive-good-topic-${testdrive.seed}")
   FORMAT TEXT
   ENVELOPE NONE
+> COMMIT
 
 # After suspending the cluster (by scaling the replication factor to 0), the
 # latest state is paused for sources that previously reported as stalled.

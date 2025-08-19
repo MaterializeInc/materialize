@@ -109,6 +109,7 @@ users                   ""
 contains:reference to user not found in source
 
 > CREATE SCHEMA another;
+> BEGIN
 > CREATE SOURCE another.auction_house
   IN CLUSTER ${arg.single-replica-cluster}
   FROM LOAD GENERATOR AUCTION;
@@ -118,6 +119,7 @@ contains:reference to user not found in source
 > CREATE TABLE another.bids FROM SOURCE another.auction_house (REFERENCE bids);
 > CREATE TABLE another.organizations FROM SOURCE another.auction_house (REFERENCE organizations);
 > CREATE TABLE another.users FROM SOURCE another.auction_house (REFERENCE users);
+> COMMIT
 
 > SHOW SOURCES FROM another;
 auction_house           load-generator ${arg.single-replica-cluster}    ""

@@ -27,12 +27,14 @@ $ kafka-ingest format=avro topic=foo schema=${foo-schema} timestamp=1
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE foo
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-foo-${testdrive.seed}')
 
 > CREATE TABLE foo_tbl FROM SOURCE foo (REFERENCE "testdrive-foo-${testdrive.seed}")
   FORMAT AVRO USING SCHEMA '${foo-schema}'
+> COMMIT
 
 > SELECT * FROM foo_tbl;
 1
@@ -56,12 +58,14 @@ $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=nullpayload 
 :
 :así
 
+> BEGIN
 > CREATE SOURCE nullpayload
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-nullpayload-${testdrive.seed}')
 
 > CREATE TABLE nullpayload_tbl (col) FROM SOURCE nullpayload (REFERENCE "testdrive-nullpayload-${testdrive.seed}")
   FORMAT BYTES
+> COMMIT
 
 > SELECT col from nullpayload_tbl
 col

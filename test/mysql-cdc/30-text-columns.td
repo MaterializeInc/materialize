@@ -35,10 +35,12 @@ CREATE TABLE t1 (f1 JSON, f2 ENUM('small', 'medium', 'large'), f3 YEAR, f4 DATE,
 SET SESSION sql_mode = '';
 INSERT INTO t1 VALUES (CAST('{"bar": "baz", "balance": 7.77, "active": false, "nest": {"birds": ["seagull", "robin"]}}' AS JSON), 'large', 2024, '0000-00-00', '2024-00-01', '2024-01-00', '0000-00-00 00:00:00',  '0000-00-00 00:00:00.000000',  '0000-00-00 00:00:00.000000');
 
+> BEGIN
 > CREATE SOURCE da
   FROM MYSQL CONNECTION mysqc;
 > CREATE TABLE t1 FROM SOURCE da (REFERENCE public.t1)
   WITH (TEXT COLUMNS = (f1, f2, f3, f4, f5, f6, f7, f8, f9));
+> COMMIT
 
 # Insert the same data post-snapshot
 $ mysql-execute name=mysql

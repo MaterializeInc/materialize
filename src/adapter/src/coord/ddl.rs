@@ -11,11 +11,11 @@
 //! and altering objects.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
 use fail::fail_point;
-use futures::Future;
 use maplit::{btreemap, btreeset};
 use mz_adapter_types::compaction::SINCE_GRANULARITY;
 use mz_adapter_types::connection::ConnectionId;
@@ -64,7 +64,7 @@ use crate::session::{Session, Transaction, TransactionOps};
 use crate::statement_logging::StatementEndedExecutionReason;
 use crate::telemetry::{EventDetails, SegmentClientExt};
 use crate::util::ResultExt;
-use crate::{AdapterError, TimestampProvider, catalog, flags};
+use crate::{AdapterError, ExecuteContext, TimestampProvider, catalog, flags};
 
 impl Coordinator {
     /// Same as [`Self::catalog_transact_conn`] but takes a [`Session`].
@@ -82,20 +82,23 @@ impl Coordinator {
     /// builtin table updates concurrently with any side effects (e.g. creating
     /// collections).
     #[instrument(name = "coord::catalog_transact_with_side_effects")]
-    pub(crate) async fn catalog_transact_with_side_effects<'c, F, Fut>(
-        &'c mut self,
-        session: Option<&Session>,
+    pub(crate) async fn catalog_transact_with_side_effects<F>(
+        &mut self,
+        ctx: Option<&mut ExecuteContext>,
         ops: Vec<catalog::Op>,
         side_effect: F,
     ) -> Result<(), AdapterError>
     where
-        F: FnOnce(&'c mut Coordinator) -> Fut,
-        Fut: Future<Output = ()>,
+        F: for<'a> FnOnce(
+                &'a mut Coordinator,
+                Option<&'a mut ExecuteContext>,
+            ) -> Pin<Box<dyn Future<Output = ()> + 'a>>
+            + 'static,
     {
         let table_updates = self
-            .catalog_transact_inner(session.map(|session| session.conn_id()), ops)
+            .catalog_transact_inner(ctx.as_ref().map(|ctx| ctx.session().conn_id()), ops)
             .await?;
-        let side_effects_fut = side_effect(self);
+        let side_effects_fut = side_effect(self, ctx);
 
         // Run our side effects concurrently with the table updates.
         let ((), ()) = futures::future::join(
@@ -128,22 +131,35 @@ impl Coordinator {
     /// Executes a Catalog transaction with handling if the provided [`Session`]
     /// is in a SQL transaction that is executing DDL.
     #[instrument(name = "coord::catalog_transact_with_ddl_transaction")]
-    pub(crate) async fn catalog_transact_with_ddl_transaction(
+    pub(crate) async fn catalog_transact_with_ddl_transaction<F>(
         &mut self,
-        session: &mut Session,
+        ctx: &mut ExecuteContext,
         ops: Vec<catalog::Op>,
-    ) -> Result<(), AdapterError> {
+        side_effect: F,
+    ) -> Result<(), AdapterError>
+    where
+        F: for<'a> FnOnce(
+                &'a mut Coordinator,
+                Option<&'a mut ExecuteContext>,
+            ) -> Pin<Box<dyn Future<Output = ()> + 'a>>
+            + Send
+            + Sync
+            + 'static,
+    {
         let Some(Transaction {
             ops:
                 TransactionOps::DDL {
                     ops: txn_ops,
                     revision: txn_revision,
+                    side_effects: _,
                     state: _,
                 },
             ..
-        }) = session.transaction().inner()
+        }) = ctx.session().transaction().inner()
         else {
-            return self.catalog_transact(Some(session), ops).await;
+            return self
+                .catalog_transact_with_side_effects(Some(ctx), ops, side_effect)
+                .await;
         };
 
         // Make sure our Catalog hasn't changed since openning the transaction.
@@ -158,18 +174,21 @@ impl Coordinator {
         all_ops.push(Op::TransactionDryRun);
 
         // Run our Catalog transaction, but abort before committing.
-        let result = self.catalog_transact(Some(session), all_ops).await;
+        let result = self.catalog_transact(Some(ctx.session()), all_ops).await;
 
         match result {
             // We purposefully fail with this error to prevent committing the transaction.
             Err(AdapterError::TransactionDryRun { new_ops, new_state }) => {
                 // Sets these ops to our transaction, bailing if the Catalog has changed since we
                 // ran the transaction.
-                session.transaction_mut().add_ops(TransactionOps::DDL {
-                    ops: new_ops,
-                    state: new_state,
-                    revision: self.catalog().transient_revision(),
-                })?;
+                ctx.session_mut()
+                    .transaction_mut()
+                    .add_ops(TransactionOps::DDL {
+                        ops: new_ops,
+                        state: new_state,
+                        side_effects: vec![Box::new(side_effect)],
+                        revision: self.catalog().transient_revision(),
+                    })?;
                 Ok(())
             }
             Ok(_) => unreachable!("unexpected success!"),

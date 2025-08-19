@@ -11,12 +11,14 @@ $ schema-registry-wait topic=sql-server.test.dbo.transaction_table1
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE transaction_table1
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'sql-server.test.dbo.transaction_table1');
 
 > CREATE TABLE transaction_table1_tbl FROM SOURCE transaction_table1 (REFERENCE "sql-server.test.dbo.transaction_table1")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
+> COMMIT
 
 $ schema-registry-wait topic=sql-server.test.dbo.transaction_table2
 
@@ -24,12 +26,14 @@ $ schema-registry-wait topic=sql-server.test.dbo.transaction_table2
     URL '${testdrive.schema-registry-url}'
   );
 
+> BEGIN
 > CREATE SOURCE transaction_table2
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'sql-server.test.dbo.transaction_table2');
 
 > CREATE TABLE transaction_table2_tbl FROM SOURCE transaction_table2 (REFERENCE "sql-server.test.dbo.transaction_table2")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM;
+> COMMIT
 
 $ sql-server-connect name=sql-server
 server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID=sa;Password=${arg.sa-password}

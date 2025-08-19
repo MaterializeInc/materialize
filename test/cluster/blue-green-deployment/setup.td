@@ -32,6 +32,7 @@ ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;
 > CREATE SOURCE counter FROM LOAD GENERATOR counter (TICK INTERVAL '1s')
 
 > DROP SOURCE IF EXISTS tpch CASCADE
+> BEGIN
 > CREATE SOURCE tpch
   FROM LOAD GENERATOR TPCH (SCALE FACTOR 0.1)
 
@@ -43,6 +44,7 @@ ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;
 > CREATE TABLE partsupp FROM SOURCE tpch (REFERENCE partsupp);
 > CREATE TABLE region FROM SOURCE tpch (REFERENCE region);
 > CREATE TABLE supplier FROM SOURCE tpch (REFERENCE supplier);
+> COMMIT
 
 > CREATE SCHEMA prod
 > CREATE MATERIALIZED VIEW prod.counter_mv IN CLUSTER prod AS SELECT count(*) FROM counter

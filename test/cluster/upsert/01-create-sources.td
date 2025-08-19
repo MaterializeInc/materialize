@@ -72,19 +72,23 @@ $ kafka-ingest format=avro topic=dbzupsert-broken-value key-format=avro key-sche
 
 # With these first two sources, we verify that we can retract key/value decoding errors.
 
+> BEGIN
 > CREATE SOURCE upsert_broken_key
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-broken-key-${testdrive.seed}')
 
 > CREATE TABLE upsert_broken_key_tbl FROM SOURCE upsert_broken_key (REFERENCE "testdrive-dbzupsert-broken-key-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
+> BEGIN
 > CREATE SOURCE upsert_broken_value
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-dbzupsert-broken-value-${testdrive.seed}')
 
 > CREATE TABLE upsert_broken_value_tbl FROM SOURCE upsert_broken_value (REFERENCE "testdrive-dbzupsert-broken-value-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
+> COMMIT
 
 > SELECT * FROM upsert_broken_key_tbl
 id creature
@@ -115,6 +119,7 @@ $ kafka-ingest format=bytes topic=upsert-nullkey key-format=bytes key-terminator
 bird1:goose
 :geese
 
+> BEGIN
 > CREATE SOURCE upsert_nullkey
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-upsert-nullkey-${testdrive.seed}')
 
@@ -122,6 +127,7 @@ bird1:goose
   KEY FORMAT TEXT
   VALUE FORMAT TEXT
   ENVELOPE UPSERT
+> COMMIT
 
 ! select * from upsert_nullkey_tbl
 contains: record with NULL key in UPSERT source

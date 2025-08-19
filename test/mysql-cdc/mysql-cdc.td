@@ -708,11 +708,13 @@ INSERT INTO pk_table VALUES (99999, 'abc');
 #
 # Check schema scoped tables
 
+> BEGIN
 > CREATE SOURCE another_source
   IN CLUSTER cdc_cluster
   FROM MYSQL CONNECTION mysql_conn;
 
 > CREATE TABLE another_table FROM SOURCE another_source (REFERENCE another_schema.another_table);
+> COMMIT
 
 > SHOW SOURCES
 another_source          mysql  cdc_cluster     ""

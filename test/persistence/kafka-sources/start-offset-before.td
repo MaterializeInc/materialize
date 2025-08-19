@@ -47,19 +47,23 @@ $ kafka-ingest format=avro topic=offset key-format=avro key-schema=${keyschema} 
     URL '${testdrive.schema-registry-url}'
   );
 
+> BEGIN
 > CREATE SOURCE start_offset
   FROM KAFKA CONNECTION kafka_conn (START OFFSET = [100], TOPIC 'testdrive-offset-${testdrive.seed}')
 
 > CREATE TABLE start_offset_tbl FROM SOURCE start_offset (REFERENCE "testdrive-offset-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
+> COMMIT
 
+> BEGIN
 > CREATE SOURCE kafka_time_offset
   FROM KAFKA CONNECTION kafka_conn (START TIMESTAMP=2, TOPIC 'testdrive-offset-${testdrive.seed}')
 
 > CREATE TABLE kafka_time_offset_tbl FROM SOURCE kafka_time_offset (REFERENCE "testdrive-offset-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
+> COMMIT
 
 > SELECT COUNT(*) FROM start_offset_tbl;
 2900

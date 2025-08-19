@@ -15,6 +15,7 @@ $ set-arg-default single-replica-cluster=quickstart
 
 $ postgres-connect name=mz_support url=postgres://mz_support:materialize@${testdrive.materialize-internal-sql-addr}
 
+> BEGIN
 > CREATE SOURCE auction_house
   IN CLUSTER ${arg.single-replica-cluster}
   FROM LOAD GENERATOR AUCTION (UP TO 100);
@@ -24,6 +25,7 @@ $ postgres-connect name=mz_support url=postgres://mz_support:materialize@${testd
 > CREATE TABLE bids FROM SOURCE auction_house (REFERENCE bids);
 > CREATE TABLE organizations FROM SOURCE auction_house (REFERENCE organizations);
 > CREATE TABLE users FROM SOURCE auction_house (REFERENCE users);
+> COMMIT
 
 > CREATE VIEW v AS SELECT b.auction_id, b.buyer, b.amount, b.bid_time, u.org_id FROM bids b JOIN users u ON(b.buyer = u.id);
 

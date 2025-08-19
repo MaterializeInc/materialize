@@ -69,11 +69,13 @@ contains:Invalid username or password
     SSL CERTIFICATE AUTHORITY '${ca-crt}'
   )
 
+> BEGIN
 > CREATE SOURCE text_data FROM KAFKA CONNECTION kafka (
     TOPIC 'testdrive-text-data-${testdrive.seed}'
   )
 
 > CREATE TABLE text_data_tbl FROM SOURCE text_data (REFERENCE "testdrive-text-data-${testdrive.seed}") FORMAT TEXT
+> COMMIT
 
 > SELECT * FROM text_data_tbl
 banana
@@ -90,11 +92,13 @@ banana
     SSL CERTIFICATE AUTHORITY '${ca-crt}'
   )
 
+> BEGIN
 > CREATE SOURCE text_data_ssh FROM KAFKA CONNECTION kafka_ssh (
     TOPIC 'testdrive-text-data-${testdrive.seed}'
   )
 
 > CREATE TABLE text_data_ssh_tbl FROM SOURCE text_data_ssh (REFERENCE "testdrive-text-data-${testdrive.seed}") FORMAT TEXT
+> COMMIT
 
 > SELECT * FROM text_data_ssh_tbl
 banana

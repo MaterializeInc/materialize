@@ -73,12 +73,14 @@ contains:key values mismatch
     SSL CERTIFICATE AUTHORITY = '${ca-crt}'
   )
 
+> BEGIN
 > CREATE SOURCE avro_data FROM KAFKA CONNECTION kafka (
     TOPIC 'testdrive-avro-data-${testdrive.seed}'
   )
 
 > CREATE TABLE avro_data_tbl FROM SOURCE avro_data (REFERENCE "testdrive-avro-data-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION schema_registry
+> COMMIT
 
 > SELECT * FROM avro_data_tbl
 a
@@ -95,12 +97,14 @@ a
     SSH TUNNEL testdrive_no_reset_connections.public.ssh
   )
 
+> BEGIN
 > CREATE SOURCE avro_data_ssh FROM KAFKA CONNECTION kafka (
     TOPIC 'testdrive-avro-data-${testdrive.seed}'
   )
 
 > CREATE TABLE avro_data_ssh_tbl FROM SOURCE avro_data_ssh (REFERENCE "testdrive-avro-data-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION schema_registry
+> COMMIT
 
 > SELECT * FROM avro_data_ssh_tbl
 a

@@ -272,6 +272,7 @@ mv  hydrated_test_3 true
 
 # Test adding new storage dataflows.
 
+> BEGIN
 > CREATE SOURCE src
   IN CLUSTER test
   FROM LOAD GENERATOR auction (UP TO 100);
@@ -281,6 +282,7 @@ mv  hydrated_test_3 true
 > CREATE TABLE bids FROM SOURCE src (REFERENCE bids);
 > CREATE TABLE organizations FROM SOURCE src (REFERENCE organizations);
 > CREATE TABLE users FROM SOURCE src (REFERENCE users);
+> COMMIT
 
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)

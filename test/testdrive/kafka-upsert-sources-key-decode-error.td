@@ -45,6 +45,7 @@ $ kafka-ingest format=avro topic=int2long key-format=avro key-schema=${keyschema
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE int2long
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC
@@ -53,6 +54,7 @@ $ kafka-ingest format=avro topic=int2long key-format=avro key-schema=${keyschema
 > CREATE TABLE int2long_tbl FROM SOURCE int2long (REFERENCE "testdrive-int2long-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT
+> COMMIT
 
 $ kafka-ingest format=avro topic=int2long key-format=avro key-schema=${keyschema-1-long-key} schema=${schema}
 {"key": 999999999999} {"nokey": "nokey1"}

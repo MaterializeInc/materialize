@@ -17,6 +17,7 @@ use std::fmt::Debug;
 use std::future::Future;
 use std::mem;
 use std::net::IpAddr;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
@@ -51,17 +52,17 @@ use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::sync::watch;
 use uuid::Uuid;
 
-use crate::AdapterNotice;
 use crate::catalog::CatalogState;
 use crate::client::RecordFirstRowStream;
-use crate::coord::ExplainContext;
 use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::in_memory_oracle::InMemoryTimestampOracle;
 use crate::coord::peek::PeekResponseUnary;
 use crate::coord::statement_logging::PreparedStatementLoggingInfo;
 use crate::coord::timestamp_selection::{TimestampContext, TimestampDetermination};
+use crate::coord::{Coordinator, ExplainContext};
 use crate::error::AdapterError;
 use crate::metrics::{Metrics, SessionMetrics};
+use crate::{AdapterNotice, ExecuteContext};
 
 const DUMMY_CONNECTION_ID: ConnectionId = ConnectionId::Static(0);
 
@@ -1323,10 +1324,12 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
                         ops: og_ops,
                         revision: og_revision,
                         state: og_state,
+                        side_effects,
                     } => match add_ops {
                         TransactionOps::DDL {
                             ops: new_ops,
                             revision: new_revision,
+                            side_effects: mut net_new_side_effects,
                             state: new_state,
                         } => {
                             if *og_revision != new_revision {
@@ -1337,6 +1340,7 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
                                 *og_ops = new_ops;
                                 *og_state = new_state;
                             }
+                            side_effects.append(&mut net_new_side_effects);
                         }
                         _ => return Err(AdapterError::DDLOnlyTransaction),
                     },
@@ -1473,7 +1477,8 @@ impl<T> From<&TransactionStatus<T>> for TransactionCode {
 /// This is needed because we currently do not allow mixing reads and writes in
 /// a transaction. Use this to record what we have done, and what may need to
 /// happen at commit.
-#[derive(Debug)]
+#[derive(Derivative)]
+#[derivative(Debug)]
 pub enum TransactionOps<T> {
     /// The transaction has been initiated, but no statement has yet been executed
     /// in it.
@@ -1510,6 +1515,18 @@ pub enum TransactionOps<T> {
         ops: Vec<crate::catalog::Op>,
         /// In-memory state that reflects the previously applied ops.
         state: CatalogState,
+        /// A list of side effects that should be executed if this DDL transaction commits.
+        #[derivative(Debug = "ignore")]
+        side_effects: Vec<
+            Box<
+                dyn for<'a> FnOnce(
+                        &'a mut Coordinator,
+                        Option<&'a mut ExecuteContext>,
+                    ) -> Pin<Box<dyn Future<Output = ()> + 'a>>
+                    + Send
+                    + Sync,
+            >,
+        >,
         /// Transient revision of the `Catalog` when this transaction started.
         revision: u64,
     },

@@ -31,19 +31,23 @@ one
 > CREATE CONNECTION kafka_conn_dynamic
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT, SSH TUNNEL thancred);
 
+> BEGIN
 > CREATE SOURCE fixed_text IN CLUSTER sc
   FROM KAFKA CONNECTION kafka_conn_using (TOPIC 'testdrive-thetopic-${testdrive.seed}')
 
 > CREATE TABLE fixed_text_tbl FROM SOURCE fixed_text (REFERENCE "testdrive-thetopic-${testdrive.seed}")
   FORMAT TEXT
   ENVELOPE NONE
+> COMMIT
 
+> BEGIN
 > CREATE SOURCE dynamic_text  IN CLUSTER sc
   FROM KAFKA CONNECTION kafka_conn_dynamic (TOPIC 'testdrive-thetopic-${testdrive.seed}')
 
 > CREATE TABLE dynamic_text_tbl FROM SOURCE dynamic_text (REFERENCE "testdrive-thetopic-${testdrive.seed}")
   FORMAT TEXT
   ENVELOPE NONE
+> COMMIT
 
 > SELECT * FROM fixed_text_tbl
 text
@@ -85,6 +89,7 @@ $ kafka-create-topic topic=avroavro
 $ kafka-ingest format=avro topic=avroavro schema=${schema}
 {"f1": "fish", "f2": 1000}
 
+> BEGIN
 > CREATE SOURCE fixed_plus_csr
   IN CLUSTER sc
   FROM KAFKA CONNECTION kafka_conn_using (TOPIC 'testdrive-avroavro-${testdrive.seed}')
@@ -92,6 +97,7 @@ $ kafka-ingest format=avro topic=avroavro schema=${schema}
 > CREATE TABLE fixed_plus_csr_tbl FROM SOURCE fixed_plus_csr (REFERENCE "testdrive-avroavro-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
+> COMMIT
 
 > SELECT * FROM fixed_plus_csr_tbl
 f1    f2
@@ -99,6 +105,7 @@ f1    f2
 fish  1000
 
 # Test csr sources for dynamic connections as well.
+> BEGIN
 > CREATE SOURCE dynamic_plus_csr
   IN CLUSTER sc
   FROM KAFKA CONNECTION kafka_conn_dynamic (TOPIC 'testdrive-avroavro-${testdrive.seed}')
@@ -106,6 +113,7 @@ fish  1000
 > CREATE TABLE dynamic_plus_csr_tbl FROM SOURCE dynamic_plus_csr (REFERENCE "testdrive-avroavro-${testdrive.seed}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE NONE
+> COMMIT
 
 > SELECT * FROM dynamic_plus_csr_tbl
 f1    f2

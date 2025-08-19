@@ -4518,13 +4518,13 @@ pub async fn load_remote_system_parameters(
 }
 
 #[derive(Debug)]
-pub(crate) enum WatchSetResponse {
+pub enum WatchSetResponse {
     StatementDependenciesReady(StatementLoggingId, StatementLifecycleEvent),
     AlterSinkReady(AlterSinkReadyContext),
 }
 
 #[derive(Debug)]
-pub(crate) struct AlterSinkReadyContext {
+pub struct AlterSinkReadyContext {
     ctx: Option<ExecuteContext>,
     otel_ctx: OpenTelemetryContext,
     plan: AlterSinkPlan,
