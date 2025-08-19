@@ -204,7 +204,7 @@ impl Coordinator {
                 }
                 match &options.disk {
                     Set(d) => *disk = *d,
-                    Reset => *disk = self.catalog.system_config().disk_cluster_replicas_default(),
+                    Reset => *disk = true,
                     Unchanged => {}
                 }
                 match &options.availability_zones {

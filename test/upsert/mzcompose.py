@@ -44,7 +44,6 @@ SERVICES = [
             "--orchestrator-process-scratch-directory=/scratch",
         ],
         additional_system_parameter_defaults={
-            "disk_cluster_replicas_default": "true",
             "unsafe_enable_unorchestrated_cluster_replicas": "true",
             "storage_dataflow_delay_sources_past_rehydration": "true",
         },
@@ -118,9 +117,6 @@ def workflow_testdrive(c: Composition, parser: WorkflowArgumentParser) -> None:
         options=[
             "--orchestrator-process-scratch-directory=/scratch",
         ],
-        additional_system_parameter_defaults={
-            "disk_cluster_replicas_default": "true",
-        },
         environment_extra=materialized_environment_extra,
         default_replication_factor=2,
         support_external_clusterd=True,
@@ -182,8 +178,6 @@ def workflow_rehydration(c: Composition) -> None:
                     "storage_statistics_collection_interval": "1000",
                     "storage_statistics_interval": "2000",
                     "unsafe_enable_unorchestrated_cluster_replicas": "true",
-                    "disk_cluster_replicas_default": "true",
-                    "enable_disk_cluster_replicas": "true",
                     # Force backpressure to be enabled.
                     "storage_dataflow_max_inflight_bytes": "1",
                     "storage_dataflow_max_inflight_bytes_to_cluster_size_fraction": "0.01",
@@ -215,8 +209,6 @@ def workflow_rehydration(c: Composition) -> None:
                     "storage_statistics_collection_interval": "1000",
                     "storage_statistics_interval": "2000",
                     "unsafe_enable_unorchestrated_cluster_replicas": "true",
-                    "disk_cluster_replicas_default": "true",
-                    "enable_disk_cluster_replicas": "true",
                     # Force backpressure to be enabled.
                     "storage_dataflow_max_inflight_bytes": "1",
                     "storage_dataflow_max_inflight_bytes_to_cluster_size_fraction": "0.01",
@@ -362,7 +354,6 @@ def workflow_incident_49(c: Composition) -> None:
             "with DISK",
             Materialized(
                 additional_system_parameter_defaults={
-                    "disk_cluster_replicas_default": "true",
                     "storage_dataflow_delay_sources_past_rehydration": "true",
                 },
                 environment_extra=materialized_environment_extra,
@@ -373,7 +364,6 @@ def workflow_incident_49(c: Composition) -> None:
             "without DISK",
             Materialized(
                 additional_system_parameter_defaults={
-                    "disk_cluster_replicas_default": "false",
                     "storage_dataflow_delay_sources_past_rehydration": "true",
                 },
                 environment_extra=materialized_environment_extra,
@@ -501,8 +491,6 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
                 "--orchestrator-process-scratch-directory=/scratch",
             ],
             additional_system_parameter_defaults={
-                "disk_cluster_replicas_default": "true",
-                "enable_disk_cluster_replicas": "true",
                 # Force backpressure to be enabled.
                 "storage_dataflow_max_inflight_bytes": f"{backpressure_bytes}",
                 "storage_dataflow_max_inflight_bytes_disk_only": "true",
@@ -556,8 +544,6 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
             (
                 "default",
                 {
-                    "disk_cluster_replicas_default": "true",
-                    "enable_disk_cluster_replicas": "true",
                     # Force backpressure to be enabled.
                     "storage_dataflow_max_inflight_bytes": f"{backpressure_bytes}",
                     "storage_dataflow_max_inflight_bytes_disk_only": "true",
@@ -567,8 +553,6 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
                 "default with RocksDB Merge Operator",
                 {
                     "storage_rocksdb_use_merge_operator": "true",
-                    "disk_cluster_replicas_default": "true",
-                    "enable_disk_cluster_replicas": "true",
                     # Force backpressure to be enabled.
                     "storage_dataflow_max_inflight_bytes": f"{backpressure_bytes}",
                     "storage_dataflow_max_inflight_bytes_disk_only": "true",
@@ -577,8 +561,6 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
             (
                 "with write_buffer_manager no stall",
                 {
-                    "disk_cluster_replicas_default": "true",
-                    "enable_disk_cluster_replicas": "true",
                     # Force backpressure to be enabled.
                     "storage_dataflow_max_inflight_bytes": f"{backpressure_bytes}",
                     "storage_dataflow_max_inflight_bytes_disk_only": "true",
@@ -589,8 +571,6 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
             (
                 "with write_buffer_manager stall enabled",
                 {
-                    "disk_cluster_replicas_default": "true",
-                    "enable_disk_cluster_replicas": "true",
                     # Force backpressure to be enabled.
                     "storage_dataflow_max_inflight_bytes": f"{backpressure_bytes}",
                     "storage_dataflow_max_inflight_bytes_disk_only": "true",

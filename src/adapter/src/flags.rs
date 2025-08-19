@@ -203,7 +203,6 @@ pub fn orchestrator_scheduling_config(config: &SystemVars) -> ServiceSchedulingC
         },
         soften_az_affinity: config.cluster_soften_az_affinity(),
         soften_az_affinity_weight: config.cluster_soften_az_affinity_weight(),
-        always_use_disk: config.cluster_always_use_disk(),
         security_context_enabled: config.cluster_security_context_enabled(),
     }
 }

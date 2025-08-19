@@ -96,7 +96,6 @@ def get_minimal_system_parameters(
         "enable_continual_task_transform": "true",
         "enable_copy_to_expr": "true",
         "enable_create_table_from_source": "true",
-        "enable_disk_cluster_replicas": "true",
         "enable_eager_delta_joins": "true",
         "enable_envelope_debezium_in_subscribe": "true",
         "enable_expressions_in_limit_syntax": "true",
@@ -165,7 +164,6 @@ def get_variable_system_parameters(
         ),
         # -----
         # Others (ordered by name),
-        VariableSystemParameter("cluster_always_use_disk", "true", ["true", "false"]),
         VariableSystemParameter(
             "compute_dataflow_max_inflight_bytes",
             "134217728",
@@ -184,9 +182,6 @@ def get_variable_system_parameters(
             "1048576",
             # force-enabled, the in-between, and the production value
             ["0", "1048576", "314572800", "67108864"],
-        ),
-        VariableSystemParameter(
-            "disk_cluster_replicas_default", "true", ["true", "false"]
         ),
         VariableSystemParameter(
             "kafka_default_metadata_fetch_interval",

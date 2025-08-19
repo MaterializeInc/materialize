@@ -329,12 +329,6 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
         id: &str,
         config: ServiceConfig,
     ) -> Result<Box<dyn Service>, anyhow::Error> {
-        let always_use_disk = self
-            .scheduling_config
-            .read()
-            .expect("poisoned")
-            .always_use_disk;
-
         let service = ProcessService {
             run_dir: self.config.service_run_dir(id),
             scale: config.scale,
@@ -344,8 +338,8 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
         // self hosted deployments.
         let disk = {
             // Whether the user specified `DISK = TRUE` when creating the
-            // replica OR whether the feature flag to force disk is enabled.
-            let user_requested_disk = config.disk || always_use_disk;
+            // replica.
+            let user_requested_disk = config.disk;
             // Whether the cluster replica size map provided by the
             // administrator explicitly indicates that the size does not support
             // disk.

@@ -45,9 +45,6 @@ $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} 
 
 > DROP CLUSTER IF EXISTS storage_cluster CASCADE;
 
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_disk_cluster_replicas = true
-
 > CREATE CLUSTER storage_cluster SIZE 'scale=2,workers=2', REPLICATION FACTOR 1, DISK = true
 
 > BEGIN

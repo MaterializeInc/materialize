@@ -4614,7 +4614,7 @@ pub fn plan_create_cluster_inner(
             sql_bail!("SIZE must be specified for managed clusters");
         };
 
-        let mut disk_default = scx.catalog.system_vars().disk_cluster_replicas_default();
+        let mut disk_default = true;
         // HACK(benesch): disk is always enabled for v2 cluster sizes, and it
         // is an error to specify `DISK = FALSE` or `DISK = TRUE` explicitly.
         //
@@ -4628,11 +4628,6 @@ pub fn plan_create_cluster_inner(
                 );
             }
             disk_default = true;
-        }
-        // Only require the feature flag if `DISK` was explicitly specified and it does not match
-        // the default value.
-        if matches!(disk_in, Some(disk) if disk != disk_default) {
-            scx.require_feature_flag(&vars::ENABLE_DISK_CLUSTER_REPLICAS)?;
         }
         let disk = disk_in.unwrap_or(disk_default);
 
@@ -4883,10 +4878,6 @@ fn plan_replica_config(
 
     let compute = plan_compute_replica_config(introspection_interval, introspection_debugging)?;
 
-    if disk_in.is_some() {
-        scx.require_feature_flag(&vars::ENABLE_DISK_CLUSTER_REPLICAS)?;
-    }
-
     match (
         size,
         availability_zone,
@@ -4901,8 +4892,7 @@ fn plan_replica_config(
             sql_bail!("SIZE option must be specified");
         }
         (Some(size), availability_zone, billed_as, None, None) => {
-            let disk_default = scx.catalog.system_vars().disk_cluster_replicas_default();
-            let mut disk = disk_in.unwrap_or(disk_default);
+            let mut disk = disk_in.unwrap_or(true);
 
             // HACK(benesch): disk is always enabled for v2 cluster sizes, and
             // it is an error to specify `DISK = FALSE` or `DISK = TRUE`
@@ -6159,9 +6149,6 @@ pub fn plan_alter_cluster(
                     );
                 }
 
-                if disk {
-                    scx.require_feature_flag(&vars::ENABLE_DISK_CLUSTER_REPLICAS)?;
-                }
                 options.disk = AlterOptionParameter::Set(disk);
             }
             if !replicas.is_empty() {

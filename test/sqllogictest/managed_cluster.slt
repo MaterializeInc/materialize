@@ -399,11 +399,6 @@ CREATE CLUSTER foo SIZE invalid_size, REPLICATION FACTOR 0
 statement error db error: ERROR: creating cluster replica would violate max_replicas_per_cluster limit \(desired: 9999999, limit: 5, current: 0\)
 CREATE CLUSTER foo SIZE 'scale=1,workers=1', replication factor 9999999;
 
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_disk_cluster_replicas = true;
-----
-COMPLETE 0
-
 statement ok
 CREATE CLUSTER foo REPLICAS (r1 (SIZE 'scale=1,workers=1'), r2 (SIZE 'scale=1,workers=1', DISK))
 
