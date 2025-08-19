@@ -18,5 +18,5 @@ cd "$(dirname "$0")/.."
 . misc/shlib/shlib.bash
 
 find . -type f -name "Dockerfile" -exec sed -i 's/MZFROM/FROM/g' {} +
-inspector-sbomgen directory --path . --outfile sbom.json --disable-progress-bar || true
-inspector-sbomgen directory --path . --outfile inspector-results.json --disable-progress-bar --scan-sbom --scan-sbom-output-format cyclonedx --aws-region us-east-1 || true
+inspector-sbomgen directory --path . --skip-files test --outfile sbom.json --disable-progress-bar || true
+inspector-sbomgen directory --path . --skip-files test --outfile inspector-results.json --disable-progress-bar --scan-sbom --scan-sbom-output-format cyclonedx --aws-region us-east-1 || true

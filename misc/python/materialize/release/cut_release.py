@@ -55,7 +55,7 @@ def main():
         print(f"Checking out SHA {args.sha}")
         checkout(args.sha)
         print(f"Bumping version to {version}")
-        spawn.runv([MZ_ROOT / "bin" / "bump-version", version])
+        spawn.runv([MZ_ROOT / "bin" / "bump-version", version, "--sbom"])
         print("Tagging version")
         tag_annotated(version)
         print("Pushing tag to Materialize repo")
