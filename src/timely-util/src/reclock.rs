@@ -1176,4 +1176,44 @@ mod test {
             },
         );
     }
+
+    #[cfg(feature = "count-allocations")]
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
+    fn test_shrinking() {
+        let as_of = 1000_u64;
+
+        // Test that supplying a single big batch of unconsolidated bindings gets
+        // consolidated after a single worker step.
+
+        harness::<FromTime, u64, _, _>(
+            Antichain::from_elem(0),
+            move |worker, mut bindings, (_data, mut data_cap), _| {
+                let info1 = allocation_counter::measure(|| {
+                    step(worker);
+                    for ts in 0..as_of {
+                        if ts > 0 {
+                            bindings.update_at(
+                                Partitioned::new_singleton(0, ts - 1),
+                                ts,
+                                Diff::MINUS_ONE,
+                            );
+                        }
+                        bindings.update_at(Partitioned::new_singleton(0, ts), ts, Diff::ONE);
+                        bindings.advance_to(ts + 1);
+                        bindings.flush();
+                        step(worker);
+                    }
+                });
+                println!("info = {info1:?}");
+
+                let info2 = allocation_counter::measure(|| {
+                    data_cap.downgrade(&Partitioned::new_singleton(0, 900));
+                    step(worker);
+                });
+                println!("info = {info2:?}");
+                assert!(info1.bytes_current + info2.bytes_current < (info1.bytes_current / 4));
+            },
+        );
+    }
 }
