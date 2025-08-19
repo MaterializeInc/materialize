@@ -191,6 +191,7 @@ impl AdapterNotice {
                 PlanNotice::ObjectDoesNotExist { .. } => Severity::Notice,
                 PlanNotice::ColumnAlreadyExists { .. } => Severity::Notice,
                 PlanNotice::UpsertSinkKeyNotEnforced { .. } => Severity::Warning,
+                PlanNotice::ReplicaDiskOptionDeprecated { .. } => Severity::Notice,
             },
             AdapterNotice::UnknownSessionDatabase(_) => Severity::Notice,
             AdapterNotice::OptimizerNotice { .. } => Severity::Notice,
@@ -292,6 +293,9 @@ impl AdapterNotice {
                 PlanNotice::ObjectDoesNotExist { .. } => SqlState::UNDEFINED_OBJECT,
                 PlanNotice::ColumnAlreadyExists { .. } => SqlState::DUPLICATE_COLUMN,
                 PlanNotice::UpsertSinkKeyNotEnforced { .. } => SqlState::WARNING,
+                PlanNotice::ReplicaDiskOptionDeprecated { .. } => {
+                    SqlState::WARNING_DEPRECATED_FEATURE
+                }
             },
             AdapterNotice::UnknownSessionDatabase(_) => SqlState::from_code("MZ004"),
             AdapterNotice::DefaultClusterDoesNotExist { .. } => SqlState::from_code("MZ005"),

@@ -4587,7 +4587,7 @@ pub fn plan_create_cluster_inner(
         replication_factor,
         seen: _,
         size,
-        disk: disk_in,
+        disk,
         schedule,
         workload_class,
     }: ClusterOptionExtracted = options.try_into()?;
@@ -4614,22 +4614,19 @@ pub fn plan_create_cluster_inner(
             sql_bail!("SIZE must be specified for managed clusters");
         };
 
-        let mut disk_default = true;
-        // HACK(benesch): disk is always enabled for v2 cluster sizes, and it
-        // is an error to specify `DISK = FALSE` or `DISK = TRUE` explicitly.
-        //
-        // The long term plan is to phase out the v1 cluster sizes, at which
-        // point we'll be able to remove the `DISK` option entirely and simply
-        // always enable disk.
-        if scx.catalog.is_cluster_size_cc(&size) {
-            if disk_in == Some(false) {
+        if disk.is_some() {
+            // The `DISK` option is a no-op for legacy cluster sizes and was never allowed for
+            // `cc` sizes. The long term plan is to phase out the legacy sizes, at which point
+            // we'll be able to remove the `DISK` option entirely.
+            if scx.catalog.is_cluster_size_cc(&size) {
                 sql_bail!(
-                    "DISK option disabled is not supported for non-legacy cluster sizes because disk is always enabled"
+                    "DISK option not supported for modern cluster sizes because disk is always enabled"
                 );
             }
-            disk_default = true;
+
+            scx.catalog
+                .add_notice(PlanNotice::ReplicaDiskOptionDeprecated);
         }
-        let disk = disk_in.unwrap_or(disk_default);
 
         let compute = plan_compute_replica_config(
             introspection_interval,
@@ -4691,7 +4688,6 @@ pub fn plan_create_cluster_inner(
                 size,
                 availability_zones,
                 compute,
-                disk,
                 optimizer_feature_overrides,
                 schedule,
             }),
@@ -4716,7 +4712,7 @@ pub fn plan_create_cluster_inner(
         if size.is_some() {
             sql_bail!("SIZE not supported for unmanaged clusters");
         }
-        if disk_in.is_some() {
+        if disk.is_some() {
             sql_bail!("DISK not supported for unmanaged clusters");
         }
         if !features.is_empty() {
@@ -4758,7 +4754,6 @@ pub fn unplan_create_cluster(
             size,
             availability_zones,
             compute,
-            disk,
             optimizer_feature_overrides,
             schedule,
         }) => {
@@ -4819,7 +4814,7 @@ pub fn unplan_create_cluster(
                 // Seen is ignored when unplanning.
                 seen: Default::default(),
                 availability_zones,
-                disk: Some(disk),
+                disk: None,
                 introspection_debugging: Some(introspection_debugging),
                 introspection_interval,
                 managed: Some(true),
@@ -4867,7 +4862,7 @@ fn plan_replica_config(
         availability_zone,
         billed_as,
         computectl_addresses,
-        disk: disk_in,
+        disk,
         internal,
         introspection_debugging,
         introspection_interval,
@@ -4892,29 +4887,24 @@ fn plan_replica_config(
             sql_bail!("SIZE option must be specified");
         }
         (Some(size), availability_zone, billed_as, None, None) => {
-            let mut disk = disk_in.unwrap_or(true);
-
-            // HACK(benesch): disk is always enabled for v2 cluster sizes, and
-            // it is an error to specify `DISK = FALSE` or `DISK = TRUE`
-            // explicitly.
-            //
-            // The long term plan is to phase out the v1 cluster sizes, at which
-            // point we'll be able to remove the `DISK` option entirely and
-            // simply always enable disk.
-            if scx.catalog.is_cluster_size_cc(&size) {
-                if disk_in.is_some() {
+            if disk.is_some() {
+                // The `DISK` option is a no-op for legacy cluster sizes and was never allowed for
+                // `cc` sizes. The long term plan is to phase out the legacy sizes, at which point
+                // we'll be able to remove the `DISK` option entirely.
+                if scx.catalog.is_cluster_size_cc(&size) {
                     sql_bail!(
-                        "DISK option not supported for non-legacy cluster sizes because disk is always enabled"
+                        "DISK option not supported for modern cluster sizes because disk is always enabled"
                     );
                 }
-                disk = true;
+
+                scx.catalog
+                    .add_notice(PlanNotice::ReplicaDiskOptionDeprecated);
             }
 
             Ok(ReplicaConfig::Orchestrated {
                 size,
                 availability_zone,
                 compute,
-                disk,
                 billed_as,
                 internal,
             })
@@ -4939,7 +4929,7 @@ fn plan_replica_config(
                 );
             }
 
-            if disk_in.is_some() {
+            if disk.is_some() {
                 sql_bail!("DISK can't be specified for unorchestrated clusters");
             }
 
@@ -6104,22 +6094,6 @@ pub fn plan_alter_cluster(
                 options.replication_factor = AlterOptionParameter::Set(replication_factor);
             }
             if let Some(size) = &size {
-                // HACK(benesch): disk is always enabled for v2 cluster sizes,
-                // and it is an error to specify `DISK = FALSE` or `DISK = TRUE`
-                // explicitly.
-                //
-                // The long term plan is to phase out the v1 cluster sizes, at
-                // which point we'll be able to remove the `DISK` option
-                // entirely and simply always enable disk.
-                if scx.catalog.is_cluster_size_cc(size) {
-                    if disk.is_some() {
-                        sql_bail!(
-                            "DISK option not supported for modern cluster sizes because disk is always enabled"
-                        );
-                    } else {
-                        options.disk = AlterOptionParameter::Set(true);
-                    }
-                }
                 options.size = AlterOptionParameter::Set(size.clone());
             }
             if let Some(availability_zones) = availability_zones {
@@ -6132,14 +6106,10 @@ pub fn plan_alter_cluster(
             if let Some(introspection_interval) = introspection_interval {
                 options.introspection_interval = AlterOptionParameter::Set(introspection_interval);
             }
-            if let Some(disk) = disk {
-                // HACK(benesch): disk is always enabled for v2 cluster sizes,
-                // and it is an error to specify `DISK = FALSE` or `DISK = TRUE`
-                // explicitly.
-                //
-                // The long term plan is to phase out the v1 cluster sizes, at
-                // which point we'll be able to remove the `DISK` option
-                // entirely and simply always enable disk.
+            if disk.is_some() {
+                // The `DISK` option is a no-op for legacy cluster sizes and was never allowed for
+                // `cc` sizes. The long term plan is to phase out the legacy sizes, at which point
+                // we'll be able to remove the `DISK` option entirely.
                 let size = size.as_deref().unwrap_or_else(|| {
                     cluster.managed_size().expect("cluster known to be managed")
                 });
@@ -6149,7 +6119,8 @@ pub fn plan_alter_cluster(
                     );
                 }
 
-                options.disk = AlterOptionParameter::Set(disk);
+                scx.catalog
+                    .add_notice(PlanNotice::ReplicaDiskOptionDeprecated);
             }
             if !replicas.is_empty() {
                 options.replicas = AlterOptionParameter::Set(replicas);
@@ -6174,7 +6145,9 @@ pub fn plan_alter_cluster(
             for option in reset_options {
                 match option {
                     AvailabilityZones => options.availability_zones = Reset,
-                    Disk => options.disk = Reset,
+                    Disk => scx
+                        .catalog
+                        .add_notice(PlanNotice::ReplicaDiskOptionDeprecated),
                     IntrospectionInterval => options.introspection_interval = Reset,
                     IntrospectionDebugging => options.introspection_debugging = Reset,
                     Managed => options.managed = Reset,

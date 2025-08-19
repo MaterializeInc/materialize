@@ -15,15 +15,16 @@
 
 use mz_audit_log::{
     AlterDefaultPrivilegeV1, AlterRetainHistoryV1, AlterSetClusterV1, AlterSourceSinkV1,
-    CreateClusterReplicaV1, CreateClusterReplicaV2, CreateClusterReplicaV3, CreateIndexV1,
-    CreateMaterializedViewV1, CreateOrDropClusterReplicaReasonV1, CreateSourceSinkV1,
-    CreateSourceSinkV2, CreateSourceSinkV3, CreateSourceSinkV4, DropClusterReplicaV1,
-    DropClusterReplicaV2, DropClusterReplicaV3, EventDetails, EventType, EventV1, FromPreviousIdV1,
-    FullNameV1, GrantRoleV1, GrantRoleV2, IdFullNameV1, IdNameV1, RefreshDecisionWithReasonV1,
-    RefreshDecisionWithReasonV2, RenameClusterReplicaV1, RenameClusterV1, RenameItemV1,
-    RenameSchemaV1, RevokeRoleV1, RevokeRoleV2, RotateKeysV1, SchedulingDecisionV1,
-    SchedulingDecisionsWithReasonsV1, SchedulingDecisionsWithReasonsV2, SchemaV1, SchemaV2, SetV1,
-    ToNewIdV1, UpdateItemV1, UpdateOwnerV1, UpdatePrivilegeV1, VersionedEvent,
+    CreateClusterReplicaV1, CreateClusterReplicaV2, CreateClusterReplicaV3, CreateClusterReplicaV4,
+    CreateIndexV1, CreateMaterializedViewV1, CreateOrDropClusterReplicaReasonV1,
+    CreateSourceSinkV1, CreateSourceSinkV2, CreateSourceSinkV3, CreateSourceSinkV4,
+    DropClusterReplicaV1, DropClusterReplicaV2, DropClusterReplicaV3, EventDetails, EventType,
+    EventV1, FromPreviousIdV1, FullNameV1, GrantRoleV1, GrantRoleV2, IdFullNameV1, IdNameV1,
+    RefreshDecisionWithReasonV1, RefreshDecisionWithReasonV2, RenameClusterReplicaV1,
+    RenameClusterV1, RenameItemV1, RenameSchemaV1, RevokeRoleV1, RevokeRoleV2, RotateKeysV1,
+    SchedulingDecisionV1, SchedulingDecisionsWithReasonsV1, SchedulingDecisionsWithReasonsV2,
+    SchemaV1, SchemaV2, SetV1, ToNewIdV1, UpdateItemV1, UpdateOwnerV1, UpdatePrivilegeV1,
+    VersionedEvent,
 };
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 
@@ -521,7 +522,48 @@ impl RustType<crate::objects::audit_log_event_v1::CreateClusterReplicaV3>
             internal: proto.internal,
             reason: proto
                 .reason
-                .into_rust_if_some("DropClusterReplicaV3::reason")?,
+                .into_rust_if_some("CreateClusterReplicaV3::reason")?,
+            scheduling_policies: proto.scheduling_policies.into_rust()?,
+        })
+    }
+}
+
+impl RustType<crate::objects::audit_log_event_v1::CreateClusterReplicaV4>
+    for CreateClusterReplicaV4
+{
+    fn into_proto(&self) -> crate::objects::audit_log_event_v1::CreateClusterReplicaV4 {
+        crate::objects::audit_log_event_v1::CreateClusterReplicaV4 {
+            cluster_id: self.cluster_id.to_string(),
+            cluster_name: self.cluster_name.to_string(),
+            replica_id: self
+                .replica_id
+                .as_ref()
+                .map(|id| crate::objects::StringWrapper {
+                    inner: id.to_string(),
+                }),
+            replica_name: self.replica_name.to_string(),
+            logical_size: self.logical_size.to_string(),
+            billed_as: self.billed_as.clone(),
+            internal: self.internal,
+            reason: Some(self.reason.into_proto()),
+            scheduling_policies: self.scheduling_policies.into_proto(),
+        }
+    }
+
+    fn from_proto(
+        proto: crate::objects::audit_log_event_v1::CreateClusterReplicaV4,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(CreateClusterReplicaV4 {
+            cluster_id: proto.cluster_id,
+            cluster_name: proto.cluster_name,
+            replica_id: proto.replica_id.map(|id| id.inner),
+            replica_name: proto.replica_name,
+            logical_size: proto.logical_size,
+            billed_as: proto.billed_as,
+            internal: proto.internal,
+            reason: proto
+                .reason
+                .into_rust_if_some("CreateClusterReplicaV4::reason")?,
             scheduling_policies: proto.scheduling_policies.into_rust()?,
         })
     }
@@ -1252,6 +1294,9 @@ impl RustType<crate::objects::audit_log_event_v1::Details> for EventDetails {
             EventDetails::CreateClusterReplicaV3(details) => {
                 CreateClusterReplicaV3(details.into_proto())
             }
+            EventDetails::CreateClusterReplicaV4(details) => {
+                CreateClusterReplicaV4(details.into_proto())
+            }
             EventDetails::DropClusterReplicaV1(details) => {
                 DropClusterReplicaV1(details.into_proto())
             }
@@ -1316,6 +1361,9 @@ impl RustType<crate::objects::audit_log_event_v1::Details> for EventDetails {
             }
             CreateClusterReplicaV3(details) => {
                 Ok(EventDetails::CreateClusterReplicaV3(details.into_rust()?))
+            }
+            CreateClusterReplicaV4(details) => {
+                Ok(EventDetails::CreateClusterReplicaV4(details.into_rust()?))
             }
             DropClusterReplicaV1(details) => {
                 Ok(EventDetails::DropClusterReplicaV1(details.into_rust()?))

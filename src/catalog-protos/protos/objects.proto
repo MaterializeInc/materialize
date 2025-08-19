@@ -436,7 +436,6 @@ message ClusterConfig {
     uint32 replication_factor = 2;
     repeated string availability_zones = 3;
     ReplicaLogging logging = 4;
-    bool disk = 6;
     repeated OptimizerFeatureOverride optimizer_feature_overrides = 7;
     ClusterSchedule schedule = 8;
   }
@@ -457,7 +456,6 @@ message ReplicaConfig {
   message ManagedLocation {
     string size = 1;
     optional string availability_zone = 2;
-    bool disk = 4;
     bool internal = 5;
     optional string billed_as = 6;
     bool pending = 7;
@@ -679,6 +677,18 @@ message AuditLogEventV1 {
     SchedulingDecisionsWithReasonsV2 scheduling_policies = 10;
   }
 
+  message CreateClusterReplicaV4 {
+    string cluster_id = 1;
+    string cluster_name = 2;
+    StringWrapper replica_id = 3;
+    string replica_name = 4;
+    string logical_size = 5;
+    optional string billed_as = 6;
+    bool internal = 7;
+    CreateOrDropClusterReplicaReasonV1 reason = 8;
+    SchedulingDecisionsWithReasonsV2 scheduling_policies = 9;
+  }
+
   message DropClusterReplicaV1 {
     string cluster_id = 1;
     string cluster_name = 2;
@@ -893,11 +903,11 @@ message AuditLogEventV1 {
   StringWrapper user = 4;
   EpochMillis occurred_at = 5;
 
-  // next-id: 40
   oneof details {
     CreateClusterReplicaV1 create_cluster_replica_v1 = 6;
     CreateClusterReplicaV2 create_cluster_replica_v2 = 33;
     CreateClusterReplicaV3 create_cluster_replica_v3 = 41;
+    CreateClusterReplicaV4 create_cluster_replica_v4 = 43;
     DropClusterReplicaV1 drop_cluster_replica_v1 = 7;
     DropClusterReplicaV2 drop_cluster_replica_v2 = 34;
     DropClusterReplicaV3 drop_cluster_replica_v3 = 42;

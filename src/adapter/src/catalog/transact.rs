@@ -1015,21 +1015,19 @@ impl Catalog {
                     tx.insert_cluster_replica(cluster_id, &name, config.clone().into(), owner_id)?;
                 if let ReplicaLocation::Managed(ManagedReplicaLocation {
                     size,
-                    disk,
                     billed_as,
                     internal,
                     ..
                 }) = &config.location
                 {
                     let (reason, scheduling_policies) = reason.into_audit_log();
-                    let details = EventDetails::CreateClusterReplicaV3(
-                        mz_audit_log::CreateClusterReplicaV3 {
+                    let details = EventDetails::CreateClusterReplicaV4(
+                        mz_audit_log::CreateClusterReplicaV4 {
                             cluster_id: cluster_id.to_string(),
                             cluster_name: cluster.name.clone(),
                             replica_id: Some(id.to_string()),
                             replica_name: name.clone(),
                             logical_size: size.clone(),
-                            disk: *disk,
                             billed_as: billed_as.clone(),
                             internal: *internal,
                             reason,

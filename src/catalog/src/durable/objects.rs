@@ -348,7 +348,6 @@ pub struct ClusterVariantManaged {
     pub availability_zones: Vec<String>,
     pub logging: ReplicaLogging,
     pub replication_factor: u32,
-    pub disk: bool,
     pub optimizer_feature_overrides: BTreeMap<String, String>,
     pub schedule: ClusterSchedule,
 }
@@ -476,7 +475,6 @@ pub enum ReplicaLocation {
         size: String,
         /// `Some(az)` if the AZ was specified by the user and must be respected;
         availability_zone: Option<String>,
-        disk: bool,
         internal: bool,
         billed_as: Option<String>,
         pending: bool,
@@ -500,7 +498,6 @@ impl From<mz_controller::clusters::ReplicaLocation> for ReplicaLocation {
                     allocation: _,
                     size,
                     availability_zones,
-                    disk,
                     billed_as,
                     internal,
                     pending,
@@ -516,7 +513,6 @@ impl From<mz_controller::clusters::ReplicaLocation> for ReplicaLocation {
                     } else {
                         None
                     },
-                disk,
                 internal,
                 billed_as,
                 pending,
