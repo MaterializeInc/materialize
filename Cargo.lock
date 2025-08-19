@@ -7938,6 +7938,7 @@ dependencies = [
  "bytemuck",
  "columnar",
  "columnation",
+ "criterion",
  "differential-dataflow",
  "either",
  "futures-util",
