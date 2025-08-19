@@ -57,6 +57,7 @@ def main():
     parser_reset.set_defaults(func=reset)
 
     parser_environment = subparsers.add_parser("environment")
+    parser_environment.add_argument("--environmentd-version")
     parser_environment.add_argument("--dev", action="store_true")
     parser_environment.add_argument("--namespace", default="materialize")
     parser_environment.add_argument(
@@ -169,13 +170,17 @@ def reset(args: argparse.Namespace):
 def environment(args: argparse.Namespace):
     env_kubectl = make_env_kubectl(args)
 
-    for image in ["environmentd", "clusterd", "balancerd"]:
-        acquire(
-            image,
-            dev=args.dev,
-            cluster=args.kind_cluster_name,
-        )
-    environmentd_image_ref = f"materialize/environmentd:{DEV_IMAGE_TAG}"
+    if args.environmentd_version:
+        image_tag = args.environmentd_version
+    else:
+        for image in ["environmentd", "clusterd", "balancerd"]:
+            acquire(
+                image,
+                dev=args.dev,
+                cluster=args.kind_cluster_name,
+            )
+        image_tag = DEV_IMAGE_TAG
+    environmentd_image_ref = f"materialize/environmentd:{image_tag}"
 
     try:
         kubectl(
