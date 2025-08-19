@@ -1259,10 +1259,7 @@ where
                                 &mut to_append[..],
                                 batch_lower.clone(),
                                 batch_upper.clone(),
-                                //NB(ptravers): we get the current state of the flag to fail
-                                // fast if we re-enable bounds checks before a batch is written.
-                                // We will see an InvalidUsage error and the sink will restart(?).
-                                write.validate_part_bounds_on_write(),
+                                use_bulk_writing,
                             )
                             .await
                             .expect("Invalid usage")
