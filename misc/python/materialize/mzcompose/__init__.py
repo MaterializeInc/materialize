@@ -550,6 +550,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "enable_0dt_caught_up_check",
     "with_0dt_caught_up_check_allowed_lag",
     "with_0dt_caught_up_check_cutoff",
+    "enable_0dt_caught_up_replica_status_check",
     "plan_insights_notice_fast_path_clusters_optimize_duration",
     "enable_continual_task_builtins",
     "enable_expression_cache",
