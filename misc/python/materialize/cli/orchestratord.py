@@ -57,6 +57,7 @@ def main():
     parser_reset.set_defaults(func=reset)
 
     parser_environment = subparsers.add_parser("environment")
+    parser_environment.add_argument("--environmentd-version")
     parser_environment.add_argument("--dev", action="store_true")
     parser_environment.add_argument("--namespace", default="materialize")
     parser_environment.add_argument(
@@ -65,7 +66,7 @@ def main():
     )
     parser_environment.add_argument("--postgres-url", default=DEFAULT_POSTGRES)
     parser_environment.add_argument("--s3-bucket", default=DEFAULT_MINIO)
-    parser_environment.add_argument("--license-key-file", required=True)
+    parser_environment.add_argument("--license-key-file")
     parser_environment.add_argument(
         "--external-login-password-mz-system", required=False
     )
@@ -169,13 +170,17 @@ def reset(args: argparse.Namespace):
 def environment(args: argparse.Namespace):
     env_kubectl = make_env_kubectl(args)
 
-    for image in ["environmentd", "clusterd", "balancerd"]:
-        acquire(
-            image,
-            dev=args.dev,
-            cluster=args.kind_cluster_name,
-        )
-    environmentd_image_ref = f"materialize/environmentd:{DEV_IMAGE_TAG}"
+    if args.environmentd_version:
+        image_tag = args.environmentd_version
+    else:
+        for image in ["environmentd", "clusterd", "balancerd"]:
+            acquire(
+                image,
+                dev=args.dev,
+                cluster=args.kind_cluster_name,
+            )
+        image_tag = DEV_IMAGE_TAG
+    environmentd_image_ref = f"materialize/environmentd:{image_tag}"
 
     try:
         kubectl(
@@ -237,8 +242,12 @@ def environment(args: argparse.Namespace):
         )
     )
 
-    with open(args.license_key_file) as f:
-        license_key = f.read()
+    if args.license_key_file:
+        with open(args.license_key_file) as f:
+            license_key = f.read()
+            license_key_args = {"license_key": license_key}
+    else:
+        license_key_args = {}
 
     backend_secret_name = f"materialize-backend-{environment_id}"
 
@@ -252,7 +261,7 @@ def environment(args: argparse.Namespace):
             "stringData": {
                 "metadata_backend_url": metadata_backend_url,
                 "persist_backend_url": persist_backend_url,
-                "license_key": license_key,
+                **license_key_args,
             },
         },
         {
