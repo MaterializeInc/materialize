@@ -3096,7 +3096,7 @@ fn plan_rows_from(
     // If `WITH ORDINALITY` was specified, include the coalesced ordinality
     // column. Otherwise remove it from the scope.
     if with_ordinality {
-        columns.push(scope.items.len());
+        columns.push(offset);
     } else {
         scope.items.pop();
     }
