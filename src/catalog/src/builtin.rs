@@ -6113,8 +6113,7 @@ WHERE worker_id = 0",
     access: vec![PUBLIC_SELECT],
 });
 
-pub static MZ_MAPPABLE_OBJECTS: LazyLock<BuiltinView> = LazyLock::new(|| {
-    BuiltinView {
+pub static MZ_MAPPABLE_OBJECTS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_mappable_objects",
     schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_MAPPABLE_OBJECTS_OID,
@@ -6127,13 +6126,13 @@ pub static MZ_MAPPABLE_OBJECTS: LazyLock<BuiltinView> = LazyLock::new(|| {
         ("global_id", "The global ID of the object."),
     ]),
     sql: "
-SELECT SUBSTRING(name FROM 11) AS name, global_id
-FROM mz_introspection.mz_dataflows md JOIN mz_introspection.mz_dataflow_global_ids mdgi USING (id)
-WHERE name LIKE 'Dataflow: %' AND
-      (global_id IN (SELECT id FROM mz_catalog.mz_indexes UNION SELECT on_id FROM mz_catalog.mz_indexes)
-       OR EXISTS (SELECT 1 FROM mz_catalog.mz_materialized_views mmv WHERE POSITION(mmv.name IN name) <> 0))",
+SELECT md.name || '.' || ms.name || '.' || mo.name AS name, mgi.global_id AS global_id
+FROM      mz_catalog.mz_objects mo
+     JOIN mz_introspection.mz_compute_exports mce ON (mo.id = mce.export_id)
+     JOIN mz_catalog.mz_schemas ms ON (mo.schema_id = ms.id)
+     JOIN mz_catalog.mz_databases md ON (ms.database_id = md.id)
+     JOIN mz_introspection.mz_dataflow_global_ids mgi ON (mce.dataflow_id = mgi.id);",
     access: vec![PUBLIC_SELECT],
-}
 });
 
 pub static MZ_LIR_MAPPING: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
