@@ -74,19 +74,22 @@ module "materialize_infrastructure" {
   install_cert_manager = false
   use_self_signed_cluster_issuer = false
 
-  # TODO: Doesn't seem to work yet
-  # helm_values = {
-  #   operator = {
-  #     clusters = {
-  #       defaultReplicationFactor = {
-  #           system = 1
-  #           probe = 1
-  #           support = 1
-  #           analytics = 1
-  #       }
-  #     }
-  #   }
-  # }
+  # TODO: This currently fails: https://github.com/MaterializeInc/terraform-aws-materialize/issues/71
+  helm_values = {
+      operator = {
+        args = {
+          enableLicenseKeyChecks = true
+        }
+      },
+      clusters = {
+        defaultReplicationFactor = {
+            system = 1
+            probe = 1
+            support = 1
+            analytics = 1
+        }
+      }
+  }
 
   # VPC Configuration
   vpc_cidr             = "10.0.0.0/16"

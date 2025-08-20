@@ -38,6 +38,23 @@ module "materialize_infrastructure" {
   operator_version = var.operator_version
   orchestratord_version = var.orchestratord_version
 
+  # TODO: This currently fails: https://github.com/MaterializeInc/terraform-aws-materialize/issues/71
+  helm_values = {
+      operator = {
+        args = {
+          enableLicenseKeyChecks = true
+        },
+      },
+      clusters = {
+        defaultReplicationFactor = {
+            system = 1
+            probe = 1
+            support = 1
+            analytics = 1
+        }
+      }
+  }
+
   # VPC Configuration
   vpc_cidr             = "10.0.0.0/16"
   availability_zones   = ["us-east-1a", "us-east-1b"]

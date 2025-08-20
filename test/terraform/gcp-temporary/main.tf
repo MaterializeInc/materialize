@@ -81,6 +81,11 @@ module "materialize" {
   use_self_signed_cluster_issuer = false
 
   helm_values = {
+      operator = {
+        args = {
+          enableLicenseKeyChecks = true
+        }
+      },
       clusters = {
         defaultReplicationFactor = {
             system = 1
