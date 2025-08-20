@@ -64,7 +64,7 @@ use crate::session::{Session, Transaction, TransactionOps};
 use crate::statement_logging::StatementEndedExecutionReason;
 use crate::telemetry::{EventDetails, SegmentClientExt};
 use crate::util::ResultExt;
-use crate::{AdapterError, ExecuteContext, TimestampProvider, catalog, flags};
+use crate::{AdapterError, ExecuteContext, catalog, flags};
 
 impl Coordinator {
     /// Same as [`Self::catalog_transact_conn`] but takes a [`Session`].
@@ -1280,7 +1280,7 @@ impl Coordinator {
         // TODO: Maybe in the future, pass those holds on to storage, to hold on
         // to them and downgrade when possible?
         let read_holds = self.acquire_read_holds(&id_bundle);
-        let as_of = self.least_valid_read(&read_holds);
+        let as_of = read_holds.least_valid_read();
 
         let storage_sink_from_entry = self.catalog().get_entry_by_global_id(&sink.from);
         let storage_sink_desc = mz_storage_types::sinks::StorageSinkDesc {

@@ -72,7 +72,7 @@ use crate::util::{ClientTransmitter, ResultExt};
 use crate::webhook::{
     AppendWebhookResponse, AppendWebhookValidator, WebhookAppender, WebhookAppenderInvalidator,
 };
-use crate::{AppendWebhookError, ExecuteContext, TimestampProvider, catalog, metrics};
+use crate::{AppendWebhookError, ExecuteContext, catalog, metrics};
 
 use super::ExecuteContextExtra;
 
@@ -1221,7 +1221,7 @@ impl Coordinator {
                 // after its creation might see input changes that happened after the CRATE MATERIALIZED
                 // VIEW statement returned.
                 let oracle_timestamp = timestamp;
-                let least_valid_read = self.least_valid_read(&read_holds);
+                let least_valid_read = read_holds.least_valid_read();
                 timestamp.advance_by(least_valid_read.borrow());
 
                 if oracle_timestamp != timestamp {
