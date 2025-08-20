@@ -159,7 +159,7 @@ struct SelfManagedContext {
     k8s_client: KubernetesClient,
     k8s_context: Option<String>,
     k8s_namespace: String,
-    mz_instance_name: Option<String>,
+    mz_instance_name: String,
     k8s_additional_namespaces: Option<Vec<String>>,
     k8s_dump_secret_values: bool,
     mz_connection_info: SelfManagedMzConnectionInfo,
@@ -282,12 +282,19 @@ async fn initialize_context(
                 }
             };
 
+            let mz_instance_name = if let Some(mz_instance_name) = &args.mz_instance_name {
+                mz_instance_name.clone()
+            } else {
+                // If no mz instance name is provided, use the latest mz instance
+                utils::get_latest_mz_instance_name(&k8s_client, &args.k8s_namespace).await?
+            };
+
             let auth_mode = match get_k8s_auth_mode(
                 global_args.mz_username,
                 global_args.mz_password,
                 &k8s_client,
                 &args.k8s_namespace,
-                &args.mz_instance_name,
+                &mz_instance_name,
             )
             .await
             {
@@ -309,7 +316,7 @@ async fn initialize_context(
                         &k8s_client,
                         &args.k8s_context,
                         &args.k8s_namespace,
-                        &args.mz_instance_name,
+                        &mz_instance_name,
                     )
                     .await?;
                     port_forwarder.spawn_port_forward().await
@@ -336,7 +343,7 @@ async fn initialize_context(
                 k8s_client,
                 k8s_context: args.k8s_context.clone(),
                 k8s_namespace: args.k8s_namespace.clone(),
-                mz_instance_name: args.mz_instance_name.clone(),
+                mz_instance_name,
                 k8s_additional_namespaces: args.additional_k8s_namespaces.clone(),
                 k8s_dump_secret_values: args.k8s_dump_secret_values,
                 mz_connection_info,

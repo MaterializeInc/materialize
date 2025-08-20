@@ -19,12 +19,9 @@ use anyhow::{Context, Result};
 use k8s_openapi::api::core::v1::{Pod, Service, ServicePort};
 use kube::api::ListParams;
 use kube::{Api, Client};
-use mz_cloud_resources::crd::materialize::v1alpha1::Materialize;
 use tokio::io::AsyncBufReadExt;
 
 use tracing::info;
-
-use crate::utils;
 
 #[derive(Debug)]
 pub struct KubectlPortForwarder {
@@ -135,26 +132,20 @@ pub struct ServiceInfo {
 pub async fn find_environmentd_service(
     client: &Client,
     k8s_namespace: &String,
-    mz_instance_name: &Option<String>,
+    mz_instance_name: &String,
 ) -> Result<ServiceInfo> {
-    let services: Api<Service> = Api::namespaced(client.clone(), k8s_namespace);
-    let mut label_filter = "materialize.cloud/mz-resource-id".to_string();
-    if let Some(mz_instance_name) = mz_instance_name {
-        label_filter = format!(
-            "{},materialize.cloud/organization-name={}",
-            label_filter, mz_instance_name
-        );
-    }
+    let services_api: Api<Service> = Api::namespaced(client.clone(), k8s_namespace);
 
-    let mut services = services
+    let label_filter = format!(
+        // mz-resource-id is used to identify environmentd services
+        "materialize.cloud/mz-resource-id,materialize.cloud/organization-name={}",
+        mz_instance_name
+    );
+
+    let services = services_api
         .list(&ListParams::default().labels(&label_filter))
         .await
         .with_context(|| format!("Failed to list services in namespace {}", k8s_namespace))?;
-
-    // If the user doesn't provide a mz_instance_name, we sort the services by latest desc.
-    if mz_instance_name.is_none() {
-        utils::sort_k8s_object_list_by_creation_timestamp_desc(&mut services);
-    }
 
     // Find the first sql service that contains balancerd
     let maybe_service =
@@ -190,46 +181,9 @@ pub async fn find_environmentd_service(
 pub async fn find_cluster_services(
     client: &Client,
     k8s_namespace: &String,
-    mz_instance_name: &Option<String>,
+    mz_instance_name: &String,
 ) -> Result<Vec<ServiceInfo>> {
     let pods: Api<Pod> = Api::namespaced(client.clone(), k8s_namespace);
-
-    // Filter by a specific mz instance name
-    let mz_instance_name = if let Some(mz_instance_name) = mz_instance_name {
-        mz_instance_name.clone()
-    } else {
-        // TODO: Default mz_instance_name to the latest on initialization using this code
-        let materialize_api = Api::<Materialize>::namespaced(client.clone(), k8s_namespace);
-        let mut materialize_cr_list = materialize_api
-            .list(&ListParams::default())
-            .await
-            .with_context(|| {
-                format!(
-                    "Failed to get Materialize CR in namespace: {}",
-                    k8s_namespace
-                )
-            })?;
-
-        // Get the latest mz instance name
-        utils::sort_k8s_object_list_by_creation_timestamp_desc(&mut materialize_cr_list);
-        let latest_materialize_cr =
-            materialize_cr_list
-                .items
-                .first()
-                .cloned()
-                .with_context(|| {
-                    format!(
-                        "Could not find Materialize CR in namespace: {}",
-                        k8s_namespace
-                    )
-                })?;
-        latest_materialize_cr.metadata.name.with_context(|| {
-            format!(
-                "Could not find Materialize CR in namespace: {}",
-                k8s_namespace
-            )
-        })?
-    };
 
     let pods_label_filter = format!(
         "environmentd.materialize.cloud/namespace=cluster,materialize.cloud/organization-name={}",
@@ -242,7 +196,7 @@ pub async fn find_cluster_services(
         .with_context(|| format!("Failed to list pods in namespace {}", k8s_namespace))?;
 
     // Create a set of service IDs from pod labels
-    let service_ids_to_scrape: std::collections::HashSet<String> = pods
+    let service_ids_to_scrape: std::collections::BTreeSet<String> = pods
         .iter()
         .filter_map(|pod| {
             pod.metadata
@@ -302,7 +256,7 @@ pub async fn create_pg_wire_port_forwarder(
     client: &Client,
     k8s_context: &Option<String>,
     k8s_namespace: &String,
-    mz_instance_name: &Option<String>,
+    mz_instance_name: &String,
 ) -> Result<KubectlPortForwarder> {
     let service_info = find_environmentd_service(client, k8s_namespace, mz_instance_name)
         .await
