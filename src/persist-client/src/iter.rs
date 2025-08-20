@@ -336,6 +336,120 @@ impl<T: Timestamp + Codec64 + Lattice, D: Codec64> ConsolidationPart<T, D> {
     }
 }
 
+#[derive(Debug)]
+struct ConsolidationRun<T, D> {
+    parts: VecDeque<ConsolidationPart<T, D>>,
+    cfg: FetchConfig,
+    metrics: Arc<Metrics>,
+    shard_metrics: Arc<ShardMetrics>,
+    read_metrics: Arc<ReadMetrics>,
+    blob: Arc<dyn Blob>,
+}
+
+impl<T: Timestamp + Codec64 + Lattice, D: Codec64> ConsolidationRun<T, D> {
+    fn kvt_lower(&self) -> Option<(SortKV<'_>, T)> {
+        self.parts.front()?.kvt_lower()
+    }
+
+    async fn unblock_progress<Sort: RowSort<T, D>>(&mut self, sort: &Sort) -> anyhow::Result<bool> {
+        // It's possible for there to be multiple layers of indirection between us and the first available encoded part:
+        // if the first part is a `HollowRuns`, we'll need to fetch both that and the first part in the run to have data
+        // to consolidate. So: we loop, and bail out of the loop when either the first part in the run is available or we
+        // hit some unrecoverable error.
+        loop {
+            let mut part = self
+                .parts
+                .pop_front()
+                .expect("trimmed run should be nonempty");
+
+            let ConsolidationPart::Queued { data, task, .. } = &mut part else {
+                self.parts.push_front(part);
+                return Ok(true);
+            };
+
+            let is_prefetched = task.as_ref().map_or(false, |t| t.is_finished());
+            if is_prefetched {
+                self.metrics.compaction.parts_prefetched.inc();
+            } else {
+                self.metrics.compaction.parts_waited.inc()
+            }
+            self.metrics.consolidation.parts_fetched.inc();
+
+            let wrong_sort = data.run_meta.order != Some(RunOrder::Structured);
+            let fetch_result: anyhow::Result<FetchResult<T>> = match task.take() {
+                Some(handle) => handle
+                    .await
+                    .unwrap_or_else(|join_err| Err(anyhow!(join_err))),
+                None => {
+                    data.clone()
+                        .fetch(
+                            &self.cfg,
+                            self.shard_metrics.shard_id,
+                            &*self.blob,
+                            &*self.metrics,
+                            &*self.shard_metrics,
+                            &self.read_metrics,
+                        )
+                        .await
+                }
+            };
+            match fetch_result {
+                Err(err) => {
+                    self.parts.push_front(part);
+                    return Err(err);
+                }
+                Ok(Err(run_part)) => {
+                    // Since we're pushing these onto the _front_ of the queue, we need to
+                    // iterate in reverse order.
+                    for part in run_part.parts.into_iter().rev() {
+                        let structured_lower = part.structured_key_lower();
+                        self.parts.push_front(ConsolidationPart::Queued {
+                            data: FetchData {
+                                run_meta: data.run_meta.clone(),
+                                part_desc: data.part_desc.clone(),
+                                part,
+                                structured_lower,
+                            },
+                            task: None,
+                            _diff: Default::default(),
+                        });
+                    }
+                }
+                Ok(Ok(part)) => {
+                    self.parts.push_front(ConsolidationPart::from_encoded(
+                        part,
+                        wrong_sort,
+                        &self.metrics.columnar,
+                        sort,
+                    ));
+                }
+            }
+        }
+    }
+
+    fn trim(&mut self) {
+        while self.parts.front_mut().map_or(false, |part| part.is_empty()) {
+            self.parts.pop_front();
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.parts.is_empty()
+    }
+
+    fn front_mut(&mut self) -> Option<(&mut ConsolidationPart<T, D>, bool)> {
+        let last_in_run = self.parts.len() < 2;
+        match self.parts.front_mut() {
+            Some(part) => Some((part, last_in_run)),
+            None => None,
+        }
+    }
+
+    pub(crate) fn live_bytes(&self) -> usize {
+        self.parts.iter().map(|p| p.live_bytes()).sum()
+    }
+}
+
 /// A tool for incrementally consolidating a persist shard.
 ///
 /// The naive way to consolidate a Persist shard would be to fetch every part, then consolidate
@@ -360,7 +474,7 @@ pub(crate) struct Consolidator<T, D, Sort: RowSort<T, D>> {
     metrics: Arc<Metrics>,
     shard_metrics: Arc<ShardMetrics>,
     read_metrics: Arc<ReadMetrics>,
-    runs: Vec<VecDeque<ConsolidationPart<T, D>>>,
+    runs: Vec<ConsolidationRun<T, D>>,
     filter: FetchBatchFilter<T>,
     budget: usize,
     /// An optional exclusive lower bound for the KVTs that this consolidator will return.
@@ -467,11 +581,11 @@ where
         self.push_run(run);
     }
 
-    fn push_run(&mut self, run: VecDeque<ConsolidationPart<T, D>>) {
+    fn push_run(&mut self, parts: Vec<ConsolidationPart<T, D>>) {
         // Normally unconsolidated parts are in their own run, but we can end up with unconsolidated
         // runs if we change our sort order or have bugs, for example. Defend against this by
         // splitting up a run if it contains possibly-unconsolidated parts.
-        let wrong_sort = run.iter().any(|p| match p {
+        let wrong_sort = parts.iter().any(|p| match p {
             ConsolidationPart::Queued { data, .. } => {
                 data.run_meta.order != Some(RunOrder::Structured)
             }
@@ -482,21 +596,30 @@ where
             self.metrics.consolidation.wrong_sort.inc();
         }
 
-        if run.len() > 1 && wrong_sort {
-            for part in run {
-                self.runs.push(VecDeque::from([part]));
+        if parts.len() > 1 && wrong_sort {
+            for part in parts {
+                self.push_sorted_run(vec![part]);
             }
         } else {
-            self.runs.push(run);
+            self.push_sorted_run(parts);
         }
+    }
+
+    fn push_sorted_run(&mut self, parts: Vec<ConsolidationPart<T, D>>) {
+        self.runs.push(ConsolidationRun {
+            parts: parts.into(),
+            cfg: self.cfg.clone(),
+            metrics: Arc::clone(&self.metrics),
+            shard_metrics: Arc::clone(&self.shard_metrics),
+            read_metrics: Arc::clone(&self.read_metrics),
+            blob: Arc::clone(&self.blob),
+        })
     }
 
     /// Tidy up: discard any empty parts, and discard any runs that have no parts left.
     fn trim(&mut self) {
         self.runs.retain_mut(|run| {
-            while run.front_mut().map_or(false, |part| part.is_empty()) {
-                run.pop_front();
-            }
+            run.trim();
             !run.is_empty()
         });
 
@@ -514,11 +637,10 @@ where
         // run to the list every iteration... but since this part has the smallest tuples
         // of any run, it should be fully processed by the next consolidation step.
         if let Some(part) = self.drop_stash.take() {
-            self.runs
-                .push(VecDeque::from_iter([ConsolidationPart::Encoded {
-                    part,
-                    cursor: PartIndices::default(),
-                }]));
+            self.push_sorted_run(vec![ConsolidationPart::Encoded {
+                part,
+                cursor: PartIndices::default(),
+            }]);
         }
 
         if self.runs.is_empty() {
@@ -530,20 +652,18 @@ where
             ConsolidatingIter::new(&self.context, &self.filter, bound, &mut self.drop_stash);
 
         for run in &mut self.runs {
-            let last_in_run = run.len() < 2;
-            if let Some(part) = run.front_mut() {
-                match part {
-                    ConsolidationPart::Encoded { part, cursor } => {
-                        iter.push(part, cursor, last_in_run);
-                    }
-                    other @ ConsolidationPart::Queued { .. } => {
+            match run.front_mut() {
+                Some((ConsolidationPart::Encoded { part, cursor, .. }, last_in_run)) => {
+                    iter.push(part, cursor, last_in_run);
+                }
+                Some((other @ ConsolidationPart::Queued { .. }, _)) => {
+                    if let Some(lower) = other.kvt_lower() {
                         // We don't want the iterator to return anything at or above this bound,
                         // since it might require data that we haven't fetched yet.
-                        if let Some(bound) = other.kvt_lower() {
-                            iter.push_upper(bound);
-                        }
+                        iter.push_upper(lower);
                     }
-                };
+                }
+                None => {}
             }
         }
 
@@ -559,92 +679,20 @@ where
         if self.runs.is_empty() {
             return Ok(());
         }
-        self.runs
-            .sort_by(|a, b| a[0].kvt_lower().cmp(&b[0].kvt_lower()));
+        self.runs.sort_by(|a, b| a.kvt_lower().cmp(&b.kvt_lower()));
 
         let first_larger = {
             let run = &self.runs[0];
-            let min_lower = run[0].kvt_lower();
+            let min_lower = run.kvt_lower();
             self.runs
                 .iter()
-                .position(|q| q[0].kvt_lower() > min_lower)
+                .position(|q| q.kvt_lower() > min_lower)
                 .unwrap_or(self.runs.len())
         };
 
         let mut ready_futures: FuturesUnordered<_> = self.runs[0..first_larger]
             .iter_mut()
-            .map(|run| async {
-                // It's possible for there to be multiple layers of indirection between us and the first available encoded part:
-                // if the first part is a `HollowRuns`, we'll need to fetch both that and the first part in the run to have data
-                // to consolidate. So: we loop, and bail out of the loop when either the first part in the run is available or we
-                // hit some unrecoverable error.
-                loop {
-                    let mut part = run.pop_front().expect("trimmed run should be nonempty");
-
-                    let ConsolidationPart::Queued { data, task, .. } = &mut part else {
-                        run.push_front(part);
-                        return Ok(true);
-                    };
-
-                    let is_prefetched = task.as_ref().map_or(false, |t| t.is_finished());
-                    if is_prefetched {
-                        self.metrics.compaction.parts_prefetched.inc();
-                    } else {
-                        self.metrics.compaction.parts_waited.inc()
-                    }
-                    self.metrics.consolidation.parts_fetched.inc();
-
-                    let wrong_sort = data.run_meta.order != Some(RunOrder::Structured);
-                    let fetch_result: anyhow::Result<FetchResult<T>> = match task.take() {
-                        Some(handle) => handle
-                            .await
-                            .unwrap_or_else(|join_err| Err(anyhow!(join_err))),
-                        None => {
-                            data.clone()
-                                .fetch(
-                                    &self.cfg,
-                                    self.shard_id,
-                                    &*self.blob,
-                                    &*self.metrics,
-                                    &*self.shard_metrics,
-                                    &self.read_metrics,
-                                )
-                                .await
-                        }
-                    };
-                    match fetch_result {
-                        Err(err) => {
-                            run.push_front(part);
-                            return Err(err);
-                        }
-                        Ok(Err(run_part)) => {
-                            // Since we're pushing these onto the _front_ of the queue, we need to
-                            // iterate in reverse order.
-                            for part in run_part.parts.into_iter().rev() {
-                                let structured_lower = part.structured_key_lower();
-                                run.push_front(ConsolidationPart::Queued {
-                                    data: FetchData {
-                                        run_meta: data.run_meta.clone(),
-                                        part_desc: data.part_desc.clone(),
-                                        part,
-                                        structured_lower,
-                                    },
-                                    task: None,
-                                    _diff: Default::default(),
-                                });
-                            }
-                        }
-                        Ok(Ok(part)) => {
-                            run.push_front(ConsolidationPart::from_encoded(
-                                part,
-                                wrong_sort,
-                                &self.metrics.columnar,
-                                &self.sort,
-                            ));
-                        }
-                    }
-                }
-            })
+            .map(|run| run.unblock_progress(&self.sort))
             .collect();
 
         // Wait for all the needed parts to be fetched, and assert that there's at least one.
@@ -719,14 +767,44 @@ where
     /// normally kept less than the budget, it may burst over it temporarily, since we need at
     /// least one part in every run to continue making progress.
     fn live_bytes(&self) -> usize {
-        self.runs
-            .iter()
-            .flat_map(|run| run.iter().map(|part| part.live_bytes()))
-            .sum()
+        self.runs.iter().map(|run| run.live_bytes()).sum()
     }
 
     /// Returns None if the budget was exhausted, or Some(remaining_bytes) if it is not.
     pub(crate) fn start_prefetches(&mut self) -> Option<usize> {
+        struct Prefetching<'a, T, D> {
+            part: &'a mut ConsolidationPart<T, D>,
+            index: usize,
+        }
+
+        impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64> Prefetching<'a, T, D> {
+            fn sort_key(&self) -> (bool, Option<(SortKV<'_>, T)>) {
+                let first = self.index == 0;
+                let sort_key = self.part.kvt_lower();
+                // We want to prioritize the first part in every run, but go by the recorded sort key otherwise.
+                (!first, sort_key)
+            }
+        }
+
+        impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64> PartialEq for Prefetching<'a, T, D> {
+            fn eq(&self, other: &Self) -> bool {
+                self.sort_key() == other.sort_key()
+            }
+        }
+        impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64> Eq for Prefetching<'a, T, D> {}
+
+        impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64> PartialOrd for Prefetching<'a, T, D> {
+            fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+                Some(self.cmp(other))
+            }
+        }
+
+        impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64> Ord for Prefetching<'a, T, D> {
+            fn cmp(&self, other: &Self) -> Ordering {
+                self.sort_key().cmp(&other.sort_key()).reverse()
+            }
+        }
+
         let mut prefetch_budget_bytes = self.budget;
 
         let mut check_budget = |size| {
@@ -741,73 +819,67 @@ where
         // First account for how much budget has already been used
         let live_bytes = self.live_bytes();
         check_budget(live_bytes)?;
+
+        let mut heap = BinaryHeap::with_capacity(self.runs.len());
+        for run in &mut self.runs {
+            for (index, part) in run.parts.iter_mut().enumerate() {
+                heap.push(Prefetching { part, index })
+            }
+        }
+
         // Iterate through parts in a certain order (attempting to match the
         // order in which they'll be fetched), prefetching until we run out of
         // budget.
-        //
-        // The order used here is the first part of each run, then the second, etc.
-        // There's a bunch of heuristics we could use here, but we'd get it exactly
-        // correct if we stored on HollowBatchPart the actual kv bounds of data
-        // contained in each part and go in sorted order of that. This information
-        // would also be useful for pushing MFP down into persist reads, so it seems
-        // like we might want to do it at some point. As a result, don't think too
-        // hard about this heuristic at first.
-        let max_run_len = self.runs.iter().map(|x| x.len()).max().unwrap_or_default();
-        for idx in 0..max_run_len {
-            for run in self.runs.iter_mut() {
-                if let Some(c_part) = run.get_mut(idx) {
-                    let (data, task) = match c_part {
-                        ConsolidationPart::Queued { data, task, .. } if task.is_none() => {
-                            let size = data.part.max_part_bytes();
-                            check_budget(size)?;
-                            (data, task)
-                        }
-                        _ => continue,
-                    };
-                    let span = debug_span!("compaction::prefetch");
-                    let data = data.clone();
-                    let handle = mz_ore::task::spawn(|| "persist::compaction::prefetch", {
-                        let shard_id = self.shard_id;
-                        let blob = Arc::clone(&self.blob);
-                        let metrics = Arc::clone(&self.metrics);
-                        let shard_metrics = Arc::clone(&self.shard_metrics);
-                        let read_metrics = Arc::clone(&self.read_metrics);
-                        let fetch_config = self.cfg.clone();
-                        async move {
-                            data.fetch(
-                                &fetch_config,
-                                shard_id,
-                                &*blob,
-                                &*metrics,
-                                &*shard_metrics,
-                                &*read_metrics,
-                            )
-                            .instrument(span)
-                            .await
-                        }
-                    });
-                    *task = Some(handle);
+        while let Some(next) = heap.pop() {
+            let Prefetching { part, .. } = next;
+            let (data, task) = match part {
+                ConsolidationPart::Queued { data, task, .. } if task.is_none() => {
+                    let size = data.part.max_part_bytes();
+                    check_budget(size)?;
+                    (data, task)
                 }
-            }
+                _ => continue,
+            };
+            let span = debug_span!("compaction::prefetch");
+            let data = data.clone();
+            let handle = mz_ore::task::spawn(|| "persist::compaction::prefetch", {
+                let shard_id = self.shard_id;
+                let blob = Arc::clone(&self.blob);
+                let metrics = Arc::clone(&self.metrics);
+                let shard_metrics = Arc::clone(&self.shard_metrics);
+                let read_metrics = Arc::clone(&self.read_metrics);
+                let fetch_config = self.cfg.clone();
+                async move {
+                    data.fetch(
+                        &fetch_config,
+                        shard_id,
+                        &*blob,
+                        &*metrics,
+                        &*shard_metrics,
+                        &*read_metrics,
+                    )
+                    .instrument(span)
+                    .await
+                }
+            });
+            *task = Some(handle);
         }
 
         Some(prefetch_budget_bytes)
     }
 }
 
-impl<T, D, Sort: RowSort<T, D>> Drop for Consolidator<T, D, Sort> {
+impl<T, D> Drop for ConsolidationRun<T, D> {
     fn drop(&mut self) {
-        for run in &self.runs {
-            for part in run {
-                match part {
-                    ConsolidationPart::Queued { task: None, .. } => {
-                        self.metrics.consolidation.parts_skipped.inc();
-                    }
-                    ConsolidationPart::Queued { task: Some(_), .. } => {
-                        self.metrics.consolidation.parts_wasted.inc();
-                    }
-                    _ => {}
+        for part in &self.parts {
+            match part {
+                ConsolidationPart::Queued { task: None, .. } => {
+                    self.metrics.consolidation.parts_skipped.inc();
                 }
+                ConsolidationPart::Queued { task: Some(_), .. } => {
+                    self.metrics.consolidation.parts_wasted.inc();
+                }
+                _ => {}
             }
         }
     }
@@ -1130,7 +1202,7 @@ mod tests {
                         .map(|(mut part, cut)| {
                             part.sort();
                             let part_2 = part.split_off(cut.min(part.len()));
-                            [part, part_2]
+                            let parts = [part, part_2]
                                 .into_iter()
                                 .map(|part| {
                                     let mut records = ColumnarRecordsBuilder::default();
@@ -1163,7 +1235,15 @@ mod tests {
                                         &sort,
                                     )
                                 })
-                                .collect::<VecDeque<_>>()
+                                .collect::<Vec<_>>();
+                            ConsolidationRun {
+                                parts: parts.into(),
+                                cfg: fetch_cfg.clone(),
+                                blob: Arc::new(MemBlob::open(MemBlobConfig::default())),
+                                metrics: Arc::clone(metrics),
+                                shard_metrics: metrics.shards.shard(&ShardId::new(), "test"),
+                                read_metrics: Arc::new(metrics.read.snapshot.clone()),
+                            }
                         })
                         .collect::<Vec<_>>(),
                     filter,
@@ -1292,6 +1372,7 @@ mod tests {
                 // If we up the budget to match the total size, we should prefetch everything.
                 consolidator.budget = total_size;
                 assert_eq!(consolidator.start_prefetches(), Some(0));
+                assert_eq!(consolidator.live_bytes(), total_size);
             } else {
                 // Let the consolidator drop without fetching everything to check the Drop
                 // impl works when not all parts are prefetched.
