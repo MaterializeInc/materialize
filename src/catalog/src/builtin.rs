@@ -3979,7 +3979,7 @@ pub static MZ_RECENT_SQL_TEXT: LazyLock<BuiltinView> = LazyLock::new(|| {
             .with_key(vec![0, 1, 2])
             .finish(),
         column_comments: BTreeMap::new(),
-        sql: "SELECT DISTINCT sql_hash, sql, redacted_sql FROM mz_internal.mz_sql_text WHERE prepared_day + INTERVAL '4 days' >= mz_now()",
+        sql: "SELECT DISTINCT sql_hash, sql, redacted_sql FROM mz_internal.mz_sql_text WHERE prepared_day + INTERVAL '1 day' >= mz_now()",
         access: vec![MONITOR_SELECT],
     }
 });
@@ -4112,8 +4112,8 @@ pub static MZ_RECENT_ACTIVITY_LOG_THINNED: LazyLock<BuiltinView> = LazyLock::new
             .finish(),
         column_comments: BTreeMap::new(),
         sql:
-        "SELECT * FROM mz_internal.mz_activity_log_thinned WHERE prepared_at + INTERVAL '1 day' > mz_now()
-AND began_at + INTERVAL '1 day' > mz_now()",
+        "SELECT * FROM mz_internal.mz_activity_log_thinned WHERE prepared_at + INTERVAL '6 hours' > mz_now()
+AND began_at + INTERVAL '6 hours' > mz_now()",
         access: vec![MONITOR_SELECT],
     }
 });
