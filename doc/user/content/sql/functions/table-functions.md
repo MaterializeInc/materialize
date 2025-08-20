@@ -8,66 +8,90 @@ menu:
 
 ## Overview
 
-[Table functions]((/sql/functions/#table-functions)) return multiple rows from one input row. They are typically used in the `FROM` clause, where their arguments are allowed to refer to columns of earlier tables in the `FROM` clause.
+[Table functions](/sql/functions/#table-functions) return multiple rows from one
+input row. They are typically used in the `FROM` clause, where their arguments
+are allowed to refer to columns of earlier tables in the `FROM` clause.
 
-For example, the `unnest` table function expands a list into a collection of rows, where each row will contain one item of the list. For example, if we have the following input data:
+For example, consider the following table whose rows consist of lists of
+integers:
+
 ```mzsql
-CREATE TABLE t(l int list);
-INSERT INTO t VALUES (LIST[5, 7, 8]), (LIST[3, 3]);
+CREATE TABLE quizzes(scores int list);
+INSERT INTO quizzes VALUES (LIST[5, 7, 8]), (LIST[3, 3]);
 ```
-then
+
+Query the `scores` column from the table:
+
 ```mzsql
-SELECT l
-FROM t;
+SELECT scores
+FROM quizzes;
 ```
-gives us one list per row:
+
+The query returns two rows, where each row is a list:
+
 ```
-    l
+ scores
 ---------
  {3,3}
  {5,7,8}
 (2 rows)
 ```
-but
+
+Now, apply the [`unnest`](/sql/functions/#unnest) table function to expand the
+`scores` list into a collection of rows, where each row contains one list item:
+
 ```mzsql
-SELECT l, e
+SELECT scores, score
 FROM
-  t,
-  unnest(l) AS e;
+  quizzes,
+  unnest(scores) AS score; -- In Materialize, shorthand for AS t(score)
 ```
-gives us one list item per row:
+
+The query returns 5 rows, one row for each list item:
+
 ```
-    l    | e
----------+---
- {3,3}   | 3
- {3,3}   | 3
- {5,7,8} | 5
- {5,7,8} | 7
- {5,7,8} | 8
+ scores  | score
+---------+-------
+ {3,3}   |     3
+ {3,3}   |     3
+ {5,7,8} |     5
+ {5,7,8} |     7
+ {5,7,8} |     8
 (5 rows)
 ```
-(The `l` column, which contains as many copies of each input list as the list length, is included in the above `SELECT`'s output columns for demonstration purposes only; in real queries, you would typically omit the original list from the `SELECT` to avoid blowing up the data size.)
+
+{{< tip >}}
+
+For illustrative purposes, the original `scores` column is included in the
+results (i.e., query projection). In practice, you generally would omit
+including the original list to minimize the return data size.
+
+{{</ tip >}}
 
 ## `WITH ORDINALITY`
 
-You can also add `WITH ORDINALITY` after a table function call in a `FROM`
-clause. This causes an `ordinality` column to appear, which is a 1-based
-numbering of the output rows of each call of the table function.
+When a table function is used in the `FROM` clause, you can add `WITH
+ORDINALITY` after the table function call. `WITH ORDINALITY` adds a column that
+includes the **1**-based numbering for each output row, restarting at **1** for
+each input row.
 
-For example, `unnest(...) WITH ORDINALITY` includes the `ordinality` column containing the 1-based numbering of the unnested items:
-```
-SELECT l, e, ordinality
+The following example uses `unnest(...) WITH ORDINALITY` to include the `ordinality` column containing the **1**-based numbering of the unnested items:
+```mzsql
+SELECT scores, score, ordinality
 FROM
-  t,
-  unnest(l) WITH ORDINALITY AS e;
+  quizzes,
+  unnest(scores) WITH ORDINALITY AS t(score,ordinality);
+```
 
-    l    | e | ordinality
----------+---+------------
- {3,3}   | 3 |          1
- {3,3}   | 3 |          2
- {5,7,8} | 5 |          1
- {5,7,8} | 7 |          2
- {5,7,8} | 8 |          3
+The results includes the `ordinality` column:
+```
+ scores  | score | ordinality
+---------+-------+------------
+ {3,3}   |     3 |          1
+ {3,3}   |     3 |          2
+ {5,7,8} |     5 |          1
+ {5,7,8} |     7 |          2
+ {5,7,8} |     8 |          3
 (5 rows)
 ```
 
@@ -75,23 +99,35 @@ FROM
 
 You can use table- and column aliases to name both the result column(s) of a table function as well as the ordinality column, if present. For example:
 ```mzsql
-SELECT l, u.e, u.o
+SELECT scores, t.score, t.listidx
 FROM
-  t,
-  unnest(l) WITH ORDINALITY AS u(e, o);
+  quizzes,
+  unnest(scores) WITH ORDINALITY AS t(score,listidx);
 ```
 
-You can also name less columns in the column alias list than the number of columns in the output of the table function (plus `WITH ORDINALITY`, if present), in which case the extra columns retain their original names.
+You can also name fewer columns in the column alias list than the number of
+columns in the output of the table function (plus `WITH ORDINALITY`, if
+present), in which case the extra columns retain their original names.
+
 
 ## `ROWS FROM`
 
-Normally, if you use multiple table functions together, the output will be their cross product. For example:
+When you select from multiple relations without specifying a relationship, you
+get a cross join. This is also the case when you select from multiple table
+functions in `FROM` without specifying a relationship.
+
+For example, consider the following query that selects from two table functions
+without a relationship:
+
 ```mzsql
 SELECT *
 FROM
   generate_series(1, 2) AS g1,
   generate_series(6, 7) AS g2;
 ```
+
+The query returns every combination of rows from both:
+
 ```
 
  g1 | g2
@@ -103,7 +139,15 @@ FROM
 (4 rows)
 ```
 
-You can get a different behavior by using the `ROWS FROM` clause, which zips the outputs of multiple table functions rather than taking their cross product. In other words, the first output rows of all the table functions are combined into a single row, the second output rows of all the table functions are combined into a second row, and so on. For example:
+Using `ROWS FROM` clause with the multiple table functions, you can zip the
+outputs of the table functions (i.e., combine the n-th output row from each
+table function into a single row) instead of the cross product.
+That is, combine first output rows of all the table functions into the first row, the second output rows of all the table functions are combined into
+a second row, and so on.
+
+For example, modify the previous query to use `ROWS FROM` with the table
+functions:
+
 ```mzsql
 SELECT *
 FROM
@@ -112,8 +156,10 @@ FROM
     generate_series(6, 7)
   ) AS t(g1, g2);
 ```
-```
 
+Instead of the cross product, the results are the "zipped" rows:
+
+```
  g1 | g2
 ----+----
   1 |  6
@@ -121,26 +167,37 @@ FROM
 (2 rows)
 ```
 
-If not all the table functions in a `ROWS FROM` clause produce the same number of rows, nulls are used for padding:
+If the table functions in a `ROWS FROM` clause produce a different number of
+rows, nulls are used for padding:
 ```mzsql
 SELECT *
 FROM
   ROWS FROM (
-    generate_series(1, 3),
-    generate_series(6, 7)
+    generate_series(1, 3),  -- 3 rows
+    generate_series(6, 7)   -- 2 rows
   ) AS t(g1, g2);
 ```
-```
 
- g1 | g2
-----+----
-  1 |  6
-  2 |  7
-  3 |
+The row with the `g1` value of 3 has a null `g2` value (note that if using psql,
+psql prints null as an empty string):
+
+```
+| g1 | g2   |
+| -- | ---- |
+| 3  | null |
+| 1  | 6    |
+| 2  | 7    |
 (3 rows)
 ```
 
-You can't use `WITH ORDINALITY` on the individual table functions in a `ROWS FROM` clause, but you can use `WITH ORDINALITY` on the entire `ROWS FROM` clause. For example:
+For `ROWS FROM` clauses:
+- you can use `WITH ORDINALITY` on the entire `ROWS FROM` clause, not on the
+individual table functions within the `ROWS FROM` clause.
+- you can use table- and column aliases only on the entire `ROWS FROM` clause,
+not on the individual table functions within `ROWS FROM` clause.
+
+For example:
+
 ```mzsql
 SELECT *
 FROM
@@ -149,6 +206,9 @@ FROM
     generate_series(8, 9)
   ) WITH ORDINALITY AS t(g1, g2, o);
 ```
+
+The results contain the ordinality value in the `o` column:
+
 ```
 
  g1 | g2 | o
@@ -158,7 +218,6 @@ FROM
 (2 rows)
 ```
 
-For `ROWS FROM` clauses, you can use table- and column aliases only on the entire `ROWS FROM` clause, not on the individual table functions.
 
 ## Table functions in the `SELECT` clause
 
@@ -176,4 +235,4 @@ You can also call ordinary scalar functions in the `FROM` clause as if they were
 
 ## See also
 
-See a list of table functions in the [function reference]((/sql/functions/#table-functions)).
+See a list of table functions in the [function reference](/sql/functions/#table-functions).
