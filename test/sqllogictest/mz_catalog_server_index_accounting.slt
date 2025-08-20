@@ -153,6 +153,7 @@ mz_activity_log_thinned  authenticated_user
 mz_activity_log_thinned  began_at
 mz_activity_log_thinned  cluster_id
 mz_activity_log_thinned  cluster_name
+mz_activity_log_thinned  connected_at
 mz_activity_log_thinned  database_name
 mz_activity_log_thinned  error_message
 mz_activity_log_thinned  execution_id
@@ -506,6 +507,7 @@ mz_recent_activity_log_thinned  authenticated_user
 mz_recent_activity_log_thinned  began_at
 mz_recent_activity_log_thinned  cluster_id
 mz_recent_activity_log_thinned  cluster_name
+mz_recent_activity_log_thinned  connected_at
 mz_recent_activity_log_thinned  database_name
 mz_recent_activity_log_thinned  error_message
 mz_recent_activity_log_thinned  execution_id

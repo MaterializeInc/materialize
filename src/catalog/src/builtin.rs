@@ -4054,6 +4054,7 @@ pub static MZ_ACTIVITY_LOG_THINNED: LazyLock<BuiltinView> = LazyLock::new(|| {
             .with_column("prepared_at", ScalarType::TimestampTz { precision: None }.nullable(false))
             .with_column("statement_type", ScalarType::String.nullable(true))
             .with_column("throttled_count", ScalarType::UInt64.nullable(false))
+            .with_column("connected_at", ScalarType::TimestampTz { precision: None }.nullable(false))
             .with_column("initial_application_name", ScalarType::String.nullable(false))
             .with_column("authenticated_user", ScalarType::String.nullable(false))
             .finish(),
@@ -4064,7 +4065,7 @@ transaction_isolation, execution_timestamp, transient_index_id, params, mz_versi
 error_message, result_size, rows_returned, execution_strategy, transaction_id,
 mpsh.id AS prepared_statement_id, sql_hash, mpsh.name AS prepared_statement_name,
 mpsh.session_id, prepared_at, statement_type, throttled_count,
-initial_application_name, authenticated_user
+connected_at, initial_application_name, authenticated_user
 FROM mz_internal.mz_statement_execution_history mseh,
      mz_internal.mz_prepared_statement_history mpsh,
      mz_internal.mz_session_history msh
@@ -4107,13 +4108,16 @@ pub static MZ_RECENT_ACTIVITY_LOG_THINNED: LazyLock<BuiltinView> = LazyLock::new
             .with_column("prepared_at", ScalarType::TimestampTz { precision: None }.nullable(false))
             .with_column("statement_type", ScalarType::String.nullable(true))
             .with_column("throttled_count", ScalarType::UInt64.nullable(false))
+            .with_column("connected_at", ScalarType::TimestampTz { precision: None }.nullable(false))
             .with_column("initial_application_name", ScalarType::String.nullable(false))
             .with_column("authenticated_user", ScalarType::String.nullable(false))
             .finish(),
         column_comments: BTreeMap::new(),
+        // We use a temporal window of 2 days rather than 1 day for `mz_session_history`'s `connected_at` since a statement execution at
+        // the edge of the 1 day temporal window could've been executed in a session that was established an hour before the 1 day window.
         sql:
         "SELECT * FROM mz_internal.mz_activity_log_thinned WHERE prepared_at + INTERVAL '1 day' > mz_now()
-AND began_at + INTERVAL '1 day' > mz_now()",
+AND began_at + INTERVAL '1 day' > mz_now() AND connected_at + INTERVAL '2 days' > mz_now()",
         access: vec![MONITOR_SELECT],
     }
 });
@@ -4172,6 +4176,10 @@ pub static MZ_RECENT_ACTIVITY_LOG: LazyLock<BuiltinView> = LazyLock::new(|| Buil
         )
         .with_column("statement_type", ScalarType::String.nullable(true))
         .with_column("throttled_count", ScalarType::UInt64.nullable(false))
+        .with_column(
+            "connected_at",
+            ScalarType::TimestampTz { precision: None }.nullable(false),
+        )
         .with_column(
             "initial_application_name",
             ScalarType::String.nullable(false),
@@ -4287,6 +4295,10 @@ pub static MZ_RECENT_ACTIVITY_LOG: LazyLock<BuiltinView> = LazyLock::new(|| Buil
         (
             "throttled_count",
             "The number of statements that were dropped due to throttling before the current one was seen. If you have a very high volume of queries and need to log them without throttling, contact our team.",
+        ),
+        (
+            "connected_at",
+            "The time at which the session was established.",
         ),
         (
             "initial_application_name",
