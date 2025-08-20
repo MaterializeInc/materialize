@@ -26,7 +26,7 @@ def test_disk_replica(mz: MaterializeApplication) -> None:
 
             > CREATE CLUSTER testdrive_no_reset_disk_cluster1
                 REPLICAS (r1 (
-                    SIZE 'scale=1,workers=1,nodisk', DISK = true
+                    SIZE 'scale=1,workers=1,legacy', DISK = true
                 ))
 
             > CREATE CONNECTION IF NOT EXISTS kafka TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
@@ -95,7 +95,7 @@ def test_no_disk_replica(mz: MaterializeApplication) -> None:
 
             > CREATE CLUSTER no_disk_cluster1
                 REPLICAS (r1 (
-                    SIZE 'scale=1,workers=1,nodisk', DISK = false
+                    SIZE 'scale=1,workers=1,legacy', DISK = false
                 ))
 
             > CREATE CONNECTION IF NOT EXISTS kafka

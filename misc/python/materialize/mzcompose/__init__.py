@@ -663,7 +663,7 @@ def bootstrap_cluster_replica_size() -> str:
 
 
 def cluster_replica_size_map() -> dict[str, dict[str, Any]]:
-    """scale=<n>,workers=<n>[,mem=<n>GiB][,nodisk]"""
+    """scale=<n>,workers=<n>[,mem=<n>GiB][,legacy]"""
 
     def replica_size(
         scale: int,
@@ -688,12 +688,10 @@ def cluster_replica_size_map() -> dict[str, dict[str, Any]]:
     replica_sizes = {
         bootstrap_cluster_replica_size(): replica_size(1, 1),
         "scale=2,workers=4": replica_size(2, 4),
-        "scale=1,workers=1,nodisk": replica_size(1, 1, is_cc=False),
-        "scale=1,workers=2,nodisk": replica_size(1, 2, is_cc=False),
+        "scale=1,workers=1,legacy": replica_size(1, 1, is_cc=False),
+        "scale=1,workers=2,legacy": replica_size(1, 2, is_cc=False),
         # Intentionally not following the naming scheme
         "free": replica_size(0, 0, disabled=True),
-        "1cc": replica_size(1, 1),
-        "1C": replica_size(1, 1),
     }
 
     for i in range(0, 6):

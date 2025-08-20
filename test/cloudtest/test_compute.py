@@ -128,7 +128,7 @@ def test_disk_label(mz: MaterializeApplication) -> None:
 
     for value in ("true", "false"):
         mz.environmentd.sql(
-            f"CREATE CLUSTER disk_{value} MANAGED, SIZE = 'scale=1,workers=2,nodisk', DISK = {value}"
+            f"CREATE CLUSTER disk_{value} MANAGED, SIZE = 'scale=1,workers=2,legacy', DISK = {value}"
         )
 
         (cluster_id, replica_id) = mz.environmentd.sql_query(

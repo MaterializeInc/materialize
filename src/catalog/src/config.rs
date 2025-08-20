@@ -286,25 +286,6 @@ impl ClusterReplicaSizeMap {
             },
         );
 
-        for size in ["1cc", "1C"] {
-            inner.insert(
-                size.to_string(),
-                ReplicaAllocation {
-                    memory_limit: None,
-                    memory_request: None,
-                    cpu_limit: None,
-                    disk_limit: None,
-                    scale: 1,
-                    workers: 1,
-                    credits_per_hour: 1.into(),
-                    cpu_exclusive: false,
-                    is_cc: true,
-                    disabled: false,
-                    selectors: BTreeMap::default(),
-                },
-            );
-        }
-
         Self(inner)
     }
 }
