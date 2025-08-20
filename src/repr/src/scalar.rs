@@ -4692,6 +4692,7 @@ mod tests {
 
     proptest! {
         #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // calls decnumber_sys::decNumberCopyNegate
         fn sql_repr_types_agree_on_valid_data((src, datum) in any::<SqlColumnType>().prop_flat_map(|src| {
             let datum = arb_datum_for_column(src.clone());
             (Just(src.clone()), datum) }
@@ -4704,6 +4705,7 @@ mod tests {
 
     proptest! {
         #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // calls decnumber_sys::decNumberCopyNegate
         fn sql_repr_types_agree_on_random_data(src in any::<SqlColumnType>(), datum in arb_datum(false)) {
             let tgt: ReprColumnType = src.clone().into();
             let datum = Datum::from(&datum);
