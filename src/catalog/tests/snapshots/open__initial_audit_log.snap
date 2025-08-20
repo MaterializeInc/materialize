@@ -1,5 +1,6 @@
 ---
 source: src/catalog/tests/open.rs
+assertion_line: 513
 expression: audit_log
 ---
 [
@@ -177,8 +178,8 @@ expression: audit_log
             id: 11,
             event_type: Create,
             object_type: ClusterReplica,
-            details: CreateClusterReplicaV2(
-                CreateClusterReplicaV2 {
+            details: CreateClusterReplicaV4(
+                CreateClusterReplicaV4 {
                     cluster_id: "u1",
                     cluster_name: "quickstart",
                     replica_id: Some(
@@ -186,7 +187,6 @@ expression: audit_log
                     ),
                     replica_name: "r1",
                     logical_size: "scale=1,workers=1",
-                    disk: false,
                     billed_as: None,
                     internal: false,
                     reason: System,

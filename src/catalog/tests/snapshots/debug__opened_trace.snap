@@ -1,5 +1,6 @@
 ---
 source: src/catalog/tests/debug.rs
+assertion_line: 226
 expression: test_trace
 ---
 Trace {
@@ -382,8 +383,8 @@ Trace {
                                         },
                                     ),
                                     details: Some(
-                                        CreateClusterReplicaV2(
-                                            CreateClusterReplicaV2 {
+                                        CreateClusterReplicaV4(
+                                            CreateClusterReplicaV4 {
                                                 cluster_id: "u1",
                                                 cluster_name: "quickstart",
                                                 replica_id: Some(
@@ -393,7 +394,6 @@ Trace {
                                                 ),
                                                 replica_name: "r1",
                                                 logical_size: "scale=1,workers=1",
-                                                disk: false,
                                                 billed_as: None,
                                                 internal: false,
                                                 reason: Some(
@@ -581,7 +581,6 @@ Trace {
                                                     ),
                                                 },
                                             ),
-                                            disk: false,
                                             optimizer_feature_overrides: [],
                                             schedule: Some(
                                                 ClusterSchedule {
@@ -653,7 +652,6 @@ Trace {
                                         ManagedLocation {
                                             size: "scale=1,workers=1",
                                             availability_zone: None,
-                                            disk: false,
                                             internal: false,
                                             billed_as: None,
                                             pending: false,

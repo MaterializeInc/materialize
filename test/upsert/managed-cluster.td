@@ -45,7 +45,7 @@ $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} 
 
 > DROP CLUSTER IF EXISTS storage_cluster CASCADE;
 
-> CREATE CLUSTER storage_cluster SIZE 'scale=2,workers=2', REPLICATION FACTOR 1, DISK = true
+> CREATE CLUSTER storage_cluster SIZE 'scale=2,workers=2', REPLICATION FACTOR 1
 
 > BEGIN
 > CREATE SOURCE upsert
