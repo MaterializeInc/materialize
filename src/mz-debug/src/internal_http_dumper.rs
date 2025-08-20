@@ -304,6 +304,7 @@ pub async fn dump_self_managed_http_resources(
     let cluster_services = find_cluster_services(
         &self_managed_context.k8s_client,
         &self_managed_context.k8s_namespace,
+        &self_managed_context.mz_instance_name,
     )
     .await
     .with_context(|| "Failed to find cluster services")?;
