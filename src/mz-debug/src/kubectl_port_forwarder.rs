@@ -16,9 +16,10 @@
 //! Port forwards k8s service via Kubectl
 
 use anyhow::{Context, Result};
-use k8s_openapi::api::core::v1::{Service, ServicePort};
+use k8s_openapi::api::core::v1::{Pod, Service, ServicePort};
 use kube::api::ListParams;
 use kube::{Api, Client};
+use mz_cloud_resources::crd::materialize::v1alpha1::Materialize;
 use tokio::io::AsyncBufReadExt;
 
 use tracing::info;
@@ -189,9 +190,69 @@ pub async fn find_environmentd_service(
 pub async fn find_cluster_services(
     client: &Client,
     k8s_namespace: &String,
+    mz_instance_name: &Option<String>,
 ) -> Result<Vec<ServiceInfo>> {
-    // TODO: Find all pods with the label organization-name=<mz_instance_name since services don't have this label
-    // and filter all the services that have the label names in the pods
+    let pods: Api<Pod> = Api::namespaced(client.clone(), k8s_namespace);
+
+    // Filter by a specific mz instance name
+    let mz_instance_name = if let Some(mz_instance_name) = mz_instance_name {
+        mz_instance_name.clone()
+    } else {
+        // TODO: Default mz_instance_name to the latest on initialization using this code
+        let materialize_api = Api::<Materialize>::namespaced(client.clone(), k8s_namespace);
+        let mut materialize_cr_list = materialize_api
+            .list(&ListParams::default())
+            .await
+            .with_context(|| {
+                format!(
+                    "Failed to get Materialize CR in namespace: {}",
+                    k8s_namespace
+                )
+            })?;
+
+        // Get the latest mz instance name
+        utils::sort_k8s_object_list_by_creation_timestamp_desc(&mut materialize_cr_list);
+        let latest_materialize_cr =
+            materialize_cr_list
+                .items
+                .first()
+                .cloned()
+                .with_context(|| {
+                    format!(
+                        "Could not find Materialize CR in namespace: {}",
+                        k8s_namespace
+                    )
+                })?;
+        latest_materialize_cr.metadata.name.with_context(|| {
+            format!(
+                "Could not find Materialize CR in namespace: {}",
+                k8s_namespace
+            )
+        })?
+    };
+
+    let pods_label_filter = format!(
+        "environmentd.materialize.cloud/namespace=cluster,materialize.cloud/organization-name={}",
+        mz_instance_name
+    );
+
+    let pods = pods
+        .list(&ListParams::default().labels(&pods_label_filter))
+        .await
+        .with_context(|| format!("Failed to list pods in namespace {}", k8s_namespace))?;
+
+    // Create a set of service IDs from pod labels
+    let service_ids_to_scrape: std::collections::HashSet<String> = pods
+        .iter()
+        .filter_map(|pod| {
+            pod.metadata
+                .labels
+                .as_ref()
+                .and_then(|labels| labels.get("environmentd.materialize.cloud/service-id"))
+                .map(|s| s.to_string())
+        })
+        .collect();
+
     let services: Api<Service> = Api::namespaced(client.clone(), k8s_namespace);
     let services = services
         .list(&ListParams::default())
@@ -201,15 +262,24 @@ pub async fn find_cluster_services(
     let cluster_services: Vec<ServiceInfo> = services
         .iter()
         .filter_map(|service| {
-            let name = service.metadata.name.clone()?;
-            let spec = service.spec.clone()?;
-            let selector = spec.selector?;
-            let ports = spec.ports?;
-
-            // Check if this is a cluster service
-            // TODO: If we filter by pods, we change this check to see if it belongs in the service allowlist
-            if selector.get("environmentd.materialize.cloud/namespace")? != "cluster" {
+            let Some(name) = service.metadata.name.clone() else {
                 return None;
+            };
+            let Some(spec) = service.spec.clone() else {
+                return None;
+            };
+            let Some(selector) = spec.selector else {
+                return None;
+            };
+            let Some(ports) = spec.ports else { return None };
+
+            // Filter by cluster services
+            if let Some(service_id) = selector.get("environmentd.materialize.cloud/service-id") {
+                if !service_ids_to_scrape.contains(service_id) {
+                    return None;
+                }
+            } else {
+                return None; // Skip services without the label
             }
 
             Some(ServiceInfo {
