@@ -11,7 +11,7 @@ menu:
 collects:
 
 - Logs and resource information from pods, daemonsets, and other Kubernetes
-  resources.
+    resources.
 
 - Snapshots of system catalog tables from your Materialize instance.
 
@@ -38,7 +38,6 @@ mz-debug self-managed [OPTIONS]
 ## `mz-debug` global options
 
 {{< yaml-table data="mz-debug/mz_debug_option" >}}
-
 
 ## Output
 
@@ -67,26 +66,22 @@ Each resource type directory also contains a `describe.txt` file with the output
 
 ## Examples
 
-### Debug the `materialize-environment` namespace
+### Debugging a Materialize instance that lives in the Kubernetes namespace `materialize-environment`
 
 ```shell
 mz-debug self-managed --k8s-namespace materialize-environment
 ```
 
-### Debug the `materialize` namespace
+### Debugging Kubernetes namespace `materialize` that does not contain Materialize instances
 
 ```shell
-mz-debug --dump-system-catalog=false self-managed --k8s-namespace materialize
+mz-debug self-managed --k8s-namespace materialize-environment --additional-k8s-namespace materialize
 ```
 
 ### Debug namespaces without automatic port-forwarding
 
 ```shell
 mz-debug self-managed \
-    --k8s-namespace materialize \
     --k8s-namespace materialize-environment \
     --mz-connection-url 'postgres://root@127.0.0.1:6875/materialize?sslmode=disable'
 ```
-
-Because the `materialize` namespace does not contain Materialize instances, the
-debug tool will be unable to dump the system catalog.

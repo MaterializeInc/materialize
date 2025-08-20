@@ -17,7 +17,6 @@ rows:
 
       Defaults to `true`.
 
-
   - Option: "`--dump-system-catalog <boolean>`"
     Description: |
 
@@ -26,6 +25,19 @@ rows:
 
       Defaults to `true`.
 
+  - Option: "`--mz-username <USERNAME>`"
+    Description: |
+
+      <a name="mz-username"></a> The username to use to connect to Materialize.
+
+      Can also be set via the `MZ_USERNAME` environment variable.
+
+  - Option: "`--mz-password <PASSWORD>`"
+    Description: |
+
+      <a name="mz-password"></a> The password to use to connect to Materialize if password authentication is enabled.
+
+      Can also be set via the `MZ_PASSWORD` environment variable.
 
   - Option: "`--mz-connection-url <URL>`"
     Description: |
