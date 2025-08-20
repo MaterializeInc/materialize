@@ -4113,9 +4113,11 @@ pub static MZ_RECENT_ACTIVITY_LOG_THINNED: LazyLock<BuiltinView> = LazyLock::new
             .with_column("authenticated_user", ScalarType::String.nullable(false))
             .finish(),
         column_comments: BTreeMap::new(),
+        // We use a temporal window of 2 days rather than 1 day for `mz_session_history`'s `connected_at` since a statement execution at
+        // the edge of the 1 day temporal window could've been executed in a session that was established an hour before the 1 day window.
         sql:
         "SELECT * FROM mz_internal.mz_activity_log_thinned WHERE prepared_at + INTERVAL '1 day' > mz_now()
-AND began_at + INTERVAL '1 day' > mz_now() AND connected_at + INTERVAL '1 day' > mz_now()",
+AND began_at + INTERVAL '1 day' > mz_now() AND connected_at + INTERVAL '2 days' > mz_now()",
         access: vec![MONITOR_SELECT],
     }
 });
