@@ -128,6 +128,7 @@ use mz_compute_types::plan::render_plan::{
     self, BindStage, LetBind, LetFreePlan, RecBind, RenderPlan,
 };
 use mz_expr::{EvalError, Id, LocalId};
+use mz_ore::str::separated;
 use mz_persist_client::operators::shard_source::{ErrorHandler, SnapshotMode};
 use mz_repr::explain::DummyHumanizer;
 use mz_repr::{Datum, Diff, GlobalId, Row, SharedRow};
@@ -214,7 +215,17 @@ pub fn build_compute_dataflow<A: Allocate>(
 
     // If you change the format here to something other than "Dataflow: {name}",
     // you should also update MZ_MAPPABLE_OBJECTS in `src/catalog/src/builtin.rs`
-    let name = format!("Dataflow: {}", &dataflow.debug_name);
+    let name = format!(
+        "Dataflow: {}",
+        separated(
+            ", ",
+            &dataflow
+                .objects_to_build
+                .iter()
+                .map(|o| o.id.to_string())
+                .collect::<Vec<_>>()
+        )
+    );
     let input_name = format!("InputRegion: {}", &dataflow.debug_name);
     let build_name = format!("BuildRegion: {}", &dataflow.debug_name);
 
