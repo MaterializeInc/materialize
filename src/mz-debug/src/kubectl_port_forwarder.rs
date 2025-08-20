@@ -23,6 +23,8 @@ use tokio::io::AsyncBufReadExt;
 
 use tracing::info;
 
+use crate::utils;
+
 #[derive(Debug)]
 pub struct KubectlPortForwarder {
     pub namespace: String,
@@ -131,41 +133,53 @@ pub struct ServiceInfo {
 /// Returns ServiceInfo for balancerd
 pub async fn find_environmentd_service(
     client: &Client,
-    k8s_namespaces: &Vec<String>,
+    k8s_namespace: &String,
+    mz_instance_name: &Option<String>,
 ) -> Result<ServiceInfo> {
-    for namespace in k8s_namespaces {
-        let services: Api<Service> = Api::namespaced(client.clone(), namespace);
-        let services = services
-            .list(&ListParams::default().labels("materialize.cloud/mz-resource-id"))
-            .await
-            .with_context(|| format!("Failed to list services in namespace {}", namespace))?;
+    let services: Api<Service> = Api::namespaced(client.clone(), k8s_namespace);
+    let mut label_filter = "materialize.cloud/mz-resource-id".to_string();
+    if let Some(mz_instance_name) = mz_instance_name {
+        label_filter = format!(
+            "{},materialize.cloud/organization-name={}",
+            label_filter, mz_instance_name
+        );
+    }
 
-        // Find the first sql service that contains balancerd
-        let maybe_service =
-            services
-                .iter()
-                .find_map(|service| match (&service.metadata.name, &service.spec) {
-                    (Some(service_name), Some(spec)) => {
-                        if !service_name.to_lowercase().contains("environmentd") {
-                            return None;
-                        }
+    let mut services = services
+        .list(&ListParams::default().labels(&label_filter))
+        .await
+        .with_context(|| format!("Failed to list services in namespace {}", k8s_namespace))?;
 
-                        if let Some(ports) = &spec.ports {
-                            Some(ServiceInfo {
-                                service_name: service_name.clone(),
-                                service_ports: ports.clone(),
-                                namespace: namespace.clone(),
-                            })
-                        } else {
-                            None
-                        }
+    // If the user doesn't provide a mz_instance_name, we sort the services by latest desc.
+    if mz_instance_name.is_none() {
+        utils::sort_k8s_object_list_by_creation_timestamp_desc(&mut services);
+    }
+
+    // Find the first sql service that contains balancerd
+    let maybe_service =
+        services
+            .iter()
+            .find_map(|service| match (&service.metadata.name, &service.spec) {
+                (Some(service_name), Some(spec)) => {
+                    if !service_name.to_lowercase().contains("environmentd") {
+                        return None;
                     }
-                    _ => None,
-                });
 
-        if let Some(service) = maybe_service {
-            return Ok(service);
-        }
+                    if let Some(ports) = &spec.ports {
+                        Some(ServiceInfo {
+                            service_name: service_name.clone(),
+                            service_ports: ports.clone(),
+                            namespace: k8s_namespace.clone(),
+                        })
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            });
+
+    if let Some(service) = maybe_service {
+        return Ok(service);
     }
 
     Err(anyhow::anyhow!("Could not find environmentd service"))
@@ -174,38 +188,40 @@ pub async fn find_environmentd_service(
 /// Returns Vec<(service_name, ports)> for cluster services
 pub async fn find_cluster_services(
     client: &Client,
-    k8s_namespaces: &Vec<String>,
+    k8s_namespace: &String,
 ) -> Result<Vec<ServiceInfo>> {
-    for namespace in k8s_namespaces {
-        let services: Api<Service> = Api::namespaced(client.clone(), namespace);
-        let services = services
-            .list(&ListParams::default())
-            .await
-            .with_context(|| format!("Failed to list services in namespace {}", namespace))?;
-        let cluster_services: Vec<ServiceInfo> = services
-            .iter()
-            .filter_map(|service| {
-                let name = service.metadata.name.clone()?;
-                let spec = service.spec.clone()?;
-                let selector = spec.selector?;
-                let ports = spec.ports?;
+    // TODO: Find all pods with the label organization-name=<mz_instance_name since services don't have this label
+    // and filter all the services that have the label names in the pods
+    let services: Api<Service> = Api::namespaced(client.clone(), k8s_namespace);
+    let services = services
+        .list(&ListParams::default())
+        .await
+        .with_context(|| format!("Failed to list services in namespace {}", k8s_namespace))?;
 
-                // Check if this is a cluster service
-                if selector.get("environmentd.materialize.cloud/namespace")? != "cluster" {
-                    return None;
-                }
+    let cluster_services: Vec<ServiceInfo> = services
+        .iter()
+        .filter_map(|service| {
+            let name = service.metadata.name.clone()?;
+            let spec = service.spec.clone()?;
+            let selector = spec.selector?;
+            let ports = spec.ports?;
 
-                Some(ServiceInfo {
-                    service_name: name,
-                    service_ports: ports,
-                    namespace: namespace.clone(),
-                })
+            // Check if this is a cluster service
+            // TODO: If we filter by pods, we change this check to see if it belongs in the service allowlist
+            if selector.get("environmentd.materialize.cloud/namespace")? != "cluster" {
+                return None;
+            }
+
+            Some(ServiceInfo {
+                service_name: name,
+                service_ports: ports,
+                namespace: k8s_namespace.clone(),
             })
-            .collect();
+        })
+        .collect();
 
-        if !cluster_services.is_empty() {
-            return Ok(cluster_services);
-        }
+    if !cluster_services.is_empty() {
+        return Ok(cluster_services);
     }
 
     Err(anyhow::anyhow!("Could not find cluster services"))
@@ -215,9 +231,10 @@ pub async fn find_cluster_services(
 pub async fn create_pg_wire_port_forwarder(
     client: &Client,
     k8s_context: &Option<String>,
-    k8s_namespaces: &Vec<String>,
+    k8s_namespace: &String,
+    mz_instance_name: &Option<String>,
 ) -> Result<KubectlPortForwarder> {
-    let service_info = find_environmentd_service(client, k8s_namespaces)
+    let service_info = find_environmentd_service(client, k8s_namespace, mz_instance_name)
         .await
         .with_context(|| "Cannot find ports for environmentd service")?;
 
