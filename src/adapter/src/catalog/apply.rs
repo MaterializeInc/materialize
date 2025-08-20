@@ -1950,7 +1950,7 @@ fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
         let existing_connections: BTreeSet<_> = connections.iter().map(|item| item.0.id).collect();
 
         // Initialize our set of topological sort.
-        tracing::info!(?connections, "sorting connections");
+        tracing::debug!(?connections, "sorting connections");
         for (connection, ts, diff) in connections.drain(..) {
             let statement = mz_sql::parse::parse(&connection.create_sql)
                 .expect("valid CONNECTION create_sql")
@@ -1967,7 +1967,7 @@ fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
             // Be defensive and ensure we're not clobbering any items.
             assert_none!(topo.insert((connection, ts, diff), dependencies));
         }
-        tracing::info!(?topo, ?existing_connections, "built topological sort");
+        tracing::debug!(?topo, ?existing_connections, "built topological sort");
 
         // Do a topological sort, pushing back into the provided Vec.
         while !topo.is_empty() {
