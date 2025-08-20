@@ -315,11 +315,11 @@ impl Coordinator {
                 // Getting the max worker count across replicas
                 // and using that value for the number of batches to
                 // divide the copy output into.
-                let max_worker_count = match cluster
-                    .replicas()
-                    .map(|r| r.config.location.workers())
-                    .max()
-                {
+                let worker_counts = cluster.replicas().map(|r| {
+                    let loc = &r.config.location;
+                    loc.workers().unwrap_or_else(|| loc.num_processes())
+                });
+                let max_worker_count = match worker_counts.max() {
                     Some(count) => u64::cast_from(count),
                     None => {
                         return Err(AdapterError::NoClusterReplicasAvailable {

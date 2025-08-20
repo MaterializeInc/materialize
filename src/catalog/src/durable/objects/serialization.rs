@@ -132,17 +132,11 @@ impl RustType<proto::replica_config::Location> for ReplicaLocation {
         match self {
             ReplicaLocation::Unmanaged {
                 storagectl_addrs,
-                storage_addrs,
                 computectl_addrs,
-                compute_addrs,
-                workers,
             } => proto::replica_config::Location::Unmanaged(
                 proto::replica_config::UnmanagedLocation {
                     storagectl_addrs: storagectl_addrs.clone(),
-                    storage_addrs: storage_addrs.clone(),
                     computectl_addrs: computectl_addrs.clone(),
-                    compute_addrs: compute_addrs.clone(),
-                    workers: CastFrom::cast_from(*workers),
                 },
             ),
             ReplicaLocation::Managed {
@@ -168,10 +162,7 @@ impl RustType<proto::replica_config::Location> for ReplicaLocation {
             proto::replica_config::Location::Unmanaged(location) => {
                 Ok(ReplicaLocation::Unmanaged {
                     storagectl_addrs: location.storagectl_addrs,
-                    storage_addrs: location.storage_addrs,
                     computectl_addrs: location.computectl_addrs,
-                    compute_addrs: location.compute_addrs,
-                    workers: CastFrom::cast_from(location.workers),
                 })
             }
             proto::replica_config::Location::Managed(location) => Ok(ReplicaLocation::Managed {

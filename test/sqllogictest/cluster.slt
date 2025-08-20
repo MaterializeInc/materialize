@@ -70,7 +70,7 @@ CREATE CLUSTER foo REPLICAS (), REPLICAS()
 
 # Creating cluster w/ remote replica works.
 statement ok
-CREATE CLUSTER foo REPLICAS (r1 (STORAGECTL ADDRESSES ['s:1234'], STORAGE ADDRESSES ['st:1235'], COMPUTECTL ADDRESSES ['c:1234'], COMPUTE ADDRESSES ['ct:1235']))
+CREATE CLUSTER foo REPLICAS (r1 (STORAGECTL ADDRESSES ['s:1234'], COMPUTECTL ADDRESSES ['c:1234']))
 
 statement error cluster 'foo' already exists
 CREATE CLUSTER foo REPLICAS (r1 (SIZE 'scale=1,workers=1'))
@@ -78,8 +78,8 @@ CREATE CLUSTER foo REPLICAS (r1 (SIZE 'scale=1,workers=1'))
 statement error cannot create multiple replicas named 'r1' on cluster 'bar'
 CREATE CLUSTER bar REPLICAS (r1 (SIZE 'scale=1,workers=1'), r1 (SIZE 'scale=1,workers=1'))
 
-statement error COMPUTE ADDRESSES specified more than once
-CREATE CLUSTER bar REPLICAS (r1 (COMPUTE ADDRESSES ['localhost:1235'], COMPUTE ADDRESSES ['localhost:1234']))
+statement error COMPUTECTL ADDRESSES specified more than once
+CREATE CLUSTER bar REPLICAS (r1 (COMPUTECTL ADDRESSES ['localhost:1235'], COMPUTECTL ADDRESSES ['localhost:1234']))
 
 statement ok
 CREATE CLUSTER bar REPLICAS (r1 (SIZE 'scale=1,workers=1'), r2 (SIZE 'scale=1,workers=1'))
@@ -104,28 +104,16 @@ quickstart
 # Test invalid option combinations.
 
 statement error invalid mixture of orchestrated and unorchestrated replica options
-CREATE CLUSTER baz REPLICAS (r1 (COMPUTE ADDRESSES ['localhost:1234'], SIZE 'small'))
+CREATE CLUSTER baz REPLICAS (r1 (COMPUTECTL ADDRESSES ['localhost:1234'], SIZE 'small'))
 
 statement error invalid mixture of orchestrated and unorchestrated replica options
-CREATE CLUSTER baz REPLICAS (r1 (SIZE 'scale=1,workers=2', WORKERS 1))
-
-statement error invalid mixture of orchestrated and unorchestrated replica options
-CREATE CLUSTER baz REPLICAS (r1 (SIZE 'scale=1,workers=2', COMPUTE ADDRESSES ['localhost:1234']))
-
-statement error COMPUTECTL ADDRESSES and COMPUTE ADDRESSES must have the same length
-CREATE CLUSTER baz REPLICAS (r1 (STORAGECTL ADDRESSES ['localhost:1234'], STORAGE ADDRESSES ['localhost:1234'], COMPUTECTL ADDRESSES ['localhost:1234', 'localhost:4567'], COMPUTE ADDRESSES [], WORKERS 1))
-
-statement error STORAGECTL ADDRESSES and STORAGE ADDRESSES must have the same length
-CREATE CLUSTER baz REPLICAS (r1 (STORAGECTL ADDRESSES ['localhost:1234'], STORAGE ADDRESSES ['localhost:1234', 'localhost:4567'], COMPUTECTL ADDRESSES ['localhost:1234'], COMPUTE ADDRESSES ['localhost:1234'], WORKERS 1))
+CREATE CLUSTER baz REPLICAS (r1 (SIZE 'scale=1,workers=2', STORAGECTL ADDRESSES ['localhost:1234']))
 
 statement error COMPUTECTL ADDRESSES and STORAGECTL ADDRESSES must have the same length
-CREATE CLUSTER baz REPLICAS (r1 (STORAGECTL ADDRESSES ['localhost:1234'], STORAGE ADDRESSES ['localhost:1234'], COMPUTECTL ADDRESSES [], COMPUTE ADDRESSES [], WORKERS 1))
+CREATE CLUSTER baz REPLICAS (r1 (STORAGECTL ADDRESSES ['localhost:1234'], COMPUTECTL ADDRESSES ['localhost:1234', 'localhost:4567']))
 
-statement error COMPUTECTL ADDRESSES and COMPUTE ADDRESSES must have the same length
-CREATE CLUSTER baz REPLICAS (r1 (STORAGECTL ADDRESSES ['localhost:1234'], STORAGE ADDRESSES ['localhost:1234'], COMPUTECTL ADDRESSES [], COMPUTE ADDRESSES ['localhost:1234', 'localhost:4567'], WORKERS 1))
-
-statement error WORKERS must be greater than 0
-CREATE CLUSTER baz REPLICAS (r1 (STORAGECTL ADDRESSES ['s:1234'], STORAGE ADDRESSES ['st:1234'], COMPUTECTL ADDRESSES ['c:1234'], COMPUTE ADDRESSES ['t:1235'], WORKERS 0))
+statement error COMPUTECTL ADDRESSES and STORAGECTL ADDRESSES must have the same length
+CREATE CLUSTER baz REPLICAS (r1 (STORAGECTL ADDRESSES ['localhost:1234'], COMPUTECTL ADDRESSES []))
 
 # Test `cluster` session variable.
 
