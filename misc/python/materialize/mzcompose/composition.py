@@ -63,32 +63,7 @@ from materialize.ui import (
     CommandFailureCausedUIError,
     UIError,
 )
-
-FILTERED_ARGS = [
-    # Secrets
-    "mzp_",
-    "-----BEGIN PRIVATE KEY-----",
-    "-----BEGIN CERTIFICATE-----",
-    "confluent-api-key=",
-    "confluent-api-secret=",
-    "aws-access-key-id=",
-    "aws-secret-access-key=",
-    # Not a secret, but too spammy, filter too
-    "CLUSTER_REPLICA_SIZES",
-    "cluster-replica-sizes=",
-]
-
-
-def filter_cmd(args: list[str]) -> list[str]:
-    """Don't print out secrets in test logs"""
-    return [
-        (
-            "[REDACTED]"
-            if any(filtered_arg in arg for filtered_arg in FILTERED_ARGS)
-            else arg
-        )
-        for arg in args
-    ]
+from materialize.util import filter_cmd
 
 
 class Service:

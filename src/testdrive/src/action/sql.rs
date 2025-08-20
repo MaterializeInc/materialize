@@ -117,8 +117,12 @@ pub async fn run_sql(mut cmd: SqlCommand, state: &mut State) -> Result<ControlFl
                             state.error_line_count = 0;
                             state.error_string = error_string;
                             state.error_line_count = state.error_string.lines().count() + 1;
-                            // Contains a newline already, so don't print an additional one
-                            print!("{}", state.error_string);
+                            if state.error_string.ends_with('\n') {
+                                print!("{}", state.error_string);
+                            } else {
+                                println!("{}", state.error_string);
+                                state.error_line_count += 1;
+                            }
                             println!(
                                 "rows didn't match; sleeping to see if dataflow catches up 🕑 {:.0?}",
                                 retry_state.next_backoff.unwrap_or_default()
@@ -454,7 +458,12 @@ pub async fn run_fail_sql(
                                 state.error_line_count = 0;
                                 state.error_string = error_string;
                                 state.error_line_count = state.error_string.lines().count() + 1;
-                                println!("{}", state.error_string);
+                                if state.error_string.ends_with('\n') {
+                                    print!("{}", state.error_string);
+                                } else {
+                                    println!("{}", state.error_string);
+                                    state.error_line_count += 1;
+                                }
                                 println!("query error didn't match; sleeping to see if dataflow produces error shortly 🕑 {:.0?}", retry_state.next_backoff.unwrap_or_default());
                             }
                         }

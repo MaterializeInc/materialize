@@ -493,7 +493,7 @@ ORDER BY 1
 {hello,world}
 {hello,world}
 
-# TODO: Correct ordering when database-issues#4764 is fixed.
+# TODO: Correct ordering when database-issues#9598 is fixed.
 query T
 SELECT foo FROM regexp_split_to_table('the quick brown fox jumps over the lazy dog', '\s+') AS foo ORDER BY 1
 ----
@@ -507,7 +507,7 @@ quick
 the
 the
 
-# TODO: Correct ordering when database-issues#4764 is fixed.
+# TODO: Correct ordering when database-issues#9598 is fixed.
 query T
 SELECT foo FROM regexp_split_to_table('the quick brown fox', '\s*') AS foo ORDER BY 1
 ----

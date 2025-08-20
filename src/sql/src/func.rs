@@ -1671,10 +1671,10 @@ pub struct TableFuncPlan {
 /// 2. or a general HIR expression. This happens when it's implemented as SQL, i.e., by a call to
 ///    `sql_impl_table_func_inner`.
 ///
-/// TODO(ggevay): when a table function in 2. is used with WITH ORDINALITY or ROWS FROM, we fall
-/// back to the legacy WITH ORDINALITY implementation, which relies on the row_number window
-/// function, and is mostly broken. It can give an incorrect ordering, and also has an extreme
-/// performance problem in some cases, see
+/// TODO(ggevay, database-issues#9598): when a table function in 2. is used with WITH ORDINALITY or
+/// ROWS FROM, we fall back to the legacy WITH ORDINALITY implementation, which relies on the
+/// row_number window function, and is mostly broken. It can give an incorrect ordering, and also
+/// has an extreme performance problem in some cases. Discussed in
 /// <https://github.com/MaterializeInc/database-issues/issues/4764#issuecomment-2854572614>
 ///
 /// These table functions are somewhat exotic, and WITH ORDINALITY / ROWS FROM are also somewhat
