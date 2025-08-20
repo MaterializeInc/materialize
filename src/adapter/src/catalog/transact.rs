@@ -9,6 +9,7 @@
 
 //! Logic related to executing catalog transactions.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
@@ -425,10 +426,8 @@ impl Catalog {
             .transaction()
             .await
             .unwrap_or_terminate("starting catalog transaction");
-        // Prepare a candidate catalog state.
-        let mut state = self.state.clone();
 
-        Self::transact_inner(
+        let new_state = Self::transact_inner(
             storage_collections,
             oracle_write_ts,
             session,
@@ -437,7 +436,7 @@ impl Catalog {
             &mut builtin_table_updates,
             &mut audit_events,
             &mut tx,
-            &mut state,
+            &self.state,
         )
         .await?;
 
@@ -452,8 +451,10 @@ impl Catalog {
         // Dropping here keeps the mutable borrow on self, preventing us accidentally
         // mutating anything until after f is executed.
         drop(storage);
-        self.state = state;
-        self.transient_revision += 1;
+        if let Some(new_state) = new_state {
+            self.transient_revision += 1;
+            self.state = new_state;
+        }
 
         // Drop in-memory planning metadata.
         let dropped_notices = self.drop_plans_and_metainfos(&dropped_global_ids);
@@ -472,7 +473,8 @@ impl Catalog {
         })
     }
 
-    /// Performs the transaction described by `ops`.
+    /// Performs the transaction described by `ops` and returns the new state of the catalog, if
+    /// it has changed. If `ops` don't result in a change in the state this method returns `None`.
     ///
     /// # Panics
     /// - If `ops` contains [`Op::TransactionDryRun`] and the value is not the
@@ -490,8 +492,10 @@ impl Catalog {
         builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
         audit_events: &mut Vec<VersionedEvent>,
         tx: &mut Transaction<'_>,
-        state: &mut CatalogState,
-    ) -> Result<(), AdapterError> {
+        state: &CatalogState,
+    ) -> Result<Option<CatalogState>, AdapterError> {
+        let mut state = Cow::Borrowed(state);
+
         let dry_run_ops = match ops.last() {
             Some(Op::TransactionDryRun) => {
                 // Remove dry run marker.
@@ -500,7 +504,7 @@ impl Catalog {
                 ops.clone()
             }
             Some(_) => vec![],
-            None => return Ok(()),
+            None => return Ok(None),
         };
 
         let mut storage_collections_to_create = BTreeSet::new();
@@ -515,7 +519,7 @@ impl Catalog {
                 &temporary_ids,
                 audit_events,
                 tx,
-                state,
+                &*state,
                 &mut storage_collections_to_create,
                 &mut storage_collections_to_drop,
                 &mut storage_collections_to_register,
@@ -550,10 +554,13 @@ impl Catalog {
 
             let mut updates: Vec<_> = tx.get_and_commit_op_updates();
             updates.extend(temporary_item_updates);
-            let op_builtin_table_updates = state.apply_updates(updates)?;
-            let op_builtin_table_updates =
-                state.resolve_builtin_table_updates(op_builtin_table_updates);
-            builtin_table_updates.extend(op_builtin_table_updates);
+            if !updates.is_empty() {
+                let op_builtin_table_updates = state.to_mut().apply_updates(updates)?;
+                let op_builtin_table_updates = state
+                    .to_mut()
+                    .resolve_builtin_table_updates(op_builtin_table_updates);
+                builtin_table_updates.extend(op_builtin_table_updates);
+            }
         }
 
         if dry_run_ops.is_empty() {
@@ -569,16 +576,22 @@ impl Catalog {
             }
 
             let updates = tx.get_and_commit_op_updates();
-            let op_builtin_table_updates = state.apply_updates(updates)?;
-            let op_builtin_table_updates =
-                state.resolve_builtin_table_updates(op_builtin_table_updates);
-            builtin_table_updates.extend(op_builtin_table_updates);
+            if !updates.is_empty() {
+                let op_builtin_table_updates = state.to_mut().apply_updates(updates)?;
+                let op_builtin_table_updates = state
+                    .to_mut()
+                    .resolve_builtin_table_updates(op_builtin_table_updates);
+                builtin_table_updates.extend(op_builtin_table_updates);
+            }
 
-            Ok(())
+            match state {
+                Cow::Owned(state) => Ok(Some(state)),
+                Cow::Borrowed(_) => Ok(None),
+            }
         } else {
             Err(AdapterError::TransactionDryRun {
                 new_ops: dry_run_ops,
-                new_state: state.clone(),
+                new_state: state.into_owned(),
             })
         }
     }
