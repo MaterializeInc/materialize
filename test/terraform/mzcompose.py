@@ -223,7 +223,7 @@ def run_mz_debug(env: dict[str, str] | None = None) -> None:
                 "self-managed",
                 "--k8s-namespace",
                 "materialize-environment",
-                "--k8s-namespace",
+                "--additional-k8s-namespace",
                 "materialize",
             ],
             cwd=MZ_ROOT,

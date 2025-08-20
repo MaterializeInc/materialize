@@ -13,13 +13,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 use anyhow::Context as AnyhowContext;
+use serde::Serialize;
+use serde::de::DeserializeOwned;
 use std::fs::{File, create_dir_all, remove_dir_all};
 use std::io::{BufWriter, copy};
 use std::path::PathBuf;
 use std::str::FromStr;
 
 use chrono::{DateTime, Utc};
-use kube::api::ListParams;
+use kube::api::{ListParams, ObjectList};
 use kube::{Api, Client};
 use mz_cloud_resources::crd::materialize::v1alpha1::Materialize;
 use mz_server_core::listeners::AuthenticatorKind;
@@ -77,43 +79,73 @@ pub async fn get_k8s_auth_mode(
     mz_username: Option<String>,
     mz_password: Option<String>,
     k8s_client: &Client,
-    k8s_namespaces: &Vec<String>,
+    k8s_namespace: &String,
+    mz_instance_name: &Option<String>,
 ) -> Result<AuthMode, anyhow::Error> {
-    for namespace in k8s_namespaces.iter() {
-        let materialize_api = Api::<Materialize>::namespaced(k8s_client.clone(), namespace);
-        let object_list = materialize_api
-            .list(&ListParams::default())
-            .await
-            .with_context(|| format!("Failed to get Materialize CR in namespace: {}", namespace))?;
+    let materialize_api = Api::<Materialize>::namespaced(k8s_client.clone(), k8s_namespace);
+    let mut object_list = materialize_api
+        .list(&ListParams::default())
+        .await
+        .with_context(|| {
+            format!(
+                "Failed to get Materialize CR in namespace: {}",
+                k8s_namespace
+            )
+        })?;
 
-        if !object_list.items.is_empty() {
-            let materialize_cr = &object_list.items[0];
-            let authenticator_kind = materialize_cr.spec.authenticator_kind;
+    let materialize_cr = if let Some(mz_instance_name) = mz_instance_name {
+        object_list
+            .items
+            .into_iter()
+            .find(|item| item.metadata.name.as_ref() == Some(mz_instance_name))
+            .with_context(|| {
+                format!(
+                    "Could not find Materialize CR with name: {}",
+                    mz_instance_name
+                )
+            })?
+    } else {
+        // Sort the list by creation timestamp, newest first
+        sort_k8s_object_list_by_creation_timestamp_desc(&mut object_list);
+        object_list.items.first().cloned().with_context(|| {
+            format!(
+                "Could not find Materialize CR in namespace: {}",
+                k8s_namespace
+            )
+        })?
+    };
 
-            match authenticator_kind {
-                AuthenticatorKind::None => return Ok(AuthMode::None),
-                AuthenticatorKind::Password => {
-                    if let (Some(mz_username), Some(mz_password)) = (&mz_username, &mz_password) {
-                        return Ok(AuthMode::Password(PasswordAuthCredentials {
-                            username: mz_username.clone(),
-                            password: mz_password.clone(),
-                        }));
-                    } else {
-                        return Err(anyhow::anyhow!(
-                            "mz_username and mz_password are required for password authentication"
-                        ));
-                    }
-                }
-                _ => {
-                    return Err(anyhow::anyhow!(
-                        "Unsupported authenticator kind: {:?}",
-                        authenticator_kind
-                    ));
-                }
+    let authenticator_kind = materialize_cr.spec.authenticator_kind;
+
+    match authenticator_kind {
+        AuthenticatorKind::None => Ok(AuthMode::None),
+        AuthenticatorKind::Password => {
+            if let (Some(mz_username), Some(mz_password)) = (&mz_username, &mz_password) {
+                Ok(AuthMode::Password(PasswordAuthCredentials {
+                    username: mz_username.clone(),
+                    password: mz_password.clone(),
+                }))
+            } else {
+                Err(anyhow::anyhow!(
+                    "mz_username and mz_password are required for password authentication"
+                ))
             }
         }
+        _ => Err(anyhow::anyhow!(
+            "Unsupported authenticator kind: {:?}",
+            authenticator_kind
+        )),
     }
-    Err(anyhow::anyhow!(
-        "Could not find AuthenticatorKind in Materialize CR"
-    ))
+}
+
+pub fn sort_k8s_object_list_by_creation_timestamp_desc<K>(object_list: &mut ObjectList<K>)
+where
+    K: kube::Resource<DynamicType = ()> + Clone + Serialize + DeserializeOwned,
+{
+    object_list.items.sort_by(|a, b| {
+        let a_creation_timestamp = a.meta().creation_timestamp.as_ref();
+        let b_creation_timestamp = b.meta().creation_timestamp.as_ref();
+
+        b_creation_timestamp.cmp(&a_creation_timestamp)
+    });
 }
