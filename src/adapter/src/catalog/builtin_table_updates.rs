@@ -2025,6 +2025,7 @@ impl CatalogState {
                         credits_per_hour,
                         cpu_exclusive: _,
                         is_cc: _,
+                        swap_enabled: _,
                         disabled: _,
                         selectors: _,
                     },
