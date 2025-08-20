@@ -474,7 +474,7 @@ impl Catalog {
     }
 
     /// Performs the transaction described by `ops` and returns the new state of the catalog, if
-    /// has chagned. If `ops` don't result in a change in the state this method returns `None`.
+    /// it has changed. If `ops` don't result in a change in the state this method returns `None`.
     ///
     /// # Panics
     /// - If `ops` contains [`Op::TransactionDryRun`] and the value is not the
