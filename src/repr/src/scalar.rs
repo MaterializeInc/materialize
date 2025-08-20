@@ -1527,8 +1527,8 @@ impl fmt::Display for Datum<'_> {
 ///
 /// Each variant maps to a variant of [`ReprScalarType`], with some overlap.
 ///
-/// There is a direct correspondence between `Datum` variants and `SqlScalarType`
-/// variants.
+/// There is an indirect correspondence between `Datum` variants and `SqlScalarType`
+/// variants: every `Datum` variant belongs to one or more `SqlScalarType` variants.
 #[derive(
     Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Ord, PartialOrd, Hash, EnumKind, MzReflect,
 )]
@@ -3872,8 +3872,9 @@ impl Arbitrary for SqlScalarType {
 ///
 /// Each variant here corresponds to one or more variants of [`SqlScalarType`].
 ///
-/// There is a direct correspondence between `Datum` variants and `SqlScalarType`
-/// variants.
+/// There is a direct correspondence between `Datum` variants and `ReprScalarType`
+/// variants: every `Datum` variant corresponds to exactly one `ReprScalarType` variant
+/// (with an exception for `Datum::Array`, which could be both an `Int2Vector` and an `Array`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Ord, PartialOrd, Hash, MzReflect)]
 pub enum ReprScalarType {
     Bool,
