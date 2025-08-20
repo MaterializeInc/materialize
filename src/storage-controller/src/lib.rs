@@ -1512,6 +1512,8 @@ where
             .await
             .expect("table worker unexpectedly shut down");
 
+        self.append_shard_mappings([new_collection].into_iter(), Diff::ONE);
+
         Ok(())
     }
 
