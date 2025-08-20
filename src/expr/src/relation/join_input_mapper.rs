@@ -11,7 +11,7 @@ use std::collections::BTreeSet;
 use std::ops::Range;
 
 use itertools::Itertools;
-use mz_repr::RelationType;
+use mz_repr::SqlRelationType;
 
 use crate::visit::Visit;
 use crate::{MirRelationExpr, MirScalarExpr, VariadicFunc};
@@ -49,7 +49,7 @@ impl JoinInputMapper {
     /// Creates a new `JoinInputMapper` and calculates the mapping of global context
     /// columns to local context columns. Using this method saves is more
     /// efficient if input types have been pre-calculated
-    pub fn new_from_input_types(types: &[RelationType]) -> Self {
+    pub fn new_from_input_types(types: &[SqlRelationType]) -> Self {
         Self::new_from_input_arities(types.iter().map(|t| t.column_types.len()))
     }
 
@@ -264,13 +264,13 @@ impl JoinInputMapper {
     /// # Examples
     ///
     /// ```
-    /// use mz_repr::{Datum, ColumnType, RelationType, ScalarType};
+    /// use mz_repr::{Datum, SqlColumnType, SqlRelationType, SqlScalarType};
     /// use mz_expr::{JoinInputMapper, MirRelationExpr, MirScalarExpr};
     ///
     /// // A two-column schema common to each of the three inputs
-    /// let schema = RelationType::new(vec![
-    ///   ScalarType::Int32.nullable(false),
-    ///   ScalarType::Int32.nullable(false),
+    /// let schema = SqlRelationType::new(vec![
+    ///   SqlScalarType::Int32.nullable(false),
+    ///   SqlScalarType::Int32.nullable(false),
     /// ]);
     ///
     /// // the specific data are not important here.
@@ -445,7 +445,7 @@ impl JoinInputMapper {
 
 #[cfg(test)]
 mod tests {
-    use mz_repr::{Datum, ScalarType};
+    use mz_repr::{Datum, SqlScalarType};
 
     use crate::{BinaryFunc, MirScalarExpr, UnaryFunc};
 
@@ -493,7 +493,7 @@ mod tests {
             expr1: Box::new(MirScalarExpr::column(2)),
             expr2: Box::new(MirScalarExpr::literal(
                 Ok(Datum::Int32(4)),
-                ScalarType::Int32,
+                SqlScalarType::Int32,
             )),
         };
         let key22 = MirScalarExpr::column(5);

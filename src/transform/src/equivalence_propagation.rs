@@ -38,7 +38,7 @@ use crate::analysis::equivalences::{
     EqClassesImpl, EquivalenceClasses, EquivalenceClassesWithholdingErrors, Equivalences,
     ExpressionReducer,
 };
-use crate::analysis::{Arity, DerivedView, RelationType};
+use crate::analysis::{Arity, DerivedView, SqlRelationType};
 
 use crate::{TransformCtx, TransformError};
 
@@ -130,8 +130,8 @@ impl EquivalencePropagation {
         // for `get_equivalences` which would be scoped to the whole method rather than tupled and enqueued.
 
         let expr_type = derived
-            .value::<RelationType>()
-            .expect("RelationType required");
+            .value::<SqlRelationType>()
+            .expect("SqlRelationType required");
         assert!(expr_type.is_some());
         let expr_equivalences = derived
             .value::<Equivalences>()
@@ -267,8 +267,8 @@ impl EquivalencePropagation {
                     }
                     // Get all output types, to reveal a prefix to each scaler expr.
                     let input_types = derived
-                        .value::<RelationType>()
-                        .expect("RelationType required")
+                        .value::<SqlRelationType>()
+                        .expect("SqlRelationType required")
                         .as_ref()
                         .unwrap();
                     let input_arity = input_types.len() - scalars.len();
@@ -332,8 +332,8 @@ impl EquivalencePropagation {
                 if let Some(input_equivalences) = input_equivalences {
                     let input_types = derived
                         .last_child()
-                        .value::<RelationType>()
-                        .expect("RelationType required");
+                        .value::<SqlRelationType>()
+                        .expect("SqlRelationType required");
                     let reducer = input_equivalences.reducer();
                     for expr in exprs.iter_mut() {
                         let changed = reducer.reduce_expr(expr);
@@ -366,8 +366,8 @@ impl EquivalencePropagation {
                 if let Some(input_equivalences) = input_equivalences {
                     let input_types = derived
                         .last_child()
-                        .value::<RelationType>()
-                        .expect("RelationType required");
+                        .value::<SqlRelationType>()
+                        .expect("SqlRelationType required");
                     let reducer = input_equivalences.reducer();
                     for expr in predicates.iter_mut() {
                         let changed = reducer.reduce_expr(expr);
@@ -379,7 +379,7 @@ impl EquivalencePropagation {
                     let mut class = predicates.clone();
                     class.push(MirScalarExpr::literal_ok(
                         Datum::True,
-                        mz_repr::ScalarType::Bool,
+                        mz_repr::SqlScalarType::Bool,
                     ));
                     outer_equivalences.classes.push(class);
                     outer_equivalences.minimize(input_types.as_ref().map(|x| &x[..]));
@@ -417,8 +417,8 @@ impl EquivalencePropagation {
                     children
                         .iter()
                         .flat_map(|c| {
-                            c.value::<RelationType>()
-                                .expect("RelationType required")
+                            c.value::<SqlRelationType>()
+                                .expect("SqlRelationType required")
                                 .as_ref()
                                 .unwrap()
                                 .iter()
@@ -556,8 +556,8 @@ impl EquivalencePropagation {
                 if let Some(input_equivalences) = input_equivalences {
                     let input_type = derived
                         .last_child()
-                        .value::<RelationType>()
-                        .expect("RelationType required");
+                        .value::<SqlRelationType>()
+                        .expect("SqlRelationType required");
                     let reducer = input_equivalences.reducer();
                     for key in group_key.iter_mut() {
                         // Semijoin elimination currently fails if you do more advanced simplification than
@@ -631,8 +631,8 @@ impl EquivalencePropagation {
                 if let Some(input_equivalences) = input_equivalences {
                     let input_types = derived
                         .last_child()
-                        .value::<RelationType>()
-                        .expect("RelationType required");
+                        .value::<SqlRelationType>()
+                        .expect("SqlRelationType required");
                     let reducer = input_equivalences.reducer();
                     if let Some(expr) = limit {
                         let old_expr = expr.clone();

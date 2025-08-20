@@ -1820,11 +1820,11 @@ mod tests {
         });
 
         for (datum, column_type) in row.iter().zip(MZ_SINK_STATUS_HISTORY_DESC.iter_types()) {
-            assert!(datum.is_instance_of(column_type));
+            assert!(datum.is_instance_of_sql(column_type));
         }
 
         for (datum, column_type) in row.iter().zip(MZ_SOURCE_STATUS_HISTORY_DESC.iter_types()) {
-            assert!(datum.is_instance_of(column_type));
+            assert!(datum.is_instance_of_sql(column_type));
         }
 
         assert_eq!(row.iter().nth(1).unwrap(), Datum::String(&id.to_string()));
@@ -1865,11 +1865,11 @@ mod tests {
         });
 
         for (datum, column_type) in row.iter().zip(MZ_SINK_STATUS_HISTORY_DESC.iter_types()) {
-            assert!(datum.is_instance_of(column_type));
+            assert!(datum.is_instance_of_sql(column_type));
         }
 
         for (datum, column_type) in row.iter().zip(MZ_SOURCE_STATUS_HISTORY_DESC.iter_types()) {
-            assert!(datum.is_instance_of(column_type));
+            assert!(datum.is_instance_of_sql(column_type));
         }
 
         assert_eq!(row.iter().nth(1).unwrap(), Datum::String(&id.to_string()));
@@ -1894,11 +1894,11 @@ mod tests {
         });
 
         for (datum, column_type) in row.iter().zip(MZ_SINK_STATUS_HISTORY_DESC.iter_types()) {
-            assert!(datum.is_instance_of(column_type));
+            assert!(datum.is_instance_of_sql(column_type));
         }
 
         for (datum, column_type) in row.iter().zip(MZ_SOURCE_STATUS_HISTORY_DESC.iter_types()) {
-            assert!(datum.is_instance_of(column_type));
+            assert!(datum.is_instance_of_sql(column_type));
         }
 
         assert_eq!(row.iter().nth(1).unwrap(), Datum::String(&id.to_string()));
@@ -1939,11 +1939,11 @@ mod tests {
         });
 
         for (datum, column_type) in row.iter().zip(MZ_SINK_STATUS_HISTORY_DESC.iter_types()) {
-            assert!(datum.is_instance_of(column_type));
+            assert!(datum.is_instance_of_sql(column_type));
         }
 
         for (datum, column_type) in row.iter().zip(MZ_SOURCE_STATUS_HISTORY_DESC.iter_types()) {
-            assert!(datum.is_instance_of(column_type));
+            assert!(datum.is_instance_of_sql(column_type));
         }
 
         assert_eq!(row.iter().nth(1).unwrap(), Datum::String(&id.to_string()));
@@ -1985,11 +1985,11 @@ mod tests {
         });
 
         for (datum, column_type) in row.iter().zip(MZ_SINK_STATUS_HISTORY_DESC.iter_types()) {
-            assert!(datum.is_instance_of(column_type));
+            assert!(datum.is_instance_of_sql(column_type));
         }
 
         for (datum, column_type) in row.iter().zip(MZ_SOURCE_STATUS_HISTORY_DESC.iter_types()) {
-            assert!(datum.is_instance_of(column_type));
+            assert!(datum.is_instance_of_sql(column_type));
         }
 
         assert_eq!(row.iter().nth(1).unwrap(), Datum::String(&id.to_string()));

@@ -43,7 +43,8 @@ use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::explain::text::DisplayText;
 use mz_repr::explain::{CompactScalars, IndexUsageType, PlanRenderingContext, UsedIndexes};
 use mz_repr::{
-    Diff, GlobalId, IntoRowIterator, RelationDesc, RelationType, Row, RowIterator, preserves_order,
+    Diff, GlobalId, IntoRowIterator, RelationDesc, Row, RowIterator, SqlRelationType,
+    preserves_order,
 };
 use mz_storage_types::sources::SourceData;
 use serde::{Deserialize, Serialize};
@@ -96,7 +97,7 @@ impl<T> PeekDataflowPlan<T> {
     pub fn new(
         desc: DataflowDescription<mz_compute_types::plan::Plan<T>, (), T>,
         id: GlobalId,
-        typ: &RelationType,
+        typ: &SqlRelationType,
     ) -> Self {
         let arity = typ.arity();
         let key = typ
@@ -119,9 +120,9 @@ impl<T> PeekDataflowPlan<T> {
 pub enum FastPathPlan {
     /// The view evaluates to a constant result that can be returned.
     ///
-    /// The [RelationType] is unnecessary for evaluating the constant result but
+    /// The [SqlRelationType] is unnecessary for evaluating the constant result but
     /// may be helpful when printing out an explanation.
-    Constant(Result<Vec<(Row, Diff)>, EvalError>, RelationType),
+    Constant(Result<Vec<(Row, Diff)>, EvalError>, SqlRelationType),
     /// The view can be read out of an existing arrangement.
     /// (coll_id, idx_id, values to look up, mfp to apply)
     PeekExisting(GlobalId, GlobalId, Option<Vec<Row>>, mz_expr::SafeMfpPlan),
@@ -380,7 +381,7 @@ pub struct PlannedPeek {
     ///
     /// This is _the_ `result_type` as far as compute is concerned and futher
     /// changes through projections happen purely in the adapter.
-    pub intermediate_result_type: RelationType,
+    pub intermediate_result_type: SqlRelationType,
     pub source_arity: usize,
     pub source_ids: BTreeSet<GlobalId>,
 }
@@ -1209,15 +1210,15 @@ mod tests {
     use mz_ore::str::Indent;
     use mz_repr::explain::text::text_string_at;
     use mz_repr::explain::{DummyHumanizer, ExplainConfig, PlanRenderingContext};
-    use mz_repr::{ColumnType, Datum, ScalarType};
+    use mz_repr::{Datum, SqlColumnType, SqlScalarType};
 
     use super::*;
 
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     fn test_fast_path_plan_as_text() {
-        let typ = RelationType::new(vec![ColumnType {
-            scalar_type: ScalarType::String,
+        let typ = SqlRelationType::new(vec![SqlColumnType {
+            scalar_type: SqlScalarType::String,
             nullable: false,
         }]);
         let constant_err = FastPathPlan::Constant(Err(EvalError::DivisionByZero), typ.clone());
