@@ -14,6 +14,7 @@ from dataclasses import dataclass
 
 from materialize import MZ_ROOT
 from materialize.ui import CommandFailureCausedUIError, UIError
+from materialize.util import filter_cmd
 
 PEM_CONTENT_RE = r"-----BEGIN ([A-Z ]+)-----[^-]+-----END [A-Z ]+-----"
 PEM_CONTENT_REPLACEMENT = r"<\1>"
@@ -155,5 +156,5 @@ def extract_error_chunks_from_output(output: str) -> list[str]:
 
 
 def to_sanitized_command_str(cmd: list[str]) -> str:
-    command_str = " ".join([str(x) for x in cmd])
+    command_str = " ".join([str(x) for x in filter_cmd(cmd)])
     return re.sub(PEM_CONTENT_RE, PEM_CONTENT_REPLACEMENT, command_str)

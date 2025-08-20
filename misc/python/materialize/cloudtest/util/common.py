@@ -14,7 +14,7 @@ from textwrap import dedent
 from time import sleep
 from typing import Any, cast
 
-from materialize.mzcompose.composition import filter_cmd
+from materialize.util import filter_cmd
 
 LOGGER = logging.getLogger(__name__)
 

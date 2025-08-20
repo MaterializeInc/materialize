@@ -20,11 +20,11 @@ from materialize.cloudtest.k8s.api.k8s_pod import K8sPod
 from materialize.mzcompose import (
     cluster_replica_size_map,
 )
-from materialize.mzcompose.composition import filter_cmd
 from materialize.mzcompose.test_result import (
     extract_error_chunks_from_output,
 )
 from materialize.ui import CommandFailureCausedUIError
+from materialize.util import filter_cmd
 
 
 class TestdriveBase:
