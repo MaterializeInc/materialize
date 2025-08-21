@@ -186,13 +186,6 @@ impl Coordinator {
                         .await?
                     }
                 }
-                ControllerCommand::Table(TableControllerCommand::DropTable(table)) => {
-                    let global_ids = table.global_ids();
-                    // WIP: Handle versions!
-                    for global_id in global_ids {
-                        tables_to_drop.insert((catalog_id, global_id));
-                    }
-                }
                 ControllerCommand::Table(TableControllerCommand::AlterTable {
                     prev_table,
                     new_table,
@@ -204,8 +197,25 @@ impl Coordinator {
                     )
                     .await?
                 }
+                ControllerCommand::Table(TableControllerCommand::DropTable(table)) => {
+                    let global_ids = table.global_ids();
+                    // WIP: Handle versions!
+                    for global_id in global_ids {
+                        tables_to_drop.insert((catalog_id, global_id));
+                    }
+                }
                 ControllerCommand::Source(SourceControllerCommand::AddSource(source)) => {
                     tracing::info!(?source, "not handling AddSource in here yet");
+                }
+                ControllerCommand::Source(SourceControllerCommand::AlterSource {
+                    prev_source,
+                    new_source,
+                }) => {
+                    tracing::info!(
+                        ?prev_source,
+                        ?new_source,
+                        "not handling AlterSource in here yet"
+                    );
                 }
                 ControllerCommand::Source(SourceControllerCommand::DropSource(source)) => {
                     let global_id = source.global_id();
@@ -229,11 +239,27 @@ impl Coordinator {
                 ControllerCommand::Sink(SinkControllerCommand::AddSink(sink)) => {
                     tracing::info!(?sink, "not handling AddSink in here yet");
                 }
+                ControllerCommand::Sink(SinkControllerCommand::AlterSink {
+                    prev_sink,
+                    new_sink,
+                }) => {
+                    tracing::info!(?prev_sink, ?new_sink, "not handling AlterSink in here yet");
+                }
                 ControllerCommand::Sink(SinkControllerCommand::DropSink(sink)) => {
                     storage_sink_gids_to_drop.push(sink.global_id());
                 }
                 ControllerCommand::Index(IndexControllerCommand::AddIndex(index)) => {
                     tracing::info!(?index, "not handling AddIndex in here yet");
+                }
+                ControllerCommand::Index(IndexControllerCommand::AlterIndex {
+                    prev_index,
+                    new_index,
+                }) => {
+                    tracing::info!(
+                        ?prev_index,
+                        ?new_index,
+                        "not handling AlterIndex in here yet"
+                    );
                 }
                 ControllerCommand::Index(IndexControllerCommand::DropIndex(index)) => {
                     indexes_to_drop.push((index.cluster_id, index.global_id()));
@@ -244,12 +270,27 @@ impl Coordinator {
                     tracing::info!(?mv, "not handling AddMaterializedView in here yet");
                 }
                 ControllerCommand::MaterializedView(
+                    MaterializedViewControllerCommand::AlterMaterializedView { prev_mv, new_mv },
+                ) => {
+                    tracing::info!(
+                        ?prev_mv,
+                        ?new_mv,
+                        "not handling AlterMaterializedView in here yet"
+                    );
+                }
+                ControllerCommand::MaterializedView(
                     MaterializedViewControllerCommand::DropMaterializedView(mv),
                 ) => {
                     materialized_views_to_drop.push((mv.cluster_id, mv.global_id()));
                 }
                 ControllerCommand::View(ViewControllerCommand::AddView(view)) => {
                     tracing::info!(?view, "not handling AddView in here yet");
+                }
+                ControllerCommand::View(ViewControllerCommand::AlterView {
+                    prev_view,
+                    new_view,
+                }) => {
+                    tracing::info!(?prev_view, ?new_view, "not handling AlterView in here yet");
                 }
                 ControllerCommand::View(ViewControllerCommand::DropView(view)) => {
                     view_gids_to_drop.push(view.global_id());
@@ -260,12 +301,31 @@ impl Coordinator {
                     tracing::info!(?ct, "not handling AddContinualTask in here yet");
                 }
                 ControllerCommand::ContinualTask(
+                    ContinualTaskControllerCommand::AlterContinualTask { prev_ct, new_ct },
+                ) => {
+                    tracing::info!(
+                        ?prev_ct,
+                        ?new_ct,
+                        "not handling AlterContinualTask in here yet"
+                    );
+                }
+                ControllerCommand::ContinualTask(
                     ContinualTaskControllerCommand::DropContinualTask(ct),
                 ) => {
                     continual_tasks_to_drop.push((catalog_id, ct.cluster_id, ct.global_id()));
                 }
                 ControllerCommand::Secret(SecretControllerCommand::AddSecret(secret)) => {
                     tracing::info!(?secret, "not handling AddSecret in here yet");
+                }
+                ControllerCommand::Secret(SecretControllerCommand::AlterSecret {
+                    prev_secret,
+                    new_secret,
+                }) => {
+                    tracing::info!(
+                        ?prev_secret,
+                        ?new_secret,
+                        "not handling AlterSecret in here yet"
+                    );
                 }
                 ControllerCommand::Secret(SecretControllerCommand::DropSecret(_secret)) => {
                     secrets_to_drop.push(catalog_id);
@@ -274,6 +334,16 @@ impl Coordinator {
                     connection,
                 )) => {
                     tracing::info!(?connection, "not handling AddConnection in here yet");
+                }
+                ControllerCommand::Connection(ConnectionControllerCommand::AlterConnection {
+                    prev_connection,
+                    new_connection,
+                }) => {
+                    tracing::info!(
+                        ?prev_connection,
+                        ?new_connection,
+                        "not handling AlterConnection in here yet"
+                    );
                 }
                 ControllerCommand::Connection(ConnectionControllerCommand::DropConnection(
                     connection,
@@ -303,6 +373,16 @@ impl Coordinator {
                 ControllerCommand::Cluster(ClusterControllerCommand::AddCluster(cluster)) => {
                     tracing::info!(?cluster, "not handling AddCluster in here yet");
                 }
+                ControllerCommand::Cluster(ClusterControllerCommand::AlterCluster {
+                    prev_cluster,
+                    new_cluster,
+                }) => {
+                    tracing::info!(
+                        ?prev_cluster,
+                        ?new_cluster,
+                        "not handling AlterCluster in here yet"
+                    );
+                }
                 ControllerCommand::Cluster(ClusterControllerCommand::DropCluster(_cluster)) => {
                     clusters_to_drop.push(cluster_id);
                 }
@@ -319,6 +399,18 @@ impl Coordinator {
                     ClusterReplicaControllerCommand::AddClusterReplica(replica),
                 ) => {
                     tracing::info!(?replica, "not handling AddClusterReplica in here yet");
+                }
+                ControllerCommand::ClusterReplica(
+                    ClusterReplicaControllerCommand::AlterClusterReplica {
+                        prev_replica,
+                        new_replica,
+                    },
+                ) => {
+                    tracing::info!(
+                        ?prev_replica,
+                        ?new_replica,
+                        "not handling AlterClusterReplica in here yet"
+                    );
                 }
                 ControllerCommand::ClusterReplica(
                     ClusterReplicaControllerCommand::DropClusterReplica(_replica),
@@ -915,70 +1007,98 @@ enum ControllerCommand {
 #[derive(Debug, Clone)]
 enum TableControllerCommand {
     AddTable(Table),
-    AlterTable {
-        prev_table: Table,
-        new_table: Table,
-    },
+    AlterTable { prev_table: Table, new_table: Table },
     DropTable(Table),
 }
 
 #[derive(Debug, Clone)]
 enum SourceControllerCommand {
     AddSource(Source),
+    AlterSource {
+        prev_source: Source,
+        new_source: Source,
+    },
     DropSource(Source),
 }
 
 #[derive(Debug, Clone)]
 enum SinkControllerCommand {
     AddSink(Sink),
+    AlterSink { prev_sink: Sink, new_sink: Sink },
     DropSink(Sink),
 }
 
 #[derive(Debug, Clone)]
 enum IndexControllerCommand {
     AddIndex(Index),
+    AlterIndex { prev_index: Index, new_index: Index },
     DropIndex(Index),
 }
 
 #[derive(Debug, Clone)]
 enum MaterializedViewControllerCommand {
     AddMaterializedView(MaterializedView),
+    AlterMaterializedView {
+        prev_mv: MaterializedView,
+        new_mv: MaterializedView,
+    },
     DropMaterializedView(MaterializedView),
 }
 
 #[derive(Debug, Clone)]
 enum ViewControllerCommand {
     AddView(View),
+    AlterView { prev_view: View, new_view: View },
     DropView(View),
 }
 
 #[derive(Debug, Clone)]
 enum ContinualTaskControllerCommand {
     AddContinualTask(ContinualTask),
+    AlterContinualTask {
+        prev_ct: ContinualTask,
+        new_ct: ContinualTask,
+    },
     DropContinualTask(ContinualTask),
 }
 
 #[derive(Debug, Clone)]
 enum SecretControllerCommand {
     AddSecret(Secret),
+    AlterSecret {
+        prev_secret: Secret,
+        new_secret: Secret,
+    },
     DropSecret(Secret),
 }
 
 #[derive(Debug, Clone)]
 enum ConnectionControllerCommand {
     AddConnection(Connection),
+    AlterConnection {
+        prev_connection: Connection,
+        new_connection: Connection,
+    },
     DropConnection(Connection),
 }
 
 #[derive(Debug, Clone)]
 enum ClusterControllerCommand {
     AddCluster(Cluster),
+    AlterCluster {
+        prev_cluster: Cluster,
+        new_cluster: Cluster,
+    },
     DropCluster(Cluster),
 }
 
 #[derive(Debug, Clone)]
 enum ClusterReplicaControllerCommand {
     AddClusterReplica(ClusterReplica),
+    AlterClusterReplica {
+        prev_replica: ClusterReplica,
+        new_replica: ClusterReplica,
+    },
     DropClusterReplica(ClusterReplica),
 }
 
@@ -1089,26 +1209,31 @@ impl ControllerCommand {
                     *self = ControllerCommand::Source(SourceControllerCommand::DropSource(source));
                 }
             },
-            ControllerCommand::Source(SourceControllerCommand::DropSource(_existing_source)) => {
+            ControllerCommand::Source(SourceControllerCommand::DropSource(existing_source)) => {
                 match diff {
                     StateDiff::Addition => {
-                        panic!("addition for just-dropped source");
+                        *self = ControllerCommand::Source(SourceControllerCommand::AlterSource {
+                            prev_source: existing_source.clone(),
+                            new_source: source,
+                        });
                     }
                     StateDiff::Retraction => {
                         panic!("retraction for already dropped source");
                     }
                 }
             }
-            ControllerCommand::Source(SourceControllerCommand::AddSource(_new_source)) => {
-                match diff {
-                    StateDiff::Addition => {
-                        panic!("addition for already added source");
-                    }
-                    StateDiff::Retraction => {
-                        panic!("retraction for just-added source");
-                    }
+            ControllerCommand::Source(SourceControllerCommand::AddSource(new_source)) => match diff
+            {
+                StateDiff::Addition => {
+                    panic!("addition for already added source");
                 }
-            }
+                StateDiff::Retraction => {
+                    *self = ControllerCommand::Source(SourceControllerCommand::AlterSource {
+                        prev_source: source,
+                        new_source: new_source.clone(),
+                    });
+                }
+            },
             _ => {
                 tracing::info!(?self, "todo");
             }
@@ -1125,22 +1250,26 @@ impl ControllerCommand {
                     *self = ControllerCommand::Sink(SinkControllerCommand::DropSink(sink));
                 }
             },
-            ControllerCommand::Sink(SinkControllerCommand::DropSink(_existing_sink)) => {
-                match diff {
-                    StateDiff::Addition => {
-                        panic!("addition for just-dropped sink");
-                    }
-                    StateDiff::Retraction => {
-                        panic!("retraction for already dropped sink");
-                    }
+            ControllerCommand::Sink(SinkControllerCommand::DropSink(existing_sink)) => match diff {
+                StateDiff::Addition => {
+                    *self = ControllerCommand::Sink(SinkControllerCommand::AlterSink {
+                        prev_sink: existing_sink.clone(),
+                        new_sink: sink,
+                    });
                 }
-            }
-            ControllerCommand::Sink(SinkControllerCommand::AddSink(_new_sink)) => match diff {
+                StateDiff::Retraction => {
+                    panic!("retraction for already dropped sink");
+                }
+            },
+            ControllerCommand::Sink(SinkControllerCommand::AddSink(new_sink)) => match diff {
                 StateDiff::Addition => {
                     panic!("addition for already added sink");
                 }
                 StateDiff::Retraction => {
-                    panic!("retraction for just-added sink");
+                    *self = ControllerCommand::Sink(SinkControllerCommand::AlterSink {
+                        prev_sink: sink,
+                        new_sink: new_sink.clone(),
+                    });
                 }
             },
             _ => {
@@ -1159,22 +1288,28 @@ impl ControllerCommand {
                     *self = ControllerCommand::Index(IndexControllerCommand::DropIndex(index));
                 }
             },
-            ControllerCommand::Index(IndexControllerCommand::DropIndex(_existing_index)) => {
+            ControllerCommand::Index(IndexControllerCommand::DropIndex(existing_index)) => {
                 match diff {
                     StateDiff::Addition => {
-                        panic!("addition for just-dropped index");
+                        *self = ControllerCommand::Index(IndexControllerCommand::AlterIndex {
+                            prev_index: existing_index.clone(),
+                            new_index: index,
+                        });
                     }
                     StateDiff::Retraction => {
                         panic!("retraction for already dropped index");
                     }
                 }
             }
-            ControllerCommand::Index(IndexControllerCommand::AddIndex(_new_index)) => match diff {
+            ControllerCommand::Index(IndexControllerCommand::AddIndex(new_index)) => match diff {
                 StateDiff::Addition => {
                     panic!("addition for already added index");
                 }
                 StateDiff::Retraction => {
-                    panic!("retraction for just-added index");
+                    *self = ControllerCommand::Index(IndexControllerCommand::AlterIndex {
+                        prev_index: index,
+                        new_index: new_index.clone(),
+                    });
                 }
             },
             _ => {
@@ -1198,23 +1333,33 @@ impl ControllerCommand {
                 }
             },
             ControllerCommand::MaterializedView(
-                MaterializedViewControllerCommand::DropMaterializedView(_existing_mv),
+                MaterializedViewControllerCommand::DropMaterializedView(existing_mv),
             ) => match diff {
                 StateDiff::Addition => {
-                    panic!("addition for just-dropped materialized view");
+                    *self = ControllerCommand::MaterializedView(
+                        MaterializedViewControllerCommand::AlterMaterializedView {
+                            prev_mv: existing_mv.clone(),
+                            new_mv: mv,
+                        },
+                    );
                 }
                 StateDiff::Retraction => {
                     panic!("retraction for already dropped materialized view");
                 }
             },
             ControllerCommand::MaterializedView(
-                MaterializedViewControllerCommand::AddMaterializedView(_new_mv),
+                MaterializedViewControllerCommand::AddMaterializedView(new_mv),
             ) => match diff {
                 StateDiff::Addition => {
                     panic!("addition for already added materialized view");
                 }
                 StateDiff::Retraction => {
-                    panic!("retraction for just-added materialized view");
+                    *self = ControllerCommand::MaterializedView(
+                        MaterializedViewControllerCommand::AlterMaterializedView {
+                            prev_mv: mv,
+                            new_mv: new_mv.clone(),
+                        },
+                    );
                 }
             },
             _ => {
@@ -1233,22 +1378,26 @@ impl ControllerCommand {
                     *self = ControllerCommand::View(ViewControllerCommand::DropView(view));
                 }
             },
-            ControllerCommand::View(ViewControllerCommand::DropView(_existing_view)) => {
-                match diff {
-                    StateDiff::Addition => {
-                        panic!("addition for just-dropped view");
-                    }
-                    StateDiff::Retraction => {
-                        panic!("retraction for already dropped view");
-                    }
+            ControllerCommand::View(ViewControllerCommand::DropView(existing_view)) => match diff {
+                StateDiff::Addition => {
+                    *self = ControllerCommand::View(ViewControllerCommand::AlterView {
+                        prev_view: existing_view.clone(),
+                        new_view: view,
+                    });
                 }
-            }
-            ControllerCommand::View(ViewControllerCommand::AddView(_new_view)) => match diff {
+                StateDiff::Retraction => {
+                    panic!("retraction for already dropped view");
+                }
+            },
+            ControllerCommand::View(ViewControllerCommand::AddView(new_view)) => match diff {
                 StateDiff::Addition => {
                     panic!("addition for already added view");
                 }
                 StateDiff::Retraction => {
-                    panic!("retraction for just-added view");
+                    *self = ControllerCommand::View(ViewControllerCommand::AlterView {
+                        prev_view: view,
+                        new_view: new_view.clone(),
+                    });
                 }
             },
             _ => {
@@ -1272,23 +1421,33 @@ impl ControllerCommand {
                 }
             },
             ControllerCommand::ContinualTask(
-                ContinualTaskControllerCommand::DropContinualTask(_existing_ct),
+                ContinualTaskControllerCommand::DropContinualTask(existing_ct),
             ) => match diff {
                 StateDiff::Addition => {
-                    panic!("addition for just-dropped continual task");
+                    *self = ControllerCommand::ContinualTask(
+                        ContinualTaskControllerCommand::AlterContinualTask {
+                            prev_ct: existing_ct.clone(),
+                            new_ct: ct,
+                        },
+                    );
                 }
                 StateDiff::Retraction => {
                     panic!("retraction for already dropped continual task");
                 }
             },
             ControllerCommand::ContinualTask(ContinualTaskControllerCommand::AddContinualTask(
-                _new_ct,
+                new_ct,
             )) => match diff {
                 StateDiff::Addition => {
                     panic!("addition for already added continual task");
                 }
                 StateDiff::Retraction => {
-                    panic!("retraction for just-added continual task");
+                    *self = ControllerCommand::ContinualTask(
+                        ContinualTaskControllerCommand::AlterContinualTask {
+                            prev_ct: ct,
+                            new_ct: new_ct.clone(),
+                        },
+                    );
                 }
             },
             _ => {
@@ -1307,26 +1466,31 @@ impl ControllerCommand {
                     *self = ControllerCommand::Secret(SecretControllerCommand::DropSecret(secret));
                 }
             },
-            ControllerCommand::Secret(SecretControllerCommand::DropSecret(_existing_secret)) => {
+            ControllerCommand::Secret(SecretControllerCommand::DropSecret(existing_secret)) => {
                 match diff {
                     StateDiff::Addition => {
-                        panic!("addition for just-dropped secret");
+                        *self = ControllerCommand::Secret(SecretControllerCommand::AlterSecret {
+                            prev_secret: existing_secret.clone(),
+                            new_secret: secret,
+                        });
                     }
                     StateDiff::Retraction => {
                         panic!("retraction for already dropped secret");
                     }
                 }
             }
-            ControllerCommand::Secret(SecretControllerCommand::AddSecret(_new_secret)) => {
-                match diff {
-                    StateDiff::Addition => {
-                        panic!("addition for already added secret");
-                    }
-                    StateDiff::Retraction => {
-                        panic!("retraction for just-added secret");
-                    }
+            ControllerCommand::Secret(SecretControllerCommand::AddSecret(new_secret)) => match diff
+            {
+                StateDiff::Addition => {
+                    panic!("addition for already added secret");
                 }
-            }
+                StateDiff::Retraction => {
+                    *self = ControllerCommand::Secret(SecretControllerCommand::AlterSecret {
+                        prev_secret: secret,
+                        new_secret: new_secret.clone(),
+                    });
+                }
+            },
             _ => {
                 tracing::info!(?self, "todo");
             }
@@ -1348,23 +1512,33 @@ impl ControllerCommand {
                 }
             },
             ControllerCommand::Connection(ConnectionControllerCommand::DropConnection(
-                _existing_connection,
+                existing_connection,
             )) => match diff {
                 StateDiff::Addition => {
-                    panic!("addition for just-dropped connection");
+                    *self = ControllerCommand::Connection(
+                        ConnectionControllerCommand::AlterConnection {
+                            prev_connection: existing_connection.clone(),
+                            new_connection: connection,
+                        },
+                    );
                 }
                 StateDiff::Retraction => {
                     panic!("retraction for already dropped connection");
                 }
             },
             ControllerCommand::Connection(ConnectionControllerCommand::AddConnection(
-                _new_connection,
+                new_connection,
             )) => match diff {
                 StateDiff::Addition => {
                     panic!("addition for already added connection");
                 }
                 StateDiff::Retraction => {
-                    panic!("retraction for just-added connection");
+                    *self = ControllerCommand::Connection(
+                        ConnectionControllerCommand::AlterConnection {
+                            prev_connection: connection,
+                            new_connection: new_connection.clone(),
+                        },
+                    );
                 }
             },
             _ => {
@@ -1385,23 +1559,31 @@ impl ControllerCommand {
                         ControllerCommand::Cluster(ClusterControllerCommand::DropCluster(cluster));
                 }
             },
-            ControllerCommand::Cluster(ClusterControllerCommand::DropCluster(
-                _existing_cluster,
-            )) => match diff {
-                StateDiff::Addition => {
-                    panic!("addition for just-dropped cluster");
+            ControllerCommand::Cluster(ClusterControllerCommand::DropCluster(existing_cluster)) => {
+                match diff {
+                    StateDiff::Addition => {
+                        *self =
+                            ControllerCommand::Cluster(ClusterControllerCommand::AlterCluster {
+                                prev_cluster: existing_cluster.clone(),
+                                new_cluster: cluster,
+                            });
+                    }
+                    StateDiff::Retraction => {
+                        panic!("retraction for already dropped cluster");
+                    }
                 }
-                StateDiff::Retraction => {
-                    panic!("retraction for already dropped cluster");
-                }
-            },
-            ControllerCommand::Cluster(ClusterControllerCommand::AddCluster(_new_cluster)) => {
+            }
+            ControllerCommand::Cluster(ClusterControllerCommand::AddCluster(new_cluster)) => {
                 match diff {
                     StateDiff::Addition => {
                         panic!("addition for already added cluster");
                     }
                     StateDiff::Retraction => {
-                        panic!("retraction for just-added cluster");
+                        *self =
+                            ControllerCommand::Cluster(ClusterControllerCommand::AlterCluster {
+                                prev_cluster: cluster,
+                                new_cluster: new_cluster.clone(),
+                            });
                     }
                 }
             }
@@ -1431,23 +1613,33 @@ impl ControllerCommand {
                 }
             },
             ControllerCommand::ClusterReplica(
-                ClusterReplicaControllerCommand::DropClusterReplica(_existing_replica),
+                ClusterReplicaControllerCommand::DropClusterReplica(existing_replica),
             ) => match diff {
                 StateDiff::Addition => {
-                    panic!("addition for just-dropped cluster replica");
+                    *self = ControllerCommand::ClusterReplica(
+                        ClusterReplicaControllerCommand::AlterClusterReplica {
+                            prev_replica: existing_replica.clone(),
+                            new_replica: cluster_replica,
+                        },
+                    );
                 }
                 StateDiff::Retraction => {
                     panic!("retraction for already dropped cluster replica");
                 }
             },
             ControllerCommand::ClusterReplica(
-                ClusterReplicaControllerCommand::AddClusterReplica(_new_replica),
+                ClusterReplicaControllerCommand::AddClusterReplica(new_replica),
             ) => match diff {
                 StateDiff::Addition => {
                     panic!("addition for already added cluster replica");
                 }
                 StateDiff::Retraction => {
-                    panic!("retraction for just-added cluster replica");
+                    *self = ControllerCommand::ClusterReplica(
+                        ClusterReplicaControllerCommand::AlterClusterReplica {
+                            prev_replica: cluster_replica,
+                            new_replica: new_replica.clone(),
+                        },
+                    );
                 }
             },
             _ => {
