@@ -33,7 +33,7 @@ from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.util import PropagatingThread, all_subclasses
 
 SERVICES = [
-    Postgres(),
+    Postgres(max_replication_slots=1000),
     MySql(),
     Zookeeper(),
     Kafka(
@@ -49,7 +49,10 @@ SERVICES = [
     Minio(setup_materialize=True, additional_directories=["copytos3"]),
     Testdrive(no_reset=True, consistent_seed=True, default_timeout="600s"),
     Mc(),
-    Materialized(default_replication_factor=2),
+    Materialized(
+        default_replication_factor=2,
+        additional_system_parameter_defaults={"memory_limiter_interval": "0"},
+    ),
 ]
 
 SERVICE_NAMES = [
@@ -149,24 +152,28 @@ class UpsertSource(Object):
               URL '${{testdrive.schema-registry-url}}')
 
             > CREATE CONNECTION IF NOT EXISTS kafka_conn
-              TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT)
-
-            > DROP SOURCE IF EXISTS {self.name}_source CASCADE
-            > CREATE SOURCE {self.name}_source
-              IN CLUSTER quickstart
-              FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-{self.name}-${{testdrive.seed}}')"""
+              TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT)"""
         )
 
     def create(self) -> str:
         return dedent(
             f"""
+            > BEGIN
+            > CREATE SOURCE {self.name}_source
+              IN CLUSTER quickstart
+              FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-{self.name}-${{testdrive.seed}}')
             > CREATE TABLE {self.name} FROM SOURCE {self.name}_source (REFERENCE "testdrive-{self.name}-${{testdrive.seed}}")
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-              ENVELOPE DEBEZIUM"""
+              ENVELOPE DEBEZIUM
+            > COMMIT"""
         )
 
     def destroy(self) -> str:
-        return f"> DROP TABLE {self.name} CASCADE"
+        return dedent(
+            f"""
+            > DROP TABLE {self.name} CASCADE
+            > DROP SOURCE IF EXISTS {self.name}_source CASCADE"""
+        )
 
     def manipulate(self, kind: int) -> str:
         manipulations = [
@@ -222,19 +229,27 @@ class PostgresSource(Object):
               HOST 'postgres',
               DATABASE postgres,
               USER {self.name}_role,
-              PASSWORD SECRET {self.name}_pass
-            > DROP SOURCE IF EXISTS {self.name}_source
-            > CREATE SOURCE {self.name}_source
-              IN CLUSTER quickstart
-              FROM POSTGRES CONNECTION {self.name}_conn
-              (PUBLICATION '{self.name}_source')"""
+              PASSWORD SECRET {self.name}_pass"""
         )
 
     def create(self) -> str:
-        return f"> CREATE TABLE {self.name} FROM SOURCE {self.name}_source (REFERENCE {self.name}_table)"
+        return dedent(
+            f"""
+            > BEGIN
+            > CREATE SOURCE {self.name}_source
+              IN CLUSTER quickstart
+              FROM POSTGRES CONNECTION {self.name}_conn
+              (PUBLICATION '{self.name}_source')
+            > CREATE TABLE {self.name} FROM SOURCE {self.name}_source (REFERENCE {self.name}_table)
+            > COMMIT"""
+        )
 
     def destroy(self) -> str:
-        return f"> DROP TABLE {self.name} CASCADE"
+        return dedent(
+            f"""
+            > DROP TABLE {self.name} CASCADE
+            > DROP SOURCE IF EXISTS {self.name}_source"""
+        )
 
     def manipulate(self, kind: int) -> str:
         manipulations = [
@@ -294,18 +309,27 @@ class MySqlSource(Object):
                 HOST 'mysql',
                 USER {self.name}_role,
                 PASSWORD SECRET {self.name}_pass
-              )
-            > DROP SOURCE IF EXISTS {self.name}_source
-            > CREATE SOURCE {self.name}_source
-              IN CLUSTER quickstart
-              FROM MYSQL CONNECTION {self.name}_conn;"""
+              )"""
         )
 
     def create(self) -> str:
-        return f"> CREATE TABLE {self.name} FROM SOURCE {self.name}_source (REFERENCE public.{self.name}_table)"
+        return dedent(
+            f"""
+            > BEGIN
+            > CREATE SOURCE {self.name}_source
+              IN CLUSTER quickstart
+              FROM MYSQL CONNECTION {self.name}_conn
+            > CREATE TABLE {self.name} FROM SOURCE {self.name}_source (REFERENCE public.{self.name}_table)
+            > COMMIT
+            """
+        )
 
     def destroy(self) -> str:
-        return f"> DROP TABLE {self.name} CASCADE"
+        return dedent(
+            f"""
+            > DROP TABLE {self.name} CASCADE
+            > DROP SOURCE IF EXISTS {self.name}_source"""
+        )
 
     def manipulate(self, kind: int) -> str:
         manipulations = [
@@ -740,7 +764,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         if args.scenario == "subsequent":
             scenario = Subsequent(c, rng, args.num_objects)
         elif args.scenario == "subsequent-chain":
-            scenario = Subsequent(c, rng, args.num_objects)
+            scenario = SubsequentChain(c, rng, args.num_objects)
         elif args.scenario == "concurrent":
             scenario = Concurrent(c, rng, args.num_objects)
         else:
