@@ -6113,7 +6113,8 @@ WHERE worker_id = 0",
     access: vec![PUBLIC_SELECT],
 });
 
-pub static MZ_MAPPABLE_OBJECTS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+pub static MZ_MAPPABLE_OBJECTS: LazyLock<BuiltinView> = LazyLock::new(|| {
+    BuiltinView {
     name: "mz_mappable_objects",
     schema: MZ_INTROSPECTION_SCHEMA,
     oid: oid::VIEW_MZ_MAPPABLE_OBJECTS_OID,
@@ -6133,6 +6134,7 @@ FROM      mz_catalog.mz_objects mo
      JOIN mz_catalog.mz_databases md ON (ms.database_id = md.id)
      JOIN mz_introspection.mz_dataflow_global_ids mgi ON (mce.dataflow_id = mgi.id);",
     access: vec![PUBLIC_SELECT],
+}
 });
 
 pub static MZ_LIR_MAPPING: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
