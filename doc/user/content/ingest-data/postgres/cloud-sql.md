@@ -8,6 +8,7 @@ menu:
     parent: "postgresql"
     name: "Google Cloud SQL"
     identifier: "pg-google-cloudsql"
+    weight: 30
 ---
 
 This page shows you how to stream data from [Google Cloud SQL for PostgreSQL](https://cloud.google.com/sql/postgresql)

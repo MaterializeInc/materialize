@@ -8,6 +8,7 @@ menu:
     parent: "postgresql"
     name: "Azure DB"
     identifier: "pg-azuredb"
+    weight: 25
 ---
 
 This page shows you how to stream data from [Azure DB for PostgreSQL](https://azure.microsoft.com/en-us/products/postgresql)

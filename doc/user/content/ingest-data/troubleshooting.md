@@ -13,11 +13,13 @@ aliases:
 ---
 
 As you wire up data ingestion in Materialize, you might run into some snags or
-unexpected scenarios. This guide collects common questions around data
-ingestion to help you troubleshoot your sources. If you're looking for
-troubleshooting guidance for slow or unresponsive queries, check out the
-[`Transform data` troubleshooting](/transform-data/troubleshooting) guide
-instead.
+unexpected scenarios. This guide collects common questions around data ingestion
+to help you troubleshoot your sources. See also [Monitoring data
+ingestion](/ingest-data/monitoring-data-ingestion/)
+
+If you're looking for troubleshooting guidance for slow or unresponsive queries,
+check out the [`Transform data`
+troubleshooting](/transform-data/troubleshooting) guide instead.
 
 {{< tip >}}
 {{< guided-tour-blurb-for-ingest-data >}}
@@ -79,7 +81,7 @@ for the source as a whole once all worker threads have committed their
 components of the snapshot.
 
 Even if your source has not yet committed its initial snapshot, you can still
-monitor its progress. See [How do I monitor source ingestion progress?](#how-do-i-monitor-source-ingestion-progress).
+monitor its progress. See [Monitoring data ingestion](/ingest-data/monitoring-data-ingestion/).
 
 ## How do I speed up the snapshotting process?
 
@@ -96,51 +98,6 @@ also be necessary to support increased memory usage during the process. For more
 information, see [Use a larger cluster for upsert source
 snapshotting](/ingest-data/#use-a-larger-cluster-for-upsert-source-snapshotting).
 
-## How do I monitor source ingestion progress?
+## See also
 
-Repeatedly query the
-[`mz_source_statistics`](/sql/system-catalog/mz_internal/#mz_source_statistics)
-table and look for ingestion statistics that advance over time:
-
-```mzsql
-SELECT
-    bytes_received,
-    messages_received,
-    updates_staged,
-    updates_committed
-FROM mz_internal.mz_source_statistics
-WHERE id = <SOURCE_ID>;
-```
-
-You can also look at statistics for individual worker threads to evaluate
-whether ingestion progress is skewed, but it's generally simplest to start
-by looking at the aggregate statistics for the whole source.
-
-The `bytes_received` and `messages_received` statistics should roughly match the
-external system's measure of progress. For example, the `bytes_received` and
-`messages_received` fields for a Kafka source should roughly match the upstream
-Kafka broker reports as the number of bytes (including the key) and number of
-messages transmitted, respectively.
-
-During the initial snapshot, `updates_committed` will remain at zero until all
-messages in the snapshot have been staged. Only then will `updates_committed`
-advance. This is expected, and not a cause for concern.
-
-After the initial snapshot, there should be relatively little skew between
-`updates_staged` and `updates_committed`. A large gap is usually an indication
-that the source has fallen behind, and that you likely need to scale it up.
-
-`messages_received` does not necessarily correspond with `updates_staged`
-and `updates_commmited`. For example, a source with `ENVELOPE UPSERT` can have _more_
-updates than messages, because messages can cause both deletions and insertions
-(i.e. when they update a value for a key), which are both counted in the
-`updates_*` statistics. There can also be _fewer_ updates than messages, as
-many messages for a single key can be consolidated if they occur within a (small)
-internally configured window. That said, `messages_received` making
-steady progress while `updates_staged`/`updates_committed` doesn't is also
-evidence that a source has fallen behind, and may need to be scaled up.
-
-Beware that these statistics periodically reset to zero, as internal components
-of the system restart. This is expected behavior. As a result, you should
-restrict your attention to how these statistics evolve over time, and not their
-absolute values at any moment in time.
+- [Monitoring data ingestion](/ingest-data/monitoring-data-ingestion/)
