@@ -238,13 +238,21 @@ cleanup() {
   fi
 
   if [ "$BUILDKITE_STEP_KEY" = "terraform-aws" ]; then
-    mzcompose run aws-temporary --no-setup --no-test --no-run-mz-debug || CI_ANNOTATE_ERRORS_RESULT=1
+      if ! mzcompose run aws-temporary --no-setup --no-test --no-run-mz-debug; then
+          CI_ANNOTATE_ERRORS_RESULT=1
+      fi
   elif [ "$BUILDKITE_STEP_KEY" = "terraform-aws-upgrade" ]; then
-    mzcompose run aws-upgrade --no-setup --no-test --no-run-mz-debug || CI_ANNOTATE_ERRORS_RESULT=1
+      if ! mzcompose run aws-upgrade --no-setup --no-test --no-run-mz-debug; then
+          CI_ANNOTATE_ERRORS_RESULT=1
+      fi
   elif [ "$BUILDKITE_STEP_KEY" = "terraform-gcp" ]; then
-    mzcompose run gcp-temporary --no-setup --no-test --no-run-mz-debug || CI_ANNOTATE_ERRORS_RESULT=1
+      if ! mzcompose run gcp-temporary --no-setup --no-test --no-run-mz-debug; then
+          CI_ANNOTATE_ERRORS_RESULT=1
+      fi
   elif [ "$BUILDKITE_STEP_KEY" = "terraform-azure" ]; then
-    mzcompose run azure-temporary --no-setup --no-test --no-run-mz-debug || CI_ANNOTATE_ERRORS_RESULT=1
+      if ! mzcompose run azure-temporary --no-setup --no-test --no-run-mz-debug; then
+          CI_ANNOTATE_ERRORS_RESULT=1
+      fi
   fi
   rm -rf ~/.kube # Remove potential state from E2E Terraform tests
 

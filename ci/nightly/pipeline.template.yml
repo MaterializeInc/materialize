@@ -1390,6 +1390,7 @@ steps:
             args: [--no-cleanup]
             ci-builder: stable
       branches: "main v*.* *aws* *tf* *terraform* *helm* *self-managed* *orchestratord*"
+      skip: "https://github.com/MaterializeInc/terraform-aws-materialize/issues/71"
 
     - id: terraform-aws-upgrade
       label: "Terraform + Helm Chart Upgrade on AWS"
@@ -1409,6 +1410,7 @@ steps:
             args: [--no-cleanup]
             ci-builder: stable
       branches: "main v*.* *aws* *tf* *terraform* *helm* *self-managed* *orchestratord*"
+      skip: "https://github.com/MaterializeInc/terraform-aws-materialize/issues/71"
 
     - id: terraform-gcp
       label: "Terraform + Helm Chart E2E on GCP"
