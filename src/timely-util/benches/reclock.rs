@@ -14,20 +14,19 @@ use differential_dataflow::{
     ExchangeData,
     input::{Input, InputSession},
 };
+
 use mz_ore::Overflowing;
-use mz_timely_util::{capture::PusherCapture, order::Partitioned, reclock::reclock};
-use timely::{
-    communication::allocator::Thread,
-    dataflow::{
-        Scope,
-        operators::{
-            ActivateCapability, Capture, UnorderedInput, capture::Event,
-            unordered_input::UnorderedHandle,
-        },
-    },
-    progress::{Antichain, Timestamp, timestamp::Refines},
-    worker::Worker,
-};
+use mz_timely_util::capture::PusherCapture;
+use mz_timely_util::order::Partitioned;
+use mz_timely_util::reclock::reclock;
+use timely::communication::allocator::Thread;
+use timely::dataflow::Scope;
+use timely::dataflow::operators::capture::Event;
+use timely::dataflow::operators::unordered_input::UnorderedHandle;
+use timely::dataflow::operators::{ActivateCapability, Capture, UnorderedInput};
+use timely::progress::timestamp::Refines;
+use timely::progress::{Antichain, Timestamp};
+use timely::worker::Worker;
 
 type Diff = Overflowing<i64>;
 type FromTime = Partitioned<u64, u64>;
