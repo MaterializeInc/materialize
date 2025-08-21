@@ -169,7 +169,7 @@ pub struct MaterializeControllerArgs {
     default_certificate_specs: DefaultCertificateSpecs,
 
     #[clap(long, hide = true)]
-    disable_license_key_checks: bool,
+    enable_license_key_checks: bool,
 }
 
 fn parse_affinity(s: &str) -> anyhow::Result<Affinity> {

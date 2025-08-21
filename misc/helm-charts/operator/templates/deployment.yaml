@@ -61,8 +61,8 @@ spec:
         {{- if .Values.operator.args.enableInternalStatementLogging }}
         - "--enable-internal-statement-logging"
         {{- end }}
-        {{- if not .Values.operator.args.enableLicenseKeyChecks }}
-        - "--disable-license-key-checks"
+        {{- if .Values.operator.args.enableLicenseKeyChecks }}
+        - "--enable-license-key-checks"
         {{- end }}
 
         {{/* AWS Configuration */}}

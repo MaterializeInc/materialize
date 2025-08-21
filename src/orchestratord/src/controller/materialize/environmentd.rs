@@ -1264,7 +1264,7 @@ fn create_environmentd_statefulset_object(
         args.push("--orchestrator-kubernetes-enable-prometheus-scrape-annotations".into());
     }
 
-    if config.disable_license_key_checks {
+    if !config.enable_license_key_checks {
         if mz.meets_minimum_version(&V143) && !mz.meets_minimum_version(&V153) {
             args.push("--disable-license-key-checks".into());
         }
