@@ -19,6 +19,11 @@
 
 mode cockroach
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_with_ordinality_legacy_fallback = true
+----
+COMPLETE 0
+
 query II colnames
 SELECT * FROM ROWS FROM (generate_series(1,2), generate_series(4,8))
 ----

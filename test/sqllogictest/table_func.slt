@@ -1232,6 +1232,11 @@ NULL  NULL  NULL  12
 # about this. For further details, see comment in `plan_table_function_internal`.
 ########################################################################################################################
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_with_ordinality_legacy_fallback = true
+----
+COMPLETE 0
+
 query IIII colnames
 SELECT * FROM ROWS FROM (generate_series(1, 2), information_schema._pg_expandarray(array[9]), generate_series(3, 6)) ORDER BY 4;
 ----
