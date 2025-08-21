@@ -228,7 +228,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
         let mut df_builder = {
             let catalog = self.catalog.state();
             let compute = self.compute_instance.clone();
-            DataflowBuilder::new(catalog, compute).with_config(&self.config)
+            DataflowBuilder::new(catalog, compute, true).with_config(&self.config)
         };
 
         let debug_name = format!("copy-to-{}", self.select_id);

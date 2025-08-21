@@ -245,7 +245,7 @@ impl Optimize<LocalMirPlan> for Optimizer {
 
         let mut df_builder = {
             let compute = self.compute_instance.clone();
-            DataflowBuilder::new(&*self.catalog, compute).with_config(&self.config)
+            DataflowBuilder::new(&*self.catalog, compute, false).with_config(&self.config)
         };
         let mut df_desc = MirDataflowDescription::new(self.debug_name.clone());
 

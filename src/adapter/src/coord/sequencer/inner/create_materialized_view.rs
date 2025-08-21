@@ -381,7 +381,7 @@ impl Coordinator {
                 // Also check that no new id has appeared in `sufficient_collections` (e.g. a new
                 // index), otherwise we might be missing some read holds.
                 let ids = self
-                    .index_oracle(*cluster_id)
+                    .index_oracle(*cluster_id, false)
                     .sufficient_collections(resolved_ids.collections().copied());
                 if !ids.difference(&read_holds.id_bundle()).is_empty() {
                     return Err(AdapterError::ChangedPlan(

@@ -1171,7 +1171,7 @@ impl Coordinator {
             let catalog = self.catalog().for_session(session);
             let cluster = mz_sql::plan::resolve_cluster_for_materialized_view(&catalog, cmvs)?;
             let ids = self
-                .index_oracle(cluster)
+                .index_oracle(cluster, false)
                 .sufficient_collections(resolved_ids.collections().copied());
 
             // If there is any REFRESH option, then acquire read holds. (Strictly speaking, we'd

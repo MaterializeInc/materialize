@@ -577,6 +577,7 @@ impl Coordinator {
         timeline_context: &TimelineContext,
         conn_id: &ConnectionId,
         compute_instance: ComputeInstanceId,
+        is_peek: bool,
     ) -> Result<CollectionIdBundle, AdapterError>
     where
         I: IntoIterator<Item = &'a GlobalId>,
@@ -625,7 +626,7 @@ impl Coordinator {
 
         // Gather the dependencies of those items.
         let mut id_bundle: CollectionIdBundle = self
-            .index_oracle(compute_instance)
+            .index_oracle(compute_instance, is_peek)
             .sufficient_collections(collection_ids);
 
         // Filter out ids from different timelines.

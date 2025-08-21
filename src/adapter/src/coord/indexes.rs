@@ -20,8 +20,8 @@ use crate::optimize::dataflows::DataflowBuilder;
 
 impl Coordinator {
     /// Creates a new index oracle for the specified compute instance.
-    pub fn index_oracle(&self, instance: ComputeInstanceId) -> DataflowBuilder<'_> {
-        self.dataflow_builder(instance)
+    pub fn index_oracle(&self, instance: ComputeInstanceId, peek: bool) -> DataflowBuilder<'_> {
+        self.dataflow_builder(instance, peek)
     }
 }
 
@@ -86,7 +86,7 @@ impl DataflowBuilder<'_> {
     pub fn indexes_on(&self, id: GlobalId) -> impl Iterator<Item = (GlobalId, &Index)> {
         self.catalog
             .get_indexes_on(id, self.compute.instance_id())
-            .filter(|(idx_id, _idx)| self.compute.contains_collection(idx_id))
+            .filter(|(idx_id, _idx)| self.peek || self.compute.contains_collection(idx_id))
             .filter(|(idx_id, _idx)| self.replan.map_or(true, |id| idx_id < &id))
     }
 }

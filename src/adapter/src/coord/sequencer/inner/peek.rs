@@ -480,7 +480,7 @@ impl Coordinator {
             Either::Right(optimizer) => optimizer.cluster_id(),
         };
         let id_bundle = self
-            .dataflow_builder(cluster_id)
+            .dataflow_builder(cluster_id, true)
             .sufficient_collections(source_ids.iter().copied());
 
         // Although we have added `sources.depends_on()` to the validity already, also add the
@@ -1167,6 +1167,7 @@ impl Coordinator {
                         &timeline_context,
                         session.conn_id(),
                         cluster_id,
+                        true,
                     )?;
 
                     &timedomain_bundle

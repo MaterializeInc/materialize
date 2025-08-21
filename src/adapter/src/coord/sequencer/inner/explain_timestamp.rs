@@ -300,7 +300,7 @@ impl Coordinator {
         }: ExplainTimestampFinish,
     ) -> Result<StageResult<Box<ExplainTimestampStage>>, AdapterError> {
         let id_bundle = self
-            .index_oracle(cluster_id)
+            .index_oracle(cluster_id, true) ////////////////// todo: true?
             .sufficient_collections(source_ids.iter().copied());
 
         let is_json = match format {

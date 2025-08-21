@@ -104,6 +104,8 @@ pub struct DataflowBuilder<'a> {
     pub replan: Option<GlobalId>,
     /// A guard for recursive operations in this [`DataflowBuilder`] instance.
     recursion_guard: RecursionGuard,
+    /// todo //////////////////
+    pub peek: bool, //////////////// move to OptimizerConfig?   add or_copy_to?
 }
 
 /// The styles in which an expression can be prepared for use in a dataflow.
@@ -151,12 +153,17 @@ pub fn dataflow_import_id_bundle<P>(
 }
 
 impl<'a> DataflowBuilder<'a> {
-    pub fn new(catalog: &'a dyn OptimizerCatalog, compute: ComputeInstanceSnapshot) -> Self {
+    pub fn new(
+        catalog: &'a dyn OptimizerCatalog,
+        compute: ComputeInstanceSnapshot,
+        peek: bool,
+    ) -> Self {
         Self {
             catalog,
             compute,
             replan: None,
             recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
+            peek,
         }
     }
 
