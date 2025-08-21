@@ -1338,7 +1338,7 @@ pub(crate) fn validate_truncate_batch<T: Timestamp>(
     batch: &HollowBatch<T>,
     truncate: &Description<T>,
     any_batch_rewrite: bool,
-    enforce_matching_batch_boundaries: bool,
+    validate_part_bounds_on_write: bool,
 ) -> Result<(), InvalidUsage<T>> {
     // If rewrite_ts is used, we don't allow truncation, to keep things simpler
     // to reason about.
@@ -1368,7 +1368,7 @@ pub(crate) fn validate_truncate_batch<T: Timestamp>(
         }
     }
 
-    if !enforce_matching_batch_boundaries {
+    if !validate_part_bounds_on_write {
         return Ok(());
     }
 
