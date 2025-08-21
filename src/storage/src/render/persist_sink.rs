@@ -1109,10 +1109,10 @@ where
                 }
             });
 
-            let use_bulk_writing = !write.validate_part_bounds_on_write();
+            let validate_part_bounds_on_write = write.validate_part_bounds_on_write();
             let mut todo = VecDeque::new();
 
-            if use_bulk_writing {
+            if !validate_part_bounds_on_write {
                 let mut combined_batch_metadata = None;
                 let mut combined_batch_set = BatchSet::default();
                 for done_batch_metadata in done_batches.drain(..) {
@@ -1259,7 +1259,7 @@ where
                                 &mut to_append[..],
                                 batch_lower.clone(),
                                 batch_upper.clone(),
-                                use_bulk_writing,
+                                validate_part_bounds_on_write,
                             )
                             .await
                             .expect("Invalid usage")

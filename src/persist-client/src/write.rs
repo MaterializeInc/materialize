@@ -483,18 +483,11 @@ where
         batches: &mut [&mut Batch<K, V, T, D>],
         expected_upper: Antichain<T>,
         new_upper: Antichain<T>,
-        override_validate_part_bounds_on_write: bool,
+        validate_part_bounds_on_write: bool,
     ) -> Result<Result<(), UpperMismatch<T>>, InvalidUsage<T>>
     where
         D: Send + Sync,
     {
-        // NB(ptravers): we validate batch bounds iff
-        // override_validate_part_bounds_on_write = true
-        // OR
-        // (persist_validate_part_bounds_on_write = true AND persist_validate_part_bounds_on_read = true).
-        let validate_part_bounds_on_write =
-            override_validate_part_bounds_on_write || self.validate_part_bounds_on_write();
-
         for batch in batches.iter() {
             if self.machine.shard_id() != batch.shard_id() {
                 return Err(InvalidUsage::BatchNotFromThisShard {
