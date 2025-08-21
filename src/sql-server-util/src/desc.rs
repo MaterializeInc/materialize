@@ -38,6 +38,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use crate::cdc::Lsn;
 use crate::{SqlServerDecodeError, SqlServerError};
 
 include!(concat!(env!("OUT_DIR"), "/mz_sql_server_util.rs"));
@@ -159,6 +160,8 @@ pub struct SqlServerTableRaw {
     pub name: Arc<str>,
     /// The capture instance replicating changes.
     pub capture_instance: Arc<str>,
+    /// The start lsn of the capture instance was created replicating changes.
+    pub capture_instance_start_lsn: Lsn,
     /// Columns for the table.
     pub columns: Arc<[SqlServerColumnRaw]>,
 }
@@ -985,6 +988,7 @@ impl SqlServerRowDecoder {
 mod tests {
     use std::collections::BTreeSet;
 
+    use crate::cdc::Lsn;
     use crate::desc::{
         SqlServerColumnDecodeType, SqlServerColumnDesc, SqlServerTableDesc, SqlServerTableRaw,
         tiberius_numeric_to_mz_numeric,
@@ -1090,6 +1094,7 @@ mod tests {
             schema_name: "my_schema".into(),
             name: "my_table".into(),
             capture_instance: "my_table_CT".into(),
+            capture_instance_start_lsn: Lsn::default(),
             columns: sql_server_columns.into(),
         };
         let sql_server_desc = SqlServerTableDesc::new(sql_server_desc);
@@ -1162,6 +1167,7 @@ mod tests {
                 schema_name: "my_schema".into(),
                 name: "my_table".into(),
                 capture_instance: "my_table_CT".into(),
+                capture_instance_start_lsn: Lsn::default(),
                 columns: columns.into(),
             };
             let mut sql_server_desc = SqlServerTableDesc::new(sql_server_desc);
