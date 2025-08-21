@@ -92,6 +92,36 @@ SELECT
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('mz_source')
 
+# capture the current replica_id for the source statistics
+$ set-regex match=u\d+ replacement="<REPLICAID>"
+> SELECT cr.id
+  FROM
+    mz_clusters c,
+    mz_cluster_replicas cr,
+    mz_internal.mz_source_statistics_raw u,
+    mz_sources s
+  WHERE
+    c.name = 'stats_cluster' AND c.id = cr.cluster_id AND cr.id = u.replica_id
+    AND s.name IN ('mz_source') AND u.id = s.id
+  ORDER BY cr.id
+  LIMIT 1
+<REPLICAID>
+
+$ set-from-sql var=old_replica_id
+SELECT cr.id
+  FROM
+    mz_clusters c,
+    mz_cluster_replicas cr,
+    mz_internal.mz_source_statistics_raw u,
+    mz_sources s
+  WHERE
+    c.name = 'stats_cluster' AND c.id = cr.cluster_id AND cr.id = u.replica_id
+    AND s.name IN ('mz_source') AND u.id = s.id
+  ORDER BY cr.id
+  LIMIT 1
+
+$ unset-regex
+
 > ALTER CLUSTER stats_cluster SET (REPLICATION FACTOR 0)
 
 $ sql-server-execute name=sql-server
@@ -99,9 +129,41 @@ INSERT INTO t1 VALUES ('four');
 
 > ALTER CLUSTER stats_cluster SET (REPLICATION FACTOR 1)
 
-# Ensure the snapshot stats stay there, and don't change.
+# capture the new replica_id
+$ set-regex match=u\d+ replacement="<REPLICAID>"
+> SELECT cr.id
+  FROM
+    mz_clusters c,
+    mz_cluster_replicas cr,
+    mz_internal.mz_source_statistics_raw u,
+    mz_sources s
+  WHERE
+    c.name = 'stats_cluster' AND c.id = cr.cluster_id AND cr.id = u.replica_id
+    AND s.name IN ('mz_source') AND u.id = s.id
+  ORDER BY cr.id
+  LIMIT 1
+<REPLICAID>
+
+$ set-from-sql var=replica_id
+SELECT cr.id
+  FROM
+    mz_clusters c,
+    mz_cluster_replicas cr,
+    mz_internal.mz_source_statistics_raw u,
+    mz_sources s
+  WHERE
+    c.name = 'stats_cluster' AND c.id = cr.cluster_id AND cr.id = u.replica_id
+    AND s.name IN ('mz_source') AND u.id = s.id
+  ORDER BY cr.id
+  LIMIT 1
+
+$ unset-regex
+
+# Ensure the snapshot stats stay there, and don't change for the original replica
+# and the new replica has reset stats
 > SELECT
     s.name,
+    u.replica_id,
     SUM(u.offset_committed) > ${pre-restart-offset-committed},
     SUM(u.offset_known) >= SUM(u.offset_committed),
     SUM(u.snapshot_records_known),
@@ -109,9 +171,10 @@ INSERT INTO t1 VALUES ('four');
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
   WHERE s.name IN ('mz_source')
-  GROUP BY s.name
-  ORDER BY s.name
-mz_source true true 2 2
+  GROUP BY s.name, u.replica_id
+  ORDER BY s.name, u.replica_id
+mz_source "${old_replica_id}" false true 2 2
+mz_source "${replica_id}" true true 0 0
 
 $ sql-server-execute name=sql-server
 CREATE TABLE alt (f1 VARCHAR(128));
@@ -123,18 +186,17 @@ INSERT INTO alt VALUES ('one');
 > SELECT COUNT(*) > 0 FROM alt;
 true
 
-# FIXME(ptravers): https://github.com/MaterializeInc/database-issues/issues/9583
 # Ensure snapshot stats are overridden when we add a new table
-# > SELECT
-#     s.name,
-#     SUM(u.snapshot_records_known),
-#     SUM(u.snapshot_records_staged)
-#   FROM mz_sources s
-#   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
-#   WHERE s.name IN ('mz_source')
-#   GROUP BY s.name
-#   ORDER BY s.name
-# mz_source 1 1
+> SELECT
+     s.name,
+     SUM(u.snapshot_records_known),
+     SUM(u.snapshot_records_staged)
+   FROM mz_sources s
+   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+   WHERE s.name IN ('mz_source') AND u.replica_id = '${replica_id}'
+   GROUP BY s.name
+   ORDER BY s.name
+ mz_source 1 1
 
 # Ensure subsource stats show up, and then are removed when we drop subsources.
 > SELECT
@@ -142,7 +204,7 @@ true
     SUM(u.updates_committed) > 0
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
-  WHERE s.name IN ('alt')
+  WHERE s.name IN ('alt') AND u.replica_id = '${replica_id}'
   GROUP BY s.name
   ORDER BY s.name
 alt true
@@ -153,5 +215,5 @@ alt true
     count(*)
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
-  WHERE s.name IN ('alt')
+  WHERE s.name IN ('alt') AND u.replica_id = '${replica_id}'
 0
