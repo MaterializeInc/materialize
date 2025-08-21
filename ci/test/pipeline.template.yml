@@ -208,7 +208,7 @@ steps:
       - id: lint-macos
         label: ":rust: macOS Clippy"
         # Running on a manually installed macOS agent, so make sure we don't go out of disk
-        command: "cargo clippy --all-targets -- -D warnings; find target -type f -mtime +7 -delete"
+        command: "cargo clippy --all-targets -- -D warnings; if [ $(du -sg target | cut -f1) -gt 50 ]; then rm -rf target; fi"
         env:
           CARGO_INCREMENTAL: "0"
           RUSTUP_TOOLCHAIN: $RUST_VERSION
