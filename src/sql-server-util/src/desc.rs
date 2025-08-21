@@ -887,13 +887,10 @@ impl RustType<proto_sql_server_column_desc::DecodeType> for SqlServerColumnDecod
 /// Numerics in SQL Server have a maximum precision of 38 digits, where [`Numeric`]s in
 /// Materialize have a maximum precision of 39 digits, so this conversion is infallible.
 fn tiberius_numeric_to_mz_numeric(val: tiberius::numeric::Numeric) -> Numeric {
-    let mut scale = Numeric::from(10);
-    let scale_pow = Numeric::from(val.scale());
-    mz_repr::adt::numeric::cx_datum().pow(&mut scale, &scale_pow);
-
     let mut numeric = mz_repr::adt::numeric::cx_datum().from_i128(val.value());
-    mz_repr::adt::numeric::cx_datum().div(&mut numeric, &scale);
-
+    // Use scaleb to adjust the exponent directly, avoiding precision loss from division
+    // scaleb(x, -n) computes x * 10^(-n)
+    mz_repr::adt::numeric::cx_datum().scaleb(&mut numeric, &Numeric::from(-i32::from(val.scale())));
     numeric
 }
 
@@ -1222,6 +1219,20 @@ mod tests {
         let a = tiberius::numeric::Numeric::new_with_scale(-99999, 5);
         let rnd = tiberius_numeric_to_mz_numeric(a);
         let og = mz_repr::adt::numeric::cx_datum().parse("-.99999").unwrap();
+        assert_eq!(og, rnd);
+
+        let a = tiberius::numeric::Numeric::new_with_scale(1, 29);
+        let rnd = tiberius_numeric_to_mz_numeric(a);
+        let og = mz_repr::adt::numeric::cx_datum()
+            .parse("0.00000000000000000000000000001")
+            .unwrap();
+        assert_eq!(og, rnd);
+
+        let a = tiberius::numeric::Numeric::new_with_scale(-111111111111111111, 0);
+        let rnd = tiberius_numeric_to_mz_numeric(a);
+        let og = mz_repr::adt::numeric::cx_datum()
+            .parse("-111111111111111111")
+            .unwrap();
         assert_eq!(og, rnd);
     }
 
