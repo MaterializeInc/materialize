@@ -48,3 +48,7 @@ SET cluster TO 'c1';
 # aggregating the result from multiple workers, as opposed to on any single worker.
 query error db error: ERROR: total result exceeds max size of 1048.6 KB
 SELECT * FROM t1;
+
+# For SUBSCRIBE, we need to add a GROUP BY to force an exchange in the dataflow.
+query error db error: ERROR: total result exceeds max size of 1048.6 KB
+SUBSCRIBE (SELECT * FROM t1 GROUP BY a, b)
