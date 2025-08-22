@@ -2239,3 +2239,42 @@ steps:
               composition: ruby
         agents:
           queue: hetzner-aarch64-4cpu-8gb
+
+  - group: "Orchestratord tests"
+    key: orchestratord-test
+    steps:
+      - id: orchestratord-defaults
+        label: "Orchestratord test (defaults for properties)"
+        depends_on: build-aarch64
+        timeout_in_minutes: 180
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: orchestratord
+              args: [--scenario=defaults, --recreate-cluster]
+              ci-builder: stable
+        agents:
+          queue: hetzner-aarch64-8cpu-16gb
+
+      - id: orchestratord-all
+        label: "Orchestratord test (every property)"
+        depends_on: build-aarch64
+        timeout_in_minutes: 180
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: orchestratord
+              args: [--scenario=all, --recreate-cluster]
+              ci-builder: stable
+        agents:
+          queue: hetzner-aarch64-8cpu-16gb
+
+      - id: orchestratord-combine
+        label: "Orchestratord test (combine properties)"
+        depends_on: build-aarch64
+        timeout_in_minutes: 180
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: orchestratord
+              args: [--scenario=combine, --runtime=7200, --recreate-cluster]
+              ci-builder: stable
+        agents:
+          queue: hetzner-aarch64-8cpu-16gb
