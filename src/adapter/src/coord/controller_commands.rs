@@ -954,6 +954,14 @@ impl Coordinator {
     ) -> Result<(), AdapterError> {
         let existing_gid = prev_table.global_id_writes();
         let new_gid = new_table.global_id_writes();
+
+        if existing_gid == new_gid {
+            // It's not an ALTER TABLE as far as the controller is concerned,
+            // because we still have the same GlobalId. This is likely a change
+            // from an ALTER SWAP.
+            return Ok(());
+        }
+
         let expected_version = prev_table.desc.latest_version();
         let new_version = new_table.desc.latest_version();
         let new_desc = new_table
