@@ -14,6 +14,7 @@ use std::sync::Arc;
 use mz_ore::now::SYSTEM_TIME;
 use mz_repr::RelationDesc;
 use mz_sql_parser::ast::{ExternalReferences, Ident, IdentError, UnresolvedItemName};
+use mz_sql_server_util::desc::SqlServerTableRaw;
 use mz_storage_types::sources::load_generator::{LoadGenerator, LoadGeneratorOutput};
 use mz_storage_types::sources::{ExternalReferenceResolutionError, SourceReferenceResolver};
 
@@ -246,22 +247,35 @@ impl<'a> SourceReferenceClient<'a> {
             } => {
                 let tables = mz_sql_server_util::inspect::get_tables(client).await?;
 
-                // TODO(sql_server2): Figure out how to handle a single table with
-                // multiple capture instances.
-                let mut unique_tables = BTreeMap::default();
+                let mut unique_tables: BTreeMap<(Arc<str>, Arc<str>), SqlServerTableRaw> =
+                    BTreeMap::default();
                 for table in tables {
                     let key = (Arc::clone(&table.schema_name), Arc::clone(&table.name));
-                    if unique_tables.contains_key(&key) {
-                        tracing::warn!(?table, "filtering out other instance of table");
-                    } else {
-                        unique_tables.insert(key, table);
-                    }
+
+                    unique_tables
+                        .entry(key)
+                        .and_modify(|chosen_table: &mut SqlServerTableRaw| {
+                            // When multiple capture instances exist for the same table,
+                            // we select deterministically based on:
+                            // 1. Most recent create_date (newer capture instance)
+                            // 2. If dates are equal, lexicographically greatest capture_instance name
+                            if chosen_table.capture_instance.create_date
+                                < table.capture_instance.create_date
+                                || (chosen_table.capture_instance.create_date
+                                    == table.capture_instance.create_date
+                                    && chosen_table.capture_instance.name
+                                        < table.capture_instance.name)
+                            {
+                                *chosen_table = table.clone();
+                            }
+                        })
+                        .or_insert(table);
                 }
 
                 unique_tables
                     .into_values()
                     .map(|raw| {
-                        let capture_instance = Arc::clone(&raw.capture_instance);
+                        let capture_instance = Arc::clone(&raw.capture_instance.name);
                         let database = Arc::clone(database);
                         let table = mz_sql_server_util::desc::SqlServerTableDesc::new(raw);
                         ReferenceMetadata::SqlServer {

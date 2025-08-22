@@ -664,12 +664,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     # and kafka implementations, if --extended is passed
     workflows = [
         # These tests core functionality related to kafka with ssh and error reporting.
-        (workflow_kafka, (False,), True),
+        # TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/9533 is fixed
+        # (workflow_kafka, (False,), True),
         (workflow_hidden_hosts, (False,), True),
         # These tests core functionality related to pg with ssh and error reporting.
         (workflow_basic_ssh_features, (), False),
         (workflow_pg, (), True),
-        (workflow_kafka_restart_replica, (), True),
+        # TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/9533 is fixed
+        # (workflow_kafka_restart_replica, (), True),
         (workflow_kafka_sink, (), True),
     ]
     if args.extended:

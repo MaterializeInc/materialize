@@ -93,7 +93,6 @@ class KafkaTransactionLogGreaterThan1:
             c.up("zookeeper", "badkafka", "schema-registry", "materialized")
             self.populate(c)
             self.assert_error(c, "transaction error", "running a single Kafka broker")
-            c.down(sanity_restart_mz=False)
 
     def populate(self, c: Composition) -> None:
         # Create a source and a sink
@@ -147,7 +146,6 @@ class KafkaDisruption:
         print(f"+++ Running disruption scenario {self.name}")
         seed = random.randint(0, 256**4)
 
-        c.down(destroy_volumes=True, sanity_restart_mz=False)
         c.up(
             "redpanda",
             "materialized",
@@ -262,7 +260,6 @@ class KafkaSinkDisruption:
         print(f"+++ Running Kafka sink disruption scenario {self.name}")
         seed = random.randint(0, 256**4)
 
-        c.down(destroy_volumes=True, sanity_restart_mz=False)
         c.up(
             "redpanda",
             "materialized",
@@ -371,7 +368,6 @@ class PgDisruption:
         print(f"+++ Running disruption scenario {self.name}")
         seed = random.randint(0, 256**4)
 
-        c.down(destroy_volumes=True, sanity_restart_mz=False)
         c.up(
             "postgres",
             "materialized",
@@ -582,6 +578,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             f"Disruption '{disruption.name}' in workflow_default"
         )
         disruption.run_test(c)
+        c.down(sanity_restart_mz=False)
 
 
 def delete_sink_topic(c: Composition, seed: int) -> None:

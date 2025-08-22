@@ -18,28 +18,24 @@ Materialize organization, you can create service accounts manually via the
 More granular permissions for the service account can then be configured using
 [role-based access control (RBAC)](/manage/access-control/).
 
-## Materialize Console
+{{< note >}}
 
-{{< important >}}
-For a new service account, after creating the new app password, you
-must connect with the service account to complete the account creation.
-{{</ important >}}
+- The new account creation is not finished until the first time you connect with
+the account.
+
+- {{< include-md file="shared-content/rbac/service-account-creation.md" >}}
+
+{{</ note >}}
+
+## Materialize Console
 
 1. [Log in to the Materialize Console](https://console.materialize.com/).
 
 1. In the side navigation bar, click **+ Create New** > **App Password**.
 
-1. In the **New app password** modal, select **Type** > **Service** and name the
-new app password. Under **User**, specify the new service user you'd like to
-create and associate with the new app password.
+1. In the **New app password** modal, specify the type and required field(s):
 
-1. Under **Roles**, select *Organization Admin* or *Organization Member*
-   depending on the level of database access the service user needs:
-
-    - `Organization Admin`: has _superuser_ privileges in the database.
-
-    - `Organization Member`: has restricted access to the database, depending on
-      the privileges defined via [role-based access control (RBAC)](/manage/access-control/#role-based-access-control-rbac).
+   {{< yaml-table data="console/service_account_fields" >}}
 
 1. Click **Create Password** to generate a new password for your service
    account.
@@ -56,6 +52,15 @@ create and associate with the new app password.
 1. Connect with the new service account to finish creating the new
    account.
 
+   {{< note >}}
+
+- The new account creation is not finished until the first time you connect with
+  the account.
+
+- {{< include-md file="shared-content/rbac/service-account-creation.md" >}}
+
+   {{</ note >}}
+
    1. Find your new service account in the **App Passwords** table.
 
    1. Click on the **Connect** button to get details on connecting with the new
@@ -69,8 +74,7 @@ If you have `psql` installed:
 1. From a terminal, connect using the psql command displayed.
 1. When prompted for the password, enter the app's password.
 
-Once connected, the service account creation is complete and you can grant roles
-to the new service account.
+{{< include-md file="shared-content/rbac/service-account-creation.md" >}}
 
       {{</ tab >}}
       {{< tab "Other clients" >}}
@@ -80,8 +84,8 @@ To use a different client to connect,
 
 1. Update the client to use these details and connect.
 
-Once connected, the service account creation is complete and you can grant roles
-to the new service account.
+{{< include-md file="shared-content/rbac/service-account-creation.md" >}}
+
       {{</ tab >}}
       {{</ tabs >}}
 
@@ -137,3 +141,7 @@ to the new service account.
 
 For general guidance on using the Materialize Terraform provider to manage
 resources in your region, see the [reference documentation](/manage/terraform/).
+
+## Next steps
+
+{{< include-md file="shared-content/rbac/account-creation-next-steps.md" >}}

@@ -120,35 +120,83 @@ toCSS | fingerprint }}
 
 {{/* Tabs */}}
 <script>
-  $(document).ready(function () {
-    // make nav-tab lists from tab-panes
-    $(".tab-content").each(function (idx, tab) {
-      $(tab)
-        .find(".tab-pane")
-        .each(function (item) {
-          var navTabs = $(this).closest(".code-tabs").find(".nav-tabs"),
-            title = $(this).attr("title"),
-            id = title
-              .toLowerCase()
-              .replace(/ /g, "-")
-              .replace(/[^\w-]+/g, "");
-          navTabs.append(`<li><a href="#${id}-t${idx}">${title}</a></li>`);
-        });
+document.addEventListener("DOMContentLoaded", function () {
+  document.querySelectorAll(".code-tabs").forEach(function (tabGroup) {
+    const navTabs = tabGroup.querySelector(".nav-tabs");
+    const tabContent = tabGroup.querySelector(".tab-content");
+    if (!navTabs || !tabContent) return;
+
+    if (navTabs.children.length > 0) return; // skip if already populated
+
+    const tabPanes = Array.from(tabContent.children).filter(child =>
+      child.classList.contains("tab-pane")
+    );
+
+    // Create tab navigation
+    tabPanes.forEach((pane, index) => {
+      const title = pane.getAttribute("title") || `Tab ${index + 1}`;
+      const paneId = pane.getAttribute("id");
+
+      const tab = document.createElement("li");
+      tab.className = "nav-item";
+
+      const link = document.createElement("a");
+      link.className = "nav-link";
+      link.href = `#${paneId}`;
+      link.textContent = title;
+      link.setAttribute("data-tab", index);
+
+      tab.appendChild(link);
+      navTabs.appendChild(tab);
+
+      // Set first tab as active by default
+      if (index === 0) {
+        tab.classList.add("active");
+        pane.classList.add("active");
+      } else {
+        pane.classList.remove("active");
+      }
     });
 
-    // handle click events
-    $(".nav-tabs a").click(function (e) {
-      var tab = $(this).parent(),
-        tabIndex = tab.index(),
-        tabPanel = $(this).closest(".code-tabs"),
-        tabPane = tabPanel.find(".tab-pane").eq(tabIndex);
-      tabPanel.find(".active").removeClass("active");
-      tab.addClass("active");
-      tabPane.addClass("active");
+    // Add click handlers for tab switching
+    navTabs.addEventListener("click", function(e) {
+      e.preventDefault();
+
+      if (e.target.classList.contains("nav-link")) {
+        const tabIndex = parseInt(e.target.getAttribute("data-tab"));
+        if (!isNaN(tabIndex) && tabIndex >= 0 && tabIndex < tabPanes.length) {
+          activateTab(tabIndex);
+        }
+      }
     });
 
-    // activate first tab
-    $(".nav-tabs li:first-child a").click();
+    // Function to activate a specific tab
+    function activateTab(tabIndex) {
+      // Remove active class from all tabs and panes
+      navTabs.querySelectorAll(".nav-item").forEach(item => item.classList.remove("active"));
+      tabPanes.forEach(pane => pane.classList.remove("active"));
 
+      // Add active class to specified tab and corresponding pane
+      const targetTab = navTabs.children[tabIndex];
+      const targetPane = tabPanes[tabIndex];
+
+      if (targetTab && targetPane) {
+        targetTab.classList.add("active");
+        targetPane.classList.add("active");
+      }
+    }
+
+    const updateOverflow = () => {
+      const scrollLeft = navTabs.scrollLeft;
+      const scrollRight = navTabs.scrollWidth - navTabs.clientWidth - scrollLeft;
+
+      tabGroup.classList.toggle('has-left-overflow', scrollLeft > 0);
+      tabGroup.classList.toggle('has-right-overflow', scrollRight > 1);
+    };
+
+    updateOverflow();
+    navTabs.addEventListener('scroll', updateOverflow);
+    window.addEventListener('resize', updateOverflow);
   });
+});
 </script>

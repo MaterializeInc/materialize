@@ -56,13 +56,11 @@ To make Materialize metadata available to Datadog, you must configure and run th
 
 * Optionally, add the SSO domain provided by your identity provider. Click **Proceed**.
 
-* Select `Organization Admin` or `Organization Member`, depending on the level
-  of console access the user needs:
+* Select the organization role for the user:
 
-    - `Organization Admin`: can perform adminstration tasks in the console, like
-      inviting new users, editing account and security information, or managing
-      billing. Admins have _superuser_ privileges in the database.
+  {{< include-md file="shared-content/rbac/organization-roles.md" >}}
 
-    - `Organization Member`: can login to the console and has restricted access
-      to the database, depending  on the privileges defined via
-      [role-based access control (RBAC)](/manage/access-control/#role-based-access-control-rbac).
+
+## Next steps
+
+{{< include-md file="shared-content/rbac/account-creation-next-steps.md" >}}

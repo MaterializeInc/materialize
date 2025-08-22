@@ -43,3 +43,14 @@ Change Data Capture (CDC) implementation which only notifies CDC consumers every
 5 minutes when no changes are made to replicating tables.
 
 See [Monitoring freshness status](/ingest-data/monitoring-data-ingestion/#monitoring-hydrationdata-freshness-status)
+
+### Capture Instance Selection
+
+When a new Source is created, Materialize selects a capture instance for each table.
+SQL Server allows for a maximum of two capture instances per table. The [sys.cdc_change_tables](https://learn.microsoft.com/en-us/sql/relational-databases/system-tables/cdc-change-tables-transact-sql)
+table is used to discover the capture instances for each table. In particular the columns
+`create_date` and `capture_instance`. The capture instance is selected by picking
+the newest `create_date` of the two capture instances. If the two capture instances
+have the same create_date, unlikely given the resolution of `create_date` is to the
+millisecond, a tie will be broken by selecting the largest lexicographically using
+the column `capture_instance`.
