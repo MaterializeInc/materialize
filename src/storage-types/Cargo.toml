@@ -64,8 +64,8 @@ prost = { version = "0.13.5", features = ["no-recursion-limit"] }
 rdkafka = { version = "0.29.0", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
 regex = "1.11.1"
 serde = { version = "1.0.219", features = ["derive"] }
-serde_json = { version = "1.0.127", features = ["preserve_order"] }
-thiserror = "2.0.12"
+serde_json = { version = "1.0.143", features = ["preserve_order"] }
+thiserror = "2.0.16"
 tiberius = { version = "0.12", features = ["sql-browser-tokio", "tds73", "native-tls"], default-features = false }
 timely = "0.22.0"
 tokio = { version = "1.44.1", features = ["fs", "rt", "sync", "test-util", "time"] }
