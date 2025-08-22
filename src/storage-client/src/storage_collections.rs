@@ -1294,21 +1294,6 @@ where
             let changes = collection.read_capabilities.update_iter(update.drain());
             update.extend(changes);
 
-            if id.is_user() {
-                trace!(
-                %id,
-                ?collection.storage_dependencies,
-                ?update,
-                "forwarding update to storage dependencies");
-            }
-
-            for id in collection.storage_dependencies.iter() {
-                updates
-                    .entry(*id)
-                    .or_insert_with(ChangeBatch::new)
-                    .extend(update.iter().cloned());
-            }
-
             let (changes, frontier) = collections_net
                 .entry(id)
                 .or_insert_with(|| (<ChangeBatch<_>>::new(), Antichain::new()));
@@ -3085,6 +3070,13 @@ where
                 update.extend(new_read_capability.iter().map(|time| (time.clone(), -1)));
 
                 if !update.is_empty() {
+                    for id in collection.storage_dependencies.iter() {
+                        read_capability_changes
+                            .entry(*id)
+                            .or_insert_with(ChangeBatch::new)
+                            .extend(update.iter().cloned());
+                    }
+
                     read_capability_changes.insert(*id, update);
                 }
             }

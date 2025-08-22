@@ -2871,36 +2871,44 @@ where
         let mut read_capability_changes = BTreeMap::default();
 
         if let Some(collection) = self.collections.get_mut(&id) {
-            let (write_frontier, derived_since, hold_policy) = match &mut collection.extra_state {
-                CollectionStateExtra::Ingestion(ingestion) => (
-                    &mut ingestion.write_frontier,
-                    &mut ingestion.derived_since,
-                    &ingestion.hold_policy,
-                ),
-                CollectionStateExtra::None => {
-                    if matches!(collection.data_source, DataSource::Progress) {
-                        // We do get these, but can't do anything with it!
-                    } else {
-                        tracing::error!(
-                            ?collection,
-                            ?new_upper,
-                            "updated write frontier for collection which is not an ingestion"
-                        );
+            let (write_frontier, derived_since, hold_policy, dependency_holds) =
+                match &mut collection.extra_state {
+                    CollectionStateExtra::Ingestion(ingestion) => (
+                        &mut ingestion.write_frontier,
+                        &mut ingestion.derived_since,
+                        &ingestion.hold_policy,
+                        ingestion.dependency_read_holds.as_mut_slice(),
+                    ),
+                    CollectionStateExtra::None => {
+                        if matches!(collection.data_source, DataSource::Progress) {
+                            // We do get these, but can't do anything with it!
+                        } else {
+                            tracing::error!(
+                                ?collection,
+                                ?new_upper,
+                                "updated write frontier for collection which is not an ingestion"
+                            );
+                        }
+                        return;
                     }
-                    return;
-                }
-                CollectionStateExtra::Export(export) => (
-                    &mut export.write_frontier,
-                    &mut export.derived_since,
-                    &export.read_policy,
-                ),
-            };
+                    CollectionStateExtra::Export(export) => (
+                        &mut export.write_frontier,
+                        &mut export.derived_since,
+                        &export.read_policy,
+                        export.read_holds.as_mut_slice(),
+                    ),
+                };
 
             if PartialOrder::less_than(write_frontier, new_upper) {
                 write_frontier.clone_from(new_upper);
             }
 
             let new_derived_since = hold_policy.frontier(write_frontier.borrow());
+            for dependency_hold in dependency_holds {
+                dependency_hold
+                    .try_downgrade(new_derived_since.clone())
+                    .expect("we only advance the frontier");
+            }
             let mut update = swap_updates(derived_since, new_derived_since);
             if !update.is_empty() {
                 read_capability_changes.insert(id, update);
@@ -2987,31 +2995,6 @@ where
             if !changes.is_empty() {
                 if key.is_user() {
                     debug!(id = %key, ?frontier, "downgrading ingestion read holds!");
-                }
-
-                let collection = self
-                    .collections
-                    .get_mut(&key)
-                    .expect("missing collection state");
-
-                let read_holds = match &mut collection.extra_state {
-                    CollectionStateExtra::Ingestion(ingestion) => {
-                        ingestion.dependency_read_holds.as_mut_slice()
-                    }
-                    CollectionStateExtra::Export(export) => export.read_holds.as_mut_slice(),
-                    CollectionStateExtra::None => {
-                        soft_panic_or_log!(
-                            "trying to downgrade read holds for collection which is not an \
-                             ingestion: {collection:?}"
-                        );
-                        continue;
-                    }
-                };
-
-                for read_hold in read_holds.iter_mut() {
-                    read_hold
-                        .try_downgrade(frontier.clone())
-                        .expect("we only advance the frontier");
                 }
 
                 // Send AllowCompaction command directly to the instance
