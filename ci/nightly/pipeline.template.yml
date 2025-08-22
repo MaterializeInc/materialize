@@ -263,6 +263,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: kafka-matrix
+        skip: "https://github.com/MaterializeInc/database-issues/issues/9510"
 
       - id: kafka-multi-broker
         label: Kafka multi-broker test
