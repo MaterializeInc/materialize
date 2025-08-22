@@ -9,9 +9,8 @@
 
 $ set-sql-timeout duration=1s
 
-
 #
-# ENUM supported only as TEXT
+# ENUM supported as TEXT or INT
 #
 
 > CREATE SECRET mysqlpass AS '${arg.mysql-root-password}'
@@ -34,9 +33,14 @@ INSERT INTO enum_type VALUES ('val1', 'val1'), ('val2', 'val2'), ('not-present',
 
 > CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
 
-# TODO: database-issues#7719 (enum unsupported)
-! CREATE TABLE enum_type FROM SOURCE mz_source (REFERENCE public.enum_type);
-contains:referenced tables use unsupported types
+> CREATE TABLE enum_type FROM SOURCE mz_source (REFERENCE public.enum_type);
+
+> SELECT * FROM enum_type;
+1 1
+2 2
+0 2
+
+> DROP SOURCE enum_type;
 
 > CREATE TABLE enum_type FROM SOURCE mz_source (REFERENCE public.enum_type) WITH (TEXT COLUMNS (f1));
 
