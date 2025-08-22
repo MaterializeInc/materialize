@@ -2904,13 +2904,13 @@ where
             }
 
             let new_derived_since = hold_policy.frontier(write_frontier.borrow());
-            for dependency_hold in dependency_holds {
-                dependency_hold
-                    .try_downgrade(new_derived_since.clone())
-                    .expect("we only advance the frontier");
-            }
             let mut update = swap_updates(derived_since, new_derived_since);
             if !update.is_empty() {
+                for dependency_hold in dependency_holds {
+                    dependency_hold
+                        .try_downgrade(derived_since.clone())
+                        .expect("we only advance the frontier");
+                }
                 read_capability_changes.insert(id, update);
             }
         } else if self.dropped_objects.contains_key(&id) {
