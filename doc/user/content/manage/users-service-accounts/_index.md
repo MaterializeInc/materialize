@@ -15,22 +15,18 @@ resources.
 
 ## Organization roles
 
-Each user/service account in Materialize is associated with an organization
-role:
+During creation of a user/service account in Materialize, the account is
+assigned an organization role:
 
-{{< yaml-table data="rbac/organization_roles" >}}
-
-When creating a new account for your Materialize organization, you assign
-an organization role to the account. As such, before creating a new account,
-determine the appropriate access level needed for the new accounts.
+{{< include-md file="shared-content/rbac/organization-roles.md" >}}
 
 ## User accounts
 
-As an **Organization administrator**, you can [invite new
+As an **Organization admin**, you can [invite new
 users](./invite-users/) via the Materialize Console. When you invite a new user,
 Materialize will email the user with an invitation link.
 
-{{< include-md file="shared-content/invite-user-note.md" >}}
+{{< include-md file="shared-content/rbac/invite-user-note.md" >}}
 
 For instructions on inviting users to your Materialize organization, see [Invite
 users](./invite-users/).
@@ -44,15 +40,16 @@ applications and services to Materialize.
 
 {{</ tip >}}
 
-As an **Organization administrator**, you can create a new service account via
+As an **Organization admin**, you can create a new service account via
 the [Materialize Console](https://console.materialize.com/) or via
 [Terraform](/manage/terraform/).
 
 {{< note >}}
 
-The new account creation is not finished until you use it to connect for the
-first time. That is, after you setup a new service account, you must use it to
-connect to finish creating the new account.
+- The new account creation is not finished until the first time you connect with
+the account.
+
+- {{< include-md file="shared-content/rbac/service-account-creation.md" >}}
 
 {{</ note >}}
 
@@ -61,7 +58,7 @@ organization, see [Create service accounts](./create-service-accounts/).
 
 ## Single sign-on (SSO)
 
-As an **Organization administrator**, you can configure single sign-on (SSO) as
+As an **Organization admin**, you can configure single sign-on (SSO) as
 an additional layer of account security using your existing
 [SAML](https://auth0.com/blog/how-saml-authentication-works/)- or [OpenID
 Connect](https://auth0.com/intro-to-iam/what-is-openid-connect-oidc)-based
@@ -74,6 +71,6 @@ guide](./sso/).
 
 ## See also
 
-- [Role-based access control](/manage/access-control/rbac/)
+- [Role-based access control](/manage/access-control/)
 - [Manage with dbt](/manage/dbt/)
 - [Manage with Terraform](/manage/terraform/)

@@ -76,6 +76,7 @@ From the [Materialize console](https://console.materialize.com/):
 password](/images/console/console-create-new/create-app-password.png "Create
 application password")
 
+
 1. Click **+ Create New** and select **App Password** to open the **New app
    password** modal.
 
@@ -84,10 +85,11 @@ application password")
 
    {{< note >}}
 
-   - **Personal** apps are run under your user account.
-- **Service** apps are run under a Service account.  If the specified Service
-     account does not exist, it will be automatically created the **first time**
-     the app password is used.
+- Only **Organization admins** can create a service account.
+- **Personal** apps are run under your user account.
+- **Service** apps are run under a Service account user. If the specified
+   Service account user does not exist, it will be automatically created the
+   **first time** the app password is used.
 
    {{</ note >}}
 
@@ -109,13 +111,7 @@ application password")
    For an app that you will run under a Service account, specify the
    type and required field(s):
 
-
-   | Field | Details |
-   | ----- | ----------- |
-   | **Type** | Select **Service** |
-   | **Name** | Specify a descriptive name. |
-   | **User** | Specify the service account user name. If the specifie account   does not exist, it will be automatically created the **first time** the application password is used. |
-   | **Roles** | Select the roles to associate with the account. <br><br><ul><li><strong>Organization Admin</strong> has _superuser_ privileges in the database.</li><li><strong>Organization Member</strong> has restricted access to the database, depending on the privileges defined via [role-based access control (RBAC)](/manage/access-control/#role-based-access-control-rbac). |
+   {{< yaml-table data="console/service_account_fields" >}}
 
    See also [Create service
    accounts](/manage/access-control/create-service-accounts/) for creating
@@ -139,7 +135,10 @@ application password")
 1. **For a new service account only**.
 
    For a new service account, after creating the new app password, you must
-   connect with the service account to complete the account creation. To connect:
+   connect with the service account to complete the account creation. {{<
+   include-md file="shared-content/rbac/service-account-creation.md" >}}
+
+   To connect:
 
    1. Find your new service account in the **App Passwords** table.
 

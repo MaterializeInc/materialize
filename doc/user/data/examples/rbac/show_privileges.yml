@@ -1,0 +1,66 @@
+- name: "for-user"
+  description: |
+
+    To view privileges for a
+    [user](/manage/users-service-accounts/invite-users/), run [`SHOW
+    PRIVILEGES`](/sql/show-privileges) on the role named after the user's email
+    (automatically created when the account is activated; i.e., first time the
+    user logs in):
+
+  code: |
+    SHOW PRIVILEGES FOR "blue.berry@example.com";
+
+- name: "for-service-account"
+  description: |
+
+    To view privileges for a [service
+    account](/manage/users-service-accounts/create-service-accounts/), run
+    [`SHOW PRIVILEGES`](/sql/show-privileges) on the role named after the
+    service account user (automatically created when the account is activated;
+    i.e., first time the service account connects):
+
+  code: |
+    SHOW PRIVILEGES FOR sales_report_app;
+
+- name: "for-view-manager"
+  description: |
+
+    Show the privileges for the `view_manager` role created in the
+    [Create a role section](#create-a-role).
+
+  code: |
+    SHOW PRIVILEGES FOR view_manager;
+
+- name: "for-serving-index-manager"
+  description: |
+
+    Show the privileges for the `serving_index_manager` role created in the
+    [Create a role section](#create-a-role).
+
+  code: |
+    SHOW PRIVILEGES FOR serving_index_manager;
+
+
+- name: "for-data-reader"
+  description: |
+
+    Show the privileges for the `data_reader` role created in the
+    [Create a role section](#create-a-role).
+
+  code: |
+    SHOW PRIVILEGES FOR data_reader;
+
+- name: "example-results"
+  description: |
+
+    The results show that the role currently has only the privileges inherited
+    through the `PUBLIC` role.
+
+    ```none
+    | grantor           | grantee | database    | schema | name        | object_type | privilege_type |
+    | ----------------- | ------- | ----------- | ------ | ----------- | ----------- | -------------- |
+    | admin@example.com | PUBLIC  | mydb        | null   | public      | schema      | USAGE          |
+    | mz_system         | PUBLIC  | materialize | null   | public      | schema      | USAGE          |
+    | mz_system         | PUBLIC  | null        | null   | materialize | database    | USAGE          |
+    | mz_system         | PUBLIC  | null        | null   | quickstart  | cluster     | USAGE          |
+    ```

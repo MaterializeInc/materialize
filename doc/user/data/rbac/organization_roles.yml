@@ -4,12 +4,19 @@ columns:
 
 rows:
   - Organization role: "**Organization Admin**"
-    Description: |
-      - Admins can perform adminstration tasks in the Console; e.g., invite new
-      users, create service accounts, edit account and security information, or
-      manage billing.
+    Description: |-
+      - **Console access**: Has access to all Materialize console
+      features, including administrative features (e.g., invite users, create
+      service accounts, manage billing, and organization settings).
 
-      - Admins have **superuser** privileges in the database.
+      - **Database access**: Has <red>**superuser**</red> privileges in the database.
+
   - Organization role: "**Organization Member**"
-    Description: |
-      - Members have access to the database as determined by the privileges defined via [role-based access control (RBAC)](/manage/access-control/).
+    Description: |-
+      - **Console access**: Has no access to Materialize console
+        administrative features.
+
+      - **Database access**: Inherits role-level privileges defined by
+        the `PUBLIC` role; may also have additional privileges via grants or
+        default privileges. See [Access control
+        control](/manage/access-control/#roles-and-privileges).

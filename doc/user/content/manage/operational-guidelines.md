@@ -68,3 +68,9 @@ See also [Cluster architecture](#three-tier-architecture).
 
 - During sink creation (initial hydration), sinks need to load an entire
   snapshot of the data in memory.
+
+## Role-based access control (RBAC)
+
+{{< include-md file="shared-content/rbac/rbac-intro-disambiguation.md" >}}
+
+{{% yaml-sections data="rbac/recommendations" heading-field="recommendation" heading-level=3 %}}

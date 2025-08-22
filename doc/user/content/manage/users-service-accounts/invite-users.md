@@ -11,10 +11,10 @@ menu:
     weight: 5
 ---
 
+{{< include-md file="shared-content/rbac/invite-user-note.md" >}}
+
 As an **Organization administrator**, you can invite new users via the
 Materialize Console.
-
-## How to invite a new user
 
 1. [Log in to the Materialize Console](https://console.materialize.com/).
 
@@ -24,17 +24,14 @@ Materialize Console.
 
 1. In the **Select Role**, select the organization role for the user:
 
-   {{< yaml-table data="rbac/organization_roles" >}}
+   {{< include-md file="shared-content/rbac/organization-roles.md" >}}
 
-2. Click the **Invite** button at the bottom right section of the screen.
+1. Click the **Invite** button at the bottom right section of the screen.
 
    Materialize will email the user with an invitation link.
 
-   {{< include-md file="shared-content/invite-user-note.md" >}}
+   {{< include-md file="shared-content/rbac/invite-user-note.md" >}}
 
 ## Next steps
 
-The organization role assigned to the user determines the user's default level
-of database access. For more information on access control in Materialize, see
-[role-based access control
-(RBAC)](/manage/access-control/#role-based-access-control-rbac).
+{{< include-md file="shared-content/rbac/account-creation-next-steps.md" >}}

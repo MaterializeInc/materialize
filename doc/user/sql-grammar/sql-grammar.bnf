@@ -341,8 +341,6 @@ format_spec ::=
   'TEXT' |
   'BYTES' |
   'JSON'
-grant_privilege ::=
-  'GRANT' ((privilege (',' privilege)*) | 'ALL' 'PRIVILEGES'? ) 'ON' ( ('TABLE'? | 'TYPE' | 'SECRET' | 'CONNECTION' | 'DATABASE' | 'SCHEMA' | 'CLUSTER') object_name (',' object_name)* | 'SYSTEM' | 'ALL' ('TABLES' | 'TYPES' | 'SECRETS' | 'CONNECTIONS') 'IN' 'SCHEMA' schema_name (',' schema_name)* | 'ALL' ('TABLES' | 'TYPES' | 'SECRETS' | 'CONNECTIONS' | 'SCHEMAS') 'IN' 'DATABASE' database_name (',' database_name)* | 'ALL' ('TABLES' | 'TYPES' | 'SECRETS' | 'CONNECTIONS' | 'DATABASES' | 'SCHEMAS' | 'CLUSTERS') ) 'TO' 'GROUP'? role_name ( ',' 'GROUP'? role_name )*
 grant_role ::=
   'GRANT' role_name ( ',' role_name )* 'TO' 'GROUP'? member_name ( ',' 'GROUP'? member_name )*
 key_strat ::=
