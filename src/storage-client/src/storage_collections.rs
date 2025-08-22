@@ -966,7 +966,7 @@ where
                 "install_read_capabilities_inner");
         }
 
-        let mut storage_read_updates = storage_dependencies
+        let storage_read_updates = storage_dependencies
             .iter()
             .map(|id| (*id, changes.clone()))
             .collect();
@@ -974,7 +974,7 @@ where
         StorageCollectionsImpl::update_read_capabilities_inner(
             &self.cmd_tx,
             self_collections,
-            &mut storage_read_updates,
+            storage_read_updates,
         );
 
         if tracing::span_enabled!(tracing::Level::TRACE) {
@@ -1226,7 +1226,7 @@ where
             StorageCollectionsImpl::update_read_capabilities_inner(
                 &self.cmd_tx,
                 collections,
-                &mut read_capability_changes,
+                read_capability_changes,
             );
         }
     }
@@ -1237,7 +1237,7 @@ where
     fn update_read_capabilities_inner(
         cmd_tx: &mpsc::UnboundedSender<BackgroundCmd<T>>,
         collections: &mut BTreeMap<GlobalId, CollectionState<T>>,
-        updates: &mut BTreeMap<GlobalId, ChangeBatch<T>>,
+        mut updates: BTreeMap<GlobalId, ChangeBatch<T>>,
     ) {
         // Location to record consequences that we need to act on.
         let mut collections_net = BTreeMap::new();
@@ -2403,11 +2403,10 @@ where
             // Add a record of the new collection.
             self_collections.insert(new_collection, collection_state);
 
-            let mut updates = BTreeMap::from([(new_collection, changes)]);
             StorageCollectionsImpl::update_read_capabilities_inner(
                 &self.cmd_tx,
                 &mut *self_collections,
-                &mut updates,
+                BTreeMap::from([(new_collection, changes)]),
             );
         };
 
@@ -2553,7 +2552,7 @@ where
             advanced_holds.push((*id, since));
         }
 
-        let mut updates = advanced_holds
+        let updates = advanced_holds
             .iter()
             .map(|(id, hold)| {
                 let mut changes = ChangeBatch::new();
@@ -2565,7 +2564,7 @@ where
         StorageCollectionsImpl::update_read_capabilities_inner(
             &self.cmd_tx,
             &mut collections,
-            &mut updates,
+            updates,
         );
 
         let acquired_holds = advanced_holds
@@ -3036,7 +3035,7 @@ where
                     StorageCollectionsImpl::update_read_capabilities_inner(
                         &self.cmds_tx,
                         &mut collections,
-                        &mut batched_changes,
+                        batched_changes,
                     );
                 }
             }
@@ -3095,7 +3094,7 @@ where
             StorageCollectionsImpl::update_read_capabilities_inner(
                 &self.cmds_tx,
                 &mut self_collections,
-                &mut read_capability_changes,
+                read_capability_changes,
             );
         }
     }
