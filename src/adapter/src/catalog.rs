@@ -108,6 +108,7 @@ mod migrate;
 mod apply;
 mod open;
 mod state;
+mod timeline;
 mod transact;
 
 /// A `Catalog` keeps track of the SQL objects known to the planner.
