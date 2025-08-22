@@ -1,0 +1,20 @@
+{{- $dataPath := .Get "data" -}}
+{{- $headingField := .Get "heading-field" | default "title" -}}
+{{- $headingLevel := .Get "heading-level" | default "3" | int -}}
+{{- $headingPrefix := "" -}}
+{{- range seq $headingLevel -}}
+  {{- $headingPrefix = printf "%s#" $headingPrefix -}}
+{{- end -}}
+
+
+{{- $parts := split $dataPath "/" -}}
+{{- $data := index site.Data (index $parts 0) -}}
+{{- range $i, $key := after 1 $parts -}}
+  {{- $data = index $data $key -}}
+{{- end -}}
+
+{{ range $section := $data }}
+  {{ $heading := index $section $headingField }}
+  {{ $headingPrefix }} {{ $heading }}
+  {{ $section.description | markdownify }}
+{{- end -}}

@@ -1,0 +1,12 @@
+columns:
+  - column: Privilege
+  - column: "Description"
+  - column: "On database object(s)"
+rows:
+  - Privilege: "`USAGE`"
+    Description: |
+      Permission to use or reference an object.
+    "On database object(s)": |
+      - All `*.public` schemas (e.g., `materialize.public`);
+      - `materialize` database; and
+      - `quickstart` cluster.

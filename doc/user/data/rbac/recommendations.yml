@@ -1,0 +1,33 @@
+- recommendation: "Follow the principle of least privilege"
+  description: |
+    Role-based access control in Materialize should follow the principle of
+    least privilege. Grant only the minimum access necessary for users and
+    service accounts to perform their duties.
+
+- recommendation: "Restrict the assignment of **Organization Admin** role"
+  description: |
+
+    {{< include-md file="shared-content/rbac/org-admin-recommendation.md" >}}
+
+- recommendation: "Restrict the granting of `CREATEROLE` privilege"
+  description: |
+
+    {{< include-md file="shared-content/rbac/createrole-consideration.md" >}}
+
+- recommendation: "Use Reusable Roles for Privilege Assignment"
+  description: |
+
+    {{< include-md file="shared-content/rbac/use-resusable-roles.md" >}}
+
+    See also [Manage database roles](/manage/access-control/manage-roles).
+
+- recommendation: "Audit for unused roles and privileges."
+
+  description: |
+
+    {{< include-md file="shared-content/rbac/audit-remove-roles.md" >}}
+
+    See also [Show roles in
+    system](/manage/access-control/manage-roles/#show-roles-in-system) and [Drop
+    a role](/manage/access-control/manage-roles/#drop-a-role) for more
+    information.

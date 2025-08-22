@@ -1,0 +1,56 @@
+columns:
+  - column: Object
+  - column: Privileges
+
+rows:
+  - Object: "`CLUSTER`"
+    Privileges: |
+      - `USAGE`
+      - `CREATE`
+
+  - Object: "`CONNECTION`"
+    Privileges: |
+      - `USAGE`
+
+  - Object: "`DATABASE`"
+    Privileges: |
+      - `USAGE`
+      - `CREATE`
+
+  - Object: "`MATERIALIZED VIEW`"
+    Privileges: |
+      - `SELECT`
+
+  - Object: "`SCHEMA`"
+    Privileges: |
+      - `USAGE`
+      - `CREATE`
+
+  - Object: "`SECRET`"
+    Privileges: |
+      - `USAGE`
+
+  - Object: "`SOURCE`"
+    Privileges: |
+      - `SELECT`
+
+  - Object: "`SYSTEM`"
+    Privileges: |
+      - `CREATEROLE`
+      - `CREATEDB`
+      - `CREATECLUSTER`
+
+  - Object: "`TABLE`"
+    Privileges: |
+      - `INSERT`
+      - `SELECT`
+      - `UPDATE`
+      - `DELETE`
+
+  - Object: "`TYPE`"
+    Privileges: |
+      - `USAGE`
+
+  - Object: "`VIEW`"
+    Privileges: |
+      - `SELECT`
