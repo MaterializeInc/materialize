@@ -524,7 +524,7 @@ LEFT JOIN information_schema.table_constraints tc
         .into_iter()
         .map(
             |((schema, name, capture_instance, capture_instance_create_date), columns)| {
-                Ok::<_, SqlServerError>(SqlServerTableRaw {
+                SqlServerTableRaw {
                     schema_name: schema,
                     name,
                     capture_instance: Arc::new(SqlServerCaptureInstanceRaw {
@@ -532,10 +532,10 @@ LEFT JOIN information_schema.table_constraints tc
                         create_date: capture_instance_create_date.into(),
                     }),
                     columns: columns.into(),
-                })
+                }
             },
         )
-        .collect::<Result<_, _>>()?;
+        .collect();
 
     Ok(tables)
 }

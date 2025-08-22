@@ -38,7 +38,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use crate::cdc::Lsn;
 use crate::{SqlServerDecodeError, SqlServerError};
 
 include!(concat!(env!("OUT_DIR"), "/mz_sql_server_util.rs"));
@@ -993,10 +992,10 @@ impl SqlServerRowDecoder {
 
 #[cfg(test)]
 mod tests {
+    use chrono::NaiveDateTime;
     use std::collections::BTreeSet;
     use std::sync::Arc;
 
-    use crate::cdc::Lsn;
     use crate::desc::{
         SqlServerCaptureInstanceRaw, SqlServerColumnDecodeType, SqlServerColumnDesc,
         SqlServerTableDesc, SqlServerTableRaw, tiberius_numeric_to_mz_numeric,
