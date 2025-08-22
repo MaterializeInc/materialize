@@ -253,7 +253,11 @@ pub struct SqlServerSourceExtras {
 }
 
 impl AlterCompatible for SqlServerSourceExtras {
-    fn alter_compatible(&self, _id: GlobalId, _other: &Self) -> Result<(), AlterError> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
+        if self.restore_history_id != other.restore_history_id {
+            tracing::warn!(?self, ?other, "SqlServerSourceExtras incompatible");
+            return Err(AlterError { id });
+        }
         Ok(())
     }
 }
