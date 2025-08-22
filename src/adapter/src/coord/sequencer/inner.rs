@@ -116,7 +116,7 @@ use crate::session::{
     WriteLocks, WriteOp,
 };
 use crate::util::{ClientTransmitter, ResultExt, viewable_variables};
-use crate::{PeekResponseUnary, ReadHolds};
+use crate::{CollectionIdBundle, PeekResponseUnary, ReadHolds};
 
 mod cluster;
 mod copy_from;
@@ -1199,7 +1199,15 @@ impl Coordinator {
         }
 
         match catalog_result {
-            Ok(()) => Ok(ExecuteResponse::CreatedTable),
+            Ok(()) => {
+                // For temporary tables, handle storage collection creation using the old code path
+                if table.conn_id.is_some() {
+                    self.handle_temporary_table_creation(ctx, table_id, global_id, table.clone())
+                        .await?;
+                }
+                // Non-temporary tables will be handled by controller commands
+                Ok(ExecuteResponse::CreatedTable)
+            }
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
                 kind:
                     mz_catalog::memory::error::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
@@ -1213,6 +1221,177 @@ impl Coordinator {
             }
             Err(err) => Err(err),
         }
+    }
+
+    /// Handles storage collection creation for temporary tables using the old code path.
+    /// This maintains compatibility for temporary tables while non-temporary tables
+    /// go through the controller commands path.
+    #[instrument]
+    async fn handle_temporary_table_creation(
+        &mut self,
+        ctx: &mut ExecuteContext,
+        table_id: CatalogItemId,
+        global_id: GlobalId,
+        table: Table,
+    ) -> Result<(), AdapterError> {
+        use mz_adapter_types::compaction::CompactionWindow;
+        use mz_storage_client::controller::CollectionDescription;
+        use std::collections::{BTreeMap, BTreeSet};
+
+        let mut storage_collections_to_create = BTreeMap::new();
+        let mut storage_policies_to_initialize: BTreeMap<CompactionWindow, BTreeSet<GlobalId>> =
+            BTreeMap::new();
+        let mut execution_timestamps_to_set = BTreeSet::new();
+
+        // Replicate the logic from controller_commands::handle_create_table for temporary tables
+        match table.data_source {
+            TableDataSource::TableWrites { defaults: _ } => {
+                let collection_desc = CollectionDescription::for_table(table.desc.latest(), None);
+                storage_collections_to_create.insert(global_id, collection_desc);
+
+                if let Some(id) = ctx.extra().contents() {
+                    execution_timestamps_to_set.insert(id);
+                }
+
+                let compaction_window = table
+                    .custom_logical_compaction_window
+                    .unwrap_or(CompactionWindow::Default);
+                let ids = storage_policies_to_initialize
+                    .entry(compaction_window)
+                    .or_default();
+                ids.insert(global_id);
+            }
+            TableDataSource::DataSource {
+                desc: data_source_desc,
+                timeline,
+            } => match data_source_desc {
+                DataSourceDesc::IngestionExport {
+                    ingestion_id,
+                    external_reference: _,
+                    details,
+                    data_config,
+                } => {
+                    let status_collection_id = self.catalog().resolve_builtin_storage_collection(
+                        &mz_catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
+                    );
+
+                    let global_ingestion_id =
+                        self.catalog().get_entry(&ingestion_id).latest_global_id();
+                    let global_status_collection_id = self
+                        .catalog()
+                        .get_entry(&status_collection_id)
+                        .latest_global_id();
+
+                    let collection_desc = CollectionDescription::<Timestamp> {
+                        desc: table.desc.latest(),
+                        data_source: DataSource::IngestionExport {
+                            ingestion_id: global_ingestion_id,
+                            details,
+                            data_config: data_config.into_inline_connection(self.catalog.state()),
+                        },
+                        since: None,
+                        status_collection_id: Some(global_status_collection_id),
+                        timeline: Some(timeline),
+                    };
+
+                    storage_collections_to_create.insert(global_id, collection_desc);
+
+                    let read_policies = self
+                        .catalog()
+                        .state()
+                        .source_compaction_windows(vec![table_id]);
+                    for (compaction_window, catalog_ids) in read_policies {
+                        let compaction_ids = storage_policies_to_initialize
+                            .entry(compaction_window)
+                            .or_default();
+
+                        let gids = catalog_ids
+                            .into_iter()
+                            .map(|item_id| self.catalog().get_entry(&item_id).global_ids())
+                            .flatten();
+                        compaction_ids.extend(gids);
+                    }
+                }
+                DataSourceDesc::Webhook {
+                    validate_using: _,
+                    body_format: _,
+                    headers: _,
+                    cluster_id: _,
+                } => {
+                    let desc = table.desc.latest();
+
+                    let collection_desc = CollectionDescription::<Timestamp> {
+                        desc,
+                        data_source: DataSource::Webhook,
+                        since: None,
+                        status_collection_id: None,
+                        timeline: Some(timeline),
+                    };
+
+                    storage_collections_to_create.insert(global_id, collection_desc);
+
+                    let read_policies = self
+                        .catalog()
+                        .state()
+                        .source_compaction_windows(vec![table_id]);
+
+                    for (compaction_window, catalog_ids) in read_policies {
+                        let compaction_ids = storage_policies_to_initialize
+                            .entry(compaction_window)
+                            .or_default();
+
+                        let gids = catalog_ids
+                            .into_iter()
+                            .map(|item_id| self.catalog().get_entry(&item_id).global_ids())
+                            .flatten();
+                        compaction_ids.extend(gids);
+                    }
+                }
+                _ => unreachable!("CREATE TABLE data source got {:?}", data_source_desc),
+            },
+        }
+
+        // Create storage collections if needed
+        if !storage_collections_to_create.is_empty() || !execution_timestamps_to_set.is_empty() {
+            let register_ts = self.get_local_write_ts().await.timestamp;
+
+            self.catalog
+                .confirm_leadership()
+                .await
+                .unwrap_or_terminate("unable to confirm leadership");
+
+            for id in execution_timestamps_to_set {
+                self.set_statement_execution_timestamp(id, register_ts);
+            }
+
+            let storage_metadata = self.catalog.state().storage_metadata();
+
+            self.controller
+                .storage
+                .create_collections(
+                    storage_metadata,
+                    Some(register_ts),
+                    storage_collections_to_create.into_iter().collect(),
+                )
+                .await
+                .unwrap_or_terminate("cannot fail to create collections");
+
+            self.apply_local_write(register_ts).await;
+        }
+
+        // Initialize storage policies if needed
+        for (compaction_window, global_ids) in storage_policies_to_initialize {
+            self.initialize_read_policies(
+                &CollectionIdBundle {
+                    storage_ids: global_ids,
+                    compute_ids: BTreeMap::new(),
+                },
+                compaction_window,
+            )
+            .await;
+        }
+
+        Ok(())
     }
 
     #[instrument]
