@@ -8,8 +8,7 @@
 # by the Apache License, Version 2.0.
 
 $ sql-server-connect name=sql-server
-server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID=${arg.default-sql-server-user};Password=${arg.default-sql-server-password};Database=test
-
+server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID=${arg.default-sql-server-user};Password=${arg.default-sql-server-password}
 $ sql-server-execute name=sql-server
 USE msdb;
 WAITFOR DELAY '00:00:30';
