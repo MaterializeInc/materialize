@@ -563,6 +563,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "storage_statistics_retention_duration",
     "enable_ctp_cluster_protocols",
     "enable_paused_cluster_readhold_downgrade",
+    "force_swap_for_cc_sizes",
 ]
 
 
