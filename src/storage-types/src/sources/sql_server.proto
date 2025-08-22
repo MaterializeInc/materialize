@@ -21,7 +21,9 @@ message ProtoSqlServerSource {
   ProtoSqlServerSourceExtras extras = 3;
 }
 
-message ProtoSqlServerSourceExtras {}
+message ProtoSqlServerSourceExtras {
+  optional int32 restore_history_id = 1;
+}
 
 message ProtoSqlServerSourceExportDetails {
   string capture_instance = 1;

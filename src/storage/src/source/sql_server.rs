@@ -88,6 +88,8 @@ pub enum DefiniteError {
     Decoding(String),
     #[error("programming error: {0}")]
     ProgrammingError(String),
+    #[error("Restore history id changed from {0:?} to {1:?}")]
+    RestoreHistoryChanged(Option<i32>, Option<i32>),
 }
 
 impl From<DefiniteError> for DataflowError {

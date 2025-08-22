@@ -245,7 +245,12 @@ impl RustType<ProtoSqlServerSource> for SqlServerSource {
 /// It's currently unused but we keep the struct around to maintain conformity
 /// with other sources.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
-pub struct SqlServerSourceExtras {}
+pub struct SqlServerSourceExtras {
+    /// The most recent `restore_history_id` field from msdb.dbo.restorehistory. A change in this
+    /// value indicates the upstream SQL server has been restored.
+    /// See: <https://learn.microsoft.com/en-us/sql/relational-databases/system-tables/restorehistory-transact-sql?view=sql-server-ver17>
+    pub restore_history_id: Option<i32>,
+}
 
 impl AlterCompatible for SqlServerSourceExtras {
     fn alter_compatible(&self, _id: GlobalId, _other: &Self) -> Result<(), AlterError> {
@@ -255,11 +260,15 @@ impl AlterCompatible for SqlServerSourceExtras {
 
 impl RustType<ProtoSqlServerSourceExtras> for SqlServerSourceExtras {
     fn into_proto(&self) -> ProtoSqlServerSourceExtras {
-        ProtoSqlServerSourceExtras {}
+        ProtoSqlServerSourceExtras {
+            restore_history_id: self.restore_history_id.clone(),
+        }
     }
 
-    fn from_proto(_proto: ProtoSqlServerSourceExtras) -> Result<Self, mz_proto::TryFromProtoError> {
-        Ok(SqlServerSourceExtras {})
+    fn from_proto(proto: ProtoSqlServerSourceExtras) -> Result<Self, mz_proto::TryFromProtoError> {
+        Ok(SqlServerSourceExtras {
+            restore_history_id: proto.restore_history_id,
+        })
     }
 }
 
