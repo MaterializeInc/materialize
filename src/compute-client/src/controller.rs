@@ -76,12 +76,12 @@ use crate::metrics::ComputeControllerMetrics;
 use crate::protocol::command::{ComputeParameters, PeekTarget};
 use crate::protocol::response::{PeekResponse, SubscribeBatch};
 
-mod instance;
 mod introspection;
 mod replica;
 mod sequential_hydration;
 
 pub mod error;
+pub mod instance;
 
 pub(crate) type StorageCollections<T> = Arc<
     dyn mz_storage_client::storage_collections::StorageCollections<Timestamp = T> + Send + Sync,
@@ -332,6 +332,14 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
     /// Return a reference to the indicated compute instance.
     fn instance(&self, id: ComputeInstanceId) -> Result<&InstanceState<T>, InstanceMissing> {
         self.instances.get(&id).ok_or(InstanceMissing(id))
+    }
+
+    /// Return an `instance::Client` for the indicated compute instance.
+    pub fn thin_instance_client(
+        &self,
+        id: ComputeInstanceId,
+    ) -> Result<instance::Client<T>, InstanceMissing> {
+        self.instance(id).map(|instance| instance.client.clone())
     }
 
     /// Return a mutable reference to the indicated compute instance.
@@ -900,7 +908,7 @@ where
                 result_desc,
                 finishing,
                 map_filter_project,
-                read_hold,
+                Some(read_hold),
                 target_replica,
                 peek_response_tx,
             )
@@ -1083,19 +1091,7 @@ impl<T: ComputeControllerTimestamp> InstanceState<T> {
         F: FnOnce(&mut Instance<T>) -> R + Send + 'static,
         R: Send + 'static,
     {
-        let (tx, rx) = oneshot::channel();
-        let otel_ctx = OpenTelemetryContext::obtain();
-        self.client
-            .send(Box::new(move |instance| {
-                let _span = debug_span!("instance::call_sync").entered();
-                otel_ctx.attach_as_parent();
-
-                let result = f(instance);
-                let _ = tx.send(result);
-            }))
-            .expect("instance not dropped");
-
-        rx.await.expect("instance not dropped")
+        self.client.call_sync(f).await
     }
 
     /// Acquires a [`ReadHold`] for the identified compute collection.
