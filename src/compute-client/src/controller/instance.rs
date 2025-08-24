@@ -127,12 +127,12 @@ impl From<CollectionMissing> for ReadPolicyError {
 }
 
 /// A command sent to an [`Instance`] task.
-pub type Command<T> = Box<dyn FnOnce(&mut Instance<T>) + Send>;
+pub(super) type Command<T> = Box<dyn FnOnce(&mut Instance<T>) + Send>;
 
-/// A client for an [`Instance`] task.
+/// A client for an `Instance` task.
 #[derive(Clone, derivative::Derivative)]
 #[derivative(Debug)]
-pub(super) struct Client<T: ComputeControllerTimestamp> {
+pub struct Client<T: ComputeControllerTimestamp> {
     /// A sender for commands for the instance.
     command_tx: mpsc::UnboundedSender<Command<T>>,
     /// A sender for read hold changes for collections installed on the instance.
@@ -141,12 +141,34 @@ pub(super) struct Client<T: ComputeControllerTimestamp> {
 }
 
 impl<T: ComputeControllerTimestamp> Client<T> {
-    pub fn send(&self, command: Command<T>) -> Result<(), SendError<Command<T>>> {
+    pub(super) fn send(&self, command: Command<T>) -> Result<(), SendError<Command<T>>> {
         self.command_tx.send(command)
     }
 
-    pub fn read_hold_tx(&self) -> read_holds::ChangeTx<T> {
+    pub(super) fn read_hold_tx(&self) -> read_holds::ChangeTx<T> {
         Arc::clone(&self.read_hold_tx)
+    }
+
+    /// Call a method to be run on the instance task, by sending a message to the instance and
+    /// waiting for a response message.
+    pub(super) async fn call_sync<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&mut Instance<T>) -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        use tokio::sync::oneshot;
+        use tracing::debug_span;
+        let (tx, rx) = oneshot::channel();
+        let otel_ctx = OpenTelemetryContext::obtain();
+        self.send(Box::new(move |instance| {
+            let _span = debug_span!("instance::call_sync").entered();
+            otel_ctx.attach_as_parent();
+            let result = f(instance);
+            let _ = tx.send(result);
+        }))
+        .expect("instance not dropped");
+
+        rx.await.expect("instance not dropped")
     }
 }
 
@@ -154,7 +176,7 @@ impl<T> Client<T>
 where
     T: ComputeControllerTimestamp,
 {
-    pub fn spawn(
+    pub(super) fn spawn(
         id: ComputeInstanceId,
         build_info: &'static BuildInfo,
         storage: StorageCollections<T>,
@@ -203,6 +225,50 @@ where
             command_tx,
             read_hold_tx,
         }
+    }
+
+    /// Acquires a `ReadHold` and collection write frontier for each of the identified compute
+    /// collections.
+    pub async fn acquire_read_holds_and_collection_write_frontiers(
+        &self,
+        ids: Vec<GlobalId>,
+    ) -> Result<Vec<(GlobalId, ReadHold<T>, Antichain<T>)>, CollectionMissing> {
+        self.call_sync(move |i| i.acquire_read_holds_and_collection_write_frontiers(ids))
+            .await
+    }
+
+    /// Issue a peek by calling into the instance task synchronously, letting the instance acquire
+    /// read holds if none are provided. This ensures the read holds are established before
+    /// returning to the caller.
+    pub async fn peek_call_sync(
+        &self,
+        peek_target: PeekTarget,
+        literal_constraints: Option<Vec<Row>>,
+        uuid: Uuid,
+        timestamp: T,
+        result_desc: RelationDesc,
+        finishing: RowSetFinishing,
+        map_filter_project: mz_expr::SafeMfpPlan,
+        read_hold: Option<ReadHold<T>>,
+        target_replica: Option<ReplicaId>,
+        peek_response_tx: oneshot::Sender<PeekResponse>,
+    ) {
+        self.call_sync(move |i| {
+            i.peek(
+                peek_target,
+                literal_constraints,
+                uuid,
+                timestamp,
+                result_desc,
+                finishing,
+                map_filter_project,
+                read_hold,
+                target_replica,
+                peek_response_tx,
+            )
+            .expect("validated by instance");
+        })
+        .await
     }
 }
 
@@ -966,6 +1032,11 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         ]);
         Ok(serde_json::Value::Object(map))
     }
+
+    /// Reports the current write frontier for the identified compute collection.
+    fn collection_write_frontier(&self, id: GlobalId) -> Result<Antichain<T>, CollectionMissing> {
+        Ok(self.collection(id)?.write_frontier())
+    }
 }
 
 impl<T> Instance<T>
@@ -1640,14 +1711,29 @@ where
         result_desc: RelationDesc,
         finishing: RowSetFinishing,
         map_filter_project: mz_expr::SafeMfpPlan,
-        mut read_hold: ReadHold<T>,
+        read_hold: Option<ReadHold<T>>,
         target_replica: Option<ReplicaId>,
         peek_response_tx: oneshot::Sender<PeekResponse>,
     ) -> Result<(), PeekError> {
         use PeekError::*;
 
-        // Downgrade the provided read hold to the peek time.
+        // Acquire a read hold if one was not provided.
         let target_id = peek_target.id();
+        let mut read_hold = match read_hold {
+            Some(h) => h,
+            None => match &peek_target {
+                PeekTarget::Index { id } => self
+                    .acquire_read_hold(*id)
+                    .map_err(|_| ReadHoldInsufficient(target_id))?,
+                PeekTarget::Persist { .. } => {
+                    // For persist peeks, the controller should provide a storage read hold.
+                    // We don't support acquiring it here.
+                    return Err(ReadHoldInsufficient(target_id));
+                }
+            },
+        };
+
+        // Downgrade the provided (or acquired) read hold to the peek time.
         if read_hold.id() != target_id {
             return Err(ReadHoldIdMismatch(read_hold.id()));
         }
@@ -2319,6 +2405,45 @@ where
             let collection = self.expect_collection_mut(id);
             let _ = collection.implied_read_hold.try_downgrade(new_capability);
         }
+    }
+
+    /// Acquires a `ReadHold` and collection write frontier for each of the identified compute
+    /// collections.
+    fn acquire_read_holds_and_collection_write_frontiers(
+        &self,
+        ids: Vec<GlobalId>,
+    ) -> Result<Vec<(GlobalId, ReadHold<T>, Antichain<T>)>, CollectionMissing> {
+        let mut result = Vec::new();
+        for id in ids.into_iter() {
+            // TODO: This takes locks separately for each id. We should change these methods to be
+            // able to take a collection of ids.
+            result.push((
+                id,
+                self.acquire_read_hold(id)?,
+                self.collection_write_frontier(id)?,
+            ));
+        }
+        Ok(result)
+    }
+
+    /// Acquires a `ReadHold` for the identified compute collection.
+    ///
+    /// This mirrors the logic used by the controller-side `InstanceState::acquire_read_hold`,
+    /// but executes on the instance task itself.
+    fn acquire_read_hold(&self, id: GlobalId) -> Result<ReadHold<T>, CollectionMissing> {
+        // Similarly to InstanceState::acquire_read_hold and StorageCollections::acquire_read_holds,
+        // we acquire read holds at the earliest possible time rather than returning a copy
+        // of the implied read hold. This is so that dependents can acquire read holds on
+        // compute dependencies at frontiers that are held back by other read holds the caller
+        // has previously taken.
+        let collection = self.collection(id)?;
+        let since = collection.shared.lock_read_capabilities(|caps| {
+            let since = caps.frontier().to_owned();
+            caps.update_iter(since.iter().map(|t| (t.clone(), 1)));
+            since
+        });
+        let hold = ReadHold::new(id, since, Arc::clone(&self.read_hold_tx));
+        Ok(hold)
     }
 
     /// Process pending maintenance work.
