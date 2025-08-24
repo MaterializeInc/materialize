@@ -217,21 +217,30 @@ impl Client {
 
         // Create the client as soon as startup succeeds (before any await points) so its `Drop` can
         // handle termination.
+        // Build the PeekClient with controller handles returned from startup.
+        let StartupResponse {
+            role_id,
+            write_notify,
+            session_defaults,
+            catalog,
+            compute_instance_clients,
+            storage_collections,
+        } = response;
+
+        let peek_client = crate::peek_client::PeekClient {
+            compute_instances: compute_instance_clients,
+            storage_collections: Some(storage_collections),
+        };
+
         let mut client = SessionClient {
             inner: Some(self.clone()),
             session: Some(session),
             timeouts: Timeout::new(),
             environment_id: self.environment_id.clone(),
             segment_client: self.segment_client.clone(),
-            peek_client: crate::peek_client::PeekClient::new(),
+            peek_client,
         };
 
-        let StartupResponse {
-            role_id,
-            write_notify,
-            session_defaults,
-            catalog,
-        } = response;
 
         let session = client.session();
         session.initialize_role_metadata(role_id);
