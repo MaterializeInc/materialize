@@ -57,11 +57,11 @@ prost = "0.13.5"
 rand = "0.8.5"
 semver = { version = "1.0.26" }
 serde = "1.0.219"
-serde_json = "1.0.127"
+serde_json = "1.0.143"
 serde_plain = "1.0.2"
 static_assertions = "1.1"
 sha2 = "0.10.9"
-thiserror = "2.0.12"
+thiserror = "2.0.16"
 timely = "0.22.0"
 tokio = { version = "1.44.1" }
 tracing = "0.1.37"
