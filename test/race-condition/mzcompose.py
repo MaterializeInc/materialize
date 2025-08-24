@@ -33,7 +33,7 @@ from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.util import PropagatingThread, all_subclasses
 
 SERVICES = [
-    Postgres(max_replication_slots=1000),
+    Postgres(max_replication_slots=100000),
     MySql(),
     Zookeeper(),
     Kafka(

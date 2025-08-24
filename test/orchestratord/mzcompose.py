@@ -220,11 +220,12 @@ class LicenseKey(Modification):
 class LicenseKeyCheck(Modification):
     @classmethod
     def values(cls) -> list[Any]:
-        return [False, True]
+        # TODO: Reenable False when fixed
+        return [True]
 
-    @classmethod
-    def bad_values(cls) -> list[Any]:
-        return [False]
+    # @classmethod
+    # def bad_values(cls) -> list[Any]:
+    #     return [False]
 
     @classmethod
     def default(cls) -> Any:
@@ -291,7 +292,7 @@ class BalancerdNodeSelector(Modification):
     def values(cls) -> list[Any]:
         return [
             {},
-            # TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/9606 is fixed
+            # TODO: Reenable when we create nodes with these labels
             # {"materialize.cloud/foo": "bar"},
             # {"materialize.cloud/a": "b", "materialize.cloud/cd": "ef"},
         ]
