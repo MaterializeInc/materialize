@@ -286,11 +286,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                 source_resume_uppers,
                 storage_metadata: description.ingestion_metadata.clone(),
                 persist_clients: Arc::clone(&storage_state.persist_clients),
-                source_statistics: storage_state
-                    .aggregated_statistics
-                    .get_source(&primary_source_id)
-                    .expect("statistics initialized")
-                    .clone(),
+                statistics: storage_state.aggregated_statistics.get_local_source_stats(),
                 shared_remap_upper: Rc::clone(
                     &storage_state.source_uppers[&description.remap_collection_id],
                 ),

@@ -41,9 +41,7 @@ use crate::source::RawSourceCreationConfig;
 use crate::source::sql_server::{
     DefiniteError, ReplicationError, SourceOutputInfo, TransientError,
 };
-use crate::source::types::{
-    ProgressStatisticsUpdate, SignaledFuture, SourceMessage, StackedCollection,
-};
+use crate::source::types::{SignaledFuture, SourceMessage, StackedCollection};
 
 /// Used as a partition ID to determine the worker that is responsible for
 /// reading data from SQL Server.
@@ -61,7 +59,6 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
     StackedCollection<G, (u64, Result<SourceMessage, DataflowError>)>,
     TimelyStream<G, Infallible>,
     TimelyStream<G, ReplicationError>,
-    TimelyStream<G, ProgressStatisticsUpdate>,
     PressOnDropButton,
 ) {
     let op_name = format!("SqlServerReplicationReader({})", config.id);
@@ -69,7 +66,6 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
 
     let (data_output, data_stream) = builder.new_output::<AccountedStackBuilder<_>>();
     let (_upper_output, upper_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
-    let (stats_output, stats_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
 
     // Captures DefiniteErrors that affect the entire source, including all outputs
     let (definite_error_handle, definite_errors) =
@@ -78,17 +74,10 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
     let (button, transient_errors) = builder.build_fallible(move |caps| {
         let busy_signal = Arc::clone(&config.busy_signal);
         Box::pin(SignaledFuture::new(busy_signal, async move {
-            let [
-                data_cap_set,
-                upper_cap_set,
-                stats_cap,
-                definite_error_cap_set,
-            ]: &mut [_; 4] = caps.try_into().unwrap();
+            let [data_cap_set, upper_cap_set, definite_error_cap_set]: &mut [_; 3] =
+                caps.try_into().unwrap();
 
-            // TODO(sql_server2): Run ingestions across multiple workers.
-            if !config.responsible_for(REPL_READER) {
-                return Ok::<_, TransientError>(());
-            }
+            let source_statistics = config.source_statistics();
 
             let connection_config = source
                 .connection
@@ -106,8 +95,10 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
             let mut export_ids_to_snapshot: BTreeMap<_, Vec<_>> = BTreeMap::new();
             // Maps the 'capture instance' to the output index for all outputs of this worker
             let mut capture_instances: BTreeMap<_, Vec<_>> = BTreeMap::new();
+            // Export statistics for a given capture instance
+            let mut export_statistics: BTreeMap<_, Vec<_>> = BTreeMap::new();
 
-            for output in outputs.values() {
+            for (export_id, output) in outputs.iter() {
                 if decoder_map.insert(output.partition_index, Arc::clone(&output.decoder)).is_some() {
                     panic!("Multiple decoders for output index {}", output.partition_index);
                 }
@@ -122,6 +113,31 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                         .or_default()
                         .push((output.partition_index, output.initial_lsn));
                 }
+                export_statistics.entry( Arc::clone(&output.capture_instance))
+                    .or_default()
+                    .push(
+                        config
+                            .statistics
+                            .get(export_id)
+                            .expect("statistics have been intialized")
+                            .clone(),
+                    );
+            }
+
+            // Eagerly emit an event if we have tables to snapshot.
+            // A worker *must* emit a count even if not responsible for snapshotting a table
+            // as statistic summarization will return null if any worker hasn't set a value.
+            // This will also reset snapshot stats for any exports not snapshotting.
+            if !export_ids_to_snapshot.is_empty() {
+                for stats in config.statistics.values() {
+                    stats.set_snapshot_records_known(0);
+                    stats.set_snapshot_records_staged(0);
+                }
+            }
+            // We need to emit statistics before we exit
+            // TODO(sql_server2): Run ingestions across multiple workers.
+            if !config.responsible_for(REPL_READER) {
+                return Ok::<_, TransientError>(());
             }
 
             let mut cdc_handle = client
@@ -131,22 +147,8 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
             // Snapshot any instance that requires it.
             // The LSN returned here will be the max LSN for any capture instance on the SQL server.
             let snapshot_lsn = {
-                // Small helper closure.
-                let emit_stats = |cap, known: usize, total: usize| {
-                    let update = ProgressStatisticsUpdate::Snapshot {
-                        records_known: u64::cast_from(known),
-                        records_staged: u64::cast_from(total),
-                    };
-                    tracing::debug!(?config.id, %known, %total, "snapshot progress");
-                    stats_output.give(cap, update);
-                };
-
                 let capture_instances_to_snapshot: BTreeSet<_> = export_ids_to_snapshot.keys().cloned().collect();
                 tracing::debug!(?config.id, ?capture_instances_to_snapshot, "starting snapshot");
-                // Eagerly emit an event if we have tables to snapshot.
-                if !capture_instances_to_snapshot.is_empty() {
-                    emit_stats(&stats_cap[0], 0, 0);
-                }
 
                 let (snapshot_lsn, snapshot_stats, snapshot_streams) = cdc_handle
                     .snapshot(Some(capture_instances_to_snapshot), config.worker_id, config.id)
@@ -154,24 +156,45 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                 let snapshot_cap = data_cap_set.delayed(&snapshot_lsn);
 
                 // As we stream rows for the snapshot we'll track the total we've seen.
-                let mut records_total: usize = 0;
-                let records_known = snapshot_stats.values().sum();
+                let mut records_staged_accumulator = BTreeMap::new();
+                let records_known_total: usize = snapshot_stats.values().sum();
                 let report_interval =
                     SNAPSHOT_PROGRESS_REPORT_INTERVAL.handle(config.config.config_set());
                 let mut last_report = Instant::now();
                 if !snapshot_stats.is_empty() {
-                    emit_stats(&stats_cap[0], records_known, 0);
+                    source_statistics
+                        .set_snapshot_records_known(u64::cast_from(records_known_total));
+                    for (capture_instance, snapshot_records_known) in snapshot_stats.iter() {
+                        records_staged_accumulator.insert(capture_instance, 0u64);
+                        for stats in export_statistics.get(capture_instance).unwrap() {
+                            stats.set_snapshot_records_known(u64::cast_from(*snapshot_records_known));
+                        }
+                    }
                 }
 
                 // Begin streaming our snapshots!
                 let mut snapshot_streams = std::pin::pin!(snapshot_streams);
                 while let Some((capture_instance, data)) = snapshot_streams.next().await {
                     let sql_server_row = data.map_err(TransientError::from)?;
-                    records_total = records_total.saturating_add(1);
 
+                    let records_staged = records_staged_accumulator
+                        .get_mut(&capture_instance)
+                        .and_then(|v| {
+                            *v = v.saturating_add(1);
+                            Some(*v)
+                        })
+                        .unwrap();
+
+                    // TODO: export statistics needs to be set by export_id, but currently
+                    // it looks like we don't support more than one export per capture instance
                     if last_report.elapsed() > report_interval.get() {
                         last_report = Instant::now();
-                        emit_stats(&stats_cap[0], records_known, records_total);
+                        source_statistics
+                            .set_snapshot_records_staged(records_staged_accumulator.values().sum());
+
+                        for stats in export_statistics.get(&capture_instance).unwrap() {
+                            stats.set_snapshot_records_staged(records_staged);
+                        }
                     }
 
                     // Decode the SQL Server row into an MZ one.
@@ -212,12 +235,22 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                     }
                 }
 
+                let records_staged_total = records_staged_accumulator.values().sum();
+
                 mz_ore::soft_assert_eq_or_log!(
-                    records_known,
-                    records_total,
+                    u64::cast_from(records_known_total),
+                    records_staged_total,
                     "snapshot size did not match total records received",
                 );
-                emit_stats(&stats_cap[0], records_known, records_total);
+
+                source_statistics.set_snapshot_records_known(records_staged_total);
+                source_statistics.set_snapshot_records_staged(records_staged_total);
+                for (capture_instance, records_staged) in records_staged_accumulator {
+                    for stats in export_statistics.get(capture_instance).unwrap() {
+                        stats.set_snapshot_records_known(records_staged);
+                        stats.set_snapshot_records_staged(records_staged);
+                    }
+                }
 
                 snapshot_lsn
             };
@@ -421,7 +454,6 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
         data_stream.as_collection(),
         upper_stream,
         error_stream,
-        stats_stream,
         button.press_on_drop(),
     )
 }
