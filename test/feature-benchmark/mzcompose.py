@@ -155,7 +155,10 @@ SERVICES = [
 
 
 def run_one_scenario(
-    c: Composition, scenario_class: type[Scenario], args: argparse.Namespace
+    c: Composition,
+    scenario_class: type[Scenario],
+    args: argparse.Namespace,
+    dependencies: list[str],
 ) -> BenchmarkScenarioResult:
     scenario_name = scenario_class.__name__
     print(f"--- Now benchmarking {scenario_name} ...")
@@ -297,9 +300,10 @@ def run_one_scenario(
                         aggregation.name(),
                     )
 
-        c.kill("cockroach", "materialized", "clusterd", "testdrive")
-        c.rm("cockroach", "materialized", "clusterd", "testdrive")
+        c.kill("cockroach", "materialized", "clusterd", "testdrive", *dependencies)
+        c.rm("cockroach", "materialized", "clusterd", "testdrive", *dependencies)
         c.rm_volumes("mzdata")
+        c.up(*dependencies)
 
         if early_abort:
             result.empty()
@@ -563,7 +567,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         for scenario_class in scenario_classes_scheduled_to_run:
             try:
-                scenario_result = run_one_scenario(c, scenario_class, args)
+                scenario_result = run_one_scenario(
+                    c, scenario_class, args, dependencies
+                )
             except RuntimeError as e:
                 if (
                     "No image found for commit hash" in str(e)
