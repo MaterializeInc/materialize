@@ -39,12 +39,14 @@ use mz_sql::catalog::{EnvironmentId, SessionCatalog};
 use mz_sql::session::hint::ApplicationNameHint;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::SUPPORT_USER;
-use mz_sql::session::vars::{CLUSTER, OwnedVarInput, SystemVars, Var};
+use mz_sql::session::vars::{
+    CLUSTER, ENABLE_FRONTEND_PEEK_SEQUENCING, OwnedVarInput, SystemVars, Var,
+};
 use mz_sql_parser::parser::{ParserStatementError, StatementParseResult};
 use prometheus::Histogram;
 use serde_json::json;
 use tokio::sync::{mpsc, oneshot};
-use tracing::error;
+use tracing::{debug, error};
 use uuid::Uuid;
 
 use crate::catalog::Catalog;
@@ -63,7 +65,7 @@ use crate::session::{
 use crate::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use crate::telemetry::{self, EventDetails, SegmentClientExt, StatementFailureType};
 use crate::webhook::AppendWebhookResponse;
-use crate::{AdapterNotice, AppendWebhookError, PeekResponseUnary, StartupResponse};
+use crate::{AdapterNotice, AppendWebhookError, PeekClient, PeekResponseUnary, StartupResponse};
 
 /// A handle to a running coordinator.
 ///
@@ -252,20 +254,33 @@ impl Client {
 
         // Create the client as soon as startup succeeds (before any await points) so its `Drop` can
         // handle termination.
+        // Build the PeekClient with controller handles returned from startup.
+        let StartupResponse {
+            role_id,
+            write_notify,
+            session_defaults,
+            catalog,
+            storage_collections,
+            transient_id_gen,
+            optimizer_metrics,
+        } = response;
+
+        let peek_client = PeekClient::new(
+            self.clone(),
+            storage_collections,
+            transient_id_gen,
+            optimizer_metrics,
+            // enable_frontend_peek_sequencing is initialized below, once we have a ConnCatalog
+        );
+
         let mut client = SessionClient {
             inner: Some(self.clone()),
             session: Some(session),
             timeouts: Timeout::new(),
             environment_id: self.environment_id.clone(),
             segment_client: self.segment_client.clone(),
+            peek_client,
         };
-
-        let StartupResponse {
-            role_id,
-            write_notify,
-            session_defaults,
-            catalog,
-        } = response;
 
         let session = client.session();
         session.initialize_role_metadata(role_id);
@@ -396,6 +411,10 @@ Issue a SQL query to get started. Need help?
             }
         }
 
+        client.peek_client.enable_frontend_peek_sequencing = ENABLE_FRONTEND_PEEK_SEQUENCING
+            .require(catalog.system_vars())
+            .is_ok();
+
         Ok(client)
     }
 
@@ -412,7 +431,7 @@ Issue a SQL query to get started. Need help?
     pub async fn support_execute_one(
         &self,
         sql: &str,
-    ) -> Result<Pin<Box<dyn Stream<Item = PeekResponseUnary> + Send + Sync>>, anyhow::Error> {
+    ) -> Result<Pin<Box<dyn Stream<Item = PeekResponseUnary> + Send>>, anyhow::Error> {
         // Connect to the coordinator.
         let conn_id = self.new_conn_id()?;
         let session = self.new_session(SessionConfig {
@@ -503,7 +522,7 @@ Issue a SQL query to get started. Need help?
     }
 
     #[instrument(level = "debug")]
-    fn send(&self, cmd: Command) {
+    pub(crate) fn send(&self, cmd: Command) {
         self.inner_cmd_tx
             .send((OpenTelemetryContext::obtain(), cmd))
             .expect("coordinator unexpectedly gone");
@@ -524,6 +543,8 @@ pub struct SessionClient {
     timeouts: Timeout,
     segment_client: Option<mz_segment::Client>,
     environment_id: EnvironmentId,
+    /// Thin client for frontend peek sequencing; populated at connection startup.
+    peek_client: PeekClient,
 }
 
 impl SessionClient {
@@ -672,6 +693,17 @@ impl SessionClient {
         outer_ctx_extra: Option<ExecuteContextExtra>,
     ) -> Result<(ExecuteResponse, Instant), AdapterError> {
         let execute_started = Instant::now();
+
+        // Attempt peek sequencing in the session task.
+        // If unsupported, fall back to the Coordinator path.
+        // TODO: wire up cancel_future
+        if let Some(resp) = self.try_frontend_peek(&portal_name).await? {
+            debug!("frontend peek succeeded");
+            return Ok((resp, execute_started));
+        } else {
+            debug!("frontend peek did not happen");
+        }
+
         let response = self
             .send_with_cancel(
                 |tx, session| Command::Execute {
@@ -973,7 +1005,9 @@ impl SessionClient {
                 | Command::Terminate { .. }
                 | Command::RetireExecute { .. }
                 | Command::CheckConsistency { .. }
-                | Command::Dump { .. } => {}
+                | Command::Dump { .. }
+                | Command::GetComputeInstanceClient { .. }
+                | Command::GetOracle { .. } => {}
             };
             cmd
         });
@@ -1044,6 +1078,39 @@ impl SessionClient {
     /// channel.
     pub async fn recv_timeout(&mut self) -> Option<TimeoutType> {
         self.timeouts.recv().await
+    }
+
+    /// Returns a reference to the PeekClient used for frontend peek sequencing.
+    pub fn peek_client(&self) -> &PeekClient {
+        &self.peek_client
+    }
+
+    /// Returns a reference to the PeekClient used for frontend peek sequencing.
+    pub fn peek_client_mut(&mut self) -> &mut PeekClient {
+        &mut self.peek_client
+    }
+
+    /// Attempt to sequence a peek from the session task.
+    ///
+    /// Returns Some(response) if we handled the peek, or None to fall back to the Coordinator's
+    /// peek sequencing.
+    pub(crate) async fn try_frontend_peek(
+        &mut self,
+        portal_name: &str,
+    ) -> Result<Option<ExecuteResponse>, AdapterError> {
+        if self.peek_client().enable_frontend_peek_sequencing {
+            // We need to snatch the session out of self here, because if we just had a reference to it,
+            // then we couldn't do other things with self.
+            let mut session = self.session.take().expect("SessionClient invariant");
+            let r = self
+                .try_frontend_peek_inner(portal_name, &mut session)
+                .await;
+            // Always put it back, even if we got an error.
+            self.session = Some(session);
+            r
+        } else {
+            Ok(None)
+        }
     }
 }
 
