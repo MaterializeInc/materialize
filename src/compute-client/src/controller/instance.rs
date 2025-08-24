@@ -151,6 +151,27 @@ impl<T: ComputeControllerTimestamp> Client<T> {
     pub fn read_hold_tx(&self) -> read_holds::ChangeTx<T> {
         Arc::clone(&self.read_hold_tx)
     }
+
+    pub(crate) async fn call_sync<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&mut Instance<T>) -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        use tokio::sync::oneshot;
+        use tracing::debug_span;
+        let (tx, rx) = oneshot::channel();
+        let otel_ctx = OpenTelemetryContext::obtain();
+        self.send(Box::new(move |instance| {
+            let _span = debug_span!("instance::call_sync").entered();
+            otel_ctx.attach_as_parent();
+            let result = f(instance);
+            let _ = tx.send(result);
+        }))
+        .expect("instance not dropped");
+
+        rx.await.expect("instance not dropped")
+    }
+
 }
 
 impl<T> Client<T>
@@ -158,6 +179,11 @@ where
     T: ComputeControllerTimestamp,
     ComputeGrpcClient: ComputeClient<T>,
 {
+    /// Acquire a compute read hold by asking the instance task.
+    pub async fn acquire_read_hold(&self, id: GlobalId) -> Result<ReadHold<T>, CollectionMissing> {
+        //////// todo: move this fn down in the file
+        self.call_sync(move |i| i.acquire_read_hold(id)).await
+    }
     pub fn spawn(
         id: ComputeInstanceId,
         build_info: &'static BuildInfo,
@@ -1009,6 +1035,26 @@ where
     T: ComputeControllerTimestamp,
     ComputeGrpcClient: ComputeClient<T>,
 {
+    /// Acquires a `ReadHold` for the identified compute collection.
+    ///
+    /// This mirrors the logic used by the controller-side `InstanceState::acquire_read_hold`,
+    /// but executes on the instance task itself.
+    pub fn acquire_read_hold(&self, id: GlobalId) -> Result<ReadHold<T>, CollectionMissing> {
+        ///////// todo: place this fn further down in the file
+        ///////// todo: refactor to take a collection of ids, so that we need just one call_sync in PeekClient::acquire_read_hold
+        // We acquire read holds at the earliest possible time rather than returning a copy
+        // of the implied read hold. This is so that dependents can acquire read holds on
+        // compute dependencies at frontiers that are held back by other read holds the caller
+        // has previously taken. /////////// todo: check comment
+        let collection = self.collection(id)?;
+        let since = collection.shared.lock_read_capabilities(|caps| {
+            let since = caps.frontier().to_owned();
+            caps.update_iter(since.iter().map(|t| (t.clone(), 1)));
+            since
+        });
+        let hold = ReadHold::new(id, since, Arc::clone(&self.read_hold_tx));
+        Ok(hold)
+    }
     fn new(
         build_info: &'static BuildInfo,
         storage: StorageCollections<T>,
