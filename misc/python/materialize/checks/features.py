@@ -14,13 +14,9 @@
 # cannot enable that feature on ARM based runners.
 class Features:
     AZURITE = "azurite"
-    SQL_SERVER = "sql_server"
 
     def __init__(self, features):
         self.features = features
 
     def azurite_enabled(self) -> bool:
         return self.features and self.AZURITE in self.features
-
-    def sql_server_enabled(self) -> bool:
-        return self.features and self.SQL_SERVER in self.features
