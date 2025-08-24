@@ -104,7 +104,7 @@ impl Optimize<HirRelationExpr> for Optimizer<'_> {
             &self.typecheck_ctx,
             &self.repr_typecheck_ctx,
             &mut df_meta,
-            self.metrics.as_ref(),
+            self.metrics.as_mut(),
             None,
         );
 

@@ -828,6 +828,17 @@ impl TestServer {
         }
     }
 
+    pub async fn disable_feature_flags(&self, flags: &[&'static str]) {
+        let internal_client = self.connect().internal().await.unwrap();
+
+        for flag in flags {
+            internal_client
+                .batch_execute(&format!("ALTER SYSTEM SET {} = false;", flag))
+                .await
+                .unwrap();
+        }
+    }
+
     pub fn ws_addr(&self) -> Uri {
         format!(
             "ws://{}/api/experimental/sql",
@@ -1155,6 +1166,17 @@ impl TestServerWithRuntime {
         for flag in flags {
             internal_client
                 .batch_execute(&format!("ALTER SYSTEM SET {} = true;", flag))
+                .unwrap();
+        }
+    }
+
+    /// Disable LaunchDarkly feature flags.
+    pub fn disable_feature_flags(&self, flags: &[&'static str]) {
+        let mut internal_client = self.connect_internal(postgres::NoTls).unwrap();
+
+        for flag in flags {
+            internal_client
+                .batch_execute(&format!("ALTER SYSTEM SET {} = false;", flag))
                 .unwrap();
         }
     }

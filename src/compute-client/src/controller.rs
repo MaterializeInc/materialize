@@ -64,7 +64,6 @@ use timely::PartialOrder;
 use timely::progress::{Antichain, Timestamp};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{self, MissedTickBehavior};
-use tracing::debug_span;
 use uuid::Uuid;
 
 use crate::controller::error::{
@@ -80,12 +79,12 @@ use crate::metrics::ComputeControllerMetrics;
 use crate::protocol::command::{ComputeParameters, PeekTarget};
 use crate::protocol::response::{PeekResponse, SubscribeBatch};
 
-mod instance;
 mod introspection;
 mod replica;
 mod sequential_hydration;
 
 pub mod error;
+pub mod instance;
 
 pub(crate) type StorageCollections<T> = Arc<
     dyn mz_storage_client::storage_collections::StorageCollections<Timestamp = T> + Send + Sync,
@@ -336,6 +335,14 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
     /// Return a reference to the indicated compute instance.
     fn instance(&self, id: ComputeInstanceId) -> Result<&InstanceState<T>, InstanceMissing> {
         self.instances.get(&id).ok_or(InstanceMissing(id))
+    }
+
+    /// Return an `instance::Client` for the indicated compute instance.
+    pub fn instance_client(
+        &self,
+        id: ComputeInstanceId,
+    ) -> Result<instance::Client<T>, InstanceMissing> {
+        self.instance(id).map(|instance| instance.client.clone())
     }
 
     /// Return a mutable reference to the indicated compute instance.
@@ -1087,39 +1094,32 @@ impl<T: ComputeControllerTimestamp> InstanceState<T> {
         self.collections.get(&id).ok_or(CollectionMissing(id))
     }
 
+    /// Calls the given function on the instance task. Does not await the result.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the instance corresponding to `self` does not exist.
     fn call<F>(&self, f: F)
     where
         F: FnOnce(&mut Instance<T>) + Send + 'static,
     {
-        let otel_ctx = OpenTelemetryContext::obtain();
-        self.client
-            .send(Box::new(move |instance| {
-                let _span = debug_span!("instance::call").entered();
-                otel_ctx.attach_as_parent();
-
-                f(instance)
-            }))
-            .expect("instance not dropped");
+        self.client.call(f).expect("instance not dropped")
     }
 
+    /// Calls the given function on the instance task, and awaits the result.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the instance corresponding to `self` does not exist.
     async fn call_sync<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut Instance<T>) -> R + Send + 'static,
         R: Send + 'static,
     {
-        let (tx, rx) = oneshot::channel();
-        let otel_ctx = OpenTelemetryContext::obtain();
         self.client
-            .send(Box::new(move |instance| {
-                let _span = debug_span!("instance::call_sync").entered();
-                otel_ctx.attach_as_parent();
-
-                let result = f(instance);
-                let _ = tx.send(result);
-            }))
-            .expect("instance not dropped");
-
-        rx.await.expect("instance not dropped")
+            .call_sync(f)
+            .await
+            .expect("instance not dropped")
     }
 
     /// Acquires a [`ReadHold`] for the identified compute collection.

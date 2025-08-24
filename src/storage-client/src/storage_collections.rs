@@ -46,8 +46,9 @@ use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::connections::inline::InlinedConnection;
 use mz_storage_types::controller::{CollectionMetadata, StorageError, TxnsCodecRow};
 use mz_storage_types::dyncfgs::STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION;
+use mz_storage_types::errors::CollectionMissing;
 use mz_storage_types::parameters::StorageParameters;
-use mz_storage_types::read_holds::{ReadHold, ReadHoldError};
+use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sources::{
     GenericSourceConnection, SourceData, SourceDesc, SourceEnvelope, SourceExport,
@@ -106,10 +107,7 @@ pub trait StorageCollections: Debug {
     fn update_parameters(&self, config_params: StorageParameters);
 
     /// Returns the [CollectionMetadata] of the collection identified by `id`.
-    fn collection_metadata(
-        &self,
-        id: GlobalId,
-    ) -> Result<CollectionMetadata, StorageError<Self::Timestamp>>;
+    fn collection_metadata(&self, id: GlobalId) -> Result<CollectionMetadata, CollectionMissing>;
 
     /// Acquire an iterator over [CollectionMetadata] for all active
     /// collections.
@@ -122,7 +120,7 @@ pub trait StorageCollections: Debug {
     fn collection_frontiers(
         &self,
         id: GlobalId,
-    ) -> Result<CollectionFrontiers<Self::Timestamp>, StorageError<Self::Timestamp>> {
+    ) -> Result<CollectionFrontiers<Self::Timestamp>, CollectionMissing> {
         let frontiers = self
             .collections_frontiers(vec![id])?
             .expect_element(|| "known to exist");
@@ -135,12 +133,12 @@ pub trait StorageCollections: Debug {
     fn collections_frontiers(
         &self,
         id: Vec<GlobalId>,
-    ) -> Result<Vec<CollectionFrontiers<Self::Timestamp>>, StorageError<Self::Timestamp>>;
+    ) -> Result<Vec<CollectionFrontiers<Self::Timestamp>>, CollectionMissing>;
 
     /// Atomically gets and returns the frontiers of all active collections.
     ///
-    /// A collection is "active" when it has a non empty frontier of read
-    /// capabilties.
+    /// A collection is "active" when it has a non-empty frontier of read
+    /// capabilities.
     fn active_collection_frontiers(&self) -> Vec<CollectionFrontiers<Self::Timestamp>>;
 
     /// Checks whether a collection exists under the given `GlobalId`. Returns
@@ -343,7 +341,7 @@ pub trait StorageCollections: Debug {
     fn acquire_read_holds(
         &self,
         desired_holds: Vec<GlobalId>,
-    ) -> Result<Vec<ReadHold<Self::Timestamp>>, ReadHoldError>;
+    ) -> Result<Vec<ReadHold<Self::Timestamp>>, CollectionMissing>;
 
     /// Get the time dependence for a storage collection. Returns no value if unknown or if
     /// the object isn't managed by storage.
@@ -1093,7 +1091,7 @@ where
     {
         let metadata = match self.collection_metadata(id) {
             Ok(metadata) => metadata.clone(),
-            Err(e) => return async { Err(e) }.boxed(),
+            Err(e) => return async { Err(e.into()) }.boxed(),
         };
         let txns_read = metadata.txns_shard.as_ref().map(|txns_id| {
             assert_eq!(txns_id, txns_read.txns_id());
@@ -1158,7 +1156,7 @@ where
 
         let metadata = match self.collection_metadata(id) {
             Ok(metadata) => metadata.clone(),
-            Err(e) => return async { Err(e) }.boxed(),
+            Err(e) => return async { Err(e.into()) }.boxed(),
         };
         let txns_read = metadata.txns_shard.as_ref().map(|txns_id| {
             assert_eq!(txns_id, txns_read.txns_id());
@@ -1436,16 +1434,13 @@ where
             .update(config_params);
     }
 
-    fn collection_metadata(
-        &self,
-        id: GlobalId,
-    ) -> Result<CollectionMetadata, StorageError<Self::Timestamp>> {
+    fn collection_metadata(&self, id: GlobalId) -> Result<CollectionMetadata, CollectionMissing> {
         let collections = self.collections.lock().expect("lock poisoned");
 
         collections
             .get(&id)
             .map(|c| c.collection_metadata.clone())
-            .ok_or(StorageError::IdentifierMissing(id))
+            .ok_or(CollectionMissing(id))
     }
 
     fn active_collection_metadatas(&self) -> Vec<(GlobalId, CollectionMetadata)> {
@@ -1461,7 +1456,7 @@ where
     fn collections_frontiers(
         &self,
         ids: Vec<GlobalId>,
-    ) -> Result<Vec<CollectionFrontiers<Self::Timestamp>>, StorageError<Self::Timestamp>> {
+    ) -> Result<Vec<CollectionFrontiers<Self::Timestamp>>, CollectionMissing> {
         if ids.is_empty() {
             return Ok(vec![]);
         }
@@ -1479,7 +1474,7 @@ where
                         implied_capability: c.implied_capability.clone(),
                         read_capabilities: c.read_capabilities.frontier().to_owned(),
                     })
-                    .ok_or(StorageError::IdentifierMissing(id))
+                    .ok_or(CollectionMissing(id))
             })
             .collect::<Result<Vec<_>, _>>()?;
 
@@ -1643,7 +1638,7 @@ where
     {
         let metadata = match self.collection_metadata(id) {
             Ok(metadata) => metadata.clone(),
-            Err(e) => return async { Err(e) }.boxed(),
+            Err(e) => return async { Err(e.into()) }.boxed(),
         };
         let txns_read = metadata.txns_shard.as_ref().map(|txns_id| {
             // Ensure the txn's shard the controller has is the same that this
@@ -1717,7 +1712,7 @@ where
     > {
         let metadata = match self.collection_metadata(id) {
             Ok(m) => m,
-            Err(e) => return Box::pin(async move { Err(e) }),
+            Err(e) => return Box::pin(async move { Err(e.into()) }),
         };
         let persist = Arc::clone(&self.persist);
 
@@ -2525,7 +2520,7 @@ where
     fn acquire_read_holds(
         &self,
         desired_holds: Vec<GlobalId>,
-    ) -> Result<Vec<ReadHold<Self::Timestamp>>, ReadHoldError> {
+    ) -> Result<Vec<ReadHold<Self::Timestamp>>, CollectionMissing> {
         if desired_holds.is_empty() {
             return Ok(vec![]);
         }
@@ -2544,9 +2539,7 @@ where
         // to pass around ReadHold tokens, we might tighten this up and instead
         // acquire read holds at the implied capability.
         for id in desired_holds.iter() {
-            let collection = collections
-                .get(id)
-                .ok_or(ReadHoldError::CollectionMissing(*id))?;
+            let collection = collections.get(id).ok_or(CollectionMissing(*id))?;
             let since = collection.read_capabilities.frontier().to_owned();
             advanced_holds.push((*id, since));
         }

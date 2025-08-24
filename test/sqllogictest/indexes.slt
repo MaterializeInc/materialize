@@ -27,3 +27,15 @@ CREATE INDEX illegal_sys_ind ON mz_internal.mz_comments (id)
 db error: ERROR: cannot create index with unstable dependencies
 DETAIL: The object depends on the following unstable objects:
     mz_comments
+
+# Test an index on a constant view
+statement ok
+CREATE VIEW c1 AS SELECT 1;
+
+statement ok
+CREATE INDEX i1 ON c1();
+
+query I
+SELECT * FROM c1;
+----
+1

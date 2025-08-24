@@ -203,11 +203,3 @@ impl<T: TimelyTimestamp> Drop for ReadHold<T> {
         self.release();
     }
 }
-
-#[derive(Error, Debug)]
-pub enum ReadHoldError {
-    #[error("collection does not exist: {0}")]
-    CollectionMissing(GlobalId),
-    #[error("desired read hold frontier is not beyond the since of collection: {0}")]
-    SinceViolation(GlobalId),
-}

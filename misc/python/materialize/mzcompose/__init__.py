@@ -138,6 +138,10 @@ def get_variable_system_parameters(
     version: MzVersion,
     force_source_table_syntax: bool,
 ) -> list[VariableSystemParameter]:
+    """Note: Only the default is tested unless we explicitly select "System Parameters: Random" in trigger-ci.
+    These defaults are applied _after_ applying the settings from `get_minimal_system_parameters`.
+    """
+
     return [
         # -----
         # To reduce CRDB load as we are struggling with it in CI (values based on load test environment):
@@ -188,6 +192,11 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "enable_password_auth",
             "true",
+            ["true", "false"],
+        ),
+        VariableSystemParameter(
+            "enable_frontend_peek_sequencing",
+            "false",
             ["true", "false"],
         ),
         VariableSystemParameter(
