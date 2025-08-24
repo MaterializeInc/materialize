@@ -169,6 +169,7 @@ def setup(c: Composition, external_blob_store: bool) -> None:
         "schema-registry",
         "postgres",
         "mysql",
+        "sql-server",
         "debezium",
         "ssh-bastion-host",
         Service("testdrive", idle=True),
@@ -239,7 +240,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "--features",
         nargs="*",
-        help="A list of features (e.g. azurite, sql_server), to enable.",
+        help="A list of features (e.g. azurite), to enable.",
     )
 
     parser.add_argument(
@@ -273,9 +274,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         checks = [all_checks[check] for check in args.check]
     else:
         checks = list(all_subclasses(Check))
-
-    if features.sql_server_enabled():
-        c.up("sql-server")
 
     checks.sort(key=lambda ch: ch.__name__)
     checks = buildkite.shard_list(checks, lambda ch: ch.__name__)
