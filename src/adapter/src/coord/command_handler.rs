@@ -361,6 +361,14 @@ impl Coordinator {
                     write_notify: notify,
                     session_defaults,
                     catalog: self.owned_catalog(),
+                    compute_instance_clients: self
+                        .controller
+                        .compute
+                        .instances
+                        .iter()
+                        .map(|(id, state)| (*id, state.client.clone()))
+                        .collect(),
+                    storage_collections: Arc::clone(&self.controller.storage_collections),
                 });
                 if tx.send(resp).is_err() {
                     // Failed to send to adapter, but everything is setup so we can terminate
