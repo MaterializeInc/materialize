@@ -405,7 +405,7 @@ pub struct StashedPeekResponse {
     pub relation_desc: RelationDesc,
     /// The [ShardId] under which result batches have been stashed.
     pub shard_id: ShardId,
-    /// Batches of Rows, must be combined with reponses from other workers and
+    /// Batches of Rows, must be combined with responses from other workers and
     /// consolidated before sending back via a client.
     pub batches: Vec<ProtoBatch>,
     /// Rows that have not been uploaded to the stash, because their total size
