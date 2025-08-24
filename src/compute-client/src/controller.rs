@@ -1084,19 +1084,7 @@ impl<T: ComputeControllerTimestamp> InstanceState<T> {
         F: FnOnce(&mut Instance<T>) -> R + Send + 'static,
         R: Send + 'static,
     {
-        let (tx, rx) = oneshot::channel();
-        let otel_ctx = OpenTelemetryContext::obtain();
-        self.client
-            .send(Box::new(move |instance| {
-                let _span = debug_span!("instance::call_sync").entered();
-                otel_ctx.attach_as_parent();
-
-                let result = f(instance);
-                let _ = tx.send(result);
-            }))
-            .expect("instance not dropped");
-
-        rx.await.expect("instance not dropped")
+        self.client.call_sync(f).await
     }
 
     /// Acquires a [`ReadHold`] for the identified compute collection.

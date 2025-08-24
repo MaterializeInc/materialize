@@ -43,12 +43,48 @@ impl PeekClient {
         }
     }
 
-    /// Stub: acquire read holds on the required compute/storage collections.
-    ///
-    /// This will be implemented to coordinate read holds across the relevant
-    /// controllers.
-    pub async fn acquire_read_holds(&self) {
-        // stub
+    /// Acquire read holds on the required compute/storage collections.
+    /// Similar to Coordinator::acquire_read_holds.
+    pub async fn acquire_read_holds(
+        &self,
+        id_bundle: &crate::CollectionIdBundle,
+    ) -> crate::ReadHolds<Timestamp> {
+        use tracing::debug;
+
+        let mut read_holds = crate::ReadHolds::new();
+
+        // Acquire storage read holds via StorageCollections.
+        let storage = self
+            .storage_collections
+            .as_ref()
+            .expect("storage_collections handle not available in PeekClient");
+        let desired_storage: Vec<_> = id_bundle.storage_ids.iter().copied().collect();
+        let storage_read_holds = storage
+            .acquire_read_holds(desired_storage)
+            .expect("missing storage collections");
+        read_holds.storage_holds = storage_read_holds
+            .into_iter()
+            .map(|hold| (hold.id(), hold))
+            .collect();
+
+        // Acquire compute read holds by calling into the appropriate instance tasks.
+        for (&instance_id, collection_ids) in &id_bundle.compute_ids {
+            let client = self
+                .compute_instances
+                .get(&instance_id)
+                .expect("missing compute instance client");
+            for &id in collection_ids {
+                let hold = client
+                    .acquire_read_hold(id)
+                    .await
+                    .expect("missing compute collection");
+                let prev = read_holds.compute_holds.insert((instance_id, id), hold);
+                assert!(prev.is_none(), "duplicate compute ID in id_bundle {id_bundle:?}");
+            }
+        }
+
+        debug!(?read_holds, "acquire_read_holds (fast path)");
+        read_holds
     }
 
     /// Stub: determine the least valid write frontier to pick a safe read timestamp.
