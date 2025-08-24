@@ -582,12 +582,17 @@ mod tests {
             unreachable!()
         }
         fn finish(self) -> Self::FinishedColumn {
-            let arrays = self
-                .arrays
-                .into_iter()
-                .map(|mut x| ArrayBuilder::finish(&mut x))
-                .collect();
-            StructArray::new(self.fields.into(), arrays, None)
+            assert_eq!(self.fields.len(), self.arrays.len(), "invalid schema");
+            if self.fields.is_empty() {
+                StructArray::new_empty_fields(0, None)
+            } else {
+                let arrays = self
+                    .arrays
+                    .into_iter()
+                    .map(|mut x| ArrayBuilder::finish(&mut x))
+                    .collect();
+                StructArray::new(self.fields.into(), arrays, None)
+            }
         }
     }
 

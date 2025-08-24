@@ -1100,6 +1100,7 @@ impl CatalogState {
                     ConnectionDetails::Ssh { .. } => "ssh-tunnel",
                     ConnectionDetails::MySql { .. } => "mysql",
                     ConnectionDetails::SqlServer(_) => "sql-server",
+                    ConnectionDetails::IcebergCatalog(_) => "iceberg-catalog",
                 }),
                 Datum::String(&owner_id.to_string()),
                 privileges,
@@ -1143,7 +1144,8 @@ impl CatalogState {
             ConnectionDetails::Csr(_)
             | ConnectionDetails::Postgres(_)
             | ConnectionDetails::MySql(_)
-            | ConnectionDetails::SqlServer(_) => (),
+            | ConnectionDetails::SqlServer(_)
+            | ConnectionDetails::IcebergCatalog(_) => (),
         };
         updates
     }

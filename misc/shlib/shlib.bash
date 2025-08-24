@@ -267,7 +267,8 @@ trufflehog_jq_filter_common() {
       .Raw != "slt" and
       .Raw != "e6d5833015b170e23ae819e8c5d7eaedb472ca98" and
       .Raw != "postgresql://materialize:AbC123dEf@ep-cool-darkness-123456.us-east-2.aws.neon.tech:5432" and
-      .Raw != "d3aa325086974cdfb3912f28e5a8c168"
+      .Raw != "d3aa325086974cdfb3912f28e5a8c168" and
+      .Raw != "jdbc:postgresql://postgres:5432/postgres"
     )'
 }
 

@@ -38,6 +38,7 @@ class TestContext:
         self.seed = random.getrandbits(32)
         self.sts = boto3.client("sts")
         self.iam = boto3.client("iam")
+        self.s3tables = boto3.client("s3tables")
 
         # Get the IAM principal that we're running as.
         caller = self.sts.get_caller_identity()
@@ -100,7 +101,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 """,
             )
 
-            for fn in [test_credentials, test_assume_role]:
+            for fn in [test_credentials, test_assume_role, test_s3tables_connection]:
                 with c.test_case(fn.__name__):
                     fn(c, ctx)
     finally:
@@ -230,6 +231,71 @@ def test_assume_role(c: Composition, ctx: TestContext):
         c.sql("VALIDATE CONNECTION aws_assume_role")
     finally:
         _delete_role(ctx, customer_role)
+
+
+def test_s3tables_connection(c: Composition, ctx: TestContext):
+    bucket = None
+    customer_role = None
+    try:
+        bucket = ctx.s3tables.create_table_bucket(
+            name=f"test-bucket-{ctx.seed}",
+        )
+        customer_role = f"testdrive-{ctx.seed}-Customer"
+        customer_role_arn = f"arn:aws:iam::{ctx.account_id}:role/{customer_role}"
+        c.sql(
+            f"CREATE CONNECTION aws_assume_role TO AWS (ASSUME ROLE ARN '{customer_role_arn}')"
+        )
+        connection_id = c.sql_query(
+            "SELECT id FROM mz_connections WHERE name = 'aws_assume_role'"
+        )[0][0]
+
+        principal = c.sql_query(
+            f"SELECT principal FROM mz_internal.mz_aws_connections WHERE id = '{connection_id}'"
+        )[0][0]
+
+        _create_role(ctx, customer_role, principal)
+
+        c.sleep(ctx.iam_propagation_seconds)
+
+        ctx.iam.put_role_policy(
+            RoleName=customer_role,
+            PolicyName=f"{customer_role}-s3tables-all",
+            PolicyDocument=json.dumps(
+                {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Action": ["s3tables:*"],
+                            "Resource": "*",
+                        }
+                    ],
+                }
+            ),
+        )
+
+        trust_policy = c.sql_query(
+            f"SELECT example_trust_policy FROM mz_internal.mz_aws_connections WHERE id = '{connection_id}'"
+        )[0][0]
+        ctx.iam.update_assume_role_policy(
+            RoleName=customer_role,
+            PolicyDocument=json.dumps(trust_policy),
+        )
+
+        c.sleep(ctx.iam_propagation_seconds)
+
+        c.sql(
+            f"CREATE CONNECTION s3tables TO ICEBERG CATALOG (TYPE 's3tablesrest', URL = 'https://s3tables.us-east-1.amazonaws.com/iceberg', WAREHOUSE = '{bucket['arn']}', AWS CONNECTION = aws_assume_role)"
+        )
+    finally:
+        if bucket is not None:
+            ctx.s3tables.delete_table_bucket(tableBucketARN=bucket["arn"])
+        if customer_role is not None:
+            ctx.iam.delete_role_policy(
+                RoleName=customer_role,
+                PolicyName=f"{customer_role}-s3tables-all",
+            )
+            _delete_role(ctx, customer_role)
 
 
 def _create_role(ctx: TestContext, customer_role: str, principal: str) -> None:

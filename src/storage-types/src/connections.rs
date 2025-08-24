@@ -15,10 +15,15 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::{Context, anyhow, bail};
+use iceberg::{Catalog, CatalogBuilder};
+use iceberg_catalog_rest::{
+    REST_CATALOG_PROP_URI, REST_CATALOG_PROP_WAREHOUSE, RestCatalogBuilder,
+};
 use itertools::Itertools;
 use mz_ccsr::tls::{Certificate, Identity};
 use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceReader, vpc_endpoint_host};
 use mz_dyncfg::ConfigSet;
+// use mz_iceberg_rest::{REST_CATALOG_PROP_URI, REST_CATALOG_PROP_WAREHOUSE, RestCatalogBuilder};
 use mz_kafka_util::client::{
     BrokerAddr, BrokerRewrite, MzClientContext, MzKafkaError, TunnelConfig, TunnelingClientContext,
 };
@@ -202,6 +207,7 @@ pub enum Connection<C: ConnectionAccess = InlinedConnection> {
     AwsPrivatelink(AwsPrivatelinkConnection),
     MySql(MySqlConnection<C>),
     SqlServer(SqlServerConnectionDetails<C>),
+    IcebergCatalog(IcebergCatalogConnection<C>),
 }
 
 impl<R: ConnectionResolver> IntoInlineConnection<Connection, R>
@@ -219,6 +225,9 @@ impl<R: ConnectionResolver> IntoInlineConnection<Connection, R>
             Connection::SqlServer(sql_server) => {
                 Connection::SqlServer(sql_server.into_inline_connection(r))
             }
+            Connection::IcebergCatalog(iceberg) => {
+                Connection::IcebergCatalog(iceberg.into_inline_connection(r))
+            }
         }
     }
 }
@@ -235,6 +244,7 @@ impl<C: ConnectionAccess> Connection<C> {
             Connection::AwsPrivatelink(conn) => conn.validate_by_default(),
             Connection::MySql(conn) => conn.validate_by_default(),
             Connection::SqlServer(conn) => conn.validate_by_default(),
+            Connection::IcebergCatalog(conn) => conn.validate_by_default(),
         }
     }
 }
@@ -255,6 +265,7 @@ impl Connection<InlinedConnection> {
             Connection::AwsPrivatelink(conn) => conn.validate(id, storage_configuration).await?,
             Connection::MySql(conn) => conn.validate(id, storage_configuration).await?,
             Connection::SqlServer(conn) => conn.validate(id, storage_configuration).await?,
+            Connection::IcebergCatalog(conn) => conn.validate(id, storage_configuration).await?,
         }
         Ok(())
     }
@@ -355,6 +366,160 @@ impl<C: ConnectionAccess> AlterCompatible for Connection<C> {
                 Err(AlterError { id })
             }
         }
+    }
+}
+
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub enum IcebergCatalogType {
+    Rest,
+    S3TablesRest,
+}
+
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct IcebergCatalogConnection<C: ConnectionAccess = InlinedConnection> {
+    pub catalog_type: IcebergCatalogType,
+    pub uri: String,
+    pub warehouse: Option<String>,
+    pub credential: Option<StringOrSecret>,
+    pub aws_connection: Option<AwsConnectionReference<C>>,
+    pub scope: Option<String>,
+}
+
+impl AlterCompatible for IcebergCatalogConnection {
+    fn alter_compatible(&self, _id: GlobalId, _other: &Self) -> Result<(), AlterError> {
+        //TODO(iceberg): figure out what if anything isn't alterable
+        Ok(())
+    }
+}
+
+impl<R: ConnectionResolver> IntoInlineConnection<IcebergCatalogConnection, R>
+    for IcebergCatalogConnection<ReferencedConnection>
+{
+    fn into_inline_connection(self, r: R) -> IcebergCatalogConnection {
+        IcebergCatalogConnection {
+            catalog_type: self.catalog_type,
+            uri: self.uri,
+            warehouse: self.warehouse,
+            credential: self.credential,
+            scope: self.scope,
+            aws_connection: self
+                .aws_connection
+                .map(|aws| aws.into_inline_connection(&r)),
+        }
+    }
+}
+
+impl<C: ConnectionAccess> IcebergCatalogConnection<C> {
+    fn validate_by_default(&self) -> bool {
+        true
+    }
+}
+
+impl IcebergCatalogConnection<InlinedConnection> {
+    async fn connect(
+        &self,
+        storage_configuration: &StorageConfiguration,
+        in_task: InTask,
+    ) -> Result<Arc<dyn Catalog>, anyhow::Error> {
+        match self.catalog_type {
+            IcebergCatalogType::S3TablesRest => {
+                self.connect_s3tables(storage_configuration, in_task).await
+            }
+            IcebergCatalogType::Rest => self.connect_rest(storage_configuration, in_task).await,
+        }
+    }
+
+    async fn connect_s3tables(
+        &self,
+        storage_configuration: &StorageConfiguration,
+        in_task: InTask,
+    ) -> Result<Arc<dyn Catalog>, anyhow::Error> {
+        let mut props = BTreeMap::from([(REST_CATALOG_PROP_URI.to_string(), self.uri.clone())]);
+
+        let aws_ref = self
+            .aws_connection
+            .as_ref()
+            .ok_or_else(|| anyhow!("IcebergCatalogConnection requires an AWS connection"))?;
+        let aws_config = aws_ref
+            .connection
+            .load_sdk_config(
+                &storage_configuration.connection_context,
+                aws_ref.connection_id,
+                in_task,
+            )
+            .await?;
+
+        props.insert(
+            REST_CATALOG_PROP_WAREHOUSE.to_string(),
+            self.warehouse.clone().ok_or_else(|| {
+                anyhow!(
+                    "IcebergCatalogConnection with S3TablesRest catalog type requires a warehouse"
+                )
+            })?,
+        );
+
+        let catalog = RestCatalogBuilder::default()
+            .with_aws_client(aws_config)
+            .load("IcebergCatalog", props.into_iter().collect())
+            .await
+            .map_err(|e| anyhow!("failed to create Iceberg catalog: {e}"))?;
+        Ok(Arc::new(catalog))
+    }
+
+    async fn connect_rest(
+        &self,
+        storage_configuration: &StorageConfiguration,
+        in_task: InTask,
+    ) -> Result<Arc<dyn Catalog>, anyhow::Error> {
+        let mut props = BTreeMap::from([(REST_CATALOG_PROP_URI.to_string(), self.uri.clone())]);
+
+        if let Some(warehouse) = &self.warehouse {
+            props.insert(REST_CATALOG_PROP_WAREHOUSE.to_string(), warehouse.clone());
+        }
+
+        let credential = self
+            .credential
+            .clone()
+            .ok_or_else(|| {
+                anyhow!("IcebergCatalogConnection with Rest catalog type requires a credential")
+            })?
+            .get_string(
+                in_task,
+                &storage_configuration.connection_context.secrets_reader,
+            )
+            .await
+            .map_err(|e| anyhow!("failed to read Iceberg catalog credential: {e}"))?;
+        props.insert("credential".to_string(), credential);
+
+        if let Some(scope) = &self.scope {
+            props.insert("scope".to_string(), scope.clone());
+        }
+
+        let catalog = RestCatalogBuilder::default()
+            .load("IcebergCatalog", props.into_iter().collect())
+            .await
+            .map_err(|e| anyhow!("failed to create Iceberg catalog: {e}"))?;
+        Ok(Arc::new(catalog))
+    }
+
+    async fn validate(
+        &self,
+        _id: CatalogItemId,
+        storage_configuration: &StorageConfiguration,
+    ) -> Result<(), ConnectionValidationError> {
+        let catalog = self
+            .connect(storage_configuration, InTask::No)
+            .await
+            .map_err(|e| {
+                ConnectionValidationError::Other(anyhow!("failed to connect to catalog: {e}"))
+            })?;
+
+        // If we can list namespaces, the connection is valid.
+        catalog.list_namespaces(None).await.map_err(|e| {
+            ConnectionValidationError::Other(anyhow!("failed to list namespaces: {e}"))
+        })?;
+
+        Ok(())
     }
 }
 
