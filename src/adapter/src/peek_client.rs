@@ -22,7 +22,7 @@ pub type StorageCollectionsHandle = Arc<
 ///
 /// Note: The compute instance client type is generic over timestamp, but in
 /// the adapter we operate with the default system timestamp `mz_repr::Timestamp`.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct PeekClient {
     /// Channels to talk to each compute Instance task directly.
     pub compute_instances: BTreeMap<
@@ -30,19 +30,10 @@ pub struct PeekClient {
         mz_compute_client::controller::instance::Client<Timestamp>,
     >,
     /// Handle to storage collections for reading frontiers and policies.
-    pub storage_collections: Option<StorageCollectionsHandle>,
+    pub storage_collections: StorageCollectionsHandle,
 }
 
 impl PeekClient {
-    /// Creates an empty PeekClient with no attached controllers. These will be
-    /// populated later when wiring fast-path peeks.
-    pub fn new() -> Self {
-        Self {
-            compute_instances: BTreeMap::new(),
-            storage_collections: None,
-        }
-    }
-
     /// Acquire read holds on the required compute/storage collections.
     /// Similar to Coordinator::acquire_read_holds.
     pub async fn acquire_read_holds(
@@ -54,12 +45,9 @@ impl PeekClient {
         let mut read_holds = crate::ReadHolds::new();
 
         // Acquire storage read holds via StorageCollections.
-        let storage = self
-            .storage_collections
-            .as_ref()
-            .expect("storage_collections handle not available in PeekClient");
         let desired_storage: Vec<_> = id_bundle.storage_ids.iter().copied().collect();
-        let storage_read_holds = storage
+        let storage_read_holds = self
+            .storage_collections
             .acquire_read_holds(desired_storage)
             .expect("missing storage collections");
         read_holds.storage_holds = storage_read_holds

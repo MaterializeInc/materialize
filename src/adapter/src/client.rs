@@ -229,7 +229,7 @@ impl Client {
 
         let peek_client = crate::peek_client::PeekClient {
             compute_instances: compute_instance_clients,
-            storage_collections: Some(storage_collections),
+            storage_collections,
         };
 
         let mut client = SessionClient {
