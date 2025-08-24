@@ -57,6 +57,9 @@ pub mod session;
 pub mod statement_logging;
 pub mod telemetry;
 pub mod webhook;
+pub mod peek_client;
+
+pub use crate::peek_client::PeekClient;
 
 pub use crate::client::{Client, Handle, SessionClient};
 pub use crate::command::{ExecuteResponse, ExecuteResponseKind, StartupResponse};
