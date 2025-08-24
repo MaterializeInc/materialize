@@ -198,7 +198,7 @@ impl Optimize<HirRelationExpr> for Optimizer {
             &self.config.features,
             &self.typecheck_ctx,
             &mut df_meta,
-            Some(&self.metrics),
+            Some(&mut self.metrics),
             Some(self.view_id),
         );
         let expr = optimize_mir_local(expr, &mut transform_ctx)?.into_inner();
@@ -287,7 +287,7 @@ impl Optimize<LocalMirPlan> for Optimizer {
             &self.config.features,
             &self.typecheck_ctx,
             &mut df_meta,
-            Some(&self.metrics),
+            Some(&mut self.metrics),
         );
         // Apply source monotonicity overrides.
         for id in self.force_source_non_monotonic.iter() {

@@ -24,10 +24,9 @@ use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_adapter_types::dyncfgs::{ENABLE_MULTI_REPLICA_SOURCES, ENABLE_PASSWORD_AUTH};
 use mz_catalog::memory::objects::{
-    CatalogItem, Cluster, Connection, DataSourceDesc, Sink, Source, Table, TableDataSource, Type,
+    CatalogItem, Connection, DataSourceDesc, Sink, Source, Table, TableDataSource, Type,
 };
 use mz_cloud_resources::VpcEndpointConfig;
-use mz_controller_types::ReplicaId;
 use mz_expr::{
     CollectionPlan, MapFilterProject, OptimizedMirRelationExpr, ResultSpec, RowSetFinishing,
 };
@@ -74,7 +73,7 @@ use mz_sql::plan::{
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::UserKind;
 use mz_sql::session::vars::{
-    self, IsolationLevel, NETWORK_POLICY, OwnedVarInput, SCHEMA_ALIAS, SessionVars,
+    self, IsolationLevel, NETWORK_POLICY, OwnedVarInput, SCHEMA_ALIAS,
     TRANSACTION_ISOLATION_VAR_NAME, Var, VarError, VarInput,
 };
 use mz_sql::{plan, rbac};
@@ -92,7 +91,6 @@ use mz_storage_types::controller::StorageError;
 use mz_storage_types::stats::RelationPartStats;
 use mz_transform::EmptyStatisticsOracle;
 use mz_transform::dataflow::DataflowMetainfo;
-use mz_transform::notice::{OptimizerNoticeApi, OptimizerNoticeKind, RawOptimizerNotice};
 use smallvec::SmallVec;
 use timely::progress::Antichain;
 use timely::progress::Timestamp as TimelyTimestamp;
@@ -142,6 +140,7 @@ macro_rules! return_if_err {
     };
 }
 
+use crate::coord::sequencer::emit_optimizer_notices;
 pub(super) use return_if_err;
 
 struct DropOps {
@@ -5292,97 +5291,7 @@ impl Coordinator {
     }
 }
 
-/// Checks whether we should emit diagnostic
-/// information associated with reading per-replica sources.
-///
-/// If an unrecoverable error is found (today: an untargeted read on a
-/// cluster with a non-1 number of replicas), return that.  Otherwise,
-/// return a list of associated notices (today: we always emit exactly
-/// one notice if there are any per-replica log dependencies and if
-/// `emit_introspection_query_notice` is set, and none otherwise.)
-pub(super) fn check_log_reads(
-    catalog: &Catalog,
-    cluster: &Cluster,
-    source_ids: &BTreeSet<GlobalId>,
-    target_replica: &mut Option<ReplicaId>,
-    vars: &SessionVars,
-) -> Result<impl IntoIterator<Item = AdapterNotice>, AdapterError>
-where
-{
-    let log_names = source_ids
-        .iter()
-        .map(|gid| catalog.resolve_item_id(gid))
-        .flat_map(|item_id| catalog.introspection_dependencies(item_id))
-        .map(|item_id| catalog.get_entry(&item_id).name().item.clone())
-        .collect::<Vec<_>>();
-
-    if log_names.is_empty() {
-        return Ok(None);
-    }
-
-    // Reading from log sources on replicated clusters is only allowed if a
-    // target replica is selected. Otherwise, we have no way of knowing which
-    // replica we read the introspection data from.
-    let num_replicas = cluster.replicas().count();
-    if target_replica.is_none() {
-        if num_replicas == 1 {
-            *target_replica = cluster.replicas().map(|r| r.replica_id).next();
-        } else {
-            return Err(AdapterError::UntargetedLogRead { log_names });
-        }
-    }
-
-    // Ensure that logging is initialized for the target replica, lest
-    // we try to read from a non-existing arrangement.
-    let replica_id = target_replica.expect("set to `Some` above");
-    let replica = &cluster.replica(replica_id).expect("Replica must exist");
-    if !replica.config.compute.logging.enabled() {
-        return Err(AdapterError::IntrospectionDisabled { log_names });
-    }
-
-    Ok(vars
-        .emit_introspection_query_notice()
-        .then_some(AdapterNotice::PerReplicaLogRead { log_names }))
-}
-
 impl Coordinator {
-    /// Forward notices that we got from the optimizer.
-    fn emit_optimizer_notices(&self, session: &Session, notices: &Vec<RawOptimizerNotice>) {
-        // `for_session` below is expensive, so return early if there's nothing to do.
-        if notices.is_empty() {
-            return;
-        }
-        let humanizer = self.catalog.for_session(session);
-        let system_vars = self.catalog.system_config();
-        for notice in notices {
-            let kind = OptimizerNoticeKind::from(notice);
-            let notice_enabled = match kind {
-                OptimizerNoticeKind::IndexAlreadyExists => {
-                    system_vars.enable_notices_for_index_already_exists()
-                }
-                OptimizerNoticeKind::IndexTooWideForLiteralConstraints => {
-                    system_vars.enable_notices_for_index_too_wide_for_literal_constraints()
-                }
-                OptimizerNoticeKind::IndexKeyEmpty => {
-                    system_vars.enable_notices_for_index_empty_key()
-                }
-            };
-            if notice_enabled {
-                // We don't need to redact the notice parts because
-                // `emit_optimizer_notices` is only called by the `sequence_~`
-                // method for the statement that produces that notice.
-                session.add_notice(AdapterNotice::OptimizerNotice {
-                    notice: notice.message(&humanizer, false).to_string(),
-                    hint: notice.hint(&humanizer, false).to_string(),
-                });
-            }
-            self.metrics
-                .optimization_notices
-                .with_label_values(&[kind.metric_label()])
-                .inc_by(1);
-        }
-    }
-
     /// Process the metainfo from a newly created non-transient dataflow.
     async fn process_dataflow_metainfo(
         &mut self,
@@ -5393,7 +5302,7 @@ impl Coordinator {
     ) -> Option<BuiltinTableAppendNotify> {
         // Emit raw notices to the user.
         if let Some(ctx) = ctx {
-            self.emit_optimizer_notices(ctx.session(), &df_meta.optimizer_notices);
+            emit_optimizer_notices(&*self.catalog, ctx.session(), &df_meta.optimizer_notices);
         }
 
         // Create a metainfo with rendered notices.

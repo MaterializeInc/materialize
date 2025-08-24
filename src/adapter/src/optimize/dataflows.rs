@@ -54,7 +54,9 @@ use crate::util::viewable_variables;
 #[derive(Debug, Clone)]
 pub struct ComputeInstanceSnapshot {
     instance_id: ComputeInstanceId,
-    collections: BTreeSet<GlobalId>,
+    /// The collections that exist on this compute instance. If it's None, then any collection that
+    /// a caller asks us about is considered to exist.
+    collections: Option<BTreeSet<GlobalId>>,
 }
 
 impl ComputeInstanceSnapshot {
@@ -64,8 +66,22 @@ impl ComputeInstanceSnapshot {
             .collection_ids(id)
             .map(|collection_ids| Self {
                 instance_id: id,
-                collections: collection_ids.collect(),
+                collections: Some(collection_ids.collect()),
             })
+    }
+
+    pub fn new_from_parts(instance_id: ComputeInstanceId, collections: BTreeSet<GlobalId>) -> Self {
+        Self {
+            instance_id,
+            collections: Some(collections),
+        }
+    }
+
+    pub fn new_without_collections(instance_id: ComputeInstanceId) -> Self {
+        Self {
+            instance_id,
+            collections: None,
+        }
     }
 
     /// Return the ID of this compute instance.
@@ -73,14 +89,20 @@ impl ComputeInstanceSnapshot {
         self.instance_id
     }
 
-    /// Reports whether the instance contains the indicated collection.
+    /// Reports whether the instance contains the indicated collection. If the snapshot doesn't
+    /// track collections, then it returns true.
     pub fn contains_collection(&self, id: &GlobalId) -> bool {
-        self.collections.contains(id)
+        self.collections
+            .as_ref()
+            .map_or(true, |collections| collections.contains(id))
     }
 
     /// Inserts the given collection into the snapshot.
     pub fn insert_collection(&mut self, id: GlobalId) {
-        self.collections.insert(id);
+        self.collections
+            .as_mut()
+            .expect("insert_collection called on snapshot with None collections")
+            .insert(id);
     }
 }
 

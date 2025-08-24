@@ -17,7 +17,8 @@ use tracing::Span;
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveSubscribe};
 use crate::command::ExecuteResponse;
-use crate::coord::sequencer::inner::{check_log_reads, return_if_err};
+use crate::coord::sequencer::inner::return_if_err;
+use crate::coord::sequencer::{check_log_reads, emit_optimizer_notices};
 use crate::coord::{
     Coordinator, Message, PlanValidity, StageResult, Staged, SubscribeFinish, SubscribeOptimizeMir,
     SubscribeStage, SubscribeTimestampOptimizeLir, TargetCluster,
@@ -356,7 +357,7 @@ impl Coordinator {
         let (df_desc, df_meta) = global_lir_plan.unapply();
 
         // Emit notices.
-        self.emit_optimizer_notices(ctx.session(), &df_meta.optimizer_notices);
+        emit_optimizer_notices(&*self.catalog, ctx.session(), &df_meta.optimizer_notices);
 
         // Add metadata for the new SUBSCRIBE.
         let write_notify_fut = self

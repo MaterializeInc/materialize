@@ -208,26 +208,26 @@ use crate::util::{ClientTransmitter, ResultExt};
 use crate::webhook::{WebhookAppenderInvalidator, WebhookConcurrencyLimiter};
 use crate::{AdapterNotice, ReadHolds, flags};
 
+pub(crate) mod appends;
+pub(crate) mod catalog_serving;
+pub(crate) mod cluster_scheduling;
+pub(crate) mod consistency;
 pub(crate) mod id_bundle;
 pub(crate) mod in_memory_oracle;
 pub(crate) mod peek;
+pub(crate) mod read_policy;
+pub(crate) mod sequencer;
 pub(crate) mod statement_logging;
 pub(crate) mod timeline;
 pub(crate) mod timestamp_selection;
 
-pub mod appends;
-mod catalog_serving;
 mod caught_up;
-pub mod cluster_scheduling;
 mod command_handler;
-pub mod consistency;
 mod ddl;
 mod indexes;
 mod introspection;
 mod message_handler;
 mod privatelink_status;
-pub mod read_policy;
-mod sequencer;
 mod sql;
 mod validity;
 
@@ -361,6 +361,8 @@ impl Message {
                 Command::AuthenticatePassword { .. } => "command-auth_check",
                 Command::AuthenticateGetSASLChallenge { .. } => "command-auth_get_sasl_challenge",
                 Command::AuthenticateVerifySASLProof { .. } => "command-auth_verify_sasl_proof",
+                Command::GetComputeInstanceClient { .. } => "get-compute-instance-client",
+                Command::GetOracle { .. } => "get-oracle",
             },
             Message::ControllerReady {
                 controller: ControllerReadiness::Compute,

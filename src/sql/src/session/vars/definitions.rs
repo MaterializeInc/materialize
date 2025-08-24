@@ -2207,6 +2207,12 @@ feature_flags!(
         default: false,
         enable_for_item_parsing: true,
     },
+    {
+        name: enable_frontend_peek_sequencing, // currently, changes only take effect for new sessions
+        desc: "Enables the new peek sequencing code, which does most of its work in the Adapter Frontend instead of the Coordinator main task.",
+        default: true, ////////// todo: default to false before merging the PR. (but figure out what to do in CI)
+        enable_for_item_parsing: false,
+    },
 );
 
 impl From<&super::SystemVars> for OptimizerFeatures {

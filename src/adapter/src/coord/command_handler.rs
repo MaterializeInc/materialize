@@ -270,6 +270,26 @@ impl Coordinator {
                 Command::Dump { tx } => {
                     let _ = tx.send(self.dump().await);
                 }
+
+                Command::GetComputeInstanceClient { instance_id, tx } => {
+                    let _ = tx.send(
+                        self.controller
+                            .compute
+                            .thin_instance_client(instance_id)
+                            .map_err(|_| AdapterError::ConcurrentClusterDrop),
+                    );
+                }
+
+                Command::GetOracle { timeline, tx } => {
+                    let oracle = self
+                        .global_timelines
+                        .get(&timeline)
+                        .map(|timeline_state| Arc::clone(&timeline_state.oracle))
+                        .ok_or(AdapterError::ChangedPlan(
+                            "timeline has disappeared during planning".to_string(),
+                        ));
+                    let _ = tx.send(oracle);
+                }
             }
         }
         .instrument(debug_span!("handle_command"))
@@ -528,6 +548,9 @@ impl Coordinator {
                     write_notify: notify,
                     session_defaults,
                     catalog: self.owned_catalog(),
+                    storage_collections: Arc::clone(&self.controller.storage_collections),
+                    transient_id_gen: Arc::clone(&self.transient_id_gen),
+                    optimizer_metrics: self.optimizer_metrics.clone(),
                 });
                 if tx.send(resp).is_err() {
                     // Failed to send to adapter, but everything is setup so we can terminate
@@ -691,7 +714,7 @@ impl Coordinator {
             }
         }
 
-        if let Err(err) = self.verify_portal(&mut session, &portal_name) {
+        if let Err(err) = Self::verify_portal(self.catalog(), &mut session, &portal_name) {
             // If statement logging hasn't started yet, we don't need
             // to add any "end" event, so just make up a no-op
             // `ExecuteContextExtra` here, via `Default::default`.
