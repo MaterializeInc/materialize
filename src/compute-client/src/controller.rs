@@ -174,7 +174,7 @@ impl PeekNotification {
 
 /// A controller for the compute layer.
 pub struct ComputeController<T: ComputeControllerTimestamp> {
-    instances: BTreeMap<ComputeInstanceId, InstanceState<T>>,
+    pub instances: BTreeMap<ComputeInstanceId, InstanceState<T>>,
     /// A map from an instance ID to an arbitrary string that describes the
     /// class of the workload that compute instance is running (e.g.,
     /// `production` or `staging`).
@@ -227,6 +227,7 @@ pub struct ComputeController<T: ComputeControllerTimestamp> {
 }
 
 impl<T: ComputeControllerTimestamp> ComputeController<T> {
+
     /// Construct a new [`ComputeController`].
     pub fn new(
         build_info: &'static BuildInfo,
@@ -1044,8 +1045,8 @@ where
 }
 
 #[derive(Debug)]
-struct InstanceState<T: ComputeControllerTimestamp> {
-    client: instance::Client<T>,
+pub struct InstanceState<T: ComputeControllerTimestamp> {
+    pub client: instance::Client<T>,
     replicas: BTreeSet<ReplicaId>,
     collections: BTreeMap<GlobalId, Collection<T>>,
 }

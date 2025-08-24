@@ -216,6 +216,16 @@ pub struct StartupResponse {
     /// Map of (name, VarInput::Flat) tuples of session default variables that should be set.
     pub session_defaults: BTreeMap<String, OwnedVarInput>,
     pub catalog: Arc<Catalog>,
+    /// Thin compute instance clients keyed by instance id, for fast-path peeks.
+    pub compute_instance_clients: BTreeMap<
+        ComputeInstanceId,
+        mz_compute_client::controller::instance::Client<mz_repr::Timestamp>,
+    >,
+    /// Handle to storage collections for reading since/frontiers and policies.
+    pub storage_collections: Arc<dyn mz_storage_client::storage_collections::StorageCollections<
+            Timestamp = mz_repr::Timestamp,
+        > + Send
+            + Sync>,
 }
 
 /// The response to [`Client::authenticate`](crate::Client::authenticate).
