@@ -14,7 +14,7 @@ use std::fmt::Debug;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
-use differential_dataflow::difference::Semigroup;
+use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
@@ -117,7 +117,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
-    D: Debug + Semigroup + Ord + Codec64 + Send + Sync,
+    D: Debug + Monoid + Ord + Codec64 + Send + Sync,
     O: Opaque + Debug + Codec64,
     C: TxnsCodec,
 {
@@ -745,7 +745,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + TotalOrder + Codec64 + Sync,
-    D: Semigroup + Ord + Codec64 + Send + Sync,
+    D: Monoid + Ord + Codec64 + Send + Sync,
 {
     async fn open_data_write_for_apply(&self, data_id: ShardId) -> DataWriteApply<K, V, T, D> {
         let diagnostics = Diagnostics::from_purpose("txn data");
@@ -886,7 +886,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + TotalOrder + Codec64 + Sync,
-    D: Semigroup + Ord + Codec64 + Send + Sync,
+    D: Monoid + Ord + Codec64 + Send + Sync,
 {
     pub(crate) async fn maybe_replace_with_batch_schema(&mut self, batches: &[Batch<K, V, T, D>]) {
         // TODO: Remove this once everything is rolled out and we're sure it's
