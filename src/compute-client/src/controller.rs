@@ -76,7 +76,7 @@ use crate::metrics::ComputeControllerMetrics;
 use crate::protocol::command::{ComputeParameters, PeekTarget};
 use crate::protocol::response::{PeekResponse, SubscribeBatch};
 
-mod instance;
+pub mod instance;
 mod introspection;
 mod replica;
 mod sequential_hydration;

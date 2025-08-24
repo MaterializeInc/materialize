@@ -258,6 +258,7 @@ impl Client {
             timeouts: Timeout::new(),
             environment_id: self.environment_id.clone(),
             segment_client: self.segment_client.clone(),
+            peek_client: crate::peek_client::PeekClient::new(),
         };
 
         let StartupResponse {
@@ -524,9 +525,16 @@ pub struct SessionClient {
     timeouts: Timeout,
     segment_client: Option<mz_segment::Client>,
     environment_id: EnvironmentId,
+    /// Thin client for fast-path peeks; populated at connection startup.
+    peek_client: crate::peek_client::PeekClient,
 }
 
 impl SessionClient {
+    /// Returns a reference to the PeekClient used for fast-path peek sequencing.
+    pub fn peek_client(&self) -> &crate::peek_client::PeekClient {
+        &self.peek_client
+    }
+
     /// Parses a SQL expression, reporting failures as a telemetry event if
     /// possible.
     pub fn parse<'a>(
