@@ -135,7 +135,7 @@ pub type Command<T> = Box<dyn FnOnce(&mut Instance<T>) + Send>;
 /// A client for an [`Instance`] task.
 #[derive(Clone, derivative::Derivative)]
 #[derivative(Debug)]
-pub(super) struct Client<T: ComputeControllerTimestamp> {
+pub struct Client<T: ComputeControllerTimestamp> {
     /// A sender for commands for the instance.
     command_tx: mpsc::UnboundedSender<Command<T>>,
     /// A sender for read hold changes for collections installed on the instance.

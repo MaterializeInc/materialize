@@ -77,7 +77,7 @@ use crate::protocol::command::{ComputeParameters, PeekTarget};
 use crate::protocol::response::{PeekResponse, SubscribeBatch};
 use crate::service::{ComputeClient, ComputeGrpcClient};
 
-mod instance;
+pub mod instance;
 mod introspection;
 mod replica;
 mod sequential_hydration;
