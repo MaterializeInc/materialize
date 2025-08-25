@@ -126,16 +126,9 @@ def get_node_selector(
 def test_disk_label(mz: MaterializeApplication) -> None:
     """Test that cluster replicas have the correct materialize.cloud/disk labels"""
 
-    # If cluster_always_use_disk is set to true, it will take precedence over the DISK keyword in CREATE CLUSTER.
-    mz.environmentd.sql(
-        "ALTER SYSTEM SET cluster_always_use_disk = false;",
-        port="internal",
-        user="mz_system",
-    )
-
     for value in ("true", "false"):
         mz.environmentd.sql(
-            f"CREATE CLUSTER disk_{value} MANAGED, SIZE = 'scale=1,workers=2,nodisk', DISK = {value}"
+            f"CREATE CLUSTER disk_{value} MANAGED, SIZE = 'scale=1,workers=2,legacy', DISK = {value}"
         )
 
         (cluster_id, replica_id) = mz.environmentd.sql_query(
@@ -153,13 +146,6 @@ def test_disk_label(mz: MaterializeApplication) -> None:
             assert node_selectors == "''"
 
         mz.environmentd.sql(f"DROP CLUSTER disk_{value} CASCADE")
-
-    # Reset
-    mz.environmentd.sql(
-        "ALTER SYSTEM SET cluster_always_use_disk = true;",
-        port="internal",
-        user="mz_system",
-    )
 
 
 @pytest.mark.skip(reason="Keeps flaking, see database-issues#8299")

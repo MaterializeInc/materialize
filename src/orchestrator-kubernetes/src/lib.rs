@@ -580,8 +580,8 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         // self hosted deployments.
         let disk = {
             // Whether the user specified `DISK = TRUE` when creating the
-            // replica OR whether the feature flag to force disk is enabled.
-            let user_requested_disk = disk_in || scheduling_config.always_use_disk;
+            // replica.
+            let user_requested_disk = disk_in;
             // Whether the cluster replica size map provided by the
             // administrator explicitly indicates that the size does not support
             // disk.

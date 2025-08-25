@@ -21,9 +21,7 @@ use clap::ArgAction;
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig, KeyValueArg};
 use mz_ore::metrics::MetricsRegistry;
-use mz_sql::session::vars::{
-    DISK_CLUSTER_REPLICAS_DEFAULT, ENABLE_LOGICAL_COMPACTION_WINDOW, Var, VarInput,
-};
+use mz_sql::session::vars::{ENABLE_LOGICAL_COMPACTION_WINDOW, Var, VarInput};
 use mz_sqllogictest::runner::{self, Outcomes, RunConfig, Runner, WriteFmt};
 use mz_sqllogictest::util;
 use mz_tracing::CloneableEnvFilter;
@@ -139,11 +137,7 @@ async fn main() -> ExitCode {
     // sqllogictest requires that Materialize have some system variables set to some specific value
     // to pass. If the caller hasn't set this variable, then we set it for them. If the caller has
     // set this variable, then we assert that it's set to the right value.
-    let required_system_defaults: Vec<_> = [
-        (&DISK_CLUSTER_REPLICAS_DEFAULT, "true"),
-        (ENABLE_LOGICAL_COMPACTION_WINDOW.flag, "true"),
-    ]
-    .into();
+    let required_system_defaults: Vec<_> = [(ENABLE_LOGICAL_COMPACTION_WINDOW.flag, "true")].into();
     let mut system_parameter_defaults: BTreeMap<_, _> = args
         .system_parameter_default
         .clone()

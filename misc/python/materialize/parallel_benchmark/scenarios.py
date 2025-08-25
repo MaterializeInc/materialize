@@ -354,7 +354,7 @@ class FlagUpdate(Scenario):
                                 # doesn't matter. It just needs to be a flag
                                 # that exists in both versions to be
                                 # benchmarked.
-                                "ALTER SYSTEM SET enable_disk_cluster_replicas = true",
+                                "ALTER SYSTEM SET compute_hydration_concurrency = 1",
                                 conn_info=conn_infos["mz_system"],
                             ),
                             dist=Periodic(per_second=1),

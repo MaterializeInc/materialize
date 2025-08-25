@@ -1096,7 +1096,6 @@ impl SystemVars {
             &MAX_RESULT_SIZE,
             &MAX_COPY_FROM_SIZE,
             &ALLOWED_CLUSTER_REPLICA_SIZES,
-            &DISK_CLUSTER_REPLICAS_DEFAULT,
             &upsert_rocksdb::UPSERT_ROCKSDB_COMPACTION_STYLE,
             &upsert_rocksdb::UPSERT_ROCKSDB_OPTIMIZE_COMPACTION_MEMTABLE_BUDGET,
             &upsert_rocksdb::UPSERT_ROCKSDB_LEVEL_COMPACTION_DYNAMIC_LEVEL_BYTES,
@@ -1180,7 +1179,6 @@ impl SystemVars {
             &cluster_scheduling::CLUSTER_TOPOLOGY_SPREAD_SOFT,
             &cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY,
             &cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY_WEIGHT,
-            &cluster_scheduling::CLUSTER_ALWAYS_USE_DISK,
             &cluster_scheduling::CLUSTER_ALTER_CHECK_READY_INTERVAL,
             &cluster_scheduling::CLUSTER_CHECK_SCHEDULING_POLICIES_INTERVAL,
             &cluster_scheduling::CLUSTER_SECURITY_CONTEXT_ENABLED,
@@ -1652,11 +1650,6 @@ impl SystemVars {
         *self.expect_value::<u32>(&DEFAULT_CLUSTER_REPLICATION_FACTOR)
     }
 
-    /// Returns the `disk_cluster_replicas_default` configuration parameter.
-    pub fn disk_cluster_replicas_default(&self) -> bool {
-        *self.expect_value(&DISK_CLUSTER_REPLICAS_DEFAULT)
-    }
-
     pub fn upsert_rocksdb_compaction_style(&self) -> mz_rocksdb_types::config::CompactionStyle {
         *self.expect_value(&upsert_rocksdb::UPSERT_ROCKSDB_COMPACTION_STYLE)
     }
@@ -2080,10 +2073,6 @@ impl SystemVars {
         *self.expect_value(&cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY_WEIGHT)
     }
 
-    pub fn cluster_always_use_disk(&self) -> bool {
-        *self.expect_value(&cluster_scheduling::CLUSTER_ALWAYS_USE_DISK)
-    }
-
     pub fn cluster_alter_check_ready_interval(&self) -> Duration {
         *self.expect_value(&cluster_scheduling::CLUSTER_ALTER_CHECK_READY_INTERVAL)
     }
@@ -2287,7 +2276,6 @@ pub fn is_cluster_scheduling_var(name: &str) -> bool {
         || name == cluster_scheduling::CLUSTER_TOPOLOGY_SPREAD_SOFT.name()
         || name == cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY.name()
         || name == cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY_WEIGHT.name()
-        || name == cluster_scheduling::CLUSTER_ALWAYS_USE_DISK.name()
 }
 
 /// Returns whether the named variable is an HTTP server related config var.

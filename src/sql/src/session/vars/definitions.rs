@@ -674,14 +674,6 @@ pub static PG_TIMESTAMP_ORACLE_CONNECTION_POOL_TTL_STAGGER: VarDefinition = VarD
     false,
 );
 
-/// The default for the `DISK` option when creating managed clusters and cluster replicas.
-pub static DISK_CLUSTER_REPLICAS_DEFAULT: VarDefinition = VarDefinition::new(
-    "disk_cluster_replicas_default",
-    value!(bool; false),
-    "Whether the disk option for managed clusters and cluster replicas should be enabled by default.",
-    false,
-);
-
 pub static UNSAFE_NEW_TRANSACTION_WALL_TIME: VarDefinition = VarDefinition::new(
     "unsafe_new_transaction_wall_time",
     value!(Option<CheckedTimestamp<DateTime<Utc>>>; None),
@@ -1610,13 +1602,6 @@ pub mod cluster_scheduling {
         false,
     );
 
-    pub static CLUSTER_ALWAYS_USE_DISK: VarDefinition = VarDefinition::new(
-        "cluster_always_use_disk",
-        value!(bool; DEFAULT_ALWAYS_USE_DISK),
-        "Always provisions a replica with disk, regardless of `DISK` DDL option.",
-        false,
-    );
-
     const DEFAULT_CLUSTER_ALTER_CHECK_READY_INTERVAL: Duration = Duration::from_secs(3);
 
     pub static CLUSTER_ALTER_CHECK_READY_INTERVAL: VarDefinition = VarDefinition::new(
@@ -1913,12 +1898,6 @@ feature_flags!(
         name: unsafe_enable_unstable_dependencies,
         desc: "depending on unstable objects",
         default: false,
-        enable_for_item_parsing: true,
-    },
-    {
-        name: enable_disk_cluster_replicas,
-        desc: "`WITH (DISK)` for cluster replicas",
-        default: true,
         enable_for_item_parsing: true,
     },
     {

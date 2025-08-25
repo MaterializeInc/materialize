@@ -96,7 +96,6 @@ def get_minimal_system_parameters(
         "enable_continual_task_transform": "true",
         "enable_copy_to_expr": "true",
         "enable_create_table_from_source": "true",
-        "enable_disk_cluster_replicas": "true",
         "enable_eager_delta_joins": "true",
         "enable_envelope_debezium_in_subscribe": "true",
         "enable_expressions_in_limit_syntax": "true",
@@ -165,7 +164,6 @@ def get_variable_system_parameters(
         ),
         # -----
         # Others (ordered by name),
-        VariableSystemParameter("cluster_always_use_disk", "true", ["true", "false"]),
         VariableSystemParameter(
             "compute_dataflow_max_inflight_bytes",
             "134217728",
@@ -184,9 +182,6 @@ def get_variable_system_parameters(
             "1048576",
             # force-enabled, the in-between, and the production value
             ["0", "1048576", "314572800", "67108864"],
-        ),
-        VariableSystemParameter(
-            "disk_cluster_replicas_default", "true", ["true", "false"]
         ),
         VariableSystemParameter(
             "kafka_default_metadata_fetch_interval",
@@ -668,7 +663,7 @@ def bootstrap_cluster_replica_size() -> str:
 
 
 def cluster_replica_size_map() -> dict[str, dict[str, Any]]:
-    """scale=<n>,workers=<n>[,mem=<n>GiB][,nodisk]"""
+    """scale=<n>,workers=<n>[,mem=<n>GiB][,legacy]"""
 
     def replica_size(
         scale: int,
@@ -693,12 +688,10 @@ def cluster_replica_size_map() -> dict[str, dict[str, Any]]:
     replica_sizes = {
         bootstrap_cluster_replica_size(): replica_size(1, 1),
         "scale=2,workers=4": replica_size(2, 4),
-        "scale=1,workers=1,nodisk": replica_size(1, 1, is_cc=False),
-        "scale=1,workers=2,nodisk": replica_size(1, 2, is_cc=False),
+        "scale=1,workers=1,legacy": replica_size(1, 1, is_cc=False),
+        "scale=1,workers=2,legacy": replica_size(1, 2, is_cc=False),
         # Intentionally not following the naming scheme
         "free": replica_size(0, 0, disabled=True),
-        "1cc": replica_size(1, 1),
-        "1C": replica_size(1, 1),
     }
 
     for i in range(0, 6):
