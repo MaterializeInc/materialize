@@ -1,0 +1,3 @@
+- `CREATE` privileges on the containing schema.
+- `USAGE` privileges on all connections and secrets used in the connection definition.
+- `USAGE` privileges on the schemas that all connections and secrets in the statement are contained in.

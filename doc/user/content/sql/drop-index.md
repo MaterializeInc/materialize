@@ -31,8 +31,7 @@ RESTRICT`, and `DROP INDEX CASCADE` are equivalent.
 
 To execute the `DROP INDEX` statement, you need:
 
-- Ownership of the dropped index.
-- `USAGE` privileges on the containing schema.
+{{< include-md file="shared-content/sql-command-privileges/drop-index.md" >}}
 
 ## Examples
 

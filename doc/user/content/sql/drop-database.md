@@ -48,7 +48,7 @@ DROP DATABASE IF EXISTS my_db;
 
 The privileges required to execute this statement are:
 
-- Ownership of the dropped database.
+{{< include-md file="shared-content/sql-command-privileges/drop-database.md" >}}
 
 ## Related pages
 

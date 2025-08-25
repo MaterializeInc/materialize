@@ -24,8 +24,10 @@ _name_ | The configuration parameter's name.
 
 ## Privileges
 
-[_Superuser_ privileges](/manage/access-control/#role-based-access-control-rbac) are required to execute
-this statement.
+The privileges required to execute this statement are:
+
+{{< include-md
+file="shared-content/sql-command-privileges/alter-system-reset.md" >}}
 
 ## Related pages
 

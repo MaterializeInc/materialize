@@ -1,0 +1,2 @@
+- `USAGE` privileges on the schema containing the table.
+- `INSERT` privileges on the table.

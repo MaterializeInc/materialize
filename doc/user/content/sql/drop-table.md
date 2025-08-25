@@ -102,8 +102,7 @@ DROP TABLE IF EXISTS t;
 
 The privileges required to execute this statement are:
 
-- Ownership of the dropped table.
-- `USAGE` privileges on the containing schema.
+{{< include-md file="shared-content/sql-command-privileges/drop-table.md" >}}
 
 ## Related pages
 

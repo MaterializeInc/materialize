@@ -143,9 +143,7 @@ custom_nested_row_type
 
 The privileges required to execute this statement are:
 
-- `CREATE` privileges on the containing schema.
-- `USAGE` privileges on all types used in the type definition.
-- `USAGE` privileges on the schemas that all types in the statement are contained in.
+{{< include-md file="shared-content/sql-command-privileges/create-type.md" >}}
 
 ## Related pages
 

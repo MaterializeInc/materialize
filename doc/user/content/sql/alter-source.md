@@ -79,7 +79,7 @@ DROP SOURCE tbl_a, b CASCADE;
 
 The privileges required to execute this statement are:
 
-- Ownership of the source being altered.
+{{< include-md file="shared-content/sql-command-privileges/alter-source.md" >}}
 
 ## See also
 

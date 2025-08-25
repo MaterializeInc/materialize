@@ -44,7 +44,8 @@ SHOW CREATE SINK my_view_sink;
 
 The privileges required to execute this statement are:
 
-- `USAGE` privileges on the schema containing the sink.
+{{< include-md file="shared-content/sql-command-privileges/show-create-sink.md"
+>}}
 
 ## Related pages
 

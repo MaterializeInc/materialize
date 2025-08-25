@@ -103,8 +103,7 @@ DROP TYPE IF EXISTS int4_list;
 
 The privileges required to execute this statement are:
 
-- Ownership of the dropped type.
-- `USAGE` privileges on the containing schema.
+{{< include-md file="shared-content/sql-command-privileges/drop-type.md" >}}
 
 ## Related pages
 

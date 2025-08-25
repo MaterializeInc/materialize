@@ -47,8 +47,8 @@ upon by catalog item 'materialize.public.wb_custom_art'
 
 The privileges required to execute this statement are:
 
-- Ownership of the dropped materialized view.
-- `USAGE` privileges on the containing schema.
+{{< include-md
+file="shared-content/sql-command-privileges/drop-materialized-view.md" >}}
 
 ## Related pages
 

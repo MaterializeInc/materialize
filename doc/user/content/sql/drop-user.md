@@ -25,7 +25,7 @@ _role_name_ | The role you want to drop. For available roles, see [`mz_roles`](/
 
 The privileges required to execute this statement are:
 
-- `CREATEROLE` privileges on the system.
+{{< include-md file="shared-content/sql-command-privileges/drop-user.md" >}}
 
 ## Related pages
 

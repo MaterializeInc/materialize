@@ -32,7 +32,7 @@ GRANT data_scientist TO joe, mike;
 
 The privileges required to execute this statement are:
 
-- `CREATEROLE` privileges on the systems.
+{{< include-md file="shared-content/sql-command-privileges/grant-role.md" >}}
 
 ## Useful views
 

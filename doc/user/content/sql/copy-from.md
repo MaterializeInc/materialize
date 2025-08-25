@@ -82,8 +82,7 @@ COPY t FROM STDIN (DELIMITER '|');
 
 The privileges required to execute this statement are:
 
-- `USAGE` privileges on the schema containing the table.
-- `INSERT` privileges on the table.
+{{< include-md file="shared-content/sql-command-privileges/copy-from.md" >}}
 
 [pg-copy-from]: https://www.postgresql.org/docs/14/sql-copy.html
 

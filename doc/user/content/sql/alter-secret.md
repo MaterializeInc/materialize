@@ -55,7 +55,7 @@ ALTER SECRET kafka_ca_cert AS decode('c2VjcmV0Cg==', 'base64');
 
 The privileges required to execute this statement are:
 
-- Ownership of the secret being altered.
+{{< include-md file="shared-content/sql-command-privileges/alter-secret.md" >}}
 
 ## Related pages
 

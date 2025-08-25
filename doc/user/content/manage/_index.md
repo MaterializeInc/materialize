@@ -1,8 +1,8 @@
 ---
 title: "Manage Materialize"
 description: ""
-disable_toc: true
 disable_list: true
+disable_toc: true
 menu:
   main:
     identifier: "manage"
@@ -14,8 +14,8 @@ This section contains various resources for managing Materialize.
 | Guide | Description |
 |-------|-------------|
 | [Operational guidelines](/manage/operational-guidelines/) | General operational guidelines |
-| [Access control](//manage/access-control/) | Reference for role-based access management (RBAC) |
+| [Access control](/manage/access-control/) | Reference for role-based access management (RBAC) |
 | [Monitoring and alerting](/manage/monitor/) | Guides to set up monitoring and alerting |
 | [Using dbt to manage Materialize](/manage/dbt/) | Guides for using dbt to manage Materialize |
 | [Using Terraform to manage Materialize](/manage/terraform/) | Guides for using Terraform to manage Materialize |
-| [**Usage & billing**](/administration/billing/) | Understand the billing model of Materialize |
+| [**Usage overview**](/administration/billing/) | Overview of resource usage. |

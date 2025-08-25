@@ -48,7 +48,7 @@ my_schema
 
 The privileges required to execute this statement are:
 
-- `CREATE` privileges on the containing database.
+{{< include-md file="shared-content/sql-command-privileges/create-schema.md" >}}
 
 ## Related pages
 

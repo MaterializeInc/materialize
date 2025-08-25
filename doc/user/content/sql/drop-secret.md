@@ -61,8 +61,7 @@ DROP SECRET kafka_sasl_password CASCADE;
 
 The privileges required to execute this statement are:
 
-- Ownership of the dropped secret.
-- `USAGE` privileges on the containing schema.
+{{< include-md file="shared-content/sql-command-privileges/drop-secret.md" >}}
 
 ## Related pages
 

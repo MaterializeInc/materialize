@@ -30,7 +30,8 @@ SHOW CREATE CLUSTER c;
 
 ## Privileges
 
-There are no privileges required to execute this statement.
+{{< include-md
+file="shared-content/sql-command-privileges/show-create-cluster.md" >}}
 
 ## Related pages
 

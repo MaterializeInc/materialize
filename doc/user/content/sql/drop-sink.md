@@ -37,8 +37,7 @@ DROP SINK
 
 The privileges required to execute this statement are:
 
-- Ownership of the dropped sink.
-- `USAGE` privileges on the containing schema.
+{{< include-md file="shared-content/sql-command-privileges/drop-sink.md" >}}
 
 ## Related pages
 

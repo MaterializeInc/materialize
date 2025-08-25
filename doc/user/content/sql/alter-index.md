@@ -31,7 +31,7 @@ indexes.
 
 The privileges required to execute this statement are:
 
-- Ownership of the index.
+{{< include-md file="shared-content/sql-command-privileges/alter-index.md" >}}
 
 ## Related pages
 

@@ -36,7 +36,8 @@ REASSIGN OWNED BY joe, george TO mike;
 
 The privileges required to execute this statement are:
 
-- Role membership in `old_role` and `new_role`.
+{{< include-md file="shared-content/sql-command-privileges/reassign-owned.md"
+>}}
 
 ## Related pages
 

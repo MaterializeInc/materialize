@@ -99,7 +99,8 @@ CREATE CLUSTER REPLICA c1.r1 (SIZE = '400cc');
 
 The privileges required to execute this statement are:
 
-- Ownership of `cluster_name`.
+{{< include-md
+file="shared-content/sql-command-privileges/create-cluster-replica.md" >}}
 
 ## See also
 

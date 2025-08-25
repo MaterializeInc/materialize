@@ -46,8 +46,9 @@ DROP CLUSTER REPLICA auction_house.bigger;
 
 The privileges required to execute this statement are:
 
-- Ownership of the dropped cluster replica.
-- `USAGE` privileges on the containing cluster.
+{{< include-md
+file="shared-content/sql-command-privileges/drop-cluster-replica.md" >}}
+
 
 ## Related pages
 

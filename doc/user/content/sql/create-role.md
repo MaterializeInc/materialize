@@ -57,7 +57,7 @@ Materialize will reject the statement `CREATE ROLE ... INHERIT INHERIT`.
 
 The privileges required to execute this statement are:
 
--   `CREATEROLE` privileges on the system.
+{{< include-md file="shared-content/sql-command-privileges/create-role.md" >}}
 
 ## Examples
 
