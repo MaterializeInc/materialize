@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use mz_compute_types::ComputeInstanceId;
 use mz_repr::Timestamp;
+use timely::progress::Antichain;
 
 /// Storage collections trait alias we need to consult for since/frontiers.
 pub type StorageCollectionsHandle = Arc<
@@ -25,6 +26,7 @@ pub type StorageCollectionsHandle = Arc<
 #[derive(Debug)]
 pub struct PeekClient {
     /// Channels to talk to each compute Instance task directly.
+    /// ////////////// todo: we'll need to update this somehow when instances come and go
     pub compute_instances: BTreeMap<
         ComputeInstanceId,
         mz_compute_client::controller::instance::Client<Timestamp>,
@@ -75,9 +77,31 @@ impl PeekClient {
         read_holds
     }
 
-    /// Stub: determine the least valid write frontier to pick a safe read timestamp.
-    pub async fn least_valid_write(&self) {
-        // stub
+    /// Determine the smallest common valid write frontier among the specified collections.
+    ///
+    /// Note: Unlike the old Coordinator/StorageController `least_valid_write` that treated sinks
+    /// specially when fetching storage frontiers, we intentionally do not special‑case sinks here
+    /// because peeks never read from sinks. Therefore, using
+    /// `StorageCollections::collections_frontiers` is sufficient. //////// todo: verify
+    pub async fn least_valid_write(
+        &self,
+        id_bundle: &crate::CollectionIdBundle,
+    ) -> timely::progress::Antichain<Timestamp> {
+        let mut upper = Antichain::new();
+        if !id_bundle.storage_ids.is_empty() {
+            let storage_ids: Vec<_> = id_bundle.storage_ids.iter().copied().collect();
+            for f in self.storage_collections.collections_frontiers(storage_ids).expect("missing collections") {
+                upper.extend(f.write_frontier);
+            }
+        }
+        for (instance_id, ids) in &id_bundle.compute_ids {
+            let client = self.compute_instances.get(instance_id).expect("PeekClient is missing a compute instance client");
+            for id in ids {
+                let wf = client.collection_write_frontier(*id).await;
+                upper.extend(wf);
+            }
+        }
+        upper
     }
 
     /// Stub: implement the provided peek plan directly against a compute instance.
