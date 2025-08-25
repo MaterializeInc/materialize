@@ -8,24 +8,24 @@
 # by the Apache License, Version 2.0.
 
 """
-Deploy the current version on a real Staging Cloud, and run some basic
-verifications, like ingesting data from Kafka and Redpanda Cloud using AWS
-Privatelink. Runs only on main and release branches.
+Reproduces cluster spec sheet results on Materialize Cloud.
 """
 
 import argparse
+import glob
+import itertools
 import os
 import re
 import time
-from abc import abstractmethod
+from abc import ABC, abstractmethod
 from collections.abc import Callable, Hashable
 from textwrap import dedent
 from typing import Any
 
 import matplotlib.pyplot as plt
 import pandas as pd
-import pg8000.native
-from pg8000.exceptions import InterfaceError
+import psycopg
+from psycopg import InterfaceError
 
 from materialize import MZ_ROOT, buildkite
 from materialize.mzcompose import _wait_for_pg
@@ -36,7 +36,7 @@ from materialize.mzcompose.composition import (
 from materialize.mzcompose.services.mz import Mz
 from materialize.ui import UIError
 
-REGION = "aws/us-west-2"
+REGION = os.getenv("REGION", "aws/us-west-2")
 ENVIRONMENT = os.getenv("ENVIRONMENT", "production")
 USERNAME = os.getenv("NIGHTLY_MZ_USERNAME", "infra+bot@materialize.com")
 APP_PASSWORD = os.getenv("MZ_CLI_APP_PASSWORD")
@@ -63,7 +63,7 @@ class ScenarioRunner:
         scenario: str,
         scale: int,
         mode: str,
-        connection: pg8000.native.Connection,
+        connection: psycopg.Connection,
         results_file: Any,
         replica_size: Any,
     ) -> None:
@@ -87,10 +87,15 @@ class ScenarioRunner:
         )
         self.results_file.flush()
 
-    def run_query(self, query: str, **params) -> list | None:
+    def run_query(self, query: str, fetch: bool = False, **params) -> list | None:
         query = dedent(query).strip()
         print(f"> {query} {params or ''}")
-        return self.connection.run(query, **params)
+        with self.connection.cursor() as cur:
+            cur.execute(query.encode(), params)
+            if fetch:
+                return cur.fetchall()
+            else:
+                return None
 
     def measure(
         self,
@@ -109,6 +114,7 @@ class ScenarioRunner:
                 self.run_query(query_part)
             end_time = time.time()
             if size_of_index:
+                # We need to wait for the introspection source to catch up.
                 time.sleep(2)
                 size_bytes = self.size_of_dataflow(f"%{size_of_index}")
                 print(f"Size of index {size_of_index}: {size_bytes}")
@@ -122,8 +128,9 @@ class ScenarioRunner:
         retries = 10
         while retries > 0:
             result = self.run_query(
-                "SELECT size FROM mz_introspection.mz_dataflow_arrangement_sizes WHERE name LIKE :name;",
+                "SELECT size FROM mz_introspection.mz_dataflow_arrangement_sizes WHERE name LIKE %(name)s;",
                 name=object,
+                fetch=True,
             )
             if result:
                 return int(result[0][0])
@@ -133,31 +140,25 @@ class ScenarioRunner:
         return None
 
 
-class Scenario:
+class Scenario(ABC):
     def __init__(self, scale: int, replica_size: str) -> None:
         self.scale = scale
         self.replica_size = replica_size
 
     @abstractmethod
-    def name(self) -> str:
-        pass
+    def name(self) -> str: ...
 
     @abstractmethod
-    def setup(self) -> list[str]:
-        pass
+    def setup(self) -> list[str]: ...
 
     @abstractmethod
-    def drop(self) -> list[str]:
-        pass
+    def drop(self) -> list[str]: ...
 
     @abstractmethod
-    def materialize_views(self) -> list[str]:
-        pass
+    def materialize_views(self) -> list[str]: ...
 
     @abstractmethod
-    def run(self, runner: ScenarioRunner) -> None:
-        pass
-        raise NotImplementedError("Subclasses should implement this method")
+    def run(self, runner: ScenarioRunner) -> None: ...
 
 
 class TpchScenario(Scenario):
@@ -458,7 +459,7 @@ class AuctionScenario(Scenario):
             CREATE MATERIALIZED VIEW auctions AS
             SELECT auctions_core.id, seller, items.item, end_time
             FROM auctions_core, items
-            WHERE auctions_core.item % 5 = items.id;
+            WHERE auctions_core.item %% 5 = items.id;
             """,
             """
             -- Create and materialize bid data.
@@ -738,7 +739,7 @@ def disable_region(c: Composition) -> None:
     print(f"Shutting down region {REGION} ...")
 
     try:
-        c.run("mz", "region", "disable", "--hard")
+        c.run("mz", "region", "disable", "--hard", rm=True)
     except UIError:
         # Can return: status 404 Not Found
         pass
@@ -761,13 +762,10 @@ def wait_for_cloud(c: Composition) -> None:
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    def process(name: str) -> None:
-        if name == "default":
-            return
-        with c.test_case(name):
-            c.workflow(name, *parser.args)
-
-    c.test_parts(list(c.workflows.keys()), process)
+    """
+    Run the bench workflow by default
+    """
+    workflow_bench(c, parser)
 
 
 def workflow_bench(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -799,7 +797,7 @@ def workflow_bench(c: Composition, parser: WorkflowArgumentParser) -> None:
     test_failed = True
     try:
         print("Enabling region using Mz ...")
-        c.run("mz", "region", "enable")
+        c.run("mz", "region", "enable", rm=True)
 
         time.sleep(10)
 
@@ -809,22 +807,30 @@ def workflow_bench(c: Composition, parser: WorkflowArgumentParser) -> None:
         # Create new app password.
         new_app_password_name = "Materialize CLI (mz) - Cluster Spec Sheet"
         output = c.run(
-            "mz", "app-password", "create", new_app_password_name, capture=True
+            "mz",
+            "app-password",
+            "create",
+            new_app_password_name,
+            capture=True,
+            rm=True,
         )
         new_app_password = output.stdout.strip()
         assert "mzp_" in new_app_password
 
         def run_with_retries(
-            func: Callable[[pg8000.native.Connection], None], max_retries: int = 3
+            func: Callable[[psycopg.Connection], None], max_retries: int = 3
         ) -> None:
             for attempt in range(max_retries):
                 try:
-                    conn = pg8000.native.Connection(
-                        user=USERNAME,
-                        password=new_app_password,
+                    conn = psycopg.connect(
                         host=c.cloud_hostname(),
                         port=6875,
+                        user=USERNAME,
+                        password=new_app_password,
+                        dbname="materialize",
+                        sslmode="require",
                     )
+                    conn.autocommit = True
                     func(conn)
                     return
                 except InterfaceError as e:
@@ -876,6 +882,9 @@ def workflow_bench(c: Composition, parser: WorkflowArgumentParser) -> None:
         if args.cleanup:
             disable_region(c)
 
+    if buildkite.is_in_buildkite():
+        buildkite.upload_artifact(args.record, cwd=MZ_ROOT, quiet=True)
+
     if args.analyze:
         analyze_file(args.record)
 
@@ -883,8 +892,12 @@ def workflow_bench(c: Composition, parser: WorkflowArgumentParser) -> None:
 
 
 def run_scenario_strong(
-    scenario: Scenario, results_file: Any, connection: pg8000.native.Connection
+    scenario: Scenario, results_file: Any, connection: psycopg.Connection
 ) -> None:
+    """
+    Run a strong scaling scenario, where we increase the cluster size
+    and keep the data size constant.
+    """
 
     runner = ScenarioRunner(
         scenario.name(),
@@ -926,12 +939,17 @@ def run_scenario_strong(
 
 
 def run_scenario_weak(
-    scenario: Scenario, results_file: Any, connection: pg8000.native.Connection
+    scenario: Scenario, results_file: Any, connection: psycopg.Connection
 ) -> None:
+    """
+    Run a weak scaling scenario, where we increase both the cluster size
+    and the data size.
+    """
 
-    connection.run("DROP TABLE IF EXISTS t CASCADE;")
-    connection.run("CREATE TABLE t (a int);")
-    connection.run("INSERT INTO t VALUES (1);")
+    with connection.cursor() as cur:
+        cur.execute("DROP TABLE IF EXISTS t CASCADE;")
+        cur.execute("CREATE TABLE t (a int);")
+        cur.execute("INSERT INTO t VALUES (1);")
 
     initial_scale = scenario.scale
 
@@ -975,16 +993,20 @@ def workflow_plot(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "files",
         nargs="*",
-        help="Destroy the region at the end of the workflow.",
+        default="results_*.csv",
+        type=str,
+        help="Glob pattern of result files to plot.",
     )
 
     args = parser.parse_args()
 
-    for file in args.files:
-        analyze_file(file)
+    for file in itertools.chain(*map(glob.iglob, args.files)):
+        analyze_file(str(file))
 
 
 def analyze_file(file: str):
+    print(f"--- Analyzing file {file} ...")
+
     def extract_cluster_size(s: str) -> float:
         match = re.search(r"(\d+)(?:(cc)|(C))", s)
         if match:
@@ -995,6 +1017,10 @@ def analyze_file(file: str):
         raise ValueError(f"Invalid cluster size format: {s}")
 
     df = pd.read_csv(file)
+    if df.empty:
+        print(f"^^^ +++ File {file} is empty, skipping")
+        return
+
     # Cluster replica size as credits/hour
     df["credits_per_h"] = df["cluster_size"].map(extract_cluster_size)
     # Cluster replica size as centi-credits/s
@@ -1018,9 +1044,9 @@ def analyze_file(file: str):
     plot_dir = os.path.join(MZ_ROOT, "test", "cluster-spec-sheet", "plots", base_name)
     os.makedirs(plot_dir, exist_ok=True)
 
-    all_files = []
-
     def save_plot(data_frame: pd.DataFrame, benchmark: str, variant: str, unit: str):
+        all_files = []
+
         base_file_name = os.path.join(plot_dir, f"{benchmark}_{variant}_{unit}")
         file_path = f"{base_file_name}.png"
         plt.savefig(file_path)
@@ -1031,6 +1057,8 @@ def analyze_file(file: str):
         print(f"+++ Plot for {benchmark} {variant} [{unit}]")
         print(data_frame.to_string())
 
+        upload_file(all_files, benchmark, variant, unit)
+
     # Plot the results
 
     # TPCH create index
@@ -1039,14 +1067,16 @@ def analyze_file(file: str):
         'category != "peek_serving" and (scenario == "tpch" or scenario == "tpch_mv")',
         "TPCH create index/MV",
     )
-    save_plot(df2, "tpch", "create_index_mv", "time_ms")
+    if df2 is not None:
+        save_plot(df2, "tpch", "create_index_mv", "time_ms")
 
     df2 = plot_credit_time(
         df,
         'category != "peek_serving" and (scenario == "tpch" or scenario == "tpch_mv")',
         "TPCH create index/MV",
     )
-    save_plot(df2, "tpch", "create_index_mv", "credits")
+    if df2 is not None:
+        save_plot(df2, "tpch", "create_index_mv", "credits")
 
     # Auction arrangement formation strong scaling
     df2 = plot_time_ms(
@@ -1054,14 +1084,16 @@ def analyze_file(file: str):
         'category == "arrangement_formation" and scenario == "auction" and mode == "strong"',
         "Auction arrangement formation",
     )
-    save_plot(df2, "auction", "arrangement_formation_strong", "time_ms")
+    if df2 is not None:
+        save_plot(df2, "auction", "arrangement_formation_strong", "time_ms")
 
     df2 = plot_credit_time(
         df,
         'category == "arrangement_formation" and scenario == "auction" and mode == "strong"',
         "Auction arrangement formation",
     )
-    save_plot(df2, "auction", "arrangement_formation_strong", "credits")
+    if df2 is not None:
+        save_plot(df2, "auction", "arrangement_formation_strong", "credits")
 
     # Auction primitive operators strong scaling
     df2 = plot_time_ms(
@@ -1069,14 +1101,16 @@ def analyze_file(file: str):
         'category == "primitive_operators" and scenario == "auction" and mode == "strong"',
         "Auction primitive operators",
     )
-    save_plot(df2, "auction", "primitive_operators_strong", "time_ms")
+    if df2 is not None:
+        save_plot(df2, "auction", "primitive_operators_strong", "time_ms")
 
     df2 = plot_credit_time(
         df,
         'category == "primitive_operators" and scenario == "auction" and mode == "strong"',
         "Auction primitive operators",
     )
-    save_plot(df2, "auction", "primitive_operators_strong", "credits")
+    if df2 is not None:
+        save_plot(df2, "auction", "primitive_operators_strong", "credits")
 
     # Auction arrangement formation strong scaling
     df2 = plot_time_ms(
@@ -1084,14 +1118,16 @@ def analyze_file(file: str):
         'category == "arrangement_formation" and scenario == "auction" and mode == "weak"',
         "Auction arrangement formation",
     )
-    save_plot(df2, "auction", "arrangement_formation_weak", "time_ms")
+    if df2 is not None:
+        save_plot(df2, "auction", "arrangement_formation_weak", "time_ms")
 
     df2 = plot_credit_time(
         df,
         'category == "arrangement_formation" and scenario == "auction" and mode == "weak"',
         "Auction arrangement formation",
     )
-    save_plot(df2, "auction", "arrangement_formation_weak", "credits")
+    if df2 is not None:
+        save_plot(df2, "auction", "arrangement_formation_weak", "credits")
 
     # Auction primitive operators weak scaling
     df2 = plot_time_ms(
@@ -1099,36 +1135,40 @@ def analyze_file(file: str):
         'category == "primitive_operators" and scenario == "auction" and mode == "weak"',
         "Auction primitive operators",
     )
-    save_plot(df2, "auction", "primitive_operators_weak", "time_ms")
+    if df2 is not None:
+        save_plot(df2, "auction", "primitive_operators_weak", "time_ms")
 
     df2 = plot_credit_time(
         df,
         'category == "primitive_operators" and scenario == "auction" and mode == "weak"',
         "Auction primitive operators",
     )
-    save_plot(df2, "auction", "primitive_operators_weak", "credits")
+    if df2 is not None:
+        save_plot(df2, "auction", "primitive_operators_weak", "credits")
 
 
 def upload_file(
     file_paths: list[str],
     scenario_name: str,
     variant: str,
+    unit: str,
 ):
     if buildkite.is_in_buildkite():
         for file_path in file_paths:
             buildkite.upload_artifact(file_path, cwd=MZ_ROOT, quiet=True)
-        print(f"+++ Plot for {scenario_name} ({variant})")
+        print(f"+++ Plot for {scenario_name} ({variant} [{unit}]")
         for file_path in file_paths:
             print(
                 buildkite.inline_image(
-                    f"artifact://{file_path}", f"Plot for {scenario_name} ({variant})"
+                    f"artifact://{file_path}",
+                    f"Plot for {scenario_name} ({variant}) [{unit}]",
                 )
             )
     else:
         print(f"Saving plots to {file_paths}")
 
 
-def plot_time_ms(data: pd.DataFrame, query: str, title: str) -> pd.DataFrame:
+def plot_time_ms(data: pd.DataFrame, query: str, title: str) -> pd.DataFrame | None:
     df2 = (
         data.query(query)
         .pivot_table(
@@ -1141,6 +1181,9 @@ def plot_time_ms(data: pd.DataFrame, query: str, title: str) -> pd.DataFrame:
     )
     (level, dropped) = labels_to_drop(df2)
     filtered = df2.droplevel(level, axis=1).dropna(axis=1, how="all")
+    if filtered.empty:
+        print(f"Warning: No data to plot for {title}")
+        return None
     filtered.plot(
         kind="bar",
         figsize=(12, 6),
@@ -1151,7 +1194,7 @@ def plot_time_ms(data: pd.DataFrame, query: str, title: str) -> pd.DataFrame:
     return filtered
 
 
-def plot_credit_time(data: pd.DataFrame, query: str, title: str) -> pd.DataFrame:
+def plot_credit_time(data: pd.DataFrame, query: str, title: str) -> pd.DataFrame | None:
     df2 = (
         data.query(query)
         .pivot_table(
@@ -1164,6 +1207,9 @@ def plot_credit_time(data: pd.DataFrame, query: str, title: str) -> pd.DataFrame
     )
     (level, dropped) = labels_to_drop(df2)
     filtered = df2.droplevel(level, axis=1).dropna(axis=1, how="all")
+    if filtered.empty:
+        print(f"Warning: No data to plot for {title}")
+        return None
     filtered.plot(
         kind="bar",
         figsize=(12, 6),
