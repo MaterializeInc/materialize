@@ -107,7 +107,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
             // emit a definite error at the max LSN, but we also have to terminate the RLU probes
             // to ensure that the error propogates to downstream consumers, otherwise it will
             // wait in reclock as the server LSN will always be less than the LSN of the definite
-            // error. 
+            // error.
             let current_restore_history_id = get_latest_restore_history_id(&mut client).await?;
             if current_restore_history_id != extras.restore_history_id {
                 tracing::error!("Restore happened, exiting");

@@ -439,11 +439,11 @@ pub async fn ensure_database_cdc_enabled(client: &mut Client) -> Result<(), SqlS
 pub async fn get_latest_restore_history_id(
     client: &mut Client,
 ) -> Result<Option<i32>, SqlServerError> {
-    static DATABASE_CDC_ENABLED_QUERY: &str = "SELECT TOP 1 restore_history_id \
+    static LATEST_RESTORE_ID_QUERY: &str = "SELECT TOP 1 restore_history_id \
         FROM msdb.dbo.restorehistory \
         WHERE destination_database_name = DB_NAME() \
         ORDER BY restore_history_id DESC;";
-    let result = client.simple_query(DATABASE_CDC_ENABLED_QUERY).await?;
+    let result = client.simple_query(LATEST_RESTORE_ID_QUERY).await?;
 
     match &result[..] {
         [] => Ok(None),
