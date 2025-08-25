@@ -456,6 +456,7 @@ fn parse_data_type(
             };
             return Ok((ScalarType::UInt64, Some(MySqlColumnMeta::Bit(precision))));
         }
+        "enum" => ScalarType::UInt16,
         typ => {
             tracing::warn!(?typ, "found unsupported data type");
             return Err(UnsupportedDataType {
