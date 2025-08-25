@@ -132,7 +132,7 @@ class ScenarioRunner:
                 name=object,
                 fetch=True,
             )
-            if result:
+            if result and len(result) == 1 and result[0][0] is not None:
                 return int(result[0][0])
             retries -= 1
             if retries > 0:
