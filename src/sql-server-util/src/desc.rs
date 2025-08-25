@@ -23,7 +23,7 @@
 //! to efficiently decode [`tiberius::Row`]s into [`mz_repr::Row`]s.
 
 use base64::Engine;
-use chrono::SubsecRound;
+use chrono::{NaiveDateTime, SubsecRound};
 use dec::OrderedDecimal;
 use mz_ore::cast::CastFrom;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType};
@@ -38,7 +38,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use crate::cdc::Lsn;
 use crate::{SqlServerDecodeError, SqlServerError};
 
 include!(concat!(env!("OUT_DIR"), "/mz_sql_server_util.rs"));
@@ -159,11 +158,18 @@ pub struct SqlServerTableRaw {
     /// Name of the table.
     pub name: Arc<str>,
     /// The capture instance replicating changes.
-    pub capture_instance: Arc<str>,
-    /// The start lsn of the capture instance was created replicating changes.
-    pub capture_instance_start_lsn: Lsn,
+    pub capture_instance: Arc<SqlServerCaptureInstanceRaw>,
     /// Columns for the table.
     pub columns: Arc<[SqlServerColumnRaw]>,
+}
+
+/// Raw capture instance metadata.
+#[derive(Debug, Clone)]
+pub struct SqlServerCaptureInstanceRaw {
+    /// The capture instance replicating changes.
+    pub name: Arc<str>,
+    /// The creation date of the capture instance.
+    pub create_date: Arc<NaiveDateTime>,
 }
 
 /// Description of a column from a table in Microsoft SQL Server.
@@ -986,12 +992,13 @@ impl SqlServerRowDecoder {
 
 #[cfg(test)]
 mod tests {
+    use chrono::NaiveDateTime;
     use std::collections::BTreeSet;
+    use std::sync::Arc;
 
-    use crate::cdc::Lsn;
     use crate::desc::{
-        SqlServerColumnDecodeType, SqlServerColumnDesc, SqlServerTableDesc, SqlServerTableRaw,
-        tiberius_numeric_to_mz_numeric,
+        SqlServerCaptureInstanceRaw, SqlServerColumnDecodeType, SqlServerColumnDesc,
+        SqlServerTableDesc, SqlServerTableRaw, tiberius_numeric_to_mz_numeric,
     };
 
     use super::SqlServerColumnRaw;
@@ -1093,8 +1100,15 @@ mod tests {
         let sql_server_desc = SqlServerTableRaw {
             schema_name: "my_schema".into(),
             name: "my_table".into(),
-            capture_instance: "my_table_CT".into(),
-            capture_instance_start_lsn: Lsn::default(),
+            capture_instance: Arc::new(SqlServerCaptureInstanceRaw {
+                name: "my_table_CT".into(),
+                create_date: NaiveDateTime::parse_from_str(
+                    "2024-01-01 00:00:00",
+                    "%Y-%m-%d %H:%M:%S",
+                )
+                .unwrap()
+                .into(),
+            }),
             columns: sql_server_columns.into(),
         };
         let sql_server_desc = SqlServerTableDesc::new(sql_server_desc);
@@ -1166,8 +1180,15 @@ mod tests {
             let sql_server_desc = SqlServerTableRaw {
                 schema_name: "my_schema".into(),
                 name: "my_table".into(),
-                capture_instance: "my_table_CT".into(),
-                capture_instance_start_lsn: Lsn::default(),
+                capture_instance: Arc::new(SqlServerCaptureInstanceRaw {
+                    name: "my_table_CT".into(),
+                    create_date: NaiveDateTime::parse_from_str(
+                        "2024-01-01 00:00:00",
+                        "%Y-%m-%d %H:%M:%S",
+                    )
+                    .unwrap()
+                    .into(),
+                }),
                 columns: columns.into(),
             };
             let mut sql_server_desc = SqlServerTableDesc::new(sql_server_desc);

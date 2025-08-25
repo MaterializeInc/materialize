@@ -254,14 +254,17 @@ impl<'a> SourceReferenceClient<'a> {
 
                     unique_tables
                         .entry(key)
-                        .and_modify(|chosen_table| {
+                        .and_modify(|chosen_table: &mut SqlServerTableRaw| {
                             // When multiple capture instances exist for the same table,
-                            // we prefer the one with the highest LSN because it represents
-                            // the most recent point in the transaction log where CDC began
-                            // tracking changes.
-                            if chosen_table
-                                .capture_instance_start_lsn
-                                .lt(&table.capture_instance_start_lsn)
+                            // we select deterministically based on:
+                            // 1. Most recent create_date (newer capture instance)
+                            // 2. If dates are equal, lexicographically greatest capture_instance name
+                            if chosen_table.capture_instance.create_date
+                                < table.capture_instance.create_date
+                                || (chosen_table.capture_instance.create_date
+                                    == table.capture_instance.create_date
+                                    && chosen_table.capture_instance.name
+                                        < table.capture_instance.name)
                             {
                                 *chosen_table = table.clone();
                             }
@@ -272,7 +275,7 @@ impl<'a> SourceReferenceClient<'a> {
                 unique_tables
                     .into_values()
                     .map(|raw| {
-                        let capture_instance = Arc::clone(&raw.capture_instance);
+                        let capture_instance = Arc::clone(&raw.capture_instance.name);
                         let database = Arc::clone(database);
                         let table = mz_sql_server_util::desc::SqlServerTableDesc::new(raw);
                         ReferenceMetadata::SqlServer {

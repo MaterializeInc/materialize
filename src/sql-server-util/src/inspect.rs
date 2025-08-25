@@ -10,6 +10,7 @@
 //! Useful queries to inspect the state of a SQL Server instance.
 
 use anyhow::Context;
+use chrono::NaiveDateTime;
 use futures::Stream;
 use itertools::Itertools;
 use mz_ore::cast::CastFrom;
@@ -22,7 +23,7 @@ use std::time::Duration;
 use tiberius::numeric::Numeric;
 
 use crate::cdc::{Lsn, RowFilterOption};
-use crate::desc::{SqlServerColumnRaw, SqlServerTableRaw};
+use crate::desc::{SqlServerCaptureInstanceRaw, SqlServerColumnRaw, SqlServerTableRaw};
 use crate::{Client, SqlServerError};
 
 /// Returns the minimum log sequence number for the specified `capture_instance`.
@@ -449,7 +450,7 @@ SELECT
     s.name as schema_name,
     t.name as table_name,
     ch.capture_instance as capture_instance,
-    ch.start_lsn as capture_instance_start_lsn,
+    ch.create_date as capture_instance_create_date,
     c.name as col_name,
     ty.name as col_type,
     c.is_nullable as col_nullable,
@@ -490,15 +491,8 @@ LEFT JOIN information_schema.table_constraints tc
         let schema_name: Arc<str> = get_value::<&str>(&row, "schema_name")?.into();
         let table_name: Arc<str> = get_value::<&str>(&row, "table_name")?.into();
         let capture_instance: Arc<str> = get_value::<&str>(&row, "capture_instance")?.into();
-        let val: &[u8] = get_value::<&[u8]>(&row, "capture_instance_start_lsn")?;
-        let capture_instance_start_lsn = if val.is_empty() {
-            Err(SqlServerError::NullLsn)?
-        } else {
-            Lsn::try_from(val).map_err(|msg| SqlServerError::InvalidData {
-                column_name: "lsn".to_string(),
-                error: msg,
-            })?
-        };
+        let capture_instance_create_date: NaiveDateTime =
+            get_value::<NaiveDateTime>(&row, "capture_instance_create_date")?;
         let primary_key_constraint: Option<Arc<str>> = row
             .try_get::<&str, _>("col_primary_key_constraint")?
             .map(|v| v.into());
@@ -519,7 +513,7 @@ LEFT JOIN information_schema.table_constraints tc
                 Arc::clone(&schema_name),
                 Arc::clone(&table_name),
                 Arc::clone(&capture_instance),
-                capture_instance_start_lsn,
+                capture_instance_create_date,
             ))
             .or_default();
         columns.push(column);
@@ -529,17 +523,19 @@ LEFT JOIN information_schema.table_constraints tc
     let tables = tables
         .into_iter()
         .map(
-            |((schema, name, capture_instance, capture_instance_start_lsn), columns)| {
-                Ok::<_, SqlServerError>(SqlServerTableRaw {
+            |((schema, name, capture_instance, capture_instance_create_date), columns)| {
+                SqlServerTableRaw {
                     schema_name: schema,
                     name,
-                    capture_instance,
-                    capture_instance_start_lsn,
+                    capture_instance: Arc::new(SqlServerCaptureInstanceRaw {
+                        name: capture_instance,
+                        create_date: capture_instance_create_date.into(),
+                    }),
                     columns: columns.into(),
-                })
+                }
             },
         )
-        .collect::<Result<_, _>>()?;
+        .collect();
 
     Ok(tables)
 }
