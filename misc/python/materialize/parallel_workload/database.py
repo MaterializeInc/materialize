@@ -1141,7 +1141,7 @@ class Database:
             f"CREATE SECRET sql_server_pass AS '{SqlServer.DEFAULT_SA_PASSWORD}'"
         )
         exe.execute(
-            f"CREATE CONNECTION sql_server_conn FOR SQL SERVER HOST 'sql-server', USER {SqlServer.DEFAULT_USER}, PASSWORD SECRET sql_server_pass"
+            f"CREATE CONNECTION sql_server_conn FOR SQL SERVER HOST 'sql-server', DATABASE test, USER {SqlServer.DEFAULT_USER}, PASSWORD SECRET sql_server_pass"
         )
 
         exe.execute("CREATE SECRET IF NOT EXISTS minio AS 'minioadmin'")
