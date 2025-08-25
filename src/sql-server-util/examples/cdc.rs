@@ -40,6 +40,8 @@ use mz_ore::future::InTask;
 use mz_sql_server_util::cdc::CdcEvent;
 use mz_sql_server_util::config::TunnelConfig;
 use mz_sql_server_util::{Client, Config};
+use std::collections::BTreeMap;
+use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -69,21 +71,36 @@ async fn main() -> Result<(), anyhow::Error> {
     let mut client_2 = Client::connect(mz_config).await?;
     tracing::info!("connection 2 successful!");
 
-    // Get an initial snapshot of the table.
-    let (lsn, stats, snapshot) = cdc_handle
-        .snapshot(None, 1, mz_repr::GlobalId::User(1))
-        .await?;
-    tracing::info!("snapshot stats: {stats:?}");
-    {
+    let tables = mz_sql_server_util::inspect::get_tables_for_capture_instance(
+        &mut client_2,
+        capture_instances,
+    )
+    .await?;
+    let mut instance_to_lsn = BTreeMap::new();
+
+    for table in tables {
+        // Get an initial snapshot of the table.
+        let (lsn, stats, snapshot) = cdc_handle
+            .snapshot(&table, 1, mz_repr::GlobalId::User(1))
+            .await?;
+
+        tracing::info!("snapshot stats: {stats:?}");
+
+        instance_to_lsn.insert(Arc::clone(&table.capture_instance), lsn);
+
         let mut snapshot = std::pin::pin!(snapshot);
-        while let Some((capture_instance, result)) = snapshot.next().await {
+        while let Some(result) = snapshot.next().await {
             let row = result?;
-            tracing::info!("snapshot: {capture_instance} {row:?}");
+            tracing::info!("snapshot: {} {row:?}", &table.capture_instance);
         }
     }
 
     // Initialize all capture instances at the LSN we just snapshotted.
     for instance in capture_instances {
+        let lsn = instance_to_lsn
+            .remove(instance)
+            .expect("table must have instance");
+
         cdc_handle = cdc_handle.start_lsn(instance, lsn);
     }
     // Get a stream of changes from the table.
