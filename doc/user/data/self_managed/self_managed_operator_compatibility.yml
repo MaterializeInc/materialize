@@ -6,8 +6,20 @@ columns:
   - column: "Notes"
 
 rows:
+  - "Materialize Operator": "v25.2.5"
+    "orchestratord version": "v0.154.0."
+    "environmentd version": "v0.147.6"
+    "Release date": "2025-08-21"
+    "Notes": "Fixes license key issues, adds broader service account support."
+
+  - "Materialize Operator": "v25.2.4"
+    "orchestratord version": "v0.153.0"
+    "environmentd version": "v0.147.4"
+    "Release date": "2025-07-15"
+    "Notes": "DO NOT USE"
+
   - "Materialize Operator": "v25.2.3"
-    "orchestratord version": "v0.147.4"
+    "orchestratord version": "v0.147.5"
     "environmentd version": "v0.147.4"
     "Release date": "2025-07-15"
     "Notes": ""

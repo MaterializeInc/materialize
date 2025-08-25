@@ -718,7 +718,10 @@
     url: /sql/types/jsonb#to_jsonb
 
 - type: Table
-  description: Table functions evaluate to a set of rows, rather than a single expression.
+  description: |
+    Table functions evaluate to a collection of rows rather than a single row. You can use the `WITH ORDINALITY` and
+    `ROWS FROM` clauses together with table functions. For more details, see [Table functions](/sql/functions/table-functions).
+
   functions:
   - signature: 'generate_series(start: int, stop: int) -> Col<int>'
     description: Generate all integer values between `start` and `stop`, inclusive.
@@ -731,7 +734,9 @@
   - signature: 'generate_subscripts(a: anyarray, dim: int) -> Col<int>'
     description: Generates a series comprising the valid subscripts of the `dim`'th dimension of the given array `a`.
   - signature: 'regexp_extract(regex: str, haystack: str) -> Col<string>'
-    description: Values of the capture groups of `regex` as matched in `haystack`.
+    description: Values of the capture groups of `regex` as matched in `haystack`. Outputs each capture group in a
+      separate column. At least one capture group is needed. (The capture groups are the parts of the regular expression
+      between parentheses.)
   - signature: 'regexp_split_to_table(text: str, pattern: str [, flags: str]]) -> Col<string>'
     description: |
       Splits `text` by the regular expression `pattern`.

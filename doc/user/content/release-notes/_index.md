@@ -7,6 +7,33 @@ menu:
     name: "Release notes"
     identifier: "release-notes"
 ---
+## v25.2.5
+
+### Broader support for service accounts
+
+v25.2.5 allows setting the service account name materialize will use in the
+MZ k8s resource. Along with this we allow setting labels and annotations
+on service accounts we create. This should allow us to more tightly integrate with
+authorization best practices in Azure.
+
+Along with this the AWS specific `environmentd_iam_role_arn` field on the Materialize CRD will be
+depreciated. Please set the `eks.amazonaws.com/role-arn` service account annotation instead.
+
+
+
+### Pod name Annotation propagation
+
+Cluster and replica names will not propagate into statefulset and pod annoattions.
+
+### Set Security Standards on [Orchestratord](https://github.com/MaterializeInc/materialize/commit/bc86e34d7d2e9022ada697ee5a5e8371a92f6234)
+
+### Fixed correctness bug in Upsert [operator](https://github.com/MaterializeInc/materialize/pull/33283)
+
+### Support for [WITH ORDINALITY](../sql/functions/table-functions/#WITH_ORDINALITY)
+
+## v25.2.4
+
+### DO NOT USE
 
 ## v25.2.3
 
