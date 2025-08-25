@@ -230,7 +230,6 @@ pub struct ComputeController<T: ComputeControllerTimestamp> {
 }
 
 impl<T: ComputeControllerTimestamp> ComputeController<T> {
-
     /// Construct a new [`ComputeController`].
     pub fn new(
         build_info: &'static BuildInfo,
@@ -938,7 +937,7 @@ where
                 result_desc,
                 finishing,
                 map_filter_project,
-                read_hold,
+                Some(read_hold),
                 target_replica,
                 peek_response_tx,
             )
