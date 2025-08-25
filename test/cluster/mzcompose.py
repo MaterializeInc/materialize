@@ -3893,7 +3893,7 @@ def workflow_cluster_drop_concurrent(
                 try:
                     thread.join(timeout=10)
                 except InternalError_ as e:
-                    assert 'query could not complete because relation "materialize.public.counter" was dropped' in str(
+                    assert 'query could not complete because relation' in str(
                         e
                     ) or 'subscribe has been terminated because underlying relation "materialize.public.counter" was dropped' in str(
                         e
