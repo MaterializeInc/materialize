@@ -128,7 +128,12 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
             // validate that the restore_history_id hasn't changed
             let current_restore_history_id = get_latest_restore_history_id(&mut client).await?;
             if current_restore_history_id != source.extras.restore_history_id {
-                let definite_error = DefiniteError::RestoreHistoryChanged(source.extras.restore_history_id.clone(), current_restore_history_id.clone());
+                let definite_error = DefiniteError::RestoreHistoryChanged(
+                    source.extras.restore_history_id.clone(),
+                    current_restore_history_id.clone()
+                );
+                tracing::error!(?definite_error, "Restore detected, exiting replication");
+
                 return_definite_error(
                         definite_error.clone(),
                         capture_instances.values().flat_map(|indexes| indexes.iter().copied()),
@@ -464,8 +469,14 @@ async fn return_definite_error(
     for output_idx in outputs {
         let update = (
             (output_idx, Err(err.clone().into())),
-            // TODO(sql_server1): Provide the correct LSN.
-            Lsn::minimum(),
+            // Select an LSN that should not conflict with a previously observed LSN.  Ideally
+            // we could identify the LSN that resulted in the definite error so that all replicas
+            // would emit the same updates for the same times.
+            Lsn {
+                vlf_id: u32::MAX,
+                block_id: u32::MAX,
+                record_id: u16::MAX,
+            },
             Diff::ONE,
         );
         data_handle.give_fueled(&data_capset[0], update).await;

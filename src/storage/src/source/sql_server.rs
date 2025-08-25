@@ -173,6 +173,7 @@ impl SourceRender for SqlServerSource {
             self.connection.clone(),
             source_outputs.clone(),
             resume_uppers,
+            self.extras.clone(),
         );
 
         let partition_count = u64::cast_from(config.source_exports.len());
