@@ -70,8 +70,7 @@ DROP SOURCE IF EXISTS my_source;
 
 The privileges required to execute this statement are:
 
-- Ownership of the dropped source.
-- `USAGE` privileges on the containing schema.
+{{< include-md file="shared-content/sql-command-privileges/drop-source.md" >}}
 
 ## Related pages
 

@@ -124,7 +124,7 @@ SHOW VIEWS;
 
 The privileges required to execute this statement are:
 
-- Ownership of the object being renamed.
+{{< include-md file="shared-content/sql-command-privileges/alter-rename.md" >}}
 
 ## See also
 

@@ -69,8 +69,7 @@ DROP SCHEMA IF EXISTS my_schema;
 
 The privileges required to execute this statement are:
 
-- Ownership of the dropped schema.
-- `USAGE` privileges on the containing database.
+{{< include-md file="shared-content/sql-command-privileges/drop-schema.md" >}}
 
 ## Related pages
 

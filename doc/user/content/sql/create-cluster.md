@@ -326,7 +326,8 @@ You can later add replicas to this cluster with [`ALTER CLUSTER`].
 
 The privileges required to execute this statement are:
 
-- `CREATECLUSTER` privileges on the system.
+{{< include-md file="shared-content/sql-command-privileges/create-cluster.md"
+>}}
 
 ## See also
 

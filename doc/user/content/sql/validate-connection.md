@@ -31,8 +31,8 @@ a validation error.
 
 The privileges required to execute this statement are:
 
-- `USAGE` privileges on the containing schema.
-- `USAGE` privileges on the connection.
+{{< include-md
+file="shared-content/sql-command-privileges/validate-connection.md" >}}
 
 ## Related pages
 
