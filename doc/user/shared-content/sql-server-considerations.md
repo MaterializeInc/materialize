@@ -46,11 +46,11 @@ See [Monitoring freshness status](/ingest-data/monitoring-data-ingestion/#monito
 
 ### Capture Instance Selection
 
-When a new Source is created, Materialize selects a capture instance for each table.
-SQL Server allows for a maximum of two capture instances per table. The [sys.cdc_change_tables](https://learn.microsoft.com/en-us/sql/relational-databases/system-tables/cdc-change-tables-transact-sql)
-table is used to discover the capture instances for each table. In particular the columns
-`create_date` and `capture_instance`. The capture instance is selected by picking
-the newest `create_date` of the two capture instances. If the two capture instances
-have the same create_date, unlikely given the resolution of `create_date` is to the
-millisecond, a tie will be broken by selecting the largest lexicographically using
-the column `capture_instance`.
+When a new source is created, Materialize selects a capture instance for each
+table. SQL Server permits at most two capture instances per table, which are
+listed in the
+[`sys.cdc_change_tables`](https://learn.microsoft.com/en-us/sql/relational-databases/system-tables/cdc-change-tables-transact-sql)
+system table. For each table, Materialize picks the capture instance with the
+most recent `create_date`.
+
+If two capture instances for a table share the same timestamp (unlikely given the millisecond resolution), Materialize selects the `capture_instance` with the lexicographically larger name.
