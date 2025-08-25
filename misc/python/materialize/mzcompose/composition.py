@@ -1621,7 +1621,7 @@ class Composition:
         """Uses the mz command line tool to get the hostname of the cloud instance"""
         if not quiet:
             print("Obtaining hostname of cloud instance ...")
-        region_status = self.run("mz", "region", "show", capture=True)
+        region_status = self.run("mz", "region", "show", capture=True, rm=True)
         sql_line = region_status.stdout.split("\n")[2]
         cloud_url = sql_line.split("\t")[1].strip()
         # It is necessary to append the 'https://' protocol; otherwise, urllib can't parse it correctly.
