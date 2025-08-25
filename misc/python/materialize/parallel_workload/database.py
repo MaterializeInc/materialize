@@ -806,10 +806,7 @@ class SqlServerSource(DBObject):
         self.num_rows = 0
         fields = []
         for i in range(rng.randint(1, 10)):
-            fields.append(
-                # naughtify: Postgres column identifiers are escaped differently for postgres sources: key3_ЁЂЃЄЅІЇЈЉЊЋЌЍЎЏА gets "", but pg8000.native.identifier() doesn't
-                Field(f"key{i}", rng.choice(DATA_TYPES_FOR_AVRO), True)
-            )
+            fields.append(Field(f"key{i}", rng.choice(DATA_TYPES_FOR_KEY), True))
         for i in range(rng.randint(0, 20)):
             fields.append(
                 Field(f"value{i}", rng.choice(DATA_TYPES_FOR_SQL_SERVER), False)

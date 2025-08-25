@@ -339,10 +339,12 @@ class Float(DataType):
 class Double(Float):
     @staticmethod
     def name(backend: Backend = Backend.MATERIALIZE) -> str:
-        if backend in (Backend.AVRO, Backend.SQL_SERVER):
+        if backend == Backend.AVRO:
             return "double"
         elif backend == Backend.JSON:
             return "number"
+        elif backend == Backend.SQL_SERVER:
+            return "float"
         else:
             return "float8"
 
@@ -640,6 +642,8 @@ class Timestamp(DataType):
             raise ValueError("Unsupported")
         elif backend == Backend.JSON:
             raise ValueError("Unsupported")
+        elif backend == Backend.SQL_SERVER:
+            return "datetime2"
         else:
             return "timestamp"
 
@@ -826,6 +830,9 @@ DATA_TYPES_FOR_SQL_SERVER = sorted(
             UInt2,
             UInt4,
             UInt8,
+            Date,
+            Timestamp,
+            Double,
         }
     ),
     key=repr,
@@ -833,7 +840,8 @@ DATA_TYPES_FOR_SQL_SERVER = sorted(
 
 # MySQL doesn't support keys of unlimited size
 DATA_TYPES_FOR_KEY = sorted(
-    list(set(DATA_TYPES_FOR_AVRO) - {Text, Bytea, IntList, IntArray}), key=repr
+    list(set(DATA_TYPES_FOR_AVRO) - {Text, Bytea, IntList, IntArray, Float, Double}),
+    key=repr,
 )
 
 NUMBER_TYPES = [

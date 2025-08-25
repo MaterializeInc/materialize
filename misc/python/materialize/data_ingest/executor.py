@@ -434,7 +434,7 @@ class SqlServerExecutor(Executor):
                     )
                     self.execute(
                         None,
-                        f"INSERT INTO {identifier(self.table)} VALUES ({values_str}) ON DUPLICATE KEY UPDATE {update_str}",
+                        f"MERGE {identifier(self.table)} AS target USING (VALUES ({values_str})) AS source ({','.join(self.columns)}) ON ({' AND '.join([f'target.{col} = source.{col}' for col in self.pk_columns])}) WHEN MATCHED THEN UPDATE SET {update_str} WHEN NOT MATCHED THEN INSERT ({','.join(self.columns)}) VALUES ({','.join([f'source.{col}' for col in self.columns])});",
                     )
                 elif row.operation == Operation.DELETE:
                     cond_str = " AND ".join(
