@@ -2635,15 +2635,11 @@ where
     }
 
     // NB: Unlike the other methods here, this one is read-only.
-    pub fn verify_listen(&self, as_of: &Antichain<T>) -> Result<Result<(), Upper<T>>, Since<T>> {
+    pub fn verify_listen(&self, as_of: &Antichain<T>) -> Result<(), Since<T>> {
         if PartialOrder::less_than(as_of, self.collections.trace.since()) {
             return Err(Since(self.collections.trace.since().clone()));
         }
-        let upper = self.collections.trace.upper();
-        if PartialOrder::less_equal(upper, as_of) {
-            return Ok(Err(Upper(upper.clone())));
-        }
-        Ok(Ok(()))
+        Ok(())
     }
 
     pub fn next_listen_batch(&self, frontier: &Antichain<T>) -> Result<HollowBatch<T>, SeqNo> {
