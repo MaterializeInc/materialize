@@ -11,29 +11,36 @@ menu:
 
 ### Broader support for service accounts
 
-v25.2.5 allows setting the service account name materialize will use in the
-MZ k8s resource. Along with this we allow setting labels and annotations
-on service accounts we create. This should allow us to more tightly integrate with
-authorization best practices in Azure.
+Starting in v25.2.5, Materialize supports:
 
-Along with this the AWS specific `environmentd_iam_role_arn` field on the Materialize CRD will be
-depreciated. Please set the `eks.amazonaws.com/role-arn` service account annotation instead.
+- Setting the service account name that Materialize will use in the MZ k8s
+  resource.
 
+- Adding labels and annotations on service accounts created by Materialize. This
+  allows for tighter integration with Azure authorization best practices.
 
+Along with this change, the AWS specific `environmentd_iam_role_arn` field on
+the Materialize CRD is deprecated. Use `eks.amazonaws.com/role-arn` service
+account annotation instead.
 
 ### Pod name Annotation propagation
 
 Cluster and replica names will not propagate into statefulset and pod annoattions.
 
-### Set Security Standards on [Orchestratord](https://github.com/MaterializeInc/materialize/commit/bc86e34d7d2e9022ada697ee5a5e8371a92f6234)
+### General improvements
 
-### Fixed correctness bug in Upsert [operator](https://github.com/MaterializeInc/materialize/pull/33283)
+- Set Security Standards on
+  [Orchestratord](https://github.com/MaterializeInc/materialize/commit/bc86e34d7d2e9022ada697ee5a5e8371a92f6234)
+- Fixed correctness bug in Upsert
+  [operator](https://github.com/MaterializeInc/materialize/pull/33283)
+- Support for [WITH
+  ORDINALITY](/sql/functions/table-functions/#with-ordinality)
 
-### Support for [WITH ORDINALITY](../sql/functions/table-functions/#WITH_ORDINALITY)
+## v25.2.4 (DO NOT USE)
 
-## v25.2.4
-
-### DO NOT USE
+{{< warning >}}
+Do not use v25.2.4.  Instead, upgrade to v25.2.5+.
+{{</ warning>}}
 
 ## v25.2.3
 
