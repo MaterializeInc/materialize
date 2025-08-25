@@ -8,8 +8,8 @@
 # by the Apache License, Version 2.0.
 
 """
-Test that ingests large amounts of data from Kafka/Postgres/MySQL and verifies
-that Materialize can handle it correctly by comparing the results.
+Test that ingests large amounts of data from Kafka/Postgres/MySQL/SQL Server
+and verifies that Materialize can handle it correctly by comparing the results.
 """
 
 import random
@@ -19,6 +19,7 @@ from materialize import buildkite
 from materialize.data_ingest.executor import (
     KafkaExecutor,
     MySqlExecutor,
+    SqlServerExecutor,
 )
 from materialize.data_ingest.workload import *  # noqa: F401 F403
 from materialize.data_ingest.workload import WORKLOADS, execute_workload
@@ -35,11 +36,17 @@ from materialize.mzcompose.services.postgres import (
     Postgres,
 )
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.sql_server import (
+    SqlServer,
+    setup_sql_server_testing,
+)
+from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.zookeeper import Zookeeper
 
 SERVICES = [
     Postgres(),
     MySql(),
+    SqlServer(),
     Zookeeper(),
     Kafka(
         auto_create_topics=False,
@@ -54,6 +61,7 @@ SERVICES = [
     CockroachOrPostgresMetadata(),
     Minio(setup_materialize=True),
     Azurite(),
+    Testdrive(),
     # Overridden below
     Materialized(),
     Materialized(name="materialized2"),
@@ -107,11 +115,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "schema-registry",
         "postgres",
         "mysql",
+        "sql-server",
     )
 
     # TODO: Reenable when database-issues#8657 is fixed
-    # executor_classes = [MySqlExecutor, KafkaRoundtripExecutor, KafkaExecutor]
-    executor_classes = [MySqlExecutor, KafkaExecutor]
+    # executor_classes = [MySqlExecutor, SqlServerExecutor, KafkaRoundtripExecutor, KafkaExecutor]
+    executor_classes = [MySqlExecutor, SqlServerExecutor, KafkaExecutor]
 
     with c.override(
         # Fixed port so that we keep the same port after restarting Mz in disruptions
@@ -138,6 +147,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         ),
     ):
         c.up(*services)
+        setup_sql_server_testing(c)
 
         if args.replicas > 1:
             c.sql(
