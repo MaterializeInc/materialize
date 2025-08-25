@@ -34,6 +34,9 @@ pub enum ParsedStateUpdateKind {
         durable_item: durable::objects::Item,
         parsed_item: memory::objects::CatalogItem,
     },
+    TemporaryItem {
+        parsed_item: memory::objects::TemporaryItem,
+    },
     Cluster {
         durable_cluster: durable::objects::Cluster,
         parsed_cluster: memory::objects::Cluster,
@@ -56,6 +59,9 @@ impl PartialEq for ParsedStateUpdateKind {
                     durable_item: b, ..
                 },
             ) => a == b,
+            (TemporaryItem { parsed_item: a, .. }, TemporaryItem { parsed_item: b, .. }) => {
+                a.id == b.id
+            }
             (
                 Cluster {
                     durable_cluster: a, ..
@@ -99,6 +105,9 @@ impl Ord for ParsedStateUpdateKind {
                     durable_item: b, ..
                 },
             ) => a.cmp(b),
+            (TemporaryItem { parsed_item: a, .. }, TemporaryItem { parsed_item: b, .. }) => {
+                a.id.cmp(&b.id)
+            }
             (
                 Cluster {
                     durable_cluster: a, ..
@@ -118,7 +127,11 @@ impl Ord for ParsedStateUpdateKind {
                 },
             ) => a.cmp(b),
             (Item { .. }, _) => std::cmp::Ordering::Less,
+            (TemporaryItem { .. }, Item { .. }) => std::cmp::Ordering::Greater,
+            (TemporaryItem { .. }, Cluster { .. }) => std::cmp::Ordering::Less,
+            (TemporaryItem { .. }, ClusterReplica { .. }) => std::cmp::Ordering::Less,
             (Cluster { .. }, Item { .. }) => std::cmp::Ordering::Greater,
+            (Cluster { .. }, TemporaryItem { .. }) => std::cmp::Ordering::Greater,
             (Cluster { .. }, ClusterReplica { .. }) => std::cmp::Ordering::Less,
             (ClusterReplica { .. }, _) => std::cmp::Ordering::Greater,
         }
@@ -152,6 +165,9 @@ pub fn parse_state_update(
     // WIP: Exhaustive match?
     let kind = match kind {
         StateUpdateKind::Item(item) => Some(parse_item_update(catalog, item, diff)),
+        StateUpdateKind::TemporaryItem(item) => {
+            Some(parse_temporary_item_update(catalog, item, diff))
+        }
         StateUpdateKind::Cluster(cluster) => Some(parse_cluster_update(catalog, cluster, diff)),
         StateUpdateKind::ClusterReplica(replica) => {
             Some(parse_cluster_replica_update(catalog, replica, diff))
@@ -173,6 +189,14 @@ fn parse_item_update(
         durable_item,
         parsed_item: entry.item().clone(),
     }
+}
+
+fn parse_temporary_item_update(
+    _catalog: &CatalogState,
+    parsed_item: memory::objects::TemporaryItem,
+    _diff: StateDiff,
+) -> ParsedStateUpdateKind {
+    ParsedStateUpdateKind::TemporaryItem { parsed_item }
 }
 
 fn parse_cluster_update(

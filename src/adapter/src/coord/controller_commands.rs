@@ -76,6 +76,12 @@ impl Coordinator {
                         .or_insert_with(|| ControllerCommand::None);
                     entry.absorb(update);
                 }
+                ParsedStateUpdateKind::TemporaryItem { parsed_item } => {
+                    let entry = controller_commands
+                        .entry(parsed_item.id.clone())
+                        .or_insert_with(|| ControllerCommand::None);
+                    entry.absorb(update);
+                }
                 ParsedStateUpdateKind::Cluster {
                     durable_cluster,
                     parsed_cluster: _,
@@ -1117,6 +1123,38 @@ impl ControllerCommand {
                 durable_item: _,
                 parsed_item,
             } => match parsed_item {
+                CatalogItem::Table(table) => {
+                    self.absorb_table(table, catalog_update.ts, catalog_update.diff)
+                }
+                CatalogItem::Source(source) => {
+                    self.absorb_source(source, catalog_update.ts, catalog_update.diff);
+                }
+                CatalogItem::Sink(sink) => {
+                    self.absorb_sink(sink, catalog_update.ts, catalog_update.diff);
+                }
+                CatalogItem::Index(index) => {
+                    self.absorb_index(index, catalog_update.ts, catalog_update.diff);
+                }
+                CatalogItem::MaterializedView(mv) => {
+                    self.absorb_materialized_view(mv, catalog_update.ts, catalog_update.diff);
+                }
+                CatalogItem::View(view) => {
+                    self.absorb_view(view, catalog_update.ts, catalog_update.diff);
+                }
+                CatalogItem::ContinualTask(ct) => {
+                    self.absorb_continual_task(ct, catalog_update.ts, catalog_update.diff);
+                }
+                CatalogItem::Secret(secret) => {
+                    self.absorb_secret(secret, catalog_update.ts, catalog_update.diff);
+                }
+                CatalogItem::Connection(connection) => {
+                    self.absorb_connection(connection, catalog_update.ts, catalog_update.diff);
+                }
+                CatalogItem::Log(_) => {}
+                CatalogItem::Type(_) => {}
+                CatalogItem::Func(_) => {}
+            },
+            ParsedStateUpdateKind::TemporaryItem { parsed_item } => match parsed_item.item {
                 CatalogItem::Table(table) => {
                     self.absorb_table(table, catalog_update.ts, catalog_update.diff)
                 }
