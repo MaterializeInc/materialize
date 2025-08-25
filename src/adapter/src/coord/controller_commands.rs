@@ -29,6 +29,7 @@ use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
 use mz_ore::instrument;
 use mz_ore::retry::Retry;
+use mz_ore::str::StrExt;
 use mz_ore::task;
 use mz_postgres_util::tunnel::PostgresFlavor;
 use mz_repr::{CatalogItemId, GlobalId, RelationVersion, RelationVersionSelector, Timestamp};
@@ -72,6 +73,7 @@ impl Coordinator {
                     durable_item,
                     parsed_item: _,
                     connection: _,
+                    parsed_full_name: _,
                 } => {
                     let entry = controller_commands
                         .entry(durable_item.id.clone())
@@ -81,6 +83,7 @@ impl Coordinator {
                 ParsedStateUpdateKind::TemporaryItem {
                     parsed_item,
                     connection: _,
+                    parsed_full_name: _,
                 } => {
                     let entry = controller_commands
                         .entry(parsed_item.id.clone())
@@ -174,6 +177,10 @@ impl Coordinator {
         let mut peeks_to_drop = vec![];
         let mut copies_to_drop = vec![];
 
+        // Maps for storing names of dropped objects for error messages
+        let mut dropped_item_names: BTreeMap<GlobalId, String> = BTreeMap::new();
+        let mut dropped_cluster_names: BTreeMap<ClusterId, String> = BTreeMap::new();
+
         // Separate collections for tables (which need write timestamps) and sources (which don't)
         let mut table_collections_to_create = BTreeMap::new();
         let mut source_collections_to_create = BTreeMap::new();
@@ -204,11 +211,12 @@ impl Coordinator {
                     new_table,
                 }) => self.handle_alter_table(prev_table, new_table).await?,
 
-                ControllerCommand::Table(TableControllerCommand::DropTable(table)) => {
+                ControllerCommand::Table(TableControllerCommand::DropTable(table, full_name)) => {
                     let global_ids = table.global_ids();
                     // WIP: Handle versions!
                     for global_id in global_ids {
                         tables_to_drop.insert((catalog_id, global_id));
+                        dropped_item_names.insert(global_id, full_name.clone());
                     }
                 }
                 ControllerCommand::Source(SourceControllerCommand::AddSource(
@@ -247,9 +255,11 @@ impl Coordinator {
                 ControllerCommand::Source(SourceControllerCommand::DropSource(
                     source,
                     connection,
+                    full_name,
                 )) => {
                     let global_id = source.global_id();
                     sources_to_drop.push((catalog_id, global_id));
+                    dropped_item_names.insert(global_id, full_name);
 
                     if let DataSourceDesc::Ingestion { ingestion_desc, .. } = &source.data_source {
                         match &ingestion_desc.desc.connection {
@@ -281,8 +291,9 @@ impl Coordinator {
                 }) => {
                     tracing::info!(?prev_sink, ?new_sink, "not handling AlterSink in here yet");
                 }
-                ControllerCommand::Sink(SinkControllerCommand::DropSink(sink)) => {
+                ControllerCommand::Sink(SinkControllerCommand::DropSink(sink, full_name)) => {
                     storage_sink_gids_to_drop.push(sink.global_id());
+                    dropped_item_names.insert(sink.global_id(), full_name);
                 }
                 ControllerCommand::Index(IndexControllerCommand::AddIndex(index)) => {
                     tracing::info!(?index, "not handling AddIndex in here yet");
@@ -297,8 +308,9 @@ impl Coordinator {
                         "not handling AlterIndex in here yet"
                     );
                 }
-                ControllerCommand::Index(IndexControllerCommand::DropIndex(index)) => {
+                ControllerCommand::Index(IndexControllerCommand::DropIndex(index, full_name)) => {
                     indexes_to_drop.push((index.cluster_id, index.global_id()));
+                    dropped_item_names.insert(index.global_id(), full_name);
                 }
                 ControllerCommand::MaterializedView(
                     MaterializedViewControllerCommand::AddMaterializedView(mv),
@@ -315,9 +327,10 @@ impl Coordinator {
                     );
                 }
                 ControllerCommand::MaterializedView(
-                    MaterializedViewControllerCommand::DropMaterializedView(mv),
+                    MaterializedViewControllerCommand::DropMaterializedView(mv, full_name),
                 ) => {
                     materialized_views_to_drop.push((mv.cluster_id, mv.global_id()));
+                    dropped_item_names.insert(mv.global_id(), full_name);
                 }
                 ControllerCommand::View(ViewControllerCommand::AddView(view)) => {
                     tracing::info!(?view, "not handling AddView in here yet");
@@ -328,8 +341,9 @@ impl Coordinator {
                 }) => {
                     tracing::info!(?prev_view, ?new_view, "not handling AlterView in here yet");
                 }
-                ControllerCommand::View(ViewControllerCommand::DropView(view)) => {
+                ControllerCommand::View(ViewControllerCommand::DropView(view, full_name)) => {
                     view_gids_to_drop.push(view.global_id());
+                    dropped_item_names.insert(view.global_id(), full_name);
                 }
                 ControllerCommand::ContinualTask(
                     ContinualTaskControllerCommand::AddContinualTask(ct),
@@ -419,8 +433,9 @@ impl Coordinator {
                         "not handling AlterCluster in here yet"
                     );
                 }
-                ControllerCommand::Cluster(ClusterControllerCommand::DropCluster(_cluster)) => {
+                ControllerCommand::Cluster(ClusterControllerCommand::DropCluster(cluster)) => {
                     clusters_to_drop.push(cluster_id);
+                    dropped_cluster_names.insert(cluster_id, cluster.name);
                 }
                 command => {
                     tracing::info!(?command, "unexpected cluster command");
@@ -498,29 +513,23 @@ impl Coordinator {
                 .iter()
                 .find(|id| collections_to_drop.contains(id))
             {
-                // WIP: We can't get the full name of the referenced collection
-                // because it has been dropped from the catalog by now. Is this
-                // okay?
-                //let entry = self.catalog().get_entry_by_global_id(id);
-                //let name = self
-                //    .catalog()
-                //    .resolve_full_name(entry.name(), Some(conn_id))
-                //    .to_string();
+                let name = dropped_item_names
+                    .get(id)
+                    .map(|n| format!("relation {}", n.quoted()))
+                    .expect("missing relation name");
                 compute_sinks_to_drop.insert(
                     *sink_id,
-                    ActiveComputeSinkRetireReason::DependencyDropped(format!("relation {}", id,)),
+                    ActiveComputeSinkRetireReason::DependencyDropped(name),
                 );
+
             } else if clusters_to_drop.contains(&cluster_id) {
-                // WIP: We can't get the full name of the referenced collection
-                // because it has been dropped from the catalog by now. Is this
-                // okay?
-                //let name = self.catalog().get_cluster(cluster_id).name();
+                let name = dropped_cluster_names
+                    .get(&cluster_id)
+                    .map(|n| format!("cluster {}", n.quoted()))
+                    .expect("missing cluster name");
                 compute_sinks_to_drop.insert(
                     *sink_id,
-                    ActiveComputeSinkRetireReason::DependencyDropped(format!(
-                        "cluster {}",
-                        cluster_id,
-                    )),
+                    ActiveComputeSinkRetireReason::DependencyDropped(name),
                 );
             }
         }
@@ -532,19 +541,17 @@ impl Coordinator {
                 .iter()
                 .find(|id| collections_to_drop.contains(id))
             {
-                // WIP: We can't get the full name of the referenced collection
-                // because it has been dropped from the catalog by now. Is this
-                // okay?
-                //let entry = self.catalog().get_entry_by_global_id(id);
-                //let name = self
-                //    .catalog()
-                //    .resolve_full_name(entry.name(), Some(&pending_peek.conn_id));
-                peeks_to_drop.push((format!("relation {}", id), uuid.clone()));
+                let name = dropped_item_names
+                    .get(id)
+                    .map(|n| format!("relation {}", n.quoted()))
+                    .expect("missing relation name");
+                peeks_to_drop.push((name, uuid.clone()));
             } else if clusters_to_drop.contains(&pending_peek.cluster_id) {
-                // WIP: We can't get the full name of the used cluster because
-                // it has been dropped from the catalog by now. Is this okay?
-                //let name = self.catalog().get_cluster(pending_peek.cluster_id).name();
-                peeks_to_drop.push((format!("cluster {}", pending_peek.cluster_id), uuid.clone()));
+                let name = dropped_cluster_names
+                    .get(&pending_peek.cluster_id)
+                    .map(|n| format!("cluster {}", n.quoted()))
+                    .expect("missing cluster name");
+                peeks_to_drop.push((name, uuid.clone()));
             }
         }
 
@@ -1198,7 +1205,7 @@ enum ControllerCommand {
 enum TableControllerCommand {
     AddTable(Table),
     AlterTable { prev_table: Table, new_table: Table },
-    DropTable(Table),
+    DropTable(Table, String), // Table and full name
 }
 
 #[allow(dead_code)]
@@ -1211,21 +1218,21 @@ enum SourceControllerCommand {
         new_source: Source,
         new_connection: Option<GenericSourceConnection>,
     },
-    DropSource(Source, Option<GenericSourceConnection>),
+    DropSource(Source, Option<GenericSourceConnection>, String), // Source, connection, and full name
 }
 
 #[derive(Debug, Clone)]
 enum SinkControllerCommand {
     AddSink(Sink),
     AlterSink { prev_sink: Sink, new_sink: Sink },
-    DropSink(Sink),
+    DropSink(Sink, String), // Sink and full name
 }
 
 #[derive(Debug, Clone)]
 enum IndexControllerCommand {
     AddIndex(Index),
     AlterIndex { prev_index: Index, new_index: Index },
-    DropIndex(Index),
+    DropIndex(Index, String), // Index and full name
 }
 
 #[derive(Debug, Clone)]
@@ -1235,14 +1242,14 @@ enum MaterializedViewControllerCommand {
         prev_mv: MaterializedView,
         new_mv: MaterializedView,
     },
-    DropMaterializedView(MaterializedView),
+    DropMaterializedView(MaterializedView, String), // MaterializedView and full name
 }
 
 #[derive(Debug, Clone)]
 enum ViewControllerCommand {
     AddView(View),
     AlterView { prev_view: View, new_view: View },
-    DropView(View),
+    DropView(View, String), // View and full name
 }
 
 #[derive(Debug, Clone)]
@@ -1302,24 +1309,54 @@ impl ControllerCommand {
                 durable_item: _,
                 parsed_item,
                 connection,
+                parsed_full_name,
             } => match parsed_item {
-                CatalogItem::Table(table) => {
-                    self.absorb_table(table, catalog_update.ts, catalog_update.diff)
-                }
+                CatalogItem::Table(table) => self.absorb_table(
+                    table,
+                    parsed_full_name,
+                    catalog_update.ts,
+                    catalog_update.diff,
+                ),
                 CatalogItem::Source(source) => {
-                    self.absorb_source(source, connection, catalog_update.ts, catalog_update.diff);
+                    self.absorb_source(
+                        source,
+                        connection,
+                        parsed_full_name,
+                        catalog_update.ts,
+                        catalog_update.diff,
+                    );
                 }
                 CatalogItem::Sink(sink) => {
-                    self.absorb_sink(sink, catalog_update.ts, catalog_update.diff);
+                    self.absorb_sink(
+                        sink,
+                        parsed_full_name,
+                        catalog_update.ts,
+                        catalog_update.diff,
+                    );
                 }
                 CatalogItem::Index(index) => {
-                    self.absorb_index(index, catalog_update.ts, catalog_update.diff);
+                    self.absorb_index(
+                        index,
+                        parsed_full_name,
+                        catalog_update.ts,
+                        catalog_update.diff,
+                    );
                 }
                 CatalogItem::MaterializedView(mv) => {
-                    self.absorb_materialized_view(mv, catalog_update.ts, catalog_update.diff);
+                    self.absorb_materialized_view(
+                        mv,
+                        parsed_full_name,
+                        catalog_update.ts,
+                        catalog_update.diff,
+                    );
                 }
                 CatalogItem::View(view) => {
-                    self.absorb_view(view, catalog_update.ts, catalog_update.diff);
+                    self.absorb_view(
+                        view,
+                        parsed_full_name,
+                        catalog_update.ts,
+                        catalog_update.diff,
+                    );
                 }
                 CatalogItem::ContinualTask(ct) => {
                     self.absorb_continual_task(ct, catalog_update.ts, catalog_update.diff);
@@ -1337,24 +1374,54 @@ impl ControllerCommand {
             ParsedStateUpdateKind::TemporaryItem {
                 parsed_item,
                 connection,
+                parsed_full_name,
             } => match parsed_item.item {
-                CatalogItem::Table(table) => {
-                    self.absorb_table(table, catalog_update.ts, catalog_update.diff)
-                }
+                CatalogItem::Table(table) => self.absorb_table(
+                    table,
+                    parsed_full_name,
+                    catalog_update.ts,
+                    catalog_update.diff,
+                ),
                 CatalogItem::Source(source) => {
-                    self.absorb_source(source, connection, catalog_update.ts, catalog_update.diff);
+                    self.absorb_source(
+                        source,
+                        connection,
+                        parsed_full_name,
+                        catalog_update.ts,
+                        catalog_update.diff,
+                    );
                 }
                 CatalogItem::Sink(sink) => {
-                    self.absorb_sink(sink, catalog_update.ts, catalog_update.diff);
+                    self.absorb_sink(
+                        sink,
+                        parsed_full_name,
+                        catalog_update.ts,
+                        catalog_update.diff,
+                    );
                 }
                 CatalogItem::Index(index) => {
-                    self.absorb_index(index, catalog_update.ts, catalog_update.diff);
+                    self.absorb_index(
+                        index,
+                        parsed_full_name,
+                        catalog_update.ts,
+                        catalog_update.diff,
+                    );
                 }
                 CatalogItem::MaterializedView(mv) => {
-                    self.absorb_materialized_view(mv, catalog_update.ts, catalog_update.diff);
+                    self.absorb_materialized_view(
+                        mv,
+                        parsed_full_name,
+                        catalog_update.ts,
+                        catalog_update.diff,
+                    );
                 }
                 CatalogItem::View(view) => {
-                    self.absorb_view(view, catalog_update.ts, catalog_update.diff);
+                    self.absorb_view(
+                        view,
+                        parsed_full_name,
+                        catalog_update.ts,
+                        catalog_update.diff,
+                    );
                 }
                 CatalogItem::ContinualTask(ct) => {
                     self.absorb_continual_task(ct, catalog_update.ts, catalog_update.diff);
@@ -1388,29 +1455,39 @@ impl ControllerCommand {
         }
     }
 
-    fn absorb_table(&mut self, table: Table, _ts: Timestamp, diff: StateDiff) {
+    fn absorb_table(
+        &mut self,
+        table: Table,
+        parsed_full_name: String,
+        _ts: Timestamp,
+        diff: StateDiff,
+    ) {
         match self {
             ControllerCommand::None => match diff {
                 StateDiff::Addition => {
                     *self = ControllerCommand::Table(TableControllerCommand::AddTable(table));
                 }
                 StateDiff::Retraction => {
-                    *self = ControllerCommand::Table(TableControllerCommand::DropTable(table));
+                    *self = ControllerCommand::Table(TableControllerCommand::DropTable(
+                        table,
+                        parsed_full_name,
+                    ));
                 }
             },
-            ControllerCommand::Table(TableControllerCommand::DropTable(existing_table)) => {
-                match diff {
-                    StateDiff::Addition => {
-                        *self = ControllerCommand::Table(TableControllerCommand::AlterTable {
-                            prev_table: existing_table.clone(),
-                            new_table: table,
-                        });
-                    }
-                    StateDiff::Retraction => {
-                        panic!("retraction for already dropped table");
-                    }
+            ControllerCommand::Table(TableControllerCommand::DropTable(
+                existing_table,
+                _existing_name,
+            )) => match diff {
+                StateDiff::Addition => {
+                    *self = ControllerCommand::Table(TableControllerCommand::AlterTable {
+                        prev_table: existing_table.clone(),
+                        new_table: table,
+                    });
                 }
-            }
+                StateDiff::Retraction => {
+                    panic!("retraction for already dropped table");
+                }
+            },
             ControllerCommand::Table(TableControllerCommand::AddTable(new_table)) => match diff {
                 StateDiff::Addition => {
                     panic!("addition for already added table");
@@ -1432,6 +1509,7 @@ impl ControllerCommand {
         &mut self,
         source: Source,
         connection: Option<GenericSourceConnection>,
+        parsed_full_name: String,
         _ts: Timestamp,
         diff: StateDiff,
     ) {
@@ -1444,13 +1522,16 @@ impl ControllerCommand {
                 }
                 StateDiff::Retraction => {
                     *self = ControllerCommand::Source(SourceControllerCommand::DropSource(
-                        source, connection,
+                        source,
+                        connection,
+                        parsed_full_name,
                     ));
                 }
             },
             ControllerCommand::Source(SourceControllerCommand::DropSource(
                 existing_source,
                 existing_connection,
+                _existing_name,
             )) => match diff {
                 StateDiff::Addition => {
                     *self = ControllerCommand::Source(SourceControllerCommand::AlterSource {
@@ -1486,17 +1567,29 @@ impl ControllerCommand {
         }
     }
 
-    fn absorb_sink(&mut self, sink: Sink, _ts: Timestamp, diff: StateDiff) {
+    fn absorb_sink(
+        &mut self,
+        sink: Sink,
+        parsed_full_name: String,
+        _ts: Timestamp,
+        diff: StateDiff,
+    ) {
         match self {
             ControllerCommand::None => match diff {
                 StateDiff::Addition => {
                     *self = ControllerCommand::Sink(SinkControllerCommand::AddSink(sink));
                 }
                 StateDiff::Retraction => {
-                    *self = ControllerCommand::Sink(SinkControllerCommand::DropSink(sink));
+                    *self = ControllerCommand::Sink(SinkControllerCommand::DropSink(
+                        sink,
+                        parsed_full_name,
+                    ));
                 }
             },
-            ControllerCommand::Sink(SinkControllerCommand::DropSink(existing_sink)) => match diff {
+            ControllerCommand::Sink(SinkControllerCommand::DropSink(
+                existing_sink,
+                _existing_name,
+            )) => match diff {
                 StateDiff::Addition => {
                     *self = ControllerCommand::Sink(SinkControllerCommand::AlterSink {
                         prev_sink: existing_sink.clone(),
@@ -1524,29 +1617,39 @@ impl ControllerCommand {
         }
     }
 
-    fn absorb_index(&mut self, index: Index, _ts: Timestamp, diff: StateDiff) {
+    fn absorb_index(
+        &mut self,
+        index: Index,
+        parsed_full_name: String,
+        _ts: Timestamp,
+        diff: StateDiff,
+    ) {
         match self {
             ControllerCommand::None => match diff {
                 StateDiff::Addition => {
                     *self = ControllerCommand::Index(IndexControllerCommand::AddIndex(index));
                 }
                 StateDiff::Retraction => {
-                    *self = ControllerCommand::Index(IndexControllerCommand::DropIndex(index));
+                    *self = ControllerCommand::Index(IndexControllerCommand::DropIndex(
+                        index,
+                        parsed_full_name,
+                    ));
                 }
             },
-            ControllerCommand::Index(IndexControllerCommand::DropIndex(existing_index)) => {
-                match diff {
-                    StateDiff::Addition => {
-                        *self = ControllerCommand::Index(IndexControllerCommand::AlterIndex {
-                            prev_index: existing_index.clone(),
-                            new_index: index,
-                        });
-                    }
-                    StateDiff::Retraction => {
-                        panic!("retraction for already dropped index");
-                    }
+            ControllerCommand::Index(IndexControllerCommand::DropIndex(
+                existing_index,
+                _existing_name,
+            )) => match diff {
+                StateDiff::Addition => {
+                    *self = ControllerCommand::Index(IndexControllerCommand::AlterIndex {
+                        prev_index: existing_index.clone(),
+                        new_index: index,
+                    });
                 }
-            }
+                StateDiff::Retraction => {
+                    panic!("retraction for already dropped index");
+                }
+            },
             ControllerCommand::Index(IndexControllerCommand::AddIndex(new_index)) => match diff {
                 StateDiff::Addition => {
                     panic!("addition for already added index");
@@ -1564,7 +1667,13 @@ impl ControllerCommand {
         }
     }
 
-    fn absorb_materialized_view(&mut self, mv: MaterializedView, _ts: Timestamp, diff: StateDiff) {
+    fn absorb_materialized_view(
+        &mut self,
+        mv: MaterializedView,
+        parsed_full_name: String,
+        _ts: Timestamp,
+        diff: StateDiff,
+    ) {
         match self {
             ControllerCommand::None => match diff {
                 StateDiff::Addition => {
@@ -1574,12 +1683,18 @@ impl ControllerCommand {
                 }
                 StateDiff::Retraction => {
                     *self = ControllerCommand::MaterializedView(
-                        MaterializedViewControllerCommand::DropMaterializedView(mv),
+                        MaterializedViewControllerCommand::DropMaterializedView(
+                            mv,
+                            parsed_full_name,
+                        ),
                     );
                 }
             },
             ControllerCommand::MaterializedView(
-                MaterializedViewControllerCommand::DropMaterializedView(existing_mv),
+                MaterializedViewControllerCommand::DropMaterializedView(
+                    existing_mv,
+                    _existing_name,
+                ),
             ) => match diff {
                 StateDiff::Addition => {
                     *self = ControllerCommand::MaterializedView(
@@ -1614,17 +1729,29 @@ impl ControllerCommand {
         }
     }
 
-    fn absorb_view(&mut self, view: View, _ts: Timestamp, diff: StateDiff) {
+    fn absorb_view(
+        &mut self,
+        view: View,
+        parsed_full_name: String,
+        _ts: Timestamp,
+        diff: StateDiff,
+    ) {
         match self {
             ControllerCommand::None => match diff {
                 StateDiff::Addition => {
                     *self = ControllerCommand::View(ViewControllerCommand::AddView(view));
                 }
                 StateDiff::Retraction => {
-                    *self = ControllerCommand::View(ViewControllerCommand::DropView(view));
+                    *self = ControllerCommand::View(ViewControllerCommand::DropView(
+                        view,
+                        parsed_full_name,
+                    ));
                 }
             },
-            ControllerCommand::View(ViewControllerCommand::DropView(existing_view)) => match diff {
+            ControllerCommand::View(ViewControllerCommand::DropView(
+                existing_view,
+                _existing_name,
+            )) => match diff {
                 StateDiff::Addition => {
                     *self = ControllerCommand::View(ViewControllerCommand::AlterView {
                         prev_view: existing_view.clone(),

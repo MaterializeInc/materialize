@@ -36,10 +36,12 @@ pub enum ParsedStateUpdateKind {
         durable_item: durable::objects::Item,
         parsed_item: memory::objects::CatalogItem,
         connection: Option<GenericSourceConnection>,
+        parsed_full_name: String,
     },
     TemporaryItem {
         parsed_item: memory::objects::TemporaryItem,
         connection: Option<GenericSourceConnection>,
+        parsed_full_name: String,
     },
     Cluster {
         durable_cluster: durable::objects::Cluster,
@@ -190,6 +192,9 @@ fn parse_item_update(
     let entry = catalog.get_entry(&durable_item.id);
 
     let parsed_item = entry.item().clone();
+    let parsed_full_name = catalog
+        .resolve_full_name(entry.name(), entry.conn_id())
+        .to_string();
 
     let connection = match &parsed_item {
         memory::objects::CatalogItem::Source(source) => {
@@ -212,6 +217,7 @@ fn parse_item_update(
         durable_item,
         parsed_item,
         connection,
+        parsed_full_name,
     }
 }
 
@@ -220,6 +226,11 @@ fn parse_temporary_item_update(
     parsed_item: memory::objects::TemporaryItem,
     _diff: StateDiff,
 ) -> ParsedStateUpdateKind {
+    let entry = catalog.get_entry(&parsed_item.id);
+    let parsed_full_name = catalog
+        .resolve_full_name(entry.name(), entry.conn_id())
+        .to_string();
+
     let connection = match &parsed_item.item {
         memory::objects::CatalogItem::Source(source) => {
             if let DataSourceDesc::Ingestion { ingestion_desc, .. } = &source.data_source {
@@ -240,6 +251,7 @@ fn parse_temporary_item_update(
     ParsedStateUpdateKind::TemporaryItem {
         parsed_item,
         connection,
+        parsed_full_name,
     }
 }
 

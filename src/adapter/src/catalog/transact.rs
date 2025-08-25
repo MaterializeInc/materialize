@@ -563,14 +563,13 @@ impl Catalog {
             let mut updates: Vec<_> = tx.get_and_commit_op_updates();
             updates.extend(temporary_item_updates);
             if !updates.is_empty() {
-
-            let (op_builtin_table_updates, op_controller_state_updates) =
-                state.to_mut().apply_updates(updates.clone())?;
-             let op_builtin_table_updates =
-                 state.to_mut().resolve_builtin_table_updates(op_builtin_table_updates);
-             builtin_table_updates.extend(op_builtin_table_updates);
-            parsed_catalog_updates.extend(op_controller_state_updates);
-
+                let (op_builtin_table_updates, op_controller_state_updates) =
+                    state.to_mut().apply_updates(updates.clone())?;
+                let op_builtin_table_updates = state
+                    .to_mut()
+                    .resolve_builtin_table_updates(op_builtin_table_updates);
+                builtin_table_updates.extend(op_builtin_table_updates);
+                parsed_catalog_updates.extend(op_controller_state_updates);
             }
         }
 
@@ -588,12 +587,13 @@ impl Catalog {
 
             let updates = tx.get_and_commit_op_updates();
             if !updates.is_empty() {
-            let (op_builtin_table_updates, op_controller_state_updates) =
-                state.to_mut().apply_updates(updates.clone())?;
-             let op_builtin_table_updates =
-                 state.to_mut().resolve_builtin_table_updates(op_builtin_table_updates);
-             builtin_table_updates.extend(op_builtin_table_updates);
-            parsed_catalog_updates.extend(op_controller_state_updates);
+                let (op_builtin_table_updates, op_controller_state_updates) =
+                    state.to_mut().apply_updates(updates.clone())?;
+                let op_builtin_table_updates = state
+                    .to_mut()
+                    .resolve_builtin_table_updates(op_builtin_table_updates);
+                builtin_table_updates.extend(op_builtin_table_updates);
+                parsed_catalog_updates.extend(op_controller_state_updates);
             }
 
             match state {

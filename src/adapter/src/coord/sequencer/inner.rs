@@ -644,24 +644,18 @@ impl Coordinator {
             if_not_exists_ids,
         } = self.create_source_inner(ctx.session(), plans).await?;
 
-        // Check if any sources are webhook sources and collect their URLs for notices
-        let mut webhook_notices = Vec::new();
-        for (item_id, source) in &sources {
-            if matches!(source.data_source, DataSourceDesc::Webhook { .. }) {
-                if let Some(url) = self.catalog().state().try_get_webhook_url(item_id) {
-                    webhook_notices.push(url);
-                }
-            }
-        }
-
         let transact_result = self
             .catalog_transact_with_ddl_transaction(ctx, ops, |_, _| Box::pin(async {}))
             .await;
 
-        // Add webhook notices after the transaction completes
-        for url in webhook_notices {
-            ctx.session()
-                .add_notice(AdapterNotice::WebhookSourceCreated { url });
+        // Check if any sources are webhook sources and report them as created.
+        for (item_id, source) in &sources {
+            if matches!(source.data_source, DataSourceDesc::Webhook { .. }) {
+                if let Some(url) = self.catalog().state().try_get_webhook_url(item_id) {
+                    ctx.session()
+                        .add_notice(AdapterNotice::WebhookSourceCreated { url });
+                }
+            }
         }
 
         match transact_result {

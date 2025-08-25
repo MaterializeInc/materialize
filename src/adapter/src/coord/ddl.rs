@@ -82,7 +82,7 @@ impl Coordinator {
     #[instrument(name = "coord::catalog_transact_with_side_effects")]
     pub(crate) async fn catalog_transact_with_side_effects<F>(
         &mut self,
-        ctx: Option<&mut ExecuteContext>,
+        mut ctx: Option<&mut ExecuteContext>,
         ops: Vec<catalog::Op>,
         side_effect: F,
     ) -> Result<(), AdapterError>
@@ -100,7 +100,7 @@ impl Coordinator {
         // We can't run this concurrently with the explicit side effects,
         // because both want to borrow self mutably.
         let controller_state_updates_res = self
-            .controller_apply_catalog_updates(None, controller_state_updates)
+            .controller_apply_catalog_updates(ctx.as_deref_mut(), controller_state_updates)
             .await;
 
         // We would get into an inconsistent state if we updated the catalog but
