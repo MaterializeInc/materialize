@@ -11,10 +11,12 @@
 //! ([StateUpdateKind]), so that we can apply derived commands to the
 //! controller(s).
 
-use mz_catalog::memory::objects::{StateDiff, StateUpdateKind};
+use mz_catalog::memory::objects::{DataSourceDesc, StateDiff, StateUpdateKind};
 use mz_catalog::{durable, memory};
 use mz_ore::instrument;
 use mz_repr::Timestamp;
+use mz_storage_types::connections::inline::IntoInlineConnection;
+use mz_storage_types::sources::GenericSourceConnection;
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
 use crate::catalog::CatalogState;
@@ -33,9 +35,11 @@ pub enum ParsedStateUpdateKind {
     Item {
         durable_item: durable::objects::Item,
         parsed_item: memory::objects::CatalogItem,
+        connection: Option<GenericSourceConnection>,
     },
     TemporaryItem {
         parsed_item: memory::objects::TemporaryItem,
+        connection: Option<GenericSourceConnection>,
     },
     Cluster {
         durable_cluster: durable::objects::Cluster,
@@ -185,18 +189,58 @@ fn parse_item_update(
 ) -> ParsedStateUpdateKind {
     let entry = catalog.get_entry(&durable_item.id);
 
+    let parsed_item = entry.item().clone();
+
+    let connection = match &parsed_item {
+        memory::objects::CatalogItem::Source(source) => {
+            if let DataSourceDesc::Ingestion { ingestion_desc, .. } = &source.data_source {
+                match &ingestion_desc.desc.connection {
+                    GenericSourceConnection::Postgres(conn) => {
+                        let inline_conn = conn.clone().into_inline_connection(catalog);
+                        Some(GenericSourceConnection::Postgres(inline_conn))
+                    }
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        }
+        _ => None,
+    };
+
     ParsedStateUpdateKind::Item {
         durable_item,
-        parsed_item: entry.item().clone(),
+        parsed_item,
+        connection,
     }
 }
 
 fn parse_temporary_item_update(
-    _catalog: &CatalogState,
+    catalog: &CatalogState,
     parsed_item: memory::objects::TemporaryItem,
     _diff: StateDiff,
 ) -> ParsedStateUpdateKind {
-    ParsedStateUpdateKind::TemporaryItem { parsed_item }
+    let connection = match &parsed_item.item {
+        memory::objects::CatalogItem::Source(source) => {
+            if let DataSourceDesc::Ingestion { ingestion_desc, .. } = &source.data_source {
+                match &ingestion_desc.desc.connection {
+                    GenericSourceConnection::Postgres(conn) => {
+                        let inline_conn = conn.clone().into_inline_connection(catalog);
+                        Some(GenericSourceConnection::Postgres(inline_conn))
+                    }
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        }
+        _ => None,
+    };
+
+    ParsedStateUpdateKind::TemporaryItem {
+        parsed_item,
+        connection,
+    }
 }
 
 fn parse_cluster_update(

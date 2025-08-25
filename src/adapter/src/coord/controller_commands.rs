@@ -70,13 +70,17 @@ impl Coordinator {
                 ParsedStateUpdateKind::Item {
                     durable_item,
                     parsed_item: _,
+                    connection: _,
                 } => {
                     let entry = controller_commands
                         .entry(durable_item.id.clone())
                         .or_insert_with(|| ControllerCommand::None);
                     entry.absorb(update);
                 }
-                ParsedStateUpdateKind::TemporaryItem { parsed_item } => {
+                ParsedStateUpdateKind::TemporaryItem {
+                    parsed_item,
+                    connection: _,
+                } => {
                     let entry = controller_commands
                         .entry(parsed_item.id.clone())
                         .or_insert_with(|| ControllerCommand::None);
@@ -210,12 +214,17 @@ impl Coordinator {
                         tables_to_drop.insert((catalog_id, global_id));
                     }
                 }
-                ControllerCommand::Source(SourceControllerCommand::AddSource(source)) => {
+                ControllerCommand::Source(SourceControllerCommand::AddSource(
+                    source,
+                    _connection,
+                )) => {
                     tracing::info!(?source, "not handling AddSource in here yet");
                 }
                 ControllerCommand::Source(SourceControllerCommand::AlterSource {
                     prev_source,
+                    prev_connection: _,
                     new_source,
+                    new_connection: _,
                 }) => {
                     tracing::info!(
                         ?prev_source,
@@ -223,18 +232,27 @@ impl Coordinator {
                         "not handling AlterSource in here yet"
                     );
                 }
-                ControllerCommand::Source(SourceControllerCommand::DropSource(source)) => {
+                ControllerCommand::Source(SourceControllerCommand::DropSource(
+                    source,
+                    connection,
+                )) => {
                     let global_id = source.global_id();
                     sources_to_drop.push((catalog_id, global_id));
 
                     if let DataSourceDesc::Ingestion { ingestion_desc, .. } = &source.data_source {
                         match &ingestion_desc.desc.connection {
-                            GenericSourceConnection::Postgres(conn) => {
-                                let conn =
-                                    conn.clone().into_inline_connection(self.catalog().state());
+                            GenericSourceConnection::Postgres(_referenced_conn) => {
+                                let inline_conn = connection.expect("missing inlined connection");
+
+                                let pg_conn = match inline_conn {
+                                    GenericSourceConnection::Postgres(pg_conn) => pg_conn,
+                                    other => {
+                                        panic!("expected postgres connection, got: {:?}", other)
+                                    }
+                                };
                                 let pending_drop = (
-                                    conn.connection.clone(),
-                                    conn.publication_details.slot.clone(),
+                                    pg_conn.connection.clone(),
+                                    pg_conn.publication_details.slot.clone(),
                                 );
                                 replication_slots_to_drop.push(pending_drop);
                             }
@@ -1025,14 +1043,17 @@ enum TableControllerCommand {
     DropTable(Table),
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 enum SourceControllerCommand {
-    AddSource(Source),
+    AddSource(Source, Option<GenericSourceConnection>),
     AlterSource {
         prev_source: Source,
+        prev_connection: Option<GenericSourceConnection>,
         new_source: Source,
+        new_connection: Option<GenericSourceConnection>,
     },
-    DropSource(Source),
+    DropSource(Source, Option<GenericSourceConnection>),
 }
 
 #[derive(Debug, Clone)]
@@ -1122,12 +1143,13 @@ impl ControllerCommand {
             ParsedStateUpdateKind::Item {
                 durable_item: _,
                 parsed_item,
+                connection,
             } => match parsed_item {
                 CatalogItem::Table(table) => {
                     self.absorb_table(table, catalog_update.ts, catalog_update.diff)
                 }
                 CatalogItem::Source(source) => {
-                    self.absorb_source(source, catalog_update.ts, catalog_update.diff);
+                    self.absorb_source(source, connection, catalog_update.ts, catalog_update.diff);
                 }
                 CatalogItem::Sink(sink) => {
                     self.absorb_sink(sink, catalog_update.ts, catalog_update.diff);
@@ -1154,12 +1176,15 @@ impl ControllerCommand {
                 CatalogItem::Type(_) => {}
                 CatalogItem::Func(_) => {}
             },
-            ParsedStateUpdateKind::TemporaryItem { parsed_item } => match parsed_item.item {
+            ParsedStateUpdateKind::TemporaryItem {
+                parsed_item,
+                connection,
+            } => match parsed_item.item {
                 CatalogItem::Table(table) => {
                     self.absorb_table(table, catalog_update.ts, catalog_update.diff)
                 }
                 CatalogItem::Source(source) => {
-                    self.absorb_source(source, catalog_update.ts, catalog_update.diff);
+                    self.absorb_source(source, connection, catalog_update.ts, catalog_update.diff);
                 }
                 CatalogItem::Sink(sink) => {
                     self.absorb_sink(sink, catalog_update.ts, catalog_update.diff);
@@ -1245,38 +1270,55 @@ impl ControllerCommand {
         }
     }
 
-    fn absorb_source(&mut self, source: Source, _ts: Timestamp, diff: StateDiff) {
+    fn absorb_source(
+        &mut self,
+        source: Source,
+        connection: Option<GenericSourceConnection>,
+        _ts: Timestamp,
+        diff: StateDiff,
+    ) {
         match self {
             ControllerCommand::None => match diff {
                 StateDiff::Addition => {
-                    *self = ControllerCommand::Source(SourceControllerCommand::AddSource(source));
+                    *self = ControllerCommand::Source(SourceControllerCommand::AddSource(
+                        source, connection,
+                    ));
                 }
                 StateDiff::Retraction => {
-                    *self = ControllerCommand::Source(SourceControllerCommand::DropSource(source));
+                    *self = ControllerCommand::Source(SourceControllerCommand::DropSource(
+                        source, connection,
+                    ));
                 }
             },
-            ControllerCommand::Source(SourceControllerCommand::DropSource(existing_source)) => {
-                match diff {
-                    StateDiff::Addition => {
-                        *self = ControllerCommand::Source(SourceControllerCommand::AlterSource {
-                            prev_source: existing_source.clone(),
-                            new_source: source,
-                        });
-                    }
-                    StateDiff::Retraction => {
-                        panic!("retraction for already dropped source");
-                    }
+            ControllerCommand::Source(SourceControllerCommand::DropSource(
+                existing_source,
+                existing_connection,
+            )) => match diff {
+                StateDiff::Addition => {
+                    *self = ControllerCommand::Source(SourceControllerCommand::AlterSource {
+                        prev_source: existing_source.clone(),
+                        prev_connection: existing_connection.clone(),
+                        new_source: source,
+                        new_connection: connection,
+                    });
                 }
-            }
-            ControllerCommand::Source(SourceControllerCommand::AddSource(new_source)) => match diff
-            {
+                StateDiff::Retraction => {
+                    panic!("retraction for already dropped source");
+                }
+            },
+            ControllerCommand::Source(SourceControllerCommand::AddSource(
+                new_source,
+                new_connection,
+            )) => match diff {
                 StateDiff::Addition => {
                     panic!("addition for already added source");
                 }
                 StateDiff::Retraction => {
                     *self = ControllerCommand::Source(SourceControllerCommand::AlterSource {
                         prev_source: source,
+                        prev_connection: connection,
                         new_source: new_source.clone(),
+                        new_connection: new_connection.clone(),
                     });
                 }
             },
