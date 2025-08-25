@@ -27,11 +27,6 @@ rows:
       {{< include-md
       file="shared-content/sql-command-privileges/alter-materialized-view.md"
       >}}
-  - Command: "[`ALTER NETWORK POLICY`](/sql/alter-network-policy)"
-    Privileges: |
-      {{< include-md
-      file="shared-content/sql-command-privileges/alter-network-policy.md"
-      >}}
 
   - Command: "[`ALTER ROLE`](/sql/alter-role)"
     Privileges: |
@@ -129,11 +124,6 @@ rows:
       file="shared-content/sql-command-privileges/create-materialized-view.md"
       >}}
 
-  - Command: "[`CREATE NETWORK POLICY`](/sql/create-network-policy/)"
-    Privileges: |
-      {{< include-md
-      file="shared-content/sql-command-privileges/create-network-policy.md" >}}
-
   - Command: "[`CREATE ROLE`](/sql/create-role)"
     Privileges: |
       {{< include-md
@@ -203,10 +193,6 @@ rows:
   - Command: "[`DROP MATERIALIZED VIEW`](/sql/drop-materialized-view)"
     Privileges: |
       {{< include-md file="shared-content/sql-command-privileges/drop-materialized-view.md" >}}
-
-  - Command: "[`DROP NETWORK POLICY`](/sql/drop-network-policy)"
-    Privileges: |
-      {{< include-md file="shared-content/sql-command-privileges/drop-network-policy.md" >}}
 
   - Command: "[`DROP OWNED`](/sql/drop-owned)"
     Privileges: |
