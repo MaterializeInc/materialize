@@ -53,11 +53,11 @@ pub mod config;
 pub mod continual_task;
 pub mod flags;
 pub mod metrics;
+pub mod peek_client;
 pub mod session;
 pub mod statement_logging;
 pub mod telemetry;
 pub mod webhook;
-pub mod peek_client;
 
 pub use crate::peek_client::PeekClient;
 

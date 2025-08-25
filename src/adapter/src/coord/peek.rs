@@ -633,7 +633,7 @@ impl crate::coord::Coordinator {
         target_replica: Option<ReplicaId>,
         max_result_size: u64,
         max_returned_query_size: Option<u64>,
-    ) -> Result<crate::ExecuteResponse, AdapterError> {
+    ) -> Result<ExecuteResponse, AdapterError> {
         let PlannedPeek {
             plan: fast_path,
             determination,

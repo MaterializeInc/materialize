@@ -171,7 +171,6 @@ impl<T: ComputeControllerTimestamp> Client<T> {
 
         rx.await.expect("instance not dropped")
     }
-
 }
 
 impl<T> Client<T>
@@ -187,9 +186,45 @@ where
 
     /// Fetch the write frontier for the identified compute collection by asking the instance task.
     pub async fn collection_write_frontier(&self, id: GlobalId) -> Antichain<T> {
-        self
-            .call_sync(move |i| i.collection_write_frontier(id).expect("missing compute collection"))
-            .await
+        self.call_sync(move |i| {
+            i.collection_write_frontier(id)
+                .expect("missing compute collection")
+        })
+        .await
+    }
+
+    /// Issue a peek by calling into the instance task synchronously, letting the instance acquire
+    /// read holds if none are provided. This ensures the read holds are established before
+    /// returning to the caller.
+    pub async fn peek_call_sync(
+        &self,
+        peek_target: PeekTarget,
+        literal_constraints: Option<Vec<Row>>,
+        uuid: Uuid,
+        timestamp: T,
+        result_desc: RelationDesc,
+        finishing: RowSetFinishing,
+        map_filter_project: mz_expr::SafeMfpPlan,
+        read_hold: Option<ReadHold<T>>,
+        target_replica: Option<ReplicaId>,
+        peek_response_tx: oneshot::Sender<PeekResponse>,
+    ) {
+        self.call_sync(move |i| {
+            i.peek(
+                peek_target,
+                literal_constraints,
+                uuid,
+                timestamp,
+                result_desc,
+                finishing,
+                map_filter_project,
+                read_hold,
+                target_replica,
+                peek_response_tx,
+            )
+            .expect("validated by instance");
+        })
+        .await
     }
 
     pub fn spawn(
@@ -345,7 +380,10 @@ pub(super) struct Instance<T: ComputeControllerTimestamp> {
 
 impl<T: ComputeControllerTimestamp> Instance<T> {
     /// Reports the current write frontier for the identified compute collection.
-    pub fn collection_write_frontier(&self, id: GlobalId) -> Result<Antichain<T>, CollectionMissing> {
+    pub fn collection_write_frontier(
+        &self,
+        id: GlobalId,
+    ) -> Result<Antichain<T>, CollectionMissing> {
         Ok(self.collection(id)?.write_frontier())
     }
     /// Acquire a handle to the collection state associated with `id`.
@@ -1735,14 +1773,29 @@ where
         result_desc: RelationDesc,
         finishing: RowSetFinishing,
         map_filter_project: mz_expr::SafeMfpPlan,
-        mut read_hold: ReadHold<T>,
+        mut read_hold: Option<ReadHold<T>>,
         target_replica: Option<ReplicaId>,
         peek_response_tx: oneshot::Sender<PeekResponse>,
     ) -> Result<(), PeekError> {
         use PeekError::*;
 
-        // Downgrade the provided read hold to the peek time.
+        // Acquire a read hold if one was not provided.
         let target_id = peek_target.id();
+        let mut read_hold = match read_hold {
+            Some(h) => h,
+            None => match &peek_target {
+                PeekTarget::Index { id } => self
+                    .acquire_read_hold(*id)
+                    .map_err(|_| ReadHoldInsufficient(target_id))?,
+                PeekTarget::Persist { .. } => {
+                    // For persist peeks, the controller should provide a storage read hold.
+                    // We don't support acquiring it here.
+                    return Err(ReadHoldInsufficient(target_id));
+                }
+            },
+        };
+
+        // Downgrade the provided (or acquired) read hold to the peek time.
         if read_hold.id() != target_id {
             return Err(ReadHoldIdMismatch(read_hold.id()));
         }
