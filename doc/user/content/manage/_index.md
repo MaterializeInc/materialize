@@ -2,6 +2,7 @@
 title: "Manage Materialize"
 description: ""
 disable_list: true
+disable_toc: true
 menu:
   main:
     identifier: "manage"
@@ -9,8 +10,6 @@ menu:
 ---
 
 This section contains various resources for managing Materialize.
-
-## Operational guides
 
 | Guide | Description |
 |-------|-------------|
