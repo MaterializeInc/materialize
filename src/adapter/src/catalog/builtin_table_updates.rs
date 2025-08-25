@@ -286,7 +286,7 @@ impl CatalogState {
             match &cluster.config.variant {
                 ClusterVariant::Managed(config) => (
                     Some(config.size.as_str()),
-                    Some(config.disk),
+                    Some(self.cluster_replica_size_has_disk(&config.size)),
                     Some(config.replication_factor),
                     if config.availability_zones.is_empty() {
                         None
@@ -376,13 +376,12 @@ impl CatalogState {
                 size,
                 availability_zones: ManagedReplicaAvailabilityZones::FromReplica(Some(az)),
                 allocation: _,
-                disk,
                 billed_as: _,
                 internal,
                 pending,
             }) => (
                 Some(&**size),
-                Some(*disk),
+                Some(self.cluster_replica_size_has_disk(size)),
                 Some(az.as_str()),
                 *internal,
                 *pending,
@@ -391,11 +390,16 @@ impl CatalogState {
                 size,
                 availability_zones: _,
                 allocation: _,
-                disk,
                 billed_as: _,
                 internal,
                 pending,
-            }) => (Some(&**size), Some(*disk), None, *internal, *pending),
+            }) => (
+                Some(&**size),
+                Some(self.cluster_replica_size_has_disk(size)),
+                None,
+                *internal,
+                *pending,
+            ),
             _ => (None, None, None, false, false),
         };
 

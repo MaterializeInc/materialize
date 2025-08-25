@@ -239,8 +239,6 @@ pub struct ServiceConfig {
     /// The orchestrator backend may or may not actually implement placement spread functionality.
     pub replicas_selector: Vec<LabelSelector>,
 
-    /// Whether scratch disk space should be allocated for the service.
-    pub disk: bool,
     /// The maximum amount of scratch disk space that the service is allowed to consume.
     pub disk_limit: Option<DiskLimit>,
     /// Node selector for this service.

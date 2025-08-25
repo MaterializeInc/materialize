@@ -158,6 +158,7 @@ pub enum EventDetails {
     CreateClusterReplicaV1(CreateClusterReplicaV1),
     CreateClusterReplicaV2(CreateClusterReplicaV2),
     CreateClusterReplicaV3(CreateClusterReplicaV3),
+    CreateClusterReplicaV4(CreateClusterReplicaV4),
     #[serde(rename = "DropComputeReplicaV1")] // historical name
     DropClusterReplicaV1(DropClusterReplicaV1),
     DropClusterReplicaV2(DropClusterReplicaV2),
@@ -317,6 +318,20 @@ pub struct CreateClusterReplicaV3 {
     pub replica_name: String,
     pub logical_size: String,
     pub disk: bool,
+    pub billed_as: Option<String>,
+    pub internal: bool,
+    pub reason: CreateOrDropClusterReplicaReasonV1,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scheduling_policies: Option<SchedulingDecisionsWithReasonsV2>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+pub struct CreateClusterReplicaV4 {
+    pub cluster_id: String,
+    pub cluster_name: String,
+    pub replica_id: Option<String>,
+    pub replica_name: String,
+    pub logical_size: String,
     pub billed_as: Option<String>,
     pub internal: bool,
     pub reason: CreateOrDropClusterReplicaReasonV1,
@@ -571,6 +586,9 @@ impl EventDetails {
                 serde_json::to_value(v).expect("must serialize")
             }
             EventDetails::CreateClusterReplicaV3(v) => {
+                serde_json::to_value(v).expect("must serialize")
+            }
+            EventDetails::CreateClusterReplicaV4(v) => {
                 serde_json::to_value(v).expect("must serialize")
             }
             EventDetails::DropClusterReplicaV1(v) => {

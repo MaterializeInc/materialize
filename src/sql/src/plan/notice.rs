@@ -41,6 +41,7 @@ pub enum PlanNotice {
         key: Vec<ColumnName>,
         name: String,
     },
+    ReplicaDiskOptionDeprecated,
 }
 
 impl PlanNotice {
@@ -97,6 +98,9 @@ impl fmt::Display for PlanNotice {
             }
             PlanNotice::UpsertSinkKeyNotEnforced { .. } => {
                 write!(f, "upsert key not validated to be unique")
+            }
+            PlanNotice::ReplicaDiskOptionDeprecated => {
+                write!(f, "the DISK option is deprecated and has no effect")
             }
         }
     }

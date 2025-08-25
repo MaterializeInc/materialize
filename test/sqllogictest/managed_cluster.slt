@@ -399,34 +399,6 @@ CREATE CLUSTER foo SIZE invalid_size, REPLICATION FACTOR 0
 statement error db error: ERROR: creating cluster replica would violate max_replicas_per_cluster limit \(desired: 9999999, limit: 5, current: 0\)
 CREATE CLUSTER foo SIZE 'scale=1,workers=1', replication factor 9999999;
 
-statement ok
-CREATE CLUSTER foo REPLICAS (r1 (SIZE 'scale=1,workers=1'), r2 (SIZE 'scale=1,workers=1', DISK))
-
-statement error db error: ERROR: Cluster replicas with DISK true do not match expected DISK false
-ALTER CLUSTER foo SET (MANAGED, DISK=False, SIZE 'scale=1,workers=1')
-
-statement ok
-DROP CLUSTER foo
-
-statement ok
-CREATE CLUSTER foo REPLICAS (r1 (SIZE 'scale=1,workers=1'))
-
-statement error db error: ERROR: Cluster replicas with DISK true do not match expected DISK false
-ALTER CLUSTER foo SET (MANAGED, SIZE 'scale=1,workers=1', DISK=False)
-
-statement ok
-DROP CLUSTER foo
-
-statement ok
-CREATE CLUSTER foo REPLICAS (r1 (SIZE 'scale=1,workers=1', DISK), r2 (SIZE 'scale=1,workers=1', DISK))
-
-statement ok
-ALTER CLUSTER foo SET (MANAGED, SIZE 'scale=1,workers=1', DISK)
-
-statement ok
-DROP CLUSTER foo
-
-
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_zero_downtime_cluster_reconfiguration = true;
 ----

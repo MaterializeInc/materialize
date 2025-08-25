@@ -577,7 +577,6 @@ pub struct CreateClusterManagedPlan {
     pub size: String,
     pub availability_zones: Vec<String>,
     pub compute: ComputeReplicaConfig,
-    pub disk: bool,
     pub optimizer_feature_overrides: OptimizerFeatureOverrides,
     pub schedule: ClusterSchedule,
 }
@@ -614,7 +613,6 @@ pub enum ReplicaConfig {
         size: String,
         availability_zone: Option<String>,
         compute: ComputeReplicaConfig,
-        disk: bool,
         internal: bool,
         billed_as: Option<String>,
     },
@@ -1954,7 +1952,6 @@ pub struct PlanClusterOption {
     pub replicas: AlterOptionParameter<Vec<(String, ReplicaConfig)>>,
     pub replication_factor: AlterOptionParameter<u32>,
     pub size: AlterOptionParameter,
-    pub disk: AlterOptionParameter<bool>,
     pub schedule: AlterOptionParameter<ClusterSchedule>,
     pub workload_class: AlterOptionParameter<Option<String>>,
 }
@@ -1969,7 +1966,6 @@ impl Default for PlanClusterOption {
             replicas: AlterOptionParameter::Unchanged,
             replication_factor: AlterOptionParameter::Unchanged,
             size: AlterOptionParameter::Unchanged,
-            disk: AlterOptionParameter::Unchanged,
             schedule: AlterOptionParameter::Unchanged,
             workload_class: AlterOptionParameter::Unchanged,
         }

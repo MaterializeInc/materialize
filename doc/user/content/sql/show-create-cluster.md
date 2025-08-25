@@ -25,7 +25,7 @@ SHOW CREATE CLUSTER c;
 ```nofmt
     name          |    create_sql
 ------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
- c                | CREATE CLUSTER "c" (DISK = false, INTROSPECTION DEBUGGING = false, INTROSPECTION INTERVAL = INTERVAL '00:00:01', MANAGED = true, REPLICATION FACTOR = 1, SIZE = '100cc', SCHEDULE = MANUAL)
+ c                | CREATE CLUSTER "c" (INTROSPECTION DEBUGGING = false, INTROSPECTION INTERVAL = INTERVAL '00:00:01', MANAGED = true, REPLICATION FACTOR = 1, SIZE = '100cc', SCHEDULE = MANUAL)
 ```
 
 ## Privileges

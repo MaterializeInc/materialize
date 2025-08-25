@@ -680,20 +680,13 @@ pub(crate) async fn initialize(
         audit_events.push((
             mz_audit_log::EventType::Create,
             mz_audit_log::ObjectType::ClusterReplica,
-            mz_audit_log::EventDetails::CreateClusterReplicaV2(
-                mz_audit_log::CreateClusterReplicaV2 {
+            mz_audit_log::EventDetails::CreateClusterReplicaV4(
+                mz_audit_log::CreateClusterReplicaV4 {
                     cluster_id: DEFAULT_USER_CLUSTER_ID.to_string(),
                     cluster_name: DEFAULT_USER_CLUSTER_NAME.to_string(),
                     replica_name,
                     replica_id: Some(replica_id.to_string()),
                     logical_size: options.default_cluster_replica_size.to_string(),
-                    disk: {
-                        let cluster_size = options.default_cluster_replica_size.to_string();
-                        let cluster_allocation = options
-                            .cluster_replica_size_map
-                            .get_allocation_by_name(&cluster_size)?;
-                        cluster_allocation.is_cc
-                    },
                     billed_as: None,
                     internal: false,
                     reason: CreateOrDropClusterReplicaReasonV1::System,
@@ -782,20 +775,15 @@ pub fn resolve_system_schema(name: &str) -> &Schema {
 
 /// Defines the default config for a Cluster.
 fn default_cluster_config(args: &BootstrapArgs) -> Result<ClusterConfig, CatalogError> {
-    let cluster_size = args.default_cluster_replica_size.to_string();
-    let cluster_allocation = args
-        .cluster_replica_size_map
-        .get_allocation_by_name(&cluster_size)?;
     Ok(ClusterConfig {
         variant: ClusterVariant::Managed(ClusterVariantManaged {
-            size: cluster_size,
+            size: args.default_cluster_replica_size.to_string(),
             replication_factor: args.default_cluster_replication_factor,
             availability_zones: vec![],
             logging: ReplicaLogging {
                 log_logging: false,
                 interval: Some(Duration::from_secs(1)),
             },
-            disk: cluster_allocation.is_cc,
             optimizer_feature_overrides: Default::default(),
             schedule: Default::default(),
         }),
@@ -805,15 +793,10 @@ fn default_cluster_config(args: &BootstrapArgs) -> Result<ClusterConfig, Catalog
 
 /// Defines the default config for a Cluster Replica.
 fn default_replica_config(args: &BootstrapArgs) -> Result<ReplicaConfig, CatalogError> {
-    let cluster_size = args.default_cluster_replica_size.to_string();
-    let cluster_allocation = args
-        .cluster_replica_size_map
-        .get_allocation_by_name(&cluster_size)?;
     Ok(ReplicaConfig {
         location: ReplicaLocation::Managed {
-            size: cluster_size,
+            size: args.default_cluster_replica_size.to_string(),
             availability_zone: None,
-            disk: cluster_allocation.is_cc,
             internal: false,
             billed_as: None,
             pending: false,

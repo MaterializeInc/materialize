@@ -42,6 +42,7 @@ use mz_controller::clusters::{
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::{CollectionPlan, OptimizedMirRelationExpr};
 use mz_license_keys::ValidatedLicenseKey;
+use mz_orchestrator::DiskLimit;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NOW_ZERO;
 use mz_ore::soft_assert_no_log;
@@ -2273,7 +2274,6 @@ impl CatalogState {
             mz_catalog::durable::ReplicaLocation::Managed {
                 size,
                 availability_zone,
-                disk,
                 billed_as,
                 internal,
                 pending,
@@ -2304,7 +2304,6 @@ impl CatalogState {
                         (None, None) => ManagedReplicaAvailabilityZones::FromReplica(None),
                     },
                     size,
-                    disk,
                     billed_as,
                     internal,
                     pending,
@@ -2312,6 +2311,16 @@ impl CatalogState {
             }
         };
         Ok(location)
+    }
+
+    /// Return whether the given replica size requests a disk.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the given size doesn't exist in `cluster_replica_sizes`.
+    pub(crate) fn cluster_replica_size_has_disk(&self, size: &str) -> bool {
+        let alloc = &self.cluster_replica_sizes.0[size];
+        alloc.disk_limit != Some(DiskLimit::ZERO)
     }
 
     pub(crate) fn ensure_valid_replica_size(

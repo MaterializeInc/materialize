@@ -73,7 +73,6 @@ impl RustType<proto::cluster_config::Variant> for ClusterVariant {
                 availability_zones,
                 logging,
                 replication_factor,
-                disk,
                 optimizer_feature_overrides,
                 schedule,
             }) => proto::cluster_config::Variant::Managed(proto::cluster_config::ManagedCluster {
@@ -81,7 +80,6 @@ impl RustType<proto::cluster_config::Variant> for ClusterVariant {
                 availability_zones: availability_zones.clone(),
                 logging: Some(logging.into_proto()),
                 replication_factor: *replication_factor,
-                disk: *disk,
                 optimizer_feature_overrides: optimizer_feature_overrides.into_proto(),
                 schedule: Some(schedule.into_proto()),
             }),
@@ -100,7 +98,6 @@ impl RustType<proto::cluster_config::Variant> for ClusterVariant {
                         .logging
                         .into_rust_if_some("ManagedCluster::logging")?,
                     replication_factor: managed.replication_factor,
-                    disk: managed.disk,
                     optimizer_feature_overrides: managed.optimizer_feature_overrides.into_rust()?,
                     schedule: managed.schedule.unwrap_or_default().into_rust()?,
                 }))
@@ -142,14 +139,12 @@ impl RustType<proto::replica_config::Location> for ReplicaLocation {
             ReplicaLocation::Managed {
                 size,
                 availability_zone,
-                disk,
                 billed_as,
                 internal,
                 pending,
             } => proto::replica_config::Location::Managed(proto::replica_config::ManagedLocation {
                 size: size.to_string(),
                 availability_zone: availability_zone.clone(),
-                disk: *disk,
                 billed_as: billed_as.clone(),
                 internal: *internal,
                 pending: *pending,
@@ -168,7 +163,6 @@ impl RustType<proto::replica_config::Location> for ReplicaLocation {
             proto::replica_config::Location::Managed(location) => Ok(ReplicaLocation::Managed {
                 availability_zone: location.availability_zone,
                 billed_as: location.billed_as,
-                disk: location.disk,
                 internal: location.internal,
                 size: location.size,
                 pending: location.pending,

@@ -404,7 +404,6 @@ impl Cluster {
                 availability_zones,
                 logging,
                 replication_factor,
-                disk,
                 optimizer_feature_overrides,
                 schedule,
             }) => {
@@ -427,7 +426,6 @@ impl Cluster {
                     size: size.clone(),
                     availability_zones: availability_zones.clone(),
                     compute,
-                    disk: disk.clone(),
                     optimizer_feature_overrides: optimizer_feature_overrides.clone(),
                     schedule: schedule.clone(),
                 })
@@ -2965,7 +2963,6 @@ pub struct ClusterVariantManaged {
     pub availability_zones: Vec<String>,
     pub logging: ReplicaLogging,
     pub replication_factor: u32,
-    pub disk: bool,
     pub optimizer_feature_overrides: OptimizerFeatureOverrides,
     pub schedule: ClusterSchedule,
 }
@@ -2977,7 +2974,6 @@ impl From<ClusterVariantManaged> for durable::ClusterVariantManaged {
             availability_zones: managed.availability_zones,
             logging: managed.logging,
             replication_factor: managed.replication_factor,
-            disk: managed.disk,
             optimizer_feature_overrides: managed.optimizer_feature_overrides.into(),
             schedule: managed.schedule,
         }
@@ -2991,7 +2987,6 @@ impl From<durable::ClusterVariantManaged> for ClusterVariantManaged {
             availability_zones: managed.availability_zones,
             logging: managed.logging,
             replication_factor: managed.replication_factor,
-            disk: managed.disk,
             optimizer_feature_overrides: managed.optimizer_feature_overrides.into(),
             schedule: managed.schedule,
         }

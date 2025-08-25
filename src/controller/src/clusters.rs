@@ -312,9 +312,7 @@ pub struct ManagedReplicaLocation {
     /// is an empty list if none are specified
     #[serde(skip)]
     pub availability_zones: ManagedReplicaAvailabilityZones,
-    /// Whether the replica needs scratch disk space.
-    pub disk: bool,
-    /// Whether the repelica is pending reconfiguration
+    /// Whether the replica is pending reconfiguration
     pub pending: bool,
 }
 
@@ -800,7 +798,6 @@ where
                     },
                 }],
                 disk_limit: location.allocation.disk_limit,
-                disk: location.disk,
                 node_selector: location.allocation.selectors,
             },
         )?;
