@@ -32,6 +32,10 @@ from materialize.mzcompose.services.minio import Mc, Minio
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.sql_server import (
+    SqlServer,
+    setup_sql_server_testing,
+)
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
 from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.parallel_workload.parallel_workload import parse_common_args, run
@@ -41,6 +45,7 @@ SERVICES = [
     Cockroach(setup_materialize=True, in_memory=True),
     Postgres(),
     MySql(),
+    SqlServer(),
     Zookeeper(),
     Kafka(
         auto_create_topics=False,
@@ -75,6 +80,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "cockroach",
         "postgres",
         "mysql",
+        "sql-server",
         "zookeeper",
         "kafka",
         "schema-registry",
@@ -104,6 +110,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     ):
         toxiproxy_start(c)
         c.up(*service_names)
+        setup_sql_server_testing(c)
 
         c.up(Service("mc", idle=True))
         c.exec(

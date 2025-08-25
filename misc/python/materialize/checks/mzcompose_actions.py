@@ -16,6 +16,9 @@ from materialize.checks.executors import Executor
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.materialized import DeploymentStatus, Materialized
+from materialize.mzcompose.services.sql_server import (
+    setup_sql_server_testing,
+)
 from materialize.mzcompose.services.ssh_bastion_host import (
     setup_default_ssh_test_connection,
 )
@@ -108,6 +111,9 @@ class StartMz(MzcomposeAction):
                 setup_default_ssh_test_connection(
                     c, ssh_tunnel_name, mz_service=self.mz_service
                 )
+
+            # This should live in sql_server_cdc.py, but initialization is shared between all SQL Server checks
+            setup_sql_server_testing(c)
 
             mz_version = MzVersion.parse_mz(c.query_mz_version(service=self.mz_service))
             if self.tag:

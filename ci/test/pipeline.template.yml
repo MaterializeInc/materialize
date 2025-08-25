@@ -471,12 +471,12 @@ steps:
 
   - id: checks-no-restart-no-upgrade
     label: "Checks parallel without restart or upgrade"
-    depends_on: build-aarch64
+    depends_on: build-x86_64
     inputs: [misc/python/materialize/checks]
     timeout_in_minutes: 45
     parallelism: 16
     agents:
-      queue: hetzner-aarch64-8cpu-16gb
+      queue: hetzner-x86-64-8cpu-16gb
     plugins:
       - ./ci/plugins/mzcompose:
           composition: platform-checks

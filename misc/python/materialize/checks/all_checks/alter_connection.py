@@ -16,7 +16,6 @@ from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check, externally_idempotent
 from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
 from materialize.checks.executors import Executor
-from materialize.checks.features import Features
 from materialize.mz_version import MzVersion
 
 
@@ -42,9 +41,8 @@ class AlterConnectionSshChangeBase(Check):
         index: int,
         base_version: MzVersion,
         rng: Random | None,
-        features: Features | None,
     ):
-        super().__init__(base_version, rng, features)
+        super().__init__(base_version, rng)
         self.ssh_change = ssh_change
         self.index = index
 
@@ -204,26 +202,20 @@ class AlterConnectionSshChangeBase(Check):
 
 @externally_idempotent(False)
 class AlterConnectionToSsh(AlterConnectionSshChangeBase):
-    def __init__(
-        self, base_version: MzVersion, rng: Random | None, features: Features | None
-    ):
-        super().__init__(SshChange.ADD_SSH, 1, base_version, rng, features)
+    def __init__(self, base_version: MzVersion, rng: Random | None):
+        super().__init__(SshChange.ADD_SSH, 1, base_version, rng)
 
 
 @externally_idempotent(False)
 class AlterConnectionToNonSsh(AlterConnectionSshChangeBase):
-    def __init__(
-        self, base_version: MzVersion, rng: Random | None, features: Features | None
-    ):
-        super().__init__(SshChange.DROP_SSH, 2, base_version, rng, features)
+    def __init__(self, base_version: MzVersion, rng: Random | None):
+        super().__init__(SshChange.DROP_SSH, 2, base_version, rng)
 
 
 @externally_idempotent(False)
 class AlterConnectionHost(AlterConnectionSshChangeBase):
-    def __init__(
-        self, base_version: MzVersion, rng: Random | None, features: Features | None
-    ):
-        super().__init__(SshChange.CHANGE_SSH_HOST, 3, base_version, rng, features)
+    def __init__(self, base_version: MzVersion, rng: Random | None):
+        super().__init__(SshChange.CHANGE_SSH_HOST, 3, base_version, rng)
 
 
 class AlterConnectionDependencyOrder(Check):
@@ -235,9 +227,8 @@ class AlterConnectionDependencyOrder(Check):
         self,
         base_version: MzVersion,
         rng: Random | None,
-        features: Features | None,
     ):
-        super().__init__(base_version, rng, features)
+        super().__init__(base_version, rng)
 
     def _can_run(self, e: Executor) -> bool:
         return self.base_version >= MzVersion.parse_mz("v0.144.0-dev")

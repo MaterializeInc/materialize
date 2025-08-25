@@ -14,7 +14,6 @@ from materialize import buildkite
 from materialize.buildkite import BuildkiteEnvVar
 from materialize.checks.actions import Testdrive
 from materialize.checks.executors import Executor
-from materialize.checks.features import Features
 from materialize.mz_version import MzVersion
 
 if TYPE_CHECKING:
@@ -29,12 +28,9 @@ class Check:
     enabled: bool = True
     externally_idempotent: bool = True
 
-    def __init__(
-        self, base_version: MzVersion, rng: Random | None, features: Features | None
-    ) -> None:
+    def __init__(self, base_version: MzVersion, rng: Random | None) -> None:
         self.base_version = base_version
         self.rng = rng
-        self.features = features
 
     def _can_run(self, e: Executor) -> bool:
         return True

@@ -31,7 +31,8 @@ class Backend(Enum):
     JSON = 2
     POSTGRES = 3
     MYSQL = 4
-    MATERIALIZE = 5
+    SQL_SERVER = 5
+    MATERIALIZE = 6
 
 
 class DataType:
@@ -407,7 +408,12 @@ class Text(DataType):
 
     @staticmethod
     def name(backend: Backend = Backend.MATERIALIZE) -> str:
-        if backend in (Backend.MATERIALIZE, Backend.POSTGRES, Backend.MYSQL):
+        if backend in (
+            Backend.MATERIALIZE,
+            Backend.POSTGRES,
+            Backend.MYSQL,
+            Backend.SQL_SERVER,
+        ):
             return "text"
         else:
             return "string"
@@ -777,6 +783,29 @@ DATA_TYPES_FOR_AVRO = sorted(
 )
 
 DATA_TYPES_FOR_MYSQL = sorted(
+    list(
+        set(DATA_TYPES)
+        - {
+            IntList,
+            IntArray,
+            UUID,
+            TextTextMap,
+            Interval,
+            Oid,
+            Jsonb,
+            Bytea,
+            Boolean,
+            Numeric,
+            Numeric383,
+            UInt2,
+            UInt4,
+            UInt8,
+        }
+    ),
+    key=repr,
+)
+
+DATA_TYPES_FOR_SQL_SERVER = sorted(
     list(
         set(DATA_TYPES)
         - {
