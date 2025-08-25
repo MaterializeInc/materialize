@@ -789,45 +789,37 @@ where
 
                     let (batch_lower, batch_upper) = batch_description;
 
-                    let finalized_timestamps: Vec<_> = stashed_batches
+                    let futures: Vec<_> = stashed_batches
                         .keys()
-                        .filter(|time| {
-                            batch_lower.less_equal(time) && !batch_upper.less_equal(time)
-                        })
-                        .copied()
-                        .collect();
+                        .filter_map(|time| {
+                            if (batch_lower.less_equal(time) && !batch_upper.less_equal(time)) {
+                                return None;
+                            }
+                            let batch_builder = stashed_batches.remove(&time).unwrap();
 
-                    let mut batch_tokens = vec![];
-                    for ts in finalized_timestamps {
-                        let batch_builder = stashed_batches.remove(&ts).unwrap();
-
-                        if collection_id.is_user() {
-                            trace!(
+                            if collection_id.is_user() {
+                                trace!(
                                 "persist_sink {collection_id}/{shard_id}: \
                                     wrote batch from worker {}: ({:?}, {:?}),
                                     containing {:?}",
                                 worker_index, batch_lower, batch_upper, batch_builder.metrics
                             );
-                        }
-
-                        let batch = batch_builder
-                            .finish(batch_lower.clone(), batch_upper.clone())
-                            .await;
-
-                        // The next "safe" lower for batches is the meet (max) of all the emitted
-                        // batches. These uppers all are not beyond the `desired_frontier`, which
-                        // means all updates received by this operator will be beyond this lower.
-                        // Additionally, the `mint_batch_descriptions` operator ensures that
-                        // later-received batch descriptions will start beyond these uppers as
-                        // well.
-                        //
-                        // It is impossible to emit a batch description that is
-                        // beyond a not-yet emitted description in `in_flight_batches`, as
-                        // a that description would also have been chosen as ready above.
-                        operator_batch_lower = operator_batch_lower.join(&batch_upper);
-                        batch_tokens.push(batch);
-                    }
-
+                            }
+                            // The next "safe" lower for batches is the meet (max) of all the emitted
+                            // batches. These uppers all are not beyond the desired_frontier, which
+                            // means all updates received by this operator will be beyond this lower.
+                            // Additionally, the mint_batch_descriptions operator ensures that
+                            // later-received batch descriptions will start beyond these uppers as
+                            // well.
+                            //
+                            // It is impossible to emit a batch description that is
+                            // beyond a not-yet emitted description in in_flight_batches, as
+                            // a that description would also have been chosen as ready above.
+                            operator_batch_lower = operator_batch_lower.join(&batch_upper);
+                            batch_builder.finish(batch_lower.clone(), batch_upper.clone())
+                        })
+                        .collect();
+                    let mut batch_tokens: Vec<_> = futures::future::join_all(futures).await;
                     output.give_container(&cap, &mut batch_tokens);
 
                     processed_desired_frontier.clone_from(&desired_frontier);
