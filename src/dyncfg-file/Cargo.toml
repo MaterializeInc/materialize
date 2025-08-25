@@ -11,7 +11,7 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.97"
+anyhow = "1.0.99"
 humantime = "2.2.0"
 mz-dyncfg = { path = "../dyncfg" }
 mz-ore = { path = "../ore" }
