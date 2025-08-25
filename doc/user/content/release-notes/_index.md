@@ -12,12 +12,14 @@ menu:
 ### Broader support for service accounts
 
 v25.2.5 allows setting the service account name materialize will use in the
-MZ k8s resource. Along with this we  allow setting labels and annotations
-on pod service accounts. This should allow us to more tightly integrate with
-authorization best practices in Azure and GCP.
+MZ k8s resource. Along with this we allow setting labels and annotations
+on service accounts we create. This should allow us to more tightly integrate with
+authorization best practices in Azure.
 
-Along with this the `environmentd_iam_role_arn` field on the Materialize CRD will be
-depreciated.
+Along with this the AWS specific `environmentd_iam_role_arn` field on the Materialize CRD will be
+depreciated. Please set the `eks.amazonaws.com/role-arn` service account annotation instead.
+
+
 
 ### Pod name Annotation propagation
 
