@@ -8,5 +8,5 @@ To run locally, an example of a command is:
 ```shell
 $ bin/mz-debug self-managed \
     --k8s-namespace materialize \
-    --k8s-namespace materialize-environment
+    --additional-k8s-namespace materialize-environment
 ```
