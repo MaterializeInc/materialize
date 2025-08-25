@@ -1036,9 +1036,13 @@ async fn purify_create_source(
             // Update our set of requested source exports.
             requested_subsource_map.extend(source_exports);
 
-            // Reset the 'DETAILS' to ensure they're empty, we don't use them
-            // in the SQL Server source.
-            let details = SqlServerSourceExtras {};
+            // Record the most recent restore_history_id, or none if the system has never been
+            // restored.
+
+            let restore_history_id =
+                mz_sql_server_util::inspect::get_latest_restore_history_id(&mut client).await?;
+            let details = SqlServerSourceExtras { restore_history_id };
+
             options.retain(|SqlServerConfigOption { name, .. }| {
                 name != &SqlServerConfigOptionName::Details
             });

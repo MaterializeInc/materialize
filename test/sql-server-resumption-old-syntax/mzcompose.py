@@ -334,6 +334,5 @@ def backup_restore_sql_server(c: Composition) -> None:
         "sql-server-restore.td",
         "sql-server-restart-dummy-writing.td",
         "verify-sql-server-select.td",
-        # FIXME(ptravers): https://github.com/MaterializeInc/database-issues/issues/9591
-        # "verify-source-failed.td",
+        "verify-source-failed.td",
     )

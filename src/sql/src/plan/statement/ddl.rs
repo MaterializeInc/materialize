@@ -110,7 +110,9 @@ use mz_storage_types::sources::postgres::{
     PostgresSourceConnection, PostgresSourcePublicationDetails,
     ProtoPostgresSourcePublicationDetails,
 };
-use mz_storage_types::sources::sql_server::SqlServerSourceExportDetails;
+use mz_storage_types::sources::sql_server::{
+    ProtoSqlServerSourceExtras, SqlServerSourceExportDetails,
+};
 use mz_storage_types::sources::{
     GenericSourceConnection, MySqlSourceExportDetails, PostgresSourceExportDetails,
     ProtoSourceExportStatementDetails, SourceConnection, SourceDesc, SourceExportDataConfig,
@@ -969,7 +971,7 @@ pub fn plan_create_source(
         }
         CreateSourceConnection::SqlServer {
             connection,
-            options: _,
+            options,
         } => {
             let connection_item = scx.get_item_by_resolved_name(connection)?;
             match connection_item.connection()? {
@@ -979,9 +981,20 @@ pub fn plan_create_source(
                     scx.catalog.resolve_full_name(connection_item.name())
                 ),
             };
-            // TODO(sql_server2): Handle SQL Server connection options.
 
-            let extras = SqlServerSourceExtras {};
+            let SqlServerConfigOptionExtracted { details, .. } = options.clone().try_into()?;
+            let details = details
+                .as_ref()
+                .ok_or_else(|| sql_err!("internal error: SQL Server source missing details"))?;
+            let extras = hex::decode(details)
+                .map_err(|e| sql_err!("{e}"))
+                .and_then(|raw| {
+                    ProtoSqlServerSourceExtras::decode(&*raw).map_err(|e| sql_err!("{e}"))
+                })
+                .and_then(|proto| {
+                    SqlServerSourceExtras::from_proto(proto).map_err(|e| sql_err!("{e}"))
+                })?;
+
             let connection =
                 GenericSourceConnection::<ReferencedConnection>::from(SqlServerSource {
                     catalog_id: connection_item.id(),

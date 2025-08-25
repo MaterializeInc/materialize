@@ -88,6 +88,8 @@ pub enum DefiniteError {
     Decoding(String),
     #[error("programming error: {0}")]
     ProgrammingError(String),
+    #[error("Restore history id changed from {0:?} to {1:?}")]
+    RestoreHistoryChanged(Option<i32>, Option<i32>),
 }
 
 impl From<DefiniteError> for DataflowError {
@@ -171,6 +173,7 @@ impl SourceRender for SqlServerSource {
             self.connection.clone(),
             source_outputs.clone(),
             resume_uppers,
+            self.extras.clone(),
         );
 
         let partition_count = u64::cast_from(config.source_exports.len());

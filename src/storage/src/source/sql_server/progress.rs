@@ -31,7 +31,9 @@ use futures::StreamExt;
 use mz_ore::future::InTask;
 use mz_repr::GlobalId;
 use mz_sql_server_util::cdc::Lsn;
+use mz_sql_server_util::inspect::get_latest_restore_history_id;
 use mz_storage_types::connections::SqlServerConnectionDetails;
+use mz_storage_types::sources::SqlServerSourceExtras;
 use mz_storage_types::sources::sql_server::{
     CDC_CLEANUP_CHANGE_TABLE, CDC_CLEANUP_CHANGE_TABLE_MAX_DELETES, OFFSET_KNOWN_INTERVAL,
 };
@@ -54,6 +56,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
     connection: SqlServerConnectionDetails,
     outputs: BTreeMap<GlobalId, SourceOutputInfo>,
     resume_uppers: impl futures::Stream<Item = Antichain<Lsn>> + 'static,
+    extras: SqlServerSourceExtras,
 ) -> (
     TimelyStream<G, ProgressStatisticsUpdate>,
     TimelyStream<G, ReplicationError>,
@@ -98,6 +101,19 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                 )
                 .await?;
             let mut client = mz_sql_server_util::Client::connect(conn_config).await?;
+
+
+            // Terminate the progress probes if a restore has happened. Replication operator will
+            // emit a definite error at the max LSN, but we also have to terminate the RLU probes
+            // to ensure that the error propogates to downstream consumers, otherwise it will
+            // wait in reclock as the server LSN will always be less than the LSN of the definite
+            // error. 
+            let current_restore_history_id = get_latest_restore_history_id(&mut client).await?;
+            if current_restore_history_id != extras.restore_history_id {
+                tracing::error!("Restore happened, exiting");
+                return Ok(());
+             }
+
 
             let probe_interval = OFFSET_KNOWN_INTERVAL.handle(config.config.config_set());
             let mut probe_ticker = probe::Ticker::new(|| probe_interval.get(), config.now_fn);
