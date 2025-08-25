@@ -184,6 +184,14 @@ where
         //////// todo: move this fn down in the file
         self.call_sync(move |i| i.acquire_read_hold(id)).await
     }
+
+    /// Fetch the write frontier for the identified compute collection by asking the instance task.
+    pub async fn collection_write_frontier(&self, id: GlobalId) -> Antichain<T> {
+        self
+            .call_sync(move |i| i.collection_write_frontier(id).expect("missing compute collection"))
+            .await
+    }
+
     pub fn spawn(
         id: ComputeInstanceId,
         build_info: &'static BuildInfo,
@@ -336,6 +344,10 @@ pub(super) struct Instance<T: ComputeControllerTimestamp> {
 }
 
 impl<T: ComputeControllerTimestamp> Instance<T> {
+    /// Reports the current write frontier for the identified compute collection.
+    pub fn collection_write_frontier(&self, id: GlobalId) -> Result<Antichain<T>, CollectionMissing> {
+        Ok(self.collection(id)?.write_frontier())
+    }
     /// Acquire a handle to the collection state associated with `id`.
     fn collection(&self, id: GlobalId) -> Result<&CollectionState<T>, CollectionMissing> {
         self.collections.get(&id).ok_or(CollectionMissing(id))
