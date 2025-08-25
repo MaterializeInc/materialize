@@ -9,7 +9,7 @@
 
 //! Code to render the ingestion dataflow of a [`SqlServerSource`].
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -18,6 +18,7 @@ use std::time::Instant;
 use differential_dataflow::AsCollection;
 use differential_dataflow::containers::TimelyStack;
 use futures::StreamExt;
+use itertools::Itertools;
 use mz_ore::cast::CastFrom;
 use mz_ore::future::InTask;
 use mz_repr::{Diff, GlobalId, Row, RowArena};
@@ -100,12 +101,14 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                 .await?;
             let mut client = mz_sql_server_util::Client::connect(connection_config).await?;
 
+            let worker_id = config.worker_id;
+
             // The decoder is specific to the export, and each export pulls data from a specific capture instance.
             let mut decoder_map: BTreeMap<_, _> = BTreeMap::new();
             // Maps the 'capture instance' to the output index for only those outputs that this worker will snapshot
-            let mut export_ids_to_snapshot: BTreeMap<_, Vec<_>> = BTreeMap::new();
+            let mut capture_instance_to_snapshot: BTreeMap<Arc<str>, Vec<_>> = BTreeMap::new();
             // Maps the 'capture instance' to the output index for all outputs of this worker
-            let mut capture_instances: BTreeMap<_, Vec<_>> = BTreeMap::new();
+            let mut capture_instances: BTreeMap<Arc<str>, Vec<_>> = BTreeMap::new();
 
             for output in outputs.values() {
                 if decoder_map.insert(output.partition_index, Arc::clone(&output.decoder)).is_some() {
@@ -117,20 +120,26 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                     .push(output.partition_index);
 
                 if *output.resume_upper == [Lsn::minimum()] {
-                    export_ids_to_snapshot
+                    capture_instance_to_snapshot
                         .entry(Arc::clone(&output.capture_instance))
                         .or_default()
                         .push((output.partition_index, output.initial_lsn));
                 }
             }
 
+            let snapshot_instances = capture_instance_to_snapshot
+                    .keys()
+                    .map(|i| i.as_ref());
+
+            let snapshot_tables = mz_sql_server_util::inspect::get_tables_for_capture_instance(&mut client, snapshot_instances).await?;
+
             let mut cdc_handle = client
                 .cdc(capture_instances.keys().cloned())
                 .max_lsn_wait(MAX_LSN_WAIT.get(config.config.config_set()));
 
             // Snapshot any instance that requires it.
-            // The LSN returned here will be the max LSN for any capture instance on the SQL server.
-            let snapshot_lsn = {
+            // Each table snapshot will have its own LSN captured at the moment of snapshotting.
+            let snapshot_lsns: BTreeMap<Arc<str>, Lsn> = {
                 // Small helper closure.
                 let emit_stats = |cap, known: usize, total: usize| {
                     let update = ProgressStatisticsUpdate::Snapshot {
@@ -140,76 +149,90 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                     tracing::debug!(?config.id, %known, %total, "snapshot progress");
                     stats_output.give(cap, update);
                 };
+                // Before starting a transaction where the LSN will not advance, ensure
+                // the upstream DB is ready for CDC.
+                cdc_handle.wait_for_ready().await?;
 
-                let capture_instances_to_snapshot: BTreeSet<_> = export_ids_to_snapshot.keys().cloned().collect();
-                tracing::debug!(?config.id, ?capture_instances_to_snapshot, "starting snapshot");
+                // Intentionally logging this at info for debugging. This section won't get entered
+                // often, but if there are problems here, it will be much easier to troubleshoot
+                // knowing where stall/hang might be happening.
+                tracing::info!(%config.worker_id, "timely-{worker_id} upstream is ready");
+
                 // Eagerly emit an event if we have tables to snapshot.
-                if !capture_instances_to_snapshot.is_empty() {
+                if !snapshot_tables.is_empty() {
                     emit_stats(&stats_cap[0], 0, 0);
                 }
 
-                let (snapshot_lsn, snapshot_stats, snapshot_streams) = cdc_handle
-                    .snapshot(Some(capture_instances_to_snapshot), config.worker_id, config.id)
-                    .await?;
-                let snapshot_cap = data_cap_set.delayed(&snapshot_lsn);
-
-                // As we stream rows for the snapshot we'll track the total we've seen.
-                let mut records_total: usize = 0;
-                let records_known = snapshot_stats.values().sum();
                 let report_interval =
                     SNAPSHOT_PROGRESS_REPORT_INTERVAL.handle(config.config.config_set());
                 let mut last_report = Instant::now();
-                if !snapshot_stats.is_empty() {
-                    emit_stats(&stats_cap[0], records_known, 0);
-                }
+                let mut records_known: usize = 0;
+                let mut records_total: usize = 0;
+                let mut snapshot_lsns = BTreeMap::new();
+                let arena = RowArena::default();
 
-                // Begin streaming our snapshots!
-                let mut snapshot_streams = std::pin::pin!(snapshot_streams);
-                while let Some((capture_instance, data)) = snapshot_streams.next().await {
-                    let sql_server_row = data.map_err(TransientError::from)?;
-                    records_total = records_total.saturating_add(1);
+                for table in snapshot_tables {
+                    // TODO(sql_server3): filter columns to only select columns required for Source.
+                    let (snapshot_lsn, size, snapshot)= cdc_handle
+                        .snapshot(&table, config.worker_id, config.id)
+                        .await?;
 
-                    if last_report.elapsed() > report_interval.get() {
-                        last_report = Instant::now();
-                        emit_stats(&stats_cap[0], records_known, records_total);
+                    tracing::info!(%config.id, %table.name, %table.schema_name, %snapshot_lsn, %size, "timely-{worker_id} snapshot start");
+
+                    let mut snapshot = std::pin::pin!(snapshot);
+
+                    snapshot_lsns.insert(Arc::clone(&table.capture_instance.name), snapshot_lsn);
+
+                    records_known = records_known.saturating_add(size);
+                    emit_stats(&stats_cap[0], records_known, records_total);
+
+                    let partition_indexes = capture_instance_to_snapshot.get(&table.capture_instance.name)
+                        .unwrap_or_else(|| {
+                            panic!("no snapshot outputs in known capture instances [{}] for capture instance: '{}'", capture_instance_to_snapshot.keys().join(","), table.capture_instance.name);
+                        });
+
+                    while let Some(result) = snapshot.next().await {
+                        let sql_server_row = result.map_err(TransientError::from)?;
+
+                        records_total = records_total.saturating_add(1);
+
+                        if last_report.elapsed() > report_interval.get() {
+                            last_report = Instant::now();
+                            emit_stats(&stats_cap[0], records_known, records_total);
+                        }
+
+                        for (partition_idx, _) in partition_indexes {
+                            // Decode the SQL Server row into an MZ one.
+                            let mut mz_row = Row::default();
+
+                            let decoder = decoder_map.get(partition_idx).expect("decoder for output");
+                            // Try to decode a row, returning a SourceError if it fails.
+                            let message = match decoder.decode(&sql_server_row, &mut mz_row, &arena) {
+                                Ok(()) => Ok(SourceMessage {
+                                    key: Row::default(),
+                                    value: mz_row,
+                                    metadata: Row::default(),
+                                }),
+                                Err(e) => {
+                                    let kind = DecodeErrorKind::Text(e.to_string().into());
+                                    // TODO(sql_server2): Get the raw bytes from `tiberius`.
+                                    let raw = format!("{sql_server_row:?}");
+                                    Err(DataflowError::DecodeError(Box::new(DecodeError {
+                                        kind,
+                                        raw: raw.as_bytes().to_vec(),
+                                    })))
+                                }
+                            };
+                            data_output
+                                .give_fueled(
+                                    &data_cap_set[0],
+                                    ((*partition_idx, message), Lsn::minimum(), Diff::ONE),
+                                )
+                                .await;
+                        }
                     }
 
-                    // Decode the SQL Server row into an MZ one.
-                    let mut mz_row = Row::default();
-                    let arena = RowArena::default();
-
-                    let partition_indexes = export_ids_to_snapshot.get(&capture_instance)
-                        .ok_or_else(|| {
-                            let msg = format!("no snapshot outputs for capture instance: '{capture_instance}'");
-                            TransientError::ProgrammingError(msg)
-                        })?;
-
-                    for (partition_idx, _) in partition_indexes {
-                        let decoder = decoder_map.get(partition_idx).expect("decoder for output");
-                        // Try to decode a row, returning a SourceError if it fails.
-                        let message = match decoder.decode(&sql_server_row, &mut mz_row, &arena) {
-                            Ok(()) => Ok(SourceMessage {
-                                key: Row::default(),
-                                value: mz_row.clone(),
-                                metadata: Row::default(),
-                            }),
-                            Err(e) => {
-                                let kind = DecodeErrorKind::Text(e.to_string().into());
-                                // TODO(sql_server2): Get the raw bytes from `tiberius`.
-                                let raw = format!("{sql_server_row:?}");
-                                Err(DataflowError::DecodeError(Box::new(DecodeError {
-                                    kind,
-                                    raw: raw.as_bytes().to_vec(),
-                                })))
-                            }
-                        };
-                        data_output
-                            .give_fueled(
-                                &snapshot_cap,
-                                ((*partition_idx, message), Lsn::minimum(), Diff::ONE),
-                            )
-                            .await;
-                    }
+                    tracing::info!(%config.id, %table.name, %table.schema_name, %snapshot_lsn, %size, "timely-{worker_id} snapshot complete");
                 }
 
                 mz_ore::soft_assert_eq_or_log!(
@@ -219,7 +242,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                 );
                 emit_stats(&stats_cap[0], records_known, records_total);
 
-                snapshot_lsn
+                snapshot_lsns
             };
 
             // Rewinds need to keep track of 2 timestamps to ensure that
@@ -236,13 +259,14 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
             //
             // If initial_lsn == snapshot_lsn, all CDC events at LSNs up to and including the
             // snapshot_lsn are ignored, and no rewinds are issued.
-            let mut rewinds: BTreeMap<_, _> = export_ids_to_snapshot
-                .values()
-                .flat_map(|export_ids|
+            let mut rewinds: BTreeMap<_, _> = capture_instance_to_snapshot
+                .iter()
+                .flat_map(|(capture_instance, export_ids)|{
+                    let snapshot_lsn = snapshot_lsns.get(capture_instance).expect("snapshot lsn must be collected for capture instance");
                     export_ids
                         .iter()
-                        .map(|(idx, initial_lsn)| (*idx, (*initial_lsn, snapshot_lsn)))
-                ).collect();
+                        .map(|(idx, initial_lsn)| (*idx, (*initial_lsn, *snapshot_lsn)))
+                }).collect();
 
             // For now, we assert that initial_lsn captured during purification is less
             // than or equal to snapshot_lsn. If that was not true, it would mean that
@@ -258,8 +282,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
 
             tracing::debug!("rewinds to process: {rewinds:?}");
 
-            export_ids_to_snapshot.clear();
-
+            capture_instance_to_snapshot.clear();
 
             // Resumption point is the minimum LSN that has been observed per capture instance.
             let resume_lsns:BTreeMap<_, _> = outputs

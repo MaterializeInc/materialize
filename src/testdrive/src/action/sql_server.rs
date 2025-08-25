@@ -9,6 +9,8 @@
 
 mod connect;
 mod execute;
+mod set_from_sql;
 
 pub use connect::run_connect;
 pub use execute::run_execute;
+pub use set_from_sql::run_set_from_sql;
