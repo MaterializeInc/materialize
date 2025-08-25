@@ -7,9 +7,19 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use differential_dataflow::consolidation::consolidate;
+use mz_compute_client::protocol::command::PeekTarget;
+use mz_compute_client::protocol::response::PeekResponse;
 use mz_compute_types::ComputeInstanceId;
+use mz_expr::row::RowCollection;
+use mz_ore::cast::CastFrom;
 use mz_repr::Timestamp;
+use mz_repr::{RelationDesc, Row};
 use timely::progress::Antichain;
+use tokio::sync::oneshot;
+use uuid::Uuid;
+
+use crate::coord::peek::FastPathPlan;
 
 /// Storage collections trait alias we need to consult for since/frontiers.
 pub type StorageCollectionsHandle = Arc<
@@ -27,10 +37,8 @@ pub type StorageCollectionsHandle = Arc<
 pub struct PeekClient {
     /// Channels to talk to each compute Instance task directly.
     /// ////////////// todo: we'll need to update this somehow when instances come and go
-    pub compute_instances: BTreeMap<
-        ComputeInstanceId,
-        mz_compute_client::controller::instance::Client<Timestamp>,
-    >,
+    pub compute_instances:
+        BTreeMap<ComputeInstanceId, mz_compute_client::controller::instance::Client<Timestamp>>,
     /// Handle to storage collections for reading frontiers and policies.
     pub storage_collections: StorageCollectionsHandle,
 }
@@ -69,7 +77,10 @@ impl PeekClient {
                     .await
                     .expect("missing compute collection");
                 let prev = read_holds.compute_holds.insert((instance_id, id), hold);
-                assert!(prev.is_none(), "duplicate compute ID in id_bundle {id_bundle:?}");
+                assert!(
+                    prev.is_none(),
+                    "duplicate compute ID in id_bundle {id_bundle:?}"
+                );
             }
         }
 
@@ -90,12 +101,19 @@ impl PeekClient {
         let mut upper = Antichain::new();
         if !id_bundle.storage_ids.is_empty() {
             let storage_ids: Vec<_> = id_bundle.storage_ids.iter().copied().collect();
-            for f in self.storage_collections.collections_frontiers(storage_ids).expect("missing collections") {
+            for f in self
+                .storage_collections
+                .collections_frontiers(storage_ids)
+                .expect("missing collections")
+            {
                 upper.extend(f.write_frontier);
             }
         }
         for (instance_id, ids) in &id_bundle.compute_ids {
-            let client = self.compute_instances.get(instance_id).expect("PeekClient is missing a compute instance client");
+            let client = self
+                .compute_instances
+                .get(instance_id)
+                .expect("PeekClient is missing a compute instance client");
             for id in ids {
                 let wf = client.collection_write_frontier(*id).await;
                 upper.extend(wf);
@@ -104,8 +122,169 @@ impl PeekClient {
         upper
     }
 
-    /// Stub: implement the provided peek plan directly against a compute instance.
-    pub async fn implement_peek_plan(&self) {
-        // stub
+    /// Implement a fast-path peek plan.
+    ///
+    /// Supported variants:
+    /// - FastPathPlan::Constant
+    /// - FastPathPlan::PeekExisting (PeekTarget::Index only)
+    ///
+    /// Note: FastPathPlan::PeekPersist is not yet supported here; we may add this later.
+    /// ////////// todo: add statement logging, pending_peeks/client_pending_peeks wiring, and metrics.row_set_finishing_seconds.
+    pub async fn implement_fast_path_peek_plan(
+        &self,
+        fast_path: FastPathPlan,
+        timestamp: Timestamp,
+        finishing: mz_expr::RowSetFinishing,
+        compute_instance: ComputeInstanceId,
+        target_replica: Option<mz_cluster_client::ReplicaId>,
+        intermediate_result_type: mz_repr::RelationType,
+        max_result_size: u64,
+        max_returned_query_size: Option<u64>,
+    ) -> Result<crate::ExecuteResponse, crate::AdapterError> {
+        //////// todo: don't we need other things from PlannedPeek?
+
+        match fast_path {
+            // If the dataflow optimizes to a constant expression, we can immediately return the result.
+            FastPathPlan::Constant(rows_res, _) => {
+                let mut rows = match rows_res {
+                    Ok(rows) => rows,
+                    Err(e) => return Err(e.into()),
+                };
+                consolidate(&mut rows);
+
+                let mut results = Vec::new();
+                for (row, count) in rows {
+                    if count.is_negative() {
+                        /////// todo: check error type (might need to revise also in the old code)
+                        return Err(crate::AdapterError::Unstructured(anyhow::anyhow!(
+                            "Negative multiplicity in constant result: {}",
+                            count
+                        )));
+                    }
+                    if count.is_positive() {
+                        let count = usize::cast_from(
+                            u64::try_from(count.into_inner())
+                                .expect("known to be positive from check above"),
+                        );
+                        results.push((
+                            row,
+                            std::num::NonZeroUsize::new(count)
+                                .expect("known to be non-zero from check above"),
+                        ));
+                    }
+                }
+                let row_collection = RowCollection::new(results, &finishing.order_by);
+                // /////////// todo: wire up metrics.row_set_finishing_seconds
+                let histogram = prometheus::Histogram::with_opts(
+                    prometheus::HistogramOpts::new(
+                        format!("new_fast_path_peek_finish_{}", Uuid::new_v4()),
+                        "temporary histogram for fast path finishing",
+                    )
+                    .buckets(vec![0.001, 0.01, 0.1, 1.0, 10.0]),
+                )
+                .unwrap();
+                match finishing.finish(
+                    row_collection,
+                    max_result_size,
+                    max_returned_query_size,
+                    &histogram,
+                ) {
+                    ////////// todo: put send_immediate_rows somewhere where we can call it from here
+                    Ok((rows, _bytes)) => Ok(crate::ExecuteResponse::SendingRowsImmediate {
+                        rows: Box::new(rows),
+                    }),
+                    Err(e) => Err(crate::AdapterError::ResultSize(e)),
+                }
+            }
+            FastPathPlan::PeekExisting(_coll_id, idx_id, literal_constraints, mfp) => {
+                let (rows_tx, rows_rx) = oneshot::channel();
+                let uuid = Uuid::new_v4();
+                // ////// todo: manage pending peeks for cancellation/cleanup
+
+                // ///////// todo: what are these names used for? (also in the original code)
+                let cols = (0..intermediate_result_type.arity()).map(|i| format!("peek_{i}"));
+                let result_desc = RelationDesc::new(intermediate_result_type.clone(), cols);
+
+                // Issue peek to the instance
+                let client = self
+                    .compute_instances
+                    .get(&compute_instance)
+                    .expect("missing compute instance client");
+                let peek_target = PeekTarget::Index { id: idx_id };
+                let literal_vec: Option<Vec<Row>> = literal_constraints;
+                let map_filter_project = mfp;
+                let finishing_for_instance = finishing.clone();
+                client
+                    .peek_call_sync(
+                        peek_target,
+                        literal_vec,
+                        uuid,
+                        timestamp,
+                        result_desc,
+                        finishing_for_instance,
+                        map_filter_project,
+                        None, // let the instance acquire read holds
+                        target_replica,
+                        rows_tx,
+                    )
+                    .await;
+
+                //////// todo: this is a dummy histogram; need to wire up metrics
+                let duration_histogram = prometheus::Histogram::with_opts(
+                    prometheus::HistogramOpts::new(
+                        format!("new_fast_path_peek_finish_{}", Uuid::new_v4()),
+                        "temporary histogram for fast path finishing",
+                    )
+                    .buckets(vec![0.001, 0.01, 0.1, 1.0, 10.0]),
+                )
+                .unwrap();
+
+                let peek_response_stream = async_stream::stream!({
+                    match rows_rx.await {
+                        Ok(PeekResponse::Rows(rows)) => {
+                            match finishing.finish(
+                                rows,
+                                max_result_size,
+                                max_returned_query_size,
+                                &duration_histogram,
+                            ) {
+                                Ok((rows, _size_bytes)) => {
+                                    yield crate::coord::peek::PeekResponseUnary::Rows(Box::new(
+                                        rows,
+                                    ))
+                                }
+                                Err(e) => yield crate::coord::peek::PeekResponseUnary::Error(e),
+                            }
+                        }
+                        Ok(PeekResponse::Stashed(_response)) => {
+                            // /////// todo: support stashed peek responses; put create_peek_response_stream somewhere where we can call it from here
+                            panic!("stashed peek responses not yet supported in new fast-path");
+                        }
+                        ////////// todo: check error cases
+                        Ok(PeekResponse::Error(err)) => {
+                            yield crate::coord::peek::PeekResponseUnary::Error(err.to_string());
+                        }
+                        Ok(PeekResponse::Canceled) => {
+                            yield crate::coord::peek::PeekResponseUnary::Error(
+                                "peek canceled".to_string(),
+                            );
+                        }
+                        Err(e) => {
+                            yield crate::coord::peek::PeekResponseUnary::Error(e.to_string());
+                        }
+                    }
+                });
+
+                Ok(crate::ExecuteResponse::SendingRowsStreaming {
+                    rows: Box::pin(peek_response_stream),
+                    instance_id: compute_instance,
+                    strategy: crate::statement_logging::StatementExecutionStrategy::FastPath,
+                })
+            }
+            FastPathPlan::PeekPersist(..) => {
+                ////////// todo: do we want to support PeekPersist here? I guess why not?
+                panic!()
+            }
+        }
     }
 }

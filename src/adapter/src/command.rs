@@ -222,10 +222,12 @@ pub struct StartupResponse {
         mz_compute_client::controller::instance::Client<mz_repr::Timestamp>,
     >,
     /// Handle to storage collections for reading since/frontiers and policies.
-    pub storage_collections: Arc<dyn mz_storage_client::storage_collections::StorageCollections<
-            Timestamp = mz_repr::Timestamp,
-        > + Send
-            + Sync>,
+    pub storage_collections: Arc<
+        dyn mz_storage_client::storage_collections::StorageCollections<
+                Timestamp = mz_repr::Timestamp,
+            > + Send
+            + Sync,
+    >,
 }
 
 /// The response to [`Client::authenticate`](crate::Client::authenticate).

@@ -276,7 +276,6 @@ impl Client {
             peek_client,
         };
 
-
         let session = client.session();
         session.initialize_role_metadata(role_id);
         let vars_mut = session.vars_mut();
