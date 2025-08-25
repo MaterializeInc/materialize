@@ -788,13 +788,17 @@ where
                     }
 
                     let (batch_lower, batch_upper) = batch_description;
-
-                    let futures: Vec<_> = stashed_batches
+                    let ready_times: Vec<_> = stashed_batches
                         .keys()
-                        .filter_map(|time| {
-                            if (batch_lower.less_equal(time) && !batch_upper.less_equal(time)) {
-                                return None;
-                            }
+                        .filter(|time| {
+                            !(batch_lower.less_equal(*time) && !batch_upper.less_equal(*time))
+                        })
+                        .copied()
+                        .collect();
+
+                    let futures: Vec<_> = ready_times
+                        .into_iter()
+                        .map(|time| {
                             let batch_builder = stashed_batches.remove(&time).unwrap();
 
                             if collection_id.is_user() {
