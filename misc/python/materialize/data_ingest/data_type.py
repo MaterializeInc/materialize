@@ -330,6 +330,8 @@ class Float(DataType):
             return "float"
         elif backend == Backend.JSON:
             return "number"
+        elif backend == Backend.SQL_SERVER:
+            return "real"
         else:
             return "float4"
 
@@ -337,7 +339,7 @@ class Float(DataType):
 class Double(Float):
     @staticmethod
     def name(backend: Backend = Backend.MATERIALIZE) -> str:
-        if backend == Backend.AVRO:
+        if backend in (Backend.AVRO, Backend.SQL_SERVER):
             return "double"
         elif backend == Backend.JSON:
             return "number"
@@ -412,9 +414,10 @@ class Text(DataType):
             Backend.MATERIALIZE,
             Backend.POSTGRES,
             Backend.MYSQL,
-            Backend.SQL_SERVER,
         ):
             return "text"
+        elif backend == Backend.SQL_SERVER:
+            return "varchar(1024)"
         else:
             return "string"
 

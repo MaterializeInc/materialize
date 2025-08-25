@@ -36,6 +36,7 @@ from materialize.mzcompose.services.sql_server import (
     SqlServer,
     setup_sql_server_testing,
 )
+from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
 from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.parallel_workload.parallel_workload import parse_common_args, run
@@ -68,6 +69,7 @@ SERVICES = [
         config={"mzbuild": "jobs"},
     ),
     Toxiproxy(),
+    Testdrive(no_reset=True),
 ]
 
 

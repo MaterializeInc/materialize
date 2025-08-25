@@ -2255,12 +2255,14 @@ class CreateSqlServerSourceAction(Action):
                 return False
 
             try:
+                assert self.composition
                 source = SqlServerSource(
                     source_id,
                     cluster,
                     schema,
                     exe.db.ports,
                     self.rng,
+                    self.composition,
                 )
                 source.create(exe)
                 exe.db.sql_server_sources.append(source)

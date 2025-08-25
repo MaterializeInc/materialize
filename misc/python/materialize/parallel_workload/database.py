@@ -20,6 +20,7 @@ from materialize.data_ingest.data_type import (
     DATA_TYPES_FOR_AVRO,
     DATA_TYPES_FOR_KEY,
     DATA_TYPES_FOR_MYSQL,
+    DATA_TYPES_FOR_SQL_SERVER,
     NUMBER_TYPES,
     Bytea,
     DataType,
@@ -796,6 +797,7 @@ class SqlServerSource(DBObject):
         schema: Schema,
         ports: dict[str, int],
         rng: random.Random,
+        composition: Composition,
     ):
         super().__init__()
         self.source_id = source_id
@@ -809,7 +811,9 @@ class SqlServerSource(DBObject):
                 Field(f"key{i}", rng.choice(DATA_TYPES_FOR_AVRO), True)
             )
         for i in range(rng.randint(0, 20)):
-            fields.append(Field(f"value{i}", rng.choice(DATA_TYPES_FOR_AVRO), False))
+            fields.append(
+                Field(f"value{i}", rng.choice(DATA_TYPES_FOR_SQL_SERVER), False)
+            )
         self.columns = [
             SqlServerColumn(field.name, field.data_type, False, self)
             for field in fields
@@ -821,6 +825,7 @@ class SqlServerSource(DBObject):
             schema.db.name(),
             schema.name(),
             cluster.name(),
+            composition=composition,
         )
         self.generator = rng.choice(list(WORKLOADS))(azurite=False).generate(fields)
         self.lock = threading.Lock()

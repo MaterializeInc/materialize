@@ -275,6 +275,7 @@ def execute_workload(
     ports: dict[str, int],
     runtime: int,
     verbose: bool,
+    composition: Composition,
 ) -> None:
     fields = []
 
@@ -291,6 +292,7 @@ def execute_workload(
             fields,
             "materialize",
             mz_service=workload.mz_service,
+            composition=composition,
             cluster=(
                 "quickstart" if executor_class == KafkaExecutor else "singlereplica"
             ),

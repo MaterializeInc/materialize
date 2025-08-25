@@ -61,7 +61,7 @@ SERVICES = [
     CockroachOrPostgresMetadata(),
     Minio(setup_materialize=True),
     Azurite(),
-    Testdrive(),
+    Testdrive(no_reset=True),
     # Overridden below
     Materialized(),
     Materialized(name="materialized2"),
@@ -207,6 +207,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 ports,
                 args.runtime,
                 args.verbose,
+                c,
             )
             mz_service = workload.mz_service
             deploy_generation = workload.deploy_generation

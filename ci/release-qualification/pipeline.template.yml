@@ -484,7 +484,7 @@ steps:
     steps:
       - id: mysql-cdc-large-scale
         label: MySQL CDC large scale ingestion
-        depends_on: build-aarch64
+        depends_on: build-x86_64
         timeout_in_minutes: 3600
         plugins:
           - ./ci/plugins/mzcompose:
@@ -495,11 +495,22 @@ steps:
 
       - id: pg-cdc-large-scale
         label: Postgres CDC large scale ingestion
-        depends_on: build-aarch64
+        depends_on: build-x86_64
         timeout_in_minutes: 3600
         plugins:
           - ./ci/plugins/mzcompose:
               composition: pg-cdc
+              run: large-scale
+        agents:
+          queue: hetzner-x86-64-dedi-48cpu-192gb # 1 TB disk
+
+      - id: sql-server-cdc-large-scale
+        label: SQL Server CDC large scale ingestion
+        depends_on: build-x86_64
+        timeout_in_minutes: 3600
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: sql-server-cdc
               run: large-scale
         agents:
           queue: hetzner-x86-64-dedi-48cpu-192gb # 1 TB disk
