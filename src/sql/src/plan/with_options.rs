@@ -52,7 +52,7 @@ impl TryFromValue<WithOptionValue<Aug>> for IcebergCatalogType {
     fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<WithOptionValue<Aug>> {
         Some(WithOptionValue::Value(Value::String(match self {
             IcebergCatalogType::Rest => "rest".to_string(),
-            IcebergCatalogType::S3TablesRest => "s3tables".to_string(),
+            IcebergCatalogType::S3TablesRest => "s3tablesrest".to_string(),
         })))
     }
 
