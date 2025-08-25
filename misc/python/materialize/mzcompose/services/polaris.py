@@ -18,7 +18,7 @@ class PolarisBootstrap(Service):
         self,
         name: str = "polaris-bootstrap",
         image: str = "apache/polaris-admin-tool",
-        tag: str = "latest",
+        tag: str = "1.0.1-incubating",
         environment: list[str] = [
             "POLARIS_BOOTSTRAP_CREDENTIALS=POLARIS,root,root",
             "POLARIS_PERSISTENCE_TYPE=relational-jdbc",

@@ -17,6 +17,7 @@ use bytes::{Bytes, BytesMut};
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
+use mz_ore::cast::CastFrom;
 use mz_persist_types::arrow::ProtoArrayData;
 use mz_proto::{ProtoType, RustType};
 use mz_repr::RelationDesc;
@@ -174,12 +175,8 @@ impl<S: OneshotSource> MetadataFetch for ParquetReaderAdapter<S> {
         let inclusive_end = std::cmp::max(range.start, range.end.saturating_sub(1));
 
         Box::pin(async move {
-            let range_start = range.start.try_into().map_err(|_| {
-                ParquetError::General("Range start is too large to fit in a usize".to_string())
-            })?;
-            let inclusive_end = inclusive_end.try_into().map_err(|_| {
-                ParquetError::General("Range end is too large to fit in a usize".to_string())
-            })?;
+            let range_start = usize::cast_from(range.start);
+            let inclusive_end = usize::cast_from(inclusive_end);
             // Fetch the specified range.
             let result: Result<Vec<_>, _> = self
                 .source
@@ -219,10 +216,7 @@ impl<S: OneshotSource> AsyncFileReader for ParquetReaderAdapter<S> {
     ) -> BoxFuture<'a, parquet::errors::Result<Arc<ParquetMetaData>>> {
         Box::pin(async move {
             let mut reader = ParquetMetaDataReader::new();
-            let object_size = self.object.size();
-            let object_size = object_size.try_into().map_err(|_| {
-                ParquetError::General("Object size is too large to fit in a u64".to_string())
-            })?;
+            let object_size = u64::cast_from(self.object.size());
             reader.try_load(self, object_size).await?;
             reader.finish().map(Arc::new)
         })

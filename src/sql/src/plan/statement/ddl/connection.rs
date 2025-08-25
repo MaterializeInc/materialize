@@ -34,9 +34,10 @@ use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::connections::string_or_secret::StringOrSecret;
 use mz_storage_types::connections::{
     AwsPrivatelink, AwsPrivatelinkConnection, CsrConnection, CsrConnectionHttpAuth,
-    IcebergCatalogConnection, IcebergCatalogType, KafkaConnection, KafkaSaslConfig, KafkaTlsConfig,
-    KafkaTopicOptions, MySqlConnection, MySqlSslMode, PostgresConnection,
-    SqlServerConnectionDetails, SshConnection, SshTunnel, TlsIdentity, Tunnel,
+    IcebergCatalogConnection, IcebergCatalogImpl, IcebergCatalogType, KafkaConnection,
+    KafkaSaslConfig, KafkaTlsConfig, KafkaTopicOptions, MySqlConnection, MySqlSslMode,
+    PostgresConnection, RestIcebergCatalog, S3TablesRestIcebergCatalog, SqlServerConnectionDetails,
+    SshConnection, SshTunnel, TlsIdentity, Tunnel,
 };
 
 use crate::names::Aug;
@@ -641,36 +642,40 @@ impl ConnectionOptionExtracted {
                 let credential = self.credential.clone();
                 let aws_connection = get_aws_connection_reference(scx, &self)?;
 
-                match catalog_type {
+                let catalog = match catalog_type {
                     IcebergCatalogType::S3TablesRest => {
-                        if warehouse.is_none() {
+                        let Some(warehouse) = warehouse else {
                             sql_bail!(
-                                "invalid CONNECTION: ICEBERG s3tables connections must specify WAREHOUSE"
+                                "invalid CONNECTION: ICEBERG s3tablesrest connections must specify WAREHOUSE"
                             );
-                        }
-                        if aws_connection.is_none() {
+                        };
+                        let Some(aws_connection) = aws_connection else {
                             sql_bail!(
-                                "invalid CONNECTION: ICEBERG s3tables connections require an AWS connection"
+                                "invalid CONNECTION: ICEBERG s3tablesrest connections require an AWS connection"
                             );
-                        }
+                        };
+
+                        IcebergCatalogImpl::S3TablesRest(S3TablesRestIcebergCatalog {
+                            aws_connection,
+                            warehouse,
+                        })
                     }
                     IcebergCatalogType::Rest => {
-                        if credential.is_none() {
+                        let Some(credential) = credential else {
                             sql_bail!(
                                 "invalid CONNECTION: ICEBERG rest connections require a CREDENTIAL"
                             );
-                        }
-                    }
-                }
+                        };
 
-                ConnectionDetails::IcebergCatalog(IcebergCatalogConnection {
-                    catalog_type,
-                    uri: uri.to_string(),
-                    warehouse,
-                    credential,
-                    aws_connection,
-                    scope: self.scope.clone(),
-                })
+                        IcebergCatalogImpl::Rest(RestIcebergCatalog {
+                            credential,
+                            scope: self.scope.clone(),
+                            warehouse,
+                        })
+                    }
+                };
+
+                ConnectionDetails::IcebergCatalog(IcebergCatalogConnection { catalog, uri })
             }
         };
 

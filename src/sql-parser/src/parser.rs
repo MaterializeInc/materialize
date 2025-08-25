@@ -2620,6 +2620,7 @@ impl<'a> Parser<'a> {
                 AWS,
                 BROKER,
                 BROKERS,
+                CATALOG,
                 CREDENTIAL,
                 DATABASE,
                 ENDPOINT,
@@ -2638,7 +2639,6 @@ impl<'a> Parser<'a> {
                 SESSION,
                 SSH,
                 SSL,
-                TYPE,
                 URL,
                 USER,
                 USERNAME,
@@ -2670,6 +2670,10 @@ impl<'a> Parser<'a> {
                 },
                 BROKER => ConnectionOptionName::Broker,
                 BROKERS => ConnectionOptionName::Brokers,
+                CATALOG => {
+                    self.expect_keyword(TYPE)?;
+                    ConnectionOptionName::CatalogType
+                }
                 CREDENTIAL => ConnectionOptionName::Credential,
                 DATABASE => ConnectionOptionName::Database,
                 ENDPOINT => ConnectionOptionName::Endpoint,
@@ -2732,7 +2736,7 @@ impl<'a> Parser<'a> {
                     _ => unreachable!(),
                 },
                 URL => ConnectionOptionName::Url,
-                TYPE => ConnectionOptionName::CatalogType,
+                // TYPE => ConnectionOptionName::CatalogType,
                 WAREHOUSE => ConnectionOptionName::Warehouse,
                 USER | USERNAME => ConnectionOptionName::User,
                 _ => unreachable!(),

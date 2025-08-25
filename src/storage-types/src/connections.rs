@@ -43,6 +43,7 @@ use mz_ssh_util::tunnel::SshTunnelConfig;
 use mz_ssh_util::tunnel_manager::{ManagedSshTunnelHandle, SshTunnelManager};
 use mz_tls_util::Pkcs12Archive;
 use mz_tracing::CloneableEnvFilter;
+use proptest::prelude::{Arbitrary, BoxedStrategy};
 use proptest::strategy::Strategy;
 use proptest_derive::Arbitrary;
 use rdkafka::ClientContext;
@@ -74,6 +75,9 @@ pub mod inline;
 pub mod string_or_secret;
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage_types.connections.rs"));
+
+const REST_CATALOG_PROP_SCOPE: &str = "scope";
+const REST_CATALOG_PROP_CREDENTIAL: &str = "credential";
 
 /// An extension trait for [`SecretsReader`]
 #[async_trait::async_trait]
@@ -369,25 +373,87 @@ impl<C: ConnectionAccess> AlterCompatible for Connection<C> {
 }
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct RestIcebergCatalog {
+    /// For REST catalogs, the oauth2 credential in a `CLIENT_ID:CLIENT_SECRET` format
+    pub credential: StringOrSecret,
+    /// The oauth2 scope for REST catalogs
+    pub scope: Option<String>,
+    /// The warehouse for REST catalogs
+    pub warehouse: Option<String>,
+}
+
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct S3TablesRestIcebergCatalog<C: ConnectionAccess = InlinedConnection> {
+    /// The AWS connection details, for s3tables
+    pub aws_connection: AwsConnectionReference<C>,
+    /// The warehouse for s3tables
+    pub warehouse: String,
+}
+
+impl<R: ConnectionResolver> IntoInlineConnection<S3TablesRestIcebergCatalog, R>
+    for S3TablesRestIcebergCatalog<ReferencedConnection>
+{
+    fn into_inline_connection(self, r: R) -> S3TablesRestIcebergCatalog {
+        S3TablesRestIcebergCatalog {
+            aws_connection: self.aws_connection.into_inline_connection(&r),
+            warehouse: self.warehouse,
+        }
+    }
+}
+
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum IcebergCatalogType {
     Rest,
     S3TablesRest,
 }
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub enum IcebergCatalogImpl<C: ConnectionAccess = InlinedConnection> {
+    Rest(RestIcebergCatalog),
+    S3TablesRest(S3TablesRestIcebergCatalog<C>),
+}
+
+impl<R: ConnectionResolver> IntoInlineConnection<IcebergCatalogImpl, R>
+    for IcebergCatalogImpl<ReferencedConnection>
+{
+    fn into_inline_connection(self, r: R) -> IcebergCatalogImpl {
+        match self {
+            IcebergCatalogImpl::Rest(rest) => IcebergCatalogImpl::Rest(rest),
+            IcebergCatalogImpl::S3TablesRest(s3tables) => {
+                IcebergCatalogImpl::S3TablesRest(s3tables.into_inline_connection(r))
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct IcebergCatalogConnection<C: ConnectionAccess = InlinedConnection> {
-    pub catalog_type: IcebergCatalogType,
-    pub uri: String,
-    pub warehouse: Option<String>,
-    pub credential: Option<StringOrSecret>,
-    pub aws_connection: Option<AwsConnectionReference<C>>,
-    pub scope: Option<String>,
+    /// The catalog impl impl of that catalog
+    pub catalog: IcebergCatalogImpl<C>,
+    /// Where the catalog is located
+    pub uri: reqwest::Url,
+}
+
+impl<C: ConnectionAccess> Arbitrary for IcebergCatalogConnection<C> {
+    type Parameters = ();
+    type Strategy = BoxedStrategy<Self>;
+
+    fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
+        (
+            IcebergCatalogImpl::arbitrary(),
+            proptest::sample::select(vec![
+                reqwest::Url::parse("https://example.com/catalog").unwrap(),
+                reqwest::Url::parse("https://catalog.example.org").unwrap(),
+            ]),
+        )
+            .prop_map(|(catalog, uri)| IcebergCatalogConnection { catalog, uri })
+            .boxed()
+    }
 }
 
 impl AlterCompatible for IcebergCatalogConnection {
-    fn alter_compatible(&self, _id: GlobalId, _other: &Self) -> Result<(), AlterError> {
-        //TODO(iceberg): figure out what if anything isn't alterable
-        Ok(())
+    fn alter_compatible(&self, id: GlobalId, _other: &Self) -> Result<(), AlterError> {
+        Err(AlterError { id })
     }
 }
 
@@ -396,14 +462,8 @@ impl<R: ConnectionResolver> IntoInlineConnection<IcebergCatalogConnection, R>
 {
     fn into_inline_connection(self, r: R) -> IcebergCatalogConnection {
         IcebergCatalogConnection {
-            catalog_type: self.catalog_type,
+            catalog: self.catalog.into_inline_connection(&r),
             uri: self.uri,
-            warehouse: self.warehouse,
-            credential: self.credential,
-            scope: self.scope,
-            aws_connection: self
-                .aws_connection
-                .map(|aws| aws.into_inline_connection(&r)),
         }
     }
 }
@@ -420,25 +480,30 @@ impl IcebergCatalogConnection<InlinedConnection> {
         storage_configuration: &StorageConfiguration,
         in_task: InTask,
     ) -> Result<Arc<dyn Catalog>, anyhow::Error> {
-        match self.catalog_type {
-            IcebergCatalogType::S3TablesRest => {
-                self.connect_s3tables(storage_configuration, in_task).await
+        match self.catalog {
+            IcebergCatalogImpl::S3TablesRest(ref s3tables) => {
+                self.connect_s3tables(s3tables, storage_configuration, in_task)
+                    .await
             }
-            IcebergCatalogType::Rest => self.connect_rest(storage_configuration, in_task).await,
+            IcebergCatalogImpl::Rest(ref rest) => {
+                self.connect_rest(rest, storage_configuration, in_task)
+                    .await
+            }
         }
     }
 
     async fn connect_s3tables(
         &self,
+        s3tables: &S3TablesRestIcebergCatalog,
         storage_configuration: &StorageConfiguration,
         in_task: InTask,
     ) -> Result<Arc<dyn Catalog>, anyhow::Error> {
-        let mut props = BTreeMap::from([(REST_CATALOG_PROP_URI.to_string(), self.uri.clone())]);
+        let mut props = BTreeMap::from([(
+            REST_CATALOG_PROP_URI.to_string(),
+            self.uri.to_string().clone(),
+        )]);
 
-        let aws_ref = self
-            .aws_connection
-            .as_ref()
-            .ok_or_else(|| anyhow!("IcebergCatalogConnection requires an AWS connection"))?;
+        let aws_ref = &s3tables.aws_connection;
         let aws_config = aws_ref
             .connection
             .load_sdk_config(
@@ -450,11 +515,7 @@ impl IcebergCatalogConnection<InlinedConnection> {
 
         props.insert(
             REST_CATALOG_PROP_WAREHOUSE.to_string(),
-            self.warehouse.clone().ok_or_else(|| {
-                anyhow!(
-                    "IcebergCatalogConnection with S3TablesRest catalog type requires a warehouse"
-                )
-            })?,
+            s3tables.warehouse.clone(),
         );
 
         let catalog = RestCatalogBuilder::default()
@@ -467,31 +528,31 @@ impl IcebergCatalogConnection<InlinedConnection> {
 
     async fn connect_rest(
         &self,
+        rest: &RestIcebergCatalog,
         storage_configuration: &StorageConfiguration,
         in_task: InTask,
     ) -> Result<Arc<dyn Catalog>, anyhow::Error> {
-        let mut props = BTreeMap::from([(REST_CATALOG_PROP_URI.to_string(), self.uri.clone())]);
+        let mut props = BTreeMap::from([(
+            REST_CATALOG_PROP_URI.to_string(),
+            self.uri.to_string().clone(),
+        )]);
 
-        if let Some(warehouse) = &self.warehouse {
+        if let Some(warehouse) = &rest.warehouse {
             props.insert(REST_CATALOG_PROP_WAREHOUSE.to_string(), warehouse.clone());
         }
 
-        let credential = self
+        let credential = rest
             .credential
-            .clone()
-            .ok_or_else(|| {
-                anyhow!("IcebergCatalogConnection with Rest catalog type requires a credential")
-            })?
             .get_string(
                 in_task,
                 &storage_configuration.connection_context.secrets_reader,
             )
             .await
             .map_err(|e| anyhow!("failed to read Iceberg catalog credential: {e}"))?;
-        props.insert("credential".to_string(), credential);
+        props.insert(REST_CATALOG_PROP_CREDENTIAL.to_string(), credential);
 
-        if let Some(scope) = &self.scope {
-            props.insert("scope".to_string(), scope.clone());
+        if let Some(scope) = &rest.scope {
+            props.insert(REST_CATALOG_PROP_SCOPE.to_string(), scope.clone());
         }
 
         let catalog = RestCatalogBuilder::default()

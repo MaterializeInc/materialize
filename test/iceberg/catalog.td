@@ -17,7 +17,7 @@
   );
 
 > CREATE CONNECTION polaris TO ICEBERG CATALOG (
-    TYPE = 'REST',
+    CATALOG TYPE = 'REST',
     URL = 'http://polaris:8181/api/catalog',
     CREDENTIAL = 'root:root',
     WAREHOUSE = 'default_catalog',

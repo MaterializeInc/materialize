@@ -544,9 +544,9 @@ CREATE CONNECTION privatelinkconn TO AWS PRIVATELINK (SERVICE NAME = 'com.amazon
 CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("privatelinkconn")]), connection_type: AwsPrivatelink, if_not_exists: false, values: [ConnectionOption { name: ServiceName, value: Some(Value(String("com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc"))) }, ConnectionOption { name: AvailabilityZones, value: Some(Sequence([Value(String("use1-az1")), Value(String("use1-az4"))])) }], with_options: [CreateConnectionOption { name: Validate, value: Some(Value(Boolean(true))) }] })
 
 parse-statement
-CREATE CONNECTION icebergcatalog TO ICEBERG CATALOG (TYPE = 's3tablesrest', AWS CONNECTION = awsconn, WAREHOUSE = 'wh')
+CREATE CONNECTION icebergcatalog TO ICEBERG CATALOG (CATALOG TYPE = 's3tablesrest', AWS CONNECTION = awsconn, WAREHOUSE = 'wh')
 ----
-CREATE CONNECTION icebergcatalog TO ICEBERG CATALOG (TYPE = 's3tablesrest', AWS CONNECTION = awsconn, WAREHOUSE = 'wh')
+CREATE CONNECTION icebergcatalog TO ICEBERG CATALOG (CATALOG TYPE = 's3tablesrest', AWS CONNECTION = awsconn, WAREHOUSE = 'wh')
 =>
 CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("icebergcatalog")]), connection_type: IcebergCatalog, if_not_exists: false, values: [ConnectionOption { name: CatalogType, value: Some(Value(String("s3tablesrest"))) }, ConnectionOption { name: AwsConnection, value: Some(Item(Name(UnresolvedItemName([Ident("awsconn")])))) }, ConnectionOption { name: Warehouse, value: Some(Value(String("wh"))) }], with_options: [] })
 
@@ -2683,7 +2683,7 @@ CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("my
 parse-statement
 CREATE CONNECTION my_ssh_tunnel FOR SSH TUNNEL (PUBLIC KEY 3 = nope)
 ----
-error: Expected one of ACCESS or ASSUME or AVAILABILITY or AWS or BROKER or BROKERS or CREDENTIAL or DATABASE or ENDPOINT or HOST or PASSWORD or PORT or PUBLIC or PROGRESS or REGION or ROLE or SASL or SCOPE or SECRET or SECURITY or SERVICE or SESSION or SSH or SSL or TYPE or URL or USER or USERNAME or WAREHOUSE, found left parenthesis
+error: Expected one of ACCESS or ASSUME or AVAILABILITY or AWS or BROKER or BROKERS or CATALOG or CREDENTIAL or DATABASE or ENDPOINT or HOST or PASSWORD or PORT or PUBLIC or PROGRESS or REGION or ROLE or SASL or SCOPE or SECRET or SECURITY or SERVICE or SESSION or SSH or SSL or URL or USER or USERNAME or WAREHOUSE, found left parenthesis
 CREATE CONNECTION my_ssh_tunnel FOR SSH TUNNEL (PUBLIC KEY 3 = nope)
                                                ^
 

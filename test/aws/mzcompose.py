@@ -101,7 +101,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 """,
             )
 
-            for fn in [test_credentials, test_assume_role, test_s3tables_connection]:
+            for fn in [
+                test_credentials,
+                test_assume_role,
+                test_s3tablesrest_connection,
+            ]:
                 with c.test_case(fn.__name__):
                     fn(c, ctx)
     finally:
@@ -233,7 +237,7 @@ def test_assume_role(c: Composition, ctx: TestContext):
         _delete_role(ctx, customer_role)
 
 
-def test_s3tables_connection(c: Composition, ctx: TestContext):
+def test_s3tablesrest_connection(c: Composition, ctx: TestContext):
     bucket = None
     customer_role = None
     try:
@@ -285,7 +289,7 @@ def test_s3tables_connection(c: Composition, ctx: TestContext):
         c.sleep(ctx.iam_propagation_seconds)
 
         c.sql(
-            f"CREATE CONNECTION s3tables TO ICEBERG CATALOG (TYPE 's3tablesrest', URL = 'https://s3tables.us-east-1.amazonaws.com/iceberg', WAREHOUSE = '{bucket['arn']}', AWS CONNECTION = aws_assume_role)"
+            f"CREATE CONNECTION s3tables TO ICEBERG CATALOG (CATALOG TYPE = 's3tablesrest', URL = 'https://s3tables.us-east-1.amazonaws.com/iceberg', WAREHOUSE = '{bucket['arn']}', AWS CONNECTION = aws_assume_role)"
         )
     finally:
         if bucket is not None:

@@ -125,15 +125,6 @@ def workflow_default(c: Composition) -> None:
         f"{minio_alias}/test-bucket",
     )
 
-    # # make it public
-    # c.exec(
-    #     "mc",
-    #     "anonymous",
-    #     "set",
-    #     "public",
-    #     f"{minio_alias}/test-bucket",
-    # )
-
     key = make_user("tduser", minio_alias, c)
 
     access_token = None

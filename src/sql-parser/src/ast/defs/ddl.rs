@@ -825,7 +825,7 @@ impl AstDisplay for ConnectionOptionName {
             ConnectionOptionName::SslKey => "SSL KEY",
             ConnectionOptionName::SslMode => "SSL MODE",
             ConnectionOptionName::SessionToken => "SESSION TOKEN",
-            ConnectionOptionName::CatalogType => "TYPE",
+            ConnectionOptionName::CatalogType => "CATALOG TYPE",
             ConnectionOptionName::Url => "URL",
             ConnectionOptionName::User => "USER",
             ConnectionOptionName::Warehouse => "WAREHOUSE",
