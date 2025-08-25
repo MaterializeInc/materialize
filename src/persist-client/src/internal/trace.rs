@@ -66,7 +66,7 @@ use serde::{Serialize, Serializer};
 use timely::PartialOrder;
 use timely::progress::frontier::AntichainRef;
 use timely::progress::{Antichain, Timestamp};
-use tracing::error;
+use tracing::{error, info};
 
 use crate::internal::paths::WriterKey;
 use crate::internal::state::{HollowBatch, RunId};
@@ -1685,6 +1685,7 @@ impl<T: Timestamp + Lattice> Spine<T> {
             // If any merges exist, we can directly call `apply_fuel`.
             self.apply_fuel(&fuel, log);
         } else {
+            info!("no merges in progress, introducing empty batch");
             // Otherwise, we'll need to introduce fake updates to move merges
             // along.
 
@@ -1754,15 +1755,19 @@ impl<T: Timestamp + Lattice> Spine<T> {
     /// words, there are either zero runs (fully empty) or exactly one logical
     /// run of data remaining.
     fn reduced(&self) -> bool {
-        self.spine_batches()
+        let total_runs = self
+            .spine_batches()
             .map(|b| {
                 b.parts
                     .iter()
                     .map(|p| p.batch.run_meta.len())
                     .sum::<usize>()
             })
-            .sum::<usize>()
-            < 2
+            .sum::<usize>();
+        let total_spine_batches = self.spine_batches().count();
+        info!(?total_runs, ?total_spine_batches, "checking if reduced");
+        // total_spine_batches < 2
+        total_runs < 2
     }
 
     /// Describes the merge progress of layers in the trace.

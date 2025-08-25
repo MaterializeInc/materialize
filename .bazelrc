@@ -201,6 +201,7 @@ build:optimized --config=debuginfo-none
 build:optimized --copt=-fno-lto
 build:optimized --linkopt=-fno-lto
 build:optimized --@rules_rust//rust/settings:lto=off
+build:optimized --cxxopt=-isystem/opt/homebrew/opt/llvm/include
 
 # Build with the Rust Nightly Toolchain
 build:rust-nightly --@rules_rust//rust/toolchain/channel=nightly

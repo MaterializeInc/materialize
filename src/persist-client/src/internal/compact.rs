@@ -258,7 +258,7 @@ where
                 compact_span.follows_from(&Span::current());
                 let gc = gc.clone();
                 mz_ore::task::spawn(|| "PersistCompactionWorker", async move {
-                    let res = Self::compact_and_apply(&machine, req, write_schemas)
+                    let res = Self::compact_and_apply(&machine, req, write_schemas, false)
                         .instrument(compact_span)
                         .await;
                     if let Ok(maintenance) = res {
@@ -338,6 +338,7 @@ where
         machine: &Machine<K, V, T, D>,
         req: CompactReq<T>,
         write_schemas: Schemas<K, V>,
+        disable_incremental: bool,
     ) -> Result<RoutineMaintenance, anyhow::Error> {
         let metrics = Arc::clone(&machine.applier.metrics);
         metrics.compaction.started.inc();
@@ -422,8 +423,8 @@ where
                         .iter()
                         .all(|x| x.batch.runs().all(|(meta, _)| meta.len.is_some()));
 
-                    let incremental_enabled = ENABLE_INCREMENTAL_COMPACTION
-                        .get(&machine_clone.applier.cfg)
+                    let incremental_enabled = !disable_incremental
+                        && ENABLE_INCREMENTAL_COMPACTION.get(&machine_clone.applier.cfg)
                         && all_runs_have_uuids
                         && all_runs_have_len;
                     let stream = Self::compact_stream(
@@ -706,12 +707,31 @@ where
 
                             let covers_whole_batch = run_ids.len() == full_run_count;
                             if !covers_whole_batch {
+                                tracing::info!(
+                                    "incremental compaction of batch {:?} with {} runs, \
+                                    compacting {} out of {} runs",
+                                    batch_id,
+                                    full_run_count,
+                                    run_ids.len(),
+                                    full_run_count
+                                );
                                 CompactionInput::PartialBatch(*batch_id, run_ids)
                             } else {
+                                tracing::info!(
+                                    "incremental compaction of batch {:?} with {} runs, \
+                                    compacting all runs",
+                                    batch_id,
+                                    full_run_count,
+                                );
                                 input_id_range(batch_ids)
                             }
                         }
-                        None => input_id_range(batch_ids),
+                        None => {
+                            tracing::info!(
+                                "incremental compaction of multiple batches: {:?}",
+                                batch_ids,
+                            );
+                            input_id_range(batch_ids)},
                     }
                 } else {
                     input_id_range(batch_ids)
