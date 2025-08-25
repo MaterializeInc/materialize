@@ -38,6 +38,8 @@ breaking:
     # reason: does currently not require backward-compatibility
     - catalog-protos/protos/objects_v76.proto
     # reason: does currently not require backward-compatibility
+    - catalog-protos/protos/objects_v77.proto
+    # reason: does currently not require backward-compatibility
     - compute-client/src/logging.proto
     # reason: does currently not require backward-compatibility
     - compute-client/src/protocol/command.proto

@@ -24,7 +24,7 @@ pub mod serialization;
 /// We will initialize new `Catalog`s with this version, and migrate existing `Catalog`s to this
 /// version. Whenever the `Catalog` changes, e.g. the protobufs we serialize in the `Catalog`
 /// change, we need to bump this version.
-pub const CATALOG_VERSION: u64 = 76;
+pub const CATALOG_VERSION: u64 = 77;
 
 /// The minimum `Catalog` version number that we support migrating from.
 ///
@@ -46,7 +46,7 @@ macro_rules! proto_objects {
     };
 }
 
-proto_objects!(v67, v68, v69, v70, v71, v72, v73, v74, v75, v76);
+proto_objects!(v67, v68, v69, v70, v71, v72, v73, v74, v75, v76, v77);
 
 #[cfg(test)]
 mod tests {
