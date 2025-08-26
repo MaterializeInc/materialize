@@ -878,6 +878,7 @@ impl Coordinator {
             && isolation_level == &IsolationLevel::StrictSerializable
             && real_time_recency_ts.is_none()
         {
+            // Note down the difference between StrictSerializable and Serializable into a metric.
             if let Some(strict) = det.timestamp_context.timestamp() {
                 let (serializable_det, _tmp_read_holds) = self.determine_timestamp_for(
                     session,

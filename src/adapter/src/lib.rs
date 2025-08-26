@@ -46,6 +46,7 @@ mod explain;
 mod notice;
 mod optimize;
 mod util;
+mod frontend_peek;
 
 pub mod catalog;
 pub mod client;

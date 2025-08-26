@@ -1,8 +1,15 @@
 // Copyright Materialize, Inc. and contributors. All rights reserved.
 //
-// Thin client for fast-path peek sequencing. This intentionally carries
-// minimal state: just the handles necessary to talk directly to compute
-// instances and to the storage collections view.
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+//! Thin client for peek sequencing from the Adapter Frontend. This intentionally carries
+//! minimal state: just the handles necessary to talk directly to compute
+//! instances and to the storage collections view.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -18,8 +25,13 @@ use mz_repr::{RelationDesc, Row};
 use timely::progress::Antichain;
 use tokio::sync::oneshot;
 use uuid::Uuid;
-
+use mz_compute_client::controller::error::InstanceMissing;
+use mz_repr::global_id::TransientIdGen;
+use mz_sql::optimizer_metrics::OptimizerMetrics;
+use mz_storage_types::sources::Timeline;
+use mz_timestamp_oracle::TimestampOracle;
 use crate::coord::peek::FastPathPlan;
+use crate::optimize::dataflows::ComputeInstanceSnapshot;
 
 /// Storage collections trait alias we need to consult for since/frontiers.
 pub type StorageCollectionsHandle = Arc<
@@ -28,22 +40,39 @@ pub type StorageCollectionsHandle = Arc<
         + Sync,
 >;
 
-/// A thin client to the compute and storage controllers for sequencing
-/// fast-path peeks from the session task.
-///
-/// Note: The compute instance client type is generic over timestamp, but in
-/// the adapter we operate with the default system timestamp `mz_repr::Timestamp`.
+/// A thin client to the compute and storage controllers for sequencing fast-path peeks from the
+/// session task.
 #[derive(Debug)]
 pub struct PeekClient {
     /// Channels to talk to each compute Instance task directly.
     /// ////////////// todo: we'll need to update this somehow when instances come and go
+    /// ////// todo: do we want to make this generic, like instance::Client?
     pub compute_instances:
         BTreeMap<ComputeInstanceId, mz_compute_client::controller::instance::Client<Timestamp>>,
     /// Handle to storage collections for reading frontiers and policies.
     pub storage_collections: StorageCollectionsHandle,
+    /// A generator for transient [`GlobalId`]s, shared with Coordinator.
+    pub transient_id_gen: Arc<TransientIdGen>,
+    pub optimizer_metrics: OptimizerMetrics,
+    ///// todo: generic timestamp?
+    pub oracles: BTreeMap<Timeline, Arc<dyn TimestampOracle<Timestamp> + Send + Sync>>,
 }
 
 impl PeekClient {
+
+    ///////// todo: This is a temporary thing.
+    // We should refactor stuff to make a snapshot optional, and rather than panicking in the
+    // Controller when we try to do something with a non-existent collection, return a graceful
+    // error, which we can handle in the peek sequencing code.
+    pub async fn snapshot(&self, compute_instance: ComputeInstanceId) -> Result<ComputeInstanceSnapshot, InstanceMissing> {
+        self.compute_instances
+            .get(&compute_instance)
+            .expect("/////// todo: return proper error")
+            .call_sync(move |i| {
+                Ok(ComputeInstanceSnapshot::new_from_parts(compute_instance, i.snapshot()))
+            }).await
+    }
+
     /// Acquire read holds on the required compute/storage collections.
     /// Similar to Coordinator::acquire_read_holds.
     pub async fn acquire_read_holds(
@@ -177,7 +206,7 @@ impl PeekClient {
                 // /////////// todo: wire up metrics.row_set_finishing_seconds
                 let histogram = prometheus::Histogram::with_opts(
                     prometheus::HistogramOpts::new(
-                        format!("new_fast_path_peek_finish_{}", Uuid::new_v4()),
+                        "new_fast_path_peek_finish",
                         "temporary histogram for fast path finishing",
                     )
                     .buckets(vec![0.001, 0.01, 0.1, 1.0, 10.0]),
@@ -232,7 +261,7 @@ impl PeekClient {
                 //////// todo: this is a dummy histogram; need to wire up metrics
                 let duration_histogram = prometheus::Histogram::with_opts(
                     prometheus::HistogramOpts::new(
-                        format!("new_fast_path_peek_finish_{}", Uuid::new_v4()),
+                        "new_fast_path_peek_finish",
                         "temporary histogram for fast path finishing",
                     )
                     .buckets(vec![0.001, 0.01, 0.1, 1.0, 10.0]),
