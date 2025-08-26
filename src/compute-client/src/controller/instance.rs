@@ -149,7 +149,8 @@ impl<T: ComputeControllerTimestamp> Client<T> {
         Arc::clone(&self.read_hold_tx)
     }
 
-    pub(crate) async fn call_sync<F, R>(&self, f: F) -> R
+    ///////// todo: can we avoid pub?
+    pub async fn call_sync<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut Instance<T>) -> R + Send + 'static,
         R: Send + 'static,
@@ -280,7 +281,8 @@ where
 pub(super) type ReplicaResponse<T> = (ReplicaId, u64, ComputeResponse<T>);
 
 /// The state we keep for a compute instance.
-pub(super) struct Instance<T: ComputeControllerTimestamp> {
+/// //////////// todo: can we avoid pub?
+pub struct Instance<T: ComputeControllerTimestamp> {
     /// Build info for spawning replicas
     build_info: &'static BuildInfo,
     /// A handle providing access to storage collections.
@@ -375,13 +377,6 @@ pub(super) struct Instance<T: ComputeControllerTimestamp> {
 }
 
 impl<T: ComputeControllerTimestamp> Instance<T> {
-    /// Reports the current write frontier for the identified compute collection.
-    pub fn collection_write_frontier(
-        &self,
-        id: GlobalId,
-    ) -> Result<Antichain<T>, CollectionMissing> {
-        Ok(self.collection(id)?.write_frontier())
-    }
     /// Acquire a handle to the collection state associated with `id`.
     fn collection(&self, id: GlobalId) -> Result<&CollectionState<T>, CollectionMissing> {
         self.collections.get(&id).ok_or(CollectionMissing(id))
@@ -1041,6 +1036,19 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             field("wallclock_lag_last_recorded", wallclock_lag_last_recorded)?,
         ]);
         Ok(serde_json::Value::Object(map))
+    }
+
+    /// Reports the current write frontier for the identified compute collection.
+    pub fn collection_write_frontier(
+        &self,
+        id: GlobalId,
+    ) -> Result<Antichain<T>, CollectionMissing> {
+        Ok(self.collection(id)?.write_frontier())
+    }
+
+    //////// todo: temporary thing: only needed for PeekClient::snapshot
+    pub fn snapshot(&self) -> BTreeSet<GlobalId> {
+        self.collections.keys().cloned().collect()
     }
 }
 

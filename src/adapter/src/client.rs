@@ -33,7 +33,7 @@ use mz_ore::result::ResultExt;
 use mz_ore::task::AbortOnDropHandle;
 use mz_ore::thread::JoinOnDropHandle;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_repr::{CatalogItemId, ColumnIndex, Row, SqlScalarType};
+use mz_repr::{CatalogItemId, ColumnIndex, Row, SqlScalarType, Timestamp};
 use mz_sql::ast::{Raw, Statement};
 use mz_sql::catalog::{EnvironmentId, SessionCatalog};
 use mz_sql::session::hint::ApplicationNameHint;
@@ -44,7 +44,7 @@ use mz_sql_parser::parser::{ParserStatementError, StatementParseResult};
 use prometheus::Histogram;
 use serde_json::json;
 use tokio::sync::{mpsc, oneshot};
-use tracing::error;
+use tracing::{debug, error};
 use uuid::Uuid;
 
 use crate::catalog::Catalog;
@@ -52,7 +52,7 @@ use crate::command::{
     AuthResponse, CatalogDump, CatalogSnapshot, Command, ExecuteResponse, Response,
     SASLChallengeResponse, SASLVerifyProofResponse,
 };
-use crate::coord::{Coordinator, ExecuteContextExtra};
+use crate::coord::{read_policy, Coordinator, ExecuteContextExtra};
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
 use crate::optimize::dataflows::{EvalTime, ExprPrepStyle};
@@ -63,7 +63,7 @@ use crate::session::{
 use crate::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use crate::telemetry::{self, EventDetails, SegmentClientExt, StatementFailureType};
 use crate::webhook::AppendWebhookResponse;
-use crate::{AdapterNotice, AppendWebhookError, PeekResponseUnary, StartupResponse};
+use crate::{AdapterNotice, AppendWebhookError, PeekClient, PeekResponseUnary, StartupResponse};
 
 /// A handle to a running coordinator.
 ///
@@ -260,11 +260,17 @@ impl Client {
             catalog,
             compute_instance_clients,
             storage_collections,
+            transient_id_gen,
+            optimizer_metrics,
+            oracles,
         } = response;
 
         let peek_client = crate::peek_client::PeekClient {
             compute_instances: compute_instance_clients,
             storage_collections,
+            transient_id_gen,
+            optimizer_metrics,
+            oracles,
         };
 
         let mut client = SessionClient {
@@ -274,6 +280,7 @@ impl Client {
             environment_id: self.environment_id.clone(),
             segment_client: self.segment_client.clone(),
             peek_client,
+            txn_read_holds: None,
         };
 
         let session = client.session();
@@ -421,7 +428,7 @@ Issue a SQL query to get started. Need help?
     pub async fn support_execute_one(
         &self,
         sql: &str,
-    ) -> Result<Pin<Box<dyn Stream<Item = PeekResponseUnary> + Send + Sync>>, anyhow::Error> {
+    ) -> Result<Pin<Box<dyn Stream<Item = PeekResponseUnary> + Send>>, anyhow::Error> {
         // Connect to the coordinator.
         let conn_id = self.new_conn_id()?;
         let session = self.new_session(SessionConfig {
@@ -534,15 +541,14 @@ pub struct SessionClient {
     segment_client: Option<mz_segment::Client>,
     environment_id: EnvironmentId,
     /// Thin client for fast-path peeks; populated at connection startup.
-    peek_client: crate::peek_client::PeekClient,
+    peek_client: PeekClient,
+    /// The current transaction's read holds.
+    /// (similar to the Coordinator's txn_read_holds)
+    /// ////// todo: Is this ok? Why didn't old peek sequencing code put read holds here?
+    txn_read_holds: Option<read_policy::ReadHolds<Timestamp>>,
 }
 
 impl SessionClient {
-    /// Returns a reference to the PeekClient used for fast-path peek sequencing.
-    pub fn peek_client(&self) -> &crate::peek_client::PeekClient {
-        &self.peek_client
-    }
-
     /// Parses a SQL expression, reporting failures as a telemetry event if
     /// possible.
     pub fn parse<'a>(
@@ -688,6 +694,17 @@ impl SessionClient {
         outer_ctx_extra: Option<ExecuteContextExtra>,
     ) -> Result<(ExecuteResponse, Instant), AdapterError> {
         let execute_started = Instant::now();
+
+        // Attempt fast-path peek sequencing in the session task.
+        // If unsupported, fall back to the Coordinator path.
+        ///////// todo: wire up cancel_future?
+        if let Some(resp) = self.try_frontend_peek(&portal_name).await? {
+            println!("++++++ try_frontend_peek succeeded");
+            return Ok((resp, execute_started));
+        } else {
+            println!("------ try_frontend_peek failed");
+        }
+
         let response = self
             .send_with_cancel(
                 |tx, session| Command::Execute {
@@ -1060,6 +1077,27 @@ impl SessionClient {
     /// channel.
     pub async fn recv_timeout(&mut self) -> Option<TimeoutType> {
         self.timeouts.recv().await
+    }
+
+    /// Returns a reference to the PeekClient used for fast-path peek sequencing.
+    pub fn peek_client(&self) -> &PeekClient {
+        &self.peek_client
+    }
+
+    /// Attempt to execute a fast-path peek from the session task.
+    ///
+    /// Returns Some(response) if we handled the peek, or None to fall back to the Coordinator.
+    pub(crate) async fn try_frontend_peek(
+        &mut self,
+        portal_name: &str,
+    ) -> Result<Option<ExecuteResponse>, AdapterError> {
+        // We need to snatch the session out of self here, because if we just had a reference to it,
+        // then we couldn't do other things with self.
+        let mut session = self.session.take().expect("SessionClient invariant");
+        let r = self.try_frontend_peek_inner(portal_name, &mut session).await;
+        // Always put it back, even if we got an error.
+        self.session = Some(session);
+        r
     }
 }
 

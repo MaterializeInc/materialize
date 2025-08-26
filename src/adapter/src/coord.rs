@@ -213,7 +213,7 @@ pub(crate) mod timeline;
 pub(crate) mod timestamp_selection;
 
 pub mod appends;
-mod catalog_serving;
+pub mod catalog_serving; ////////// todo: can we avoid pub?
 mod caught_up;
 pub mod cluster_scheduling;
 mod command_handler;
@@ -224,7 +224,7 @@ mod introspection;
 mod message_handler;
 mod privatelink_status;
 pub mod read_policy;
-mod sequencer;
+pub(crate) mod sequencer; ////////// todo: can we avoid pub?
 mod sql;
 mod validity;
 

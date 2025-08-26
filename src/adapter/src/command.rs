@@ -32,6 +32,10 @@ use mz_sql::session::vars::{OwnedVarInput, SystemVars};
 use mz_sql_parser::ast::{AlterObjectRenameStatement, AlterOwnerStatement, DropObjectsStatement};
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
+use mz_repr::global_id::TransientIdGen;
+use mz_sql::optimizer_metrics::OptimizerMetrics;
+use mz_storage_types::sources::Timeline;
+use mz_timestamp_oracle::TimestampOracle;
 
 use crate::catalog::Catalog;
 use crate::coord::ExecuteContextExtra;
@@ -205,6 +209,7 @@ pub struct Response<T> {
 }
 
 /// The response to [`Client::startup`](crate::Client::startup).
+/// /////// todo: should this be generic in the timestamp type, like e.g. TimelineState
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub struct StartupResponse {
@@ -216,6 +221,7 @@ pub struct StartupResponse {
     /// Map of (name, VarInput::Flat) tuples of session default variables that should be set.
     pub session_defaults: BTreeMap<String, OwnedVarInput>,
     pub catalog: Arc<Catalog>,
+    ///////// todo: encapsulate the below into PeekClient?
     /// Thin compute instance clients keyed by instance id, for fast-path peeks.
     pub compute_instance_clients: BTreeMap<
         ComputeInstanceId,
@@ -228,6 +234,12 @@ pub struct StartupResponse {
             > + Send
             + Sync,
     >,
+    /////// todo: comment
+    pub transient_id_gen: Arc<TransientIdGen>,
+    /////// todo: comment
+    pub optimizer_metrics: OptimizerMetrics,
+    /////// todo: comment
+    pub oracles: BTreeMap<Timeline, Arc<dyn TimestampOracle<mz_repr::Timestamp> + Send + Sync>>,
 }
 
 /// The response to [`Client::authenticate`](crate::Client::authenticate).
