@@ -131,10 +131,6 @@ class TableFromPgSource(TableFromSourceBase):
 class TableFromMySqlSource(TableFromSourceBase):
     suffix = "tbl_from_mysql_source"
 
-    def _can_run(self, e: Executor) -> bool:
-        # TODO: Reenable when database-issues#9288 is fixed
-        return False
-
     def initialize(self) -> Testdrive:
         return Testdrive(
             self.generic_setup()
@@ -238,7 +234,10 @@ class TableFromSqlServerSource(TableFromSourceBase):
     suffix = "tbl_from_sql_server_source"
 
     def _can_run(self, e: Executor) -> bool:
-        return self.base_version > MzVersion.parse_mz("v0.154.0-dev")
+        return (
+            self.base_version > MzVersion.parse_mz("v0.154.0-dev")
+            and not self.is_running_as_cloudtest()
+        )
 
     def initialize(self) -> Testdrive:
         return Testdrive(
@@ -259,7 +258,7 @@ class TableFromSqlServerSource(TableFromSourceBase):
 
                 $ sql-server-execute name=sql-server
                 USE test;
-                CREATE TABLE sql_server_source_table_1 (a INTEGER, b INTEGER, y YEAR);
+                CREATE TABLE sql_server_source_table_1 (a INTEGER, b INTEGER, y INTEGER);
                 EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'sql_server_source_table_1', @role_name = 'SA', @supports_net_changes = 0;
                 INSERT INTO sql_server_source_table_1 VALUES (1, 1234, 2024), (2, 0, 2001);
 
@@ -270,7 +269,6 @@ class TableFromSqlServerSource(TableFromSourceBase):
                 > CREATE SOURCE sql_server_source_{self.suffix} FROM SQL SERVER CONNECTION sql_server_conn_{self.suffix};
 
                 > CREATE SOURCE old_sql_server_source_{self.suffix} FROM SQL SERVER CONNECTION sql_server_conn_{self.suffix}
-                  (TEXT COLUMNS = (sql_server_source_table_1.y))
                   FOR TABLES (sql_server_source_table_1 AS sql_server_table_1_old_syntax);
                 """
             )
@@ -282,8 +280,7 @@ class TableFromSqlServerSource(TableFromSourceBase):
             for s in [
                 f"""
                 > CREATE TABLE sql_server_table_1 FROM SOURCE sql_server_source_{self.suffix}
-                  (REFERENCE "sql_server_source_table_1")
-                  WITH (TEXT COLUMNS = (y));
+                  (REFERENCE "sql_server_source_table_1");
 
                 $ sql-server-connect name=sql-server
                 server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
@@ -294,9 +291,8 @@ class TableFromSqlServerSource(TableFromSourceBase):
                 """,
                 f"""
                 > CREATE TABLE sql_server_table_1b FROM SOURCE sql_server_source_{self.suffix}
-                  (REFERENCE "public_{self.suffix}"."sql_server_source_table_1")
-                  WITH (IGNORE COLUMNS = (y));
-                > CREATE TABLE sql_server_table_2 FROM SOURCE sql_server_source_{self.suffix} (REFERENCE "public_{self.suffix}"."sql_server_source_table_2");
+                  (REFERENCE "sql_server_source_table_1");
+                > CREATE TABLE sql_server_table_2 FROM SOURCE sql_server_source_{self.suffix} (REFERENCE "sql_server_source_table_2");
 
                 $ sql-server-connect name=sql-server
                 server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
@@ -320,10 +316,10 @@ class TableFromSqlServerSource(TableFromSourceBase):
                 4 3456 <null>
 
                 > SELECT * FROM sql_server_table_1b;
-                1 1234
-                2 0
-                3 2345
-                4 3456
+                1 1234 2024
+                2 0 2001
+                3 2345 2000
+                4 3456 <null>
 
                 > SELECT * FROM sql_server_table_2;
                 1000

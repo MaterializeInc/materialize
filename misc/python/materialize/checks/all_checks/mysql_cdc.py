@@ -261,10 +261,6 @@ class MySqlCdcNoWait(MySqlCdcBase, Check):
 
 @externally_idempotent(False)
 class MySqlCdcMzNow(Check):
-    def _can_run(self, e: Executor) -> bool:
-        # TODO: Reenable when database-issues#9288 is fixed
-        return False
-
     def initialize(self) -> Testdrive:
         return Testdrive(
             dedent(
@@ -383,9 +379,7 @@ class MySqlCdcMzNow(Check):
 @externally_idempotent(False)
 class MySqlBitType(Check):
     def _can_run(self, e: Executor) -> bool:
-        # TODO: Reenable when database-issues#9288 is fixed
-        return False
-        # return self.base_version > MzVersion.parse_mz("v0.131.0-dev")
+        return self.base_version > MzVersion.parse_mz("v0.131.0-dev")
 
     def initialize(self) -> Testdrive:
         return Testdrive(
@@ -500,9 +494,7 @@ class MySqlBitType(Check):
 @externally_idempotent(False)
 class MySqlInvisibleColumn(Check):
     def _can_run(self, e: Executor) -> bool:
-        # TODO: Reenable when database-issues#9288 is fixed
-        return False
-        # return self.base_version > MzVersion.parse_mz("v0.133.0-dev")
+        return self.base_version > MzVersion.parse_mz("v0.133.0-dev")
 
     def initialize(self) -> Testdrive:
         return Testdrive(

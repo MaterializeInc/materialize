@@ -1815,12 +1815,12 @@ server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;U
 
 $ sql-server-execute name=sql-server
 USE test;
-IF EXISTS (SELECT 1 FROM cdc.change_tables WHERE capture_instance = 'dbpk_table') BEGIN EXEC sys.sp_cdc_disable_table @source_schema = 'dbo', @source_name = 'pk_table', @capture_instance = 'dbpk_table'; END
+IF EXISTS (SELECT 1 FROM cdc.change_tables WHERE capture_instance = 'dbo_pk_table') BEGIN EXEC sys.sp_cdc_disable_table @source_schema = 'dbo', @source_name = 'pk_table', @capture_instance = 'dbo_pk_table'; END
 DROP TABLE IF EXISTS pk_table;
 CREATE TABLE pk_table (pk BIGINT PRIMARY KEY, f2 BIGINT);
 EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'pk_table', @role_name = 'SA', @supports_net_changes = 0;
 
-WITH Numbers AS (SELECT TOP ({self.n()}) ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS n FROM sys.objects AS o1 CROSS JOIN sys.objects AS o2) INSERT INTO pk_table (pk, f2) SELECT n, n * n FROM Numbers;
+WITH Numbers AS (SELECT TOP (1000000) ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS n FROM master.dbo.spt_values t1 CROSS JOIN master.dbo.spt_values t2) INSERT INTO pk_table (pk, f2) SELECT n, CAST(n AS bigint) * n FROM Numbers;
 """
         )
 
@@ -1885,7 +1885,7 @@ server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;U
 
 $ sql-server-execute name=sql-server
 USE test;
-IF EXISTS (SELECT 1 FROM cdc.change_tables WHERE capture_instance = 'dbt1') BEGIN EXEC sys.sp_cdc_disable_table @source_schema = 'dbo', @source_name = 't1', @capture_instance = 'dbt1'; END
+IF EXISTS (SELECT 1 FROM cdc.change_tables WHERE capture_instance = 'dbo_t1') BEGIN EXEC sys.sp_cdc_disable_table @source_schema = 'dbo', @source_name = 't1', @capture_instance = 'dbo_t1'; END
 DROP TABLE IF EXISTS t1;
 CREATE TABLE t1 (pk BIGINT IDENTITY(1,1) PRIMARY KEY, f2 BIGINT);
 EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 't1', @role_name = 'SA', @supports_net_changes = 0;

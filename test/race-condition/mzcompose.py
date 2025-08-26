@@ -385,7 +385,7 @@ class MySqlSource(Object):
 #
 #             $ sql-server-execute name=sql-server
 #             USE test;
-#             IF EXISTS (SELECT 1 FROM cdc.change_tables WHERE capture_instance = 'db{self.name}_table') BEGIN EXEC sys.sp_cdc_disable_table @source_schema = 'dbo', @source_name = '{self.name}_table', @capture_instance = 'db{self.name}_table'; END
+#             IF EXISTS (SELECT 1 FROM cdc.change_tables WHERE capture_instance = 'dbo_{self.name}_table') BEGIN EXEC sys.sp_cdc_disable_table @source_schema = 'dbo', @source_name = '{self.name}_table', @capture_instance = 'dbo_{self.name}_table'; END
 #             DROP TABLE IF EXISTS {self.name}_table;
 #             CREATE TABLE {self.name}_table (a VARCHAR(1024), b VARCHAR(1024));
 #             EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = '{self.name}_table', @role_name = 'SA', @supports_net_changes = 0;

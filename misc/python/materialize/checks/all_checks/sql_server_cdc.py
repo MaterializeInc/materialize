@@ -279,7 +279,10 @@ class SqlServerCdc(SqlServerCdcBase, Check):
         super().__init__(wait=True, base_version=base_version, rng=rng)
 
     def _can_run(self, e: Executor) -> bool:
-        return self.base_version > MzVersion.parse_mz("v0.154.0-dev")
+        return (
+            self.base_version > MzVersion.parse_mz("v0.154.0-dev")
+            and not self.is_running_as_cloudtest()
+        )
 
 
 @externally_idempotent(False)
@@ -288,13 +291,19 @@ class SqlServerCdcNoWait(SqlServerCdcBase, Check):
         super().__init__(wait=False, base_version=base_version, rng=rng)
 
     def _can_run(self, e: Executor) -> bool:
-        return self.base_version > MzVersion.parse_mz("v0.154.0-dev")
+        return (
+            self.base_version > MzVersion.parse_mz("v0.154.0-dev")
+            and not self.is_running_as_cloudtest()
+        )
 
 
 @externally_idempotent(False)
 class SqlServerCdcMzNow(Check):
     def _can_run(self, e: Executor) -> bool:
-        return self.base_version > MzVersion.parse_mz("v0.154.0-dev")
+        return (
+            self.base_version > MzVersion.parse_mz("v0.154.0-dev")
+            and not self.is_running_as_cloudtest()
+        )
 
     def initialize(self) -> Testdrive:
         return Testdrive(

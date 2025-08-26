@@ -11,14 +11,12 @@ import json
 from textwrap import dedent
 from typing import TYPE_CHECKING, Any
 
+from materialize import MZ_ROOT
 from materialize.checks.actions import Action
 from materialize.checks.executors import Executor
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.materialized import DeploymentStatus, Materialized
-from materialize.mzcompose.services.sql_server import (
-    setup_sql_server_testing,
-)
 from materialize.mzcompose.services.ssh_bastion_host import (
     setup_default_ssh_test_connection,
 )
@@ -182,10 +180,22 @@ class ConfigureMz(MzcomposeAction):
             """
         )
 
-        setup_sql_server_testing(e.mzcompose_composition())
-
         self.handle = e.testdrive(input=input, mz_service=self.mz_service)
         e.system_settings.update(system_settings)
+
+    def join(self, e: Executor) -> None:
+        e.join(self.handle)
+
+
+class SetupSqlServerTesting(MzcomposeAction):
+    def __init__(self, scenario: "Scenario", mz_service: str | None = None) -> None:
+        self.handle: Any | None = None
+        self.mz_service = mz_service
+        self.scenario = scenario
+
+    def execute(self, e: Executor) -> None:
+        with open(MZ_ROOT / "test" / "sql-server-cdc" / "setup" / "setup.td") as f:
+            self.handle = e.testdrive(input=f.read(), mz_service=self.mz_service)
 
     def join(self, e: Executor) -> None:
         e.join(self.handle)
