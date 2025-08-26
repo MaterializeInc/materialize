@@ -5755,3 +5755,99 @@ def workflow_test_paused_cluster_readhold_downgrade(c: Composition):
         SELECT a FROM mv;
         """
     )
+
+
+def workflow_test_swap_disk_bytes(c: Composition):
+    """
+    Test that `mz_cluster_replica_sizes.disk_bytes` shows expected values for
+    swap replica.
+    """
+
+    with c.override(
+        Materialized(
+            cluster_replica_size={
+                "swap,nodisk": {
+                    "workers": 1,
+                    "scale": 1,
+                    "credits_per_hour": "1",
+                    "memory_limit": "1G",
+                    "disk_limit": "0",
+                    "swap_enabled": True,
+                },
+                "swap,lodisk": {
+                    "workers": 1,
+                    "scale": 1,
+                    "credits_per_hour": "1",
+                    "memory_limit": "1G",
+                    "disk_limit": "1G",
+                    "swap_enabled": True,
+                },
+                "swap,hidisk": {
+                    "workers": 1,
+                    "scale": 1,
+                    "credits_per_hour": "1",
+                    "memory_limit": "1G",
+                    "disk_limit": "10G",
+                    "swap_enabled": True,
+                },
+                "noswap": {
+                    "workers": 1,
+                    "scale": 1,
+                    "credits_per_hour": "1",
+                    "memory_limit": "1G",
+                    "disk_limit": "10G",
+                    "swap_enabled": False,
+                },
+            },
+            bootstrap_replica_size="swap,nodisk",
+        ),
+    ):
+        c.up("materialized")
+
+        # Without the memory limiter enabled, disk bytes should reflect
+        # verbatim.
+        c.sql(
+            "ALTER SYSTEM SET memory_limiter_interval = 0",
+            user="mz_system",
+            port=6877,
+        )
+        c.kill("materialized")
+        c.up("materialized")
+
+        c.testdrive(
+            dedent(
+                """
+                > SELECT size, disk_bytes FROM mz_cluster_replica_sizes
+                swap,nodisk 0
+                swap,lodisk 1000000000
+                swap,hidisk 10000000000
+                noswap      10000000000
+                """
+            )
+        )
+
+        # With the memory limiter enabled, disk bytes should reflect the memory
+        # limit, if it reduces the limit from the size definition and swap is
+        # enabled.
+        c.sql(
+            """
+            ALTER SYSTEM SET memory_limiter_interval = 10;
+            ALTER SYSTEM SET memory_limiter_usage_factor = 3;
+            """,
+            user="mz_system",
+            port=6877,
+        )
+        c.kill("materialized")
+        c.up("materialized")
+
+        c.testdrive(
+            dedent(
+                """
+                > SELECT size, disk_bytes FROM mz_cluster_replica_sizes
+                swap,nodisk 0
+                swap,lodisk 1000000000
+                swap,hidisk 2000000000
+                noswap      10000000000
+                """
+            )
+        )

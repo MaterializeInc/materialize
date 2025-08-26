@@ -477,11 +477,11 @@ pub enum CdcError {
 )]
 pub struct Lsn {
     /// Virtual Log File sequence number.
-    vlf_id: u32,
+    pub vlf_id: u32,
     /// Log block number.
-    block_id: u32,
+    pub block_id: u32,
     /// Log record number.
-    record_id: u16,
+    pub record_id: u16,
 }
 
 impl Lsn {
