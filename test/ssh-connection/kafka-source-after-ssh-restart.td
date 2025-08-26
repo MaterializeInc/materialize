@@ -12,6 +12,8 @@
 # in the source, as that is the true measure of health, vs what is reported in
 # the mz_source_statuses relation.
 
+$ set-sql-timeout duration=60s
+
 $ kafka-ingest topic=thetopic format=bytes
 three
 
