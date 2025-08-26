@@ -100,7 +100,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::future::InTask;
 use mz_ore::iter::IteratorExt;
 use mz_ore::metrics::MetricsFutureExt;
-use mz_repr::{Diff, Row, ScalarType};
+use mz_repr::{Diff, Row};
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::MySqlSourceConnection;
 use mz_storage_types::sources::mysql::{GtidPartition, gtid_set_frontier};
@@ -549,16 +549,10 @@ fn build_snapshot_query(outputs: &[SourceOutputInfo]) -> String {
         .columns
         .iter()
         .map(|col| {
-            let is_uint16 = col
-                .column_type
-                .as_ref()
-                .map(|col_type| col_type.scalar_type == ScalarType::UInt16)
-                .unwrap_or(false);
-            let is_enum = matches!(col.meta, Some(MySqlColumnMeta::Enum(_)));
-
-            if is_uint16 && is_enum {
-                // Use CAST to convert enum to unsigned integer
-                // Cannot use backticks with +0 arithmetic
+            if matches!(col.meta, Some(MySqlColumnMeta::Enum(_))) {
+                // Use CAST to convert enum to unsigned integer during snapshot
+                // after snapshot the enum will replicate via the binlog as an
+                // an unsigend integer.
                 format!("CAST({} AS UNSIGNED)", quote_identifier(&col.name))
             } else {
                 quote_identifier(&col.name)
