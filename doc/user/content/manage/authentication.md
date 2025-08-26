@@ -9,38 +9,77 @@ menu:
     weight: 8
 ---
 
-## Configuring Authentication
+## Configuring Authentication Type
 
-To configure authentication for self-managed Materialize, use the `spec.authenticatorKind` setting. This setting determines which authentication method is used:
+To configure the authentication type used by self-managed Materialize, use the
+`spec.authenticatorKind` setting in conjunction with any specific configuration
+for the authentication method.
 
-- `None`: Disables authentication. All users are trusted based on their claimed
-  identity **without** any verification.
-- `Password`: Requires users to authenticate using a password.
+The `spec.authenticatorKind` setting determines which authentication method is
+used:
 
-If `spec.authenticatorKind` is not set, the default is **None**.
+{{% yaml-table data="self_managed/authentication_setting" %}}
 
-### Password authentication
+## Configuring password authentication
 
-***Public Preview*** This feature may have minor stability issues.
+{{< public-preview >}}This feature{{</ public-preview >}}
 
-Password authentication requires users to authenticate with a password. To
-use password authentication, set `spec.authenticatorKind` to `Password` and
-configure a password for the internal `mz_system` user.
+Password authentication requires users to log in with a password.
 
+To configure self-managed Materialize for password authentication:
 
-#### Configure the password for `mz_system`
-To configure the password for the internal `mz_system` user, add an
-`external_login_password_mz_system` key to the Kubernetes `Secret` referenced in
-`spec.backendSecretName` of the Materialize Kubernetes resource.
+ Configuration | Description
+---------------| ------------
+`spec.authenticatorKind` | Set to `Password` to enable password authentication.
+`external_login_password_mz_system` | To the Kubernetes Secret referenced by `spec.backendSecretName`, add the secret key `external_login_password_mz_system`. This is the password for the `mz_system` user [^1], who is the only user initially available when password authentication is enabled.
+
+For example, if using Kind, in the `sample-materialize.yaml` file:
+
+```hc {hl_lines="14 24"}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: materialize-environment
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: materialize-backend
+  namespace: materialize-environment
+stringData:
+  metadata_backend_url: "..."
+  persist_backend_url: "..."
+  external_login_password_mz_system: "enter_mz_system_password"
+---
+apiVersion: materialize.cloud/v1alpha1
+kind: Materialize
+metadata:
+  name: 12345678-1234-1234-1234-123456789012
+  namespace: materialize-environment
+spec:
+  environmentdImageRef: materialize/environmentd:v0.147.2
+  backendSecretName: materialize-backend
+  authenticatorKind: Password
+```
 
 #### Logging in and creating users
 
-Once password authentication is enabled, only the `mz_system` user will be initially available. This user is used by the Materialize Operator for upgrades and maintenance tasks and can also be used to create additional users.
+![Image of Materialize Console login screen with mz_system user](/images/mz_system_login.png
+"Materialize Console login screen with mz_system user")
 
-See [CREATE ROLE](/sql/create-role) for details on creating additional users.
+Initially, only the `mz_system` user [^1] is available. To create additional
+users, login as the `mz_system` user, using the
+`external_login_password_mz_system` password, and create additional users via
+[CREATE ROLE](/sql/create-role):
 
+```mzsql
+CREATE ROLE <user> WITH LOGIN PASSWORD '<password>';
+```
 
-### Enabling RBAC
+[^1]: The `mz_system` user is also used by the Materialize Operator for upgrades
+and maintenance tasks.
+
+## Enabling RBAC
 
 {{< include-md file="shared-content/enable-rbac.md" >}}
 

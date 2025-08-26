@@ -1,0 +1,19 @@
+columns:
+  - column: "authenticatorKind Value"
+  - column: "Description"
+
+rows:
+- "authenticatorKind Value": "**None**"
+  "Description": |
+    Disables authentication. All users are trusted based on their claimed
+    identity **without** any verification. **Default**
+- "authenticatorKind Value": "**Password**"
+  "Description": |
+    Enables [password authentication](#configuring-password-authentication) for
+    users. When enabled, users must authenticate with their password.
+
+    {{< tip >}}
+    When enabled, you must also set the `mz_system` user password in
+    `external_login_password_mz_system`. See [Configuring password
+    authentication](#configuring-password-authentication) for details.
+    {{</ tip >}}
