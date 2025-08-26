@@ -468,9 +468,9 @@ steps:
 
   - id: limits
     label: "Product limits (finding new limits)"
-    depends_on: build-aarch64
+    depends_on: build-x86_64
     agents:
-      queue: hetzner-aarch64-16cpu-32gb
+      queue: hetzner-x86-64-16cpu-32gb
     plugins:
       - ./ci/plugins/mzcompose:
           composition: limits

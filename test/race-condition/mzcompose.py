@@ -384,6 +384,7 @@ class SqlServerSource(Object):
 
             $ sql-server-execute name=sql-server
             USE test;
+            IF EXISTS (SELECT 1 FROM cdc.change_tables WHERE capture_instance = 'db{self.name}_table') BEGIN EXEC sys.sp_cdc_disable_table @source_schema = 'dbo', @source_name = '{self.name}_table', @capture_instance = 'db{self.name}_table'; END
             DROP TABLE IF EXISTS {self.name}_table;
             CREATE TABLE {self.name}_table (a VARCHAR(1024), b VARCHAR(1024));
             EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = '{self.name}_table', @role_name = 'SA', @supports_net_changes = 0;
@@ -437,7 +438,7 @@ class SqlServerSource(Object):
 
                 $ sql-server-execute name=sql-server
                 USE test;
-                UPDATE {self.name}_table SET b = CONCAT(b, 'bar') WHERE true;"""
+                UPDATE {self.name}_table SET b = CONCAT(b, 'bar') WHERE 1 = 1;"""
             ),
             lambda: dedent(
                 f"""
@@ -446,7 +447,7 @@ class SqlServerSource(Object):
 
                 $ sql-server-execute name=sql-server
                 USE test;
-                DELETE FROM {self.name}_table WHERE LENGTH(b) > 12;"""
+                DELETE FROM {self.name}_table WHERE LEN(b) > 12;"""
             ),
             lambda: dedent(
                 f"""

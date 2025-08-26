@@ -2143,10 +2143,10 @@ steps:
     steps:
        - id: race-condition-subsequent
          label: "Race Condition Test (subsequent)"
-         depends_on: build-aarch64
+         depends_on: build-x86_64
          timeout_in_minutes: 180
          agents:
-           queue: hetzner-aarch64-8cpu-16gb
+           queue: hetzner-x86-64-8cpu-16gb
          plugins:
            - ./ci/plugins/mzcompose:
                composition: race-condition
@@ -2154,10 +2154,10 @@ steps:
 
        - id: race-condition-subsequent-100
          label: "Race Condition Test (subsequent, 100 objects)"
-         depends_on: build-aarch64
+         depends_on: build-x86_64
          timeout_in_minutes: 180
          agents:
-           queue: hetzner-aarch64-8cpu-16gb
+           queue: hetzner-x86-64-16cpu-32gb
          plugins:
            - ./ci/plugins/mzcompose:
                composition: race-condition
@@ -2165,10 +2165,10 @@ steps:
 
        - id: race-condition-subsequent-chain
          label: "Race Condition Test (subsequent chain)"
-         depends_on: build-aarch64
+         depends_on: build-x86_64
          timeout_in_minutes: 180
          agents:
-           queue: hetzner-aarch64-8cpu-16gb
+           queue: hetzner-x86-64-8cpu-16gb
          plugins:
            - ./ci/plugins/mzcompose:
                composition: race-condition
@@ -2176,10 +2176,10 @@ steps:
 
        - id: race-condition-subsequent-chain-100
          label: "Race Condition Test (subsequent chain, 100 objects)"
-         depends_on: build-aarch64
+         depends_on: build-x86_64
          timeout_in_minutes: 180
          agents:
-           queue: hetzner-aarch64-8cpu-16gb
+           queue: hetzner-x86-64-16cpu-32gb
          plugins:
            - ./ci/plugins/mzcompose:
                composition: race-condition
@@ -2187,10 +2187,10 @@ steps:
 
        - id: race-condition-concurrent
          label: "Race Condition Test (concurrent)"
-         depends_on: build-aarch64
+         depends_on: build-x86_64
          timeout_in_minutes: 180
          agents:
-           queue: hetzner-aarch64-8cpu-16gb
+           queue: hetzner-x86-64-8cpu-16gb
          plugins:
            - ./ci/plugins/mzcompose:
                composition: race-condition

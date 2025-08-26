@@ -36,6 +36,10 @@ from materialize.feature_benchmark.report import (
 from materialize.mz_version import MzVersion
 from materialize.mzcompose import ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS
 from materialize.mzcompose.services.mysql import MySql
+from materialize.mzcompose.services.sql_server import (
+    SqlServer,
+    setup_sql_server_testing,
+)
 from materialize.mzcompose.test_result import (
     FailedTestExecutionError,
     TestFailureDetails,
@@ -145,6 +149,7 @@ SERVICES = [
     KgenService(),
     Postgres(),
     MySql(),
+    SqlServer(),
     Balancerd(),
     # Overridden below
     Materialized(),
@@ -364,6 +369,7 @@ def start_overridden_mz_clusterd_and_cockroach(
             "clusterd",
             *(["balancerd"] if balancerd else []),
         )
+        setup_sql_server_testing(c)
 
         version_request_command = c.run(
             "materialized",
@@ -528,7 +534,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         # specified root scenario is a leaf
         selected_scenarios = [specified_root_scenario]
 
-    dependencies = ["postgres", "mysql"]
+    dependencies = ["postgres", "mysql", "sql-server"]
 
     if args.redpanda:
         dependencies += ["redpanda"]
