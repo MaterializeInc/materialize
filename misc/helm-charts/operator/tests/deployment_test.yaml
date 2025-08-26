@@ -17,7 +17,7 @@ tests:
       of: Deployment
   - equal:
       path: spec.template.spec.containers[0].image
-      value: materialize/orchestratord:v0.147.6
+      value: materialize/orchestratord:v0.147.7
   - equal:
       path: spec.template.spec.containers[0].imagePullPolicy
       value: IfNotPresent
@@ -70,8 +70,7 @@ tests:
       path: spec.template.spec.containers[0].args[13]
       pattern: is_cc":true
 
-- it: should have a cluster with disk limit to 1552MiB when storage class is
-    configured
+- it: should have a cluster with disk limit to 1552MiB when storage class is configured
   set:
     storage.storageClass.name: "my-storage-class"
   asserts:
