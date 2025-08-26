@@ -355,6 +355,7 @@ class SqlServerExecutor(Executor):
             """
                 ),
                 quiet=True,
+                silent=True,
             )
 
     def create(self, logging_exe: Any | None = None) -> None:

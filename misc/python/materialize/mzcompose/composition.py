@@ -1416,6 +1416,7 @@ class Composition:
         caller: Traceback | None = None,
         mz_service: str | None = None,
         quiet: bool = False,
+        silent: bool = False,
     ) -> subprocess.CompletedProcess:
         """Run a string as a testdrive script.
 
@@ -1448,6 +1449,7 @@ class Composition:
             capture_and_print=not quiet,
             capture=quiet,
             capture_stderr=quiet,
+            silent=silent,
         )
 
     def enable_minio_versioning(self) -> None:
