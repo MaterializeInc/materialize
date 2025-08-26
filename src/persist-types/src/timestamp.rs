@@ -9,58 +9,61 @@
 
 //! Stats-related timestamp code.
 
-use std::ops::Range;
-
 use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
+use mz_ore::cast::CastFrom;
 
 /// Parses a specific subset of ISO8061 timestamps.
 ///
 /// This has very specific semantics so that it can enable pushdown on string
 /// timestamps in JSON. See doc/user/content/sql/functions/pushdown.md for
 /// details.
-pub fn try_parse_monotonic_iso8601_timestamp<'a>(a: &'a str) -> Option<NaiveDateTime> {
-    const YYYY: Range<usize> = 0..0 + "YYYY".len();
-    const LIT_DASH_0: Range<usize> = YYYY.end..YYYY.end + "-".len();
-    const MM: Range<usize> = LIT_DASH_0.end..LIT_DASH_0.end + "MM".len();
-    const LIT_DASH_1: Range<usize> = MM.end..MM.end + "-".len();
-    const DD: Range<usize> = LIT_DASH_1.end..LIT_DASH_1.end + "DD".len();
-    const LIT_T: Range<usize> = DD.end..DD.end + "T".len();
-    const HH: Range<usize> = LIT_T.end..LIT_T.end + "HH".len();
-    const LIT_COLON_0: Range<usize> = HH.end..HH.end + ":".len();
-    const MI: Range<usize> = LIT_COLON_0.end..LIT_COLON_0.end + "MI".len();
-    const LIT_COLON_1: Range<usize> = MI.end..MI.end + ":".len();
-    const SS: Range<usize> = LIT_COLON_1.end..LIT_COLON_1.end + "SS".len();
-    const LIT_DOT: Range<usize> = SS.end..SS.end + ".".len();
-    // NB "MS" pattern is shorter than what it matches, so hardcode the 3.
-    const MS: Range<usize> = LIT_DOT.end..LIT_DOT.end + 3;
-    const LIT_Z: Range<usize> = MS.end..MS.end + "Z".len();
+pub fn try_parse_monotonic_iso8601_timestamp(a: &str) -> Option<NaiveDateTime> {
+    fn parse_lit(str: &mut &[u8], byte: u8) -> Option<()> {
+        if *str.split_off_first()? == byte {
+            Some(())
+        } else {
+            None
+        }
+    }
+
+    fn parse_int(str: &mut &[u8], digits: usize) -> Option<u32> {
+        let mut acc = 0u32;
+        for digit in str.split_off(..digits)? {
+            if !digit.is_ascii_digit() {
+                return None;
+            }
+            acc = acc * 10 + u32::cast_from(*digit - b'0');
+        }
+        Some(acc)
+    }
 
     // The following assumes this is ASCII so do a quick check first.
     if !a.is_ascii() {
         return None;
     }
+    let bytes = &mut a.as_bytes();
 
-    if a.len() != LIT_Z.end {
+    let yyyy = parse_int(bytes, 4)?;
+    parse_lit(bytes, b'-')?;
+    let mm = parse_int(bytes, 2)?;
+    parse_lit(bytes, b'-')?;
+    let dd = parse_int(bytes, 2)?;
+    parse_lit(bytes, b'T')?;
+    let hh = parse_int(bytes, 2)?;
+    parse_lit(bytes, b':')?;
+    let mi = parse_int(bytes, 2)?;
+    parse_lit(bytes, b':')?;
+    let ss = parse_int(bytes, 2)?;
+    parse_lit(bytes, b'.')?;
+    let ms = parse_int(bytes, 3)?;
+    parse_lit(bytes, b'Z')?;
+
+    if !bytes.is_empty() {
         return None;
     }
-    if &a[LIT_DASH_0] != "-"
-        || &a[LIT_DASH_1] != "-"
-        || &a[LIT_T] != "T"
-        || &a[LIT_COLON_0] != ":"
-        || &a[LIT_COLON_1] != ":"
-        || &a[LIT_DOT] != "."
-        || &a[LIT_Z] != "Z"
-    {
-        return None;
-    }
-    let yyyy = a[YYYY].parse().ok()?;
-    let mm = a[MM].parse().ok()?;
-    let dd = a[DD].parse().ok()?;
-    let hh = a[HH].parse().ok()?;
-    let mi = a[MI].parse().ok()?;
-    let ss = a[SS].parse().ok()?;
-    let ms = a[MS].parse().ok()?;
-    let date = NaiveDate::from_ymd_opt(yyyy, mm, dd)?;
+
+    // YYYY is a max 4-digit unsigned int, which can always be represented as a positive i32.
+    let date = NaiveDate::from_ymd_opt(i32::try_from(yyyy).ok()?, mm, dd)?;
     let time = NaiveTime::from_hms_milli_opt(hh, mi, ss, ms)?;
     Some(NaiveDateTime::new(date, time))
 }
@@ -74,8 +77,12 @@ mod tests {
         // The entire point of this method is that the lexicographic order
         // corresponds to chronological order (ignoring None/NULL). So, verify.
         let mut inputs = vec![
+            "-005-01-01T00:00:00.000Z",
+            "-002-01-01T00:00:00.000Z",
             "0000-01-01T00:00:00.000Z",
             "0001-01-01T00:00:00.000Z",
+            "+000-01-01T00:00:00.000Z",
+            "+001-01-01T00:00:00.000Z",
             "2015-00-00T00:00:00.000Z",
             "2015-09-00T00:00:00.000Z",
             "2015-09-18T00:00:00.000Z",
@@ -87,6 +94,7 @@ mod tests {
             "2015-09-18T23:56:04.124Z",
             "2015-09-18T23:56:05.000Z",
             "2015-09-18T23:57:00.000Z",
+            "2015-09-18T23:57:00.000Zextra",
             "2015-09-18T24:00:00.000Z",
             "2015-09-19T00:00:00.000Z",
             "2015-10-00T00:00:00.000Z",
