@@ -153,10 +153,6 @@ impl RustType<ProtoMySqlColumnMetaEnum> for MySqlColumnMetaEnum {
     }
 }
 
-trait IsCompatible {
-    fn is_compatible(&self, other: &Self) -> bool;
-}
-
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
 pub enum MySqlColumnMeta {
     /// The described column is an enum, with the given possible values.
@@ -182,6 +178,79 @@ pub struct MySqlColumnDesc {
     pub column_type: Option<ColumnType>,
     /// Optional metadata about the column that may be necessary for decoding
     pub meta: Option<MySqlColumnMeta>,
+}
+
+impl MySqlColumnDesc {
+    /// Determines if two `MySqlColumnDesc` are compatible with one another in
+    /// a way that Materialize can handle.
+    pub fn is_compatible(&self, other: &MySqlColumnDesc) -> bool {
+        self.name == other.name
+            && match (&self.column_type, &other.column_type) {
+                (None, None) => true,
+                (Some(self_type), Some(other_type)) => {
+                    self_type.scalar_type == other_type.scalar_type
+                    // Columns are compatible if:
+                    // - self is nullable; introducing a not null constraint doesn't
+                    //   change this column's behavior.
+                    // - self and other are both not nullable
+                    && (self_type.nullable || self_type.nullable == other_type.nullable)
+                }
+                (Some(_), None) => false,
+                (None, Some(_)) => false,
+            }
+        // Ensure any column metadata is compatible.
+        && self.is_compatible_meta(&other.meta)
+    }
+
+    fn is_compatible_meta(&self, other: &Option<MySqlColumnMeta>) -> bool {
+        match (&self.meta, other) {
+            (None, None) => true,
+            (Some(_), None) => false,
+            (None, Some(_)) => false,
+            (Some(MySqlColumnMeta::Enum(self_enum)), Some(MySqlColumnMeta::Enum(other_enum))) => {
+                let uses_enum_string_representation: bool = self
+                    .column_type
+                    .as_ref()
+                    .is_some_and(|col_type| col_type.scalar_type != ScalarType::UInt16);
+
+                // For any `ScalarType` not a `UInt16` we apply the previous logic
+                // of checking to see if the enum value is already known to us.
+                // We do this as a precaution after implementing support for
+                // representing MySQL enums as `UInt16` to ensure we are
+                // still compatible with representing MySQL enums as `String`
+                // or `Bytes`.
+                if uses_enum_string_representation {
+                    self_enum.values.len() <= other_enum.values.len()
+                        && self_enum
+                            .values
+                            .iter()
+                            .zip(other_enum.values.iter())
+                            .all(|(self_val, other_val)| self_val == other_val)
+                } else {
+                    // For the `UInt16` enum representation we support addition of new enums but
+                    // no other changes.
+                    self_enum.values.len() <= other_enum.values.len()
+                        && self_enum
+                            .values
+                            .iter()
+                            .zip(other_enum.values.iter())
+                            .all(|(self_val, other_val)| self_val == other_val)
+                }
+            }
+            (Some(MySqlColumnMeta::Json), Some(MySqlColumnMeta::Json)) => true,
+            (Some(MySqlColumnMeta::Year), Some(MySqlColumnMeta::Year)) => true,
+            (Some(MySqlColumnMeta::Date), Some(MySqlColumnMeta::Date)) => true,
+            // Timestamps are compatible as long as we don't lose precision
+            (
+                Some(MySqlColumnMeta::Timestamp(precision)),
+                Some(MySqlColumnMeta::Timestamp(other_precision)),
+            ) => precision <= other_precision,
+            // We always cast bit columns to u64's and the max precision of a bit column
+            // is 64 bits, so any bit column is always compatible with another.
+            (Some(MySqlColumnMeta::Bit(_)), Some(MySqlColumnMeta::Bit(_))) => true,
+            _ => false,
+        }
+    }
 }
 
 impl RustType<ProtoMySqlColumnDesc> for MySqlColumnDesc {
@@ -225,62 +294,6 @@ impl RustType<ProtoMySqlColumnDesc> for MySqlColumnDesc {
                 })
                 .transpose()?,
         })
-    }
-}
-
-impl IsCompatible for MySqlColumnDesc {
-    /// Determines if two `MySqlColumnDesc` are compatible with one another in
-    /// a way that Materialize can handle.
-    fn is_compatible(&self, other: &MySqlColumnDesc) -> bool {
-        self.name == other.name
-            && match (&self.column_type, &other.column_type) {
-                (None, None) => true,
-                (Some(self_type), Some(other_type)) => {
-                    self_type.scalar_type == other_type.scalar_type
-                    // Columns are compatible if:
-                    // - self is nullable; introducing a not null constraint doesn't
-                    //   change this column's behavior.
-                    // - self and other are both not nullable
-                    && (self_type.nullable || self_type.nullable == other_type.nullable)
-                }
-                (Some(_), None) => false,
-                (None, Some(_)) => false,
-            }
-            // Ensure any column metadata is compatible.
-            && match (&self.meta, &other.meta) {
-                (None, None) => true,
-                (Some(_), None) => false,
-                (None, Some(_)) => false,
-                (Some(MySqlColumnMeta::Enum(self_enum)), Some(MySqlColumnMeta::Enum(other_enum))) => {
-                    let uses_enum_string_representation: bool = self.column_type
-                            .as_ref()
-                            .map(|col_type| col_type.scalar_type != ScalarType::UInt16)
-                            .unwrap_or(false);
-
-                    if uses_enum_string_representation {
-                        self_enum.values.len() <= other_enum.values.len()
-                            && self_enum
-                                .values
-                                .iter()
-                                .zip(other_enum.values.iter())
-                                .all(|(self_val, other_val)| self_val == other_val)
-                    } else {
-                        true
-                    }
-                }
-                (Some(MySqlColumnMeta::Json), Some(MySqlColumnMeta::Json)) => true,
-                (Some(MySqlColumnMeta::Year), Some(MySqlColumnMeta::Year)) => true,
-                (Some(MySqlColumnMeta::Date), Some(MySqlColumnMeta::Date)) => true,
-                // Timestamps are compatible as long as we don't lose precision
-                (
-                    Some(MySqlColumnMeta::Timestamp(precision)),
-                    Some(MySqlColumnMeta::Timestamp(other_precision)),
-                ) => precision <= other_precision,
-                // We always cast bit columns to u64's and the max precision of a bit column
-                // is 64 bits, so any bit column is always compatible with another.
-                (Some(MySqlColumnMeta::Bit(_)), Some(MySqlColumnMeta::Bit(_))) => true,
-                _ => false,
-            }
     }
 }
 

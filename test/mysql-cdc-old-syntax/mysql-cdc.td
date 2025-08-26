@@ -232,23 +232,6 @@ contains:Address resolved to a private IP
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET storage_enforce_external_addresses = false
 
-! CREATE SOURCE "mz_source"
-  IN CLUSTER cdc_cluster
-  FROM MYSQL CONNECTION mysql_conn
-  FOR TABLES (
-    public."enum_table"
-  );
-contains:referenced tables use unsupported types
-
-! CREATE SOURCE "mz_source"
-  IN CLUSTER cdc_cluster
-  FROM MYSQL CONNECTION mysql_conn
-  FOR TABLES (
-    public."enum_table",
-    public.another_enum_table
-  );
-contains:referenced tables use unsupported types
-
 ! CREATE SOURCE mz_source
   IN CLUSTER cdc_cluster
   FROM MYSQL CONNECTION mysql_conn (
@@ -678,6 +661,24 @@ DELETE FROM mixED_CAse;
 
 # n.b includes a reference to pk_table, which is not a table that's part of the
 # source, but is part of the publication.
+
+> CREATE SOURCE "mz_source_both_enum"
+  IN CLUSTER cdc_cluster
+  FROM MYSQL CONNECTION mysql_conn
+  FOR TABLES (
+    public."enum_table",
+    public.another_enum_table
+  );
+
+> SELECT * FROM enum_table;
+1
+2
+
+> SELECT * FROM another_enum_table;
+1
+2
+
+> DROP SOURCE mz_source_both_enum CASCADE;
 
 ! CREATE SOURCE enum_source
   IN CLUSTER cdc_cluster

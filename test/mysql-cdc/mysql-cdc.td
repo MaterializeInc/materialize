@@ -240,12 +240,6 @@ ALTER SYSTEM SET storage_enforce_external_addresses = false
   IN CLUSTER cdc_cluster
   FROM MYSQL CONNECTION mysql_conn;
 
-! CREATE TABLE enum_table FROM SOURCE mz_source (REFERENCE public.enum_table);
-contains:referenced tables use unsupported types
-
-! CREATE TABLE another_enum_table FROM SOURCE mz_source (REFERENCE public.another_enum_table);
-contains:referenced tables use unsupported types
-
 ! CREATE SOURCE mz_source_2
   IN CLUSTER cdc_cluster
   FROM MYSQL CONNECTION mysql_conn (
@@ -668,6 +662,18 @@ DELETE FROM mixED_CAse;
   WITH (TEXT COLUMNS = ["колона", pk]);
 contains:TEXT COLUMNS refers to table not currently being added
 
+> CREATE TABLE enum_table_int FROM SOURCE enum_source (REFERENCE public.enum_table);
+
+> CREATE TABLE another_enum_table_int FROM SOURCE enum_source (REFERENCE public.another_enum_table);
+
+> SELECT * FROM enum_table_int
+1
+2
+
+> SELECT * FROM another_enum_table_int
+1
+2
+
 > CREATE TABLE enum_table
   FROM SOURCE enum_source
   (REFERENCE public."enum_table")
@@ -685,6 +691,8 @@ enum_source_progress    progress  <null>       ""
 > SELECT * FROM (SHOW TABLES) WHERE name LIKE '%enum%';
 another_enum_table      ""
 enum_table              ""
+another_enum_table_int  ""
+enum_table_int          ""
 
 > SELECT * FROM enum_table
 var0

@@ -46,16 +46,12 @@ INSERT INTO enum_type VALUES ('val1', 'val1'), ('val2', 'val2'), ('not-present',
 2 val2
 0 not-present
 
-> DROP TABLE enum_type;
+> CREATE TABLE enum_type_string FROM SOURCE mz_source (REFERENCE public.enum_type) WITH (TEXT COLUMNS (f1));
 
-$ mysql-execute name=mysql
-DROP TABLE enum_type;
-CREATE TABLE enum_type (f1 ENUM ('val1', 'val2'), f2 TEXT);
-INSERT INTO enum_type VALUES ('val1', 'val1'), ('val2', 'val2'), ('not-present', 'not-present');
-
-> CREATE TABLE enum_type FROM SOURCE mz_source (REFERENCE public.enum_type) WITH (TEXT COLUMNS (f1));
-
-> SELECT * FROM enum_type;
+> SELECT * FROM enum_type_string;
+val1 val1
+val2 val2
+"" not-present
 val1 val1
 val2 val2
 "" not-present
@@ -65,58 +61,153 @@ $ mysql-execute name=mysql
 ALTER TABLE enum_type CHANGE f1 f1 ENUM ('val1', 'val2', 'val3');
 INSERT INTO enum_type VALUES ('val1', 'val1');
 
-> SELECT * FROM enum_type;
+> SELECT * FROM enum_type_string;
 val1 val1
 val2 val2
 "" not-present
 val1 val1
+val2 val2
+"" not-present
+val1 val1
+
+> SELECT * FROM enum_type;
+1 val1
+2 val2
+0 not-present
+1 val1
+2 val2
+0 not-present
+1 val1
 
 $ mysql-execute name=mysql
 INSERT INTO enum_type VALUES ('val3', 'val3');
 
-! SELECT * FROM enum_type;
+! SELECT * FROM enum_type_string;
 contains:received invalid enum value: 3 for column f1
+
+> SELECT * FROM enum_type;
+1 val1
+2 val2
+0 not-present
+1 val1
+2 val2
+0 not-present
+1 val1
+3 val3
 
 $ mysql-execute name=mysql
 DELETE FROM enum_type WHERE f1 = 'val3';
 
-> SELECT * FROM enum_type;
+> SELECT * FROM enum_type_string;
+val1 val1
+val2 val2
+"" not-present
 val1 val1
 val2 val2
 "" not-present
 val1 val1
 
+> SELECT * FROM enum_type;
+1 val1
+2 val2
+0 not-present
+1 val1
+2 val2
+0 not-present
+1 val1
+
 $ mysql-execute name=mysql
 USE public;
 INSERT INTO enum_type VALUES (NULL, 'val1');
-INSERT INTO enum_type VALUES ('not-present', 'val1');
+INSERT INTO enum_type VALUES ('not-present', 'not-present');
 COMMIT;
 
-> SELECT * FROM enum_type;
+> SELECT * FROM enum_type_string;
+val1 val1
+val2 val2
+"" not-present
 val1 val1
 val2 val2
 "" not-present
 val1 val1
 <null> val1
-"" val1
+"" not-present
+
+> SELECT * FROM enum_type;
+1 val1
+2 val2
+0 not-present
+1 val1
+2 val2
+0 not-present
+1 val1
+<null> val1
+0 not-present
 
 $ mysql-execute name=mysql
 USE public;
 UPDATE enum_type SET f1 = 'val2' WHERE f1 IS NULL OR f1 = '';
 COMMIT;
 
-> SELECT * FROM enum_type;
+> SELECT * FROM enum_type_string;
+val1 val1
+val2 val2
+val2 not-present
 val1 val1
 val2 val2
 val2 not-present
 val1 val1
 val2 val1
-val2 val1
+val2 not-present
 
-# Add an additional enum value type and change the ordering
+> SELECT * FROM enum_type;
+1 val1
+2 val2
+2 not-present
+1 val1
+2 val2
+2 not-present
+1 val1
+2 val1
+2 not-present
+
+# Change the ordering
 $ mysql-execute name=mysql
 ALTER TABLE enum_type CHANGE f1 f1 ENUM ('val2', 'val1', 'val3', 'val4');
-INSERT INTO enum_type VALUES ('val1', 'val1');
+
+! SELECT * FROM enum_type_string;
+contains:incompatible schema change: column f1 in table enum_type has been altered
 
 ! SELECT * FROM enum_type;
 contains:incompatible schema change: column f1 in table enum_type has been altered
+
+> DROP SOURCE mz_source CASCADE;
+
+$ mysql-execute name=mysql
+ALTER TABLE enum_type CHANGE f1 f1 ENUM ('val1', 'val2', 'val3');
+
+> CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
+
+> CREATE TABLE enum_type FROM SOURCE mz_source (REFERENCE public.enum_type);
+
+> CREATE TABLE enum_type_string FROM SOURCE mz_source (REFERENCE public.enum_type) WITH (TEXT COLUMNS (f1));
+
+# Add an additional enum value type
+$ mysql-execute name=mysql
+ALTER TABLE enum_type CHANGE f1 f1 ENUM ('val1', 'val2', 'val3', 'val4');
+INSERT INTO enum_type VALUES ('val4', 'val4');
+
+! SELECT * FROM enum_type_string;
+contains:received invalid enum value: 4 for column f1
+
+> SELECT * FROM enum_type;
+1 val1
+2 val2
+2 not-present
+1 val1
+2 val2
+2 not-present
+1 val1
+2 val1
+2 not-present
+4 val4
