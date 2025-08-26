@@ -68,6 +68,13 @@ impl ComputeInstanceSnapshot {
             })
     }
 
+    pub fn new_from_parts(instance_id: ComputeInstanceId, collections: BTreeSet<GlobalId>) -> Self {
+        Self {
+            instance_id,
+            collections,
+        }
+    }
+
     /// Return the ID of this compute instance.
     pub fn instance_id(&self) -> ComputeInstanceId {
         self.instance_id

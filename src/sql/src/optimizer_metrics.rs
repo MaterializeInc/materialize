@@ -30,6 +30,11 @@ pub struct OptimizerMetrics {
     transform_time_seconds: RefCell<std::collections::BTreeMap<String, Vec<Duration>>>,
 }
 
+///////////////// todo: this is of course not true!
+// (But should be fine for the prototype, because we clone OptimizerMetrics in try_frontend_peek_inner,
+// and then don't have actual multi-threaded optimization under try_frontend_peek_inner.)
+unsafe impl Sync for OptimizerMetrics {}
+
 impl OptimizerMetrics {
     pub fn register_into(
         registry: &MetricsRegistry,

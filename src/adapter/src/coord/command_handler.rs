@@ -369,6 +369,11 @@ impl Coordinator {
                         .map(|(id, state)| (*id, state.client.clone()))
                         .collect(),
                     storage_collections: Arc::clone(&self.controller.storage_collections),
+                    transient_id_gen: self.transient_id_gen.clone(),
+                    optimizer_metrics: self.optimizer_metrics.clone(),
+                    oracles: self.global_timelines.iter().map(|(timeline, timeline_state)| {
+                        (timeline.clone(), timeline_state.oracle.clone())
+                    }).collect(),
                 });
                 if tx.send(resp).is_err() {
                     // Failed to send to adapter, but everything is setup so we can terminate

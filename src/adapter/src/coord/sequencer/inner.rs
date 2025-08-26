@@ -5237,7 +5237,8 @@ impl Coordinator {
 /// return a list of associated notices (today: we always emit exactly
 /// one notice if there are any per-replica log dependencies and if
 /// `emit_introspection_query_notice` is set, and none otherwise.)
-pub(super) fn check_log_reads(
+////////// todo: can we avoid pub?
+pub(crate) fn check_log_reads(
     catalog: &Catalog,
     cluster: &Cluster,
     source_ids: &BTreeSet<GlobalId>,
