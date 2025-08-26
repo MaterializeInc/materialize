@@ -891,10 +891,14 @@ fn pg_len(what: &str, len: usize) -> Result<i32, io::Error> {
 /// Calling this function is equivalent to mapping [`Value::from_datum`] over
 /// every datum in `row`.
 pub fn values_from_row(row: &RowRef, typ: &RelationType) -> Vec<Option<Value>> {
-    row.iter()
+    let mut datums = row.iter();
+    let values: Vec<_> = (&mut datums)
         .zip(typ.column_types.iter())
         .map(|(col, typ)| Value::from_datum(col, &typ.scalar_type))
-        .collect()
+        .collect();
+    assert!(datums.next().is_none());
+    assert_eq!(values.len(), typ.column_types.len());
+    values
 }
 
 #[cfg(test)]

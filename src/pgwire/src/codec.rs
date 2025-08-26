@@ -304,6 +304,7 @@ impl Encoder<BackendMessage> for Codec {
             }
             BackendMessage::DataRow(fields) => {
                 dst.put_length_i16(fields.len())?;
+                assert_eq!(fields.len(), self.encode_state.len());
                 for (f, (ty, format)) in fields.iter().zip(&self.encode_state) {
                     if let Some(f) = f {
                         let base = dst.len();
