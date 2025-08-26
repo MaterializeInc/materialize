@@ -46,19 +46,19 @@
     role in addition to those privileges inherited through the `PUBLIC` role.
 
     ```none
-       grantor        |   grantee    |  database   | schema |        name       | object_type | privilege_type
-    ------------------+--------------+-------------+--------+-------------------+-------------+----------------
-    admin@example.com | view_manager | mydb        | sales  | items             | table       | SELECT
-    admin@example.com | view_manager | mydb        | sales  | orders            | table       | SELECT
-    admin@example.com | view_manager | mydb        | sales  | sales_items       | table       | SELECT
-    admin@example.com | view_manager | mydb        |        | sales             | schema      | CREATE
-    admin@example.com | view_manager | mydb        |        | sales             | schema      | USAGE
-    admin@example.com | view_manager |             |        | compute_cluster   | cluster     | CREATE
-    admin@example.com | view_manager |             |        | compute_cluster   | cluster     | USAGE
-    admin@example.com | PUBLIC       | mydb        |        | public            | schema      | USAGE
-    mz_system         | PUBLIC       | materialize |        | public            | schema      | USAGE
-    mz_system         | PUBLIC       |             |        | materialize       | database    | USAGE
-    mz_system         | PUBLIC       |             |        | quickstart        | cluster     | USAGE
+    | grantor   | grantee      | database    | schema | name            | object_type | privilege_type |
+    | --------- | ------------ | ----------- | ------ | --------------- | ----------- | -------------- |
+    | mz_system | PUBLIC       | materialize | null   | public          | schema      | USAGE          |
+    | mz_system | PUBLIC       | mydb        | null   | public          | schema      | USAGE          |
+    | mz_system | PUBLIC       | null        | null   | materialize     | database    | USAGE          |
+    | mz_system | PUBLIC       | null        | null   | quickstart      | cluster     | USAGE          |
+    | mz_system | view_manager | mydb        | sales  | items           | table       | SELECT         |
+    | mz_system | view_manager | mydb        | sales  | orders          | table       | SELECT         |
+    | mz_system | view_manager | mydb        | sales  | sales_items     | table       | SELECT         |
+    | mz_system | view_manager | mydb        | null   | sales           | schema      | CREATE         |
+    | mz_system | view_manager | mydb        | null   | sales           | schema      | USAGE          |
+    | mz_system | view_manager | null        | null   | compute_cluster | cluster     | CREATE         |
+    | mz_system | view_manager | null        | null   | compute_cluster | cluster     | USAGE          |
     ```
 
     {{< important >}}
@@ -121,15 +121,15 @@
     role in addition to those privileges inherited through the `PUBLIC` role.
 
     ```none
-       grantor        |        grantee        |  database   | schema |      name       | object_type | privilege_type
-    ------------------+-----------------------+-------------+--------+-----------------+-------------+----------------
-    admin@example.com | serving_index_manager | mydb        |        | sales           | schema      | CREATE
-    admin@example.com | serving_index_manager |             |        | serving_cluster | cluster     | CREATE
-    admin@example.com | serving_index_manager |             |        | serving_cluster | cluster     | USAGE
-    admin@example.com | PUBLIC                | mydb        |        | public          | schema      | USAGE
-    mz_system         | PUBLIC                | materialize |        | public          | schema      | USAGE
-    mz_system         | PUBLIC                |             |        | materialize     | database    | USAGE
-    mz_system         | PUBLIC                |             |        | quickstart      | cluster     | USAGE
+    | grantor   | grantee               | database    | schema | name            | object_type | privilege_type |
+    | --------- | --------------------- | ----------- | ------ | --------------- | ----------- | -------------- |
+    | mz_system | PUBLIC                | materialize | null   | public          | schema      | USAGE          |
+    | mz_system | PUBLIC                | mydb        | null   | public          | schema      | USAGE          |
+    | mz_system | PUBLIC                | null        | null   | materialize     | database    | USAGE          |
+    | mz_system | PUBLIC                | null        | null   | quickstart      | cluster     | USAGE          |
+    | mz_system | serving_index_manager | mydb        | null   | sales           | schema      | CREATE         |
+    | mz_system | serving_index_manager | null        | null   | serving_cluster | cluster     | CREATE         |
+    | mz_system | serving_index_manager | null        | null   | serving_cluster | cluster     | USAGE          |
     ```
 
     {{< note >}}
@@ -183,17 +183,17 @@
     role in addition to those privileges inherited through the `PUBLIC` role.
 
     ```none
-        grantor       |   grantee   |  database   | schema |        name         | object_type | privilege_type
-    ------------------+-------------+-------------+--------+---------------------+-------------+----------------
-    admin@example.com | data_reader | mydb        | sales  | items               | table       | SELECT
-    admin@example.com | data_reader | mydb        | sales  | orders              | table       | SELECT
-    admin@example.com | data_reader | mydb        | sales  | sales_items         | table       | SELECT
-    admin@example.com | data_reader | mydb        |        | sales               | schema      | USAGE
-    admin@example.com | data_reader |             |        | serving_cluster     | cluster     | USAGE
-    admin@example.com | PUBLIC      | mydb        |        | public              | schema      | USAGE
-    mz_system         | PUBLIC      | materialize |        | public              | schema      | USAGE
-    mz_system         | PUBLIC      |             |        | materialize         | database    | USAGE
-    mz_system         | PUBLIC      |             |        | quickstart          | cluster     | USAGE
+    | grantor   | grantee     | database    | schema | name            | object_type | privilege_type |
+    | --------- | ----------- | ----------- | ------ | --------------- | ----------- | -------------- |
+    | mz_system | PUBLIC      | materialize | null   | public          | schema      | USAGE          |
+    | mz_system | PUBLIC      | mydb        | null   | public          | schema      | USAGE          |
+    | mz_system | PUBLIC      | null        | null   | materialize     | database    | USAGE          |
+    | mz_system | PUBLIC      | null        | null   | quickstart      | cluster     | USAGE          |
+    | mz_system | data_reader | mydb        | sales  | items           | table       | SELECT         |
+    | mz_system | data_reader | mydb        | sales  | orders          | table       | SELECT         |
+    | mz_system | data_reader | mydb        | sales  | sales_items     | table       | SELECT         |
+    | mz_system | data_reader | mydb        | null   | sales           | schema      | USAGE          |
+    | mz_system | data_reader | null        | null   | serving_cluster | cluster     | USAGE          |
     ```
 
     {{< important >}}

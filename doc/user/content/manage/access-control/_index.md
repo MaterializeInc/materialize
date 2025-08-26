@@ -6,6 +6,7 @@ aliases:
   - /manage/access-control/sso/
   - /manage/access-control/create-service-accounts/
   - /manage/access-control/manage-network-policies/
+  - /manage/access-control/rbac/
 menu:
   main:
     parent: manage
@@ -15,21 +16,29 @@ menu:
 ---
 
 {{< note >}}
-Configuring and managing access control in Materialize
-requires **administrator** privileges.
+Initially, only the `mz_system` user (which has superuser/administrator
+privileges) is available to manage roles.
 {{</ note >}}
 
 <a name="role-based-access-control-rbac" ></a>
 
 ## Role-based access control
 
-In Materialize, role-based access control (RBAC) governs access to **database
-objects** through privileges granted to [database
+In Materialize, role-based access control (RBAC) governs access to objects
+through privileges granted to [database
 roles](/manage/access-control/manage-roles/).
+
+## Enabling RBAC
+
+{{< include-md file="shared-content/rbac/enable-rbac.md" >}}
 
 ## Roles and privileges
 
 {{% include-md file="shared-content/rbac/db-roles.md" %}}
+
+- {{< include-md file="shared-content/rbac/create-users.md" >}}
+
+- {{< include-md file="shared-content/rbac/create-functional-roles.md" >}}
 
 ### Managing privileges
 
@@ -54,10 +63,9 @@ role/independent role), the target role inherits privileges through the granted
 role.
 
 In general, to grant a user or service account privileges, create roles with the
-desired privileges and grant these roles to the database role associated with
-the user/service account email/name. Although you can grant privileges directly
-to the associated roles, using separate, reusable roles is recommended for
-better access management.
+desired privileges and grant these roles to the user or service account role.
+Although you can grant privileges directly to the user or service account role,
+using separate, reusable roles is recommended for better access management.
 
 With privilege inheritance, you can compose more complex roles by
 combining existing roles, enabling modular access control. However:

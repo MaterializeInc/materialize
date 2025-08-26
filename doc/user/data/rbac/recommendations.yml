@@ -4,11 +4,6 @@
     least privilege. Grant only the minimum access necessary for users and
     service accounts to perform their duties.
 
-- recommendation: "Restrict the assignment of **Organization Admin** role"
-  description: |
-
-    {{< include-md file="shared-content/rbac/org-admin-recommendation.md" >}}
-
 - recommendation: "Restrict the granting of `CREATEROLE` privilege"
   description: |
 

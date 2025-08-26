@@ -23,19 +23,19 @@
     included.
 
     ```none
-       grantor        |   grantee    |  database   | schema |        name       | object_type | privilege_type
-    ------------------+--------------+-------------+--------+-------------------+-------------+----------------
-    admin@example.com | view_manager | mydb        | sales  | items             | table       | SELECT
-    admin@example.com | view_manager | mydb        | sales  | orders            | table       | SELECT
-    admin@example.com | view_manager | mydb        | sales  | sales_items       | table       | SELECT
-    admin@example.com | view_manager | mydb        |        | sales             | schema      | CREATE
-    admin@example.com | view_manager | mydb        |        | sales             | schema      | USAGE
-    admin@example.com | view_manager |             |        | compute_cluster   | cluster     | CREATE
-    admin@example.com | view_manager |             |        | compute_cluster   | cluster     | USAGE
-    admin@example.com | PUBLIC       | mydb        |        | public            | schema      | USAGE
-    mz_system         | PUBLIC       | materialize |        | public            | schema      | USAGE
-    mz_system         | PUBLIC       |             |        | materialize       | database    | USAGE
-    mz_system         | PUBLIC       |             |        | quickstart        | cluster     | USAGE
+    | grantor   | grantee      | database    | schema | name            | object_type | privilege_type |
+    | --------- | ------------ | ----------- | ------ | --------------- | ----------- | -------------- |
+    | mz_system | PUBLIC       | materialize | null   | public          | schema      | USAGE          |
+    | mz_system | PUBLIC       | mydb        | null   | public          | schema      | USAGE          |
+    | mz_system | PUBLIC       | null        | null   | materialize     | database    | USAGE          |
+    | mz_system | PUBLIC       | null        | null   | quickstart      | cluster     | USAGE          |
+    | mz_system | view_manager | mydb        | sales  | items           | table       | SELECT         |
+    | mz_system | view_manager | mydb        | sales  | orders          | table       | SELECT         |
+    | mz_system | view_manager | mydb        | sales  | sales_items     | table       | SELECT         |
+    | mz_system | view_manager | mydb        | null   | sales           | schema      | CREATE         |
+    | mz_system | view_manager | mydb        | null   | sales           | schema      | USAGE          |
+    | mz_system | view_manager | null        | null   | compute_cluster | cluster     | CREATE         |
+    | mz_system | view_manager | null        | null   | compute_cluster | cluster     | USAGE          |
     ```
 
 - name: "view_manager-results-create-objects"
@@ -80,13 +80,12 @@
     `SELECT` privileges on the `orders_daily_totals`  and `orders_view`.
 
     ```none
-      grantor              |         grantee        |  database   | schema |      name           |     object_type   | privilege_type
-    -----------------------+------------------------+-------------+--------+---------------------+-------------------+---------------
-    blue.berry@example.com | blue.berry@example.com | mydb        | sales  | orders_daily_totals | materialized-view | SELECT
-    blue.berry@example.com | blue.berry@example.com | mydb        | sales  | orders_view         | view              | SELECT
-    admin@example.com      | view_manager           | mydb        | sales  | items               | table             | SELECT
-    admin@example.com      | view_manager           | mydb        | sales  | orders              | table             | SELECT
-    admin@example.com      | view_manager           | mydb        | sales  | sales_items         | table             | SELECT
+    | grantor                | grantee                | database    | schema | name                | object_type       | privilege_type |
+    | ---------------------- | ---------------------- | ----------- | ------ | ------------------- | ----------------- | -------------- |
+    | blue.berry@example.com | blue.berry@example.com | mydb        | sales  | orders_daily_totals | materialized-view | SELECT         |
+    | blue.berry@example.com | blue.berry@example.com | mydb        | sales  | orders_view         | view              | SELECT         |
+    | mz_system              | PUBLIC                 | materialize | null   | public              | schema            | USAGE          |
+    | mz_system              | PUBLIC                 | mydb        | null   | public              | schema            | USAGE          |
     ... -- Rest omitted for brevity
     ```
 
@@ -95,8 +94,8 @@
     {{</ note >}}
 
     However, with the current privileges, `"blue.berry@example.com"` cannot
-    select from the new view and materialized view created by **others** in the
-    schema and vice versa. For privileges on new objects, you can either:
+    select from new views/materialized views created by **others** in
+    the schema and vice versa. For privileges on new objects, you can either:
     - Manually grant privileges on new objects; or
     - Use [default
     privileges](/manage/access-control/manage-roles/#manage-future-privileges-for-a-role)
@@ -105,7 +104,7 @@
 - name: "serving_index_manager"
   description: |
     The following grants the `serving_index_manager` role to the functional role
-    `view_manager`, which already privileges to create materialized views in
+    `view_manager`, which already has privileges to create materialized views in
     `mydb.sales` schema. This allows members of the `view_manager` role to
     create indexes on their objects on the `serving_cluster`.
 
@@ -127,22 +126,22 @@
     any.
 
     ```none
-      grantor         |        grantee        |  database   | schema |        name       | object_type | privilege_type
-    ------------------+-----------------------+-------------+--------+-------------------+-------------+----------------
-    admin@example.com | serving_index_manager | mydb        |        | sales             | schema      | CREATE
-    admin@example.com | serving_index_manager |             |        | serving_cluster   | cluster     | CREATE
-    admin@example.com | serving_index_manager |             |        | serving_cluster   | cluster     | USAGE
-    admin@example.com | view_manager          | mydb        | sales  | items             | table       | SELECT
-    admin@example.com | view_manager          | mydb        | sales  | orders            | table       | SELECT
-    admin@example.com | view_manager          | mydb        | sales  | sales_items       | table       | SELECT
-    admin@example.com | view_manager          | mydb        |        | sales             | schema      | CREATE
-    admin@example.com | view_manager          | mydb        |        | sales             | schema      | USAGE
-    admin@example.com | view_manager          |             |        | compute_cluster   | cluster     | CREATE
-    admin@example.com | view_manager          |             |        | compute_cluster   | cluster     | USAGE
-    admin@example.com | PUBLIC                | mydb        |        | public            | schema      | USAGE
-    mz_system         | PUBLIC                | materialize |        | public            | schema      | USAGE
-    mz_system         | PUBLIC                |             |        | materialize       | database    | USAGE
-    mz_system         | PUBLIC                |             |        | quickstart        | cluster     | USAGE
+    | grantor   | grantee               | database    | schema | name            | object_type | privilege_type |
+    | --------- | --------------------- | ----------- | ------ | --------------- | ----------- | -------------- |
+    | mz_system | PUBLIC                | materialize | null   | public          | schema      | USAGE          |
+    | mz_system | PUBLIC                | mydb        | null   | public          | schema      | USAGE          |
+    | mz_system | PUBLIC                | null        | null   | materialize     | database    | USAGE          |
+    | mz_system | PUBLIC                | null        | null   | quickstart      | cluster     | USAGE          |
+    | mz_system | serving_index_manager | mydb        | null   | sales           | schema      | CREATE         |
+    | mz_system | serving_index_manager | null        | null   | serving_cluster | cluster     | CREATE         |
+    | mz_system | serving_index_manager | null        | null   | serving_cluster | cluster     | USAGE          |
+    | mz_system | view_manager          | mydb        | sales  | items           | table       | SELECT         |
+    | mz_system | view_manager          | mydb        | sales  | orders          | table       | SELECT         |
+    | mz_system | view_manager          | mydb        | sales  | sales_items     | table       | SELECT         |
+    | mz_system | view_manager          | mydb        | null   | sales           | schema      | CREATE         |
+    | mz_system | view_manager          | mydb        | null   | sales           | schema      | USAGE          |
+    | mz_system | view_manager          | null        | null   | compute_cluster | cluster     | CREATE         |
+    | mz_system | view_manager          | null        | null   | compute_cluster | cluster     | USAGE          |
     ```
 - name: "serving_index_manager-results-show-privileges-view_manager-member"
   description: |
@@ -162,24 +161,24 @@
     all applicable privileges on the objects they create.
 
     ```none
-      grantor              |         grantee        |  database   | schema |    name             |    object_type    | privilege_type
-    -----------------------+------------------------+-------------+--------+---------------------+-------------------+---------------
-    blue.berry@example.com | blue.berry@example.com | mydb        | sales  | orders_daily_totals | materialized-view | SELECT
-    blue.berry@example.com | blue.berry@example.com | mydb        | sales  | orders_view         | view              | SELECT
-    admin@example.com      | serving_index_manager  | mydb        |        | sales               | schema            | CREATE
-    admin@example.com      | serving_index_manager  |             |        | serving_cluster     | cluster           | CREATE
-    admin@example.com      | serving_index_manager  |             |        | serving_cluster     | cluster           | USAGE
-    admin@example.com      | view_manager           | mydb        | sales  | items               | table             | SELECT
-    admin@example.com      | view_manager           | mydb        | sales  | orders              | table             | SELECT
-    admin@example.com      | view_manager           | mydb        | sales  | sales_items         | table             | SELECT
-    admin@example.com      | view_manager           | mydb        |        | sales               | schema            | CREATE
-    admin@example.com      | view_manager           | mydb        |        | sales               | schema            | USAGE
-    admin@example.com      | view_manager           |             |        | compute_cluster     | cluster           | CREATE
-    admin@example.com      | view_manager           |             |        | compute_cluster     | cluster           | USAGE
-    admin@example.com      | PUBLIC                 | mydb        |        | public              | schema            | USAGE
-    mz_system              | PUBLIC                 | materialize |        | public              | schema            | USAGE
-    mz_system              | PUBLIC                 |             |        | materialize         | database          | USAGE
-    mz_system              | PUBLIC                 |             |        | quickstart          | cluster           | USAGE
+    | grantor                | grantee                | database    | schema | name                | object_type       | privilege_type |
+    | ---------------------- | ---------------------- | ----------- | ------ | ------------------- | ----------------- | -------------- |
+    | blue.berry@example.com | blue.berry@example.com | mydb        | sales  | orders_daily_totals | materialized-view | SELECT         |
+    | blue.berry@example.com | blue.berry@example.com | mydb        | sales  | orders_view         | view              | SELECT         |
+    | mz_system              | PUBLIC                 | materialize | null   | public              | schema            | USAGE          |
+    | mz_system              | PUBLIC                 | mydb        | null   | public              | schema            | USAGE          |
+    | mz_system              | PUBLIC                 | null        | null   | materialize         | database          | USAGE          |
+    | mz_system              | PUBLIC                 | null        | null   | quickstart          | cluster           | USAGE          |
+    | mz_system              | serving_index_manager  | mydb        | null   | sales               | schema            | CREATE         |
+    | mz_system              | serving_index_manager  | null        | null   | serving_cluster     | cluster           | CREATE         |
+    | mz_system              | serving_index_manager  | null        | null   | serving_cluster     | cluster           | USAGE          |
+    | mz_system              | view_manager           | mydb        | sales  | items               | table             | SELECT         |
+    | mz_system              | view_manager           | mydb        | sales  | orders              | table             | SELECT         |
+    | mz_system              | view_manager           | mydb        | sales  | sales_items         | table             | SELECT         |
+    | mz_system              | view_manager           | mydb        | null   | sales               | schema            | CREATE         |
+    | mz_system              | view_manager           | mydb        | null   | sales               | schema            | USAGE          |
+    | mz_system              | view_manager           | null        | null   | compute_cluster     | cluster           | CREATE         |
+    | mz_system              | view_manager           | null        | null   | compute_cluster     | cluster           | USAGE          |
     ```
 
 - name: "serving_index_manager-results-create-index"
@@ -233,17 +232,17 @@
     also be included.
 
     ```none
-        grantor       |   grantee   |  database   | schema |        name         | object_type | privilege_type
-    ------------------+-------------+-------------+--------+---------------------+-------------+----------------
-    admin@example.com | data_reader | mydb        | sales  | items               | table       | SELECT
-    admin@example.com | data_reader | mydb        | sales  | orders              | table       | SELECT
-    admin@example.com | data_reader | mydb        | sales  | sales_items         | table       | SELECT
-    admin@example.com | data_reader | mydb        |        | sales               | schema      | USAGE
-    admin@example.com | data_reader |             |        | serving_cluster     | cluster     | USAGE
-    admin@example.com | PUBLIC      | mydb        |        | public              | schema      | USAGE
-    mz_system         | PUBLIC      | materialize |        | public              | schema      | USAGE
-    mz_system         | PUBLIC      |             |        | materialize         | database    | USAGE
-    mz_system         | PUBLIC      |             |        | quickstart          | cluster     | USAGE
+    | grantor   | grantee     | database    | schema | name            | object_type | privilege_type |
+    | --------- | ----------- | ----------- | ------ | --------------- | ----------- | -------------- |
+    | mz_system | PUBLIC      | materialize | null   | public          | schema      | USAGE          |
+    | mz_system | PUBLIC      | mydb        | null   | public          | schema      | USAGE          |
+    | mz_system | PUBLIC      | null        | null   | materialize     | database    | USAGE          |
+    | mz_system | PUBLIC      | null        | null   | quickstart      | cluster     | USAGE          |
+    | mz_system | data_reader | mydb        | sales  | items           | table       | SELECT         |
+    | mz_system | data_reader | mydb        | sales  | orders          | table       | SELECT         |
+    | mz_system | data_reader | mydb        | sales  | sales_items     | table       | SELECT         |
+    | mz_system | data_reader | mydb        | null   | sales           | schema      | USAGE          |
+    | mz_system | data_reader | null        | null   | serving_cluster | cluster     | USAGE          |
     ```
 
 - name: "data_reader-results-select"

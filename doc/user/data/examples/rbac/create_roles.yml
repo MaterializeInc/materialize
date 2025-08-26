@@ -1,3 +1,33 @@
+- name: "create-role-user"
+  description: |
+
+    The following creates a new user `blue.berry@example.com`, or more specifically, creates a role for a user `blue.berry@example.com` using [`CREATE ROLE ... WITH LOGIN PASSWORD`](/sql/create-role).
+
+  code: |
+    CREATE ROLE "blue.berry@example.com" WITH LOGIN PASSWORD '<password>';
+  results: |
+    {{< note >}}
+    The role/user name `blue.berry@example.com` is enclosed in double quotes to
+    override the [naming restrictions](/sql/identifiers/#naming-restrictions).
+    {{</ note >}}
+
+    Once created, the user `blue.berry@example.com` can login using the
+    password.
+
+- name: "create-role-service-account"
+  description: |
+
+    The following creates a new service account `sales_report_app`, or more
+    specifically, creates a role for a service account `sales_report_app` using
+    [`CREATE ROLE ... WITH LOGIN PASSWORD`](/sql/create-role).
+
+  code: |
+    CREATE ROLE "sales_report_app" WITH LOGIN PASSWORD '<password>';
+  results: |
+
+    Once created, the associated application can use the `sales_report_app`
+    service account to connect to Materialize.
+
 - name: "create-role-view-manager"
   description: |
 

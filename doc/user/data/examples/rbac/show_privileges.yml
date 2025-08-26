@@ -1,11 +1,9 @@
 - name: "for-user"
   description: |
 
-    To view privileges for a
-    [user](/manage/users-service-accounts/invite-users/), run [`SHOW
-    PRIVILEGES`](/sql/show-privileges) on the role named after the user's email
-    (automatically created when the account is activated; i.e., first time the
-    user logs in):
+    To view privileges for a user, run [`SHOW PRIVILEGES`](/sql/show-privileges)
+    on the user's role. For example, show the privileges for the `blue.berry@example.com` role created in the
+    [Create a role section](#create-individual-userservice-account-roles).
 
   code: |
     SHOW PRIVILEGES FOR "blue.berry@example.com";
@@ -13,11 +11,9 @@
 - name: "for-service-account"
   description: |
 
-    To view privileges for a [service
-    account](/manage/users-service-accounts/create-service-accounts/), run
-    [`SHOW PRIVILEGES`](/sql/show-privileges) on the role named after the
-    service account user (automatically created when the account is activated;
-    i.e., first time the service account connects):
+    To view privileges for a service account, run [`SHOW
+    PRIVILEGES`](/sql/show-privileges) on the service account's role. For example, show the privileges for the `sales_report_app` role created in the
+    [Create a role section](#create-individual-userservice-account-roles).
 
   code: |
     SHOW PRIVILEGES FOR sales_report_app;
@@ -57,10 +53,10 @@
     through the `PUBLIC` role.
 
     ```none
-    | grantor           | grantee | database    | schema | name        | object_type | privilege_type |
-    | ----------------- | ------- | ----------- | ------ | ----------- | ----------- | -------------- |
-    | admin@example.com | PUBLIC  | mydb        | null   | public      | schema      | USAGE          |
-    | mz_system         | PUBLIC  | materialize | null   | public      | schema      | USAGE          |
-    | mz_system         | PUBLIC  | null        | null   | materialize | database    | USAGE          |
-    | mz_system         | PUBLIC  | null        | null   | quickstart  | cluster     | USAGE          |
+    | grantor   | grantee | database    | schema | name        | object_type | privilege_type |
+    | --------- | ------- | ----------- | ------ | ----------- | ----------- | -------------- |
+    | mz_system | PUBLIC  | materialize | null   | public      | schema      | USAGE          |
+    | mz_system | PUBLIC  | mydb        | null   | public      | schema      | USAGE          |
+    | mz_system | PUBLIC  | null        | null   | materialize | database    | USAGE          |
+    | mz_system | PUBLIC  | null        | null   | quickstart  | cluster     | USAGE          |
     ```

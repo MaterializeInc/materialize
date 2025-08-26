@@ -92,11 +92,14 @@
     role like `view_manager` as the `<object_creator>` do **not** apply to
     objects created by its members.
 
-    To illustrate, the following adds a new member `lemon@example.com` to the
-    `view_manager` role and creates a new default privilege, specifying
-    `view_manager` as the `<object_creator>`.
+    To illustrate, the following:
+    - creates a new user `lemon@example.com`,
+    - adds the user to the `view_manager` role, and
+    - creates a new default privilege, specifying `view_manager` as the
+    `<object_creator>`.
 
   code: |
+    CREATE ROLE "lemon@example.com" WITH LOGIN PASSWORD '<password>';
     GRANT view_manager TO "lemon@example.com";
 
     ALTER DEFAULT PRIVILEGES FOR ROLE view_manager

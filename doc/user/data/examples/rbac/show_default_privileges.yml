@@ -1,10 +1,11 @@
 - name: "for-user"
   description: |
 
-    To view default privileges for a
-    [user](/manage/users-service-accounts/invite-users/), run [`SHOW DEFAULT
-    PRIVILEGES`](/sql/show-default-privileges) on the role named after the
-    user's email:
+    To view default privileges for a user, run [`SHOW DEFAULT
+    PRIVILEGES`](/sql/show-default-privileges) on the user's role. For example,
+    show the defaultprivileges for the `blue.berry@example.com` role created in
+    the [Create a role section](#create-individual-userservice-account-roles).
+
 
   code: |
     SHOW DEFAULT PRIVILEGES FOR "blue.berry@example.com";
@@ -20,10 +21,9 @@
 - name: "for-service-account"
   description: |
 
-    To view default privileges for a [service
-    account](/manage/users-service-accounts/create-service-accounts/), run
-    [`SHOW DEFAULT PRIVILEGES`](/sql/show-default-privileges) on the role named after the
-    service account user:
+    To view default privileges for a service account, run [`SHOW DEFAULT
+    PRIVILEGES`](/sql/show-default-privileges) on the service account's role. For example, show the default privileges for the `sales_report_app` role created in the
+    [Create a role section](#create-individual-userservice-account-roles).
 
   code: |
     SHOW DEFAULT PRIVILEGES FOR sales_report_app;

@@ -11,27 +11,18 @@ aliases:
   - /manage/access-control/rbac-tutorial/
 ---
 
-In Materialize, role-based access control (RBAC) governs access to **database
-objects** through privileges granted to database roles.
+In Materialize, role-based access control (RBAC) governs access to objects
+through privileges granted to database roles.
 
-{{< annotation type="Disambiguation" >}}
+## Enabling RBAC
 
-{{< include-md file="shared-content/rbac/rbac-intro-disambiguation.md" >}}
-
-The focus of this page is on managing database roles. For information on
-organization roles, see [Users and service
-accounts](/manage/users-service-accounts/).
-{{< /annotation >}}
+{{< include-md file="shared-content/rbac/enable-rbac.md" >}}
 
 ## Required privileges for managing roles
 
 {{< note >}}
-
-With their **superuser** privileges, [**Organization
-admins**](/manage/users-service-accounts/#organization-roles) can manage roles
-(including overriding ownership requirements when granting privileges on various
-objects).
-
+Initially, only the `mz_system` user (which has superuser/administrator
+privileges) is available to manage roles.
 {{</ note >}}
 
 | Role management operations          | Required privileges      |
@@ -53,19 +44,51 @@ command](/manage/access-control/appendix-command-privileges/)
 
 {{< include-md file="shared-content/rbac/db-roles.md" >}}
 
-To create a new role manually, use the [`CREATE ROLE`](/sql/create-role/)
-statement.
+### Create individual user/service account roles
+
+{{< include-md file="shared-content/rbac/create-users.md" >}}
 
 {{< annotation type="Privilege(s) required to run the command" >}}
-
 {{< include-md file="shared-content/sql-command-privileges/create-role.md" >}}
-
 {{</ annotation>}}
 
-```mzsql
-CREATE ROLE <role_name> [WITH INHERIT];
--- WITH INHERIT behavior is implied and does not need to be specified.
-```
+For example, the following creates:
+
+- A new user `blue.berry@example.com` (or more specifically, a new user role).
+- A new service account `sales_report_app` (or more specifically, a new service
+  account role).
+
+{{< tabs >}}
+{{< tab "A new user role" >}}
+{{< include-example file="examples/rbac/create_roles"
+example="create-role-user" >}}
+{{</ tab >}}
+{{< tab "A new service account role" >}}
+{{< include-example file="examples/rbac/create_roles"
+example="create-role-service-account" >}}
+{{</ tab >}}
+{{</ tabs >}}
+
+In Materialize, a role is created with inheritance support. With inheritance,
+when a role is granted to another role (i.e., the target role), the target role
+inherits privileges (not role attributes and parameters) through the other role.
+{{< include-md file="shared-content/rbac/db-roles-public-membership.md" >}}
+
+{{% include-md file="shared-content/rbac/db-roles-managing-privileges.md" %}}
+
+{{< annotation type="Disambiguation" >}}
+{{% include-md file="shared-content/rbac/grant-vs-alter-default-privilege.md"
+%}}
+{{</ annotation >}}
+
+See also:
+
+- For a list of required privileges for specific operations, see [Appendix:
+Privileges by command](/manage/access-control/appendix-command-privileges/).
+
+### Create functional roles
+
+{{< include-md file="shared-content/rbac/create-functional-roles.md" >}}
 
 {{< tip >}}
 {{< include-md file="shared-content/rbac/role-name-restrictions.md" >}}
@@ -160,7 +183,7 @@ example="for-service-account">}}
 {{< include-example file="examples/rbac/show_privileges"
 example="example-results">}}
 {{</ tab >}}
-{{< tab "Manually created functional roles">}}
+{{< tab "Functional roles">}}
 {{< tabs >}}
 {{< tab "View manager role" >}}
 {{< include-example file="examples/rbac/show_privileges"
@@ -204,8 +227,8 @@ a role, use the [`GRANT PRIVILEGE`](/sql/grant-privilege/) statement (see
 {{< include-md file="shared-content/sql-command-privileges/grant-privilege.md"
 >}}
 
-To override the **object ownership** requirements to grant privileges, run as an
-Organization admin.
+To override the **object ownership** requirements to grant privileges, run as a
+user with superuser privileges; e.g. `mz_system` user.
 
 {{</ annotation>}}
 
@@ -215,8 +238,7 @@ GRANT <PRIVILEGE> ON <OBJECT_TYPE> <object_name> TO <role>;
 
 {{< include-md file="shared-content/rbac/use-resusable-roles.md" >}}
 
-For example, the following grants privileges to the manually created functional
-roles.
+For example, the following grants privileges to the functional roles.
 
 {{< note >}}
 {{< include-md file="shared-content/rbac/privileges-related-objects.md" >}}
@@ -269,7 +291,7 @@ statement (see [`GRANT ROLE`](/sql/grant-role/) for full syntax):
 {{< include-md file="shared-content/sql-command-privileges/grant-role.md"
 >}}
 
-Organization admin has the required privileges on the system.
+`mz_system` user has the required privileges on the system.
 {{</ annotation>}}
 
 ```mzsql
@@ -444,7 +466,7 @@ example="for-user">}}
 example="for-service-account">}}
 
 {{</ tab >}}
-{{< tab "Manually created functional roles">}}
+{{< tab "Functional roles">}}
 {{< tabs >}}
 {{< tab "View manager role" >}}
 {{< include-example file="examples/rbac/show_default_privileges"
@@ -615,8 +637,7 @@ example="alter-roles-configs-not-inherited" %}}
 Certain [commands on an
 object](/manage/access-control/appendix-command-privileges/) (such as creating
 an index on a materialized view or changing owner of an object) require
-ownership of the object itself (or *superuser* privileges of an Organization
-admin).
+ownership of the object itself (or *superuser* privileges).
 
 In Materialize, when a role creates an object, the role becomes the owner of the
 object and is automatically  granted all [applicable
