@@ -15,7 +15,7 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
-use mz_repr::ColumnType;
+use mz_repr::{ColumnType, ScalarType};
 
 use self::proto_my_sql_column_desc::Meta;
 
@@ -173,38 +173,6 @@ pub enum MySqlColumnMeta {
     Bit(u32),
 }
 
-impl IsCompatible for Option<MySqlColumnMeta> {
-    fn is_compatible(&self, other: &Option<MySqlColumnMeta>) -> bool {
-        match (self, other) {
-            (None, None) => true,
-            (Some(_), None) => false,
-            (None, Some(_)) => false,
-            (Some(MySqlColumnMeta::Enum(self_enum)), Some(MySqlColumnMeta::Enum(other_enum))) => {
-                // so as long as `self.values` is a compatible prefix of `other.values`, we can
-                // ignore extra values from `other.values`.
-                self_enum.values.len() <= other_enum.values.len()
-                    && self_enum
-                        .values
-                        .iter()
-                        .zip(other_enum.values.iter())
-                        .all(|(self_val, other_val)| self_val == other_val)
-            }
-            (Some(MySqlColumnMeta::Json), Some(MySqlColumnMeta::Json)) => true,
-            (Some(MySqlColumnMeta::Year), Some(MySqlColumnMeta::Year)) => true,
-            (Some(MySqlColumnMeta::Date), Some(MySqlColumnMeta::Date)) => true,
-            // Timestamps are compatible as long as we don't lose precision
-            (
-                Some(MySqlColumnMeta::Timestamp(precision)),
-                Some(MySqlColumnMeta::Timestamp(other_precision)),
-            ) => precision <= other_precision,
-            // We always cast bit columns to u64's and the max precision of a bit column
-            // is 64 bits, so any bit column is always compatible with another.
-            (Some(MySqlColumnMeta::Bit(_)), Some(MySqlColumnMeta::Bit(_))) => true,
-            _ => false,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
 pub struct MySqlColumnDesc {
     /// The name of the column.
@@ -278,8 +246,41 @@ impl IsCompatible for MySqlColumnDesc {
                 (Some(_), None) => false,
                 (None, Some(_)) => false,
             }
-            // Ensure any column metadata is compatible
-            && self.meta.is_compatible(&other.meta)
+            // Ensure any column metadata is compatible.
+            && match (&self.meta, &other.meta) {
+                (None, None) => true,
+                (Some(_), None) => false,
+                (None, Some(_)) => false,
+                (Some(MySqlColumnMeta::Enum(self_enum)), Some(MySqlColumnMeta::Enum(other_enum))) => {
+                    let uses_enum_string_representation: bool = self.column_type
+                            .as_ref()
+                            .map(|col_type| col_type.scalar_type != ScalarType::UInt16)
+                            .unwrap_or(false);
+
+                    if uses_enum_string_representation {
+                        self_enum.values.len() <= other_enum.values.len()
+                            && self_enum
+                                .values
+                                .iter()
+                                .zip(other_enum.values.iter())
+                                .all(|(self_val, other_val)| self_val == other_val)
+                    } else {
+                        true
+                    }
+                }
+                (Some(MySqlColumnMeta::Json), Some(MySqlColumnMeta::Json)) => true,
+                (Some(MySqlColumnMeta::Year), Some(MySqlColumnMeta::Year)) => true,
+                (Some(MySqlColumnMeta::Date), Some(MySqlColumnMeta::Date)) => true,
+                // Timestamps are compatible as long as we don't lose precision
+                (
+                    Some(MySqlColumnMeta::Timestamp(precision)),
+                    Some(MySqlColumnMeta::Timestamp(other_precision)),
+                ) => precision <= other_precision,
+                // We always cast bit columns to u64's and the max precision of a bit column
+                // is 64 bits, so any bit column is always compatible with another.
+                (Some(MySqlColumnMeta::Bit(_)), Some(MySqlColumnMeta::Bit(_))) => true,
+                _ => false,
+            }
     }
 }
 

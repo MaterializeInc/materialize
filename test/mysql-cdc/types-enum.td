@@ -9,9 +9,8 @@
 
 $ set-sql-timeout duration=1s
 
-
 #
-# ENUM supported only as TEXT
+# ENUM supported as TEXT or INT
 #
 
 > CREATE SECRET mysqlpass AS '${arg.mysql-root-password}'
@@ -30,20 +29,36 @@ SET SESSION sql_mode='';
 USE public;
 
 CREATE TABLE enum_type (f1 ENUM ('val1', 'val2'), f2 TEXT);
-INSERT INTO enum_type VALUES ('val1', 'val1'), ('val2', 'val2'), ('not-present', 'val2');
+INSERT INTO enum_type VALUES ('val1', 'val1'), ('val2', 'val2'), ('not-present', 'not-present');
 
 > CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
 
-# TODO: database-issues#7719 (enum unsupported)
-! CREATE TABLE enum_type FROM SOURCE mz_source (REFERENCE public.enum_type);
-contains:referenced tables use unsupported types
+> CREATE TABLE enum_type FROM SOURCE mz_source (REFERENCE public.enum_type);
+
+$ mysql-execute name=mysql
+INSERT INTO enum_type VALUES ('val1', 'val1'), ('val2', 'val2'), ('not-present', 'not-present');
+
+> SELECT * FROM enum_type;
+1 val1
+2 val2
+0 not-present
+1 val1
+2 val2
+0 not-present
+
+> DROP TABLE enum_type;
+
+$ mysql-execute name=mysql
+DROP TABLE enum_type;
+CREATE TABLE enum_type (f1 ENUM ('val1', 'val2'), f2 TEXT);
+INSERT INTO enum_type VALUES ('val1', 'val1'), ('val2', 'val2'), ('not-present', 'not-present');
 
 > CREATE TABLE enum_type FROM SOURCE mz_source (REFERENCE public.enum_type) WITH (TEXT COLUMNS (f1));
 
 > SELECT * FROM enum_type;
 val1 val1
 val2 val2
-"" val2
+"" not-present
 
 # Add an additional enum value type
 $ mysql-execute name=mysql
@@ -53,7 +68,7 @@ INSERT INTO enum_type VALUES ('val1', 'val1');
 > SELECT * FROM enum_type;
 val1 val1
 val2 val2
-"" val2
+"" not-present
 val1 val1
 
 $ mysql-execute name=mysql
@@ -68,7 +83,7 @@ DELETE FROM enum_type WHERE f1 = 'val3';
 > SELECT * FROM enum_type;
 val1 val1
 val2 val2
-"" val2
+"" not-present
 val1 val1
 
 $ mysql-execute name=mysql
@@ -80,7 +95,7 @@ COMMIT;
 > SELECT * FROM enum_type;
 val1 val1
 val2 val2
-"" val2
+"" not-present
 val1 val1
 <null> val1
 "" val1
@@ -93,7 +108,7 @@ COMMIT;
 > SELECT * FROM enum_type;
 val1 val1
 val2 val2
-val2 val2
+val2 not-present
 val1 val1
 val2 val1
 val2 val1

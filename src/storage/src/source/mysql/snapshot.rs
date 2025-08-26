@@ -94,13 +94,13 @@ use itertools::Itertools;
 use mysql_async::prelude::Queryable;
 use mysql_async::{IsolationLevel, Row as MySqlRow, TxOpts};
 use mz_mysql_util::{
-    ER_NO_SUCH_TABLE, MySqlError, pack_mysql_row, query_sys_var, quote_identifier,
+    ER_NO_SUCH_TABLE, MySqlColumnMeta, MySqlError, pack_mysql_row, query_sys_var, quote_identifier,
 };
 use mz_ore::cast::CastFrom;
 use mz_ore::future::InTask;
 use mz_ore::iter::IteratorExt;
 use mz_ore::metrics::MetricsFutureExt;
-use mz_repr::{Diff, Row};
+use mz_repr::{Diff, Row, ScalarType};
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::MySqlSourceConnection;
 use mz_storage_types::sources::mysql::{GtidPartition, gtid_set_frontier};
@@ -543,12 +543,29 @@ fn build_snapshot_query(outputs: &[SourceOutputInfo]) -> String {
             info.table_name
         );
     }
+
     let columns = info
         .desc
         .columns
         .iter()
-        .map(|col| quote_identifier(&col.name))
+        .map(|col| {
+            let is_uint16 = col
+                .column_type
+                .as_ref()
+                .map(|col_type| col_type.scalar_type == ScalarType::UInt16)
+                .unwrap_or(false);
+            let is_enum = matches!(col.meta, Some(MySqlColumnMeta::Enum(_)));
+
+            if is_uint16 && is_enum {
+                // Use CAST to convert enum to unsigned integer
+                // Cannot use backticks with +0 arithmetic
+                format!("CAST({} AS UNSIGNED)", quote_identifier(&col.name))
+            } else {
+                quote_identifier(&col.name)
+            }
+        })
         .join(", ");
+
     format!("SELECT {} FROM {}", columns, info.table_name)
 }
 

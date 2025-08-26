@@ -456,6 +456,10 @@ fn parse_data_type(
             };
             return Ok((ScalarType::UInt64, Some(MySqlColumnMeta::Bit(precision))));
         }
+        "enum" => {
+            let meta = MySqlColumnMeta::Enum(MySqlColumnMetaEnum { values: vec![] });
+            return Ok((ScalarType::UInt16, Some(meta)));
+        }
         typ => {
             tracing::warn!(?typ, "found unsupported data type");
             return Err(UnsupportedDataType {
