@@ -317,6 +317,11 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 })
                 .min();
             let Some(resume_lsn) = resume_lsn else {
+                // If the dataflow is rendered with an empty resume upper then we should do nothing
+                // and wait for the dataflow to be dropped. We can't simply exit since that will
+                // mint a remap binding for the empty frontier, which will make future
+                // instantiations of this source with more subsources impossible to make progress.
+                std::future::pending::<()>().await;
                 return Ok(());
             };
             upper_cap_set.downgrade([&resume_lsn]);
