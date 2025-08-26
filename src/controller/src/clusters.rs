@@ -17,6 +17,7 @@ use std::sync::LazyLock;
 use std::time::Duration;
 
 use anyhow::anyhow;
+use bytesize::ByteSize;
 use chrono::{DateTime, Utc};
 use futures::stream::{BoxStream, StreamExt};
 use mz_cluster_client::client::{ClusterReplicaLocation, TimelyConfig};
@@ -76,9 +77,6 @@ pub struct ReplicaConfig {
 pub struct ReplicaAllocation {
     /// The memory limit for each process in the replica.
     pub memory_limit: Option<MemoryLimit>,
-    /// The memory limit for each process in the replica.
-    #[serde(default)]
-    pub memory_request: Option<MemoryLimit>,
     /// The CPU limit for each process in the replica.
     pub cpu_limit: Option<CpuLimit>,
     /// The disk limit for each process in the replica.
@@ -97,6 +95,9 @@ pub struct ReplicaAllocation {
     /// T-shirt size.
     #[serde(default = "default_true")]
     pub is_cc: bool,
+    /// Whether instances of this type use swap as the spill-to-disk mechanism.
+    #[serde(default)]
+    pub swap_enabled: bool,
     /// Whether instances of this type can be created.
     #[serde(default)]
     pub disabled: bool,
@@ -119,11 +120,11 @@ fn test_replica_allocation_deserialization() {
         {
             "cpu_limit": 1.0,
             "memory_limit": "10GiB",
-            "memory_request": "5GiB",
             "disk_limit": "100MiB",
             "scale": 16,
             "workers": 1,
             "credits_per_hour": "16",
+            "swap_enabled": true,
             "selectors": {
                 "key1": "value1",
                 "key2": "value2"
@@ -140,10 +141,10 @@ fn test_replica_allocation_deserialization() {
             disk_limit: Some(DiskLimit(ByteSize::mib(100))),
             disabled: false,
             memory_limit: Some(MemoryLimit(ByteSize::gib(10))),
-            memory_request: Some(MemoryLimit(ByteSize::gib(5))),
             cpu_limit: Some(CpuLimit::from_millicpus(1000)),
             cpu_exclusive: false,
             is_cc: true,
+            swap_enabled: true,
             scale: 16,
             workers: 1,
             selectors: BTreeMap::from([
@@ -175,10 +176,10 @@ fn test_replica_allocation_deserialization() {
             disk_limit: Some(DiskLimit(ByteSize::mib(0))),
             disabled: true,
             memory_limit: Some(MemoryLimit(ByteSize::gib(0))),
-            memory_request: None,
             cpu_limit: Some(CpuLimit::from_millicpus(0)),
             cpu_exclusive: true,
             is_cc: true,
+            swap_enabled: false,
             scale: 0,
             workers: 0,
             selectors: Default::default(),
@@ -645,6 +646,25 @@ where
             ..Default::default()
         };
 
+        let mut disk_limit = location.allocation.disk_limit;
+        let memory_limit = location.allocation.memory_limit;
+        let mut memory_request = None;
+
+        if location.allocation.swap_enabled {
+            // The disk limit we specify in the service config decides whether or not the replica
+            // gets a scratch disk attached. We want to avoid attaching disks to swap replicas, so
+            // make sure to set the disk limit accordingly.
+            disk_limit = Some(DiskLimit::ZERO);
+
+            // We want to keep the memory request equal to the memory limit, to avoid
+            // over-provisioning and ensure replicas have predictable performance. However, to
+            // enable swap, Kubernetes currently requires that request and limit are different.
+            memory_request = memory_limit.map(|MemoryLimit(limit)| {
+                let request = ByteSize::b(limit.as_u64() - 1);
+                MemoryLimit(request)
+            });
+        }
+
         let service = self.orchestrator.ensure_service(
             &service_name,
             ServiceConfig {
@@ -746,8 +766,8 @@ where
                     },
                 ],
                 cpu_limit: location.allocation.cpu_limit,
-                memory_limit: location.allocation.memory_limit,
-                memory_request: location.allocation.memory_request,
+                memory_limit,
+                memory_request,
                 scale: location.allocation.scale,
                 labels: BTreeMap::from([
                     ("replica-id".into(), replica_id.to_string()),
@@ -797,7 +817,7 @@ where
                         value: cluster_id.to_string(),
                     },
                 }],
-                disk_limit: location.allocation.disk_limit,
+                disk_limit,
                 node_selector: location.allocation.selectors,
             },
         )?;
