@@ -25,7 +25,7 @@ from typing import Any
 import matplotlib.pyplot as plt
 import pandas as pd
 import psycopg
-from psycopg import InterfaceError
+from psycopg import InterfaceError, OperationalError
 
 from materialize import MZ_ROOT, buildkite
 from materialize.mzcompose import _wait_for_pg
@@ -57,13 +57,48 @@ def replica_size_for_scale(scale: int) -> str:
     return f"{scale}00cc-swap"
 
 
+class ConnectionHandler:
+    def __init__(self, new_connection: Callable[[], psycopg.Connection]) -> None:
+        self.new_connection = new_connection
+        self.connection = self.new_connection()
+        self.cursor: psycopg.Cursor | None = None
+
+    def __ensure_connection(self):
+        if not self.connection or self.connection.closed:
+            self.connection = self.new_connection()
+
+    def __enter__(self) -> psycopg.Cursor:
+        self.__ensure_connection()
+        assert not self.cursor
+        self.cursor = self.connection.cursor()
+        return self.cursor
+
+    def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> None:
+        if self.cursor:
+            self.cursor.close()
+            self.cursor = None
+
+    def retryable(self, func: Callable[[], Any], retries: int = 5) -> Any:
+        while True:
+            try:
+                self.__ensure_connection()
+                return func()
+            except (InterfaceError, OperationalError) as e:
+                if retries <= 0:
+                    raise e
+                print(f"Retryable error: {e}, reconnecting...")
+                time.sleep(5)
+                self.connection.close()
+                retries -= 1
+
+
 class ScenarioRunner:
     def __init__(
         self,
         scenario: str,
         scale: int,
         mode: str,
-        connection: psycopg.Connection,
+        connection: ConnectionHandler,
         results_file: Any,
         replica_size: Any,
     ) -> None:
@@ -90,7 +125,7 @@ class ScenarioRunner:
     def run_query(self, query: str, fetch: bool = False, **params) -> list | None:
         query = dedent(query).strip()
         print(f"> {query} {params or ''}")
-        with self.connection.cursor() as cur:
+        with self.connection as cur:
             cur.execute(query.encode(), params)
             if fetch:
                 return cur.fetchall()
@@ -101,28 +136,37 @@ class ScenarioRunner:
         self,
         category: str,
         name: str,
+        setup: list[str],
         query: list[str],
         repetitions: int = 1,
         size_of_index: str | None = None,
+        setup_delay: float = 0.0,
     ) -> None:
         print(
             f"--- Running {name} for {self.replica_size} with {repetitions} repetitions..."
         )
         for repetition in range(repetitions):
-            start_time = time.time()
-            for query_part in query:
-                self.run_query(query_part)
-            end_time = time.time()
-            if size_of_index:
-                # We need to wait for the introspection source to catch up.
-                time.sleep(2)
-                size_bytes = self.size_of_dataflow(f"%{size_of_index}")
-                print(f"Size of index {size_of_index}: {size_bytes}")
-            else:
-                size_bytes = None
-            self.add_result(
-                category, name, repetition, size_bytes, (end_time - start_time)
-            )
+
+            def inner() -> None:
+                for setup_part in setup:
+                    self.run_query(setup_part)
+                time.sleep(setup_delay)
+                start_time = time.time()
+                for query_part in query:
+                    self.run_query(query_part)
+                end_time = time.time()
+                if size_of_index:
+                    # We need to wait for the introspection source to catch up.
+                    time.sleep(2)
+                    size_bytes = self.size_of_dataflow(f"%{size_of_index}")
+                    print(f"Size of index {size_of_index}: {size_bytes}")
+                else:
+                    size_bytes = None
+                self.add_result(
+                    category, name, repetition, size_bytes, (end_time - start_time)
+                )
+
+            self.connection.retryable(inner)
 
     def size_of_dataflow(self, object: str) -> int | None:
         retries = 10
@@ -149,13 +193,22 @@ class Scenario(ABC):
     def name(self) -> str: ...
 
     @abstractmethod
-    def setup(self) -> list[str]: ...
+    def setup(self) -> list[str]:
+        """
+        Prepare the scenario by setting up resources like clusters, sources, and
+        load generators.
+        """
+        ...
 
     @abstractmethod
     def drop(self) -> list[str]: ...
 
     @abstractmethod
-    def materialize_views(self) -> list[str]: ...
+    def materialize_views(self) -> list[str]:
+        """
+        Returns names of the persist objects that setup initializes.
+        """
+        ...
 
     @abstractmethod
     def run(self, runner: ScenarioRunner) -> None: ...
@@ -183,12 +236,14 @@ class TpchScenario(Scenario):
 
     def run(self, runner: ScenarioRunner) -> None:
         # Create index
-        runner.run_query("DROP INDEX IF EXISTS lineitem_primary_idx CASCADE")
-        runner.run_query("SELECT * FROM t;")
 
         runner.measure(
             "arrangement_formation",
             "create_index_primary_key",
+            setup=[
+                "DROP INDEX IF EXISTS lineitem_primary_idx CASCADE",
+                "SELECT * FROM t;",
+            ],
             query=[
                 "CREATE DEFAULT INDEX ON lineitem;",
                 "SELECT count(*) > 0 FROM lineitem;",
@@ -198,14 +253,12 @@ class TpchScenario(Scenario):
 
         time.sleep(3)
 
-        index_size = runner.size_of_dataflow("%lineitem_primary_idx")
-        print(f"Index size: {index_size}")
-
         # Peek against index
         runner.measure(
             "peek_serving",
             "peek_index_key_fast_path",
             size_of_index="lineitem_primary_idx",
+            setup=[],
             query=[
                 "SELECT * FROM lineitem WHERE l_orderkey = 123412341234 and l_linenumber = 123",
             ],
@@ -217,18 +270,21 @@ class TpchScenario(Scenario):
             "peek_serving",
             "peek_index_non_key_fast_path",
             size_of_index="lineitem_primary_idx",
+            setup=[],
             query=[
                 "SELECT * FROM lineitem WHERE l_tax = 123;",
             ],
         )
 
         # Restart index
-        runner.run_query("SELECT count(*) > 0 FROM lineitem;")
-        runner.run_query("ALTER CLUSTER c SET (REPLICATION FACTOR 0);")
         runner.measure(
             "arrangement_formation",
             "index_restart",
             size_of_index="lineitem_primary_idx",
+            setup=[
+                "SELECT count(*) > 0 FROM lineitem;",
+                "ALTER CLUSTER c SET (REPLICATION FACTOR 0);",
+            ],
             query=[
                 "ALTER CLUSTER c SET (REPLICATION FACTOR 1);",
                 "WITH data AS (SELECT * FROM lineitem WHERE l_orderkey = 123412341234 and l_linenumber = 123) SELECT * FROM data, t;",
@@ -258,11 +314,13 @@ class TpchScenarioMV(Scenario):
 
     def run(self, runner: ScenarioRunner) -> None:
         # Create index
-        runner.run_query("DROP MATERIALIZED VIEW IF EXISTS mv_lineitem CASCADE")
-        runner.run_query("SELECT * FROM t;")
         runner.measure(
             "materialized_view_formation",
             "create_materialize_view",
+            setup=[
+                "DROP MATERIALIZED VIEW IF EXISTS mv_lineitem CASCADE",
+                "SELECT * FROM t;",
+            ],
             query=[
                 "CREATE MATERIALIZED VIEW mv_lineitem AS SELECT * FROM lineitem;",
                 "SELECT count(*) > 0 FROM mv_lineitem;",
@@ -272,14 +330,12 @@ class TpchScenarioMV(Scenario):
 
         time.sleep(3)
 
-        index_size = runner.size_of_dataflow("%mv_lineitem")
-        print(f"Dataflow size: {index_size}")
-
         # Peek against index
         runner.measure(
             "peek_serving",
             "peek_materialized_view_key_slow_path",
             size_of_index="mv_lineitem",
+            setup=[],
             query=[
                 "WITH data AS (SELECT * FROM mv_lineitem WHERE l_orderkey = 123412341234 and l_linenumber = 123) SELECT * FROM data, t;",
             ],
@@ -291,6 +347,7 @@ class TpchScenarioMV(Scenario):
             "peek_serving",
             "peek_materialized_view_key_fast_path",
             size_of_index="mv_lineitem",
+            setup=[],
             query=[
                 "SELECT * FROM mv_lineitem WHERE l_orderkey = 123412341234 and l_linenumber = 123",
             ],
@@ -302,6 +359,7 @@ class TpchScenarioMV(Scenario):
             "peek_serving",
             "peek_materialized_view_non_key_slow_path",
             size_of_index="mv_lineitem",
+            setup=[],
             query=[
                 "WITH data AS (SELECT * FROM mv_lineitem WHERE l_tax = 123) SELECT * FROM data, t;",
             ],
@@ -312,18 +370,21 @@ class TpchScenarioMV(Scenario):
             "peek_serving",
             "peek_materialized_view_non_key_fast_path",
             size_of_index="mv_lineitem",
+            setup=[],
             query=[
                 "SELECT * FROM mv_lineitem WHERE l_tax = 123;",
             ],
         )
 
         # Restart index
-        runner.run_query("SELECT count(*) > 0 FROM mv_lineitem;")
-        runner.run_query("ALTER CLUSTER c SET (REPLICATION FACTOR 0);")
         runner.measure(
             "materialized_view_formation",
             "materialized_view_restart",
             size_of_index="mv_lineitem",
+            setup=[
+                "SELECT count(*) > 0 FROM mv_lineitem;",
+                "ALTER CLUSTER c SET (REPLICATION FACTOR 0);",
+            ],
             query=[
                 "ALTER CLUSTER c SET (REPLICATION FACTOR 1);",
                 "WITH data AS (SELECT * FROM mv_lineitem WHERE l_orderkey = 123412341234 and l_linenumber = 123) SELECT * FROM data, t;",
@@ -488,24 +549,25 @@ class AuctionScenario(Scenario):
 
     def run(self, runner: ScenarioRunner) -> None:
         # Create index
-        runner.run_query("SELECT * FROM t;")
-        runner.run_query("DROP INDEX IF EXISTS bids_id_idx CASCADE")
         runner.measure(
             "arrangement_formation",
             "create_index_primary_key",
             size_of_index="bids_id_idx",
+            setup=[
+                "SELECT * FROM t;",
+                "DROP INDEX IF EXISTS bids_id_idx CASCADE",
+            ],
             query=[
                 "CREATE INDEX bids_id_idx ON bids(id);",
                 "SELECT count(*) > 0 FROM bids WHERE id = 123123123;",
             ],
         )
 
-        runner.run_query("DROP INDEX IF EXISTS bids_auction_id_idx CASCADE")
-
         runner.measure(
             "arrangement_formation",
             "create_index_foreign_key",
             size_of_index="bids_id_idx",
+            setup=["DROP INDEX IF EXISTS bids_auction_id_idx CASCADE"],
             query=[
                 "CREATE INDEX bids_auction_id_idx ON bids(auction_id);",
                 "SELECT count(*) > 0 FROM bids WHERE auction_id = 123123123;",
@@ -514,14 +576,12 @@ class AuctionScenario(Scenario):
 
         time.sleep(3)
 
-        index_size = runner.size_of_dataflow("%bids_id_idx")
-        print(f"Index size: {index_size}")
-
         # Peek against index
         runner.measure(
             "peek_serving",
             "peek_index_key_slow_path",
             size_of_index="bids_id_idx",
+            setup=[],
             query=[
                 "WITH data AS (SELECT * FROM bids WHERE id = 123412341234) SELECT * FROM data, t;",
             ],
@@ -533,6 +593,7 @@ class AuctionScenario(Scenario):
             "peek_serving",
             "peek_index_key_fast_path",
             size_of_index="bids_id_idx",
+            setup=[],
             query=[
                 "SELECT * FROM bids WHERE id = 123412341234",
             ],
@@ -544,6 +605,7 @@ class AuctionScenario(Scenario):
             "peek_serving",
             "peek_index_non_key_slow_path",
             size_of_index="bids_id_idx",
+            setup=[],
             query=[
                 "WITH data AS (SELECT * FROM bids WHERE amount = 123123123) SELECT * FROM data, t;",
             ],
@@ -555,6 +617,7 @@ class AuctionScenario(Scenario):
             "peek_serving",
             "peek_index_non_key_fast_path",
             size_of_index="bids_id_idx",
+            setup=[],
             query=[
                 "SELECT * FROM bids WHERE amount = 123123123;",
             ],
@@ -566,6 +629,7 @@ class AuctionScenario(Scenario):
             "primitive_operators",
             "bids_max",
             size_of_index="bids_id_idx",
+            setup=[],
             query=[
                 "SELECT max(amount) FROM bids;",
             ],
@@ -575,6 +639,7 @@ class AuctionScenario(Scenario):
             "primitive_operators",
             "bids_max_subscribe",
             size_of_index="bids_id_idx",
+            setup=[],
             query=[
                 "BEGIN",
                 "DECLARE c CURSOR FOR SUBSCRIBE (SELECT max(amount) FROM bids);",
@@ -588,6 +653,7 @@ class AuctionScenario(Scenario):
             "primitive_operators",
             "bids_sum",
             size_of_index="bids_id_idx",
+            setup=[],
             query=[
                 "SELECT sum(amount) FROM bids;",
             ],
@@ -597,6 +663,7 @@ class AuctionScenario(Scenario):
             "primitive_operators",
             "bids_sum_subscribe",
             size_of_index="bids_id_idx",
+            setup=[],
             query=[
                 "BEGIN",
                 "DECLARE c CURSOR FOR SUBSCRIBE (SELECT sum(amount) FROM bids);",
@@ -610,6 +677,7 @@ class AuctionScenario(Scenario):
             "primitive_operators",
             "bids_count",
             size_of_index="bids_id_idx",
+            setup=[],
             query=[
                 "SELECT count(1) FROM bids;",
             ],
@@ -619,6 +687,7 @@ class AuctionScenario(Scenario):
             "primitive_operators",
             "bids_count_subscribe",
             size_of_index="bids_id_idx",
+            setup=[],
             query=[
                 "BEGIN",
                 "DECLARE c CURSOR FOR SUBSCRIBE (SELECT count(1) FROM bids);",
@@ -632,6 +701,7 @@ class AuctionScenario(Scenario):
             "primitive_operators",
             "bids_basic_list_agg",
             size_of_index="bids_id_idx",
+            setup=[],
             query=[
                 "SELECT auction_id, list_agg(amount) FROM bids GROUP BY auction_id LIMIT 1;",
             ],
@@ -641,6 +711,7 @@ class AuctionScenario(Scenario):
             "primitive_operators",
             "bids_basic_list_agg_subscribe",
             size_of_index="bids_id_idx",
+            setup=[],
             query=[
                 "BEGIN",
                 # We need to limit the amount of data we retrieve to avoid
@@ -666,6 +737,7 @@ class AuctionScenario(Scenario):
             "primitive_operators",
             "join",
             size_of_index="bids_id_idx",
+            setup=[],
             query=[
                 "SELECT * FROM bids, auctions WHERE bids.auction_id = auctions.id LIMIT 0;",
             ],
@@ -677,6 +749,7 @@ class AuctionScenario(Scenario):
             "composite_operators",
             "bids_count_max_sum_min",
             size_of_index="bids_id_idx",
+            setup=[],
             query=[
                 """
                 SELECT
@@ -692,6 +765,7 @@ class AuctionScenario(Scenario):
             "composite_operators",
             "bids_count_max_sum_min_subscribe",
             size_of_index="bids_id_idx",
+            setup=[],
             query=[
                 "BEGIN",
                 """
@@ -715,6 +789,7 @@ class AuctionScenario(Scenario):
             "composite_operators",
             "join_max",
             size_of_index="bids_id_idx",
+            setup=[],
             query=[
                 "SELECT auction_id, item, MAX(amount) FROM bids, auctions WHERE bids.auction_id = auctions.id GROUP BY auction_id, item HAVING auction_id + MAX(amount)::int4 < 1000;",
             ],
@@ -722,16 +797,16 @@ class AuctionScenario(Scenario):
         )
 
         # Restart index
-        runner.run_query("ALTER CLUSTER c SET (REPLICATION FACTOR 0);")
-        time.sleep(2)
         runner.measure(
             "peek_serving",
             "index_restart",
             size_of_index="bids_id_idx",
+            setup=["ALTER CLUSTER c SET (REPLICATION FACTOR 0);"],
             query=[
                 "ALTER CLUSTER c SET (REPLICATION FACTOR 1);",
                 "WITH data AS (SELECT * FROM bids WHERE id = 123412341234) SELECT * FROM data, t;",
             ],
+            setup_delay=2,
         )
 
 
@@ -757,7 +832,6 @@ def wait_for_cloud(c: Composition) -> None:
         timeout_secs=900,
         dbname="materialize",
         sslmode="require",
-        # print_result=True
     )
 
 
@@ -817,64 +891,47 @@ def workflow_bench(c: Composition, parser: WorkflowArgumentParser) -> None:
         new_app_password = output.stdout.strip()
         assert "mzp_" in new_app_password
 
-        def run_with_retries(
-            func: Callable[[psycopg.Connection], None], max_retries: int = 3
-        ) -> None:
-            for attempt in range(max_retries):
-                try:
-                    conn = psycopg.connect(
-                        host=c.cloud_hostname(),
-                        port=6875,
-                        user=USERNAME,
-                        password=new_app_password,
-                        dbname="materialize",
-                        sslmode="require",
-                    )
-                    conn.autocommit = True
-                    func(conn)
-                    return
-                except InterfaceError as e:
-                    print(
-                        f"Interface error: {e}. Retrying ({attempt + 1}/{max_retries})..."
-                    )
-                    time.sleep(2)
-            raise RuntimeError("Max retries exceeded for scenario run.")
+        def new_connection() -> psycopg.Connection:
+            conn = psycopg.connect(
+                host=c.cloud_hostname(),
+                port=6875,
+                user=USERNAME,
+                password=new_app_password,
+                dbname="materialize",
+                sslmode="require",
+            )
+            conn.autocommit = True
+            return conn
+
+        conn = ConnectionHandler(new_connection)
 
         with open(args.record, "w") as f:
             f.write(
                 "scenario,scale,mode,category,test_name,cluster_size,repetition,size_bytes,time_ms\n"
             )
             print("+++ Running TPC-H Index strong scaling")
-            run_with_retries(
-                lambda conn: run_scenario_strong(
-                    scenario=TpchScenario(1, replica_size_for_scale(1)),
-                    results_file=f,
-                    connection=conn,
-                )
+            run_scenario_strong(
+                scenario=TpchScenario(1, replica_size_for_scale(1)),
+                results_file=f,
+                connection=conn,
             )
             print("+++ Running TPC-H Materialized view strong scaling")
-            run_with_retries(
-                lambda conn: run_scenario_strong(
-                    scenario=TpchScenarioMV(1, replica_size_for_scale(1)),
-                    results_file=f,
-                    connection=conn,
-                )
+            run_scenario_strong(
+                scenario=TpchScenarioMV(1, replica_size_for_scale(1)),
+                results_file=f,
+                connection=conn,
             )
             print("+++ Running Auction strong scaling")
-            run_with_retries(
-                lambda conn: run_scenario_strong(
-                    scenario=AuctionScenario(4, replica_size_for_scale(1)),
-                    results_file=f,
-                    connection=conn,
-                )
+            run_scenario_strong(
+                scenario=AuctionScenario(4, replica_size_for_scale(1)),
+                results_file=f,
+                connection=conn,
             )
             print("+++ Running Auction weak scaling")
-            run_with_retries(
-                lambda conn: run_scenario_weak(
-                    scenario=AuctionScenario(4, "none"),
-                    results_file=f,
-                    connection=conn,
-                )
+            run_scenario_weak(
+                scenario=AuctionScenario(4, "none"),
+                results_file=f,
+                connection=conn,
             )
         test_failed = False
     finally:
@@ -892,7 +949,9 @@ def workflow_bench(c: Composition, parser: WorkflowArgumentParser) -> None:
 
 
 def run_scenario_strong(
-    scenario: Scenario, results_file: Any, connection: psycopg.Connection
+    scenario: Scenario,
+    results_file: Any,
+    connection: ConnectionHandler,
 ) -> None:
     """
     Run a strong scaling scenario, where we increase the cluster size
@@ -939,14 +998,16 @@ def run_scenario_strong(
 
 
 def run_scenario_weak(
-    scenario: Scenario, results_file: Any, connection: psycopg.Connection
+    scenario: Scenario,
+    results_file: Any,
+    connection: ConnectionHandler,
 ) -> None:
     """
     Run a weak scaling scenario, where we increase both the cluster size
     and the data size.
     """
 
-    with connection.cursor() as cur:
+    with connection as cur:
         cur.execute("DROP TABLE IF EXISTS t CASCADE;")
         cur.execute("CREATE TABLE t (a int);")
         cur.execute("INSERT INTO t VALUES (1);")
