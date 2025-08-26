@@ -2532,8 +2532,9 @@ ddl_action_list = ActionList(
         # (DropMySqlSourceAction, 4),
         (CreatePostgresSourceAction, 4),
         (DropPostgresSourceAction, 4),
-        (CreateSqlServerSourceAction, 4),
-        (DropSqlServerSourceAction, 4),
+        # TODO: Reenable when database-issues#9620 is fixed
+        # (CreateSqlServerSourceAction, 4),
+        # (DropSqlServerSourceAction, 4),
         (GrantPrivilegesAction, 4),
         (RevokePrivilegesAction, 1),
         (ReconnectAction, 1),

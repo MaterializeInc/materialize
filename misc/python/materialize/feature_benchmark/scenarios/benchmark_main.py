@@ -1542,10 +1542,7 @@ CREATE SCHEMA public;
 DROP PUBLICATION IF EXISTS mz_source;
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
-IF EXISTS (SELECT 1 FROM cdc.change_tables WHERE capture_instance = 'dbpk_table') BEGIN EXEC sys.sp_cdc_disable_table @source_schema = 'dbo', @source_name = 'pk_table', @capture_instance = 'dbpk_table'; END
-DROP TABLE IF EXISTS pk_table;
 CREATE TABLE pk_table (pk BIGINT PRIMARY KEY, f2 BIGINT);
-EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'pk_table', @role_name = 'SA', @supports_net_changes = 0;
 INSERT INTO pk_table SELECT x, x*2 FROM generate_series(1, {self.n()}) as x;
 ALTER TABLE pk_table REPLICA IDENTITY FULL;
 """
@@ -1804,7 +1801,7 @@ class SqlServerCdc(Scenario):
     pass
 
 
-class SqlServerInitialLoad(MySqlCdc):
+class SqlServerInitialLoad(SqlServerCdc):
     """Measure the time it takes to read 1M existing records from SQL Server
     when creating a materialized source"""
 
@@ -1818,7 +1815,11 @@ server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;U
 
 $ sql-server-execute name=sql-server
 USE test;
+IF EXISTS (SELECT 1 FROM cdc.change_tables WHERE capture_instance = 'dbpk_table') BEGIN EXEC sys.sp_cdc_disable_table @source_schema = 'dbo', @source_name = 'pk_table', @capture_instance = 'dbpk_table'; END
+DROP TABLE IF EXISTS pk_table;
 CREATE TABLE pk_table (pk BIGINT PRIMARY KEY, f2 BIGINT);
+EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'pk_table', @role_name = 'SA', @supports_net_changes = 0;
+
 WITH Numbers AS (SELECT TOP ({self.n()}) ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS n FROM sys.objects AS o1 CROSS JOIN sys.objects AS o2) INSERT INTO pk_table (pk, f2) SELECT n, n * n FROM Numbers;
 """
         )
@@ -1844,7 +1845,7 @@ WITH Numbers AS (SELECT TOP ({self.n()}) ROW_NUMBER() OVER (ORDER BY (SELECT NUL
 
 > CREATE CLUSTER source_cluster SIZE 'scale={self._default_size},workers=1', REPLICATION FACTOR 1;
 
-> CREATE SOURCE mz_source_sqlcdc
+> CREATE SOURCE mz_source_sqlservercdc
   IN CLUSTER source_cluster
   FROM SQL SERVER CONNECTION sql_server_conn;
 > CREATE TABLE pk_table FROM SOURCE mz_source_sqlservercdc (REFERENCE pk_table);
@@ -1857,7 +1858,7 @@ WITH Numbers AS (SELECT TOP ({self.n()}) ROW_NUMBER() OVER (ORDER BY (SELECT NUL
         )
 
 
-class SqlServerStreaming(MySqlCdc):
+class SqlServerStreaming(SqlServerCdc):
     """Measure the time it takes to ingest records from SQL Server post-snapshot"""
 
     SCALE = 5
@@ -1884,7 +1885,7 @@ server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;U
 
 $ sql-server-execute name=sql-server
 USE test;
-IF EXISTS (SELECT 1 FROM cdc.change_tables WHERE capture_instance = 'dbpk') BEGIN EXEC sys.sp_cdc_disable_table @source_schema = 'dbo', @source_name = 'pk', @capture_instance = 'dbpk'; END
+IF EXISTS (SELECT 1 FROM cdc.change_tables WHERE capture_instance = 'dbt1') BEGIN EXEC sys.sp_cdc_disable_table @source_schema = 'dbo', @source_name = 't1', @capture_instance = 'dbt1'; END
 DROP TABLE IF EXISTS t1;
 CREATE TABLE t1 (pk BIGINT IDENTITY(1,1) PRIMARY KEY, f2 BIGINT);
 EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 't1', @role_name = 'SA', @supports_net_changes = 0;

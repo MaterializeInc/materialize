@@ -572,6 +572,17 @@ steps:
               composition: zippy
               args: [--scenario=MySqlCdc, --actions=10000, --max-execution-time=30m, --azurite]
 
+      - id: zippy-sql-server-cdc
+        label: "Zippy SQL Server CDC"
+        depends_on: build-x86_64
+        timeout_in_minutes: 120
+        agents:
+          queue: hetzner-x86-64-8cpu-16gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: zippy
+              args: [--scenario=SqlServerCdc, --actions=10000, --max-execution-time=30m, --azurite]
+
       - id: zippy-debezium-postgres
         label: "Zippy Debezium Postgres"
         depends_on: build-aarch64

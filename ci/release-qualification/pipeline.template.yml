@@ -101,6 +101,17 @@ steps:
             composition: zippy
             args: [--scenario=MySqlCdcLarge, --actions=100000, --max-execution-time=4h]
 
+    - id: zippy-sql-server-cdc-large
+      label: "Large Zippy SqlServerCdc"
+      depends_on: build-x86_64
+      timeout_in_minutes: 1440
+      agents:
+        queue: hetzner-x86-64-16cpu-32gb
+      plugins:
+        - ./ci/plugins/mzcompose:
+            composition: zippy
+            args: [--scenario=SqlServerCdcLarge, --actions=100000, --max-execution-time=4h]
+
     - id: zippy-cluster-replicas-long
       label: "Longer Zippy ClusterReplicas"
       depends_on: build-aarch64

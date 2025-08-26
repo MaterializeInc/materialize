@@ -112,9 +112,6 @@ class StartMz(MzcomposeAction):
                     c, ssh_tunnel_name, mz_service=self.mz_service
                 )
 
-            # This should live in sql_server_cdc.py, but initialization is shared between all SQL Server checks
-            setup_sql_server_testing(c)
-
             mz_version = MzVersion.parse_mz(c.query_mz_version(service=self.mz_service))
             if self.tag:
                 assert (
@@ -184,6 +181,8 @@ class ConfigureMz(MzcomposeAction):
             > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${{testdrive.schema-registry-url}}';
             """
         )
+
+        setup_sql_server_testing(e.mzcompose_composition())
 
         self.handle = e.testdrive(input=input, mz_service=self.mz_service)
         e.system_settings.update(system_settings)

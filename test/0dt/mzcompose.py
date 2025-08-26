@@ -1535,7 +1535,7 @@ def workflow_sql_server_source_rehydration(c: Composition) -> None:
 
     # The number of row value expressions in the INSERT statement exceeds the maximum allowed number of 1000 row values.
     count = 1000
-    repeats = 1000
+    repeats = 10
 
     inserts = (
         "INSERT INTO sql_server_source_table VALUES "

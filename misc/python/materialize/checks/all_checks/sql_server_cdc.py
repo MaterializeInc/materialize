@@ -33,11 +33,6 @@ class SqlServerCdcBase:
         self.suffix = f"_{str(wait).lower()}"
         super().__init__(**kwargs)  # forward unused args to Check
 
-    def _can_run(self, e: Executor) -> bool:
-        # TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/9617 is fixed
-        return False
-        # return self.base_version > MzVersion.parse_mz("v0.154.0-dev")
-
     def initialize(self) -> Testdrive:
         return Testdrive(
             dedent(
@@ -283,15 +278,24 @@ class SqlServerCdc(SqlServerCdcBase, Check):
     ) -> None:
         super().__init__(wait=True, base_version=base_version, rng=rng)
 
+    def _can_run(self, e: Executor) -> bool:
+        return self.base_version > MzVersion.parse_mz("v0.154.0-dev")
+
 
 @externally_idempotent(False)
 class SqlServerCdcNoWait(SqlServerCdcBase, Check):
     def __init__(self, base_version: MzVersion, rng: Random | None) -> None:
         super().__init__(wait=False, base_version=base_version, rng=rng)
 
+    def _can_run(self, e: Executor) -> bool:
+        return self.base_version > MzVersion.parse_mz("v0.154.0-dev")
+
 
 @externally_idempotent(False)
 class SqlServerCdcMzNow(Check):
+    def _can_run(self, e: Executor) -> bool:
+        return self.base_version > MzVersion.parse_mz("v0.154.0-dev")
+
     def initialize(self) -> Testdrive:
         return Testdrive(
             dedent(

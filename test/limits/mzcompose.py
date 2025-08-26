@@ -1740,7 +1740,9 @@ class SqlServerSources(Generator):
         print("$ sql-server-execute name=sql-server")
         print("USE test;")
         for i in cls.all():
-            print(f"IF EXISTS (SELECT 1 FROM cdc.change_tables WHERE capture_instance = 'dbt{i}') BEGIN EXEC sys.sp_cdc_disable_table @source_schema = 'dbo', @source_name = 't{i}', @capture_instance = 'dbt{i}'; END")
+            print(
+                f"IF EXISTS (SELECT 1 FROM cdc.change_tables WHERE capture_instance = 'dbt{i}') BEGIN EXEC sys.sp_cdc_disable_table @source_schema = 'dbo', @source_name = 't{i}', @capture_instance = 'dbt{i}'; END"
+            )
             print(f"DROP TABLE IF EXISTS t{i};")
             print(f"CREATE TABLE t{i} (c int);")
             print(
