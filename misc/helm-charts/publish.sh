@@ -51,9 +51,10 @@ echo "--- Publishing Helm Chart $CI_HELM_CHART_VERSION with Materialize $CI_MZ_V
 bin/helm-chart-version-bump --helm-chart-version "$CI_HELM_CHART_VERSION" "$CI_MZ_VERSION"
 git commit -a -m "Bumping helm-chart version to $CI_HELM_CHART_VERSION with Materialize $CI_MZ_VERSION"
 TAG="self-managed-$CI_HELM_CHART_VERSION"
-git tag "$TAG"
-git diff HEAD~
-run_if_not_dry git push "https://github.com/MaterializeInc/materialize.git" "$TAG"
+if git tag "$TAG"; then
+    git diff HEAD~
+    run_if_not_dry git push "https://github.com/MaterializeInc/materialize.git" "$TAG"
+fi
 
 # Find directories containing Chart.yaml
 CHARTS=""
@@ -121,7 +122,7 @@ echo "--- Verifying that Helm Chart has been published"
 i=0
 if ! is_truthy "$CI_DRY_RUN"; then
   HELM_CHART_PUBLISHED=false
-  while (( i < 30 )); do
+  while (( i < 60 )); do
     YAML=$(curl -s "https://materializeinc.github.io/materialize/index.yaml")
 
     MATCH_FOUND=$(echo "$YAML" | yq ".entries[\"materialize-operator\"][]
