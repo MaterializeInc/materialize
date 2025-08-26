@@ -355,12 +355,58 @@ SELECT @mz_cleanup_status_bit;
     }
 }
 
-/// Returns the `(capture_instance, schema_name, table_name)` for the tables
-/// that are tracked by the specified `capture_instance`s.
+// Retrieves all columns in tables that have CDC (Change Data Capture) enabled.
+//
+// Returns metadata needed to create an instance of ['SqlServerTableRaw`].
+//
+// The query joins several system tables:
+// - sys.tables: Source tables in the database
+// - sys.schemas: Schema information for proper table identification
+// - sys.columns: Column definitions including nullability
+// - sys.types: Data type information for each column
+// - cdc.change_tables: CDC configuration linking capture instances to source tables
+// - information_schema views: To identify primary key constraints
+//
+// For each column, it returns:
+// - Table identification (schema_name, table_name, capture_instance)
+// - Column metadata (name, type, nullable, max_length, precision, scale)
+// - Primary key information (constraint name if the column is part of a PK)
+static GET_COLUMNS_FOR_TABLES_WITH_CDC_QUERY: &str = "
+SELECT
+    s.name as schema_name,
+    t.name as table_name,
+    ch.capture_instance as capture_instance,
+    ch.create_date as capture_instance_create_date,
+    c.name as col_name,
+    ty.name as col_type,
+    c.is_nullable as col_nullable,
+    c.max_length as col_max_length,
+    c.precision as col_precision,
+    c.scale as col_scale,
+    tc.constraint_name AS col_primary_key_constraint
+FROM sys.tables t
+JOIN sys.schemas s ON t.schema_id = s.schema_id
+JOIN sys.columns c ON t.object_id = c.object_id
+JOIN sys.types ty ON c.user_type_id = ty.user_type_id
+JOIN cdc.change_tables ch ON t.object_id = ch.source_object_id
+LEFT JOIN information_schema.key_column_usage kc
+    ON kc.table_schema = s.name
+    AND kc.table_name = t.name
+    AND kc.column_name = c.name
+LEFT JOIN information_schema.table_constraints tc
+    ON tc.constraint_catalog = kc.constraint_catalog
+    AND tc.constraint_schema = kc.constraint_schema
+    AND tc.constraint_name = kc.constraint_name
+    AND tc.table_schema = kc.table_schema
+    AND tc.table_name = kc.table_name
+    AND tc.constraint_type = 'PRIMARY KEY'
+";
+
+/// Returns the table metadata for the tables that are tracked by the specified `capture_instance`s.
 pub async fn get_tables_for_capture_instance<'a>(
     client: &mut Client,
     capture_instances: impl IntoIterator<Item = &str>,
-) -> Result<Vec<(Arc<str>, Arc<str>, Arc<str>)>, SqlServerError> {
+) -> Result<Vec<SqlServerTableRaw>, SqlServerError> {
     // SQL Server does not have support for array types, so we need to manually construct
     // the parameterized query.
     let params: SmallVec<[_; 1]> = capture_instances.into_iter().collect();
@@ -383,37 +429,14 @@ pub async fn get_tables_for_capture_instance<'a>(
         .join(", ");
 
     let table_for_capture_instance_query = format!(
-        "
-SELECT c.capture_instance, SCHEMA_NAME(o.schema_id) as schema_name, o.name as obj_name
-FROM sys.objects o
-JOIN cdc.change_tables c
-ON o.object_id = c.source_object_id
-WHERE c.capture_instance IN ({param_indexes});"
+        "{GET_COLUMNS_FOR_TABLES_WITH_CDC_QUERY} WHERE ch.capture_instance IN ({param_indexes});"
     );
 
     let result = client
         .query(&table_for_capture_instance_query, &params_dyn[..])
         .await?;
-    let tables = result
-        .into_iter()
-        .map(|row| {
-            let capture_instance: &str = row.try_get("capture_instance")?.ok_or_else(|| {
-                SqlServerError::ProgrammingError("missing column 'capture_instance'".to_string())
-            })?;
-            let schema_name: &str = row.try_get("schema_name")?.ok_or_else(|| {
-                SqlServerError::ProgrammingError("missing column 'schema_name'".to_string())
-            })?;
-            let table_name: &str = row.try_get("obj_name")?.ok_or_else(|| {
-                SqlServerError::ProgrammingError("missing column 'schema_name'".to_string())
-            })?;
 
-            Ok::<_, SqlServerError>((
-                capture_instance.into(),
-                schema_name.into(),
-                table_name.into(),
-            ))
-        })
-        .collect::<Result<_, _>>()?;
+    let tables = deserialize_table_columns_to_raw_tables(&result)?;
 
     Ok(tables)
 }
@@ -469,36 +492,18 @@ pub async fn ensure_snapshot_isolation_enabled(client: &mut Client) -> Result<()
 }
 
 pub async fn get_tables(client: &mut Client) -> Result<Vec<SqlServerTableRaw>, SqlServerError> {
-    static GET_TABLES_QUERY: &str = "
-SELECT
-    s.name as schema_name,
-    t.name as table_name,
-    ch.capture_instance as capture_instance,
-    ch.create_date as capture_instance_create_date,
-    c.name as col_name,
-    ty.name as col_type,
-    c.is_nullable as col_nullable,
-    c.max_length as col_max_length,
-    c.precision as col_precision,
-    c.scale as col_scale,
-    tc.constraint_name AS col_primary_key_constraint
-FROM sys.tables t
-JOIN sys.schemas s ON t.schema_id = s.schema_id
-JOIN sys.columns c ON t.object_id = c.object_id
-JOIN sys.types ty ON c.user_type_id = ty.user_type_id
-JOIN cdc.change_tables ch ON t.object_id = ch.source_object_id
-LEFT JOIN information_schema.key_column_usage kc
-    ON kc.table_schema = s.name
-    AND kc.table_name = t.name
-    AND kc.column_name = c.name
-LEFT JOIN information_schema.table_constraints tc
-    ON tc.constraint_catalog = kc.constraint_catalog
-    AND tc.constraint_schema = kc.constraint_schema
-    AND tc.constraint_name = kc.constraint_name
-    AND tc.table_schema = kc.table_schema
-    AND tc.table_name = kc.table_name
-    AND tc.constraint_type = 'PRIMARY KEY';
-";
+    let result = client
+        .simple_query(&format!("{GET_COLUMNS_FOR_TABLES_WITH_CDC_QUERY};"))
+        .await?;
+
+    let tables = deserialize_table_columns_to_raw_tables(&result)?;
+
+    Ok(tables)
+}
+
+fn deserialize_table_columns_to_raw_tables(
+    rows: &[tiberius::Row],
+) -> Result<Vec<SqlServerTableRaw>, SqlServerError> {
     fn get_value<'a, T: tiberius::FromSql<'a>>(
         row: &'a tiberius::Row,
         name: &'static str,
@@ -507,29 +512,27 @@ LEFT JOIN information_schema.table_constraints tc
             .ok_or(SqlServerError::MissingColumn(name))
     }
 
-    let result = client.simple_query(GET_TABLES_QUERY).await?;
-
     // Group our columns by (schema, name).
     let mut tables = BTreeMap::default();
-    for row in result {
-        let schema_name: Arc<str> = get_value::<&str>(&row, "schema_name")?.into();
-        let table_name: Arc<str> = get_value::<&str>(&row, "table_name")?.into();
-        let capture_instance: Arc<str> = get_value::<&str>(&row, "capture_instance")?.into();
+    for row in rows {
+        let schema_name: Arc<str> = get_value::<&str>(row, "schema_name")?.into();
+        let table_name: Arc<str> = get_value::<&str>(row, "table_name")?.into();
+        let capture_instance: Arc<str> = get_value::<&str>(row, "capture_instance")?.into();
         let capture_instance_create_date: NaiveDateTime =
-            get_value::<NaiveDateTime>(&row, "capture_instance_create_date")?;
+            get_value::<NaiveDateTime>(row, "capture_instance_create_date")?;
         let primary_key_constraint: Option<Arc<str>> = row
             .try_get::<&str, _>("col_primary_key_constraint")?
             .map(|v| v.into());
 
-        let column_name = get_value::<&str>(&row, "col_name")?.into();
+        let column_name = get_value::<&str>(row, "col_name")?.into();
         let column = SqlServerColumnRaw {
             name: Arc::clone(&column_name),
-            data_type: get_value::<&str>(&row, "col_type")?.into(),
-            is_nullable: get_value(&row, "col_nullable")?,
+            data_type: get_value::<&str>(row, "col_type")?.into(),
+            is_nullable: get_value(row, "col_nullable")?,
             primary_key_constraint,
-            max_length: get_value(&row, "col_max_length")?,
-            precision: get_value(&row, "col_precision")?,
-            scale: get_value(&row, "col_scale")?,
+            max_length: get_value(row, "col_max_length")?,
+            precision: get_value(row, "col_precision")?,
+            scale: get_value(row, "col_scale")?,
         };
 
         let columns: &mut Vec<_> = tables
@@ -544,7 +547,7 @@ LEFT JOIN information_schema.table_constraints tc
     }
 
     // Flatten into our raw Table description.
-    let tables = tables
+    let raw_tables = tables
         .into_iter()
         .map(
             |((schema, name, capture_instance, capture_instance_create_date), columns)| {
@@ -559,9 +562,9 @@ LEFT JOIN information_schema.table_constraints tc
                 }
             },
         )
-        .collect();
+        .collect::<Vec<SqlServerTableRaw>>();
 
-    Ok(tables)
+    Ok(raw_tables)
 }
 
 /// Return a [`Stream`] that is the entire snapshot of the specified table.
