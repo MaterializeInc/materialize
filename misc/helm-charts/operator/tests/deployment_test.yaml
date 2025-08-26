@@ -70,7 +70,7 @@ tests:
       path: spec.template.spec.containers[0].args[13]
       pattern: is_cc":true
 
-- it: should have a cluster with disk limit to 1552MiB when storage class is 
+- it: should have a cluster with disk limit to 1552MiB when storage class is
     configured
   set:
     storage.storageClass.name: "my-storage-class"

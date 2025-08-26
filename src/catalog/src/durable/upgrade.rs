@@ -207,6 +207,7 @@ mod v70_to_v71;
 mod v71_to_v72;
 mod v72_to_v73;
 mod v73_to_v74;
+mod v74_mz_system;
 
 /// Describes a single action to take during a migration from `V1` to `V2`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -264,7 +265,10 @@ pub(crate) async fn upgrade(
         .await?
         .expect("initialized catalog must have a version");
     // Run migrations until we're up-to-date.
-    while version < CATALOG_VERSION {
+    // In 0.147 a bug whas introduce that necessitates
+    // a migration of v74 -> v74 to add login to mz_system roles
+    // this < is changed to a <= to pick that migration up.
+    while version <= CATALOG_VERSION {
         (version, commit_ts) = run_upgrade(persist_handle, version, commit_ts).await?;
     }
 
@@ -352,9 +356,16 @@ async fn run_upgrade(
             )
             .await
         }
-
+        74 => {
+            run_versioned_upgrade(
+                unopened_catalog_state,
+                version,
+                commit_ts,
+                v74_mz_system::upgrade,
+            )
+            .await
+        }
         // Up-to-date, no migration needed!
-        CATALOG_VERSION => Ok((CATALOG_VERSION, commit_ts)),
         FUTURE_VERSION.. => Err(incompatible),
     }
 }
