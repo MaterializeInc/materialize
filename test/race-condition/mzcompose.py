@@ -386,6 +386,7 @@ class SqlServerSource(Object):
             USE test;
             DROP TABLE IF EXISTS {self.name}_table;
             CREATE TABLE {self.name}_table (a VARCHAR(1024), b VARCHAR(1024));
+            EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = '{self.name}_table', @role_name = 'SA', @supports_net_changes = 0;
 
             > DROP SECRET IF EXISTS {self.name}_pass CASCADE
             > CREATE SECRET {self.name}_pass AS '{SqlServer.DEFAULT_SA_PASSWORD}'
@@ -393,7 +394,7 @@ class SqlServerSource(Object):
             > CREATE CONNECTION {self.name}_conn TO SQL SERVER (
                 HOST 'sql-server',
                 DATABASE test,
-                USER {SqlServer.DEFAULT_USER}
+                USER {SqlServer.DEFAULT_USER},
                 PASSWORD SECRET {self.name}_pass
               )"""
         )
