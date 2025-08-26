@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 # This test script runs after the SSH bastion host has been terminated.
+$ set-sql-timeout duration=60s
 
 > DROP CLUSTER REPLICA sc.r1
 > CREATE CLUSTER REPLICA sc.r1 SIZE 'scale=1,workers=32'
