@@ -13,6 +13,7 @@ from typing import Any
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check, externally_idempotent
+from materialize.checks.executors import Executor
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.services.sql_server import SqlServer
 
@@ -30,7 +31,12 @@ class SqlServerCdcBase:
         self.repeats = 1024 if wait else 1700
         self.expects = 97350 if wait else 164950
         self.suffix = f"_{str(wait).lower()}"
-        super().__init__(**kwargs)  # foward unused args to Check
+        super().__init__(**kwargs)  # forward unused args to Check
+
+    def _can_run(self, e: Executor) -> bool:
+        # TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/9617 is fixed
+        return False
+        # return self.base_version > MzVersion.parse_mz("v0.154.0-dev")
 
     def initialize(self) -> Testdrive:
         return Testdrive(

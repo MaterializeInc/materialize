@@ -784,6 +784,8 @@ DATA_TYPES_FOR_AVRO = sorted(
             UInt2,
             UInt4,
             UInt8,
+            Float,
+            Double,
         }
     ),
     key=repr,
@@ -831,7 +833,9 @@ DATA_TYPES_FOR_SQL_SERVER = sorted(
             UInt4,
             UInt8,
             Date,
+            Time,
             Timestamp,
+            Float,
             Double,
         }
     ),

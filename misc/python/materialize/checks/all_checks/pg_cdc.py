@@ -30,7 +30,7 @@ class PgCdcBase:
         self.repeats = 1024 if wait else 16384
         self.expects = 97350 if wait else 1633350
         self.suffix = f"_{str(wait).lower()}"
-        super().__init__(**kwargs)  # foward unused args to Check
+        super().__init__(**kwargs)  # forward unused args to Check
 
     def initialize(self) -> Testdrive:
         return Testdrive(

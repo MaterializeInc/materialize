@@ -353,7 +353,8 @@ class SqlServerExecutor(Executor):
                 USE test;
                 {query}
             """
-                )
+                ),
+                quiet=True,
             )
 
     def create(self, logging_exe: Any | None = None) -> None:
@@ -423,18 +424,24 @@ class SqlServerExecutor(Executor):
                     values_str = ", ".join(
                         str(formatted_value(value)) for value in row.values
                     )
-                    ", ".join(
-                        f"{identifier(field.name)}"
-                        for field in row.fields
-                        if field.is_key
-                    )
+
+                    # Identify key columns
+                    key_columns = [
+                        identifier(field.name) for field in row.fields if field.is_key
+                    ]
+
+                    # Identify all columns
+                    all_columns = [identifier(field.name) for field in row.fields]
+
+                    # Build the UPDATE part
                     update_str = ", ".join(
-                        f"{identifier(field.name)} = VALUES({identifier(field.name)})"
-                        for field in row.fields
+                        f"{col} = source.{col}" for col in all_columns
                     )
+
+                    # Build the MERGE SQL
                     self.execute(
                         None,
-                        f"MERGE {identifier(self.table)} AS target USING (VALUES ({values_str})) AS source ({','.join(self.columns)}) ON ({' AND '.join([f'target.{col} = source.{col}' for col in self.pk_columns])}) WHEN MATCHED THEN UPDATE SET {update_str} WHEN NOT MATCHED THEN INSERT ({','.join(self.columns)}) VALUES ({','.join([f'source.{col}' for col in self.columns])});",
+                        f"MERGE {identifier(self.table)} AS target USING (VALUES ({values_str})) AS source ({', '.join(all_columns)}) ON ({' AND '.join([f'target.{col} = source.{col}' for col in key_columns])}) WHEN MATCHED THEN UPDATE SET {update_str} WHEN NOT MATCHED THEN INSERT ({', '.join(all_columns)}) VALUES ({', '.join(['source.' + col for col in all_columns])});",
                     )
                 elif row.operation == Operation.DELETE:
                     cond_str = " AND ".join(
