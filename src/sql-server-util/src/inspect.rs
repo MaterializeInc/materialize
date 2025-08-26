@@ -431,6 +431,30 @@ pub async fn ensure_database_cdc_enabled(client: &mut Client) -> Result<(), SqlS
     Ok(())
 }
 
+/// Retrieves the largest `restore_history_id` from SQL Server for the current database.  The
+/// `restore_history_id` column is of type `IDENTITY(1,1)` based on `EXEC sp_help restorehistory`.
+/// We expect it to start at 1 and be incremented by 1, with possible gaps in values.
+/// See:
+/// - <https://learn.microsoft.com/en-us/sql/relational-databases/system-tables/restorehistory-transact-sql?view=sql-server-ver17>
+/// - <https://learn.microsoft.com/en-us/sql/t-sql/statements/create-table-transact-sql-identity-property?view=sql-server-ver17>
+pub async fn get_latest_restore_history_id(
+    client: &mut Client,
+) -> Result<Option<i32>, SqlServerError> {
+    static LATEST_RESTORE_ID_QUERY: &str = "SELECT TOP 1 restore_history_id \
+        FROM msdb.dbo.restorehistory \
+        WHERE destination_database_name = DB_NAME() \
+        ORDER BY restore_history_id DESC;";
+    let result = client.simple_query(LATEST_RESTORE_ID_QUERY).await?;
+
+    match &result[..] {
+        [] => Ok(None),
+        [row] => Ok(row.try_get::<i32, _>(0)?),
+        other => Err(SqlServerError::InvariantViolated(format!(
+            "expected one row, got {other:?}"
+        ))),
+    }
+}
+
 /// Ensure the `SNAPSHOT` transaction isolation level is enabled for the
 /// database the provided `client` is currently connected to.
 ///
