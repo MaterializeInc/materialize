@@ -999,6 +999,7 @@ ArrangeBy[[Column(0),␠CallUnary(CastUint64ToNumeric(CastUint64ToNumeric(None))
 ArrangeBy[[Column(0),␠CallUnary(Lower(Lower),␠Column(1))]]  1
 ArrangeBy[[Column(0),␠CallUnary(Lower(Lower),␠Column(2))]]  1
 ArrangeBy[[Column(0),␠Column(1),␠Column(2),␠Column(3),␠Column(4),␠Column(5),␠Column(6),␠Column(7),␠Column(8),␠Column(9),␠Column(10),␠Column(11),␠Column(12),␠Column(13),␠Column(14),␠Column(15),␠Column(16),␠Column(17),␠Column(18),␠Column(19),␠Column(20),␠Column(21),␠Column(22),␠Column(23),␠Column(24),␠Column(25),␠Column(26),␠Column(27)]]  2
+ArrangeBy[[Column(0),␠Column(1),␠Column(2),␠Column(3),␠Column(4),␠Column(5),␠Column(6),␠Column(7),␠Column(8),␠Column(9),␠Column(10),␠Column(11),␠Column(12),␠Column(13),␠Column(14),␠Column(15),␠Column(16),␠Column(17),␠Column(18),␠Column(19)]]  2
 ArrangeBy[[Column(0),␠Column(1),␠Column(2),␠Column(3),␠Column(4),␠Column(5),␠Column(6),␠Column(7),␠Column(8),␠Column(9),␠Column(10),␠Column(11),␠Column(12),␠Column(13)]]  1
 ArrangeBy[[Column(0),␠Column(1),␠Column(2),␠Column(3),␠Column(4),␠Column(5),␠Column(6),␠Column(7),␠Column(8),␠Column(9),␠Column(10),␠Column(11),␠Column(12),␠Column(13)]]-errors  1
 ArrangeBy[[Column(0),␠Column(1),␠Column(2),␠Column(3),␠Column(4),␠Column(5)]]  1
@@ -1009,7 +1010,7 @@ ArrangeBy[[Column(0),␠Column(1)]]  2
 ArrangeBy[[Column(0),␠Column(2)]]  4
 ArrangeBy[[Column(0),␠Column(3)]]  4
 ArrangeBy[[Column(0),␠Column(4)]]  1
-ArrangeBy[[Column(0)]]  155
+ArrangeBy[[Column(0)]]  157
 ArrangeBy[[Column(0)]]-errors  44
 ArrangeBy[[Column(1),␠Column(0)]]  1
 ArrangeBy[[Column(1),␠Column(2)]]  2
@@ -1025,11 +1026,12 @@ ArrangeBy[[Column(21)]]  1
 ArrangeBy[[Column(21)]]-errors  1
 ArrangeBy[[Column(3)]]  6
 ArrangeBy[[Column(3)]]-errors  2
-ArrangeBy[[Column(4)]]  5
+ArrangeBy[[Column(4)]]  4
 ArrangeBy[[Column(4)]]-errors  2
-ArrangeBy[[Column(5)]]  2
-ArrangeBy[[Column(6)]]  3
+ArrangeBy[[Column(5)]]  3
+ArrangeBy[[Column(6)]]  2
 ArrangeBy[[Column(6)]]-errors  2
+ArrangeBy[[Column(7)]]  1
 ArrangeBy[[Column(9)]]  1
 ArrangeBy[[]]  11
 Arranged␠DistinctBy  49
