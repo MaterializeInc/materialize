@@ -26,12 +26,12 @@ name = "data_types"
 harness = false
 
 [dependencies]
-anyhow = "1.0.98"
+anyhow = "1.0.99"
 arrow = { version = "54.3.1", default-features = false }
 bitflags = "1.3.2"
-bytemuck = { version = "1.23.1", features = ["latest_stable_rust"] }
+bytemuck = { version = "1.23.2", features = ["latest_stable_rust"] }
 bytes = "1.10.1"
-cfg-if = "1.0.1"
+cfg-if = "1.0.3"
 columnar = "0.10.1"
 columnation = "0.1.0"
 chrono = { version = "0.4.39", default-features = false, features = ["serde", "std"] }
