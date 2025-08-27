@@ -65,17 +65,26 @@ Each resource type directory also contains a `describe.txt` file with the output
 {{% integrations/mz-debug/memory-profiles %}}
 
 ## Examples
-
-### Debugging a Materialize instance that lives in the Kubernetes namespace `materialize-environment`
-
-```shell
-mz-debug self-managed --k8s-namespace materialize-environment
+### Viewing Materialize instance names in the Kubernetes namespace `materialize-environment`
+```
+kubectl --namespace materialize-environment get materializes.materialize.cloud
+```
+The output should look something like:
+```
+NAME
+12345678-1234-1234-1234-123456789012
 ```
 
-### Debugging Kubernetes namespace `materialize` that does not contain Materialize instances
+### Debugging a Materialize instance that lives in the Kubernetes namespace `materialize-environment` with Materialize instance `12345678-1234-1234-1234-123456789012`
 
 ```shell
-mz-debug self-managed --k8s-namespace materialize-environment --additional-k8s-namespace materialize
+mz-debug self-managed --k8s-namespace materialize-environment --mz-instance-name 12345678-1234-1234-1234-123456789012
+```
+
+### Debugging a Materialize instance with supporting infrastructure in other namespaces (e.g. `materialize`)
+
+```shell
+mz-debug self-managed --k8s-namespace materialize-environment --mz-instance-name 12345678-1234-1234-1234-123456789012 --additional-k8s-namespace materialize
 ```
 
 ### Debug namespaces without automatic port-forwarding
@@ -83,5 +92,6 @@ mz-debug self-managed --k8s-namespace materialize-environment --additional-k8s-n
 ```shell
 mz-debug self-managed \
     --k8s-namespace materialize-environment \
+    --mz-instance-name 12345678-1234-1234-1234-123456789012 \
     --mz-connection-url 'postgres://root@127.0.0.1:6875/materialize?sslmode=disable'
 ```

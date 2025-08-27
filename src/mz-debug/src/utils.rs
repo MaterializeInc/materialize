@@ -13,15 +13,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 use anyhow::Context as AnyhowContext;
-use serde::Serialize;
-use serde::de::DeserializeOwned;
+
 use std::fs::{File, create_dir_all, remove_dir_all};
 use std::io::{BufWriter, copy};
 use std::path::PathBuf;
 use std::str::FromStr;
 
 use chrono::{DateTime, Utc};
-use kube::api::{ListParams, ObjectList};
 use kube::{Api, Client};
 use mz_cloud_resources::crd::materialize::v1alpha1::Materialize;
 use mz_server_core::listeners::AuthenticatorKind;
@@ -83,20 +81,10 @@ pub async fn get_k8s_auth_mode(
     mz_instance_name: &String,
 ) -> Result<AuthMode, anyhow::Error> {
     let materialize_api = Api::<Materialize>::namespaced(k8s_client.clone(), k8s_namespace);
-    let object_list = materialize_api
-        .list(&ListParams::default())
-        .await
-        .with_context(|| {
-            format!(
-                "Failed to get Materialize CR in namespace: {}",
-                k8s_namespace
-            )
-        })?;
 
-    let materialize_cr = object_list
-        .items
-        .into_iter()
-        .find(|item| item.metadata.name.as_ref() == Some(mz_instance_name))
+    let materialize_cr = materialize_api
+        .get(mz_instance_name)
+        .await
         .with_context(|| {
             format!(
                 "Could not find Materialize CR with name: {}",
@@ -125,51 +113,4 @@ pub async fn get_k8s_auth_mode(
             authenticator_kind
         )),
     }
-}
-
-fn sort_k8s_object_list_by_creation_timestamp_desc<K>(object_list: &mut ObjectList<K>)
-where
-    K: kube::Resource<DynamicType = ()> + Clone + Serialize + DeserializeOwned,
-{
-    object_list.items.sort_by(|a, b| {
-        let a_creation_timestamp = a.meta().creation_timestamp.as_ref();
-        let b_creation_timestamp = b.meta().creation_timestamp.as_ref();
-
-        b_creation_timestamp.cmp(&a_creation_timestamp)
-    });
-}
-
-pub async fn get_latest_mz_instance_name(
-    k8s_client: &Client,
-    k8s_namespace: &String,
-) -> Result<String, anyhow::Error> {
-    let materialize_api = Api::<Materialize>::namespaced(k8s_client.clone(), k8s_namespace);
-    let mut materialize_cr_list = materialize_api
-        .list(&ListParams::default())
-        .await
-        .with_context(|| {
-            format!(
-                "Failed to get Materialize CR in namespace: {}",
-                k8s_namespace
-            )
-        })?;
-
-    // Get the latest mz instance name
-    sort_k8s_object_list_by_creation_timestamp_desc(&mut materialize_cr_list);
-    let latest_materialize_cr = materialize_cr_list
-        .items
-        .first()
-        .cloned()
-        .with_context(|| {
-            format!(
-                "Could not find Materialize CR in namespace: {}",
-                k8s_namespace
-            )
-        })?;
-    latest_materialize_cr.metadata.name.with_context(|| {
-        format!(
-            "Could not find Materialize CR in namespace: {}",
-            k8s_namespace
-        )
-    })
 }
