@@ -83,7 +83,8 @@ class ConnectionHandler:
             try:
                 self.__ensure_connection()
                 return func()
-            except (InterfaceError, OperationalError) as e:
+            # TODO: Catch DatabaseError until https://github.com/MaterializeInc/database-issues/issues/9496 is fixed.
+            except (InterfaceError, OperationalError, psycopg.DatabaseError) as e:
                 if retries <= 0:
                     raise e
                 print(f"Retryable error: {e}, reconnecting...")
