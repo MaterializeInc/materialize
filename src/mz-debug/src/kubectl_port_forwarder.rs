@@ -216,24 +216,33 @@ pub async fn find_cluster_services(
     let cluster_services: Vec<ServiceInfo> = services
         .iter()
         .filter_map(|service| {
-            let Some(name) = service.metadata.name.clone() else {
-                return None;
-            };
-            let Some(spec) = service.spec.clone() else {
-                return None;
-            };
-            let Some(selector) = spec.selector else {
-                return None;
-            };
-            let Some(ports) = spec.ports else { return None };
+            let name = service.metadata.name.clone()?;
+            let spec = service.spec.clone()?;
+            let selector = spec.selector?;
+            let ports = spec.ports?;
 
-            // Filter by cluster services
-            if let Some(service_id) = selector.get("environmentd.materialize.cloud/service-id") {
-                if !service_ids_to_scrape.contains(service_id) {
-                    return None;
-                }
-            } else {
-                return None; // Skip services without the label
+            // Check if this is a cluster service
+            if !service_ids_to_scrape
+                .contains(selector.get("environmentd.materialize.cloud/service-id")?)
+            {
+                // let Some(name) = service.metadata.name.clone() else {
+                //     return None;
+                // };
+                // let Some(spec) = service.spec.clone() else {
+                //     return None;
+                // };
+                // let Some(selector) = spec.selector else {
+                //     return None;
+                // };
+                // let Some(ports) = spec.ports else { return None };
+
+                // // Filter by cluster services
+                // if let Some(service_id) = selector.get("environmentd.materialize.cloud/service-id") {
+                // if !service_ids_to_scrape.contains(service_id) {
+                return None;
+                // }
+                // } else {
+                // return None; // Skip services without the label
             }
 
             Some(ServiceInfo {

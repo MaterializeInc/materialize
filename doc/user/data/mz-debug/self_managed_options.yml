@@ -11,9 +11,8 @@ rows:
   - Option: "`--mz-instance-name <MZ_INSTANCE_NAME>`"
     Description: |
 
-      <a name="mz-instance-name"></a> The Materialize instance to target.
-
-      Defaults to the latest Materialize instance.
+      <a name="mz-instance-name"></a> The Materialize instance to target. This is
+      required.
 
   - Option: "`--dump-k8s`"
     Description: |
