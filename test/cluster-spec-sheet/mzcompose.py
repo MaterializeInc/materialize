@@ -228,7 +228,7 @@ class TpchScenario(Scenario):
             "DROP SOURCE IF EXISTS lgtpch CASCADE;",
             "DROP CLUSTER IF EXISTS lg CASCADE;",
             f"CREATE CLUSTER lg SIZE '{self.replica_size}';",
-            f"CREATE SOURCE lgtpch IN CLUSTER lg FROM LOAD GENERATOR TPCH (SCALE FACTOR {10*self.scale}, TICK INTERVAL 1) FOR ALL TABLES;",
+            f"CREATE SOURCE lgtpch IN CLUSTER lg FROM LOAD GENERATOR TPCH (SCALE FACTOR {self.scale}, TICK INTERVAL 1) FOR ALL TABLES;",
             "SELECT COUNT(*) > 0 FROM region;",
         ]
 
@@ -912,13 +912,13 @@ def workflow_bench(c: Composition, parser: WorkflowArgumentParser) -> None:
             )
             print("+++ Running TPC-H Index strong scaling")
             run_scenario_strong(
-                scenario=TpchScenario(1, replica_size_for_scale(1)),
+                scenario=TpchScenario(8, replica_size_for_scale(1)),
                 results_file=f,
                 connection=conn,
             )
             print("+++ Running TPC-H Materialized view strong scaling")
             run_scenario_strong(
-                scenario=TpchScenarioMV(1, replica_size_for_scale(1)),
+                scenario=TpchScenarioMV(8, replica_size_for_scale(1)),
                 results_file=f,
                 connection=conn,
             )
