@@ -41,11 +41,12 @@
 - name: "view_manager-results-create-objects"
   description: |
 
-    After the `view_manager` role is granted to `"blue.berry@example.com"`,
-    `"blue.berry@example.com"` can create objects in the `mydb.sales` schema on
+    After the `view_manager` role is granted to `blue.berry@example.com`,
+    `blue.berry@example.com` can create objects in the `mydb.sales` schema on
     the `compute_cluster`.
 
   code: |
+    -- run as blue.berry@example.com
     SET CLUSTER TO compute_cluster;
     SET DATABASE TO mydb;
     SET SCHEMA TO sales;
@@ -95,8 +96,8 @@
     {{</ note >}}
 
     However, with the current privileges, `"blue.berry@example.com"` cannot
-    select from the new view and materialized view created by **others** in the
-    schema and vice versa. For privileges on new objects, you can either:
+    select from new views/materialized views created by **others** in the
+    schema and vice versa. For privileges on new objects created by **others**, you can either:
     - Manually grant privileges on new objects; or
     - Use [default
     privileges](/manage/access-control/manage-roles/#manage-future-privileges-for-a-role)
@@ -105,7 +106,7 @@
 - name: "serving_index_manager"
   description: |
     The following grants the `serving_index_manager` role to the functional role
-    `view_manager`, which already privileges to create materialized views in
+    `view_manager`, which already has privileges to create materialized views in
     `mydb.sales` schema. This allows members of the `view_manager` role to
     create indexes on their objects on the `serving_cluster`.
 
