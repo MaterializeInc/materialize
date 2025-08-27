@@ -15,7 +15,7 @@ Materialize.
 ## Level 1: Basic configuration (Intra-Region Recovery)
 
 Because Materialize is deterministic and its infrastructure runs on a container
-scheduler (AWS MSK), basic Materialize configuration provides intra-region
+scheduler (AWS EKS), basic Materialize configuration provides intra-region
 disaster recovery **as long as**:
 
 - Materialize can spin up a new pod somewhere in the region, and
