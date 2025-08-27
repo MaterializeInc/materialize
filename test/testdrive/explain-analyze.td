@@ -9,6 +9,9 @@
 
 $ set-regex match=((\d+)\sbytes|u(\d+)) replacement=<XXX>
 
+# In case the environment has other replicas
+> SET cluster_replica = r1
+
 > CREATE SCHEMA blue;
 > CREATE SCHEMA green;
 
