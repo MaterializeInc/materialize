@@ -170,7 +170,9 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                     },
                     Some(resume_upper) = resume_uppers.next() => {
                         let Some(resume_upper) = resume_upper.as_option() else {
-                            mz_ore::soft_panic_or_log!("empty resume upper? {resume_upper:?}");
+                            // It's possible that the source has been dropped, in which case this can
+                            // observe an empty upper. There's no action to take in that case as
+                            // this dataflow will be dropped.
                             continue;
                         };
 
