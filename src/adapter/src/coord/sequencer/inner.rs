@@ -83,7 +83,7 @@ use mz_sql_parser::ast::{
     WithOptionValue,
 };
 use mz_ssh_util::keys::SshKeyPairSet;
-use mz_storage_client::controller::{CollectionDescription, DataSource, ExportDescription};
+use mz_storage_client::controller::ExportDescription;
 use mz_storage_types::AlterCompatible;
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::controller::StorageError;
@@ -4077,8 +4077,6 @@ impl Coordinator {
                     cur_source.is_retained_metrics_object,
                 );
 
-                let source_compaction_window = source.custom_logical_compaction_window;
-
                 // Get new ingestion description for storage.
                 let desc = match &source.data_source {
                     DataSourceDesc::Ingestion { ingestion_desc, .. } => ingestion_desc
@@ -4105,7 +4103,7 @@ impl Coordinator {
 
                 let CreateSourceInner {
                     ops: new_ops,
-                    sources,
+                    sources: _,
                     if_not_exists_ids,
                 } = self.create_source_inner(session, subsources).await?;
 
@@ -4117,79 +4115,6 @@ impl Coordinator {
                 );
 
                 self.catalog_transact(Some(session), ops).await?;
-
-                self.controller
-                    .storage
-                    .alter_ingestion_source_desc(ingestion_id, desc)
-                    .await
-                    .unwrap_or_terminate("cannot fail to alter source desc");
-
-                let mut item_ids = BTreeSet::new();
-                let mut collections = Vec::with_capacity(sources.len());
-                for (item_id, source) in sources {
-                    let status_id = self.catalog().resolve_builtin_storage_collection(
-                        &mz_catalog::builtin::MZ_SOURCE_STATUS_HISTORY,
-                    );
-                    let source_status_collection_id =
-                        Some(self.catalog().get_entry(&status_id).latest_global_id());
-
-                    let (data_source, status_collection_id) = match source.data_source {
-                        // Subsources use source statuses.
-                        DataSourceDesc::IngestionExport {
-                            ingestion_id,
-                            external_reference: _,
-                            details,
-                            data_config,
-                        } => {
-                            // TODO(parkmycar): We should probably check the type here, but I'm not sure if
-                            // this will always be a Source or a Table.
-                            let ingestion_id =
-                                self.catalog().get_entry(&ingestion_id).latest_global_id();
-                            (
-                                DataSource::IngestionExport {
-                                    ingestion_id,
-                                    details,
-                                    data_config: data_config
-                                        .into_inline_connection(self.catalog().state()),
-                                },
-                                source_status_collection_id,
-                            )
-                        }
-                        o => {
-                            unreachable!(
-                                "ALTER SOURCE...ADD SUBSOURCE only creates SourceExport but got {:?}",
-                                o
-                            )
-                        }
-                    };
-
-                    collections.push((
-                        source.global_id,
-                        CollectionDescription {
-                            desc: source.desc.clone(),
-                            data_source,
-                            since: None,
-                            status_collection_id,
-                            timeline: Some(source.timeline.clone()),
-                        },
-                    ));
-
-                    item_ids.insert(item_id);
-                }
-
-                let storage_metadata = self.catalog.state().storage_metadata();
-
-                self.controller
-                    .storage
-                    .create_collections(storage_metadata, None, collections)
-                    .await
-                    .unwrap_or_terminate("cannot fail to create collections");
-
-                self.initialize_storage_read_policies(
-                    item_ids,
-                    source_compaction_window.unwrap_or(CompactionWindow::Default),
-                )
-                .await;
             }
             plan::AlterSourceAction::RefreshReferences { references } => {
                 self.catalog_transact(

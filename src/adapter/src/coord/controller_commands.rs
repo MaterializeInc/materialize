@@ -521,7 +521,6 @@ impl Coordinator {
                     *sink_id,
                     ActiveComputeSinkRetireReason::DependencyDropped(name),
                 );
-
             } else if clusters_to_drop.contains(&cluster_id) {
                 let name = dropped_cluster_names
                     .get(&cluster_id)
