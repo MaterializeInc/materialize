@@ -12,6 +12,7 @@ use std::sync::Arc;
 use criterion::measurement::WallTime;
 use criterion::{Bencher, BenchmarkGroup, BenchmarkId, Criterion, criterion_group, criterion_main};
 use mz_build_info::DUMMY_BUILD_INFO;
+use mz_ore::hint::black_box;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist::file::{FileBlob, FileBlobConfig};
@@ -28,6 +29,7 @@ use mz_persist_client::metrics::Metrics;
 use mz_persist_client::rpc::PubSubClientConnection;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_types::Codec64;
+use mz_persist_types::timestamp::try_parse_monotonic_iso8601_timestamp;
 use tempfile::TempDir;
 use timely::progress::{Antichain, Timestamp};
 use tokio::runtime::Runtime;
@@ -99,6 +101,36 @@ pub fn bench_persist(c: &mut Criterion) {
     }
     plumbing::bench_encode_batch("plumbing/encode_batch", throughput, c, &data);
     plumbing::bench_trace_push_batch(c);
+
+    let mut group = c.benchmark_group("misc");
+    group.bench_function("try_parse_monotonic", |x| {
+        let timestamps = [
+            "0000-01-01T00:00:00.000Z",
+            "0001-01-01T00:00:00.000Z",
+            "2015-00-00T00:00:00.000Z",
+            "2015-09-00T00:00:00.000Z",
+            "2015-09-18T00:00:00.000Z",
+            "2015-09-18T23:00:00.000Z",
+            "2015-09-18T23:56:00.000Z",
+            "2015-09-18T23:56:04.000Z",
+            "2015-09-18T23:56:04.123Z",
+            "2015-09-18T23:56:04.1234Z",
+            "2015-09-18T23:56:04.124Z",
+            "2015-09-18T23:56:05.000Z",
+            "2015-09-18T23:57:00.000Z",
+            "2015-09-18T24:00:00.000Z",
+            "2015-09-19T00:00:00.000Z",
+            "2015-10-00T00:00:00.000Z",
+            "2016-10-00T00:00:00.000Z",
+            "9999-12-31T23:59:59.999Z",
+        ]
+        .repeat(32);
+        x.iter(|| {
+            for ts in &timestamps {
+                black_box(try_parse_monotonic_iso8601_timestamp(ts));
+            }
+        })
+    });
 }
 
 fn create_mem_mem_client() -> Result<PersistClient, ExternalError> {
