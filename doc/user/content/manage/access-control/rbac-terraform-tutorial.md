@@ -22,11 +22,12 @@ In this scenario, you are a DevOps engineer responsible for managing your Materi
 
 * You should be familiar with setting up a [Terraform project in Materialize](https://materialize.com/docs/manage/terraform/).
 
-* Have an understanding of permissions in Materialize. These grant resources in this tutorial are modeled after the [access-control tutorial](https://materialize.com/docs/manage/access-control/rbac-tutorial/).
+* Have an understanding of permissions in Materialize.
 
 ## Step 1. Create Role
 
-1. A role is a collection of privileges you can apply to users. First, we will create a role resource in Terraform.
+1. You can create a functional role with a set of object-specific privileges.
+   First, we will create a role resource in Terraform.
 
     ```hcl
     resource "materialize_role" "dev_role" {

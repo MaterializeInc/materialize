@@ -1,0 +1,96 @@
+columns:
+  - column: Privilege
+  - column: Description
+  - column: Abbreviation
+  - column: Applies to
+rows:
+  - Privilege: "**SELECT**"
+    Description: Permission to read rows from an object.
+    Abbreviation: "`r`"
+    Applies to: |
+      - `MATERIALIZED VIEW`
+      - `SOURCE`
+      - `TABLE`
+      - `VIEW`
+  - Privilege: "**INSERT**"
+    Description: Permission to insert rows into an object.
+    Abbreviation: "`a`"
+    Applies to: |
+      - `TABLE`
+
+  - Privilege: "**UPDATE**"
+    Description: |
+
+      Permission to modify rows in an object.
+
+      Modifying rows may also require **SELECT** if a read is needed to
+      determine which rows to update.
+
+    Abbreviation: "`w`"
+    Applies to: |
+      - `TABLE`
+
+  - Privilege: "**DELETE**"
+    Description: |
+
+      Permission to delete rows from an object.
+
+      Deleting rows may also require **SELECT** if a read is needed to determine
+      which rows to delete.
+
+    Abbreviation: "`d`"
+    Applies to: |
+      - `TABLE`
+
+  - Privilege: "**CREATE**"
+    Description: Permission to create a new objects within the specified object.
+    Abbreviation: "`C`"
+    Applies to: |
+      - `DATABASE`
+      - `SCHEMA`
+      - `CLUSTER`
+
+  - Privilege: "**USAGE**"
+    Description: |
+      <a name="privilege-usage"></a>
+      Permission to use or reference an object (e.g., schema/type lookup).
+    Abbreviation: "`U`"
+    Applies to: |
+      - `CLUSTER`
+      - `CONNECTION`
+      - `DATABASE`
+      - `SCHEMA`
+      - `SECRET`
+      - `TYPE`
+
+  - Privilege: "**CREATEROLE**"
+    Description: |
+
+      Permission to create/modify/delete roles and manage role memberships for
+      any role in the system.
+
+      {{< warning >}}
+      {{< include-md file="shared-content/rbac/createrole-consideration.md" >}}
+      {{</ warning >}}
+
+    Abbreviation: "`R`"
+    Applies to: |
+      - `SYSTEM`
+
+  - Privilege: "**CREATEDB**"
+    Description: Permission to create new databases.
+    Abbreviation: "`B`"
+    Applies to: |
+      - `SYSTEM`
+
+  - Privilege: "**CREATECLUSTER**"
+    Description: Permission to create new clusters.
+    Abbreviation: "`N`"
+    Applies to: |
+      - `SYSTEM`
+
+  - Privilege: "**CREATENETWORKPOLICY**"
+    Description: Permission to create network policies to control access at the network layer.
+    Abbreviation: "`P`"
+    Applies to: |
+      - `SYSTEM`

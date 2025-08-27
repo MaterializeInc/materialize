@@ -1,0 +1,89 @@
+- name: "for-user"
+  description: |
+
+    To view default privileges for a user, run [`SHOW DEFAULT
+    PRIVILEGES`](/sql/show-default-privileges) on the user's role. For example,
+    show the defaultprivileges for the `blue.berry@example.com` role created in
+    the [Create a role section](#create-individual-userservice-account-roles).
+
+
+  code: |
+    SHOW DEFAULT PRIVILEGES FOR "blue.berry@example.com";
+  results: |
+
+    The example results show that the default privileges for
+    `"blue.berry@example.com"` are the default privileges it has as a member of
+    the `PUBLIC` role.
+
+    {{< include-md
+    file="shared-content/rbac/show-default-privileges-new-roles.md" >}}
+
+- name: "for-service-account"
+  description: |
+
+    To view default privileges for a service account, run [`SHOW DEFAULT
+    PRIVILEGES`](/sql/show-default-privileges) on the service account's role. For example, show the default privileges for the `sales_report_app` role created in the
+    [Create a role section](#create-individual-userservice-account-roles).
+
+  code: |
+    SHOW DEFAULT PRIVILEGES FOR sales_report_app;
+
+  results: |
+
+    The example results show that the default privileges for `sales_report_app`
+    are the default privileges it has as a member of the `PUBLIC` role.
+
+    {{< include-md
+    file="shared-content/rbac/show-default-privileges-new-roles.md" >}}
+
+- name: "for-view-manager"
+  description: |
+
+    Show the default privileges for the `view_manager` role created in the
+    [Create a role section](#create-a-role).
+
+  code: |
+    SHOW DEFAULT PRIVILEGES FOR view_manager;
+
+  results: |
+
+    The example results show that the default privileges for `view_manager` are
+    the default privileges it has as a member of the `PUBLIC` role.
+
+    {{< include-md
+    file="shared-content/rbac/show-default-privileges-new-roles.md" >}}
+
+- name: "for-serving-index-manager"
+  description: |
+
+    Show the default privileges for the `serving_index_manager` role created in
+    the [Create a role section](#create-a-role).
+
+  code: |
+    SHOW DEFAULT PRIVILEGES FOR serving_index_manager;
+
+  results: |
+
+    The example results show that the default privileges for
+    `serving_index_manager` are the default privileges it has as a member of
+    the `PUBLIC` role.
+
+    {{< include-md
+    file="shared-content/rbac/show-default-privileges-new-roles.md" >}}
+
+- name: "for-data-reader"
+  description: |
+
+    Show the default privileges for the `data_reader` role created in the
+    [Create a role section](#create-a-role).
+
+  code: |
+    SHOW DEFAULT PRIVILEGES FOR data_reader;
+
+  results: |
+
+    The example results show that the default privileges for `data_reader` are
+    the default privileges it has as a member of the `PUBLIC` role.
+
+    {{< include-md
+    file="shared-content/rbac/show-default-privileges-new-roles.md" >}}

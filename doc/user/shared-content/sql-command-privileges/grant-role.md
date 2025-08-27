@@ -1,1 +1,1 @@
-- `CREATEROLE` privileges on the systems.
+- `CREATEROLE` privileges on the system.

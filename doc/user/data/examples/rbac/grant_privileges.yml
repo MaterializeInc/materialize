@@ -1,0 +1,214 @@
+- name: "to-view-manager"
+  description: |
+
+    The following example grants the `view_manager` role various privileges to
+    run:
+
+    - [`SELECT`](/sql/select/#privileges) from currently existing
+      materialized views/views/tables/sources in the `mydb.sales` schema.
+    - [`CREATE MATERIALIZED VIEW`](/sql/create-materialized-view/#privileges)
+      in the `mydb.sales` schema on the `compute_cluster`.
+    - [`CREATE VIEW`](/sql/create-view/#privileges) if using intermediate views
+      as part of a stacked view definition (i.e., views whose definition depends
+      on other views).
+
+    {{< note >}}
+    {{< include-md file="shared-content/rbac/select-views-privileges.md" >}}
+    {{</ note >}}
+
+  code: |
+    -- To SELECT from currently **existing** relations in `mydb.sales` schema:
+    -- Need USAGE on schema and cluster
+    -- Need SELECT on existing materialized views/views/tables/sources
+    GRANT USAGE ON SCHEMA mydb.sales TO view_manager;
+    GRANT USAGE ON CLUSTER compute_cluster TO view_manager;
+    GRANT SELECT ON ALL TABLES IN SCHEMA mydb.sales TO view_manager;
+    -- ALL TABLES encompasses tables, views, materialized views, and sources,
+    -- and refers only to currently existing objects.
+
+    -- To CREATE materialized views/views:
+    -- Need CREATE on cluster for materialized views
+    -- Need CREATE on schema for the materialized views/views
+    GRANT CREATE ON CLUSTER compute_cluster TO view_manager;
+    GRANT CREATE ON SCHEMA mydb.sales TO view_manager;
+
+- name: "to-view-manager-results"
+  description: |
+
+    Review the privileges granted to the `view_manager` role:
+
+  code: |
+    SHOW PRIVILEGES FOR view_manager;
+
+  results: |
+
+    The results should reflect the new privileges granted to the `view_manager`
+    role in addition to those privileges inherited through the `PUBLIC` role.
+
+    ```none
+    | grantor   | grantee      | database    | schema | name            | object_type | privilege_type |
+    | --------- | ------------ | ----------- | ------ | --------------- | ----------- | -------------- |
+    | mz_system | PUBLIC       | materialize | null   | public          | schema      | USAGE          |
+    | mz_system | PUBLIC       | mydb        | null   | public          | schema      | USAGE          |
+    | mz_system | PUBLIC       | null        | null   | materialize     | database    | USAGE          |
+    | mz_system | PUBLIC       | null        | null   | quickstart      | cluster     | USAGE          |
+    | mz_system | view_manager | mydb        | sales  | items           | table       | SELECT         |
+    | mz_system | view_manager | mydb        | sales  | orders          | table       | SELECT         |
+    | mz_system | view_manager | mydb        | sales  | sales_items     | table       | SELECT         |
+    | mz_system | view_manager | mydb        | null   | sales           | schema      | CREATE         |
+    | mz_system | view_manager | mydb        | null   | sales           | schema      | USAGE          |
+    | mz_system | view_manager | null        | null   | compute_cluster | cluster     | CREATE         |
+    | mz_system | view_manager | null        | null   | compute_cluster | cluster     | USAGE          |
+    ```
+
+    {{< important >}}
+
+    The `GRANT SELECT ON ALL TABLES IN SCHEMA mydb.sales TO view_manager;`
+    statement results in `view_manager` having `SELECT` privileges on specific
+    objects, namely the three tables that existed in the `mydb.sales` schema at
+    the time of the grant. It **does not** grant `SELECT` privileges on any
+    tables, views, materialized views, or sources created by others in the
+    schema afterwards.
+
+    For new objects created by others, you can either:
+    - Manually grant privileges on new objects; or
+    - Use [default
+    privileges](/manage/access-control/manage-roles/#manage-future-privileges-for-a-role)
+    to automatically grant privileges on new objects.
+
+    {{</ important >}}
+
+- name: "to-serving-index-manager"
+  description: |
+
+    The following example grants the `serving_index_manager` role various
+    privileges to:
+
+    - [`CREATE INDEX`](/sql/create-index/#privileges) in the `mydb.sales`
+      schema on the `serving_cluster`.
+
+    - Use the `serving_cluster` (i.e., `USAGE`). Although you can create an
+    index without the `USAGE`, this allows the person creating the index to use
+    the index to verify.
+
+    {{< note >}}
+
+    In addition to database privileges, to create an index, a role must be the
+    owner of the object on which the index is created.
+
+    {{</ note >}}
+
+  code: |
+    -- To create an index on an object **owned** by the role:
+    -- Need CREATE on the cluster.
+    -- Need CREATE on the schema.
+    GRANT CREATE ON CLUSTER serving_cluster TO serving_index_manager;
+    GRANT CREATE ON SCHEMA mydb.sales TO serving_index_manager;
+
+    -- Optional.
+    GRANT USAGE ON CLUSTER serving_cluster TO serving_index_manager;
+
+- name: "to-serving-index-manager-results"
+  description: |
+    Review the privileges granted to the `serving_index_manager` role:
+
+  code: |
+    SHOW PRIVILEGES FOR serving_index_manager;
+
+  results: |
+
+    The results should reflect the new privileges granted to the `index_manager`
+    role in addition to those privileges inherited through the `PUBLIC` role.
+
+    ```none
+    | grantor   | grantee               | database    | schema | name            | object_type | privilege_type |
+    | --------- | --------------------- | ----------- | ------ | --------------- | ----------- | -------------- |
+    | mz_system | PUBLIC                | materialize | null   | public          | schema      | USAGE          |
+    | mz_system | PUBLIC                | mydb        | null   | public          | schema      | USAGE          |
+    | mz_system | PUBLIC                | null        | null   | materialize     | database    | USAGE          |
+    | mz_system | PUBLIC                | null        | null   | quickstart      | cluster     | USAGE          |
+    | mz_system | serving_index_manager | mydb        | null   | sales           | schema      | CREATE         |
+    | mz_system | serving_index_manager | null        | null   | serving_cluster | cluster     | CREATE         |
+    | mz_system | serving_index_manager | null        | null   | serving_cluster | cluster     | USAGE          |
+    ```
+
+    {{< note >}}
+
+    In addition to database privileges, a role must be the owner of the object
+    on which the index is created. In our examples, `view_manager` role has
+    privileges to create the various materialized views that will be indexed:
+
+    - See [Grant a role to another
+    role](/manage/access-control/manage-roles/#grant-a-role-to-another-role) for
+    details and example of granting `serving_cluster` role to `view_manager`.
+
+    - See [Change ownership of
+    objects](/manage/access-control/manage-roles/#change-ownership-of-objects)
+    for details and example of changing ownership of objects.
+
+    {{</ note >}}
+
+- name: "to-data-reader"
+  description: |
+    The following example grants the `data_reader` role privileges to run:
+
+    - [`SELECT`](/sql/select/#privileges) from all existing tables/materialized
+      views/views/sources in the `mydb.sales` schema on the `serving_cluster`.
+
+    {{< note >}}
+    {{< include-md file="shared-content/rbac/select-views-privileges.md" >}}
+    {{</ note >}}
+
+  code: |
+    -- To select from **existing** views/materialized views/tables/sources:
+    -- Need USAGE on schema and cluster
+    -- Need SELECT on the materialized views/views/tables/sources
+    GRANT USAGE ON SCHEMA mydb.sales TO data_reader;
+    GRANT USAGE ON CLUSTER serving_cluster TO data_reader;
+    GRANT SELECT ON ALL TABLES IN SCHEMA mydb.sales TO data_reader;
+    -- For PostgreSQL compatibility, ALL TABLES encompasses tables, views,
+    -- materialized views, and sources.
+
+- name: "to-data-reader-results"
+  description: |
+
+    Review the privileges granted to the `data_reader` role:
+
+  code: |
+    SHOW PRIVILEGES FOR data_reader;
+
+  results: |
+
+    The results should reflect the new privileges granted to the `data_reader`
+    role in addition to those privileges inherited through the `PUBLIC` role.
+
+    ```none
+    | grantor   | grantee     | database    | schema | name            | object_type | privilege_type |
+    | --------- | ----------- | ----------- | ------ | --------------- | ----------- | -------------- |
+    | mz_system | PUBLIC      | materialize | null   | public          | schema      | USAGE          |
+    | mz_system | PUBLIC      | mydb        | null   | public          | schema      | USAGE          |
+    | mz_system | PUBLIC      | null        | null   | materialize     | database    | USAGE          |
+    | mz_system | PUBLIC      | null        | null   | quickstart      | cluster     | USAGE          |
+    | mz_system | data_reader | mydb        | sales  | items           | table       | SELECT         |
+    | mz_system | data_reader | mydb        | sales  | orders          | table       | SELECT         |
+    | mz_system | data_reader | mydb        | sales  | sales_items     | table       | SELECT         |
+    | mz_system | data_reader | mydb        | null   | sales           | schema      | USAGE          |
+    | mz_system | data_reader | null        | null   | serving_cluster | cluster     | USAGE          |
+    ```
+
+    {{< important >}}
+
+    The `GRANT SELECT ON ALL TABLES IN SCHEMA mydb.sales TO data_reader;`
+    statement results in `data_reader` having `SELECT` privileges on specific
+    objects, namely the three tables that existed in the `mydb.sales` schema at
+    the time of the grant. It **does not** grant `SELECT` privileges on any
+    tables, views, materialized views, or sources created in the schema
+    afterwards by others.
+
+    For new objects created by others, you can either:
+    - Manually grant privileges on new objects; or
+    - Use [default
+    privileges](/manage/access-control/manage-roles/#manage-future-privileges-for-a-role)
+    to automatically grant privileges on new objects.
+
+    {{</ important >}}

@@ -1,0 +1,19 @@
+columns:
+  - column: "Object(s)"
+  - column: "Object owner"
+  - column: "Default Privilege"
+  - column: "Granted to"
+  - column: "Description"
+rows:
+
+  - "Default Privilege": "`USAGE`"
+    "Object(s)": |
+      [`TYPE`](/sql/types/)
+    "Object owner": |
+      `PUBLIC`
+    "Granted to": |
+      `PUBLIC`
+    Description: |
+      When a [data type](/sql/types/) is created (regardless of the owner), all
+      roles are granted the `USAGE` privilege. However, to use a data type, the
+      role must also have `USAGE` privilege on the schema containing the type.
