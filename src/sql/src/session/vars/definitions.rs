@@ -2189,6 +2189,12 @@ feature_flags!(
         default: false,
         enable_for_item_parsing: false,
     },
+    {
+        name: enable_with_ordinality_legacy_fallback,
+        desc: "When the new WITH ORDINALITY implementation can't be used with a table func, whether to fall back to the legacy implementation or error out.",
+        default: false,
+        enable_for_item_parsing: true,
+    },
 );
 
 impl From<&super::SystemVars> for OptimizerFeatures {

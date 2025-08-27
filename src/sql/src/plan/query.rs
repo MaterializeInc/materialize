@@ -102,6 +102,7 @@ use crate::plan::{
     Params, PlanContext, QueryWhen, ShowCreatePlan, WebhookValidation, WebhookValidationSecret,
     literal, transform_ast,
 };
+use crate::session::vars::ENABLE_WITH_ORDINALITY_LEGACY_FALLBACK;
 use crate::session::vars::{self, FeatureFlag};
 use crate::{ORDINALITY_COL_NAME, normalize};
 
@@ -3314,23 +3315,34 @@ fn plan_table_function_internal(
                     if !with_ordinality {
                         expr
                     } else {
-                        // The table function is defined in SQL (i.e., TableFuncImpl::Expr), so we
-                        // fall back to the legacy WITH ORDINALITY / ROWS FROM implementation.
-                        // Note that this can give an incorrect ordering, and also has an extreme
-                        // performance problem in some cases. See the doc comment of
-                        // `TableFuncImpl`.
-                        tracing::error!(
-                            %name,
-                            "Using the legacy WITH ORDINALITY / ROWS FROM implementation for a table function",
-                        );
-                        expr.map(vec![HirScalarExpr::windowing(WindowExpr {
-                            func: WindowExprType::Scalar(ScalarWindowExpr {
-                                func: ScalarWindowFunc::RowNumber,
+                        // The table function is defined by a SQL query (i.e., TableFuncImpl::Expr),
+                        // so we can't use the new `WITH ORDINALITY` implementation. We can fall
+                        // back to the legacy implementation or error out the query.
+                        if qcx
+                            .scx
+                            .is_feature_flag_enabled(&ENABLE_WITH_ORDINALITY_LEGACY_FALLBACK)
+                        {
+                            // Note that this can give an incorrect ordering, and also has an extreme
+                            // performance problem in some cases. See the doc comment of
+                            // `TableFuncImpl`.
+                            tracing::error!(
+                                %name,
+                                "Using the legacy WITH ORDINALITY / ROWS FROM implementation for a table function",
+                            );
+                            expr.map(vec![HirScalarExpr::windowing(WindowExpr {
+                                func: WindowExprType::Scalar(ScalarWindowExpr {
+                                    func: ScalarWindowFunc::RowNumber,
+                                    order_by: vec![],
+                                }),
+                                partition_by: vec![],
                                 order_by: vec![],
-                            }),
-                            partition_by: vec![],
-                            order_by: vec![],
-                        })])
+                            })])
+                        } else {
+                            bail_unsupported!(format!(
+                                "WITH ORDINALITY or ROWS FROM with {}",
+                                name
+                            ));
+                        }
                     }
                 }
             };

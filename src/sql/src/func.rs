@@ -1672,7 +1672,9 @@ pub struct TableFuncPlan {
 ///    `sql_impl_table_func_inner`.
 ///
 /// TODO(ggevay, database-issues#9598): when a table function in 2. is used with WITH ORDINALITY or
-/// ROWS FROM, we fall back to the legacy WITH ORDINALITY implementation, which relies on the
+/// ROWS FROM, we can't use the new implementation of WITH ORDINALITY. Depending on
+/// `enable_with_ordinality_legacy_fallback`, we either fall back to the legacy implementation or
+/// error out the query planning. The legacy WITH ORDINALITY implementation relies on the
 /// row_number window function, and is mostly broken. It can give an incorrect ordering, and also
 /// has an extreme performance problem in some cases. Discussed in
 /// <https://github.com/MaterializeInc/database-issues/issues/4764#issuecomment-2854572614>
