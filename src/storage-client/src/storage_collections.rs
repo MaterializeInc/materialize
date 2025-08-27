@@ -2692,16 +2692,12 @@ where
         new: (&PersistEpoch, &Antichain<T>),
     ) -> Option<Result<Antichain<T>, PersistEpoch>> {
         match self {
-            Self::Critical(handle) => {
-                handle
-                    .maybe_compare_and_downgrade_since(expected, new)
-                    .await
-            }
+            Self::Critical(handle) => Some(handle.compare_and_downgrade_since(expected, new).await),
             Self::Leased(handle) => {
                 let (opaque, since) = new;
                 assert_none!(opaque.0);
 
-                handle.maybe_downgrade_since(since).await;
+                handle.downgrade_since(since).await;
 
                 Some(Ok(since.clone()))
             }
@@ -3159,9 +3155,11 @@ where
 
                 res
             } else {
-                since_handle
-                    .maybe_compare_and_downgrade_since(&epoch, (&epoch, &new_since))
-                    .await
+                Some(
+                    since_handle
+                        .compare_and_downgrade_since(&epoch, (&epoch, &new_since))
+                        .await,
+                )
             };
 
             if let Some(Err(other_epoch)) = result {
