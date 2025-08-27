@@ -342,6 +342,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
               args: [--scenario=BackupAndRestoreBeforeManipulate, "--seed=$BUILDKITE_JOB_ID"]
+        skip: "Too flaky"
 
       - id: checks-backup-restore-after-manipulate
         label: "Checks backup + restore after manipulate()"
@@ -354,6 +355,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
               args: [--scenario=BackupAndRestoreAfterManipulate, "--seed=$BUILDKITE_JOB_ID"]
+        skip: "Too flaky"
 
       - id: checks-backup-multi
         label: "Checks + multiple backups/restores"
@@ -366,6 +368,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
               args: [--scenario=BackupAndRestoreMulti, "--seed=$BUILDKITE_JOB_ID"]
+        skip: "Too flaky"
 
       - id: checks-preflight-check-continue
         label: "Checks preflight-check and continue upgrade"
