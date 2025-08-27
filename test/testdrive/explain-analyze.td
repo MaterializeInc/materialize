@@ -25,22 +25,22 @@ $ set-regex match=(\d+)\sbytes replacement=<bytes>
 > EXPLAIN ANALYZE MEMORY FOR INDEX materialize.green.t_idx;
 operator                      total_memory   total_records
 ----------------------------------------------------------
-Arrange 1                     <bytes>        0
-  Get::PassArrangements u304  null           null
+"Arrange (#0{x})"             <bytes>        4
+"  Stream u28"                <null>         <null>
 
 > EXPLAIN ANALYZE MEMORY FOR INDEX materialize.blue.t_idx;
 operator                      total_memory   total_records
 ----------------------------------------------------------
-Arrange 1                     <bytes>        0
-  Get::PassArrangements u304  null           null
+"Arrange (#0{x})"             <bytes>        <null>
+"  Stream u26"                <null>         <null>
 
 > ALTER SCHEMA blue SWAP WITH green;
 
 > DROP SCHEMA green CASCADE;
 
 # should still get output for blue!
-> EXPLAIN ANALYZE CPU FOR INDEX materialize.blue.t_idx;
+> EXPLAIN ANALYZE MEMORY FOR INDEX materialize.blue.t_idx;
 operator                      total_memory   total_records
 ----------------------------------------------------------
-Arrange 1                     <bytes>        0
-  Get::PassArrangements u304  null           null
+"Arrange (#0{x})"             <bytes>        4
+"  Stream u28"                <null>         <null>
