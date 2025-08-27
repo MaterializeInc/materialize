@@ -754,6 +754,7 @@ def workflow_basic(c: Composition) -> None:
                     "server closed the connection unexpectedly" in str(e)
                     or "Can't create a connection to host" in str(e)
                     or "Connection refused" in str(e)
+                    or "the connection is closed" in str(e)
                 ), f"Unexpected error: {e}"
             except CommandFailureCausedUIError as e:
                 # service "mz_old" is not running
@@ -2218,6 +2219,7 @@ def workflow_ddl(c: Composition) -> None:
                     "server closed the connection unexpectedly" in str(e)
                     or "Can't create a connection to host" in str(e)
                     or "Connection refused" in str(e)
+                    or "the connection is closed" in str(e)
                 ), f"Unexpected error: {e}"
             except CommandFailureCausedUIError as e:
                 # service "mz_old" is not running
