@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-regex match=(\d+)\sbytes replacement=<bytes>
+$ set-regex match=((\d+)\sbytes|u(\d+)) replacement=<XXX>
 
 > CREATE SCHEMA blue;
 > CREATE SCHEMA green;
@@ -25,14 +25,14 @@ $ set-regex match=(\d+)\sbytes replacement=<bytes>
 > EXPLAIN ANALYZE MEMORY FOR INDEX materialize.green.t_idx;
 operator                      total_memory   total_records
 ----------------------------------------------------------
-"Arrange (#0{x})"             <bytes>        4
-"  Stream u28"                <null>         <null>
+"Arrange (#0{x})"             <XXX>          4
+"  Stream <XXX>"              <null>         <null>
 
 > EXPLAIN ANALYZE MEMORY FOR INDEX materialize.blue.t_idx;
 operator                      total_memory   total_records
 ----------------------------------------------------------
-"Arrange (#0{x})"             <bytes>        <null>
-"  Stream u26"                <null>         <null>
+"Arrange (#0{x})"             <XXX>          <null>
+"  Stream <XXX>"              <null>         <null>
 
 > ALTER SCHEMA blue SWAP WITH green;
 
@@ -42,5 +42,5 @@ operator                      total_memory   total_records
 > EXPLAIN ANALYZE MEMORY FOR INDEX materialize.blue.t_idx;
 operator                      total_memory   total_records
 ----------------------------------------------------------
-"Arrange (#0{x})"             <bytes>        4
-"  Stream u28"                <null>         <null>
+"Arrange (#0{x})"             <XXX>          4
+"  Stream <XXX>"              <null>         <null>
