@@ -16,7 +16,9 @@ import csv
 import json
 import random
 import string
+import time
 from io import BytesIO, StringIO
+from textwrap import dedent
 
 import pyarrow.parquet  #
 from minio import Minio
@@ -335,3 +337,61 @@ def workflow_http(c: Composition) -> None:
         )
         assert result.returncode == 0
         assert "unsupported via this API" in result.stdout
+
+
+def workflow_test_github_9627(c: Composition):
+    """
+    Regression test for database-issues#9627, in which per-replica read holds
+    for copy-to dataflows weren't correctly cleaned up, which led to compaction
+    being disabled indefinitely for inputs to these dataflows.
+    """
+
+    with c.override(Testdrive(no_reset=True)):
+        c.up("materialized", "minio")
+
+        c.testdrive(
+            dedent(
+                """
+                > CREATE TABLE t (a int)
+                > INSERT INTO t VALUES (1)
+
+                > CREATE SECRET aws_secret AS '${arg.aws-secret-access-key}'
+                > CREATE CONNECTION aws_conn
+                  TO AWS (
+                    ACCESS KEY ID = '${arg.aws-access-key-id}',
+                    SECRET ACCESS KEY = SECRET aws_secret,
+                    ENDPOINT = '${arg.aws-endpoint}',
+                    REGION = 'us-east-1'
+                  )
+
+                > COPY (SELECT * FROM t) TO 's3://copytos3/test/github_9627/'
+                  WITH (AWS CONNECTION = aws_conn, FORMAT = 'csv');
+                """
+            )
+        )
+
+        # Check that the table's read frontier still advances.
+
+        query = """
+            SELECT f.read_frontier
+            FROM mz_internal.mz_frontiers f
+            JOIN mz_tables t ON t.id = f.object_id
+            WHERE t.name = 't'
+            """
+
+        # Because `mz_frontiers` isn't a linearizable relation it's possible that
+        # we need to wait a bit for the object's frontier to show up.
+        result = c.sql_query(query)
+        tries = 1
+        while not result and tries < 3:
+            time.sleep(1)
+            result = c.sql_query(query)
+            tries += 1
+
+        before = int(result[0][0])
+        time.sleep(3)
+
+        result = c.sql_query(query)
+        after = int(result[0][0])
+
+        assert before < after, f"read frontier is stuck, {before} >= {after}"
