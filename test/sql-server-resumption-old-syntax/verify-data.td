@@ -19,8 +19,11 @@
 ! SELECT * FROM alter_fail_drop_constraint;
 contains:Decode error
 
-# ! SELECT * FROM alter_fail_drop_col;
-# contains:has been altered
+# We can see either of InvalidData or InvalidColumn.
+# We see InvalidData if there was no data present.
+# We see InvalidColumn if there was a null present.
+! SELECT * FROM alter_fail_drop_col;
+contains:column 'f2'
 
 # Ensure non-definite errors are cleared.
 > SELECT COUNT(*) = 0 FROM mz_internal.mz_source_statuses WHERE error LIKE '%Connection refused%';

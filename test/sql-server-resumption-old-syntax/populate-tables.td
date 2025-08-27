@@ -34,7 +34,8 @@ EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 't2', @role_
 INSERT INTO t2 SELECT a1.f1 + a6.f1 , N'abc\nxyz' FROM ten AS a1, ten AS a2, ten AS a3, ten AS a4, ten AS a5, ten AS a6;
 
 DROP TABLE IF EXISTS alter_fail_drop_col;
-CREATE TABLE alter_fail_drop_col (f1 INTEGER, f2 INTEGER);
+# SQL Server CDC will continue to replicate a dropped NULL column as NULL so dropped column must be NOT NULL.
+CREATE TABLE alter_fail_drop_col (f1 INTEGER NOT NULL, f2 INTEGER NOT NULL);
 EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'alter_fail_drop_col ', @role_name = 'SA', @supports_net_changes = 0;
 
 INSERT INTO alter_fail_drop_col VALUES (1, 1);
