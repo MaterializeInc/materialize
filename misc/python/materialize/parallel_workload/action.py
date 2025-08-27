@@ -1108,7 +1108,6 @@ class FlipFlagsAction(Action):
         self.uninteresting_flags: list[str] = [
             "enable_mz_join_core",
             "enable_compute_correction_v2",
-            "enable_compute_mv_append_smearing",
             "linear_join_yielding",
             "enable_lgalloc",
             "enable_lgalloc_eager_reclamation",
@@ -1228,7 +1227,6 @@ class FlipFlagsAction(Action):
             "enable_0dt_deployment_sources",
             "enable_0dt_caught_up_replica_status_check",
             "wallclock_lag_recording_interval",
-            "enable_wallclock_lag_histogram_collection",
             "wallclock_lag_histogram_period_interval",
             "enable_timely_zero_copy",
             "enable_timely_zero_copy_lgalloc",

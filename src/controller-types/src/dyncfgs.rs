@@ -32,12 +32,6 @@ pub const WALLCLOCK_LAG_RECORDING_INTERVAL: Config<Duration> = Config::new(
     "The interval at which to record `WallclockLagHistory` introspection.",
 );
 
-pub const ENABLE_WALLCLOCK_LAG_HISTOGRAM_COLLECTION: Config<bool> = Config::new(
-    "enable_wallclock_lag_histogram_collection",
-    true,
-    "Whether to record `WallclockLagHistogram` introspection.",
-);
-
 pub const WALLCLOCK_LAG_HISTOGRAM_PERIOD_INTERVAL: Config<Duration> = Config::new(
     "wallclock_lag_histogram_period_interval",
     Duration::from_secs(24 * 60 * 60),
@@ -86,7 +80,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&CONTROLLER_PAST_GENERATION_REPLICA_CLEANUP_RETRY_INTERVAL)
         .add(&ENABLE_0DT_DEPLOYMENT_SOURCES)
         .add(&WALLCLOCK_LAG_RECORDING_INTERVAL)
-        .add(&ENABLE_WALLCLOCK_LAG_HISTOGRAM_COLLECTION)
         .add(&WALLCLOCK_LAG_HISTOGRAM_PERIOD_INTERVAL)
         .add(&ENABLE_TIMELY_ZERO_COPY)
         .add(&ENABLE_TIMELY_ZERO_COPY_LGALLOC)
