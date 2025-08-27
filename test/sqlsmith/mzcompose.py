@@ -42,6 +42,9 @@ SERVICES = [
         memory=f"{TOTAL_MEMORY / len(MZ_SERVERS)}GB",
         use_default_volumes=False,
         default_replication_factor=2,
+        additional_system_parameter_defaults={
+            "enable_with_ordinality_legacy_fallback": "true"
+        },
     )
     for mz_server in MZ_SERVERS
 ] + [
