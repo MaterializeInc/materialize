@@ -69,7 +69,8 @@ class MySql(Service):
                         "--protocol=TCP",
                     ],
                     "interval": "1s",
-                    "start_period": "60s",
+                    # MySQL can be slow to start up
+                    "start_period": "180s",
                 },
                 "volumes": volumes,
             },
