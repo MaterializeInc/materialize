@@ -986,7 +986,7 @@ class ResolvedImage:
                 self.spec(),
                 f"--platform=linux/{self.image.rd.arch.go_str()}",
                 str(self.image.path),
-                *(("--push",) if push else ()),
+                *(["--push"] if push else ["--load"]),
             ]
         spawn.runv(cmd, stdin=f, stdout=sys.stderr.buffer)
 
