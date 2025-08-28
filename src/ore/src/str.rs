@@ -15,7 +15,8 @@
 
 //! String utilities.
 
-use std::fmt::{self, Write};
+use crate::assert::soft_assertions_enabled;
+use std::fmt::{self, Debug, Formatter, Write};
 use std::ops::Deref;
 
 /// Extension methods for [`str`].
@@ -418,6 +419,53 @@ impl<'a, const MAX: usize> TryFrom<&'a str> for MaxLenString<MAX> {
     }
 }
 
+/// Returns a "redacted" debug implementation. When running with soft assertions
+/// enabled or with the alternate / `#` flag specified, this prints identically
+/// to the underlying value; otherwise, we print the basic debug representation with
+/// alphanumeric characters replaced. (For example, the number `-3.6` will print as
+/// `<-#.#>`.)
+pub fn redact(s: impl Debug) -> impl Debug {
+    Redacting {
+        value: s,
+        debug_mode: soft_assertions_enabled(),
+    }
+}
+
+struct Redacting<A: Debug> {
+    value: A,
+    debug_mode: bool,
+}
+
+struct RedactingWriter<'a, 'b>(&'a mut Formatter<'b>);
+
+impl<'a, 'b> Write for RedactingWriter<'a, 'b> {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        for c in s.chars() {
+            self.0.write_char(if c.is_digit(10) {
+                '#'
+            } else if c.is_alphabetic() {
+                'X'
+            } else {
+                c
+            })?;
+        }
+        Ok(())
+    }
+}
+
+impl<A: Debug> Debug for Redacting<A> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        if self.debug_mode || f.alternate() {
+            self.value.fmt(f)
+        } else {
+            f.write_char('<')?;
+            let mut write = RedactingWriter(f);
+            write!(&mut write, "{:?}", &self.value)?;
+            f.write_char('>')
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -435,5 +483,26 @@ mod tests {
         assert_eq!(indent.to_string(), "".to_string());
         indent += 1;
         assert_eq!(indent.to_string(), "~~~".to_string());
+    }
+
+    #[crate::test]
+    fn test_redact() {
+        // Don't pick up the soft-assert flag in this test, to emulate prod behaviour.
+        pub fn redact(s: impl Debug) -> impl Debug {
+            Redacting {
+                value: s,
+                debug_mode: false,
+            }
+        }
+
+        assert_eq!(
+            r#"<"XXXX_XXXXXX">"#,
+            format!("{:?}", &redact(&"TEST_STRING"))
+        );
+        assert_eq!(
+            r#""TEST_STRING""#,
+            format!("{:#?}", &redact(&"TEST_STRING"))
+        );
+        assert_eq!("<#.###>", format!("{:?}", &redact(&1.234f32)));
     }
 }
