@@ -110,15 +110,27 @@ Privileges by command](/manage/access-control/appendix-command-privileges/).
 
 ## Manage current privileges for a role
 
-{{< note >}}
+### Example prerequisites
 
-- The examples below assume the existence of a `mydb` database and a `sales`
-schema within the `mydb` database.
+The examples below assume:
 
-- The examples below assume the roles only need privileges to objects in the
-  `mydb.sales` schema.
+- The existence of a `source_cluster`, a `compute_cluster`, and a
+  `serving_cluster`. For example:
 
-{{</ note >}}
+  {{% include-example file="examples/rbac/manage_roles_prereq"
+  example="create-clusters" %}}
+
+- The existence of a `mydb` database and a `sales` schema within the `mydb`
+  database. For example:
+
+  {{% include-example file="examples/rbac/manage_roles_prereq"
+  example="create-db-schema" %}}
+
+- The existence of `items`, `orders`, and `sales_items` tables within the
+  `mydb.sales` schema. For example:
+
+  {{% include-example file="examples/rbac/manage_roles_prereq"
+  example="create-tables" %}}
 
 ### View privileges for a role
 

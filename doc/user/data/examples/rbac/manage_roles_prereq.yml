@@ -1,0 +1,58 @@
+- name: "create-clusters"
+  code: |
+    CREATE CLUSTER source_cluster (SIZE = '25cc');
+    CREATE CLUSTER compute_cluster (SIZE = '25cc');
+    CREATE CLUSTER serving_cluster (SIZE = '25cc');
+
+- name: "create-db-schema"
+  code: |
+    CREATE DATABASE IF NOT EXISTS mydb;
+    CREATE SCHEMA IF NOT EXISTS mydb.sales;
+
+- name: "create-tables"
+  code: |
+    SET CLUSTER = source_cluster;
+
+    SET DATABASE = mydb;
+    SET SCHEMA  = sales;
+
+    CREATE TABLE items(
+      item text NOT NULL,
+      price numeric(8,4) NOT NULL,
+      currency text NOT NULL DEFAULT 'USD'
+    );
+
+    CREATE TABLE orders (
+        order_id int NOT NULL,
+        order_date timestamp NOT NULL,
+        item text NOT NULL,
+        quantity int NOT NULL,
+        status text NOT NULL
+    );
+
+    CREATE TABLE sales_items (
+      week_of date NOT NULL,
+      items text[]
+    );
+
+    INSERT INTO items VALUES
+    ('brownie',2.25,'USD'),
+    ('cheesecake',40,'USD'),
+    ('chiffon cake',30,'USD');
+
+    INSERT INTO orders VALUES
+    (1,current_timestamp - (1 * interval '3 day') - (35 * interval '1 minute'),'brownies',12, 'Complete'),
+    (1,current_timestamp - (1 * interval '3 day') - (35 * interval '1 minute'),'cupcake',12, 'Complete'),
+    (2,current_timestamp - (1 * interval '3 day') - (15 * interval '1 minute'),'cheesecake',1, 'Complete'),
+    (3,current_timestamp - (1 * interval '3 day'),'chiffon cake',1, 'Complete'),
+    (3,current_timestamp - (1 * interval '3 day'),'egg tart',6, 'Complete'),
+    (3,current_timestamp - (1 * interval '3 day'),'fruit tart',6, 'Complete'),
+    (4,current_timestamp - (1 * interval '2 day')- (30 * interval '1 minute'),'cupcake',6, 'Shipped'),
+    (4,current_timestamp - (1 * interval '2 day')- (30 * interval '1 minute'),'cupcake',6, 'Shipped'),
+    (5,current_timestamp - (1 * interval '2 day'),'chocolate cake',1, 'Processing'),
+    (6,current_timestamp,'brownie',10, 'Pending'),
+    (6,current_timestamp,'chocolate cake',1, 'Pending');
+
+    INSERT INTO sales_items VALUES
+    (date_trunc('week', current_timestamp),ARRAY['brownie','chocolate chip cookie','chocolate cake']),
+    (date_trunc('week', current_timestamp + (1* interval '7 day')), ARRAY['chocolate chip cookie','donut','cupcake']);
