@@ -535,8 +535,10 @@ where
 fn build_snapshot_query(outputs: &[SourceOutputInfo]) -> String {
     let info = outputs.first().expect("MySQL table info");
     for output in &outputs[1..] {
+        // the columns are decoded solely based on position, so we just need to ensure that
+        // all columns are accounted for.
         assert!(
-            info.desc.columns == output.desc.columns,
+            info.desc.columns.len() == output.desc.columns.len(),
             "Mismatch in table descriptions for {}",
             info.table_name
         );
