@@ -249,7 +249,7 @@ where
 }
 
 impl<'a, M: HumanizerMode> HumanizedExpr<'a, MapFilterProject, M> {
-    /// Render an MFP using the the default (concise) syntax.
+    /// Render an MFP using the default (concise) syntax.
     pub fn fmt_default_text<T>(
         &self,
         f: &mut fmt::Formatter<'_>,
