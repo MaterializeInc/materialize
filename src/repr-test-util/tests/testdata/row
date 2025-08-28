@@ -11,10 +11,10 @@ build-row
 [1 1 2 "\"quoted\" string" "2022-10-20 21:34:54"] [int32 numeric float32 string timestamp]
 ----
 Int32(1)
-Numeric(OrderedDecimal(1))
+Numeric(1)
 Float32(2.0)
 String("\"quoted\" string")
-Timestamp(CheckedTimestamp { t: 2022-10-20T21:34:54 })
+Timestamp(2022-10-20T21:34:54)
 
 build-row
 ["string" 1 2.1 true false null]
