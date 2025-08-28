@@ -12,7 +12,7 @@ workspace = true
 [dependencies]
 columnar = "0.10.1"
 columnation = "0.1.0"
-differential-dataflow = "0.16.1"
+differential-dataflow = "0.16.2"
 itertools = "0.14.0"
 mz-dyncfg = { path = "../dyncfg" }
 mz-expr = { path = "../expr" }
@@ -24,7 +24,7 @@ proptest = { version = "1.7.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.5.1", features = ["boxed_union"] }
 prost = { version = "0.13.5", features = ["no-recursion-limit"] }
 serde = { version = "1.0.219", features = ["derive"] }
-timely = "0.22.0"
+timely = "0.23.0"
 tracing = "0.1.37"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 

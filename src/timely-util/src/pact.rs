@@ -33,8 +33,8 @@ where
     T: Timestamp,
     C: Container + ContainerBytes + Send + 'static,
 {
-    type Pusher = DistributePusher<LogPusher<T, C, Box<dyn Push<Message<T, C>>>>>;
-    type Puller = LogPuller<T, C, Box<dyn Pull<Message<T, C>>>>;
+    type Pusher = DistributePusher<LogPusher<Box<dyn Push<Message<T, C>>>>>;
+    type Puller = LogPuller<Box<dyn Pull<Message<T, C>>>>;
 
     fn connect<A: AsWorker>(
         self,
