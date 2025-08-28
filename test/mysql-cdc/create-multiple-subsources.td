@@ -7,7 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-
+# Validate that multiple subsources with different output types can be created concurrently.
+# Previously, this would have resulted in a panic during snapshot as the column types were not
+# equal.
 
 $ mysql-connect name=mysql url=mysql://root@mysql password=${arg.mysql-root-password}
 
