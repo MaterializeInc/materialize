@@ -76,11 +76,10 @@ use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::oneshot_sources::{OneshotIngestionRequest, OneshotResultCallback};
 use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::read_holds::ReadHold;
-use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sinks::{StorageSinkConnection, StorageSinkDesc};
 use mz_storage_types::sources::{
     GenericSourceConnection, IngestionDescription, SourceConnection, SourceData, SourceDesc,
-    SourceExport, SourceExportDataConfig,
+    SourceEnvelope, SourceExport, SourceExportDataConfig,
 };
 use mz_storage_types::{AlterCompatible, StorageDiff, dyncfgs};
 use mz_txn_wal::metrics::Metrics as TxnMetrics;
@@ -88,8 +87,7 @@ use mz_txn_wal::txn_read::TxnsRead;
 use mz_txn_wal::txns::TxnsHandle;
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::Timestamp as TimelyTimestamp;
-use timely::progress::frontier::MutableAntichain;
-use timely::progress::{Antichain, ChangeBatch, Timestamp};
+use timely::progress::{Antichain, Timestamp};
 use tokio::sync::watch::{Sender, channel};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::MissedTickBehavior;
@@ -915,11 +913,6 @@ where
         let mut new_sink_statistic_entries = BTreeSet::new();
 
         for (id, description, write, metadata) in to_register {
-            let is_in_txns = |id, metadata: &CollectionMetadata| {
-                metadata.txns_shard.is_some()
-                    && !(self.read_only && migrated_storage_collections.contains(&id))
-            };
-
             let mut data_source = description.data_source;
 
             to_execute.insert(id);
@@ -937,7 +930,7 @@ where
             let write_frontier = write.upper();
 
             // Determine if this collection has another dependency.
-            let storage_dependencies = self.determine_collection_dependencies(id, &data_source)?;
+            let storage_dependencies = self.determine_collection_dependencies(&data_source)?;
 
             let dependency_read_holds = self
                 .storage_collections
@@ -946,6 +939,14 @@ where
 
             let mut dependency_since = Antichain::from_elem(T::minimum());
             for read_hold in dependency_read_holds.iter() {
+                assert!(
+                    write_frontier.is_empty()
+                        || **write_frontier == [T::minimum()]
+                        || PartialOrder::less_than(read_hold.since(), &write_frontier),
+                    "collection {id} dependency too far advanced. write_frontier={:?} dep_read_hold={:?}",
+                    write_frontier.elements(),
+                    read_hold.since().elements()
+                );
                 dependency_since.join_assign(read_hold.since());
             }
 
@@ -957,10 +958,7 @@ where
             // upper of the shard's `write_handle` generally isn't the logical upper of
             // the shard. Instead we need to thread through the upper of the `txn` shard
             // here so we can check this invariant.
-            if !dependency_read_holds.is_empty()
-                && !is_in_txns(id, &metadata)
-                && !matches!(&data_source, DataSource::Sink { .. })
-            {
+            if !dependency_read_holds.is_empty() {
                 // As the halt message says, this can happen when trying to come
                 // up in read-only mode and the current read-write
                 // environmentd/controller deletes a collection. We exit
@@ -1087,11 +1085,8 @@ where
                     to_execute.insert(*ingestion_id);
 
                     let ingestion_state = IngestionState {
-                        read_capabilities: MutableAntichain::from(dependency_since.clone()),
                         dependency_read_holds,
-                        derived_since: dependency_since,
                         write_frontier: Antichain::from_elem(Self::Timestamp::minimum()),
-                        hold_policy: ReadPolicy::step_back(),
                         instance_id,
                         hydrated_on: BTreeSet::new(),
                     };
@@ -1126,11 +1121,8 @@ where
                     }
 
                     let ingestion_state = IngestionState {
-                        read_capabilities: MutableAntichain::from(dependency_since.clone()),
                         dependency_read_holds,
-                        derived_since: dependency_since,
                         write_frontier: Antichain::from_elem(Self::Timestamp::minimum()),
-                        hold_policy: ReadPolicy::step_back(),
                         instance_id: ingestion_desc.instance_id,
                         hydrated_on: BTreeSet::new(),
                     };
@@ -1141,21 +1133,12 @@ where
                     new_source_statistic_entries.insert(id);
                 }
                 DataSource::Sink { desc } => {
-                    let mut dependency_since = Antichain::from_elem(T::minimum());
-                    for read_hold in dependency_read_holds.iter() {
-                        dependency_since.join_assign(read_hold.since());
-                    }
+                    let [input_hold] = dependency_read_holds
+                        .try_into()
+                        .expect("only one hold for the input");
 
-                    let [self_hold, read_hold] =
-                        dependency_read_holds.try_into().expect("two holds");
-
-                    let state = ExportState::new(
-                        desc.instance_id,
-                        read_hold,
-                        self_hold,
-                        write_frontier.clone(),
-                        ReadPolicy::step_back(),
-                    );
+                    let state =
+                        ExportState::new(desc.instance_id, input_hold, write_frontier.clone());
                     maybe_instance_id = Some(state.cluster_id);
                     extra_state = CollectionStateExtra::Export(state);
 
@@ -1625,8 +1608,8 @@ where
 
         // Acquire read holds at StorageCollections to ensure that the
         // sinked collection is not dropped while we're sinking it.
-        let desired_read_holds = vec![from_id.clone(), id.clone()];
-        let [input_hold, self_hold] = self
+        let desired_read_holds = vec![from_id.clone()];
+        let [input_hold] = self
             .storage_collections
             .acquire_read_holds(desired_read_holds)
             .expect("missing dependency")
@@ -1646,11 +1629,8 @@ where
         }
 
         let new_export = ExportState {
-            read_capabilities: cur_export.read_capabilities.clone(),
             cluster_id: new_description.instance_id,
-            derived_since: cur_export.derived_since.clone(),
-            read_holds: [input_hold, self_hold],
-            read_policy: cur_export.read_policy.clone(),
+            input_hold: input_hold,
             write_frontier: cur_export.write_frontier.clone(),
         };
         *cur_export = new_export;
@@ -1957,23 +1937,6 @@ where
             self.run_ingestion(ingestion_id)?;
         }
 
-        // For ingestions, we fabricate a new hold that will propagate through
-        // the cluster and then back to us.
-
-        // We don't explicitly remove read capabilities! Downgrading the
-        // frontier of the source to `[]` (the empty Antichain), will propagate
-        // to the storage dependencies.
-        let ingestion_policies = ingestions_to_drop
-            .iter()
-            .map(|id| (*id, ReadPolicy::ValidFrom(Antichain::new())))
-            .collect();
-
-        tracing::debug!(
-            ?ingestion_policies,
-            "dropping sources by setting read hold policies"
-        );
-        self.set_hold_policies(ingestion_policies);
-
         // Delete all collection->shard mappings
         let shards_to_update: BTreeSet<_> = ingestions_to_drop
             .iter()
@@ -2008,6 +1971,7 @@ where
         }
 
         // Remove collection state
+        let mut drop_commands = vec![];
         for id in ingestions_to_drop.iter().chain(collections_to_drop.iter()) {
             tracing::info!(%id, "dropping collection state");
             let collection = self
@@ -2015,17 +1979,17 @@ where
                 .remove(id)
                 .expect("list populated after checking that self.collections contains it");
 
-            let instance = match &collection.extra_state {
+            let instance_id = match &collection.extra_state {
                 CollectionStateExtra::Ingestion(ingestion) => Some(ingestion.instance_id),
                 CollectionStateExtra::Export(export) => Some(export.cluster_id()),
                 CollectionStateExtra::None => None,
-            }
-            .and_then(|i| self.instances.get(&i));
+            };
 
             // Record which replicas were running a collection, so that we can
             // match DroppedId messages against them and eventually remove state
             // from self.dropped_objects
-            if let Some(instance) = instance {
+            if let Some(instance_id) = instance_id {
+                let instance = &self.instances[&instance_id];
                 let active_replicas = instance.get_active_replicas_for_object(id);
                 if !active_replicas.is_empty() {
                     // The remap collection of an ingestion doesn't have extra
@@ -2046,7 +2010,14 @@ where
 
                     self.dropped_objects.insert(*id, active_replicas);
                 }
+                drop_commands.push((instance_id, id));
             }
+        }
+        for (instance_id, id) in drop_commands {
+            self.instances
+                .get_mut(&instance_id)
+                .unwrap()
+                .send(StorageCommand::AllowCompaction(*id, Antichain::new()));
         }
 
         // Also let StorageCollections know!
@@ -2075,22 +2046,9 @@ where
         // Ignore exports that have already been removed.
         sinks_to_drop.retain(|id| self.export(*id).is_ok());
 
+        // XXX: is this comment valid?
         // TODO: ideally we'd advance the write frontier ourselves here, but this function's
         // not yet marked async.
-
-        // We don't explicitly remove read capabilities! Downgrading the
-        // frontier of the source to `[]` (the empty Antichain), will propagate
-        // to the storage dependencies.
-        let drop_policy = sinks_to_drop
-            .iter()
-            .map(|id| (*id, ReadPolicy::ValidFrom(Antichain::new())))
-            .collect();
-
-        tracing::debug!(
-            ?drop_policy,
-            "dropping sources by setting read hold policies"
-        );
-        self.set_hold_policies(drop_policy);
 
         // Record the drop status for all sink drops.
         //
@@ -2130,7 +2088,7 @@ where
                 CollectionStateExtra::Export(export) => Some(export.cluster_id()),
                 CollectionStateExtra::None => None,
             }
-            .and_then(|i| self.instances.get(&i));
+            .and_then(|i| self.instances.get_mut(&i));
 
             // Record how many replicas were running an export, so that we can
             // match `DroppedId` messages against it and eventually remove state
@@ -2140,6 +2098,7 @@ where
                 if !active_replicas.is_empty() {
                     self.dropped_objects.insert(*id, active_replicas);
                 }
+                instance.send(StorageCommand::AllowCompaction(*id, Antichain::new()));
             }
         }
 
@@ -2820,61 +2779,13 @@ where
         }
     }
 
-    // This is different from `set_read_policies`, which is for external users.
-    // This method is for setting the policy that the controller uses when
-    // maintaining the read holds that it has for collections/exports at the
-    // StorageCollections.
-    //
-    // This is really only used when dropping things, where we set the
-    // ReadPolicy to the empty Antichain.
-    #[instrument(level = "debug")]
-    fn set_hold_policies(&mut self, policies: Vec<(GlobalId, ReadPolicy<T>)>) {
-        let mut read_capability_changes = BTreeMap::default();
-
-        for (id, policy) in policies.into_iter() {
-            if let Some(collection) = self.collections.get_mut(&id) {
-                let (write_frontier, derived_since, hold_policy) = match &mut collection.extra_state
-                {
-                    CollectionStateExtra::Ingestion(ingestion) => (
-                        ingestion.write_frontier.borrow(),
-                        &mut ingestion.derived_since,
-                        &mut ingestion.hold_policy,
-                    ),
-                    CollectionStateExtra::None => {
-                        unreachable!("set_hold_policies is only called for ingestions");
-                    }
-                    CollectionStateExtra::Export(export) => (
-                        export.write_frontier.borrow(),
-                        &mut export.derived_since,
-                        &mut export.read_policy,
-                    ),
-                };
-
-                let new_derived_since = policy.frontier(write_frontier);
-                let mut update = swap_updates(derived_since, new_derived_since);
-                if !update.is_empty() {
-                    read_capability_changes.insert(id, update);
-                }
-
-                *hold_policy = policy;
-            }
-        }
-
-        if !read_capability_changes.is_empty() {
-            self.update_hold_capabilities(&mut read_capability_changes);
-        }
-    }
-
     #[instrument(level = "debug", fields(updates))]
     fn update_write_frontier(&mut self, id: GlobalId, new_upper: &Antichain<T>) {
-        let mut read_capability_changes = BTreeMap::default();
-
         if let Some(collection) = self.collections.get_mut(&id) {
-            let (write_frontier, derived_since, hold_policy) = match &mut collection.extra_state {
+            let (write_frontier, dependency_holds) = match &mut collection.extra_state {
                 CollectionStateExtra::Ingestion(ingestion) => (
                     &mut ingestion.write_frontier,
-                    &mut ingestion.derived_since,
-                    &ingestion.hold_policy,
+                    ingestion.dependency_read_holds.as_mut_slice(),
                 ),
                 CollectionStateExtra::None => {
                     if matches!(collection.data_source, DataSource::Progress) {
@@ -2890,138 +2801,29 @@ where
                 }
                 CollectionStateExtra::Export(export) => (
                     &mut export.write_frontier,
-                    &mut export.derived_since,
-                    &export.read_policy,
+                    std::slice::from_mut(&mut export.input_hold),
                 ),
             };
 
             if PartialOrder::less_than(write_frontier, new_upper) {
                 write_frontier.clone_from(new_upper);
-            }
 
-            let new_derived_since = hold_policy.frontier(write_frontier.borrow());
-            let mut update = swap_updates(derived_since, new_derived_since);
-            if !update.is_empty() {
-                read_capability_changes.insert(id, update);
+                let dependency_frontier = Antichain::from_iter(
+                    write_frontier
+                        .iter()
+                        .map(|t| t.step_back().unwrap_or_else(T::minimum)),
+                );
+                for dependency_hold in dependency_holds {
+                    dependency_hold
+                        .try_downgrade(dependency_frontier.clone())
+                        .expect("dependency read hold violation");
+                }
             }
         } else if self.dropped_objects.contains_key(&id) {
             // We dropped an object but might still get updates from cluster
             // side, before it notices the drop. This is expected and fine.
         } else {
             soft_panic_or_log!("spurious upper update for {id}: {new_upper:?}");
-        }
-
-        if !read_capability_changes.is_empty() {
-            self.update_hold_capabilities(&mut read_capability_changes);
-        }
-    }
-
-    // This is different from `update_read_capabilities`, which is for external users.
-    // This method is for maintaining the read holds that the controller has at
-    // the StorageCollections, for storage dependencies.
-    #[instrument(level = "debug", fields(updates))]
-    fn update_hold_capabilities(&mut self, updates: &mut BTreeMap<GlobalId, ChangeBatch<T>>) {
-        // Location to record consequences that we need to act on.
-        let mut collections_net = BTreeMap::new();
-
-        // We must not rely on any specific relative ordering of `GlobalId`s.
-        // That said, it is reasonable to assume that collections generally have
-        // greater IDs than their dependencies, so starting with the largest is
-        // a useful optimization.
-        while let Some(key) = updates.keys().rev().next().cloned() {
-            let mut update = updates.remove(&key).unwrap();
-
-            if key.is_user() {
-                debug!(id = %key, ?update, "update_hold_capability");
-            }
-
-            if let Some(collection) = self.collections.get_mut(&key) {
-                match &mut collection.extra_state {
-                    CollectionStateExtra::Ingestion(ingestion) => {
-                        let changes = ingestion.read_capabilities.update_iter(update.drain());
-                        update.extend(changes);
-
-                        let (changes, frontier, _cluster_id) =
-                            collections_net.entry(key).or_insert_with(|| {
-                                (
-                                    <ChangeBatch<_>>::new(),
-                                    Antichain::new(),
-                                    ingestion.instance_id,
-                                )
-                            });
-
-                        changes.extend(update.drain());
-                        *frontier = ingestion.read_capabilities.frontier().to_owned();
-                    }
-                    CollectionStateExtra::None => {
-                        // WIP: See if this ever panics in ci.
-                        soft_panic_or_log!(
-                            "trying to update holds for collection {collection:?} which is not \
-                             an ingestion: {update:?}"
-                        );
-                        continue;
-                    }
-                    CollectionStateExtra::Export(export) => {
-                        let changes = export.read_capabilities.update_iter(update.drain());
-                        update.extend(changes);
-
-                        let (changes, frontier, _cluster_id) =
-                            collections_net.entry(key).or_insert_with(|| {
-                                (<ChangeBatch<_>>::new(), Antichain::new(), export.cluster_id)
-                            });
-
-                        changes.extend(update.drain());
-                        *frontier = export.read_capabilities.frontier().to_owned();
-                    }
-                }
-            } else {
-                // This is confusing and we should probably error.
-                tracing::warn!(id = ?key, ?update, "update_hold_capabilities for unknown object");
-            }
-        }
-
-        // Translate our net compute actions into `AllowCompaction` commands and
-        // downgrade persist sinces.
-        for (key, (mut changes, frontier, cluster_id)) in collections_net {
-            if !changes.is_empty() {
-                if key.is_user() {
-                    debug!(id = %key, ?frontier, "downgrading ingestion read holds!");
-                }
-
-                let collection = self
-                    .collections
-                    .get_mut(&key)
-                    .expect("missing collection state");
-
-                let read_holds = match &mut collection.extra_state {
-                    CollectionStateExtra::Ingestion(ingestion) => {
-                        ingestion.dependency_read_holds.as_mut_slice()
-                    }
-                    CollectionStateExtra::Export(export) => export.read_holds.as_mut_slice(),
-                    CollectionStateExtra::None => {
-                        soft_panic_or_log!(
-                            "trying to downgrade read holds for collection which is not an \
-                             ingestion: {collection:?}"
-                        );
-                        continue;
-                    }
-                };
-
-                for read_hold in read_holds.iter_mut() {
-                    read_hold
-                        .try_downgrade(frontier.clone())
-                        .expect("we only advance the frontier");
-                }
-
-                // Send AllowCompaction command directly to the instance
-                if let Some(instance) = self.instances.get_mut(&cluster_id) {
-                    instance.send(StorageCommand::AllowCompaction(key, frontier.clone()));
-                } else {
-                    soft_panic_or_log!(
-                        "missing instance client for cluster {cluster_id} while we still have outstanding AllowCompaction command {frontier:?} for {key}"
-                    );
-                }
-            }
         }
     }
 
@@ -3264,7 +3066,6 @@ where
     /// Determines and returns this collection's dependencies, if any.
     fn determine_collection_dependencies(
         &self,
-        self_id: GlobalId,
         data_source: &DataSource<T>,
     ) -> Result<Vec<GlobalId>, StorageError<T>> {
         let dependency = match &data_source {
@@ -3276,36 +3077,32 @@ where
             DataSource::Table {
                 primary: Some(primary),
             } => vec![*primary],
-            DataSource::IngestionExport { ingestion_id, .. } => {
-                // Ingestion exports depend on their primary source's remap
-                // collection.
-                let source_collection = self.collection(*ingestion_id)?;
-                let ingestion_remap_collection_id = match &source_collection.data_source {
-                    DataSource::Ingestion(ingestion) => ingestion.remap_collection_id,
-                    _ => unreachable!(
-                        "SourceExport must only refer to primary sources that already exist"
-                    ),
-                };
+            // Ingestion exports depend on their primary source's remap collection.
+            DataSource::IngestionExport {
+                ingestion_id,
+                data_config,
+                ..
+            } => match data_config.envelope {
+                SourceEnvelope::None(_) | SourceEnvelope::Upsert(_) => {
+                    let source_collection = self.collection(*ingestion_id)?;
+                    let ingestion_remap_collection_id = match &source_collection.data_source {
+                        DataSource::Ingestion(ingestion) => ingestion.remap_collection_id,
+                        _ => unreachable!(
+                            "SourceExport must only refer to primary sources that already exist"
+                        ),
+                    };
 
-                // Ingestion exports (aka. subsources) must make sure that 1)
-                // their own collection's since stays one step behind the upper,
-                // and, 2) that the remap shard's since stays one step behind
-                // their upper. Hence they track themselves and the remap shard
-                // as dependencies.
-                vec![self_id, ingestion_remap_collection_id]
-            }
+                    // Ingestion exports (aka. subsources) must make sure that the remap shard's since
+                    // stays one step behind their upper
+                    vec![ingestion_remap_collection_id]
+                }
+                // CDCv2 exports don't depend on the remap shard
+                SourceEnvelope::CdcV2 => vec![],
+            },
             // Ingestions depend on their remap collection.
-            DataSource::Ingestion(ingestion) => {
-                // Ingestions must make sure that 1) their own collection's
-                // since stays one step behind the upper, and, 2) that the remap
-                // shard's since stays one step behind their upper. Hence they
-                // track themselves and the remap shard as dependencies.
-                vec![self_id, ingestion.remap_collection_id]
-            }
-            DataSource::Sink { desc } => {
-                // Sinks hold back their own frontier and the frontier of their input.
-                vec![self_id, desc.sink.from]
-            }
+            DataSource::Ingestion(ingestion) => vec![ingestion.remap_collection_id],
+            // Sinks depend on their input.
+            DataSource::Sink { desc } => vec![desc.sink.from],
         };
 
         Ok(dependency)
@@ -3917,26 +3714,11 @@ enum CollectionStateExtra<T: TimelyTimestamp> {
 /// State maintained about ingestions and ingestion exports
 #[derive(Debug)]
 struct IngestionState<T: TimelyTimestamp> {
-    /// Really only for keeping track of changes to the `derived_since`.
-    pub read_capabilities: MutableAntichain<T>,
-
-    /// The current since frontier, derived from `write_frontier` using
-    /// `hold_policy`.
-    pub derived_since: Antichain<T>,
-
     /// Holds that this ingestion (or ingestion export) has on its dependencies.
     pub dependency_read_holds: Vec<ReadHold<T>>,
 
     /// Reported write frontier.
     pub write_frontier: Antichain<T>,
-
-    /// The policy that drives how we downgrade our read hold. That is how we
-    /// derive our since from our upper.
-    ///
-    /// This is a _storage-controller-internal_ policy used to derive its
-    /// personal read hold on the collection. It should not be confused with any
-    /// read policies that the adapter might install at [StorageCollections].
-    pub hold_policy: ReadPolicy<T>,
 
     /// The ID of the instance in which the ingestion is running.
     pub instance_id: StorageInstanceId,
@@ -4053,18 +3835,4 @@ fn replica_status_history_desc(params: &StorageParameters) -> StatusHistoryDesc<
         }),
         extract_time: Box::new(move |datums| datums[time_idx].unwrap_timestamptz()),
     }
-}
-
-/// Replace one antichain with another, tracking the overall changes in the returned `ChangeBatch`.
-fn swap_updates<T: Timestamp>(
-    from: &mut Antichain<T>,
-    mut replace_with: Antichain<T>,
-) -> ChangeBatch<T> {
-    let mut update = ChangeBatch::new();
-    if PartialOrder::less_equal(from, &replace_with) {
-        update.extend(replace_with.iter().map(|time| (time.clone(), 1)));
-        std::mem::swap(from, &mut replace_with);
-        update.extend(replace_with.iter().map(|time| (time.clone(), -1)));
-    }
-    update
 }

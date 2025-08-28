@@ -46,7 +46,6 @@ use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::oneshot_sources::{OneshotIngestionRequest, OneshotResultCallback};
 use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::read_holds::ReadHold;
-use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sinks::{StorageSinkConnection, StorageSinkDesc};
 use mz_storage_types::sources::{
     GenericSourceConnection, IngestionDescription, SourceDesc, SourceExportDataConfig,
@@ -54,7 +53,6 @@ use mz_storage_types::sources::{
 };
 use serde::{Deserialize, Serialize};
 use timely::progress::Timestamp as TimelyTimestamp;
-use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, Timestamp};
 use tokio::sync::{mpsc, oneshot};
 
@@ -777,23 +775,12 @@ impl From<NonZeroI64> for PersistEpoch {
 /// State maintained about individual exports.
 #[derive(Debug)]
 pub struct ExportState<T: TimelyTimestamp> {
-    /// Really only for keeping track of changes to the `derived_since`.
-    pub read_capabilities: MutableAntichain<T>,
-
     /// The cluster this export is associated with.
     pub cluster_id: StorageInstanceId,
 
-    /// The current since frontier, derived from `write_frontier` using
-    /// `hold_policy`.
-    pub derived_since: Antichain<T>,
-
-    /// The read holds that this export has on its dependencies (its input and itself). When
-    /// the upper of the export changes, we downgrade this, which in turn
-    /// downgrades holds we have on our dependencies' sinces.
-    pub read_holds: [ReadHold<T>; 2],
-
-    /// The policy to use to downgrade `self.read_capability`.
-    pub read_policy: ReadPolicy<T>,
+    /// The read holds that this export has on its input. When the upper of the export changes, we
+    /// downgrade this, which in turn downgrades holds we have on our dependencies' sinces.
+    pub input_hold: ReadHold<T>,
 
     /// Reported write frontier.
     pub write_frontier: Antichain<T>,
@@ -803,23 +790,14 @@ impl<T: Timestamp> ExportState<T> {
     pub fn new(
         cluster_id: StorageInstanceId,
         read_hold: ReadHold<T>,
-        self_hold: ReadHold<T>,
         write_frontier: Antichain<T>,
-        read_policy: ReadPolicy<T>,
     ) -> Self
     where
         T: Lattice,
     {
-        let mut dependency_since = Antichain::from_elem(T::minimum());
-        for read_hold in [&read_hold, &self_hold] {
-            dependency_since.join_assign(read_hold.since());
-        }
         Self {
-            read_capabilities: MutableAntichain::from(dependency_since.borrow()),
             cluster_id,
-            derived_since: dependency_since,
-            read_holds: [read_hold, self_hold],
-            read_policy,
+            input_hold: read_hold,
             write_frontier,
         }
     }
@@ -831,12 +809,12 @@ impl<T: Timestamp> ExportState<T> {
 
     /// Returns the cluster to which the export is bound.
     pub fn input_hold(&self) -> &ReadHold<T> {
-        &self.read_holds[0]
+        &self.input_hold
     }
 
     /// Returns whether the export was dropped.
     pub fn is_dropped(&self) -> bool {
-        self.read_holds.iter().all(|h| h.since().is_empty())
+        self.input_hold.since().is_empty()
     }
 }
 /// A channel that allows you to append a set of updates to a pre-defined [`GlobalId`].
