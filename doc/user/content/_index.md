@@ -23,11 +23,13 @@ to transform, deliver, and act on fast changing data.
   Community editions. For more information, see the [Self-managed Materialize]
   documentation.
 
-- [Materialize MCP Server](https://materialize.com/blog/materialize-turns-views-into-tools-for-agents/).
-  The Materialize MCP Server bridges SQL and AI by transforming indexed views into well-typed tools
-  that agents can call directly. It lets you expose your freshest, most complex logic as operational
-  data products automatically and reliably. For more information, see the
-  [Materialize MCP Server](/integrations/llm/) documentation.
+- [Materialize MCP
+  Server](https://materialize.com/blog/materialize-turns-views-into-tools-for-agents/).
+  The Materialize MCP Server bridges SQL and AI by transforming indexed views
+  into well-typed tools that agents can call directly. It lets you expose your
+  most complex logic as operational data products automatically and reliably.
+  For more information, see the [Materialize MCP Server](/integrations/llm/)
+  documentation.
 
 [Self-managed Materialize]: https://materialize.com/docs/self-managed/v25.2/
 [Self-managed Materialize v25.2]: https://materialize.com/docs/self-managed/v25.2/
