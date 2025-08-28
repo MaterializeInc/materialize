@@ -113,7 +113,6 @@ skip = [
     { name = "rand_core", version = "0.5.1" },
     { name = "rand_core", version = "0.6.2" },
     { name = "reqwest", version = "0.11.24" },
-    { name = "rustls-pemfile", version = "1.0.4" },
     # Used by reqwest
     { name = "system-configuration", version = "0.5.1" },
     { name = "system-configuration-sys", version = "0.5.0" },
@@ -124,6 +123,7 @@ skip = [
     # Used by rdkafka-sys
     { name = "num_enum", version = "0.5.11" },
     { name = "num_enum_derive", version = "0.5.11" },
+    { name = "proc-macro-crate", version = "1.3.1" },
     # Used by protobuf-parse
     { name = "which", version = "4.4.2" },
     # Used by tempfile
@@ -140,7 +140,6 @@ skip = [
     { name = "windows_aarch64_gnullvm", version = "0.52.6" },
     { name = "windows_aarch64_msvc", version = "0.52.6" },
     { name = "windows_i686_gnu", version = "0.52.6" },
-    { name = "windows_i686_gnullvm", version = "0.52.6" },
     { name = "windows_i686_msvc", version = "0.52.6" },
     { name = "windows_x86_64_gnu", version = "0.52.6" },
     { name = "windows_x86_64_gnullvm", version = "0.52.6" },
@@ -158,6 +157,14 @@ skip = [
     { name = "nix", version = "0.26.4" },
     # Used by dynfmt
     { name = "erased-serde", version = "0.3.26" },
+    # Held back by mysql_async `v0.36.1`
+    { name = "socket2", version = "0.5.10" },
+    # Used by azure_core
+    { name = "quick-xml", version = "0.31.0" },
+    # Conflicts between `bon` in apache-avro and `derive_builder` in iceberg
+    { name = "darling_macro", version = "0.20.11" },
+    { name = "darling_core", version = "0.20.11" },
+    { name = "darling", version = "0.20.11" },
 ]
 
 [[bans.deny]]
@@ -186,6 +193,10 @@ wrappers = ["protobuf-parse"]
 # more targeted enum macro crates, e.g. `enum-kinds`.
 [[bans.deny]]
 name = "strum"
+wrappers = [
+    "apache-avro",
+    "iceberg"
+]
 [[bans.deny]]
 name = "strum-macros"
 
@@ -193,6 +204,7 @@ name = "strum-macros"
 name = "log"
 wrappers = [
     "azure_svc_blobstorage",
+    "apache-avro",
     "buildid",
     "cookie_store",
     "deadpool-postgres",
@@ -204,6 +216,7 @@ wrappers = [
     "launchdarkly-server-sdk",
     "launchdarkly-server-sdk-evaluation",
     "native-tls",
+    "opendal",
     "os_info",
     "postgres",
     "pprof",
@@ -211,9 +224,11 @@ wrappers = [
     "protobuf-parse",
     # TODO(guswynn): switch to tracing in rdkafka
     "rdkafka",
+    "reqsign",
     "reqwest",
     "tokio-postgres",
     "tokio-tungstenite",
+    "thrift",
     "tracing-log",
     "tracing",
     "tungstenite",

@@ -68,12 +68,12 @@ INSERT INTO numbers VALUES (1), (2), (3);
 query TIIII
 EXPLAIN FILTER PUSHDOWN FOR SELECT * FROM numbers where value > 10;
 ----
-materialize.public.numbers  1233  0  1  0
+materialize.public.numbers  1313  0  1  0
 
 query TIIII
 EXPLAIN FILTER PUSHDOWN FOR SELECT * FROM numbers where value < 10;
 ----
-materialize.public.numbers  1233  1233  1  1
+materialize.public.numbers  1313  1313  1  1
 
 # Verify that pushdown of jsonb_get_string is infallible. Before this was
 # fixed, a filter expression on a jsonb field that is not present in all parts
@@ -98,7 +98,7 @@ INSERT INTO jsonb_fields VALUES (2, '{ "other-field": "value" }');
 query TIIII
 EXPLAIN FILTER PUSHDOWN FOR SELECT * FROM jsonb_fields where timestamp > 1000 AND payload->>'field' = 'not-value';
 ----
-materialize.public.jsonb_fields  2826  0  2  0
+materialize.public.jsonb_fields  3018  0  2  0
 
 # EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW is also supported
 
@@ -111,7 +111,7 @@ SELECT mz_unsafe.mz_sleep(3);
 query TIIII
 EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW big_numbers
 ----
-materialize.public.numbers  1233  0  1  0
+materialize.public.numbers  1313  0  1  0
 
 # EXPLAIN FILTER PUSHDOWN should work even if there are no replicas.
 statement ok
@@ -123,7 +123,7 @@ SET CLUSTER = no_replicas;
 query TIIII
 EXPLAIN FILTER PUSHDOWN FOR SELECT * FROM jsonb_fields where timestamp > 1000 AND payload->>'field' = 'not-value';
 ----
-materialize.public.jsonb_fields  2826  0  2  0
+materialize.public.jsonb_fields  3018  0  2  0
 
 # ----------------------------------------
 # Cleanup

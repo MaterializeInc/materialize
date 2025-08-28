@@ -758,6 +758,7 @@ pub enum ConnectionOptionName {
     AwsPrivatelink,
     Broker,
     Brokers,
+    Credential,
     Database,
     Endpoint,
     Host,
@@ -771,6 +772,7 @@ pub enum ConnectionOptionName {
     SaslMechanisms,
     SaslPassword,
     SaslUsername,
+    Scope,
     SecretAccessKey,
     SecurityProtocol,
     ServiceName,
@@ -780,8 +782,10 @@ pub enum ConnectionOptionName {
     SslKey,
     SslMode,
     SessionToken,
+    CatalogType,
     Url,
     User,
+    Warehouse,
 }
 
 impl AstDisplay for ConnectionOptionName {
@@ -793,6 +797,7 @@ impl AstDisplay for ConnectionOptionName {
             ConnectionOptionName::AwsPrivatelink => "AWS PRIVATELINK",
             ConnectionOptionName::Broker => "BROKER",
             ConnectionOptionName::Brokers => "BROKERS",
+            ConnectionOptionName::Credential => "CREDENTIAL",
             ConnectionOptionName::Database => "DATABASE",
             ConnectionOptionName::Endpoint => "ENDPOINT",
             ConnectionOptionName::Host => "HOST",
@@ -810,6 +815,7 @@ impl AstDisplay for ConnectionOptionName {
             ConnectionOptionName::SaslMechanisms => "SASL MECHANISMS",
             ConnectionOptionName::SaslPassword => "SASL PASSWORD",
             ConnectionOptionName::SaslUsername => "SASL USERNAME",
+            ConnectionOptionName::Scope => "SCOPE",
             ConnectionOptionName::SecurityProtocol => "SECURITY PROTOCOL",
             ConnectionOptionName::SecretAccessKey => "SECRET ACCESS KEY",
             ConnectionOptionName::ServiceName => "SERVICE NAME",
@@ -819,8 +825,10 @@ impl AstDisplay for ConnectionOptionName {
             ConnectionOptionName::SslKey => "SSL KEY",
             ConnectionOptionName::SslMode => "SSL MODE",
             ConnectionOptionName::SessionToken => "SESSION TOKEN",
+            ConnectionOptionName::CatalogType => "CATALOG TYPE",
             ConnectionOptionName::Url => "URL",
             ConnectionOptionName::User => "USER",
+            ConnectionOptionName::Warehouse => "WAREHOUSE",
         })
     }
 }
@@ -840,6 +848,7 @@ impl WithOptionName for ConnectionOptionName {
             | ConnectionOptionName::AwsPrivatelink
             | ConnectionOptionName::Broker
             | ConnectionOptionName::Brokers
+            | ConnectionOptionName::Credential
             | ConnectionOptionName::Database
             | ConnectionOptionName::Endpoint
             | ConnectionOptionName::Host
@@ -855,6 +864,7 @@ impl WithOptionName for ConnectionOptionName {
             | ConnectionOptionName::SaslMechanisms
             | ConnectionOptionName::SaslPassword
             | ConnectionOptionName::SaslUsername
+            | ConnectionOptionName::Scope
             | ConnectionOptionName::SecurityProtocol
             | ConnectionOptionName::SecretAccessKey
             | ConnectionOptionName::ServiceName
@@ -864,8 +874,10 @@ impl WithOptionName for ConnectionOptionName {
             | ConnectionOptionName::SslKey
             | ConnectionOptionName::SslMode
             | ConnectionOptionName::SessionToken
+            | ConnectionOptionName::CatalogType
             | ConnectionOptionName::Url
-            | ConnectionOptionName::User => false,
+            | ConnectionOptionName::User
+            | ConnectionOptionName::Warehouse => false,
         }
     }
 }
@@ -890,6 +902,7 @@ pub enum CreateConnectionType {
     SqlServer,
     MySql,
     Yugabyte,
+    IcebergCatalog,
 }
 
 impl AstDisplay for CreateConnectionType {
@@ -921,6 +934,9 @@ impl AstDisplay for CreateConnectionType {
             }
             Self::Yugabyte => {
                 f.write_str("YUGABYTE");
+            }
+            Self::IcebergCatalog => {
+                f.write_str("ICEBERG CATALOG");
             }
         }
     }

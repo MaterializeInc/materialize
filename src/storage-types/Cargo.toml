@@ -15,7 +15,7 @@ harness = false
 
 [dependencies]
 anyhow = "1.0.98"
-arrow = { version = "54.3.1", default-features = false }
+arrow = { version = "55.2.0", default-features = false }
 async-trait = "0.1.88"
 aws-config = { version = "1.2.0", default-features = false, features = ["sso"] }
 aws-credential-types = { version = "1.2.4", features = ["hardcoded-credentials"] }
@@ -63,6 +63,7 @@ proptest-derive = { version = "0.5.1", features = ["boxed_union"] }
 prost = { version = "0.13.5", features = ["no-recursion-limit"] }
 rdkafka = { version = "0.29.0", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
 regex = "1.11.1"
+reqwest = "0.11.24"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = { version = "1.0.127", features = ["preserve_order"] }
 thiserror = "2.0.12"
@@ -75,6 +76,8 @@ url = { version = "2.3.1", features = ["serde"] }
 uuid = { version = "1.17.0", features = ["serde", "v4"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 base64 = "0.22.1"
+iceberg = "0.6.0"
+iceberg-catalog-rest = "0.6.0"
 
 [dev-dependencies]
 base64 = "0.22.1"
