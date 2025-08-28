@@ -519,7 +519,6 @@ where
         let mut instance = Instance::new(
             workload_class,
             metrics,
-            Arc::clone(self.config().config_set()),
             self.now.clone(),
             self.instance_response_tx.clone(),
         );
@@ -3433,18 +3432,11 @@ where
         // Choose an as-of frontier for this execution of the sink. If the write frontier of the sink
         // is strictly larger than its read hold, it must have at least written out its snapshot, and we can skip
         // reading it; otherwise assume we may have to replay from the beginning.
-        let enable_snapshot_frontier =
-            dyncfgs::STORAGE_SINK_SNAPSHOT_FRONTIER.get(self.config().config_set());
         let export_state = self.storage_collections.collection_frontiers(id)?;
         let mut as_of = description.sink.as_of.clone();
         as_of.join_assign(&export_state.implied_capability);
-        let with_snapshot = if enable_snapshot_frontier
-            && PartialOrder::less_than(&as_of, &export_state.write_frontier)
-        {
-            false
-        } else {
-            description.sink.with_snapshot
-        };
+        let with_snapshot = description.sink.with_snapshot
+            && !PartialOrder::less_than(&as_of, &export_state.write_frontier);
 
         info!(
             sink_id = %id,
