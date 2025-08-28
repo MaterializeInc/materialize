@@ -282,7 +282,7 @@ impl Context {
             needs_update_set.remove(&mz.name_unchecked());
         }
         self.metrics
-            .needs_update
+            .environmentd_needs_update
             .set(u64::cast_from(needs_update_set.len()));
     }
 

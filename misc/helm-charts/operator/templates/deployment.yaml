@@ -231,6 +231,9 @@ spec:
         - >
           --additional-crd-columns={{ toJson .Values.operator.additionalMaterializeCRDColumns }}
         {{- end }}
+        ports:
+        - containerPort: 3100
+          name: metrics
         resources:
           {{- toYaml .Values.operator.resources | nindent 10 }}
         securityContext:

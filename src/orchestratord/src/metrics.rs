@@ -20,15 +20,15 @@ use mz_ore::metrics::{MetricsRegistry, UIntGauge};
 
 #[derive(Debug)]
 pub struct Metrics {
-    pub needs_update: UIntGauge,
+    pub environmentd_needs_update: UIntGauge,
 }
 
 impl Metrics {
     pub fn register_into(registry: &MetricsRegistry) -> Self {
         Self {
-            needs_update: registry.register(
+            environmentd_needs_update: registry.register(
                 metric! {
-                    name: "needs_update",
+                    name: "environmentd_needs_update",
                     help: "Count of organizations in this cluster which are running outdated pod templates",
                 }),
         }
