@@ -9,7 +9,6 @@
 
 //! An abstraction for dealing with storage collections.
 
-use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::num::NonZeroI64;
@@ -1863,7 +1862,7 @@ where
         // be processed in this stream cannot all have exclusive access.
         use futures::stream::{StreamExt, TryStreamExt};
         let this = &*self;
-        let mut to_register: Vec<_> = futures::stream::iter(enriched_with_metadata)
+        let to_register: Vec<_> = futures::stream::iter(enriched_with_metadata)
             .map(|data: Result<_, StorageError<Self::Timestamp>>| {
                 let register_ts = register_ts.clone();
                 async move {
@@ -1933,11 +1932,11 @@ where
                 }
             })
             // Poll each future for each collection concurrently, maximum of 50 at a time.
-            .buffer_unordered(50)
+            .buffered(50)
             // HERE BE DRAGONS:
             //
             // There are at least 2 subtleties in using `FuturesUnordered`
-            // (which `buffer_unordered` uses underneath:
+            // (which `buffered` uses underneath:
             // - One is captured here
             //   <https://github.com/rust-lang/futures-rs/issues/2387>
             // - And the other is deadlocking if processing an OUTPUT of a
@@ -1949,22 +1948,6 @@ where
             // advice: only use `try_collect` or `collect`!
             .try_collect()
             .await?;
-
-        // Reorder in dependency order.
-        #[derive(Ord, PartialOrd, Eq, PartialEq)]
-        enum DependencyOrder {
-            /// Tables should always be registered first, and large ids before small ones.
-            Table(Reverse<GlobalId>),
-            /// For most collections the id order is the correct one.
-            Collection(GlobalId),
-            /// Sinks should always be registered last.
-            Sink(GlobalId),
-        }
-        to_register.sort_by_key(|(id, desc, ..)| match &desc.data_source {
-            DataSource::Table { .. } => DependencyOrder::Table(Reverse(*id)),
-            DataSource::Sink { .. } => DependencyOrder::Sink(*id),
-            _ => DependencyOrder::Collection(*id),
-        });
 
         // We hold this lock for a very short amount of time, just doing some
         // hashmap inserts and unbounded channel sends.
