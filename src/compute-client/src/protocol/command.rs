@@ -156,6 +156,10 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// replica must produce [`SubscribeResponse`]s that report the progress and results of the
     /// subscribes.
     ///
+    /// After receiving a `CreateDataflow` command, if the created dataflow exports copy-to sinks,
+    /// the replica must produce [`CopyToResponse`]s that report the results and completion of the
+    /// copy-to sinks.
+    ///
     /// The replica may create the dataflow in a suspended state and defer starting the computation
     /// until it receives a corresponding `Schedule` command. Thus, to ensure dataflow execution,
     /// the compute controller should eventually send a `Schedule` command for each sent
@@ -167,6 +171,7 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// [`as_of`]: DataflowDescription::as_of
     /// [`Frontiers`]: super::response::ComputeResponse::Frontiers
     /// [`SubscribeResponse`]: super::response::ComputeResponse::SubscribeResponse
+    /// [`CopyToResponse`]: super::response::ComputeResponse::CopyToResponse
     CreateDataflow(Box<DataflowDescription<RenderPlan<T>, CollectionMetadata, T>>),
 
     /// `Schedule` allows the replica to start computation for a compute collection.

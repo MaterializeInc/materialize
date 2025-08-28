@@ -2048,6 +2048,32 @@ where
         response: CopyToResponse,
         replica_id: ReplicaId,
     ) {
+        if !self.collections.contains_key(&sink_id) {
+            soft_panic_or_log!(
+                "received response for an unknown copy-to \
+                 (sink_id={sink_id}, replica_id={replica_id})",
+            );
+            return;
+        }
+        let Some(replica) = self.replicas.get_mut(&replica_id) else {
+            soft_panic_or_log!("copy-to response for an unknown replica (replica_id={replica_id})");
+            return;
+        };
+        let Some(replica_collection) = replica.collections.get_mut(&sink_id) else {
+            soft_panic_or_log!(
+                "copy-to response for an unknown replica collection \
+                 (sink_id={sink_id}, replica_id={replica_id})"
+            );
+            return;
+        };
+
+        // Downgrade the replica frontiers, to enable dropping of input read holds and clean up of
+        // collection state.
+        // TODO(database-issues#4701): report copy-to frontiers through `Frontiers` responses
+        replica_collection.update_write_frontier(Antichain::new());
+        replica_collection.update_input_frontier(Antichain::new());
+        replica_collection.update_output_frontier(Antichain::new());
+
         // We might not be tracking this COPY TO because we have already returned a response
         // from one of the replicas. In that case, we ignore the response.
         if !self.copy_tos.remove(&sink_id) {
