@@ -12,6 +12,16 @@ menu:
 The following outlines various disaster recovery (DR) strategies for
 Materialize.
 
+## Stable Environment ID
+
+For disaster recovery, you must explicitly set the
+`environmentId` in your Materialize CR (Custom Resource). Otherwise, Materialize
+generates a new value each time the environment is recreated, resulting in:
+
+- A new persist namespace in your blob storage
+- Inaccessibility of existing persisted data
+- Full data rehydration from sources
+
 ## Level 1: Basic configuration (Intra-Region Recovery)
 
 Because Materialize is deterministic and its infrastructure runs on a container
