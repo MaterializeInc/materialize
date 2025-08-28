@@ -8,6 +8,8 @@
 # by the Apache License, Version 2.0.
 
 
+import os
+
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.materialized import (
     LEADER_STATUS_HEALTHCHECK,
@@ -70,7 +72,21 @@ class MzStart(Action):
         capabilities: Capabilities,
         additional_system_parameter_defaults: dict[str, str] = {},
     ) -> None:
-        self.additional_system_parameter_defaults = additional_system_parameter_defaults
+        if additional_system_parameter_defaults:
+            self.additional_system_parameter_defaults = (
+                additional_system_parameter_defaults
+            )
+        else:
+            self.additional_system_parameter_defaults = {}
+            system_parameter_default = os.getenv("CI_MZ_SYSTEM_PARAMETER_DEFAULT", "")
+            if system_parameter_default:
+                for val in system_parameter_default.split(";"):
+                    x = val.split("=", maxsplit=1)
+                    assert (
+                        len(x) == 2
+                    ), f"CI_MZ_SYSTEM_PARAMETER_DEFAULT '{val}' should be the format <key>=<val>"
+                    self.additional_system_parameter_defaults[x[0]] = x[1]
+
         super().__init__(capabilities)
 
     def run(self, c: Composition, state: State) -> None:

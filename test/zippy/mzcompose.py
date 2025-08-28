@@ -13,6 +13,7 @@ validation and other events and runs it sequentially. By keeping track of the
 expected state it can verify results for correctness.
 """
 
+import os
 import random
 import re
 import time
@@ -178,14 +179,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     parser.add_argument(
-        "--system-param",
-        type=str,
-        action="append",
-        nargs="*",
-        help="System parameters to set in Materialize, i.e. what you would set with `ALTER SYSTEM SET`",
-    )
-
-    parser.add_argument(
         "--azurite", action="store_true", help="Use Azurite as blob store instead of S3"
     )
 
@@ -215,10 +208,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     random.seed(args.seed)
 
     additional_system_parameter_defaults = {}
-    for val in args.system_param or []:
-        x = val[0].split("=", maxsplit=1)
-        assert len(x) == 2, f"--system-param '{val}' should be the format <key>=<val>"
-        additional_system_parameter_defaults[x[0]] = x[1]
+    system_parameter_default = os.getenv("CI_MZ_SYSTEM_PARAMETER_DEFAULT", "")
+    if system_parameter_default:
+        for val in system_parameter_default.split(";"):
+            x = val.split("=", maxsplit=1)
+            assert (
+                len(x) == 2
+            ), f"CI_MZ_SYSTEM_PARAMETER_DEFAULT '{val}' should be the format <key>=<val>"
+            additional_system_parameter_defaults[x[0]] = x[1]
 
     with c.override(
         Cockroach(
