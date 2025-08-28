@@ -5851,3 +5851,67 @@ def workflow_test_swap_disk_bytes(c: Composition):
                 """
             )
         )
+
+
+def workflow_test_operator_hydration_status_reconciliation(c: Composition) -> None:
+    """
+    Tests that after a compute reconciliation operator hydration status is
+    correctly reported.
+    """
+
+    with c.override(Testdrive(no_reset=True)):
+        c.up("materialized", "clusterd1")
+
+        c.sql(
+            """
+            CREATE CLUSTER compute REPLICAS (
+                replica1 (
+                    STORAGECTL ADDRESSES ['clusterd1:2100'],
+                    STORAGE ADDRESSES ['clusterd1:2103'],
+                    COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                    COMPUTE ADDRESSES ['clusterd1:2102'],
+                    WORKERS 2
+                )
+            );
+
+            SET cluster = compute;
+            CREATE TABLE t (a int);
+            CREATE VIEW v AS SELECT a + 1 AS b FROM t;
+            CREATE INDEX idx ON v (b);
+            CREATE MATERIALIZED VIEW mv AS SELECT * FROM v;
+            """,
+        )
+
+        # Wait for dataflows to hydrate.
+        c.testdrive(
+            dedent(
+                """
+            > SELECT DISTINCT o.name, r.name, hydrated
+              FROM mz_internal.mz_compute_operator_hydration_statuses h
+              JOIN mz_objects o ON (h.object_id = o.id)
+              JOIN mz_cluster_replicas r ON (h.replica_id = r.id)
+              WHERE o.id LIKE 'u%';
+            idx replica1 true
+            mv  replica1 true
+            """
+            )
+        )
+
+        # Restart envd to force a reconciliation on clusterd1.
+        c.kill("materialized")
+        c.up("materialized")
+
+        # Verify that the operators still show up as hydrated.
+        c.testdrive(
+            dedent(
+                """
+            > SELECT DISTINCT o.name, r.name, hydrated
+              FROM mz_internal.mz_compute_operator_hydration_statuses h
+              JOIN mz_objects o ON (h.object_id = o.id)
+              JOIN mz_cluster_replicas r ON (h.replica_id = r.id)
+              WHERE o.id LIKE 'u%';
+            idx replica1 true
+            mv  replica1 true
+            """
+            )
+        )
