@@ -1202,7 +1202,6 @@ mod test {
                         bindings.update_at(Partitioned::new_singleton(0, ts), ts, Diff::ONE);
                         bindings.advance_to(ts + 1);
                         bindings.flush();
-                        step(worker);
                     }
                 });
                 println!("info = {info1:?}");
