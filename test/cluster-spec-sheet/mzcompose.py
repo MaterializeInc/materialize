@@ -33,6 +33,7 @@ from materialize.mzcompose.composition import (
     Composition,
     WorkflowArgumentParser,
 )
+from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mz import Mz
 from materialize.ui import UIError
 
@@ -47,14 +48,14 @@ SERVICES = [
         environment=ENVIRONMENT,
         app_password=APP_PASSWORD or "",
     ),
+    Materialized(
+        propagate_crashes=True,
+        additional_system_parameter_defaults={
+            "memory_limiter_interval": "0s",
+            "max_credit_consumption_rate": "1024",
+        },
+    ),
 ]
-
-
-def replica_size_for_scale(scale: int) -> str:
-    """
-    Returns the replica size for a given scale.
-    """
-    return f"{scale}00cc-swap"
 
 
 class ConnectionHandler:
@@ -306,7 +307,7 @@ class TpchScenarioMV(Scenario):
             "DROP SOURCE IF EXISTS lgtpch CASCADE;",
             "DROP CLUSTER IF EXISTS lg CASCADE;",
             f"CREATE CLUSTER lg SIZE '{self.replica_size}';",
-            f"CREATE SOURCE lgtpch IN CLUSTER lg FROM LOAD GENERATOR TPCH (SCALE FACTOR {10*self.scale}, TICK INTERVAL 1) FOR ALL TABLES;",
+            f"CREATE SOURCE lgtpch IN CLUSTER lg FROM LOAD GENERATOR TPCH (SCALE FACTOR {self.scale}, TICK INTERVAL 1) FOR ALL TABLES;",
             "SELECT COUNT(*) > 0 FROM region;",
         ]
 
@@ -843,6 +844,100 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     workflow_bench(c, parser)
 
 
+class BenchTarget:
+    @abstractmethod
+    def initialize(self) -> None: ...
+    @abstractmethod
+    def new_connection(self) -> psycopg.Connection: ...
+    @abstractmethod
+    def cleanup(self) -> None: ...
+    @abstractmethod
+    def replica_size_for_scale(self, scale: int) -> str:
+        """
+        Returns the replica size for a given scale.
+        """
+        ...
+
+    def max_scale(self) -> int | None:
+        """
+        Returns the maximum scale for the target, or None if there is no limit.
+        """
+        return None
+
+
+class CloudTarget(BenchTarget):
+    def __init__(self, c: Composition) -> None:
+        self.c = c
+        self.new_app_password: str | None = None
+
+    def initialize(self) -> None:
+        print("Enabling region using Mz ...")
+        self.c.run("mz", "region", "enable", rm=True)
+
+        time.sleep(10)
+
+        assert "materialize.cloud" in self.c.cloud_hostname()
+        wait_for_cloud(self.c)
+
+        # Create new app password.
+        new_app_password_name = "Materialize CLI (mz) - Cluster Spec Sheet"
+        output = self.c.run(
+            "mz",
+            "app-password",
+            "create",
+            new_app_password_name,
+            capture=True,
+            rm=True,
+        )
+        self.new_app_password = output.stdout.strip()
+        assert "mzp_" in self.new_app_password
+
+    def new_connection(self) -> psycopg.Connection:
+        assert self.new_app_password is not None
+        conn = psycopg.connect(
+            host=self.c.cloud_hostname(),
+            port=6875,
+            user=USERNAME,
+            password=self.new_app_password,
+            dbname="materialize",
+            sslmode="require",
+        )
+        conn.autocommit = True
+        return conn
+
+    def cleanup(self) -> None:
+        disable_region(self.c)
+
+    def replica_size_for_scale(self, scale: int) -> str:
+        """
+        Returns the replica size for a given scale.
+        """
+        return f"{scale}00cc-swap"
+
+
+class DockerTarget(BenchTarget):
+    def __init__(self, c: Composition) -> None:
+        self.c = c
+
+    def initialize(self) -> None:
+        print("Starting local Materialize instance ...")
+        self.c.up("materialized")
+
+    def new_connection(self) -> psycopg.Connection:
+        return self.c.sql_connection()
+
+    def cleanup(self) -> None:
+        print("Stopping local Materialize instance ...")
+        self.c.stop("materialized")
+
+    def replica_size_for_scale(self, scale: int) -> str:
+        # 100cc == 2 workers
+        return f"scale=1,workers={2*scale}"
+
+    def max_scale(self) -> int | None:
+        return 16
+
+
 def workflow_bench(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Deploy the current source to the cloud and run tests."""
 
@@ -863,48 +958,37 @@ def workflow_bench(c: Composition, parser: WorkflowArgumentParser) -> None:
         action=argparse.BooleanOptionalAction,
         help="Analyze results after completing test.",
     )
+    parser.add_argument(
+        "--target",
+        default="cloud",
+        choices=["cloud", "docker"],
+        help="Target to deploy to (default: cloud).",
+    )
+    parser.add_argument(
+        "--max-scale", type=int, default=32, help="Maximum scale to test."
+    )
 
     args = parser.parse_args()
 
+    if args.target == "cloud":
+        target: BenchTarget = CloudTarget(c)
+    elif args.target == "docker":
+        target = DockerTarget(c)
+    else:
+        raise ValueError(f"Unknown target: {args.target}")
+
+    max_scale = args.max_scale
+    if target.max_scale() is not None:
+        max_scale = min(max_scale, target.max_scale())
+
+    target.initialize()
+
     if args.cleanup:
-        disable_region(c)
+        target.cleanup()
 
     test_failed = True
     try:
-        print("Enabling region using Mz ...")
-        c.run("mz", "region", "enable", rm=True)
-
-        time.sleep(10)
-
-        assert "materialize.cloud" in c.cloud_hostname()
-        wait_for_cloud(c)
-
-        # Create new app password.
-        new_app_password_name = "Materialize CLI (mz) - Cluster Spec Sheet"
-        output = c.run(
-            "mz",
-            "app-password",
-            "create",
-            new_app_password_name,
-            capture=True,
-            rm=True,
-        )
-        new_app_password = output.stdout.strip()
-        assert "mzp_" in new_app_password
-
-        def new_connection() -> psycopg.Connection:
-            conn = psycopg.connect(
-                host=c.cloud_hostname(),
-                port=6875,
-                user=USERNAME,
-                password=new_app_password,
-                dbname="materialize",
-                sslmode="require",
-            )
-            conn.autocommit = True
-            return conn
-
-        conn = ConnectionHandler(new_connection)
+        conn = ConnectionHandler(target.new_connection)
 
         with open(args.record, "w") as f:
             f.write(
@@ -912,33 +996,41 @@ def workflow_bench(c: Composition, parser: WorkflowArgumentParser) -> None:
             )
             print("+++ Running TPC-H Index strong scaling")
             run_scenario_strong(
-                scenario=TpchScenario(8, replica_size_for_scale(1)),
+                scenario=TpchScenario(8, target.replica_size_for_scale(1)),
                 results_file=f,
                 connection=conn,
+                target=target,
+                max_scale=max_scale,
             )
             print("+++ Running TPC-H Materialized view strong scaling")
             run_scenario_strong(
-                scenario=TpchScenarioMV(8, replica_size_for_scale(1)),
+                scenario=TpchScenarioMV(8, target.replica_size_for_scale(1)),
                 results_file=f,
                 connection=conn,
+                target=target,
+                max_scale=max_scale,
             )
             print("+++ Running Auction strong scaling")
             run_scenario_strong(
-                scenario=AuctionScenario(4, replica_size_for_scale(1)),
+                scenario=AuctionScenario(4, target.replica_size_for_scale(1)),
                 results_file=f,
                 connection=conn,
+                target=target,
+                max_scale=max_scale,
             )
             print("+++ Running Auction weak scaling")
             run_scenario_weak(
                 scenario=AuctionScenario(4, "none"),
                 results_file=f,
                 connection=conn,
+                target=target,
+                max_scale=max_scale,
             )
         test_failed = False
     finally:
         # Clean up
         if args.cleanup:
-            disable_region(c)
+            target.cleanup()
 
     if buildkite.is_in_buildkite():
         buildkite.upload_artifact(args.record, cwd=MZ_ROOT, quiet=True)
@@ -953,6 +1045,8 @@ def run_scenario_strong(
     scenario: Scenario,
     results_file: Any,
     connection: ConnectionHandler,
+    target: BenchTarget,
+    max_scale: int,
 ) -> None:
     """
     Run a strong scaling scenario, where we increase the cluster size
@@ -981,9 +1075,10 @@ def run_scenario_strong(
     for name in scenario.materialize_views():
         runner.run_query(f"SELECT COUNT(*) > 0 FROM {name};")
 
-    for replica_size in [
-        replica_size_for_scale(scale) for scale in [1, 2, 4, 8, 16, 32]
-    ]:
+    for replica_scale in [1, 2, 4, 8, 16, 32]:
+        if replica_scale > max_scale:
+            break
+        replica_size = target.replica_size_for_scale(replica_scale)
         print(
             f"+++ Running strong scenario {scenario.name()} with replica size {replica_size}"
         )
@@ -1002,6 +1097,8 @@ def run_scenario_weak(
     scenario: Scenario,
     results_file: Any,
     connection: ConnectionHandler,
+    target: BenchTarget,
+    max_scale: int,
 ) -> None:
     """
     Run a weak scaling scenario, where we increase both the cluster size
@@ -1016,7 +1113,9 @@ def run_scenario_weak(
     initial_scale = scenario.scale
 
     for replica_scale in [1, 2, 4, 8, 16, 32]:
-        replica_size = replica_size_for_scale(replica_scale)
+        if replica_scale > max_scale:
+            break
+        replica_size = target.replica_size_for_scale(replica_scale)
         print(
             f"+++ Running weak scenario {scenario.name()} with replica size {replica_size}"
         )
