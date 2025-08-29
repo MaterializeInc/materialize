@@ -10,6 +10,7 @@
 //! Logic for  processing client [`Command`]s. Each [`Command`] is initiated by a
 //! client via some external Materialize API (ex: HTTP and psql).
 
+use base64::prelude::*;
 use differential_dataflow::lattice::Lattice;
 use mz_adapter_types::dyncfgs::ALLOW_USER_SESSIONS;
 use mz_auth::password::Password;
@@ -59,7 +60,10 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::{Instrument, debug_span, info, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
-use crate::command::{AuthResponse, CatalogSnapshot, Command, ExecuteResponse, StartupResponse};
+use crate::command::{
+    AuthResponse, CatalogSnapshot, Command, ExecuteResponse, SASLChallengeResponse,
+    SASLVerifyProofResponse, StartupResponse,
+};
 use crate::coord::appends::PendingWriteTxn;
 use crate::coord::{
     ConnMeta, Coordinator, DeferredPlanStatement, Message, PendingTxn, PlanStatement, PlanValidity,
@@ -117,6 +121,25 @@ impl Coordinator {
                     password,
                 } => {
                     self.handle_authenticate_password(tx, role_name, password)
+                        .await;
+                }
+
+                Command::AuthenticateGetSASLChallenge {
+                    tx,
+                    role_name,
+                    nonce,
+                } => {
+                    self.handle_generate_sasl_challenge(tx, role_name, nonce)
+                        .await;
+                }
+
+                Command::AuthenticateVerifySASLProof {
+                    tx,
+                    role_name,
+                    proof,
+                    auth_message: nonce,
+                } => {
+                    self.handle_authenticate_verify_sasl_proof(tx, role_name, proof, nonce)
                         .await;
                 }
 
@@ -244,6 +267,81 @@ impl Coordinator {
         }
         .instrument(debug_span!("handle_command"))
         .boxed_local()
+    }
+
+    async fn handle_authenticate_verify_sasl_proof(
+        &mut self,
+        tx: oneshot::Sender<Result<SASLVerifyProofResponse, AdapterError>>,
+        role_name: String,
+        proof: String,
+        nonce: String,
+    ) {
+        if let Some(role) = self.catalog().try_get_role_by_name(role_name.as_str()) {
+            info!("role found: {:?}", role);
+            if !role.attributes.login.unwrap_or(false) {
+                info!("role is not allowed to login");
+                // The user is not allowed to login.
+                let _ = tx.send(Err(AdapterError::AuthenticationError));
+                return;
+            }
+            if let Some(auth) = self.catalog().try_get_role_auth_by_id(&role.id) {
+                if let Some(hash) = &auth.password_hash {
+                    info!("role auth found: {:?}", auth);
+                    info!("hash={:?},proof={:?},nonce={:?}", hash, proof, nonce);
+                    match mz_auth::hash::sasl_verify(&hash, &proof, &nonce) {
+                        Ok(verifier) => {
+                            let _ = tx.send(Ok(SASLVerifyProofResponse {
+                                verifier,
+                                auth_resp: AuthResponse {
+                                    role_id: role.id,
+                                    superuser: role.attributes.superuser.unwrap_or(false),
+                                },
+                            }));
+                        }
+                        Err(_) => {
+                            info!("failed to verify proof");
+                            let _ = tx.send(Err(AdapterError::AuthenticationError));
+                        }
+                    }
+                    return;
+                }
+            }
+        }
+        let _ = tx.send(Err(AdapterError::AuthenticationError));
+    }
+
+    #[mz_ore::instrument(level = "debug")]
+    async fn handle_generate_sasl_challenge(
+        &mut self,
+        tx: oneshot::Sender<Result<SASLChallengeResponse, AdapterError>>,
+        role_name: String,
+        client_nonce: String,
+    ) {
+        if let Some(role) = self.catalog().try_get_role_by_name(role_name.as_str()) {
+            if !role.attributes.login.unwrap_or(false) {
+                // The user is not allowed to login.
+                let _ = tx.send(Err(AdapterError::AuthenticationError));
+                return;
+            }
+            if let Some(auth) = self.catalog().try_get_role_auth_by_id(&role.id) {
+                if let Some(hash) = &auth.password_hash {
+                    match mz_auth::hash::scram256_parse_opts(&hash) {
+                        Ok(opts) => {
+                            let _ = tx.send(Ok(SASLChallengeResponse {
+                                iteration_count: opts.iterations.get() as usize,
+                                salt: BASE64_STANDARD.encode(opts.salt),
+                                nonce: mz_auth::hash::generate_nonce(&client_nonce),
+                            }));
+                        }
+                        Err(_) => {
+                            let _ = tx.send(Err(AdapterError::AuthenticationError));
+                        }
+                    }
+                    return;
+                }
+            }
+        }
+        let _ = tx.send(Err(AdapterError::AuthenticationError));
     }
 
     #[mz_ore::instrument(level = "debug")]

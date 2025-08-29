@@ -79,6 +79,17 @@ pub fn hash_password(password: &Password) -> Result<PasswordHash, HashError> {
     })
 }
 
+pub fn generate_nonce(client_nonce: &str) -> String {
+    let mut nonce = vec![0u8; client_nonce.len()];
+    openssl::rand::rand_bytes(&mut nonce).unwrap();
+    let nonce = BASE64_STANDARD.encode(&nonce);
+    let new_nonce = format!("{}{}", client_nonce, nonce);
+    println!("client_nonce: {}", client_nonce);
+    println!("nonce: {}", nonce);
+    println!("Generated nonce: {}", new_nonce);
+    new_nonce
+}
+
 /// Hashes a password using PBKDF2 with SHA256
 /// and the given options.
 pub fn hash_password_with_opts(
@@ -114,8 +125,84 @@ pub fn scram256_verify(password: &Password, hashed_password: &str) -> Result<(),
     }
 }
 
+pub fn sasl_verify(
+    hashed_password: &str,
+    proof: &str,
+    auth_message: &str,
+) -> Result<String, VerifyError> {
+    // Parse SCRAM hash: SCRAM-SHA-256$<iterations>:<salt>$<client_key>:<server_key>
+    let parts: Vec<&str> = hashed_password.split('$').collect();
+    if parts.len() != 3 {
+        return Err(VerifyError::MalformedHash);
+    }
+    let auth_info = parts[1].split(':').collect::<Vec<&str>>();
+    if auth_info.len() != 2 {
+        return Err(VerifyError::MalformedHash);
+    }
+    let auth_value = parts[2].split(':').collect::<Vec<&str>>();
+    if auth_value.len() != 2 {
+        return Err(VerifyError::MalformedHash);
+    }
+
+    let client_key = BASE64_STANDARD
+        .decode(auth_value[0])
+        .map_err(|_| VerifyError::MalformedHash)?;
+    let server_key = BASE64_STANDARD
+        .decode(auth_value[1])
+        .map_err(|_| VerifyError::MalformedHash)?;
+
+    // Compute stored key
+    let stored_key = openssl::sha::sha256(&client_key);
+
+    // Compute client signature: HMAC(stored_key, auth_message)
+    let signing_key = openssl::pkey::PKey::hmac(&stored_key)
+        .map_err(|e| VerifyError::Hash(HashError::Openssl(e)))?;
+    let mut signer =
+        openssl::sign::Signer::new(openssl::hash::MessageDigest::sha256(), &signing_key)
+            .map_err(|e| VerifyError::Hash(HashError::Openssl(e)))?;
+    signer
+        .update(auth_message.as_bytes())
+        .map_err(|e| VerifyError::Hash(HashError::Openssl(e)))?;
+    let client_signature = signer
+        .sign_to_vec()
+        .map_err(|e| VerifyError::Hash(HashError::Openssl(e)))?;
+
+    // Compute expected client proof: client_key XOR client_signature
+    let expected_client_proof: Vec<u8> = client_key
+        .iter()
+        .zip(client_signature.iter())
+        .map(|(a, b)| a ^ b)
+        .collect();
+
+    // Decode provided proof
+    let provided_client_proof = BASE64_STANDARD
+        .decode(proof)
+        .map_err(|_| VerifyError::InvalidPassword)?;
+
+    // Compare
+    //FIXME: constant time comparison
+    if expected_client_proof == provided_client_proof {
+        // Compute server verifier: HMAC(server_key, auth_message)
+        let signing_key = openssl::pkey::PKey::hmac(&server_key)
+            .map_err(|e| VerifyError::Hash(HashError::Openssl(e)))?;
+        let mut signer =
+            openssl::sign::Signer::new(openssl::hash::MessageDigest::sha256(), &signing_key)
+                .map_err(|e| VerifyError::Hash(HashError::Openssl(e)))?;
+        signer
+            .update(auth_message.as_bytes())
+            .map_err(|e| VerifyError::Hash(HashError::Openssl(e)))?;
+        let server_signature = signer
+            .sign_to_vec()
+            .map_err(|e| VerifyError::Hash(HashError::Openssl(e)))?;
+        let verifier = BASE64_STANDARD.encode(&server_signature);
+        Ok(verifier)
+    } else {
+        Err(VerifyError::InvalidPassword)
+    }
+}
+
 /// Parses a SCRAM-SHA-256 hash and returns the options used to create it.
-fn scram256_parse_opts(hashed_password: &str) -> Result<HashOpts, VerifyError> {
+pub fn scram256_parse_opts(hashed_password: &str) -> Result<HashOpts, VerifyError> {
     let parts: Vec<&str> = hashed_password.split('$').collect();
     if parts.len() != 3 {
         return Err(VerifyError::MalformedHash);

@@ -19,6 +19,8 @@ pub enum AuthenticatorKind {
     Frontegg,
     /// Authenticate users using internally stored password hashes.
     Password,
+    /// Authenticate users using SASL.
+    Sasl,
     /// Do not authenticate users. Trust they are who they say they are without verification.
     #[default]
     None,
