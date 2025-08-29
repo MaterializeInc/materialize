@@ -49,8 +49,7 @@ site.Data.self_managed.latest_versions.environmentd_version }}
    Verify the operator upgrade by checking its events:
 
    ```bash
-   MZ_OPERATOR=$(kubectl -n materialize get pods --no-headers | grep operator  | awk '{print $1}')
-   kubectl -n materialize describe pod/$MZ_OPERATOR
+   kubectl -n materialize describe pod -l app.kubernetes.io/name=materialize-operator
    ```
 
 1. Create a new `upgrade-materialize.yaml` file with the following content:
@@ -90,8 +89,7 @@ site.Data.self_managed.latest_versions.environmentd_version }}
    Verify upgrade by checking the `balancerd` events:
 
    ```bash
-   MZ_BALANCERD=$(kubectl -n materialize-environment get pods --no-headers | grep balancerd  | awk '{print $1}')
-   kubectl -n materialize-environment describe pod/$MZ_BALANCERD
+   kubectl -n materialize-environment describe pod -l app=balancerd
    ```
 
    The **Events** section should list that the new version of the `balancerd`
@@ -100,8 +98,7 @@ site.Data.self_managed.latest_versions.environmentd_version }}
    Verify the upgrade by checking the `environmentd` events:
 
    ```bash
-   MZ_ENVIRONMENTD=$(kubectl -n materialize-environment get pods --no-headers | grep environmentd  | awk '{print $1}')
-   kubectl -n materialize-environment describe pod/$MZ_ENVIRONMENTD
+   kubectl -n materialize-environment describe pod -l app=environmentd
    ```
 
    The **Events** section should list that the new version of the `environmentd`
