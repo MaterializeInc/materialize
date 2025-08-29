@@ -81,7 +81,6 @@ class Benchmark:
         )
         start_time = time.time()
 
-        # Run the shared() section once for both Mzs under measurement
         self.run_shared(scenario)
 
         # Run the init() section once for each Mz
@@ -110,7 +109,7 @@ class Benchmark:
 
     def run_shared(self, scenario: Scenario) -> None:
         shared = scenario.shared()
-        if self._mz_id == 0 and shared is not None:
+        if shared is not None:
             print(
                 f"Running the shared() section for scenario {scenario.name()} with {self._mz_version} ..."
             )
