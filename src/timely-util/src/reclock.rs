@@ -365,17 +365,17 @@ where
                 let mut min_time = IntoTime::minimum();
                 min_time.advance_by(remap_since.borrow());
                 let mut prev_cur_time = None;
-                for cur_time in [min_time]
-                    .iter()
+                let mut interesting_times = std::iter::once(&min_time)
                     .chain(remap_trace.iter().map(|(_, t, _)| t))
                     .filter(|&v| {
-                        if prev_cur_time.is_some_and(|pv| pv == v) {
-                            false
-                        } else {
-                            prev_cur_time = Some(v);
-                            true
-                        }
-                    })
+                        let prev = prev_cur_time.replace(v);
+                        prev != prev_cur_time
+                    });
+                let mut frontier_reclocked = false;
+                while !(new_source_updates.is_empty()
+                    && deferred_source_updates.is_empty()
+                    && frontier_reclocked)
+                    && let Some(cur_time) = interesting_times.next()
                 {
                     // 4.0. Load updates of `cur_time` from the trace into `cur_binding` to
                     //      construct the `[FromTime]` frontier that `cur_time` maps to.
@@ -408,13 +408,19 @@ where
                     // 4.3. Reclock `source_frontier`
                     //      If any FromTime in source frontier could possibly be reclocked to this
                     //      binding then we must maintain our capability to emit data at that time
-                    //      and not compact past it.
-                    if source_frontier
-                        .frontier()
-                        .iter()
-                        .any(|t| !cur_binding.less_equal(t))
+                    //      and not compact past it. Since we iterate over this loop in time order
+                    //      and IntoTime is a total order we only need to perform this step once.
+                    //      Once a `cur_time` is inserted into `reclocked_source_frontier` no more
+                    //      changes can be made to the frontier by inserting times later in the
+                    //      loop.
+                    if !frontier_reclocked
+                        && source_frontier
+                            .frontier()
+                            .iter()
+                            .any(|t| !cur_binding.less_equal(t))
                     {
                         reclocked_source_frontier.insert(cur_time.clone());
+                        frontier_reclocked = true;
                     }
                 }
 
