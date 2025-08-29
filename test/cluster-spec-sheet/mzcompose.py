@@ -1012,7 +1012,7 @@ def workflow_bench(c: Composition, parser: WorkflowArgumentParser) -> None:
             )
             print("+++ Running Auction strong scaling")
             run_scenario_strong(
-                scenario=AuctionScenario(4, target.replica_size_for_scale(1)),
+                scenario=AuctionScenario(3, target.replica_size_for_scale(1)),
                 results_file=f,
                 connection=conn,
                 target=target,
@@ -1020,7 +1020,7 @@ def workflow_bench(c: Composition, parser: WorkflowArgumentParser) -> None:
             )
             print("+++ Running Auction weak scaling")
             run_scenario_weak(
-                scenario=AuctionScenario(4, "none"),
+                scenario=AuctionScenario(3, "none"),
                 results_file=f,
                 connection=conn,
                 target=target,
