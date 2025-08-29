@@ -22,9 +22,9 @@ bench = false
 # NB: This is meant to be a strong, independent abstraction boundary. Please
 # don't leak in dependencies on other Materialize packages.
 [dependencies]
-anyhow = "1.0.98"
+anyhow = "1.0.99"
 arrow = { version = "55.2.0", default-features = false }
-async-trait = "0.1.88"
+async-trait = "0.1.89"
 async-stream = "0.3.6"
 aws-config = { version = "1.2.0", default-features = false }
 aws-credential-types = { version = "1.2.4", features = ["hardcoded-credentials"] }
