@@ -60,7 +60,7 @@ tokio = { version = "1.44.1", features = [
     "time",
 ], optional = true }
 tokio-openssl = { version = "0.6.5", optional = true }
-thiserror = "2.0.12"
+thiserror = "2.0.16"
 tracing-capture = { version = "0.1.0", optional = true }
 # TODO(guswynn): determine, when, if ever, we can remove `tracing-log`
 # The `tracing-log` feature here is load-bearing: While our busiest-logging dependency (`rdkafka`) is now hooked-up
