@@ -14,5 +14,6 @@ use mz_frontegg_auth::Authenticator as FronteggAuthenticator;
 pub enum Authenticator {
     Frontegg(FronteggAuthenticator),
     Password(AdapterClient),
+    Sasl(AdapterClient),
     None,
 }

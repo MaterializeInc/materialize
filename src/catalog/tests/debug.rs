@@ -15,8 +15,8 @@ use mz_catalog::durable::initialize::USER_VERSION_KEY;
 use mz_catalog::durable::objects::serialization::proto;
 use mz_catalog::durable::{
     BUILTIN_MIGRATION_SHARD_KEY, CATALOG_VERSION, CatalogError, DurableCatalogError,
-    DurableCatalogState, EXPRESSION_CACHE_SHARD_KEY, Epoch, FenceError, TestCatalogStateBuilder,
-    test_bootstrap_args,
+    DurableCatalogState, EXPRESSION_CACHE_SHARD_KEY, Epoch, FenceError,
+    MOCK_AUTHENTICATION_NONCE_KEY, TestCatalogStateBuilder, test_bootstrap_args,
 };
 use mz_ore::now::{NOW_ZERO, SYSTEM_TIME};
 use mz_ore::{assert_none, assert_ok};
@@ -75,6 +75,12 @@ impl StableTrace<'_> {
     ) -> bool {
         key.name == EXPRESSION_CACHE_SHARD_KEY
     }
+
+    fn is_mock_authentication_nonce(
+        ((key, _), _, _): &((proto::SettingKey, proto::SettingValue), Timestamp, Diff),
+    ) -> bool {
+        key.name == MOCK_AUTHENTICATION_NONCE_KEY
+    }
 }
 
 impl Debug for StableTrace<'_> {
@@ -118,6 +124,7 @@ impl Debug for StableTrace<'_> {
                 .filter(|value| {
                     !Self::is_builtin_migration_shard(value)
                         && !Self::is_expression_cache_shard(value)
+                        && !Self::is_mock_authentication_nonce(value)
                 })
                 .cloned()
                 .collect(),
@@ -238,7 +245,7 @@ async fn test_debug(state_builder: TestCatalogStateBuilder) {
 
     // Check adding a new value via `edit`.
     let settings = unconsolidated_trace.settings.values;
-    assert_eq!(settings.len(), 3);
+    assert_eq!(settings.len(), 4);
 
     let prev = debug_state
         .edit::<SettingCollection>(
@@ -256,7 +263,7 @@ async fn test_debug(state_builder: TestCatalogStateBuilder) {
     let unconsolidated_trace = openable_state_reader.trace_unconsolidated().await.unwrap();
     let mut settings = unconsolidated_trace.settings.values;
     differential_dataflow::consolidation::consolidate_updates(&mut settings);
-    assert_eq!(settings.len(), 4);
+    assert_eq!(settings.len(), 5);
     let ((key, value), _ts, diff) = settings
         .into_iter()
         .find(|((key, _), _, _)| key.name == "debug-key")
@@ -297,7 +304,7 @@ async fn test_debug(state_builder: TestCatalogStateBuilder) {
     let unconsolidated_trace = openable_state_reader.trace_unconsolidated().await.unwrap();
     let mut settings = unconsolidated_trace.settings.values;
     differential_dataflow::consolidation::consolidate_updates(&mut settings);
-    assert_eq!(settings.len(), 4);
+    assert_eq!(settings.len(), 5);
     let ((key, value), _ts, diff) = settings
         .into_iter()
         .find(|((key, _), _, _)| key.name == "debug-key")
@@ -327,11 +334,11 @@ async fn test_debug(state_builder: TestCatalogStateBuilder) {
     let unconsolidated_trace = openable_state_reader.trace_unconsolidated().await.unwrap();
     let mut settings = unconsolidated_trace.settings.values;
     differential_dataflow::consolidation::consolidate_updates(&mut settings);
-    assert_eq!(settings.len(), 3);
+    assert_eq!(settings.len(), 4);
 
     let consolidated_trace = openable_state_reader.trace_consolidated().await.unwrap();
     let settings = consolidated_trace.settings.values;
-    assert_eq!(settings.len(), 3);
+    assert_eq!(settings.len(), 4);
 }
 
 #[mz_ore::test(tokio::test)]

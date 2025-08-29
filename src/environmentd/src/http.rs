@@ -1002,6 +1002,14 @@ async fn auth(
                 });
             }
         },
+        Authenticator::Sasl(_) => {
+            // We shouldn't ever end up here as the configuration is validated at startup.
+            // If we do, it's a server misconfiguration.
+            // Just in case, we return a 401 rather than panic.
+            return Err(AuthError::MissingHttpAuthentication {
+                include_www_authenticate_header,
+            });
+        }
         Authenticator::None => {
             // If no authentication, use whatever is in the HTTP auth
             // header (without checking the password), or fall back to the

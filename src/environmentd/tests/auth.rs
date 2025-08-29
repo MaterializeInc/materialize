@@ -3161,6 +3161,107 @@ async fn test_password_auth() {
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+async fn test_sasl_auth() {
+    let metrics_registry = MetricsRegistry::new();
+
+    let server = test_util::TestHarness::default()
+        .with_system_parameter_default(
+            "log_filter".to_string(),
+            "mz_frontegg_auth=debug,info".to_string(),
+        )
+        .with_system_parameter_default("enable_password_auth".to_string(), "true".to_string())
+        .with_sasl_scram_auth(Password("mz_system_password".to_owned()))
+        .with_metrics_registry(metrics_registry)
+        .start()
+        .await;
+
+    let mz_system_client = server
+        .connect()
+        .no_tls()
+        .user("mz_system")
+        .password("mz_system_password")
+        .await
+        .unwrap();
+    mz_system_client
+        .execute("CREATE ROLE foo WITH LOGIN PASSWORD 'bar'", &[])
+        .await
+        .unwrap();
+
+    let external_client = server
+        .connect()
+        .no_tls()
+        .user("foo")
+        .password("bar")
+        .await
+        .unwrap();
+
+    assert_eq!(
+        external_client
+            .query_one("SELECT current_user", &[])
+            .await
+            .unwrap()
+            .get::<_, String>(0),
+        "foo"
+    );
+
+    assert_eq!(
+        external_client
+            .query_one("SELECT mz_is_superuser()", &[])
+            .await
+            .unwrap()
+            .get::<_, bool>(0),
+        false
+    );
+}
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+async fn test_sasl_auth_failure() {
+    let metrics_registry = MetricsRegistry::new();
+
+    let server = test_util::TestHarness::default()
+        .with_system_parameter_default(
+            "log_filter".to_string(),
+            "mz_frontegg_auth=debug,info".to_string(),
+        )
+        .with_system_parameter_default("enable_password_auth".to_string(), "true".to_string())
+        .with_sasl_scram_auth(Password("mz_system_password".to_owned()))
+        .with_metrics_registry(metrics_registry)
+        .start()
+        .await;
+
+    let mz_system_client = server
+        .connect()
+        .no_tls()
+        .user("mz_system")
+        .password("mz_system_password")
+        .await
+        .unwrap();
+    mz_system_client
+        .execute("CREATE ROLE foo WITH LOGIN PASSWORD 'bar'", &[])
+        .await
+        .unwrap();
+
+    let external_client = server
+        .connect()
+        .no_tls()
+        .user("foo")
+        .password("wrong_password")
+        .await;
+    assert_err!(external_client);
+
+    let external_client = server
+        .connect()
+        .no_tls()
+        .user("no_user")
+        .password("wrong_password")
+        .await;
+
+    assert_err!(external_client);
+}
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
 async fn test_password_auth_superuser() {
     let metrics_registry = MetricsRegistry::new();
 

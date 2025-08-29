@@ -238,15 +238,20 @@ pub enum AdapterError {
     /// read-only mode.
     ReadOnly,
     AlterClusterTimeout,
-    /// Authentication error. This is specifically for self-managed auth
-    /// and can generally encompass things like "incorrect password" or
-    /// what have you. We intentionally limit the fidelity of the error
-    /// we return to avoid allowing an attacker to, for example,
-    /// enumerate users by spraying login attempts and differentiating
-    /// between a "no such user" and "incorrect password" error.
-    AuthenticationError,
-    /// An ALTER CLUSTER was attempted while a graceful cluster reconfiguration was in progress.
     AlterClusterWhilePendingReplicas,
+    AuthenticationError(AuthenticationError),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum AuthenticationError {
+    #[error("invalid credentials")]
+    InvalidCredentials,
+    #[error("role is not allowed to login")]
+    NonLogin,
+    #[error("role does not exist")]
+    RoleNotFound,
+    #[error("password is required")]
+    PasswordRequired,
 }
 
 impl AdapterError {
@@ -588,8 +593,11 @@ impl AdapterError {
             // transactions.
             AdapterError::ReadOnly => SqlState::READ_ONLY_SQL_TRANSACTION,
             AdapterError::AlterClusterTimeout => SqlState::QUERY_CANCELED,
-            AdapterError::AuthenticationError => SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
             AdapterError::AlterClusterWhilePendingReplicas => SqlState::OBJECT_IN_USE,
+            AdapterError::AuthenticationError(AuthenticationError::InvalidCredentials) => {
+                SqlState::INVALID_PASSWORD
+            }
+            AdapterError::AuthenticationError(_) => SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
         }
     }
 
@@ -824,8 +832,8 @@ impl fmt::Display for AdapterError {
             AdapterError::AlterClusterTimeout => {
                 write!(f, "canceling statement, provided timeout lapsed")
             }
-            AdapterError::AuthenticationError => {
-                write!(f, "authentication error")
+            AdapterError::AuthenticationError(e) => {
+                write!(f, "authentication error {e}")
             }
             AdapterError::UnavailableFeature { feature, docs } => {
                 write!(f, "{} is not supported in this environment.", feature)?;

@@ -14,6 +14,7 @@ use std::fmt::Display;
 use std::num::NonZeroU32;
 
 use base64::prelude::*;
+use itertools::Itertools;
 
 use crate::password::Password;
 
@@ -27,6 +28,7 @@ const DEFAULT_SALT_SIZE: usize = 32;
 const SHA256_OUTPUT_LEN: usize = 32;
 
 /// The options for hashing a password
+#[derive(Debug, PartialEq)]
 pub struct HashOpts {
     /// The number of iterations to use for PBKDF2
     pub iterations: NonZeroU32,
@@ -58,6 +60,14 @@ pub enum HashError {
     Openssl(openssl::error::ErrorStack),
 }
 
+impl Display for HashError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            HashError::Openssl(e) => write!(f, "OpenSSL error: {}", e),
+        }
+    }
+}
+
 /// Hashes a password using PBKDF2 with SHA256
 /// and a random salt.
 pub fn hash_password(password: &Password) -> Result<PasswordHash, HashError> {
@@ -77,6 +87,14 @@ pub fn hash_password(password: &Password) -> Result<PasswordHash, HashError> {
         iterations: DEFAULT_ITERATIONS,
         hash,
     })
+}
+
+pub fn generate_nonce(client_nonce: &str) -> Result<String, HashError> {
+    let mut nonce = [0u8; 24];
+    openssl::rand::rand_bytes(&mut nonce).map_err(HashError::Openssl)?;
+    let nonce = BASE64_STANDARD.encode(&nonce);
+    let new_nonce = format!("{}{}", client_nonce, nonce);
+    Ok(new_nonce)
 }
 
 /// Hashes a password using PBKDF2 with SHA256
@@ -102,20 +120,111 @@ pub fn scram256_hash(password: &Password) -> Result<String, HashError> {
     Ok(scram256_hash_inner(hashed_password).to_string())
 }
 
+fn constant_time_compare(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    openssl::memcmp::eq(a, b)
+}
+
 /// Verifies a password against a SCRAM-SHA-256 hash.
 pub fn scram256_verify(password: &Password, hashed_password: &str) -> Result<(), VerifyError> {
     let opts = scram256_parse_opts(hashed_password)?;
     let hashed = hash_password_with_opts(&opts, password).map_err(VerifyError::Hash)?;
     let scram = scram256_hash_inner(hashed);
-    if *hashed_password == scram.to_string() {
+    if constant_time_compare(hashed_password.as_bytes(), scram.to_string().as_bytes()) {
         Ok(())
     } else {
         Err(VerifyError::InvalidPassword)
     }
 }
 
+pub fn sasl_verify(
+    hashed_password: &str,
+    proof: &str,
+    auth_message: &str,
+) -> Result<String, VerifyError> {
+    // Parse SCRAM hash: SCRAM-SHA-256$<iterations>:<salt>$<client_key>:<server_key>
+    let parts: Vec<&str> = hashed_password.split('$').collect();
+    if parts.len() != 3 {
+        return Err(VerifyError::MalformedHash);
+    }
+    let auth_info = parts[1].split(':').collect::<Vec<&str>>();
+    if auth_info.len() != 2 {
+        return Err(VerifyError::MalformedHash);
+    }
+    let auth_value = parts[2].split(':').collect::<Vec<&str>>();
+    if auth_value.len() != 2 {
+        return Err(VerifyError::MalformedHash);
+    }
+
+    let client_key = BASE64_STANDARD
+        .decode(auth_value[0])
+        .map_err(|_| VerifyError::MalformedHash)?;
+    let server_key = BASE64_STANDARD
+        .decode(auth_value[1])
+        .map_err(|_| VerifyError::MalformedHash)?;
+
+    // Compute stored key
+    let stored_key = openssl::sha::sha256(&client_key);
+
+    // Compute client signature: HMAC(stored_key, auth_message)
+    let client_signature = generate_signature(&stored_key, auth_message)?;
+
+    // Compute expected client proof: client_key XOR client_signature
+    let expected_client_proof: Vec<u8> = client_key
+        .iter()
+        .zip_eq(client_signature.iter())
+        .map(|(a, b)| a ^ b)
+        .collect();
+
+    // Decode provided proof
+    let provided_client_proof = BASE64_STANDARD
+        .decode(proof)
+        .map_err(|_| VerifyError::InvalidPassword)?;
+
+    if constant_time_compare(&expected_client_proof, &provided_client_proof) {
+        // Compute server verifier: HMAC(server_key, auth_message)
+        let verifier = generate_signature(&server_key, auth_message)?;
+        let verifier = BASE64_STANDARD.encode(&verifier);
+        Ok(verifier)
+    } else {
+        Err(VerifyError::InvalidPassword)
+    }
+}
+
+fn generate_signature(key: &[u8], message: &str) -> Result<Vec<u8>, VerifyError> {
+    let signing_key =
+        openssl::pkey::PKey::hmac(key).map_err(|e| VerifyError::Hash(HashError::Openssl(e)))?;
+    let mut signer =
+        openssl::sign::Signer::new(openssl::hash::MessageDigest::sha256(), &signing_key)
+            .map_err(|e| VerifyError::Hash(HashError::Openssl(e)))?;
+    signer
+        .update(message.as_bytes())
+        .map_err(|e| VerifyError::Hash(HashError::Openssl(e)))?;
+    let signature = signer
+        .sign_to_vec()
+        .map_err(|e| VerifyError::Hash(HashError::Openssl(e)))?;
+    Ok(signature)
+}
+
+// Generate a mock challenge based on the username and client nonce
+// We do this so that we can present a deterministic challenge even for
+// nonexistent users, to avoid user enumeration attacks.
+pub fn mock_sasl_challenge(username: &str, mock_nonce: &str) -> HashOpts {
+    let mut buf = Vec::with_capacity(username.len() + mock_nonce.len());
+    buf.extend_from_slice(username.as_bytes());
+    buf.extend_from_slice(mock_nonce.as_bytes());
+    let digest = openssl::sha::sha256(&buf);
+
+    HashOpts {
+        iterations: DEFAULT_ITERATIONS,
+        salt: digest,
+    }
+}
+
 /// Parses a SCRAM-SHA-256 hash and returns the options used to create it.
-fn scram256_parse_opts(hashed_password: &str) -> Result<HashOpts, VerifyError> {
+pub fn scram256_parse_opts(hashed_password: &str) -> Result<HashOpts, VerifyError> {
     let parts: Vec<&str> = hashed_password.split('$').collect();
     if parts.len() != 3 {
         return Err(VerifyError::MalformedHash);
@@ -211,6 +320,8 @@ fn hash_password_inner(
 
 #[cfg(test)]
 mod tests {
+    use itertools::Itertools;
+
     use super::*;
 
     #[mz_ore::test]
@@ -247,5 +358,78 @@ mod tests {
         assert_eq!(opts.salt.len(), DEFAULT_SALT_SIZE);
         let decoded_salt = BASE64_STANDARD.decode(salt).expect("Failed to decode salt");
         assert_eq!(opts.salt, decoded_salt.as_ref());
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn test_mock_sasl_challenge() {
+        let username = "alice";
+        let mock = "cnonce";
+        let opts1 = mock_sasl_challenge(username, mock);
+        let opts2 = mock_sasl_challenge(username, mock);
+        assert_eq!(opts1, opts2);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn test_sasl_verify_success() {
+        let password: Password = "password".into();
+        let hashed_password = scram256_hash(&password).expect("hash password");
+        let auth_message = "n=user,r=clientnonce,s=somesalt"; // arbitrary auth message
+
+        // Parse client_key and server_key from the SCRAM hash
+        // Format: SCRAM-SHA-256$<iterations>:<salt>$<client_key>:<server_key>
+        let parts: Vec<&str> = hashed_password.split('$').collect();
+        assert_eq!(parts.len(), 3);
+        let key_parts: Vec<&str> = parts[2].split(':').collect();
+        assert_eq!(key_parts.len(), 2);
+        let client_key = BASE64_STANDARD
+            .decode(key_parts[0])
+            .expect("decode client key");
+        let server_key = BASE64_STANDARD
+            .decode(key_parts[1])
+            .expect("decode server key");
+
+        // stored_key = SHA256(client_key)
+        let stored_key = openssl::sha::sha256(&client_key);
+        // client_signature = HMAC(stored_key, auth_message)
+        let client_signature =
+            generate_signature(&stored_key, auth_message).expect("client signature");
+        // client_proof = client_key XOR client_signature
+        let client_proof: Vec<u8> = client_key
+            .iter()
+            .zip_eq(client_signature.iter())
+            .map(|(a, b)| a ^ b)
+            .collect();
+        let client_proof_b64 = BASE64_STANDARD.encode(&client_proof);
+
+        let verifier = sasl_verify(&hashed_password, &client_proof_b64, auth_message)
+            .expect("sasl_verify should succeed");
+
+        // Expected verifier: HMAC(server_key, auth_message)
+        let expected_verifier = BASE64_STANDARD
+            .encode(&generate_signature(&server_key, auth_message).expect("server verifier"));
+        assert_eq!(verifier, expected_verifier);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn test_sasl_verify_invalid_proof() {
+        let password: Password = "password".into();
+        let hashed_password = scram256_hash(&password).expect("hash password");
+        let auth_message = "n=user,r=clientnonce,s=somesalt";
+        // Provide an obviously invalid base64 proof (different size / random)
+        let bad_proof = BASE64_STANDARD.encode([0u8; 32]);
+        let res = sasl_verify(&hashed_password, &bad_proof, auth_message);
+        assert!(matches!(res, Err(VerifyError::InvalidPassword)));
+    }
+
+    #[mz_ore::test]
+    fn test_sasl_verify_malformed_hash() {
+        let malformed_hash = "NOT-SCRAM$bad"; // clearly malformed (wrong parts count)
+        let auth_message = "n=user,r=clientnonce,s=somesalt";
+        let bad_proof = BASE64_STANDARD.encode([0u8; 32]);
+        let res = sasl_verify(malformed_hash, &bad_proof, auth_message);
+        assert!(matches!(res, Err(VerifyError::MalformedHash)));
     }
 }

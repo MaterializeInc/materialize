@@ -18,6 +18,7 @@ proptest-derive = "0.5.1"
 proptest = "1.7.0"
 static_assertions = "1.1"
 openssl = { version = "0.10.73", features = ["vendored"] }
+itertools = "0.14.0"
 
 [features]
 default = ["workspace-hack"]

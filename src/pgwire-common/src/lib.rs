@@ -28,7 +28,8 @@ pub use conn::{
 };
 pub use format::Format;
 pub use message::{
-    ErrorResponse, FrontendMessage, FrontendStartupMessage, VERSION_3, VERSION_CANCEL,
-    VERSION_GSSENC, VERSION_SSL, VERSIONS,
+    ChannelBinding, ErrorResponse, FrontendMessage, FrontendStartupMessage, GS2Header,
+    SASLClientFinalResponse, SASLInitialResponse, VERSION_3, VERSION_CANCEL, VERSION_GSSENC,
+    VERSION_SSL, VERSIONS,
 };
 pub use severity::Severity;

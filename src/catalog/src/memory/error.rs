@@ -102,6 +102,8 @@ pub enum ErrorKind {
     VarError(#[from] VarError),
     #[error("unknown cluster replica size {size}")]
     InvalidClusterReplicaSize { size: String, expected: Vec<String> },
+    #[error("failed to get catalog setting: {0}")]
+    SettingError(String),
     #[error("internal error: {0}")]
     Internal(String),
 }

@@ -142,6 +142,7 @@ pub struct CatalogState {
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     pub(super) source_references: BTreeMap<CatalogItemId, SourceReferences>,
     pub(super) storage_metadata: StorageMetadata,
+    pub(super) mock_authentication_nonce: Option<String>,
 
     // Mutable state not derived from the durable catalog.
     #[serde(skip)]
@@ -316,6 +317,7 @@ impl CatalogState {
             source_references: Default::default(),
             storage_metadata: Default::default(),
             license_key: ValidatedLicenseKey::for_tests(),
+            mock_authentication_nonce: Default::default(),
         }
     }
 
@@ -2634,6 +2636,10 @@ impl CatalogState {
             }
             CommentObjectId::NetworkPolicy(id) => self.get_network_policy(&id).name.clone(),
         }
+    }
+
+    pub fn mock_authentication_nonce(&self) -> String {
+        self.mock_authentication_nonce.clone().unwrap_or_default()
     }
 }
 

@@ -19,6 +19,8 @@ pub enum AuthenticatorKind {
     Frontegg,
     /// Authenticate users using internally stored password hashes.
     Password,
+    /// Authenticate users using SASL.
+    Sasl,
     /// Do not authenticate users. Trust they are who they say they are without verification.
     #[default]
     None,
@@ -80,6 +82,7 @@ pub trait ListenerConfig {
     fn authenticator_kind(&self) -> AuthenticatorKind;
     fn allowed_roles(&self) -> AllowedRoles;
     fn enable_tls(&self) -> bool;
+    fn validate(&self) -> Result<(), String>;
 }
 impl ListenerConfig for SqlListenerConfig {
     fn addr(&self) -> SocketAddr {
@@ -97,6 +100,10 @@ impl ListenerConfig for SqlListenerConfig {
     fn enable_tls(&self) -> bool {
         self.enable_tls
     }
+
+    fn validate(&self) -> Result<(), String> {
+        Ok(())
+    }
 }
 impl ListenerConfig for HttpListenerConfig {
     fn addr(&self) -> SocketAddr {
@@ -113,5 +120,13 @@ impl ListenerConfig for HttpListenerConfig {
 
     fn enable_tls(&self) -> bool {
         self.base.enable_tls
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        if self.base.authenticator_kind == AuthenticatorKind::Sasl {
+            Err("SASL authentication is not supported for HTTP listeners".to_string())
+        } else {
+            Ok(())
+        }
     }
 }
