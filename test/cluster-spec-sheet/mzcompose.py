@@ -912,7 +912,7 @@ class CloudTarget(BenchTarget):
         """
         Returns the replica size for a given scale.
         """
-        return f"{scale}00cc-swap"
+        return f"{scale}00cc"
 
 
 class DockerTarget(BenchTarget):
