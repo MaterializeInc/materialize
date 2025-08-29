@@ -70,9 +70,10 @@ tests:
       path: spec.template.spec.containers[0].args[13]
       pattern: is_cc":true
 
-- it: should have a cluster with disk limit to 1552MiB when storage class is configured
+- it: should have a cluster with disk limit to 1552MiB when storage class is configured and swap disabled
   set:
     storage.storageClass.name: "my-storage-class"
+    operator.clusters.enable_swap: false
   asserts:
   - matchRegex:
       path: spec.template.spec.containers[0].args[13]
@@ -80,6 +81,15 @@ tests:
   - matchRegex:
       path: spec.template.spec.containers[0].args[13]
       pattern: is_cc":true
+
+- it: should have a cluster with memory_request one MiB less than memory_limit
+  asserts:
+  - matchRegex:
+      path: spec.template.spec.containers[0].args[12]
+      pattern: memory_limit":"31050MiB"
+  - matchRegex:
+      path: spec.template.spec.containers[0].args[12]
+      pattern: memory_request":"31049MiB"
 
 - it: should configure for AWS provider correctly
   set:
