@@ -211,6 +211,7 @@ pub fn describe_fetch(
     _: &StatementContext,
     _: FetchStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
+    panic!("ggggggggggggggggggggggggggggggggggggg");
     Ok(StatementDesc::new(None))
 }
 
