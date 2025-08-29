@@ -644,8 +644,8 @@ class AuctionScenario(Scenario):
             setup=[],
             query=[
                 "BEGIN",
-                "DECLARE c CURSOR FOR SUBSCRIBE (SELECT max(amount) FROM bids);",
-                "FETCH 1 c;",
+                "DECLARE a CURSOR FOR SUBSCRIBE (SELECT max(amount) FROM bids);",
+                "FETCH 1 a;",
                 "ROLLBACK;",
             ],
             repetitions=3,
@@ -668,8 +668,8 @@ class AuctionScenario(Scenario):
             setup=[],
             query=[
                 "BEGIN",
-                "DECLARE c CURSOR FOR SUBSCRIBE (SELECT sum(amount) FROM bids);",
-                "FETCH 1 c;",
+                "DECLARE b CURSOR FOR SUBSCRIBE (SELECT sum(amount) FROM bids);",
+                "FETCH 1 b;",
                 "ROLLBACK;",
             ],
             repetitions=3,
@@ -719,7 +719,7 @@ class AuctionScenario(Scenario):
                 # We need to limit the amount of data we retrieve to avoid
                 # stalling the gRPC connection.
                 """
-                DECLARE c CURSOR FOR SUBSCRIBE (
+                DECLARE d CURSOR FOR SUBSCRIBE (
                     SELECT
                         auction_id, list_agg(amount)
                     FROM
@@ -729,7 +729,7 @@ class AuctionScenario(Scenario):
                     HAVING
                         list_length(list_agg(amount)) + auction_id < 10000
                 );""",
-                "FETCH 1 c;",
+                "FETCH 1 d;",
                 "ROLLBACK;",
             ],
             repetitions=3,
@@ -771,7 +771,7 @@ class AuctionScenario(Scenario):
             query=[
                 "BEGIN",
                 """
-                DECLARE c CURSOR FOR SUBSCRIBE (
+                DECLARE e CURSOR FOR SUBSCRIBE (
                     SELECT
                         id, count(amount), max(amount), sum(amount), min(amount)
                     FROM bids
@@ -779,7 +779,7 @@ class AuctionScenario(Scenario):
                     LIMIT 0
                 )
                 """,
-                "FETCH 1 c;",
+                "FETCH 1 e;",
                 "ROLLBACK;",
                 """
                 """,
