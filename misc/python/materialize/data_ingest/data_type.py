@@ -31,7 +31,8 @@ class Backend(Enum):
     JSON = 2
     POSTGRES = 3
     MYSQL = 4
-    MATERIALIZE = 5
+    SQL_SERVER = 5
+    MATERIALIZE = 6
 
 
 class DataType:
@@ -329,6 +330,8 @@ class Float(DataType):
             return "float"
         elif backend == Backend.JSON:
             return "number"
+        elif backend == Backend.SQL_SERVER:
+            return "real"
         else:
             return "float4"
 
@@ -340,6 +343,8 @@ class Double(Float):
             return "double"
         elif backend == Backend.JSON:
             return "number"
+        elif backend == Backend.SQL_SERVER:
+            return "float"
         else:
             return "float8"
 
@@ -407,8 +412,14 @@ class Text(DataType):
 
     @staticmethod
     def name(backend: Backend = Backend.MATERIALIZE) -> str:
-        if backend in (Backend.MATERIALIZE, Backend.POSTGRES, Backend.MYSQL):
+        if backend in (
+            Backend.MATERIALIZE,
+            Backend.POSTGRES,
+            Backend.MYSQL,
+        ):
             return "text"
+        elif backend == Backend.SQL_SERVER:
+            return "varchar(1024)"
         else:
             return "string"
 
@@ -631,6 +642,8 @@ class Timestamp(DataType):
             raise ValueError("Unsupported")
         elif backend == Backend.JSON:
             raise ValueError("Unsupported")
+        elif backend == Backend.SQL_SERVER:
+            return "datetime2"
         else:
             return "timestamp"
 
@@ -771,6 +784,8 @@ DATA_TYPES_FOR_AVRO = sorted(
             UInt2,
             UInt4,
             UInt8,
+            Float,
+            Double,
         }
     ),
     key=repr,
@@ -799,9 +814,38 @@ DATA_TYPES_FOR_MYSQL = sorted(
     key=repr,
 )
 
+DATA_TYPES_FOR_SQL_SERVER = sorted(
+    list(
+        set(DATA_TYPES)
+        - {
+            IntList,
+            IntArray,
+            UUID,
+            TextTextMap,
+            Interval,
+            Oid,
+            Jsonb,
+            Bytea,
+            Boolean,
+            Numeric,
+            Numeric383,
+            UInt2,
+            UInt4,
+            UInt8,
+            Date,
+            Time,
+            Timestamp,
+            Float,
+            Double,
+        }
+    ),
+    key=repr,
+)
+
 # MySQL doesn't support keys of unlimited size
 DATA_TYPES_FOR_KEY = sorted(
-    list(set(DATA_TYPES_FOR_AVRO) - {Text, Bytea, IntList, IntArray}), key=repr
+    list(set(DATA_TYPES_FOR_AVRO) - {Text, Bytea, IntList, IntArray, Float, Double}),
+    key=repr,
 )
 
 NUMBER_TYPES = [

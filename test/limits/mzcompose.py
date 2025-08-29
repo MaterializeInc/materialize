@@ -39,6 +39,10 @@ from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.sql_server import (
+    SqlServer,
+    setup_sql_server_testing,
+)
 from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.zookeeper import Zookeeper
@@ -1531,7 +1535,7 @@ class RowsJoinOuter(Generator):
 
 
 class PostgresSources(Generator):
-    COUNT = 300  # high memory consumption, slower  with source tables
+    COUNT = 300  # high memory consumption, slower with source tables
     MAX_COUNT = 600  # Too long-running with count=1200
 
     @classmethod
@@ -1715,6 +1719,64 @@ class MySqlSources(Generator):
             print(f"{i}")
 
 
+class SqlServerSources(Generator):
+    COUNT = 300
+
+    MAX_COUNT = 400  # Too long-running with count=450
+
+    @classmethod
+    def body(cls) -> None:
+        print("$ set-sql-timeout duration=300s")
+        print("$ postgres-execute connection=mz_system")
+        print(f"ALTER SYSTEM SET max_sources = {cls.COUNT * 10};")
+        print("$ postgres-execute connection=mz_system")
+        print(f"ALTER SYSTEM SET max_objects_per_schema = {cls.COUNT * 10};")
+        print("$ postgres-execute connection=mz_system")
+        print(f"ALTER SYSTEM SET max_tables = {cls.COUNT * 10};")
+        print("$ sql-server-connect name=sql-server")
+        print(
+            f"server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}"
+        )
+        print("$ sql-server-execute name=sql-server")
+        print("USE test;")
+        for i in cls.all():
+            print(
+                f"IF EXISTS (SELECT 1 FROM cdc.change_tables WHERE capture_instance = 'dbo_t{i}') BEGIN EXEC sys.sp_cdc_disable_table @source_schema = 'dbo', @source_name = 't{i}', @capture_instance = 'dbo_t{i}'; END"
+            )
+            print(f"DROP TABLE IF EXISTS t{i};")
+            print(f"CREATE TABLE t{i} (c int);")
+            print(
+                f"EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 't{i}', @role_name = 'SA', @supports_net_changes = 0;"
+            )
+            print(f"INSERT INTO t{i} VALUES ({i});")
+        print(
+            f"> CREATE SECRET IF NOT EXISTS sqlserverpass AS '{SqlServer.DEFAULT_SA_PASSWORD}'"
+        )
+        print(
+            f"""> CREATE CONNECTION sqlserver TO SQL SERVER (
+                HOST 'sql-server',
+                DATABASE test,
+                USER {SqlServer.DEFAULT_USER},
+                PASSWORD SECRET sqlserverpass
+            )"""
+        )
+        for i in cls.all():
+            print(
+                f"""> CREATE SOURCE m{i}
+              IN CLUSTER single_replica_cluster
+              FROM SQL SERVER CONNECTION sqlserver
+              """
+            )
+            print(
+                f"""> CREATE TABLE t{i}
+              FROM SOURCE m{i} (REFERENCE t{i})
+              """
+            )
+        for i in cls.all():
+            cls.store_explain_and_run(f"SELECT * FROM t{i}")
+            print(f"{i}")
+
+
 class WebhookSources(Generator):
     COUNT = 100  # TODO: Remove when database-issues#8508 is fixed
 
@@ -1781,6 +1843,7 @@ SERVICES = [
         volumes=["sourcedata_512Mb:/var/lib/postgresql/data"],
     ),
     MySql(),
+    SqlServer(),
     SchemaRegistry(),
     # We create all sources, sinks and dataflows by default with SIZE 'scale=1,workers=1'
     # The workflow_instance_size workflow is testing multi-process clusters
@@ -1865,6 +1928,7 @@ service_names = [
     "schema-registry",
     "postgres",
     "mysql",
+    "sql-server",
     "materialized",
     "balancerd",
     "frontegg-mock",
@@ -1881,6 +1945,7 @@ service_names = [
 
 def setup(c: Composition, workers: int) -> None:
     c.up(*service_names)
+    setup_sql_server_testing(c)
 
     c.sql(
         "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",

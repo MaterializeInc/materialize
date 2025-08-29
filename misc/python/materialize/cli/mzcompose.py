@@ -43,6 +43,7 @@ from materialize.mzcompose.composition import (
     Composition,
     UnknownCompositionError,
 )
+from materialize.mzcompose.services.sql_server import SqlServer
 from materialize.mzcompose.test_result import TestResult
 from materialize.ui import UIError
 from materialize.util import filter_cmd
@@ -521,9 +522,31 @@ class SqlCommand(Command):
                     "-e=MYSQL_PWD=p@ssw0rd",
                 ],
             )
+        elif image == "materialize/mssql-server":
+            assert not args.mz_system
+            deps = composition.repo.resolve_dependencies(
+                [composition.repo.images["mssql-server"]]
+            )
+            deps.acquire()
+            deps["mssql-server"].run(
+                [
+                    "-C",
+                    "-S",
+                    service.get("hostname", args.service),
+                    "-U",
+                    SqlServer.DEFAULT_USER,
+                    "-P",
+                    SqlServer.DEFAULT_SA_PASSWORD,
+                ],
+                docker_args=[
+                    "--entrypoint=/opt/mssql-tools18/bin/sqlcmd",
+                    "--interactive",
+                    f"--network={composition.name}_default",
+                ],
+            )
         else:
             raise UIError(
-                f"cannot connect SQL shell to unhandled service {args.service!r}"
+                f"cannot connect SQL shell to unhandled service {args.service!r} (image {image}"
             )
 
 

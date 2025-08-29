@@ -8,8 +8,8 @@
 # by the Apache License, Version 2.0.
 
 """
-Test that ingests large amounts of data from Kafka/Postgres/MySQL and verifies
-that Materialize can handle it correctly by comparing the results.
+Test that ingests large amounts of data from Kafka/Postgres/MySQL/SQL Server
+and verifies that Materialize can handle it correctly by comparing the results.
 """
 
 import random
@@ -35,11 +35,17 @@ from materialize.mzcompose.services.postgres import (
     Postgres,
 )
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.sql_server import (
+    SqlServer,
+    setup_sql_server_testing,
+)
+from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.zookeeper import Zookeeper
 
 SERVICES = [
     Postgres(),
     MySql(),
+    SqlServer(),
     Zookeeper(),
     Kafka(
         auto_create_topics=False,
@@ -54,6 +60,7 @@ SERVICES = [
     CockroachOrPostgresMetadata(),
     Minio(setup_materialize=True),
     Azurite(),
+    Testdrive(no_reset=True),
     # Overridden below
     Materialized(),
     Materialized(name="materialized2"),
@@ -107,10 +114,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "schema-registry",
         "postgres",
         "mysql",
+        "sql-server",
     )
 
-    # TODO: Reenable when database-issues#8657 is fixed
-    # executor_classes = [MySqlExecutor, KafkaRoundtripExecutor, KafkaExecutor]
+    # TODO: Reenable KafkaRoundtripExecutor when database-issues#8657 is fixed
+    # TODO: Reenable SqlServerExecutor when database-issues#9618 is fixed
     executor_classes = [MySqlExecutor, KafkaExecutor]
 
     with c.override(
@@ -138,6 +146,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         ),
     ):
         c.up(*services)
+        setup_sql_server_testing(c)
 
         if args.replicas > 1:
             c.sql(
@@ -197,6 +206,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 ports,
                 args.runtime,
                 args.verbose,
+                c,
             )
             mz_service = workload.mz_service
             deploy_generation = workload.deploy_generation

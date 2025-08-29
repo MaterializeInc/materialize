@@ -19,6 +19,7 @@ from materialize.checks.mzcompose_actions import (
     ConfigureMz,
     KillClusterdCompute,
     KillMz,
+    SetupSqlServerTesting,
     StartClusterdCompute,
     StartMz,
     UseClusterdCompute,
@@ -67,7 +68,7 @@ class Scenario:
         # Use base_version() here instead of _base_version so that overwriting
         # upgrade scenarios can specify another base version.
         self.check_objects = [
-            check_class(self.base_version(), self.rng, self.features)
+            check_class(self.base_version(), self.rng)
             for check_class in filtered_check_classes
         ]
 
@@ -88,12 +89,20 @@ class Scenario:
         if not isinstance(actions[0], StartMz):
             actions.insert(0, ConfigureMz(self))
 
+        sql_server_testing_setup = False
         for index, action in enumerate(actions):
             # Implicitly call configure to raise version-dependent limits
             if isinstance(action, StartMz) and not action.deploy_generation:
                 actions.insert(
                     index + 1, ConfigureMz(self, mz_service=action.mz_service)
                 )
+                if not sql_server_testing_setup:
+                    # Can only be run once
+                    actions.insert(
+                        index + 1,
+                        SetupSqlServerTesting(self, mz_service=action.mz_service),
+                    )
+                    sql_server_testing_setup = True
             elif isinstance(action, ReplaceEnvironmentdStatefulSet):
                 actions.insert(index + 1, ConfigureMz(self))
 

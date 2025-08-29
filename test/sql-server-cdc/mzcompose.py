@@ -54,7 +54,7 @@ SERVICES = [
 #
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     def process(name: str) -> None:
-        if name == "default":
+        if name in ("default", "large-scale"):
             return
         with c.test_case(name):
             c.workflow(name, *parser.args)
@@ -152,9 +152,6 @@ def workflow_snapshot_consistency(
         c.testdrive(
             dedent(
                 f"""
-                $ postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
-                ALTER SYSTEM SET enable_sql_server_source = true;
-
                 $ sql-server-connect name=sql-server
                 server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
 
@@ -239,3 +236,91 @@ def workflow_snapshot_consistency(
             """
         ),
     )
+
+
+def workflow_large_scale(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """
+    The goal is to test a large scale SQL Server instance and to make sure that we can successfully ingest data from it quickly.
+    """
+    with c.override(SqlServer()):
+        c.kill("sql-server")
+        c.rm("sql-server")
+
+        c.up("materialized", "sql-server", Service("testdrive", idle=True))
+        c.run_testdrive_files(
+            "setup/setup.td",
+            f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
+            f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
+        )
+        # Set up the SQL Server instance with the initial records, set up the
+        # connection to the SQL Server instance in Materialize.
+        c.testdrive(
+            dedent(
+                f"""
+                $ sql-server-connect name=sql-server
+                server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
+
+                $ sql-server-execute name=sql-server
+                USE test;
+                DROP TABLE IF EXISTS products;
+                CREATE TABLE products (id int NOT NULL, name varchar(255) DEFAULT NULL, merchant_id int NOT NULL, price int DEFAULT NULL, status int DEFAULT NULL, created_at datetime2 NULL, recordSizePayload VARCHAR(1024), PRIMARY KEY (id));
+                EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'products', @role_name = 'SA', @supports_net_changes = 0;
+
+                > CREATE SECRET IF NOT EXISTS mssql_pass AS '{SqlServer.DEFAULT_SA_PASSWORD}';
+                > CREATE CONNECTION mssql_connection TO SQL SERVER (
+                    HOST 'sql-server',
+                    PORT 1433,
+                    DATABASE test,
+                    USER '{SqlServer.DEFAULT_USER}',
+                    PASSWORD = SECRET mssql_pass);
+
+                > DROP SOURCE IF EXISTS mssql_source CASCADE;
+                """
+            )
+        )
+
+        def make_inserts(c: Composition, start: int, batch_num: int):
+            c.testdrive(
+                args=["--no-reset"],
+                input=dedent(
+                    f"""
+                    $ sql-server-connect name=sql-server
+                    server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
+
+                    $ sql-server-execute name=sql-server
+                    USE test;
+                    WITH nums AS (SELECT TOP ({batch_num}) ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) - 1 AS i FROM sys.all_objects a CROSS JOIN sys.all_objects b) INSERT INTO products (id, name, merchant_id, price, status, created_at, recordSizePayload) SELECT {start} + i, 'name' + CAST({start} + i AS VARCHAR(20)), ({start} + i) % 1000, ({start} + i) % 1000, ({start} + i) % 10, CAST('2024-12-12' AS DATE), REPLICATE('x', 1024) FROM nums;
+                """
+                ),
+            )
+
+        num_rows = 10_000_000
+        batch_size = 10_000
+        for i in range(0, num_rows, batch_size):
+            batch_num = min(batch_size, num_rows - i)
+            make_inserts(c, i, batch_num)
+
+        c.testdrive(
+            args=["--no-reset"],
+            input=dedent(
+                f"""
+                > CREATE SOURCE s1
+                  FROM SQL SERVER CONNECTION mssql_connection;
+                > CREATE TABLE products FROM SOURCE s1 (REFERENCE products);
+                > SELECT COUNT(*) FROM products;
+                {num_rows}
+                """
+            ),
+        )
+
+        make_inserts(c, num_rows, 1)
+
+        c.testdrive(
+            args=["--no-reset"],
+            input=dedent(
+                f"""
+                > SELECT COUNT(*) FROM products;
+                {num_rows + 1}
+                """
+            ),
+        )

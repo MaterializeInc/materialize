@@ -254,6 +254,7 @@ trufflehog_jq_filter_common() {
       .Raw != "sub-c-4377ab04-f100-11e3-bffd-02ee2ddab7fe" and
       .Raw != "jdbc:postgresql://localhost:6875/materialize" and
       .Raw != "postgres://yugabyte:yugabyte@yugabyte:5433" and
+      .Raw != "postgres://yugabyte:yugabyte@yugabyte:5432" and
       .Raw != "postgres://materialize_user:materialize_pass@postgres.materialize.svc.cluster.local:5432" and
       .Raw != "jdbc:postgresql://%s:%s/materialize" and
       .Raw != "postgres://postgres:$MATERIALIZE_PROD_SANDBOX_RDS_PASSWORD@$MATERIALIZE_PROD_SANDBOX_RDS_HOSTNAME:5432" and
@@ -268,7 +269,8 @@ trufflehog_jq_filter_common() {
       .Raw != "e6d5833015b170e23ae819e8c5d7eaedb472ca98" and
       .Raw != "postgresql://materialize:AbC123dEf@ep-cool-darkness-123456.us-east-2.aws.neon.tech:5432" and
       .Raw != "d3aa325086974cdfb3912f28e5a8c168" and
-      .Raw != "jdbc:postgresql://postgres:5432/postgres"
+      .Raw != "jdbc:postgresql://postgres:5432/postgres" and
+      .Raw != "RPSsql12345"
     )'
 }
 

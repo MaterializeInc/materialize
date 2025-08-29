@@ -49,6 +49,7 @@ from materialize.parallel_workload.database import (
     MAX_ROLES,
     MAX_ROWS,
     MAX_SCHEMAS,
+    MAX_SQL_SERVER_SOURCES,
     MAX_TABLES,
     MAX_VIEWS,
     MAX_WEBHOOK_SOURCES,
@@ -64,6 +65,7 @@ from materialize.parallel_workload.database import (
     PostgresSource,
     Role,
     Schema,
+    SqlServerSource,
     Table,
     View,
     WebhookSource,
@@ -525,14 +527,22 @@ class SourceInsertAction(Action):
         with exe.db.lock:
             sources = [
                 source
-                for source in exe.db.kafka_sources + exe.db.postgres_sources
+                for source in exe.db.kafka_sources
+                + exe.db.postgres_sources
+                + exe.db.mysql_sources
+                + exe.db.sql_server_sources
                 if source.num_rows < MAX_ROWS
             ]
             if not sources:
                 return False
             source = self.rng.choice(sources)
         with source.lock:
-            if source not in [*exe.db.kafka_sources, *exe.db.postgres_sources]:
+            if source not in [
+                *exe.db.kafka_sources,
+                *exe.db.postgres_sources,
+                *exe.db.mysql_sources,
+                *exe.db.sql_server_sources,
+            ]:
                 return False
 
             transaction = next(source.generator)
@@ -2225,6 +2235,69 @@ class DropPostgresSourceAction(Action):
         return True
 
 
+class CreateSqlServerSourceAction(Action):
+    def run(self, exe: Executor) -> bool:
+        # See database-issues#6881, not expected to work
+        if exe.db.scenario == Scenario.BackupRestore:
+            return False
+
+        with exe.db.lock:
+            if len(exe.db.sql_server_sources) >= MAX_SQL_SERVER_SOURCES:
+                return False
+            source_id = exe.db.sql_server_source_id
+            exe.db.sql_server_source_id += 1
+            schema = self.rng.choice(exe.db.schemas)
+            cluster = self.rng.choice(exe.db.clusters)
+        with schema.lock, cluster.lock:
+            if schema not in exe.db.schemas:
+                return False
+            if cluster not in exe.db.clusters:
+                return False
+
+            try:
+                assert self.composition
+                source = SqlServerSource(
+                    source_id,
+                    cluster,
+                    schema,
+                    exe.db.ports,
+                    self.rng,
+                    self.composition,
+                )
+                source.create(exe)
+                exe.db.sql_server_sources.append(source)
+            except:
+                if exe.db.scenario not in (
+                    Scenario.Kill,
+                    Scenario.ZeroDowntimeDeploy,
+                ):
+                    raise
+        return True
+
+
+class DropSqlServerSourceAction(Action):
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        return [
+            "still depended upon by",
+        ] + super().errors_to_ignore(exe)
+
+    def run(self, exe: Executor) -> bool:
+        with exe.db.lock:
+            if not exe.db.sql_server_sources:
+                return False
+            source = self.rng.choice(exe.db.sql_server_sources)
+        with source.lock:
+            # Was dropped while we were acquiring lock
+            if source not in exe.db.sql_server_sources:
+                return False
+
+            query = f"DROP SOURCE {source.executor.source}"
+            exe.execute(query, http=Http.RANDOM)
+            exe.db.sql_server_sources.remove(source)
+            source.executor.mz_conn.close()
+        return True
+
+
 class CreateKafkaSinkAction(Action):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         return [
@@ -2354,6 +2427,8 @@ class StatisticsAction(Action):
             ("views", exe.db.views),
             ("kafka_sources", exe.db.kafka_sources),
             ("postgres_sources", exe.db.postgres_sources),
+            ("mysql_sources", exe.db.mysql_sources),
+            ("sql_server_sources", exe.db.sql_server_sources),
             ("webhook_sources", exe.db.webhook_sources),
         ]:
             counts = []
@@ -2457,6 +2532,9 @@ ddl_action_list = ActionList(
         # (DropMySqlSourceAction, 4),
         (CreatePostgresSourceAction, 4),
         (DropPostgresSourceAction, 4),
+        # TODO: Reenable when database-issues#9620 is fixed
+        # (CreateSqlServerSourceAction, 4),
+        # (DropSqlServerSourceAction, 4),
         (GrantPrivilegesAction, 4),
         (RevokePrivilegesAction, 1),
         (ReconnectAction, 1),

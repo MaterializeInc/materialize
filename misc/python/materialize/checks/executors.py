@@ -15,6 +15,7 @@ from typing import Any
 from materialize.cloudtest.app.materialize_application import MaterializeApplication
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.services.sql_server import SqlServer
 
 
 class Executor:
@@ -54,7 +55,15 @@ class MzcomposeExecutor(Executor):
     def testdrive(
         self, input: str, caller: Traceback | None = None, mz_service: str | None = None
     ) -> None:
-        self.composition.testdrive(input, caller=caller, mz_service=mz_service)
+        self.composition.testdrive(
+            input,
+            caller=caller,
+            mz_service=mz_service,
+            args=[
+                f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
+                f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
+            ],
+        )
 
 
 class MzcomposeExecutorParallel(MzcomposeExecutor):
@@ -73,7 +82,15 @@ class MzcomposeExecutorParallel(MzcomposeExecutor):
         self, input: str, caller: Traceback | None = None, mz_service: str | None = None
     ) -> None:
         try:
-            self.composition.testdrive(input, caller=caller, mz_service=mz_service)
+            self.composition.testdrive(
+                input,
+                caller=caller,
+                mz_service=mz_service,
+                args=[
+                    f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
+                    f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
+                ],
+            )
         except BaseException as e:
             self.exception = e
 
@@ -100,5 +117,10 @@ class CloudtestExecutor(Executor):
             mz_service is None
         ), "CloudtestExecutor not yet compatible with custom mz_service names"
         self.application.testdrive.run(
-            input=input, no_reset=True, seed=self.seed, caller=caller
+            f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
+            f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
+            input=input,
+            no_reset=True,
+            seed=self.seed,
+            caller=caller,
         )

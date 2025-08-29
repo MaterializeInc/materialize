@@ -35,6 +35,10 @@ from materialize.mzcompose.services.postgres import (
     Postgres,
 )
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.sql_server import (
+    SqlServer,
+    setup_sql_server_testing,
+)
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.ui import CommandFailureCausedUIError
@@ -46,6 +50,7 @@ SYSTEM_PARAMETER_DEFAULTS = get_default_system_parameters(zero_downtime=True)
 SERVICES = [
     MySql(),
     Postgres(),
+    SqlServer(),
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),
@@ -102,10 +107,12 @@ def workflow_read_only(c: Composition) -> None:
         "schema-registry",
         "postgres",
         "mysql",
+        "sql-server",
         "mz_old",
         Service("testdrive", idle=True),
     )
     setup(c)
+    setup_sql_server_testing(c)
 
     # Inserts should be reflected when writes are allowed.
     c.testdrive(
@@ -194,6 +201,28 @@ def workflow_read_only(c: Composition) -> None:
         > SELECT * FROM mysql_source_table;
         A 0
 
+        $ sql-server-connect name=sql-server
+        server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
+
+        $ sql-server-execute name=sql-server
+        USE test;
+        CREATE TABLE sql_server_source_table (f1 VARCHAR(32), f2 INTEGER);
+        EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'sql_server_source_table', @role_name = 'SA', @supports_net_changes = 0;
+        INSERT INTO sql_server_source_table VALUES ('A', 0);
+
+        > CREATE SECRET sqlserverpass AS '{SqlServer.DEFAULT_SA_PASSWORD}';
+        > CREATE CONNECTION sqlserver TO SQL SERVER (
+          HOST 'sql-server',
+          DATABASE test,
+          USER {SqlServer.DEFAULT_USER},
+          PASSWORD SECRET sqlserverpass);
+        > CREATE SOURCE sql_server_source
+          IN CLUSTER cluster
+          FROM SQL SERVER CONNECTION sqlserver;
+        > CREATE TABLE sql_server_source_table FROM SOURCE sql_server_source (REFERENCE sql_server_source_table);
+        > SELECT * FROM sql_server_source_table;
+        A 0
+
         $ kafka-verify-topic sink=materialize.public.kafka_sink
 
         > CREATE SOURCE kafka_sink_source
@@ -249,6 +278,13 @@ def workflow_read_only(c: Composition) -> None:
             USE public;
             INSERT INTO mysql_source_table VALUES ('B', 1);
 
+            $ sql-server-connect name=sql-server
+            server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
+
+            $ sql-server-execute name=sql-server
+            USE test;
+            INSERT INTO sql_server_source_table VALUES ('B', 1);
+
             > SET CLUSTER = cluster;
             > SELECT 1
             1
@@ -283,6 +319,8 @@ def workflow_read_only(c: Composition) -> None:
             > SELECT * FROM postgres_source_table
             A 0
             > SELECT * FROM mysql_source_table;
+            A 0
+            > SELECT * FROM sql_server_source_table;
             A 0
             > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source_tbl
             <null> <null> 1 2
@@ -342,6 +380,9 @@ def workflow_read_only(c: Composition) -> None:
             > SELECT * FROM mysql_source_table;
             A 0
             B 1
+            > SELECT * FROM sql_server_source_table;
+            A 0
+            B 1
             > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source_tbl
             <null> <null> 1 2
             <null> <null> 7 8
@@ -357,6 +398,13 @@ def workflow_read_only(c: Composition) -> None:
             USE public;
             INSERT INTO mysql_source_table VALUES ('C', 2);
 
+            $ sql-server-connect name=sql-server
+            server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
+
+            $ sql-server-execute name=sql-server
+            USE test;
+            INSERT INTO sql_server_source_table VALUES ('C', 2);
+
             > SELECT * FROM kafka_source_tbl
             key1A key1B value1A value1B
             key2A key2B value2A value2B
@@ -366,6 +414,10 @@ def workflow_read_only(c: Composition) -> None:
             B 1
             C 2
             > SELECT * FROM mysql_source_table;
+            A 0
+            B 1
+            C 2
+            > SELECT * FROM sql_server_source_table;
             A 0
             B 1
             C 2
@@ -386,10 +438,12 @@ def workflow_basic(c: Composition) -> None:
         "schema-registry",
         "postgres",
         "mysql",
+        "sql-server",
         "mz_old",
         Service("testdrive", idle=True),
     )
     setup(c)
+    setup_sql_server_testing(c)
 
     # Inserts should be reflected when writes are allowed.
     c.testdrive(
@@ -478,6 +532,28 @@ def workflow_basic(c: Composition) -> None:
         > SELECT * FROM mysql_source_table;
         A 0
 
+        $ sql-server-connect name=sql-server
+        server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
+
+        $ sql-server-execute name=sql-server
+        USE test;
+        CREATE TABLE sql_server_source_table (f1 VARCHAR(32), f2 INTEGER);
+        EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'sql_server_source_table', @role_name = 'SA', @supports_net_changes = 0;
+        INSERT INTO sql_server_source_table VALUES ('A', 0);
+
+        > CREATE SECRET sqlserverpass AS '{SqlServer.DEFAULT_SA_PASSWORD}';
+        > CREATE CONNECTION sqlserver TO SQL SERVER (
+          HOST 'sql-server',
+          DATABASE test,
+          USER {SqlServer.DEFAULT_USER},
+          PASSWORD SECRET sqlserverpass);
+        > CREATE SOURCE sql_server_source
+          IN CLUSTER cluster
+          FROM SQL SERVER CONNECTION sqlserver;
+        > CREATE TABLE sql_server_source_table FROM SOURCE sql_server_source (REFERENCE sql_server_source_table);
+        > SELECT * FROM sql_server_source_table;
+        A 0
+
         $ kafka-verify-topic sink=materialize.public.kafka_sink
 
         > CREATE SOURCE kafka_sink_source
@@ -545,6 +621,13 @@ def workflow_basic(c: Composition) -> None:
             USE public;
             INSERT INTO mysql_source_table VALUES ('B', 1);
 
+            $ sql-server-connect name=sql-server
+            server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
+
+            $ sql-server-execute name=sql-server
+            USE test;
+            INSERT INTO sql_server_source_table VALUES ('B', 1);
+
             > SET CLUSTER = cluster;
             > SELECT 1
             1
@@ -581,6 +664,9 @@ def workflow_basic(c: Composition) -> None:
             A 0
             B 1
             > SELECT * FROM mysql_source_table;
+            A 0
+            B 1
+            > SELECT * FROM sql_server_source_table;
             A 0
             B 1
             > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source_tbl
@@ -622,6 +708,13 @@ def workflow_basic(c: Composition) -> None:
         USE public;
         INSERT INTO mysql_source_table VALUES ('C', 2);
 
+        $ sql-server-connect name=sql-server
+        server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
+
+        $ sql-server-execute name=sql-server
+        USE test;
+        INSERT INTO sql_server_source_table VALUES ('C', 2);
+
         > SET CLUSTER = cluster;
         > SELECT 1
         1
@@ -654,6 +747,10 @@ def workflow_basic(c: Composition) -> None:
         B 1
         C 2
         > SELECT * FROM mysql_source_table;
+        A 0
+        B 1
+        C 2
+        > SELECT * FROM sql_server_source_table;
         A 0
         B 1
         C 2
@@ -717,6 +814,10 @@ def workflow_basic(c: Composition) -> None:
             B 1
             C 2
             > SELECT * FROM mysql_source_table;
+            A 0
+            B 1
+            C 2
+            > SELECT * FROM sql_server_source_table;
             A 0
             B 1
             C 2
@@ -815,6 +916,10 @@ def workflow_basic(c: Composition) -> None:
             A 0
             B 1
             C 2
+            > SELECT * FROM sql_server_source_table;
+            A 0
+            B 1
+            C 2
 
             $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=kafka
             key4A,key4B:value4A,value4B
@@ -827,6 +932,13 @@ def workflow_basic(c: Composition) -> None:
             USE public;
             INSERT INTO mysql_source_table VALUES ('D', 3);
 
+            $ sql-server-connect name=sql-server
+            server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
+
+            $ sql-server-execute name=sql-server
+            USE test;
+            INSERT INTO sql_server_source_table VALUES ('D', 3);
+
             > SELECT * FROM kafka_source_tbl
             key1A key1B value1A value1B
             key2A key2B value2A value2B
@@ -838,6 +950,11 @@ def workflow_basic(c: Composition) -> None:
             C 2
             D 3
             > SELECT * FROM mysql_source_table;
+            A 0
+            B 1
+            C 2
+            D 3
+            > SELECT * FROM sql_server_source_table;
             A 0
             B 1
             C 2
@@ -1409,6 +1526,150 @@ def workflow_mysql_source_rehydration(c: Composition) -> None:
         assert result[0][0] == 2 * count * repeats, f"Wrong result: {result}"
 
 
+def workflow_sql_server_source_rehydration(c: Composition) -> None:
+    """Verify SQL Server source rehydration in 0dt deployment"""
+    c.down(destroy_volumes=True)
+    c.up("sql-server", "mz_old", Service("testdrive", idle=True))
+    setup(c)
+    setup_sql_server_testing(c)
+
+    # The number of row value expressions in the INSERT statement exceeds the maximum allowed number of 1000 row values.
+    count = 1000
+    repeats = 100
+
+    inserts = (
+        "INSERT INTO sql_server_source_table VALUES "
+        + ", ".join([f"({i})" for i in range(count)])
+        + ";"
+    )
+
+    start_time = time.time()
+    c.testdrive(
+        dedent(
+            f"""
+        > SET CLUSTER = cluster;
+
+        $ sql-server-connect name=sql-server
+        server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
+
+        $ sql-server-execute name=sql-server
+        USE test;
+        CREATE TABLE sql_server_source_table (f1 INTEGER);
+        EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'sql_server_source_table', @role_name = 'SA', @supports_net_changes = 0;
+        {inserts}
+
+        > CREATE SECRET sqlserverpass AS '{SqlServer.DEFAULT_SA_PASSWORD}';
+        > CREATE CONNECTION sqlserver TO SQL SERVER (
+          HOST 'sql-server',
+          DATABASE test,
+          USER {SqlServer.DEFAULT_USER},
+          PASSWORD SECRET sqlserverpass);
+        > CREATE SOURCE sql_server_source
+          IN CLUSTER cluster
+          FROM SQL SERVER CONNECTION sqlserver;
+        > CREATE TABLE sql_server_source_table FROM SOURCE sql_server_source (REFERENCE sql_server_source_table);
+        > CREATE VIEW sql_server_source_cnt AS SELECT count(*) FROM sql_server_source_table
+        > CREATE DEFAULT INDEX ON sql_server_source_cnt
+        > SELECT * FROM sql_server_source_cnt;
+        {count}
+        """
+        ),
+        quiet=True,
+    )
+
+    for i in range(1, repeats):
+        c.testdrive(
+            dedent(
+                f"""
+        $ sql-server-connect name=sql-server
+        server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
+
+        $ sql-server-execute name=sql-server
+        USE test;
+        {inserts}
+        > SELECT * FROM sql_server_source_cnt;
+        {count*(i+1)}
+        """
+            ),
+            quiet=True,
+        )
+
+    elapsed = time.time() - start_time
+    print(f"initial ingestion took {elapsed} seconds")
+
+    with c.override(
+        Materialized(
+            name="mz_new",
+            sanity_restart=False,
+            deploy_generation=1,
+            system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
+            restart="on-failure",
+            external_metadata_store=True,
+            default_replication_factor=2,
+        ),
+        Testdrive(
+            materialize_url="postgres://materialize@mz_new:6875",
+            materialize_url_internal="postgres://materialize@mz_new:6877",
+            mz_service="mz_new",
+            materialize_params={"cluster": "cluster"},
+            no_reset=True,
+            seed=1,
+            default_timeout=DEFAULT_TIMEOUT,
+        ),
+    ):
+        c.up("mz_new")
+        start_time = time.time()
+        c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
+        elapsed = time.time() - start_time
+        print(f"re-hydration took {elapsed} seconds")
+        c.promote_mz("mz_new")
+        start_time = time.time()
+        c.await_mz_deployment_status(
+            DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None
+        )
+        elapsed = time.time() - start_time
+        print(f"promotion took {elapsed} seconds")
+        start_time = time.time()
+        result = c.sql_query("SELECT * FROM sql_serveR_source_cnt", service="mz_new")
+        elapsed = time.time() - start_time
+        print(f"final check took {elapsed} seconds")
+        assert result[0][0] == count * repeats, f"Wrong result: {result}"
+        assert (
+            elapsed < 4
+        ), f"Took {elapsed}s to SELECT on SQL Server source after 0dt upgrade, is it hydrated?"
+
+        result = c.sql_query(
+            "SELECT count(*) FROM sql_server_source_table", service="mz_new"
+        )
+        assert result[0][0] == count * repeats, f"Wrong result: {result}"
+
+        print("Ingesting again")
+        for i in range(repeats, repeats * 2):
+            c.testdrive(
+                dedent(
+                    f"""
+            $ sql-server-connect name=sql-server
+            server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
+
+            $ sql-server-execute name=sql-server
+            USE test;
+            {inserts}
+            > SELECT * FROM sql_server_source_cnt;
+            {count*(i+1)}
+            """
+                ),
+                quiet=True,
+            )
+
+        result = c.sql_query("SELECT * FROM sql_serveR_source_cnt", service="mz_new")
+        assert result[0][0] == 2 * count * repeats, f"Wrong result: {result}"
+
+        result = c.sql_query(
+            "SELECT count(*) FROM sql_server_source_table", service="mz_new"
+        )
+        assert result[0][0] == 2 * count * repeats, f"Wrong result: {result}"
+
+
 def workflow_kafka_source_failpoint(c: Composition) -> None:
     """Verify that source status updates of the newly deployed environment take
     precedent over older source status updates when promoted.
@@ -1733,8 +1994,6 @@ def workflow_upsert_sources(c: Composition) -> None:
         "zookeeper",
         "kafka",
         "schema-registry",
-        "postgres",
-        "mysql",
         "mz_old",
         Service("testdrive", idle=True),
     )
@@ -1842,11 +2101,13 @@ def workflow_ddl(c: Composition) -> None:
         "schema-registry",
         "postgres",
         "mysql",
+        "sql-server",
         "mz_old",
         Service("testdrive", idle=True),
     )
 
     setup(c)
+    setup_sql_server_testing(c)
 
     # Inserts should be reflected when writes are allowed.
     c.testdrive(
@@ -1935,6 +2196,28 @@ def workflow_ddl(c: Composition) -> None:
         > SELECT * FROM mysql_source_table;
         A 0
 
+        $ sql-server-connect name=sql-server
+        server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
+
+        $ sql-server-execute name=sql-server
+        USE test;
+        CREATE TABLE sql_server_source_table (f1 VARCHAR(32), f2 INTEGER);
+        EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'sql_server_source_table', @role_name = 'SA', @supports_net_changes = 0;
+        INSERT INTO sql_server_source_table VALUES ('A', 0);
+
+        > CREATE SECRET sqlserverpass AS '{SqlServer.DEFAULT_SA_PASSWORD}';
+        > CREATE CONNECTION sqlserver TO SQL SERVER (
+          HOST 'sql-server',
+          DATABASE test,
+          USER {SqlServer.DEFAULT_USER},
+          PASSWORD SECRET sqlserverpass);
+        > CREATE SOURCE sql_server_source
+          IN CLUSTER cluster
+          FROM SQL SERVER CONNECTION sqlserver;
+        > CREATE TABLE sql_server_source_table FROM SOURCE sql_server_source (REFERENCE sql_server_source_table);
+        > SELECT * FROM sql_server_source_table;
+        A 0
+
         $ kafka-verify-topic sink=materialize.public.kafka_sink
 
         > CREATE SOURCE kafka_sink_source
@@ -2002,6 +2285,13 @@ def workflow_ddl(c: Composition) -> None:
             USE public;
             INSERT INTO mysql_source_table VALUES ('B', 1);
 
+            $ sql-server-connect name=sql-server
+            server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
+
+            $ sql-server-execute name=sql-server
+            USE test;
+            INSERT INTO sql_server_source_table VALUES ('B', 1);
+
             > SET CLUSTER = cluster;
             > SELECT 1
             1
@@ -2038,6 +2328,9 @@ def workflow_ddl(c: Composition) -> None:
             A 0
             B 1
             > SELECT * FROM mysql_source_table;
+            A 0
+            B 1
+            > SELECT * FROM sql_server_source_table;
             A 0
             B 1
             > SELECT (before).a, (before).b, (after).a, (after).b FROM kafka_sink_source_tbl
@@ -2081,6 +2374,13 @@ def workflow_ddl(c: Composition) -> None:
         USE public;
         INSERT INTO mysql_source_table VALUES ('C', 2);
 
+        $ sql-server-connect name=sql-server
+        server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
+
+        $ sql-server-execute name=sql-server
+        USE test;
+        INSERT INTO sql_server_source_table VALUES ('C', 2);
+
         > CREATE TABLE t2 (a INT);
 
         > SET CLUSTER = cluster;
@@ -2115,6 +2415,10 @@ def workflow_ddl(c: Composition) -> None:
         B 1
         C 2
         > SELECT * FROM mysql_source_table;
+        A 0
+        B 1
+        C 2
+        > SELECT * FROM sql_server_source_table;
         A 0
         B 1
         C 2
@@ -2182,6 +2486,10 @@ def workflow_ddl(c: Composition) -> None:
             B 1
             C 2
             > SELECT * FROM mysql_source_table;
+            A 0
+            B 1
+            C 2
+            > SELECT * FROM sql_server_source_table;
             A 0
             B 1
             C 2
@@ -2280,6 +2588,10 @@ def workflow_ddl(c: Composition) -> None:
             A 0
             B 1
             C 2
+            > SELECT * FROM sql_server_source_table;
+            A 0
+            B 1
+            C 2
 
             $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=kafka
             key4A,key4B:value4A,value4B
@@ -2292,6 +2604,13 @@ def workflow_ddl(c: Composition) -> None:
             USE public;
             INSERT INTO mysql_source_table VALUES ('D', 3);
 
+            $ sql-server-connect name=sql-server
+            server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
+
+            $ sql-server-execute name=sql-server
+            USE test;
+            INSERT INTO sql_server_source_table VALUES ('D', 3);
+
             > SELECT * FROM kafka_source_tbl
             key1A key1B value1A value1B
             key2A key2B value2A value2B
@@ -2303,6 +2622,11 @@ def workflow_ddl(c: Composition) -> None:
             C 2
             D 3
             > SELECT * FROM mysql_source_table;
+            A 0
+            B 1
+            C 2
+            D 3
+            > SELECT * FROM sql_server_source_table;
             A 0
             B 1
             C 2

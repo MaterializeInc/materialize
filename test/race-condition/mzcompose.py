@@ -28,6 +28,10 @@ from materialize.mzcompose.services.minio import Mc, Minio
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.sql_server import (
+    SqlServer,
+    setup_sql_server_testing,
+)
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.util import PropagatingThread, all_subclasses
@@ -35,6 +39,7 @@ from materialize.util import PropagatingThread, all_subclasses
 SERVICES = [
     Postgres(max_replication_slots=100000),
     MySql(),
+    SqlServer(),
     Zookeeper(),
     Kafka(
         auto_create_topics=False,
@@ -58,6 +63,7 @@ SERVICES = [
 SERVICE_NAMES = [
     "postgres",
     "mysql",
+    "sql-server",
     "zookeeper",
     "kafka",
     "schema-registry",
@@ -369,6 +375,95 @@ class MySqlSource(Object):
         raise NotImplementedError
 
 
+# TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/9619 is fixed
+# class SqlServerSource(Object):
+#     def prepare(self) -> str:
+#         return dedent(
+#             f"""
+#             $ sql-server-connect name=sql-server
+#             server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
+#
+#             $ sql-server-execute name=sql-server
+#             USE test;
+#             IF EXISTS (SELECT 1 FROM cdc.change_tables WHERE capture_instance = 'dbo_{self.name}_table') BEGIN EXEC sys.sp_cdc_disable_table @source_schema = 'dbo', @source_name = '{self.name}_table', @capture_instance = 'dbo_{self.name}_table'; END
+#             DROP TABLE IF EXISTS {self.name}_table;
+#             CREATE TABLE {self.name}_table (a VARCHAR(1024), b VARCHAR(1024));
+#             EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = '{self.name}_table', @role_name = 'SA', @supports_net_changes = 0;
+#
+#             > DROP SECRET IF EXISTS {self.name}_pass CASCADE
+#             > CREATE SECRET {self.name}_pass AS '{SqlServer.DEFAULT_SA_PASSWORD}'
+#             > DROP CONNECTION IF EXISTS {self.name}_conn CASCADE
+#             > CREATE CONNECTION {self.name}_conn TO SQL SERVER (
+#                 HOST 'sql-server',
+#                 DATABASE test,
+#                 USER {SqlServer.DEFAULT_USER},
+#                 PASSWORD SECRET {self.name}_pass
+#               )"""
+#         )
+#
+#     def create(self) -> str:
+#         return dedent(
+#             f"""
+#             > BEGIN
+#             > CREATE SOURCE {self.name}_source
+#               IN CLUSTER quickstart
+#               FROM SQL SERVER CONNECTION {self.name}_conn
+#             > CREATE TABLE {self.name} FROM SOURCE {self.name}_source (REFERENCE {self.name}_table)
+#             > COMMIT
+#             """
+#         )
+#
+#     def destroy(self) -> str:
+#         return dedent(
+#             f"""
+#             > DROP TABLE {self.name} CASCADE
+#             > DROP SOURCE IF EXISTS {self.name}_source"""
+#         )
+#
+#     def manipulate(self, kind: int) -> str:
+#         manipulations = [
+#             lambda: "",
+#             lambda: dedent(
+#                 f"""
+#                 $ sql-server-connect name=sql-server
+#                 server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
+#
+#                 $ sql-server-execute name=sql-server
+#                 USE test;
+#                 INSERT INTO {self.name}_table VALUES ('foo', 'bar');"""
+#             ),
+#             lambda: dedent(
+#                 f"""
+#                 $ sql-server-connect name=sql-server
+#                 server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
+#
+#                 $ sql-server-execute name=sql-server
+#                 USE test;
+#                 UPDATE {self.name}_table SET b = CONCAT(b, 'bar') WHERE 1 = 1;"""
+#             ),
+#             lambda: dedent(
+#                 f"""
+#                 $ sql-server-connect name=sql-server
+#                 server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
+#
+#                 $ sql-server-execute name=sql-server
+#                 USE test;
+#                 DELETE FROM {self.name}_table WHERE LEN(b) > 12;"""
+#             ),
+#             lambda: dedent(
+#                 f"""
+#                 > DROP TABLE IF EXISTS {self.name}_tmp_table
+#                 > ALTER TABLE {self.name} RENAME TO {self.name}_tmp_table
+#                 > ALTER TABLE {self.name}_tmp_table RENAME TO {self.name}
+#                 """
+#             ),
+#         ]
+#         return manipulations[kind % len(manipulations)]()
+#
+#     def verify(self) -> str:
+#         raise NotImplementedError
+
+
 class LoadGeneratorSource(Object):
     def __init__(self, name: str, references: "Object | None", rng: random.Random):
         super().__init__(name, references, rng)
@@ -642,6 +737,7 @@ class Concurrent(Scenario):
             # Clean up old state
             self.c.down(destroy_volumes=True)
             self.c.up(*SERVICE_NAMES, Service("testdrive", idle=True))
+            setup_sql_server_testing(self.c)
 
             for obj in self.objs:
                 self.run_fragment(obj.prepare())
@@ -755,6 +851,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     ).timestamp()
 
     c.up(*SERVICE_NAMES, Service("testdrive", idle=True))
+    setup_sql_server_testing(c)
 
     seed = args.seed
 

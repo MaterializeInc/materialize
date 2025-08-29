@@ -20,6 +20,7 @@ from materialize.data_ingest.data_type import (
     DATA_TYPES_FOR_AVRO,
     DATA_TYPES_FOR_KEY,
     DATA_TYPES_FOR_MYSQL,
+    DATA_TYPES_FOR_SQL_SERVER,
     NUMBER_TYPES,
     Bytea,
     DataType,
@@ -28,12 +29,18 @@ from materialize.data_ingest.data_type import (
     TextTextMap,
 )
 from materialize.data_ingest.definition import Insert
-from materialize.data_ingest.executor import KafkaExecutor, MySqlExecutor, PgExecutor
+from materialize.data_ingest.executor import (
+    KafkaExecutor,
+    MySqlExecutor,
+    PgExecutor,
+    SqlServerExecutor,
+)
 from materialize.data_ingest.field import Field
 from materialize.data_ingest.transaction import Transaction
 from materialize.data_ingest.workload import WORKLOADS
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.mysql import MySql
+from materialize.mzcompose.services.sql_server import SqlServer
 from materialize.parallel_workload.executor import Executor
 from materialize.parallel_workload.settings import Complexity, Scenario
 from materialize.util import naughty_strings
@@ -52,6 +59,7 @@ MAX_ROLES = 15
 MAX_WEBHOOK_SOURCES = 5
 MAX_KAFKA_SOURCES = 5
 MAX_MYSQL_SOURCES = 5
+MAX_SQL_SERVER_SOURCES = 5
 MAX_POSTGRES_SOURCES = 5
 MAX_KAFKA_SINKS = 5
 
@@ -64,6 +72,7 @@ MAX_INITIAL_ROLES = 1
 MAX_INITIAL_WEBHOOK_SOURCES = 1
 MAX_INITIAL_KAFKA_SOURCES = 1
 MAX_INITIAL_MYSQL_SOURCES = 1
+MAX_INITIAL_SQL_SERVER_SOURCES = 1
 MAX_INITIAL_POSTGRES_SOURCES = 1
 MAX_INITIAL_KAFKA_SINKS = 1
 
@@ -758,6 +767,76 @@ class PostgresSource(DBObject):
         self.executor.create(logging_exe=exe)
 
 
+class SqlServerColumn(Column):
+    def __init__(
+        self, name: str, data_type: type[DataType], nullable: bool, db_object: DBObject
+    ):
+        self.raw_name = name
+        self.data_type = data_type
+        self.nullable = nullable
+        self.db_object = db_object
+
+    def name(self, in_query: bool = False) -> str:
+        return identifier(self.raw_name) if in_query else self.raw_name
+
+
+class SqlServerSource(DBObject):
+    source_id: int
+    cluster: "Cluster"
+    executor: SqlServerExecutor
+    generator: Iterator[Transaction]
+    lock: threading.Lock
+    columns: list[SqlServerColumn]
+    schema: Schema
+    num_rows: int
+
+    def __init__(
+        self,
+        source_id: int,
+        cluster: "Cluster",
+        schema: Schema,
+        ports: dict[str, int],
+        rng: random.Random,
+        composition: Composition,
+    ):
+        super().__init__()
+        self.source_id = source_id
+        self.cluster = cluster
+        self.schema = schema
+        self.num_rows = 0
+        fields = []
+        for i in range(rng.randint(1, 10)):
+            fields.append(Field(f"key{i}", rng.choice(DATA_TYPES_FOR_KEY), True))
+        for i in range(rng.randint(0, 20)):
+            fields.append(
+                Field(f"value{i}", rng.choice(DATA_TYPES_FOR_SQL_SERVER), False)
+            )
+        self.columns = [
+            SqlServerColumn(field.name, field.data_type, False, self)
+            for field in fields
+        ]
+        self.executor = SqlServerExecutor(
+            self.source_id,
+            ports,
+            fields,
+            schema.db.name(),
+            schema.name(),
+            cluster.name(),
+            composition=composition,
+        )
+        self.generator = rng.choice(list(WORKLOADS))(azurite=False).generate(fields)
+        self.lock = threading.Lock()
+
+    def name(self) -> str:
+        return self.executor.table
+
+    def __str__(self) -> str:
+        return f"{self.schema}.{self.name()}"
+
+    def create(self, exe: Executor) -> None:
+        self.executor.create(logging_exe=exe)
+
+
 class Index:
     _name: str
     lock: threading.Lock
@@ -894,6 +973,8 @@ class Database:
     mysql_source_id: int
     postgres_sources: list[PostgresSource]
     postgres_source_id: int
+    sql_server_sources: list[SqlServerSource]
+    sql_server_source_id: int
     kafka_sinks: list[KafkaSink]
     kafka_sink_id: int
     s3_path: int
@@ -969,10 +1050,12 @@ class Database:
         self.kafka_sources = []
         self.mysql_sources = []
         self.postgres_sources = []
+        self.sql_server_sources = []
         self.kafka_sinks = []
         self.kafka_source_id = len(self.kafka_sources)
         self.mysql_source_id = len(self.mysql_sources)
         self.postgres_source_id = len(self.postgres_sources)
+        self.sql_server_source_id = len(self.sql_server_sources)
         self.kafka_sink_id = len(self.kafka_sinks)
         self.lock = threading.Lock()
         self.sqlsmith_state = ""
@@ -981,7 +1064,13 @@ class Database:
     def db_objects(
         self,
     ) -> list[
-        WebhookSource | MySqlSource | PostgresSource | KafkaSource | View | Table
+        WebhookSource
+        | MySqlSource
+        | PostgresSource
+        | SqlServerSource
+        | KafkaSource
+        | View
+        | Table
     ]:
         return (
             self.tables
@@ -989,13 +1078,20 @@ class Database:
             + self.kafka_sources
             + self.mysql_sources
             + self.postgres_sources
+            + self.sql_server_sources
             + self.webhook_sources
         )
 
     def db_objects_without_views(
         self,
     ) -> list[
-        WebhookSource | MySqlSource | PostgresSource | KafkaSource | View | Table
+        WebhookSource
+        | MySqlSource
+        | PostgresSource
+        | SqlServerSource
+        | KafkaSource
+        | View
+        | Table
     ]:
         return [
             obj for obj in self.db_objects() if type(obj) != View or obj.materialized
@@ -1043,6 +1139,13 @@ class Database:
             "CREATE CONNECTION mysql_conn FOR MYSQL HOST 'mysql', USER root, PASSWORD SECRET mypass"
         )
 
+        exe.execute(
+            f"CREATE SECRET sql_server_pass AS '{SqlServer.DEFAULT_SA_PASSWORD}'"
+        )
+        exe.execute(
+            f"CREATE CONNECTION sql_server_conn FOR SQL SERVER HOST 'sql-server', DATABASE test, USER {SqlServer.DEFAULT_USER}, PASSWORD SECRET sql_server_pass"
+        )
+
         exe.execute("CREATE SECRET IF NOT EXISTS minio AS 'minioadmin'")
         exe.execute(
             "CREATE CONNECTION IF NOT EXISTS aws_conn TO AWS (ENDPOINT 'http://minio:9000/', REGION 'minio', ACCESS KEY ID 'minioadmin', SECRET ACCESS KEY SECRET minio)"
@@ -1075,6 +1178,8 @@ class Database:
         for src in self.postgres_sources:
             src.executor.mz_conn.close()
         for src in self.mysql_sources:
+            src.executor.mz_conn.close()
+        for src in self.sql_server_sources:
             src.executor.mz_conn.close()
 
     def update_sqlsmith_state(self, composition: Composition) -> None:

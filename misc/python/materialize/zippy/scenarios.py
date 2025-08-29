@@ -33,6 +33,12 @@ from materialize.zippy.mysql_actions import (
     MySqlStart,
 )
 from materialize.zippy.mysql_cdc_actions import CreateMySqlCdcTable
+from materialize.zippy.sql_server_actions import (
+    CreateSqlServerTable,
+    SqlServerDML,
+    SqlServerStart,
+)
+from materialize.zippy.sql_server_cdc_actions import CreateSqlServerCdcTable
 from materialize.zippy.mz_actions import (
     KillClusterd,
     Mz0dtDeploy,
@@ -230,6 +236,27 @@ class MySqlCdc(Scenario):
             CreateViewParameterized(): 10,
             ValidateView: 20,
             MySqlDML: 100,
+        }
+
+
+class SqlServerCdc(Scenario):
+    """A Zippy test using SQL Server CDC exclusively."""
+
+    def bootstrap(self) -> list[ActionOrFactory]:
+        return super().bootstrap() + [SqlServerStart]
+
+    def actions_with_weight(self) -> dict[ActionOrFactory, float]:
+        return {
+            CreateSqlServerTable: 10,
+            CreateSqlServerCdcTable: 10,
+            KillClusterd: 5,
+            StoragedKill: 5,
+            StoragedStart: 5,
+            # TODO: Reenable when database-issues#9624 is fixed
+            # SqlServerRestart: 10,
+            CreateViewParameterized(): 10,
+            ValidateView: 20,
+            SqlServerDML: 100,
         }
 
 

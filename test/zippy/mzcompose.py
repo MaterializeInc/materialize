@@ -38,6 +38,9 @@ from materialize.mzcompose.services.persistcli import Persistcli
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.prometheus import Prometheus
 from materialize.mzcompose.services.redpanda import Redpanda
+from materialize.mzcompose.services.sql_server import (
+    SqlServer,
+)
 from materialize.mzcompose.services.ssh_bastion_host import (
     SshBastionHost,
     setup_default_ssh_test_connection,
@@ -102,6 +105,7 @@ SERVICES = [
     SshBastionHost(),
     Persistcli(),
     MySql(),
+    SqlServer(),
 ]
 
 

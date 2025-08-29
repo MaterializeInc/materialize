@@ -36,6 +36,10 @@ from materialize.feature_benchmark.report import (
 from materialize.mz_version import MzVersion
 from materialize.mzcompose import ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS
 from materialize.mzcompose.services.mysql import MySql
+from materialize.mzcompose.services.sql_server import (
+    SqlServer,
+    setup_sql_server_testing,
+)
 from materialize.mzcompose.test_result import (
     FailedTestExecutionError,
     TestFailureDetails,
@@ -145,6 +149,7 @@ SERVICES = [
     KgenService(),
     Postgres(),
     MySql(),
+    SqlServer(),
     Balancerd(),
     # Overridden below
     Materialized(),
@@ -155,7 +160,10 @@ SERVICES = [
 
 
 def run_one_scenario(
-    c: Composition, scenario_class: type[Scenario], args: argparse.Namespace
+    c: Composition,
+    scenario_class: type[Scenario],
+    args: argparse.Namespace,
+    first_run: bool,
 ) -> BenchmarkScenarioResult:
     scenario_name = scenario_class.__name__
     print(f"--- Now benchmarking {scenario_name} ...")
@@ -233,7 +241,10 @@ def run_one_scenario(
                 clusterd_image, size, additional_system_parameter_defaults
             )
 
-        start_overridden_mz_clusterd_and_cockroach(c, mz, clusterd, instance, balancerd)
+        start_overridden_mz_clusterd_and_cockroach(
+            c, mz, clusterd, instance, balancerd, first_run
+        )
+        first_run = False
 
         with c.override(
             Testdrive(
@@ -355,7 +366,12 @@ def create_clusterd_service(
 
 
 def start_overridden_mz_clusterd_and_cockroach(
-    c: Composition, mz: Materialized, clusterd: Clusterd, instance: str, balancerd: bool
+    c: Composition,
+    mz: Materialized,
+    clusterd: Clusterd,
+    instance: str,
+    balancerd: bool,
+    first_run: bool,
 ) -> None:
     with c.override(mz, clusterd):
         c.up(
@@ -364,6 +380,8 @@ def start_overridden_mz_clusterd_and_cockroach(
             "clusterd",
             *(["balancerd"] if balancerd else []),
         )
+        if first_run:
+            setup_sql_server_testing(c)
 
         version_request_command = c.run(
             "materialized",
@@ -528,7 +546,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         # specified root scenario is a leaf
         selected_scenarios = [specified_root_scenario]
 
-    dependencies = ["postgres", "mysql"]
+    dependencies = ["postgres", "mysql", "sql-server"]
 
     if args.redpanda:
         dependencies += ["redpanda"]
@@ -551,6 +569,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         )
 
     reports = []
+    first_run = True
 
     for run_index in range(0, args.runs_per_scenario):
         run_number = run_index + 1
@@ -563,7 +582,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         for scenario_class in scenario_classes_scheduled_to_run:
             try:
-                scenario_result = run_one_scenario(c, scenario_class, args)
+                scenario_result = run_one_scenario(c, scenario_class, args, first_run)
             except RuntimeError as e:
                 if (
                     "No image found for commit hash" in str(e)
@@ -574,6 +593,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     )
                     return
                 raise e
+            finally:
+                first_run = False
 
             if scenario_result.is_empty():
                 continue

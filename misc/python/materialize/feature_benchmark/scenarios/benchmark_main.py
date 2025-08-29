@@ -28,6 +28,7 @@ from materialize.feature_benchmark.scenario import (
     ScenarioDisabled,
 )
 from materialize.feature_benchmark.scenario_version import ScenarioVersion
+from materialize.mzcompose.services.sql_server import SqlServer
 
 # for pdoc ignores
 __pdoc__ = {}
@@ -1787,6 +1788,145 @@ $ mysql-connect name=mysql url=mysql://root@mysql password=${{arg.mysql-root-pas
 
 $ mysql-execute name=mysql
 USE public;
+{insertions}
+
+> SELECT count(*) FROM t1
+  /* B */
+{self.n()}
+            """
+        )
+
+
+class SqlServerCdc(Scenario):
+    pass
+
+
+class SqlServerInitialLoad(SqlServerCdc):
+    """Measure the time it takes to read 1M existing records from SQL Server
+    when creating a materialized source"""
+
+    FIXED_SCALE = True  # TODO: Remove when database-issues#7556 is fixed
+
+    def shared(self) -> Action:
+        return TdAction(
+            f"""
+$ sql-server-connect name=sql-server
+server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
+
+$ sql-server-execute name=sql-server
+USE test;
+IF EXISTS (SELECT 1 FROM cdc.change_tables WHERE capture_instance = 'dbo_pk_table') BEGIN EXEC sys.sp_cdc_disable_table @source_schema = 'dbo', @source_name = 'pk_table', @capture_instance = 'dbo_pk_table'; END
+DROP TABLE IF EXISTS pk_table;
+CREATE TABLE pk_table (pk BIGINT PRIMARY KEY, f2 BIGINT);
+EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'pk_table', @role_name = 'SA', @supports_net_changes = 0;
+
+WITH Numbers AS (SELECT TOP (1000000) ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS n FROM master.dbo.spt_values t1 CROSS JOIN master.dbo.spt_values t2) INSERT INTO pk_table (pk, f2) SELECT n, CAST(n AS bigint) * n FROM Numbers;
+"""
+        )
+
+    def before(self) -> Action:
+        return TdAction(
+            """
+> DROP SOURCE IF EXISTS mz_source_sqlservercdc CASCADE;
+> DROP CLUSTER IF EXISTS source_cluster CASCADE
+            """
+        )
+
+    def benchmark(self) -> MeasurementSource:
+        return Td(
+            f"""
+> CREATE SECRET IF NOT EXISTS sqlserverpass AS '${{arg.sql-server-sa-password}}'
+> CREATE CONNECTION IF NOT EXISTS sql_server_conn TO SQL SERVER (
+    HOST 'sql-server',
+    DATABASE test,
+    USER {SqlServer.DEFAULT_USER},
+    PASSWORD SECRET sqlserverpass
+  )
+
+> CREATE CLUSTER source_cluster SIZE 'scale={self._default_size},workers=1', REPLICATION FACTOR 1;
+
+> CREATE SOURCE mz_source_sqlservercdc
+  IN CLUSTER source_cluster
+  FROM SQL SERVER CONNECTION sql_server_conn;
+> CREATE TABLE pk_table FROM SOURCE mz_source_sqlservercdc (REFERENCE pk_table);
+  /* A */
+
+> SELECT count(*) FROM pk_table
+  /* B */
+{self.n()}
+            """
+        )
+
+
+class SqlServerStreaming(SqlServerCdc):
+    """Measure the time it takes to ingest records from SQL Server post-snapshot"""
+
+    SCALE = 5
+
+    def shared(self) -> Action:
+        return TdAction(
+            f"""
+$ sql-server-connect name=sql-server
+server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
+
+$ sql-server-execute name=sql-server
+USE test;
+"""
+        )
+
+    def before(self) -> Action:
+        return TdAction(
+            f"""
+> DROP SOURCE IF EXISTS s1 CASCADE;
+> DROP CLUSTER IF EXISTS source_cluster CASCADE;
+
+$ sql-server-connect name=sql-server
+server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
+
+$ sql-server-execute name=sql-server
+USE test;
+IF EXISTS (SELECT 1 FROM cdc.change_tables WHERE capture_instance = 'dbo_t1') BEGIN EXEC sys.sp_cdc_disable_table @source_schema = 'dbo', @source_name = 't1', @capture_instance = 'dbo_t1'; END
+DROP TABLE IF EXISTS t1;
+CREATE TABLE t1 (pk BIGINT IDENTITY(1,1) PRIMARY KEY, f2 BIGINT);
+EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 't1', @role_name = 'SA', @supports_net_changes = 0;
+
+> CREATE SECRET IF NOT EXISTS sqlserverpass AS '${{arg.sql-server-sa-password}}'
+> CREATE CONNECTION IF NOT EXISTS sql_server_conn TO SQL SERVER (
+    HOST 'sql-server',
+    DATABASE test,
+    USER {SqlServer.DEFAULT_USER},
+    PASSWORD SECRET sqlserverpass
+  )
+
+> CREATE CLUSTER source_cluster SIZE 'scale={self._default_size},workers=1', REPLICATION FACTOR 1;
+
+> CREATE SOURCE s1
+  IN CLUSTER source_cluster
+  FROM SQL SERVER CONNECTION sql_server_conn;
+
+> CREATE TABLE t1 FROM SOURCE s1 (REFERENCE t1);
+            """
+        )
+
+    def benchmark(self) -> MeasurementSource:
+        insertions = "\n".join(
+            [
+                f"INSERT INTO t1 (f2) SELECT TOP ({round(self.n()/1000)}) n FROM (SELECT ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS n FROM sys.objects AS o1 CROSS JOIN sys.objects AS o2) AS numbers;"
+                for i in range(0, 1000)
+            ]
+        )
+
+        return Td(
+            f"""
+> SELECT 1;
+  /* A */
+1
+
+$ sql-server-connect name=sql-server
+server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
+
+$ sql-server-execute name=sql-server
+USE test;
 {insertions}
 
 > SELECT count(*) FROM t1

@@ -14,7 +14,6 @@ from typing import Any
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check, externally_idempotent
-from materialize.checks.features import Features
 from materialize.mz_version import MzVersion
 
 
@@ -31,7 +30,7 @@ class PgCdcBase:
         self.repeats = 1024 if wait else 16384
         self.expects = 97350 if wait else 1633350
         self.suffix = f"_{str(wait).lower()}"
-        super().__init__(**kwargs)  # foward unused args to Check
+        super().__init__(**kwargs)  # forward unused args to Check
 
     def initialize(self) -> Testdrive:
         return Testdrive(
@@ -268,22 +267,14 @@ class PgCdcBase:
 
 @externally_idempotent(False)
 class PgCdc(PgCdcBase, Check):
-    def __init__(
-        self, base_version: MzVersion, rng: Random | None, features: Features | None
-    ) -> None:
-        super().__init__(
-            wait=True, base_version=base_version, rng=rng, features=features
-        )
+    def __init__(self, base_version: MzVersion, rng: Random | None) -> None:
+        super().__init__(wait=True, base_version=base_version, rng=rng)
 
 
 @externally_idempotent(False)
 class PgCdcNoWait(PgCdcBase, Check):
-    def __init__(
-        self, base_version: MzVersion, rng: Random | None, features: Features | None
-    ) -> None:
-        super().__init__(
-            wait=False, base_version=base_version, rng=rng, features=features
-        )
+    def __init__(self, base_version: MzVersion, rng: Random | None) -> None:
+        super().__init__(wait=False, base_version=base_version, rng=rng)
 
 
 @externally_idempotent(False)
