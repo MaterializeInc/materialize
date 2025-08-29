@@ -1,6 +1,5 @@
 ---
 source: src/catalog/tests/debug.rs
-assertion_line: 226
 expression: test_trace
 ---
 Trace {

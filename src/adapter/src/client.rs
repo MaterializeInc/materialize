@@ -50,6 +50,7 @@ use uuid::Uuid;
 use crate::catalog::Catalog;
 use crate::command::{
     AuthResponse, CatalogDump, CatalogSnapshot, Command, ExecuteResponse, Response,
+    SASLChallengeResponse, SASLVerifyProofResponse,
 };
 use crate::coord::{Coordinator, ExecuteContextExtra};
 use crate::error::AdapterError;
@@ -162,6 +163,40 @@ impl Client {
         self.send(Command::AuthenticatePassword {
             role_name: user.to_string(),
             password: Some(password.clone()),
+            tx,
+        });
+        let response = rx.await.expect("sender dropped")?;
+        Ok(response)
+    }
+
+    pub async fn generate_sasl_challenge(
+        &self,
+        user: &String,
+        client_nonce: &String,
+    ) -> Result<SASLChallengeResponse, AdapterError> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::AuthenticateGetSASLChallenge {
+            role_name: user.to_string(),
+            nonce: client_nonce.to_string(),
+            tx,
+        });
+        let response = rx.await.expect("sender dropped")?;
+        Ok(response)
+    }
+
+    pub async fn verify_sasl_proof(
+        &self,
+        user: &String,
+        proof: &String,
+        nonce: &String,
+        mock_hash: &String,
+    ) -> Result<SASLVerifyProofResponse, AdapterError> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::AuthenticateVerifySASLProof {
+            role_name: user.to_string(),
+            proof: proof.to_string(),
+            auth_message: nonce.to_string(),
+            mock_hash: mock_hash.to_string(),
             tx,
         });
         let response = rx.await.expect("sender dropped")?;
@@ -927,6 +962,8 @@ impl SessionClient {
                 Command::GetWebhook { .. } => typ = Some("webhook"),
                 Command::Startup { .. }
                 | Command::AuthenticatePassword { .. }
+                | Command::AuthenticateGetSASLChallenge { .. }
+                | Command::AuthenticateVerifySASLProof { .. }
                 | Command::CatalogSnapshot { .. }
                 | Command::Commit { .. }
                 | Command::CancelRequest { .. }
