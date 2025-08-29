@@ -356,6 +356,8 @@ impl Message {
                 Command::CheckConsistency { .. } => "command-check_consistency",
                 Command::Dump { .. } => "command-dump",
                 Command::AuthenticatePassword { .. } => "command-auth_check",
+                Command::AuthenticateGetSASLChallenge { .. } => "command-auth_get_sasl_challenge",
+                Command::AuthenticateVerifySASLProof { .. } => "command-auth_verify_sasl_proof",
             },
             Message::ControllerReady {
                 controller: ControllerReadiness::Compute,
