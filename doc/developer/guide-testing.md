@@ -156,17 +156,18 @@ data.
 You can run a sqllogictest file like so:
 
 ```shell
-$ bin/sqllogictest [--release] -- test/sqllogictest/TESTFILE.slt
+$ bin/sqllogictest [--release] [--optimized] -- test/sqllogictest/TESTFILE.slt
 ```
 
-For larger test files, it is imperative that you compile in release mode, i.e.,
-by passing the `--release` flag as above. The extra compile time will quickly be
-made up for by a much faster execution.
+For larger test files, it is imperative that you compile in optimized mode, i.e.,
+by passing the `--optimized` flag as above. The extra compile time will quickly be
+made up for by a much faster execution. Release mode is usually not worth the
+extra compile time locally.
 
 To add logging for tests, append `-vv`, e.g.:
 
 ```shell
-$ bin/sqllogictest [--release] -- test/sqllogictest/TESTFILE.slt -vv
+$ bin/sqllogictest [--release] [--optimized] -- test/sqllogictest/TESTFILE.slt -vv
 ```
 
 There are currently three classes of sqllogictest files:

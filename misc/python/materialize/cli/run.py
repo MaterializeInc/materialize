@@ -50,6 +50,7 @@ SANITIZER_TARGET = (
 DEFAULT_POSTGRES = "postgres://root@localhost:26257/materialize"
 MZDATA = MZ_ROOT / "mzdata"
 DEFAULT_BLOB = f"file://{MZDATA}/persist/blob"
+RUST_MIN_STACK = os.getenv("RUST_MIN_STACK", "8388608")
 
 # sets entitlements on the built binary, e.g. environmentd, so you can inspect it with Instruments
 MACOS_ENTITLEMENTS_DATA = """
@@ -321,6 +322,9 @@ def main() -> int:
             ]
             if args.monitoring:
                 command += ["--opentelemetry-endpoint=http://localhost:4317"]
+            # Common stack overflows in Debug mode
+            if not args.release and not args.optimized:
+                env["RUST_MIN_STACK"] = RUST_MIN_STACK
         elif args.program == "sqllogictest":
             for arg in args.args:
                 if arg.startswith("test/sqllogictest/sqlite/") or arg.startswith(
@@ -342,6 +346,9 @@ def main() -> int:
                 f"--system-parameter-default={system_parameter_default}",
                 *args.args,
             ]
+            # Common stack overflows in Debug mode
+            if not args.release and not args.optimized:
+                env["RUST_MIN_STACK"] = RUST_MIN_STACK
     elif args.program == "test":
         if args.bazel:
             raise UIError("testing with Bazel is not yet supported")
@@ -367,7 +374,7 @@ def main() -> int:
         command += args.args
         env["METADATA_BACKEND_URL"] = args.postgres
         # some tests run into stack overflows
-        env["RUST_MIN_STACK"] = "4194304"
+        env["RUST_MIN_STACK"] = RUST_MIN_STACK
         dbconn = _connect_sql(args.postgres)
     else:
         raise UIError(f"unknown program {args.program}")
