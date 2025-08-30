@@ -91,7 +91,7 @@ Int32(5)
 build-datum
 5.2 numeric
 ----
-Numeric(OrderedDecimal(5.2))
+Numeric(5.2)
 
 build-datum
 "2021-01-02 00:12:59" timestamp
