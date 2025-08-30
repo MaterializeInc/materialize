@@ -20,7 +20,7 @@ mz-cluster-client = { path = "../cluster-client" }
 mz-ore = { path = "../ore", features = ["async", "process", "tracing"] }
 mz-service = { path = "../service" }
 rand = "0.8.5"
-regex = "1.11.1"
+regex = "1.11.2"
 timely = "0.23.0"
 tokio = { version = "1.44.1", features = ["fs", "rt", "sync", "net"] }
 tracing = "0.1.37"
