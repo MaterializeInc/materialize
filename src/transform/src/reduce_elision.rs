@@ -18,7 +18,7 @@ use mz_expr::MirRelationExpr;
 
 use crate::TransformCtx;
 use crate::analysis::{DerivedBuilder, DerivedView};
-use crate::analysis::{RelationType, UniqueKeys};
+use crate::analysis::{SqlRelationType, UniqueKeys};
 
 /// Removes `Reduce` when the input has as unique keys the keys of the reduce.
 #[derive(Debug)]
@@ -41,7 +41,7 @@ impl crate::Transform for ReduceElision {
     ) -> Result<(), crate::TransformError> {
         // Assemble type information once for the whole expression.
         let mut builder = DerivedBuilder::new(ctx.features);
-        builder.require(RelationType);
+        builder.require(SqlRelationType);
         builder.require(UniqueKeys);
         let derived = builder.visit(relation);
         let derived_view = derived.as_view();
@@ -69,8 +69,8 @@ impl ReduceElision {
             {
                 let input_type = view
                     .last_child()
-                    .value::<RelationType>()
-                    .expect("RelationType required")
+                    .value::<SqlRelationType>()
+                    .expect("SqlRelationType required")
                     .as_ref()
                     .expect("Expression not well-typed");
                 let input_keys = view

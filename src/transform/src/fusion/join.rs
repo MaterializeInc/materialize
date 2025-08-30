@@ -95,8 +95,9 @@ impl Join {
             // Local non-fusion tidying.
             inputs.retain(|e| !e.is_constant_singleton());
             if inputs.len() == 0 {
-                *relation = MirRelationExpr::constant(vec![vec![]], mz_repr::RelationType::empty())
-                    .filter(unpack_equivalences(equivalences));
+                *relation =
+                    MirRelationExpr::constant(vec![vec![]], mz_repr::SqlRelationType::empty())
+                        .filter(unpack_equivalences(equivalences));
                 return Ok(false);
             }
             if inputs.len() == 1 {
@@ -233,7 +234,7 @@ impl Join {
                 let (map, filter, project) = outer_mfp.as_map_filter_project();
 
                 *relation = match new_inputs.len() {
-                    0 => MirRelationExpr::constant(vec![vec![]], mz_repr::RelationType::empty()),
+                    0 => MirRelationExpr::constant(vec![vec![]], mz_repr::SqlRelationType::empty()),
                     1 => new_inputs.pop().unwrap(),
                     _ => MirRelationExpr::join(new_inputs, Vec::new()),
                 }
