@@ -239,8 +239,8 @@ impl HirRelationExpr {
             if let MirRelationExpr::Get { .. } = &get_outer {
             } else {
                 panic!(
-                    "get_outer: expected a MirRelationExpr::Get, found {:?}",
-                    get_outer
+                    "get_outer: expected a MirRelationExpr::Get, found\n{}",
+                    get_outer.pretty(),
                 );
             }
             assert_eq!(col_map.len(), get_outer.arity());
@@ -333,8 +333,8 @@ impl HirRelationExpr {
                             (id, typ)
                         } else {
                             panic!(
-                                "get_value: expected a MirRelationExpr::Get with local Id, found {:?}",
-                                get_value
+                                "get_value: expected a MirRelationExpr::Get with local Id, found\n{}",
+                                get_value.pretty(),
                             );
                         };
                         // Add the information about the CTE to the map and remove it when
