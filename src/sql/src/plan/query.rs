@@ -5665,7 +5665,11 @@ fn plan_case<'a>(
     )?;
     let mut expr = result_exprs.pop().unwrap();
     assert_eq!(cond_exprs.len(), result_exprs.len());
-    for (cexpr, rexpr) in cond_exprs.into_iter().zip(result_exprs).rev() {
+    for (cexpr, rexpr) in cond_exprs
+        .into_iter()
+        .rev()
+        .zip_eq(result_exprs.into_iter().rev())
+    {
         expr = HirScalarExpr::if_then_else(cexpr, rexpr, expr);
     }
     Ok(expr)

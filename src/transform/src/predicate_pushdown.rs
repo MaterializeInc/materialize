@@ -541,7 +541,7 @@ impl PredicatePushdown {
                     // and therefore we should attend to all of these expressions when pushing down
                     // a predicate into a Let binding.
                     let mut users = vec![&mut **body];
-                    for (id, value) in ids.iter_mut().zip(values).rev() {
+                    for (id, value) in ids.iter_mut().rev().zip_eq(values.into_iter().rev()) {
                         // Predicate pushdown from Gets in `users` into the value of a Let binding
                         //
                         // For now, we simply always avoid pushing into a Let binding that is

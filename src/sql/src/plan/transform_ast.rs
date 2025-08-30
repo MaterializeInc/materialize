@@ -842,7 +842,12 @@ impl<'a> Desugarer<'a> {
                         };
                         let (l, r) = (left.last_mut().unwrap(), right.last_mut().unwrap());
                         let mut new = l.take().binop(op.clone(), r.take());
-                        for (l, r) in left.iter_mut().zip(right).rev().skip(1) {
+                        for (l, r) in left
+                            .iter_mut()
+                            .rev()
+                            .zip_eq(right.into_iter().rev())
+                            .skip(1)
+                        {
                             new = l
                                 .clone()
                                 .binop(Op::bare(strict_op), r.clone())

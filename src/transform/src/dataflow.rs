@@ -1102,7 +1102,7 @@ impl<'a> CollectIndexRequests<'a> {
                     // Note that we do only one pass, i.e., we won't see context through a Get that
                     // refers to the previous iteration. But this is ok, because we can't reuse
                     // arrangements across iterations anyway.
-                    for (id, value) in ids.iter().zip(values.iter_mut()).rev() {
+                    for (id, value) in ids.iter().rev().zip_eq(values.iter_mut().rev()) {
                         this.collect_index_reqs_inner(
                             value,
                             &this.context_across_lets[id].clone(),
