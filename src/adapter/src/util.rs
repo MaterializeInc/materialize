@@ -23,7 +23,7 @@ use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::vars::Var;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
-    CreateIndexStatement, FetchStatement, Ident, Raw, RawClusterName, RawItemName, Statement,
+    CreateIndexStatement, Ident, Raw, RawClusterName, RawItemName, Statement,
 };
 use mz_storage_types::controller::StorageError;
 use mz_transform::TransformError;
@@ -222,46 +222,20 @@ pub fn index_sql(
 }
 
 /// Creates a description of the statement `stmt`.
-///
-/// This function is identical to sql::plan::describe except this is also
-/// supports describing FETCH statements which need access to bound portals
-/// through the session.
 pub fn describe(
     catalog: &Catalog,
     stmt: Statement<Raw>,
     param_types: &[Option<ScalarType>],
     session: &Session,
 ) -> Result<StatementDesc, AdapterError> {
-    match stmt {
-        // FETCH's description depends on the current session, which describe_statement
-        // doesn't (and shouldn't?) have access to, so intercept it here.
-        Statement::Fetch(FetchStatement { ref name, .. }) => {
-            // Unverified portal is ok here because Coordinator::execute will verify the
-            // named portal during execution.
-            match session
-                .get_portal_unverified(name.as_str())
-                .map(|p| p.desc.clone())
-            {
-                Some(mut desc) => {
-                    // Parameters are already bound to the portal and will not be accepted through
-                    // FETCH.
-                    desc.param_types = Vec::new();
-                    Ok(desc)
-                }
-                None => Err(AdapterError::UnknownCursor(name.to_string())),
-            }
-        }
-        _ => {
-            let catalog = &catalog.for_session(session);
-            let (stmt, _) = mz_sql::names::resolve(catalog, stmt)?;
-            Ok(mz_sql::plan::describe(
-                session.pcx(),
-                catalog,
-                stmt,
-                param_types,
-            )?)
-        }
-    }
+    let catalog = &catalog.for_session(session);
+    let (stmt, _) = mz_sql::names::resolve(catalog, stmt)?;
+    Ok(mz_sql::plan::describe(
+        session.pcx(),
+        catalog,
+        stmt,
+        param_types,
+    )?)
 }
 
 pub trait ResultExt<T> {

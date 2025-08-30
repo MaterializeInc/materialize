@@ -107,6 +107,11 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
     /// None if the prepared statement does not exist.
     fn get_prepared_statement_desc(&self, name: &str) -> Option<&StatementDesc>;
 
+    /// Retrieves a reference to the specified portal's descriptor.
+    ///
+    /// If there is no such portal, returns `None`.
+    fn get_portal_desc_unverified(&self, portal_name: &str) -> Option<&StatementDesc>;
+
     /// Resolves the named database.
     ///
     /// If `database_name` exists in the catalog, it returns a reference to the

@@ -290,6 +290,8 @@ pub enum PlanError {
     // Expected a constant expression that evaluates without an error to a non-null value.
     ConstantExpressionSimplificationFailed(String),
     InvalidOffset(String),
+    /// The named cursor does not exist.
+    UnknownCursor(String),
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -816,6 +818,9 @@ impl fmt::Display for PlanError {
             },
             Self::ConstantExpressionSimplificationFailed(e) => write!(f, "{}", e),
             Self::InvalidOffset(e) => write!(f, "Invalid OFFSET clause: {}", e),
+            Self::UnknownCursor(name) => {
+                write!(f, "cursor {} does not exist", name.quoted())
+            }
         }
     }
 }
