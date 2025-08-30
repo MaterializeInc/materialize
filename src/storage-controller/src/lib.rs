@@ -1272,39 +1272,6 @@ where
         Ok(())
     }
 
-    async fn alter_ingestion_source_desc(
-        &mut self,
-        ingestion_id: GlobalId,
-        source_desc: SourceDesc,
-    ) -> Result<(), StorageError<Self::Timestamp>> {
-        self.check_alter_ingestion_source_desc(ingestion_id, &source_desc)?;
-
-        // Update the `SourceDesc` and the source exports
-        // simultaneously.
-        let collection = self
-            .collections
-            .get_mut(&ingestion_id)
-            .expect("validated exists");
-        let curr_ingestion = match &mut collection.data_source {
-            DataSource::Ingestion(curr_ingestion) => curr_ingestion,
-            _ => unreachable!("verified collection refers to ingestion"),
-        };
-
-        curr_ingestion.desc = source_desc;
-        tracing::debug!("altered {ingestion_id}'s SourceDesc");
-
-        // n.b. we do not re-run updated ingestions because updating the source
-        // desc is only done in preparation for adding subsources, which will
-        // then run the ingestion.
-        //
-        // If this expectation ever changes, we will almost certainly know
-        // because failing to run an altered ingestion means that whatever
-        // changes you expect to occur will not be reflected in the running
-        // dataflow.
-
-        Ok(())
-    }
-
     async fn alter_ingestion_connections(
         &mut self,
         source_connections: BTreeMap<GlobalId, GenericSourceConnection<InlinedConnection>>,

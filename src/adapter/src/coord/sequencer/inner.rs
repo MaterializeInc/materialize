@@ -4383,12 +4383,6 @@ impl Coordinator {
 
                 self.catalog_transact(Some(session), ops).await?;
 
-                self.controller
-                    .storage
-                    .alter_ingestion_source_desc(ingestion_id, desc)
-                    .await
-                    .unwrap_or_terminate("cannot fail to alter source desc");
-
                 let mut item_ids = BTreeSet::new();
                 let mut collections = Vec::with_capacity(sources.len());
                 for (item_id, source) in sources {
