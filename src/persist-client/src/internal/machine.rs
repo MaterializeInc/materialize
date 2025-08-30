@@ -1770,7 +1770,7 @@ pub mod datadriven {
             consolidate_updates(&mut updates);
         }
         let run_order = if consolidate {
-            cfg.preferred_order
+            RunOrder::Structured
         } else {
             RunOrder::Unordered
         };
