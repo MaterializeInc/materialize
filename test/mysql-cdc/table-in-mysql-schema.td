@@ -50,8 +50,7 @@ contains:reference to public.timezone not found in source
 
 > CREATE SOURCE mz_source FROM MYSQL CONNECTION mysql_conn;
 
-! CREATE TABLE t_in_mysql FROM SOURCE mz_source (REFERENCE mysql.time_zone);
-contains:referenced tables use unsupported types
+> CREATE TABLE t_in_mysql_int_enum FROM SOURCE mz_source (REFERENCE mysql.time_zone);
 
 $ mysql-execute name=mysql
 USE mysql;

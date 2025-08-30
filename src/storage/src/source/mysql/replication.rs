@@ -337,6 +337,10 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 let event_data = event.read_data()?;
                 metrics.total.inc();
 
+                if let Some(event_data) = &event_data {
+                    tracing::info!(%id, ?event_data, "timely-{worker_id} received binlog event");
+                }
+
                 match event_data {
                     Some(EventData::XidEvent(_)) => {
                         // We've received a transaction commit event, which means that we've seen

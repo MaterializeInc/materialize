@@ -456,6 +456,22 @@ fn parse_data_type(
             };
             return Ok((ScalarType::UInt64, Some(MySqlColumnMeta::Bit(precision))));
         }
+        "enum" => {
+            // We must include the meta to ensure that we know during snapshot that
+            // the column must be cast to an integer.
+            let meta = MySqlColumnMeta::Enum(MySqlColumnMetaEnum {
+                values: enum_vals_from_column_type(info.column_type.as_str()).map_err(|_| {
+                    UnsupportedDataType {
+                        column_type: info.column_type.clone(),
+                        qualified_table_name: format!("{:?}.{:?}", schema_name, table_name),
+                        column_name: info.column_name.clone(),
+                        intended_type: Some("text".to_string()),
+                    }
+                })?,
+            });
+
+            return Ok((ScalarType::UInt16, Some(meta)));
+        }
         typ => {
             tracing::warn!(?typ, "found unsupported data type");
             return Err(UnsupportedDataType {

@@ -15,7 +15,7 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
-use mz_repr::ColumnType;
+use mz_repr::{ColumnType, ScalarType};
 
 use self::proto_my_sql_column_desc::Meta;
 
@@ -153,10 +153,6 @@ impl RustType<ProtoMySqlColumnMetaEnum> for MySqlColumnMetaEnum {
     }
 }
 
-trait IsCompatible {
-    fn is_compatible(&self, other: &Self) -> bool;
-}
-
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
 pub enum MySqlColumnMeta {
     /// The described column is an enum, with the given possible values.
@@ -173,21 +169,74 @@ pub enum MySqlColumnMeta {
     Bit(u32),
 }
 
-impl IsCompatible for Option<MySqlColumnMeta> {
-    fn is_compatible(&self, other: &Option<MySqlColumnMeta>) -> bool {
-        match (self, other) {
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
+pub struct MySqlColumnDesc {
+    /// The name of the column.
+    pub name: String,
+    /// The intended data type of this column within Materialize
+    /// If this is None, the column is intended to be skipped within Materialize
+    pub column_type: Option<ColumnType>,
+    /// Optional metadata about the column that may be necessary for decoding
+    pub meta: Option<MySqlColumnMeta>,
+}
+
+impl MySqlColumnDesc {
+    /// Determines if two `MySqlColumnDesc` are compatible with one another in
+    /// a way that Materialize can handle.
+    pub fn is_compatible(&self, other: &MySqlColumnDesc) -> bool {
+        self.name == other.name
+            && match (&self.column_type, &other.column_type) {
+                (None, None) => true,
+                (Some(self_type), Some(other_type)) => {
+                    self_type.scalar_type == other_type.scalar_type
+                    // Columns are compatible if:
+                    // - self is nullable; introducing a not null constraint doesn't
+                    //   change this column's behavior.
+                    // - self and other are both not nullable
+                    && (self_type.nullable || self_type.nullable == other_type.nullable)
+                }
+                (Some(_), None) => false,
+                (None, Some(_)) => false,
+            }
+        // Ensure any column metadata is compatible.
+        && self.is_compatible_meta(&other.meta)
+    }
+
+    fn is_compatible_meta(&self, other: &Option<MySqlColumnMeta>) -> bool {
+        match (&self.meta, other) {
             (None, None) => true,
             (Some(_), None) => false,
             (None, Some(_)) => false,
             (Some(MySqlColumnMeta::Enum(self_enum)), Some(MySqlColumnMeta::Enum(other_enum))) => {
-                // so as long as `self.values` is a compatible prefix of `other.values`, we can
-                // ignore extra values from `other.values`.
-                self_enum.values.len() <= other_enum.values.len()
-                    && self_enum
+                let uses_enum_string_representation: bool = self
+                    .column_type
+                    .as_ref()
+                    .is_some_and(|col_type| col_type.scalar_type != ScalarType::UInt16);
+
+                // For any `ScalarType` not a `UInt16` we apply the previous logic
+                // of checking to see if the enum value is already known to us.
+                // We do this as a precaution after implementing support for
+                // representing MySQL enums as `UInt16` to ensure we are
+                // still compatible with representing MySQL enums as `String`
+                // or `Bytes`.
+                if uses_enum_string_representation {
+                    self_enum.values.len() <= other_enum.values.len()
+                        && self_enum
+                            .values
+                            .iter()
+                            .zip(other_enum.values.iter())
+                            .all(|(self_val, other_val)| self_val == other_val)
+                } else {
+                    // For the `UInt16` enum representation we support addition of new enums but
+                    // no other changes.
+                    let other_enum_vals = other_enum.values.iter().take(self_enum.values.len());
+
+                    self_enum
                         .values
                         .iter()
-                        .zip(other_enum.values.iter())
+                        .zip(other_enum_vals)
                         .all(|(self_val, other_val)| self_val == other_val)
+                }
             }
             (Some(MySqlColumnMeta::Json), Some(MySqlColumnMeta::Json)) => true,
             (Some(MySqlColumnMeta::Year), Some(MySqlColumnMeta::Year)) => true,
@@ -203,17 +252,6 @@ impl IsCompatible for Option<MySqlColumnMeta> {
             _ => false,
         }
     }
-}
-
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
-pub struct MySqlColumnDesc {
-    /// The name of the column.
-    pub name: String,
-    /// The intended data type of this column within Materialize
-    /// If this is None, the column is intended to be skipped within Materialize
-    pub column_type: Option<ColumnType>,
-    /// Optional metadata about the column that may be necessary for decoding
-    pub meta: Option<MySqlColumnMeta>,
 }
 
 impl RustType<ProtoMySqlColumnDesc> for MySqlColumnDesc {
@@ -257,29 +295,6 @@ impl RustType<ProtoMySqlColumnDesc> for MySqlColumnDesc {
                 })
                 .transpose()?,
         })
-    }
-}
-
-impl IsCompatible for MySqlColumnDesc {
-    /// Determines if two `MySqlColumnDesc` are compatible with one another in
-    /// a way that Materialize can handle.
-    fn is_compatible(&self, other: &MySqlColumnDesc) -> bool {
-        self.name == other.name
-            && match (&self.column_type, &other.column_type) {
-                (None, None) => true,
-                (Some(self_type), Some(other_type)) => {
-                    self_type.scalar_type == other_type.scalar_type
-                    // Columns are compatible if:
-                    // - self is nullable; introducing a not null constraint doesn't
-                    //   change this column's behavior.
-                    // - self and other are both not nullable
-                    && (self_type.nullable || self_type.nullable == other_type.nullable)
-                }
-                (Some(_), None) => false,
-                (None, Some(_)) => false,
-            }
-            // Ensure any column metadata is compatible
-            && self.meta.is_compatible(&other.meta)
     }
 }
 

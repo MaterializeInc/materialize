@@ -94,7 +94,7 @@ use itertools::Itertools;
 use mysql_async::prelude::Queryable;
 use mysql_async::{IsolationLevel, Row as MySqlRow, TxOpts};
 use mz_mysql_util::{
-    ER_NO_SUCH_TABLE, MySqlError, pack_mysql_row, query_sys_var, quote_identifier,
+    ER_NO_SUCH_TABLE, MySqlColumnMeta, MySqlError, pack_mysql_row, query_sys_var, quote_identifier,
 };
 use mz_ore::cast::CastFrom;
 use mz_ore::future::InTask;
@@ -543,12 +543,23 @@ fn build_snapshot_query(outputs: &[SourceOutputInfo]) -> String {
             info.table_name
         );
     }
+
     let columns = info
         .desc
         .columns
         .iter()
-        .map(|col| quote_identifier(&col.name))
+        .map(|col| {
+            if matches!(col.meta, Some(MySqlColumnMeta::Enum(_))) {
+                // Use CAST to convert enum to unsigned integer during snapshot
+                // after snapshot the enum will replicate via the binlog as an
+                // an unsigend integer.
+                format!("CAST({} AS UNSIGNED)", quote_identifier(&col.name))
+            } else {
+                quote_identifier(&col.name)
+            }
+        })
         .join(", ");
+
     format!("SELECT {} FROM {}", columns, info.table_name)
 }
 

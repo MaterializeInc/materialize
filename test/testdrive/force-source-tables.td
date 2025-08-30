@@ -269,22 +269,32 @@ INSERT INTO mysql_table VALUES ('var1', 1234), ('var0', 0);
 > SHOW SUBSOURCES ON mysql_source
 mysql_source_progress progress
 
-! CREATE TABLE mysql_table_1 FROM SOURCE mysql_source (REFERENCE "public"."mysql_table");
-contains:referenced tables use unsupported types
-
-> CREATE TABLE mysql_table_1 FROM SOURCE mysql_source (REFERENCE "public"."mysql_table") WITH (TEXT COLUMNS = (a));
+> CREATE TABLE mysql_table_1 FROM SOURCE mysql_source (REFERENCE "public"."mysql_table");
 
 > SELECT * FROM mysql_table_1;
+1 0
+2 1234
+
+> CREATE TABLE mysql_table_1_string FROM SOURCE mysql_source (REFERENCE "public"."mysql_table") WITH (TEXT COLUMNS = (a));
+
+> SELECT * FROM mysql_table_1_string;
 var0 0
 var1 1234
 
-> SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'mysql_table_1';
+> SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'mysql_table_1' OR name = 'mysql_table_1_string';
+running
 running
 
 $ mysql-execute name=mysql
 INSERT INTO mysql_table VALUES ('var1', 5678), ('var0', 1);
 
 > SELECT * FROM mysql_table_1;
+1 0
+2 1234
+1 1
+2 5678
+
+> SELECT * FROM mysql_table_1_string;
 var0 0
 var1 1234
 var0 1
@@ -349,6 +359,7 @@ mysql_table public {a,b,c}
 mysql_table_new public {foo,bar}
 
 > SHOW TABLES ON mysql_source;
+mysql_table_1_string ""
 mysql_table_2 ""
 mysql_table_3 ""
 
