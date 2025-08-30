@@ -805,8 +805,8 @@ impl Coordinator {
                 Self::send_diffs(session, diffs_plan)
             }
             None => panic!(
-                "tried using sequence_insert_constant on non-constant MirRelationExpr {:?}",
-                constants
+                "tried using sequence_insert_constant on non-constant MirRelationExpr\n{}",
+                constants.pretty(),
             ),
         }
     }
