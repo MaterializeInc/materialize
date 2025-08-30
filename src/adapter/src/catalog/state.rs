@@ -338,6 +338,7 @@ impl CatalogState {
             search_path,
             role_id: session.current_role_id().clone(),
             prepared_statements: Some(session.prepared_statements()),
+            portals: Some(session.portals()),
             notices_tx: session.retain_notice_transmitter(),
         }
     }
@@ -360,6 +361,7 @@ impl CatalogState {
             search_path: Vec::new(),
             role_id,
             prepared_statements: None,
+            portals: None,
             notices_tx,
         }
     }

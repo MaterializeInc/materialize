@@ -688,6 +688,11 @@ impl<T: TimestampManipulation> Session<T> {
         &self.prepared_statements
     }
 
+    /// Returns the portals for the session.
+    pub fn portals(&self) -> &BTreeMap<String, Portal> {
+        &self.portals
+    }
+
     /// Binds the specified portal to the specified prepared statement.
     ///
     /// If the prepared statement contains parameters, the values and types of

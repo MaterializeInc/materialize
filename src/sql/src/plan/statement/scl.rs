@@ -208,10 +208,25 @@ pub fn plan_declare(
 }
 
 pub fn describe_fetch(
-    _: &StatementContext,
-    _: FetchStatement<Aug>,
+    scx: &StatementContext,
+    FetchStatement {
+        name,
+        count: _,
+        options: _,
+    }: FetchStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
-    Ok(StatementDesc::new(None))
+    if let Some(mut desc) = scx
+        .catalog
+        .get_portal_desc_unverified(&name.to_string())
+        .cloned()
+    {
+        // Parameters are already bound to the portal and will not be accepted through
+        // FETCH.
+        desc.param_types = Vec::new();
+        Ok(desc)
+    } else {
+        Err(PlanError::UnknownCursor(name.to_string()))
+    }
 }
 
 generate_extracted_config!(FetchOption, (Timeout, Duration));
