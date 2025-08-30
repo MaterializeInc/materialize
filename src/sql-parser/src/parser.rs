@@ -9083,7 +9083,8 @@ impl<'a> Parser<'a> {
             Statement::Select(_)
                 | Statement::Insert(_)
                 | Statement::Delete(_)
-                | Statement::Update(_),
+                | Statement::Update(_)
+                | Statement::Fetch(_),
         ) {
             return parser_err!(self, pos, "unpreparable statement").map_no_statement_parser_err();
         }
