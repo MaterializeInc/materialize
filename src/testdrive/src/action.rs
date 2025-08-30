@@ -654,7 +654,7 @@ impl State {
                             testdrive_topics.len()
                         ));
                     }
-                    for (res, topic) in res.iter().zip(testdrive_topics.iter()) {
+                    for (res, topic) in res.iter().zip_eq(testdrive_topics.iter()) {
                         match res {
                             Ok(_)
                             | Err((_, rdkafka::types::RDKafkaErrorCode::UnknownTopicOrPartition)) => {

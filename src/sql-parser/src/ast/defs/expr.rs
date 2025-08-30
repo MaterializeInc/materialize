@@ -20,6 +20,7 @@
 
 use std::{fmt, mem};
 
+use itertools::Itertools;
 use mz_ore::soft_assert_eq_or_log;
 use mz_sql_lexer::keywords::*;
 
@@ -368,7 +369,7 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                     f.write_str(" ");
                     f.write_node(&operand);
                 }
-                for (c, r) in conditions.iter().zip(results) {
+                for (c, r) in conditions.iter().zip_eq(results) {
                     f.write_str(" WHEN ");
                     f.write_node(c);
                     f.write_str(" THEN ");
@@ -898,7 +899,7 @@ impl<T: AstInfo> FunctionArgs<T> {
         };
         soft_assert_eq_or_log!(args.len(), kws.len());
         let mut delim = "";
-        for (arg, kw) in args.iter().zip(kws) {
+        for (arg, kw) in args.iter().zip_eq(kws) {
             if let Some(kw) = kw {
                 f.write_str(delim);
                 f.write_str(kw.as_str());

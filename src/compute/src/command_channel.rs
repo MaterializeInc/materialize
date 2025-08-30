@@ -25,6 +25,7 @@
 use std::sync::{Arc, Mutex};
 
 use crossbeam_channel::TryRecvError;
+use itertools::Itertools;
 use mz_compute_client::protocol::command::ComputeCommand;
 use mz_compute_types::dataflows::{BuildDesc, DataflowDescription};
 use mz_ore::cast::CastFrom;
@@ -165,7 +166,8 @@ fn split_command(
             // Partition each build description among `parts`.
             for build_desc in dataflow.objects_to_build {
                 let build_part = build_desc.plan.partition_among(parts);
-                for (plan, objects_to_build) in build_part.into_iter().zip(builds_parts.iter_mut())
+                for (plan, objects_to_build) in
+                    build_part.into_iter().zip_eq(builds_parts.iter_mut())
                 {
                     objects_to_build.push(BuildDesc {
                         id: build_desc.id,

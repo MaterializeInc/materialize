@@ -268,7 +268,7 @@ impl Demand {
                     let new_columns = input_mapper.split_column_set_by_input(columns.iter());
 
                     // Recursively indicate the requirements.
-                    for (input, columns) in inputs.iter_mut().zip(new_columns) {
+                    for (input, columns) in inputs.iter_mut().zip_eq(new_columns) {
                         self.action(input, columns, gets)?;
                     }
 

@@ -9,6 +9,7 @@
 
 //! Transform that pushes down the information that a collection will be subjected to a `Distinct` on specific columns.
 
+use itertools::Itertools;
 use mz_expr::MirRelationExpr;
 
 use crate::analysis::{DerivedView, NonNegative};
@@ -97,7 +98,7 @@ impl WillDistinct {
                             input
                                 .children_mut()
                                 .rev()
-                                .zip(derived.children_rev())
+                                .zip_eq(derived.children_rev())
                                 .map(|(x, y)| (x, y, true)),
                         );
                     }
@@ -105,7 +106,7 @@ impl WillDistinct {
                     todo.extend(
                         expr.children_mut()
                             .rev()
-                            .zip(derived.children_rev())
+                            .zip_eq(derived.children_rev())
                             .map(|(x, y)| (x, y, false)),
                     );
                 }
@@ -133,14 +134,14 @@ impl WillDistinct {
                             let children_rev = inputs.iter_mut().rev().chain(Some(&mut **base));
                             todo.extend(
                                 children_rev
-                                    .zip(derived.children_rev())
+                                    .zip_eq(derived.children_rev())
                                     .map(|(x, y)| (x, y, will_distinct)),
                             );
                         } else {
                             let children_rev = inputs.iter_mut().rev().chain(Some(&mut **base));
                             todo.extend(
                                 children_rev
-                                    .zip(derived.children_rev())
+                                    .zip_eq(derived.children_rev())
                                     .map(|(x, y)| (x, y, false)),
                             );
                         }
@@ -149,7 +150,7 @@ impl WillDistinct {
                         todo.extend(
                             x.children_mut()
                                 .rev()
-                                .zip(derived.children_rev())
+                                .zip_eq(derived.children_rev())
                                 .map(|(x, y)| (x, y, false)),
                         );
                     }

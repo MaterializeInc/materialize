@@ -16,6 +16,7 @@ use anyhow::anyhow;
 use arrow::array::{Array, ArrayData, ArrayRef, BinaryArray, Int64Array, RecordBatch, make_array};
 use arrow::buffer::{BooleanBuffer, Buffer, NullBuffer};
 use arrow::datatypes::ToByteSlice;
+use itertools::Itertools;
 use mz_dyncfg::Config;
 
 use crate::indexed::columnar::{ColumnarRecords, ColumnarRecordsStructuredExt};
@@ -87,7 +88,7 @@ fn realloc_data(data: ArrayData, nullable: bool, metrics: &ColumnarMetrics) -> A
         let field_iter = mz_persist_types::arrow::fields_for_type(data.data_type()).iter();
         let child_iter = data.child_data().iter();
         field_iter
-            .zip(child_iter)
+            .zip_eq(child_iter)
             .map(|(f, d)| realloc_data(d.clone(), f.is_nullable(), metrics))
             .collect()
     };

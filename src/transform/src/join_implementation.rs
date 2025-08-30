@@ -18,6 +18,7 @@
 
 use std::collections::BTreeMap;
 
+use itertools::Itertools;
 use mz_expr::JoinImplementation::{Differential, IndexedFilter, Unimplemented};
 use mz_expr::visit::{Visit, VisitChildren};
 use mz_expr::{
@@ -897,7 +898,7 @@ fn implement_arrangements<'a>(
         if let Some(mut lifted_mfp) = lifted_mfp {
             let column_map = new_join_mapper
                 .local_columns(index)
-                .zip(new_join_mapper.global_columns(index))
+                .zip_eq(new_join_mapper.global_columns(index))
                 .collect::<BTreeMap<_, _>>();
             lifted_mfp.permute_fn(
                 // globalize all input column references

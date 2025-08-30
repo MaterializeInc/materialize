@@ -16,6 +16,7 @@ use std::sync::Arc;
 
 use futures::TryStreamExt;
 use futures::stream::{BoxStream, StreamExt};
+use itertools::Itertools;
 use mz_pgcopy::CopyCsvFormatParams;
 use mz_repr::{Datum, RelationDesc, Row, RowArena};
 use serde::{Deserialize, Serialize};
@@ -215,7 +216,7 @@ impl OneshotFormat for CsvDecoder {
         let mut packer = row.packer();
         let arena = RowArena::new();
 
-        for (typ, maybe_raw_value) in self.column_types.iter().zip(str_slices) {
+        for (typ, maybe_raw_value) in self.column_types.iter().zip_eq(str_slices) {
             let raw_value = maybe_raw_value?;
 
             if raw_value == self.params.null.as_bytes() {

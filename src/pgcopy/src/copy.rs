@@ -12,6 +12,7 @@ use std::io;
 
 use bytes::BytesMut;
 use csv::{ByteRecord, ReaderBuilder};
+use itertools::Itertools;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::{
     ColumnType, Datum, RelationDesc, RelationType, Row, RowArena, RowRef, ScalarType, SharedRow,
@@ -44,7 +45,7 @@ fn encode_copy_row_binary(
     let mut buf = BytesMut::new();
     for (field, typ) in row
         .iter()
-        .zip(&typ.column_types)
+        .zip_eq(&typ.column_types)
         .map(|(datum, typ)| (mz_pgrepr::Value::from_datum(datum, &typ.scalar_type), typ))
     {
         match field {
@@ -232,12 +233,9 @@ impl<'a> CopyTextFormatParser<'a> {
     }
 
     fn check_bytes(&self, bytes: &[u8]) -> bool {
-        let remaining_bytes = self.data.len() - self.position;
-        remaining_bytes >= bytes.len()
-            && self.data[self.position..]
-                .iter()
-                .zip(bytes.iter())
-                .all(|(x, y)| x == y)
+        self.data
+            .get(self.position..self.position + bytes.len())
+            .map_or(false, |d| d == bytes)
     }
 
     fn consume_bytes(&mut self, bytes: &[u8]) -> bool {
@@ -824,7 +822,7 @@ pub fn decode_copy_format_csv(
         let mut row_builder = SharedRow::get();
         let mut row_packer = row_builder.packer();
 
-        for (typ, raw_value) in column_types.iter().zip(record.iter()) {
+        for (typ, raw_value) in column_types.iter().zip_eq(record.iter()) {
             if raw_value == null_as_bytes {
                 row_packer.push(Datum::Null);
             } else {

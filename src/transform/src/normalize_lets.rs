@@ -311,7 +311,7 @@ mod support {
                     if !new_type
                         .column_types
                         .iter()
-                        .zip(typ.column_types.iter())
+                        .zip_eq(typ.column_types.iter())
                         .all(|(t1, t2)| t1.scalar_type.base_eq(&t2.scalar_type))
                     {
                         Err(crate::TransformError::Internal(format!(
@@ -335,7 +335,7 @@ mod let_motion {
 
     use std::collections::{BTreeMap, BTreeSet};
 
-    use itertools::izip;
+    use itertools::Itertools;
     use mz_expr::{LetRecLimit, LocalId, MirRelationExpr};
     use mz_ore::stack::RecursionLimitError;
 
@@ -514,8 +514,10 @@ mod let_motion {
             }
 
             let mut bindings = BTreeMap::new();
-            for (id, mut value, max_iter) in
-                izip!(ids.drain(..), values.drain(..), limits.drain(..))
+            for ((id, mut value), max_iter) in ids
+                .drain(..)
+                .zip_eq(values.drain(..))
+                .zip_eq(limits.drain(..))
             {
                 bindings.extend(harvest_non_recursive(&mut value));
                 bindings.insert(id, (value, max_iter));
@@ -559,7 +561,11 @@ mod let_motion {
             // The reference count of the current bindings.
             let mut refcnt = BTreeMap::<LocalId, usize>::new();
 
-            for (id, value, max_iter) in izip!(ids.drain(..), values.drain(..), limits.drain(..)) {
+            for ((id, value), max_iter) in ids
+                .drain(..)
+                .zip_eq(values.drain(..))
+                .zip_eq(limits.drain(..))
+            {
                 refcnt.clear();
                 super::support::count_local_id_uses(&value, &mut refcnt);
 
@@ -660,7 +666,7 @@ mod inlining {
 
     use std::collections::BTreeMap;
 
-    use itertools::izip;
+    use itertools::Itertools;
     use mz_expr::{Id, LetRecLimit, LocalId, MirRelationExpr};
 
     use crate::normalize_lets::support::replace_bindings_from_map;
@@ -769,7 +775,10 @@ mod inlining {
             //      identifier beyond one, as all in values with strictly greater identifiers.
             //   2. by performing the substitution before reasoning, the structure of the value
             //      as it would be substituted is fixed.
-            for (id, mut expr, max_iter) in izip!(ids.drain(..), values.drain(..), limits.drain(..))
+            for ((id, mut expr), max_iter) in ids
+                .drain(..)
+                .zip_eq(values.drain(..))
+                .zip_eq(limits.drain(..))
             {
                 // Substitute any appropriate prior let bindings.
                 inline_lets_helper(&mut expr, &mut inline_offers)?;
@@ -921,6 +930,7 @@ mod renumbering {
 
     use std::collections::BTreeMap;
 
+    use itertools::Itertools;
     use mz_expr::{Id, LocalId, MirRelationExpr};
     use mz_ore::id_gen::IdGen;
 
@@ -973,7 +983,7 @@ mod renumbering {
                         body,
                     } => {
                         stack.push(Err(body));
-                        for (id, value) in ids.iter().rev().zip(values.iter().rev()) {
+                        for (id, value) in ids.iter().rev().zip_eq(values.iter().rev()) {
                             stack.push(Ok(*id));
                             stack.push(Err(value));
                         }

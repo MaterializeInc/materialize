@@ -25,7 +25,7 @@ use futures::Future;
 use futures::future::BoxFuture;
 
 use http::StatusCode;
-use itertools::izip;
+use itertools::Itertools;
 use mz_adapter::client::RecordFirstRowStream;
 use mz_adapter::session::{EndTransactionAction, TransactionStatus};
 use mz_adapter::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
@@ -183,7 +183,7 @@ async fn execute_promsql_query(
         let mut label_values = desc
             .columns
             .iter()
-            .zip(row)
+            .zip_eq(row)
             .filter(|(col, _)| col.name != query.value_column_name)
             .map(|(_, val)| val.as_str().expect("must be string"))
             .collect::<Vec<_>>();
@@ -191,7 +191,7 @@ async fn execute_promsql_query(
         let value = desc
             .columns
             .iter()
-            .zip(row)
+            .zip_eq(row)
             .find(|(col, _)| col.name == query.value_column_name)
             .map(|(_, val)| val.as_str().unwrap_or("0").parse::<f64>().unwrap_or(0.0))
             .unwrap_or(0.0);
@@ -1384,7 +1384,7 @@ async fn execute_stmt<S: ResultSender>(
 
     let buf = RowArena::new();
     let mut params = vec![];
-    for (raw_param, mz_typ) in izip!(raw_params, param_types) {
+    for (raw_param, mz_typ) in raw_params.into_iter().zip_eq(param_types) {
         let pg_typ = mz_pgrepr::Type::from(mz_typ);
         let datum = match raw_param {
             None => Datum::Null,

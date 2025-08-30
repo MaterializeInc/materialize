@@ -10,12 +10,12 @@
 use std::collections::BTreeSet;
 
 use anyhow::bail;
+use itertools::Itertools;
+use mz_proto::{ProtoType, RustType, TryFromProtoError};
+use mz_repr::ColumnType;
 use proptest::prelude::any;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
-
-use mz_proto::{ProtoType, RustType, TryFromProtoError};
-use mz_repr::ColumnType;
 
 use self::proto_my_sql_column_desc::Meta;
 
@@ -186,7 +186,7 @@ impl IsCompatible for Option<MySqlColumnMeta> {
                     && self_enum
                         .values
                         .iter()
-                        .zip(other_enum.values.iter())
+                        .zip_eq(other_enum.values.iter())
                         .all(|(self_val, other_val)| self_val == other_val)
             }
             (Some(MySqlColumnMeta::Json), Some(MySqlColumnMeta::Json)) => true,

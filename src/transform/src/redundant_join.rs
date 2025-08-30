@@ -552,7 +552,7 @@ impl ProvInfo {
             let resulting_projection = self
                 .dereferenced_projection
                 .iter()
-                .zip(other.dereferenced_projection.iter())
+                .zip_eq(other.dereferenced_projection.iter())
                 .map(|(e1, e2)| if e1 == e2 { e1.clone() } else { None })
                 .collect_vec();
             if resulting_projection.iter().any(|e| e.is_some()) {

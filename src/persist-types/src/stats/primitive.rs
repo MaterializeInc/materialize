@@ -9,6 +9,7 @@
 
 use std::fmt::{self, Debug};
 
+use itertools::Itertools;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use proptest::arbitrary::Arbitrary;
 use proptest::strategy::Strategy;
@@ -323,7 +324,7 @@ impl TrimStats for ProtoPrimitiveStats {
 
                 let common_prefix = lower
                     .char_indices()
-                    .zip(upper.chars())
+                    .zip_eq(upper.chars())
                     .take_while(|((_, x), y)| x == y)
                     .last();
                 if let Some(((o, x), y)) = common_prefix {
@@ -345,7 +346,7 @@ impl TrimStats for ProtoPrimitiveBytesStats {
         let common_prefix = self
             .lower
             .iter()
-            .zip(self.upper.iter())
+            .zip_eq(self.upper.iter())
             .take_while(|(x, y)| x == y)
             .count();
         self.lower = truncate_bytes(&self.lower, common_prefix + 1, TruncateBound::Lower)

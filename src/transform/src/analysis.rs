@@ -80,6 +80,7 @@ pub mod common {
     use std::any::{Any, TypeId};
     use std::collections::BTreeMap;
 
+    use itertools::Itertools;
     use mz_expr::LocalId;
     use mz_expr::MirRelationExpr;
     use mz_ore::assert_none;
@@ -327,7 +328,7 @@ pub mod common {
                             MirRelationExpr::LetRec {
                                 ids, values, body, ..
                             } => {
-                                for (id, value) in ids.iter().zip(values) {
+                                for (id, value) in ids.iter().zip_eq(values) {
                                     todo.push(Ok(value));
                                     todo.push(Err(*id));
                                 }
@@ -551,6 +552,7 @@ mod arity {
 mod types {
 
     use super::{Analysis, Derived, Lattice};
+    use itertools::Itertools;
     use mz_expr::MirRelationExpr;
     use mz_repr::ColumnType;
 
@@ -598,7 +600,8 @@ mod types {
                                 // Unclear if we should trust `typ`.
                                 assert_eq!(result.len(), rec_typ.len());
                                 result.clone_from(rec_typ);
-                                for (res, col) in result.iter_mut().zip(typ.column_types.iter()) {
+                                for (res, col) in result.iter_mut().zip_eq(typ.column_types.iter())
+                                {
                                     if !col.nullable {
                                         res.nullable = false;
                                     }
@@ -644,7 +647,7 @@ mod types {
                 (Some(a), Some(b)) => {
                     let mut changed = false;
                     assert_eq!(a.len(), b.len());
-                    for (at, bt) in a.iter_mut().zip(b.iter()) {
+                    for (at, bt) in a.iter_mut().zip_eq(b.iter()) {
                         assert_eq!(at.scalar_type, bt.scalar_type);
                         if !at.nullable && bt.nullable {
                             at.nullable = true;

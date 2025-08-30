@@ -12,6 +12,7 @@ use std::fmt;
 
 use chrono::FixedOffset;
 use chrono_tz::Tz;
+use itertools::Itertools;
 use mz_lowertest::MzReflect;
 use mz_proto::chrono::{any_fixed_offset, any_timezone};
 use mz_proto::{RustType, TryFromProtoError};
@@ -308,7 +309,7 @@ fn build_timezone_offset_second(
             continue;
         }
 
-        for (i, (atok, etok)) in actual.zip(format).enumerate() {
+        for (i, (atok, etok)) in actual.zip_eq(format).enumerate() {
             match (atok, etok) {
                 (Colon, Colon) | (Plus, Plus) => { /* Matching punctuation */ }
                 (Dash, Dash) => {

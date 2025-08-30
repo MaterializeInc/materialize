@@ -12,6 +12,7 @@
 use std::collections::BTreeMap;
 
 use columnar::Len;
+use itertools::Itertools;
 use mz_expr::JoinImplementation::{DeltaQuery, Differential, IndexedFilter, Unimplemented};
 use mz_expr::{
     AggregateExpr, Id, JoinInputMapper, MapFilterProject, MirRelationExpr, MirScalarExpr,
@@ -309,7 +310,7 @@ impl Context {
                 // Arrangements made available cannot be used by prior bindings,
                 // as we cannot circulate an arrangement through a `Variable` yet.
                 let mut lir_values = Vec::with_capacity(values.len());
-                for (id, value) in ids.iter().zip(values) {
+                for (id, value) in ids.iter().zip_eq(values) {
                     let (mut lir_value, mut v_keys) = self.lower_mir_expr(value)?;
                     // If `v_keys` does not contain an unarranged collection, we must form it.
                     if !v_keys.raw {
@@ -629,9 +630,9 @@ impl Context {
                 let is_delta = matches!(plan, JoinPlan::Delta(_));
                 for (((input_plan, input_keys), missing), arity) in plans
                     .iter_mut()
-                    .zip(input_keys.iter())
-                    .zip(missing.into_iter())
-                    .zip(input_arities.iter().cloned())
+                    .zip_eq(input_keys.iter())
+                    .zip_eq(missing.into_iter())
+                    .zip_eq(input_arities.iter().cloned())
                 {
                     if missing != Default::default() {
                         if is_delta {

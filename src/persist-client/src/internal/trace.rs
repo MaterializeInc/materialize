@@ -47,29 +47,28 @@
 //! [Batch]: differential_dataflow::trace::Batch
 //! [Batch::Merger]: differential_dataflow::trace::Batch::Merger
 
-use arrayvec::ArrayVec;
-use differential_dataflow::difference::Semigroup;
-use mz_persist::metrics::ColumnarMetrics;
-use mz_persist_types::Codec64;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::mem;
 use std::ops::Range;
 use std::sync::Arc;
-use tracing::error;
 
-use crate::internal::paths::WriterKey;
+use arrayvec::ArrayVec;
+use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
+use itertools::Itertools;
 use mz_ore::cast::CastFrom;
-#[allow(unused_imports)] // False positive.
-use mz_ore::fmt::FormatBuffer;
+use mz_persist::metrics::ColumnarMetrics;
+use mz_persist_types::Codec64;
 use serde::{Serialize, Serializer};
 use timely::PartialOrder;
 use timely::progress::frontier::AntichainRef;
 use timely::progress::{Antichain, Timestamp};
+use tracing::error;
 
+use crate::internal::paths::WriterKey;
 use crate::internal::state::{HollowBatch, RunId};
 
 use super::state::RunPart;
@@ -389,10 +388,14 @@ impl<T: Timestamp + Lattice> Trace<T> {
         for (id, batch) in spine_batches {
             let level = batch.level;
 
+            let descs = batch.descs.iter().map(Some).chain(std::iter::repeat_n(
+                None,
+                batch.parts.len() - batch.descs.len(),
+            ));
             let parts = batch
                 .parts
                 .into_iter()
-                .zip(batch.descs.iter().map(Some).chain(std::iter::repeat(None)))
+                .zip_eq(descs)
                 .map(|(id, desc)| pop_batch(id, desc))
                 .collect::<Result<Vec<_>, _>>()?;
             let len = parts.iter().map(|p| (*p).batch.len).sum();
@@ -2218,6 +2221,8 @@ impl<T: Timestamp + Lattice> MergeState<T> {
 
 #[cfg(test)]
 pub mod datadriven {
+    use mz_ore::fmt::FormatBuffer;
+
     use crate::internal::datadriven::DirectiveArgs;
 
     use super::*;

@@ -785,7 +785,7 @@ fn rocksdb_core_loop<K, V, M, O, IM, F>(
 
                 // TODO(guswynn): sort by key before writing.
                 for ((key, value, diff), encode_buf) in
-                    batch.drain(..).zip(encoded_batch_buffers.iter_mut())
+                    batch.drain(..).zip_eq(encoded_batch_buffers.iter_mut())
                 {
                     ret.processed_updates += 1;
 

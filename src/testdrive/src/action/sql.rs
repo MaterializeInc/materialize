@@ -13,6 +13,7 @@ use std::fmt::{self, Display, Formatter, Write as _};
 use std::time::SystemTime;
 
 use anyhow::{Context, bail};
+use itertools::Itertools;
 use md5::{Digest, Md5};
 use mz_ore::collections::CollectionExt;
 use mz_ore::retry::Retry;
@@ -216,7 +217,7 @@ async fn try_run_sql(
         Some(
             actual
                 .iter()
-                .zip(raw_actual.into_iter())
+                .zip_eq(raw_actual.into_iter())
                 .map(|(actual, unreplaced)| match unreplaced {
                     Some(raw_row) => raw_row,
                     None => actual.clone(),

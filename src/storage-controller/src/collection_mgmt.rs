@@ -1819,6 +1819,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
+    use itertools::Itertools;
     use mz_repr::{Datum, Row};
     use mz_storage_client::client::StatusUpdate;
     use mz_storage_client::healthcheck::{
@@ -1841,11 +1842,14 @@ mod tests {
             replica_id: None,
         });
 
-        for (datum, column_type) in row.iter().zip(MZ_SINK_STATUS_HISTORY_DESC.iter_types()) {
+        for (datum, column_type) in row.iter().zip_eq(MZ_SINK_STATUS_HISTORY_DESC.iter_types()) {
             assert!(datum.is_instance_of(column_type));
         }
 
-        for (datum, column_type) in row.iter().zip(MZ_SOURCE_STATUS_HISTORY_DESC.iter_types()) {
+        for (datum, column_type) in row
+            .iter()
+            .zip_eq(MZ_SOURCE_STATUS_HISTORY_DESC.iter_types())
+        {
             assert!(datum.is_instance_of(column_type));
         }
 
@@ -1886,11 +1890,14 @@ mod tests {
             replica_id: None,
         });
 
-        for (datum, column_type) in row.iter().zip(MZ_SINK_STATUS_HISTORY_DESC.iter_types()) {
+        for (datum, column_type) in row.iter().zip_eq(MZ_SINK_STATUS_HISTORY_DESC.iter_types()) {
             assert!(datum.is_instance_of(column_type));
         }
 
-        for (datum, column_type) in row.iter().zip(MZ_SOURCE_STATUS_HISTORY_DESC.iter_types()) {
+        for (datum, column_type) in row
+            .iter()
+            .zip_eq(MZ_SOURCE_STATUS_HISTORY_DESC.iter_types())
+        {
             assert!(datum.is_instance_of(column_type));
         }
 
@@ -1915,11 +1922,14 @@ mod tests {
             replica_id: None,
         });
 
-        for (datum, column_type) in row.iter().zip(MZ_SINK_STATUS_HISTORY_DESC.iter_types()) {
+        for (datum, column_type) in row.iter().zip_eq(MZ_SINK_STATUS_HISTORY_DESC.iter_types()) {
             assert!(datum.is_instance_of(column_type));
         }
 
-        for (datum, column_type) in row.iter().zip(MZ_SOURCE_STATUS_HISTORY_DESC.iter_types()) {
+        for (datum, column_type) in row
+            .iter()
+            .zip_eq(MZ_SOURCE_STATUS_HISTORY_DESC.iter_types())
+        {
             assert!(datum.is_instance_of(column_type));
         }
 
@@ -1960,11 +1970,14 @@ mod tests {
             replica_id: None,
         });
 
-        for (datum, column_type) in row.iter().zip(MZ_SINK_STATUS_HISTORY_DESC.iter_types()) {
+        for (datum, column_type) in row.iter().zip_eq(MZ_SINK_STATUS_HISTORY_DESC.iter_types()) {
             assert!(datum.is_instance_of(column_type));
         }
 
-        for (datum, column_type) in row.iter().zip(MZ_SOURCE_STATUS_HISTORY_DESC.iter_types()) {
+        for (datum, column_type) in row
+            .iter()
+            .zip_eq(MZ_SOURCE_STATUS_HISTORY_DESC.iter_types())
+        {
             assert!(datum.is_instance_of(column_type));
         }
 
@@ -2006,11 +2019,14 @@ mod tests {
             replica_id: None,
         });
 
-        for (datum, column_type) in row.iter().zip(MZ_SINK_STATUS_HISTORY_DESC.iter_types()) {
+        for (datum, column_type) in row.iter().zip_eq(MZ_SINK_STATUS_HISTORY_DESC.iter_types()) {
             assert!(datum.is_instance_of(column_type));
         }
 
-        for (datum, column_type) in row.iter().zip(MZ_SOURCE_STATUS_HISTORY_DESC.iter_types()) {
+        for (datum, column_type) in row
+            .iter()
+            .zip_eq(MZ_SOURCE_STATUS_HISTORY_DESC.iter_types())
+        {
             assert!(datum.is_instance_of(column_type));
         }
 
