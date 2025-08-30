@@ -57,7 +57,7 @@
 //!    [`AsyncStorageWorker::update_frontiers`], which causes a command to
 //!    be sent to the async worker.
 //! 4. We eventually get a response from the async worker:
-//!    [`AsyncStorageWorkerResponse::FrontiersUpdated`].
+//!    [`AsyncStorageWorkerResponse::IngestionFrontiersUpdated`].
 //! 5. This response is handled in [`Worker::handle_async_worker_response`].
 //! 6. Handling that response causes a
 //!    [`InternalStorageCommand::CreateIngestionDataflow`] to be broadcast to
@@ -84,8 +84,8 @@ use std::time::Duration;
 use crossbeam_channel::{RecvError, TryRecvError};
 use fail::fail_point;
 use mz_ore::now::NowFn;
+use mz_ore::soft_assert_or_log;
 use mz_ore::tracing::TracingHandle;
-use mz_ore::{soft_assert_or_log, soft_panic_or_log};
 use mz_persist_client::batch::ProtoBatch;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::operators::shard_source::ErrorHandler;
@@ -536,7 +536,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
             "only worker #0 is doing async processing"
         );
         match async_response {
-            AsyncStorageWorkerResponse::FrontiersUpdated {
+            AsyncStorageWorkerResponse::IngestionFrontiersUpdated {
                 id,
                 ingestion_description,
                 as_of,
@@ -552,6 +552,11 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         source_resume_uppers,
                     },
                 );
+            }
+            AsyncStorageWorkerResponse::SinkFrontiersUpdated { id, description } => {
+                self.storage_state
+                    .internal_cmd_tx
+                    .send(InternalStorageCommand::RunSinkDataflow(id, description));
             }
             AsyncStorageWorkerResponse::DropDataflow(id) => {
                 self.storage_state
@@ -602,7 +607,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         }
                         self.storage_state
                             .async_worker
-                            .update_frontiers(id, ingestion_description);
+                            .update_ingestion_frontiers(id, ingestion_description);
                     }
 
                     // Continue with other commands.
@@ -628,9 +633,9 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         self.storage_state
                             .aggregated_statistics
                             .advance_global_epoch(id);
-                        self.storage_state.internal_cmd_tx.send(
-                            InternalStorageCommand::RunSinkDataflow(id, sink_description),
-                        );
+                        self.storage_state
+                            .async_worker
+                            .update_sink_frontiers(id, sink_description);
                     }
 
                     // Continue with other commands.
@@ -1348,7 +1353,8 @@ impl StorageState {
                 // ingestion in the local storage state. This is something we might have
                 // interest in fixing in the future, e.g. materialize#19907
                 if self.timely_worker_index == 0 {
-                    self.async_worker.update_frontiers(id, description);
+                    self.async_worker
+                        .update_ingestion_frontiers(id, description);
                 }
             }
             StorageCommand::RunOneshotIngestion(oneshot) => {
@@ -1390,19 +1396,10 @@ impl StorageState {
                 }
             }
             StorageCommand::AllowCompaction(id, frontier) => {
-                match self.exports.get_mut(&id) {
-                    Some(export_description) => {
-                        // Update our knowledge of the `as_of`, in case we need to internally
-                        // restart a sink in the future.
-                        export_description.as_of.clone_from(&frontier);
-                    }
-                    // reported_frontiers contains both ingestions and their
-                    // exports
-                    None if self.reported_frontiers.contains_key(&id) => (),
-                    None => {
-                        soft_panic_or_log!("AllowCompaction command for non-existent {id}");
-                    }
-                }
+                soft_assert_or_log!(
+                    self.exports.contains_key(&id) || self.reported_frontiers.contains_key(&id),
+                    "AllowCompaction command for non-existent {id}"
+                );
 
                 if frontier.is_empty() {
                     // Indicates that we may drop `id`, as there are no more valid times to read.

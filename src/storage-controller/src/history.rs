@@ -11,12 +11,10 @@
 
 use std::collections::BTreeMap;
 
-use mz_dyncfg::ConfigValHandle;
 use mz_ore::cast::CastFrom;
 use mz_storage_client::client::StorageCommand;
 use mz_storage_client::metrics::HistoryMetrics;
 use mz_storage_types::parameters::StorageParameters;
-use timely::PartialOrder;
 use timely::order::TotalOrder;
 
 /// A history of storage commands.
@@ -32,20 +30,17 @@ pub(crate) struct CommandHistory<T> {
     commands: Vec<StorageCommand<T>>,
     /// Tracked metrics.
     metrics: HistoryMetrics,
-    /// Config: whether to use the snapshot-frontier optimization for sinks.
-    enable_snapshot_frontier: ConfigValHandle<bool>,
 }
 
 impl<T: timely::progress::Timestamp + TotalOrder> CommandHistory<T> {
     /// Constructs a new command history.
-    pub fn new(metrics: HistoryMetrics, enable_snapshot_frontier: ConfigValHandle<bool>) -> Self {
+    pub fn new(metrics: HistoryMetrics) -> Self {
         metrics.reset();
 
         Self {
             reduced_count: 0,
             commands: Vec::new(),
             metrics,
-            enable_snapshot_frontier,
         }
     }
 
@@ -140,20 +135,10 @@ impl<T: timely::progress::Timestamp + TotalOrder> CommandHistory<T> {
         }
 
         // Discard sinks that have been dropped, advance the as-of of the rest.
-        for mut sink in final_sinks.into_values() {
+        for sink in final_sinks.into_values() {
             if let Some(frontier) = final_compactions.remove(&sink.id) {
                 if frontier.is_empty() {
                     continue;
-                }
-                // The as-of is at least the implied capability of the sink collection. If the as-of
-                // advances for an existing export, that can only be because the implied capability
-                // has advanced, which means that the write frontier has advanced, which means the
-                // snapshot has definitely been written out.
-                if PartialOrder::less_than(&sink.description.as_of, &frontier) {
-                    sink.description.as_of = frontier;
-                    if self.enable_snapshot_frontier.get() {
-                        sink.description.with_snapshot = false;
-                    }
                 }
             }
 

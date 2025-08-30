@@ -234,13 +234,6 @@ pub const STORAGE_SUSPEND_AND_RESTART_DELAY: Config<Duration> = Config::new(
     "Delay interval when reconnecting to a source / sink after halt.",
 );
 
-/// If true, skip fetching the snapshot in the sink once the frontier has advanced.
-pub const STORAGE_SINK_SNAPSHOT_FRONTIER: Config<bool> = Config::new(
-    "storage_sink_snapshot_frontier",
-    true,
-    "If true, skip fetching the snapshot in the sink once the frontier has advanced.",
-);
-
 /// Whether to mint reclock bindings based on the latest probed frontier or the currently ingested
 /// frontier.
 pub const STORAGE_RECLOCK_TO_LATEST: Config<bool> = Config::new(
@@ -322,7 +315,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&STORAGE_ROCKSDB_CLEANUP_TRIES)
         .add(&STORAGE_ROCKSDB_USE_MERGE_OPERATOR)
         .add(&STORAGE_SERVER_MAINTENANCE_INTERVAL)
-        .add(&STORAGE_SINK_SNAPSHOT_FRONTIER)
         .add(&STORAGE_SUSPEND_AND_RESTART_DELAY)
         .add(&STORAGE_UPSERT_MAX_SNAPSHOT_BATCH_BUFFERING)
         .add(&STORAGE_UPSERT_PREVENT_SNAPSHOT_BUFFERING)

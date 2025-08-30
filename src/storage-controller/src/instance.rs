@@ -22,7 +22,6 @@ use itertools::Itertools;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::ReplicaId;
 use mz_cluster_client::client::ClusterReplicaLocation;
-use mz_dyncfg::ConfigSet;
 use mz_ore::cast::CastFrom;
 use mz_ore::now::NowFn;
 use mz_ore::retry::{Retry, RetryState};
@@ -36,7 +35,6 @@ use mz_storage_client::client::{
     StorageGrpcClient, StorageResponse,
 };
 use mz_storage_client::metrics::{InstanceMetrics, ReplicaMetrics};
-use mz_storage_types::dyncfgs::STORAGE_SINK_SNAPSHOT_FRONTIER;
 use mz_storage_types::sinks::StorageSinkDesc;
 use mz_storage_types::sources::{IngestionDescription, SourceConnection};
 use timely::order::TotalOrder;
@@ -115,12 +113,10 @@ where
     pub fn new(
         workload_class: Option<String>,
         metrics: InstanceMetrics,
-        dyncfg: Arc<ConfigSet>,
         now: NowFn,
         instance_response_tx: mpsc::UnboundedSender<(Option<ReplicaId>, StorageResponse<T>)>,
     ) -> Self {
-        let enable_snapshot_frontier = STORAGE_SINK_SNAPSHOT_FRONTIER.handle(&dyncfg);
-        let history = CommandHistory::new(metrics.for_history(), enable_snapshot_frontier);
+        let history = CommandHistory::new(metrics.for_history());
 
         let mut instance = Self {
             workload_class,

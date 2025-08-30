@@ -50,8 +50,8 @@ use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::read_holds::{ReadHold, ReadHoldError};
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sources::{
-    GenericSourceConnection, IngestionDescription, SourceData, SourceDesc, SourceEnvelope,
-    SourceExport, SourceExportDataConfig, Timeline,
+    GenericSourceConnection, IngestionDescription, SourceData, SourceDesc, SourceExport,
+    SourceExportDataConfig, Timeline,
 };
 use mz_storage_types::time_dependence::{TimeDependence, TimeDependenceError};
 use mz_txn_wal::metrics::Metrics as TxnMetrics;
@@ -844,161 +844,6 @@ where
         rx.await.expect("BackgroundTask should be live").0.await
     }
 
-    /// If this identified collection has a dependency, install a read hold on
-    /// it.
-    ///
-    /// This is necessary to ensure that the dependency's since does not advance
-    /// beyond its dependents'.
-    fn install_collection_dependency_read_holds_inner(
-        &self,
-        self_collections: &mut BTreeMap<GlobalId, CollectionState<T>>,
-        id: GlobalId,
-    ) -> Result<(), StorageError<T>> {
-        let (deps, collection_implied_capability) = match self_collections.get(&id) {
-            Some(CollectionState {
-                storage_dependencies: deps,
-                implied_capability,
-                ..
-            }) => (deps.clone(), implied_capability),
-            _ => return Ok(()),
-        };
-
-        for dep in deps.iter() {
-            let dep_collection = self_collections
-                .get(dep)
-                .ok_or(StorageError::IdentifierMissing(id))?;
-
-            mz_ore::soft_assert_or_log!(
-                PartialOrder::less_equal(
-                    &dep_collection.implied_capability,
-                    collection_implied_capability
-                ),
-                "dependency since ({dep}@{:?}) cannot be in advance of dependent's since ({id}@{:?})",
-                dep_collection.implied_capability,
-                collection_implied_capability,
-            );
-        }
-
-        self.install_read_capabilities_inner(
-            self_collections,
-            id,
-            &deps,
-            collection_implied_capability.clone(),
-        )?;
-
-        Ok(())
-    }
-
-    /// Determine if this collection has another dependency.
-    ///
-    /// Currently, collections have either 0 or 1 dependencies.
-    fn determine_collection_dependencies(
-        &self,
-        self_collections: &BTreeMap<GlobalId, CollectionState<T>>,
-        data_source: &DataSource<T>,
-    ) -> Result<Vec<GlobalId>, StorageError<T>> {
-        let dependencies = match &data_source {
-            DataSource::Introspection(_)
-            | DataSource::Webhook
-            | DataSource::Table { primary: None }
-            | DataSource::Progress
-            | DataSource::Other => Vec::new(),
-            DataSource::Table {
-                primary: Some(primary),
-            } => vec![*primary],
-            DataSource::IngestionExport {
-                ingestion_id,
-                data_config,
-                ..
-            } => {
-                // Ingestion exports depend on their primary source's remap
-                // collection, except when they use a CDCv2 envelope.
-                let source = self_collections
-                    .get(ingestion_id)
-                    .ok_or(StorageError::IdentifierMissing(*ingestion_id))?;
-                let DataSource::Ingestion(ingestion) = &source.description.data_source else {
-                    panic!("SourceExport must refer to a primary source that already exists");
-                };
-
-                match data_config.envelope {
-                    SourceEnvelope::CdcV2 => Vec::new(),
-                    _ => vec![ingestion.remap_collection_id],
-                }
-            }
-            // Ingestions depend on their remap collection.
-            DataSource::Ingestion(ingestion) => vec![ingestion.remap_collection_id],
-            DataSource::Sink { desc } => vec![desc.sink.from],
-        };
-
-        Ok(dependencies)
-    }
-
-    /// Install read capabilities on the given `storage_dependencies`.
-    #[instrument(level = "debug")]
-    fn install_read_capabilities_inner(
-        &self,
-        self_collections: &mut BTreeMap<GlobalId, CollectionState<T>>,
-        from_id: GlobalId,
-        storage_dependencies: &[GlobalId],
-        read_capability: Antichain<T>,
-    ) -> Result<(), StorageError<T>> {
-        let mut changes = ChangeBatch::new();
-        for time in read_capability.iter() {
-            changes.update(time.clone(), 1);
-        }
-
-        if tracing::span_enabled!(tracing::Level::TRACE) {
-            // Collecting `user_capabilities` is potentially slow, thus only do it when needed.
-            let user_capabilities = self_collections
-                .iter_mut()
-                .filter(|(id, _c)| id.is_user())
-                .map(|(id, c)| {
-                    let updates = c.read_capabilities.updates().cloned().collect_vec();
-                    (*id, c.implied_capability.clone(), updates)
-                })
-                .collect_vec();
-
-            trace!(
-                %from_id,
-                ?storage_dependencies,
-                ?read_capability,
-                ?user_capabilities,
-                "install_read_capabilities_inner");
-        }
-
-        let mut storage_read_updates = storage_dependencies
-            .iter()
-            .map(|id| (*id, changes.clone()))
-            .collect();
-
-        StorageCollectionsImpl::update_read_capabilities_inner(
-            &self.cmd_tx,
-            self_collections,
-            &mut storage_read_updates,
-        );
-
-        if tracing::span_enabled!(tracing::Level::TRACE) {
-            // Collecting `user_capabilities` is potentially slow, thus only do it when needed.
-            let user_capabilities = self_collections
-                .iter_mut()
-                .filter(|(id, _c)| id.is_user())
-                .map(|(id, c)| {
-                    let updates = c.read_capabilities.updates().cloned().collect_vec();
-                    (*id, c.implied_capability.clone(), updates)
-                })
-                .collect_vec();
-
-            trace!(
-                %from_id,
-                ?storage_dependencies,
-                ?read_capability,
-                ?user_capabilities,
-                "after install_read_capabilities_inner!");
-        }
-
-        Ok(())
-    }
-
     async fn recent_upper(&self, id: GlobalId) -> Result<Antichain<T>, StorageError<T>> {
         let metadata = &self.collection_metadata(id)?;
         let persist_client = self
@@ -1226,7 +1071,7 @@ where
             StorageCollectionsImpl::update_read_capabilities_inner(
                 &self.cmd_tx,
                 collections,
-                &mut read_capability_changes,
+                read_capability_changes,
             );
         }
     }
@@ -1237,7 +1082,7 @@ where
     fn update_read_capabilities_inner(
         cmd_tx: &mpsc::UnboundedSender<BackgroundCmd<T>>,
         collections: &mut BTreeMap<GlobalId, CollectionState<T>>,
-        updates: &mut BTreeMap<GlobalId, ChangeBatch<T>>,
+        mut updates: BTreeMap<GlobalId, ChangeBatch<T>>,
     ) {
         // Location to record consequences that we need to act on.
         let mut collections_net = BTreeMap::new();
@@ -1293,21 +1138,6 @@ where
 
             let changes = collection.read_capabilities.update_iter(update.drain());
             update.extend(changes);
-
-            if id.is_user() {
-                trace!(
-                %id,
-                ?collection.storage_dependencies,
-                ?update,
-                "forwarding update to storage dependencies");
-            }
-
-            for id in collection.storage_dependencies.iter() {
-                updates
-                    .entry(*id)
-                    .or_insert_with(ChangeBatch::new)
-                    .extend(update.iter().cloned());
-            }
 
             let (changes, frontier) = collections_net
                 .entry(id)
@@ -1981,78 +1811,12 @@ where
             }
 
             let write_frontier = write_handle.upper();
-            let data_shard_since = since_handle.since().clone();
-
-            // Determine if this collection has any dependencies.
-            let storage_dependencies = self
-                .determine_collection_dependencies(&*self_collections, &description.data_source)?;
-
-            // Determine the initial since of the collection.
-            let initial_since = match storage_dependencies
-                .iter()
-                .at_most_one()
-                .expect("should have at most one dependency")
-            {
-                Some(dep) => {
-                    let dependency_collection = self_collections
-                        .get(dep)
-                        .ok_or(StorageError::IdentifierMissing(*dep))?;
-                    let dependency_since = dependency_collection.implied_capability.clone();
-
-                    // If an item has a dependency, its initial since must be
-                    // advanced as far as its dependency, i.e. a dependency's
-                    // since may never be in advance of its dependents.
-                    //
-                    // We have to do this every time we initialize the
-                    // collection, though––the invariant might have been upheld
-                    // correctly in the previous epoch, but the
-                    // `data_shard_since` might not have compacted and, on
-                    // establishing a new persist connection, still have data we
-                    // said _could_ be compacted.
-                    if PartialOrder::less_than(&data_shard_since, &dependency_since) {
-                        // The dependency since cannot be beyond the dependent
-                        // (our) upper unless the collection is new. In
-                        // practice, the depdenency is the remap shard of a
-                        // source (export), and if the since is allowed to
-                        // "catch up" to the upper, that is `upper <= since`, a
-                        // restarting ingestion cannot differentiate between
-                        // updates that have already been written out to the
-                        // backing persist shard and updates that have yet to be
-                        // written. We would write duplicate updates.
-                        //
-                        // If this check fails, it means that the read hold
-                        // installed on the dependency was probably not upheld
-                        // –– if it were, the dependency's since could not have
-                        // advanced as far the dependent's upper.
-                        //
-                        // We don't care about the dependency since when the
-                        // write frontier is empty. In that case, no-one can
-                        // write down any more updates.
-                        mz_ore::soft_assert_or_log!(
-                            write_frontier.elements() == &[T::minimum()]
-                                || write_frontier.is_empty()
-                                || PartialOrder::less_than(&dependency_since, write_frontier),
-                            "dependency ({dep}) since has advanced past dependent ({id}) upper \n
-                            dependent ({id}): since {:?}, upper {:?} \n
-                            dependency ({dep}): since {:?}",
-                            data_shard_since,
-                            write_frontier,
-                            dependency_since
-                        );
-
-                        dependency_since
-                    } else {
-                        data_shard_since
-                    }
-                }
-                None => data_shard_since,
-            };
+            let initial_since = since_handle.since().clone();
 
             let mut collection_state = CollectionState::new(
                 description,
                 initial_since,
                 write_frontier.clone(),
-                storage_dependencies,
                 metadata.clone(),
             );
 
@@ -2124,9 +1888,6 @@ where
             }
 
             self.register_handles(id, is_in_txns(id, &metadata), since_handle, write_handle);
-
-            // If this collection has a dependency, install a read hold on it.
-            self.install_collection_dependency_read_holds_inner(&mut *self_collections, id)?;
         }
 
         drop(self_collections);
@@ -2365,7 +2126,8 @@ where
             existing.description.data_source = DataSource::Table {
                 primary: Some(new_collection),
             };
-            existing.storage_dependencies.push(new_collection);
+            // XXX: wat?
+            // existing.storage_dependencies.push(new_collection);
 
             // Copy over the frontiers from the previous version.
             // The new table starts with two holds - the implied capability, and the hold from
@@ -2396,18 +2158,16 @@ where
                 collection_desc,
                 implied_capability,
                 write_frontier,
-                Vec::new(),
                 collection_meta,
             );
 
             // Add a record of the new collection.
             self_collections.insert(new_collection, collection_state);
 
-            let mut updates = BTreeMap::from([(new_collection, changes)]);
             StorageCollectionsImpl::update_read_capabilities_inner(
                 &self.cmd_tx,
                 &mut *self_collections,
-                &mut updates,
+                BTreeMap::from([(new_collection, changes)]),
             );
         };
 
@@ -2553,7 +2313,7 @@ where
             advanced_holds.push((*id, since));
         }
 
-        let mut updates = advanced_holds
+        let updates = advanced_holds
             .iter()
             .map(|(id, hold)| {
                 let mut changes = ChangeBatch::new();
@@ -2565,7 +2325,7 @@ where
         StorageCollectionsImpl::update_read_capabilities_inner(
             &self.cmd_tx,
             &mut collections,
-            &mut updates,
+            updates,
         );
 
         let acquired_holds = advanced_holds
@@ -2770,9 +2530,6 @@ struct CollectionState<T> {
     /// The policy to use to downgrade `self.implied_capability`.
     pub read_policy: ReadPolicy<T>,
 
-    /// Storage identifiers on which this collection depends.
-    pub storage_dependencies: Vec<GlobalId>,
-
     /// Reported write frontier.
     pub write_frontier: Antichain<T>,
 
@@ -2786,7 +2543,6 @@ impl<T: TimelyTimestamp> CollectionState<T> {
         description: CollectionDescription<T>,
         since: Antichain<T>,
         write_frontier: Antichain<T>,
-        storage_dependencies: Vec<GlobalId>,
         metadata: CollectionMetadata,
     ) -> Self {
         let mut read_capabilities = MutableAntichain::new();
@@ -2798,7 +2554,6 @@ impl<T: TimelyTimestamp> CollectionState<T> {
             read_policy: ReadPolicy::NoPolicy {
                 initial_since: since,
             },
-            storage_dependencies,
             write_frontier,
             collection_metadata: metadata,
         }
@@ -3036,7 +2791,7 @@ where
                     StorageCollectionsImpl::update_read_capabilities_inner(
                         &self.cmds_tx,
                         &mut collections,
-                        &mut batched_changes,
+                        batched_changes,
                     );
                 }
             }
@@ -3095,7 +2850,7 @@ where
             StorageCollectionsImpl::update_read_capabilities_inner(
                 &self.cmds_tx,
                 &mut self_collections,
-                &mut read_capability_changes,
+                read_capability_changes,
             );
         }
     }
