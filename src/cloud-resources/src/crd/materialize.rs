@@ -128,7 +128,7 @@ pub mod v1alpha1 {
         //
         // Defaults to a random value in order to ensure that the first
         // generation rollout is automatically triggered.
-        #[serde(default = "Uuid::new_v4")]
+        #[serde(default)]
         pub request_rollout: Uuid,
         // If force_promote is set to the same value as request_rollout, the
         // current rollout will skip waiting for clusters in the new
@@ -166,11 +166,7 @@ pub mod v1alpha1 {
         // NOTE: This value MUST NOT be changed in an existing instance,
         // since it affects things like the way data is stored in the persist
         // backend.
-        // This is safe to be set via a default because the controller code
-        // runs an initial reconcile loop in order to set the finalizer on
-        // the resource before running any user code, and that initial loop
-        // will populate any defaults.
-        #[serde(default = "Uuid::new_v4")]
+        #[serde(default)]
         pub environment_id: Uuid,
 
         // The configuration for generating an x509 certificate using cert-manager for balancerd
