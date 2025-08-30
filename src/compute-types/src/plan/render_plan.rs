@@ -328,7 +328,7 @@ impl<T> TryFrom<Plan<T>> for RenderPlan<T> {
                 body,
             } = plan.node
             {
-                for (id, value, limit) in izip!(ids, values, limits) {
+                for ((id, value), limit) in ids.into_iter().zip_eq(values).zip_eq(limits) {
                     let value = RenderPlan::try_from(value)?;
                     recs.push(RecBind { id, value, limit })
                 }

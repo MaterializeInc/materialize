@@ -514,8 +514,10 @@ mod let_motion {
             }
 
             let mut bindings = BTreeMap::new();
-            for (id, mut value, max_iter) in
-                izip!(ids.drain(..), values.drain(..), limits.drain(..))
+            for ((id, mut value), max_iter) in ids
+                .drain(..)
+                .zip_eq(values.drain(..))
+                .zip_eq(limits.drain(..))
             {
                 bindings.extend(harvest_non_recursive(&mut value));
                 bindings.insert(id, (value, max_iter));
@@ -559,7 +561,11 @@ mod let_motion {
             // The reference count of the current bindings.
             let mut refcnt = BTreeMap::<LocalId, usize>::new();
 
-            for (id, value, max_iter) in izip!(ids.drain(..), values.drain(..), limits.drain(..)) {
+            for ((id, value), max_iter) in ids
+                .drain(..)
+                .zip_eq(values.drain(..))
+                .zip_eq(limits.drain(..))
+            {
                 refcnt.clear();
                 super::support::count_local_id_uses(&value, &mut refcnt);
 
@@ -769,7 +775,10 @@ mod inlining {
             //      identifier beyond one, as all in values with strictly greater identifiers.
             //   2. by performing the substitution before reasoning, the structure of the value
             //      as it would be substituted is fixed.
-            for (id, mut expr, max_iter) in izip!(ids.drain(..), values.drain(..), limits.drain(..))
+            for ((id, mut expr), max_iter) in ids
+                .drain(..)
+                .zip_eq(values.drain(..))
+                .zip_eq(limits.drain(..))
             {
                 // Substitute any appropriate prior let bindings.
                 inline_lets_helper(&mut expr, &mut inline_offers)?;

@@ -1384,7 +1384,7 @@ async fn execute_stmt<S: ResultSender>(
 
     let buf = RowArena::new();
     let mut params = vec![];
-    for (raw_param, mz_typ) in izip!(raw_params, param_types) {
+    for (raw_param, mz_typ) in raw_params.into_iter().zip_eq(param_types) {
         let pg_typ = mz_pgrepr::Type::from(mz_typ);
         let datum = match raw_param {
             None => Datum::Null,
