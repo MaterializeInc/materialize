@@ -321,6 +321,9 @@ def main() -> int:
             ]
             if args.monitoring:
                 command += ["--opentelemetry-endpoint=http://localhost:4317"]
+            # Common stack overflows in Debug mode
+            if not args.release and not args.optimized:
+                env["RUST_MIN_STACK"] = "4194304"
         elif args.program == "sqllogictest":
             for arg in args.args:
                 if arg.startswith("test/sqllogictest/sqlite/") or arg.startswith(
@@ -342,6 +345,9 @@ def main() -> int:
                 f"--system-parameter-default={system_parameter_default}",
                 *args.args,
             ]
+            # Common stack overflows in Debug mode
+            if not args.release and not args.optimized:
+                env["RUST_MIN_STACK"] = "4194304"
     elif args.program == "test":
         if args.bazel:
             raise UIError("testing with Bazel is not yet supported")
