@@ -4,6 +4,7 @@ await-holding-invalid-types = [
 ]
 
 disallowed-methods = [
+    { path = "std::iter::Iterator::zip", reason = "use `Itertools::zip_eq` instead" },
     { path = "std::panic::catch_unwind", reason = "use `mz_ore::panic::catch_unwind` instead" },
     { path = "futures::FutureExt::catch_unwind", reason = "use `mz_ore::future::FutureExt::catch_unwind` instead" },
 
