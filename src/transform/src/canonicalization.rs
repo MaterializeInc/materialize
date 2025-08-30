@@ -19,6 +19,7 @@ mod projection_extraction;
 mod topk_elision;
 
 pub use flat_map_elimination::FlatMapElimination;
+use itertools::Itertools;
 pub use projection_extraction::ProjectionExtraction;
 pub use topk_elision::TopKElision;
 

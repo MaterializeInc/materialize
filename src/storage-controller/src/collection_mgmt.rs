@@ -1819,6 +1819,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
+    use itertools::Itertools;
     use mz_repr::{Datum, Row};
     use mz_storage_client::client::StatusUpdate;
     use mz_storage_client::healthcheck::{

@@ -12,6 +12,7 @@ use std::fmt;
 
 use chrono::FixedOffset;
 use chrono_tz::Tz;
+use itertools::Itertools;
 use mz_lowertest::MzReflect;
 use mz_proto::chrono::{any_fixed_offset, any_timezone};
 use mz_proto::{RustType, TryFromProtoError};

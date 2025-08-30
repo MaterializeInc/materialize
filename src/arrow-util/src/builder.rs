@@ -22,6 +22,7 @@ use arrow::datatypes::{
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use chrono::Timelike;
+use itertools::Itertools;
 use mz_ore::cast::CastFrom;
 use mz_repr::adt::jsonb::JsonbRef;
 use mz_repr::{Datum, RelationDesc, Row, ScalarType};

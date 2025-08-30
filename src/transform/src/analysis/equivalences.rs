@@ -18,6 +18,7 @@
 use std::collections::BTreeMap;
 use std::fmt::Formatter;
 
+use itertools::Itertools;
 use mz_expr::canonicalize::{UnionFind, canonicalize_equivalence_classes};
 use mz_expr::explain::{HumanizedExplain, HumanizerMode};
 use mz_expr::{AggregateFunc, Id, MirRelationExpr, MirScalarExpr};

@@ -12,6 +12,7 @@ use std::io;
 
 use bytes::BytesMut;
 use csv::{ByteRecord, ReaderBuilder};
+use itertools::Itertools;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::{
     ColumnType, Datum, RelationDesc, RelationType, Row, RowArena, RowRef, ScalarType, SharedRow,

@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use bytes::BytesMut;
+use itertools::Itertools;
 use mz_repr::{ColumnName, ColumnType, RelationDesc};
 
 use crate::encode::{Encode, column_names_and_types};

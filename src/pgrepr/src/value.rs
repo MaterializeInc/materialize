@@ -13,6 +13,7 @@ use std::{io, str};
 
 use bytes::{BufMut, BytesMut};
 use chrono::{DateTime, NaiveDateTime, NaiveTime, Utc};
+use itertools::Itertools;
 use mz_ore::cast::ReinterpretCast;
 use mz_pgwire_common::Format;
 use mz_repr::adt::array::ArrayDimension;

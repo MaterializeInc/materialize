@@ -10,6 +10,7 @@
 //! Types related to source envelopes
 
 use anyhow::{anyhow, bail};
+use itertools::Itertools;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{ColumnType, RelationDesc, RelationType, ScalarType};
 use proptest::prelude::any;

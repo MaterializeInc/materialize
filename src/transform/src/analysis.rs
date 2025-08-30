@@ -80,6 +80,7 @@ pub mod common {
     use std::any::{Any, TypeId};
     use std::collections::BTreeMap;
 
+    use itertools::Itertools;
     use mz_expr::LocalId;
     use mz_expr::MirRelationExpr;
     use mz_ore::assert_none;
@@ -551,6 +552,7 @@ mod arity {
 mod types {
 
     use super::{Analysis, Derived, Lattice};
+    use itertools::Itertools;
     use mz_expr::MirRelationExpr;
     use mz_repr::ColumnType;
 

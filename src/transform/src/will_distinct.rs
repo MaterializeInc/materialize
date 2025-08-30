@@ -9,6 +9,7 @@
 
 //! Transform that pushes down the information that a collection will be subjected to a `Distinct` on specific columns.
 
+use itertools::Itertools;
 use mz_expr::MirRelationExpr;
 
 use crate::analysis::{DerivedView, NonNegative};

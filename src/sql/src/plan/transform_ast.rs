@@ -13,6 +13,7 @@
 //! are much easier to perform in SQL. Someday, we'll want our own SQL IR,
 //! but for now we just use the parser's AST directly.
 
+use itertools::Itertools;
 use mz_ore::id_gen::IdGen;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_repr::namespaces::{MZ_CATALOG_SCHEMA, MZ_UNSAFE_SCHEMA, PG_CATALOG_SCHEMA};

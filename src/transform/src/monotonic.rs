@@ -11,6 +11,7 @@
 
 use std::collections::BTreeSet;
 
+use itertools::Itertools;
 use mz_expr::MirRelationExpr;
 use mz_repr::GlobalId;
 

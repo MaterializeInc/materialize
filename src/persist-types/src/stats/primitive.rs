@@ -9,6 +9,7 @@
 
 use std::fmt::{self, Debug};
 
+use itertools::Itertools;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use proptest::arbitrary::Arbitrary;
 use proptest::strategy::Strategy;

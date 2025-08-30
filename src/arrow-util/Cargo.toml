@@ -15,6 +15,7 @@ arrow = { version = "55.2.0", default-features = false }
 chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 dec = { version = "0.4.9", features = ["num-traits"] }
 half = "2"
+itertools = "0.14.0"
 mz-repr = { path = "../repr" }
 mz-ore = { path = "../ore" }
 num-traits = "0.2"

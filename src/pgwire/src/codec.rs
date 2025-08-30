@@ -20,6 +20,7 @@ use async_trait::async_trait;
 use bytes::{Buf, BufMut, BytesMut};
 use bytesize::ByteSize;
 use futures::{SinkExt, TryStreamExt, sink};
+use itertools::Itertools;
 use mz_adapter_types::connection::ConnectionId;
 use mz_ore::cast::CastFrom;
 use mz_ore::future::OreSinkExt;

@@ -13,6 +13,7 @@
 
 use std::collections::BTreeMap;
 
+use itertools::Itertools;
 pub use mz_lowertest_derive::MzReflect;
 use mz_ore::result::ResultExt;
 use mz_ore::str::{StrExt, separated};

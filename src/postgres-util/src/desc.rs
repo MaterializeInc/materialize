@@ -12,6 +12,7 @@
 use std::collections::BTreeSet;
 
 use anyhow::bail;
+use itertools::Itertools;
 use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
 use proptest::prelude::any;
 use proptest_derive::Arbitrary;

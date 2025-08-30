@@ -3140,9 +3140,9 @@ pub fn plan_create_continual_task(
                 // Update ct nullability as necessary. The `ne` above verified that the
                 // types are the same len.
                 let zip_eq_types = || desc.iter_types().zip_eq(desc_query.iter_types());
-                let updated = zip_types().any(|(ct, q)| q.nullable && !ct.nullable);
+                let updated = zip_eq_types().any(|(ct, q)| q.nullable && !ct.nullable);
                 if updated {
-                    let new_types = zip_types().map(|(ct, q)| {
+                    let new_types = zip_eq_types().map(|(ct, q)| {
                         let mut ct = ct.clone();
                         if q.nullable {
                             ct.nullable = true;

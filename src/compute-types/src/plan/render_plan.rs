@@ -12,7 +12,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use itertools::izip;
+use itertools::Itertools;
 use mz_expr::explain::{HumanizedExplain, HumanizerMode};
 use mz_expr::{
     CollectionPlan, EvalError, Id, LetRecLimit, LocalId, MapFilterProject, MirScalarExpr, TableFunc,

@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 
+use itertools::Itertools;
 use mz_ore::soft_assert_eq_or_log;
 use mz_ore::str::{Indent, IndentLike, StrExt, closure_to_display, separated};
 use mz_ore::treat_as_equal::TreatAsEqual;

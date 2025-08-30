@@ -23,7 +23,7 @@
 use std::fmt;
 use std::ops::Deref;
 
-use itertools::{Itertools, izip};
+use itertools::Itertools;
 use mz_expr::explain::{HumanizedExplain, HumanizerMode, fmt_text_constant_rows};
 use mz_expr::{Id, MirScalarExpr};
 use mz_ore::soft_assert_or_log;

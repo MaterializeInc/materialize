@@ -28,6 +28,7 @@ use std::fmt;
 
 use chrono::NaiveDateTime;
 use enum_kinds::EnumKind;
+use itertools::Itertools;
 use serde_json::Value as JsonValue;
 
 use crate::schema::{RecordField, SchemaNode, SchemaPiece, SchemaPieceOrNamed};

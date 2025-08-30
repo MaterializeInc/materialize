@@ -12,6 +12,7 @@
 use std::collections::BTreeMap;
 
 use columnar::Len;
+use itertools::Itertools;
 use mz_expr::JoinImplementation::{DeltaQuery, Differential, IndexedFilter, Unimplemented};
 use mz_expr::{
     AggregateExpr, Id, JoinInputMapper, MapFilterProject, MirRelationExpr, MirScalarExpr,

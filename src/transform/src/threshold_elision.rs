@@ -15,6 +15,7 @@
 //! The Subset(X) notation means that the collection is a multiset subset of X:
 //! multiplicities of each record in Subset(X) are at most that of X.
 
+use itertools::Itertools;
 use mz_expr::MirRelationExpr;
 
 use crate::TransformCtx;

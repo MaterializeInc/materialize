@@ -5535,6 +5535,7 @@ dependencies = [
  "chrono",
  "dec",
  "half 2.6.0",
+ "itertools 0.14.0",
  "mz-ore",
  "mz-repr",
  "num-traits",
@@ -6121,6 +6122,7 @@ dependencies = [
  "bytesize",
  "chrono",
  "futures",
+ "itertools 0.14.0",
  "mz-build-info",
  "mz-cluster-client",
  "mz-compute-client",
@@ -6516,6 +6518,7 @@ name = "mz-expr-test-util"
 version = "0.0.0"
 dependencies = [
  "datadriven",
+ "itertools 0.14.0",
  "mz-expr",
  "mz-lowertest",
  "mz-ore",
@@ -6751,6 +6754,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "datadriven",
+ "itertools 0.14.0",
  "mz-lowertest-derive",
  "mz-ore",
  "proc-macro2",
@@ -7265,6 +7269,7 @@ version = "0.0.0"
 dependencies = [
  "bytes",
  "csv",
+ "itertools 0.14.0",
  "mz-build-tools",
  "mz-ore",
  "mz-pgrepr",
@@ -7286,6 +7291,7 @@ dependencies = [
  "bytes",
  "chrono",
  "dec",
+ "itertools 0.14.0",
  "mz-ore",
  "mz-pgrepr-consts",
  "mz-pgwire-common",
@@ -7325,6 +7331,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "chrono-tz",
+ "itertools 0.14.0",
  "mz-build-tools",
  "mz-lowertest",
  "mz-ore",
@@ -7414,6 +7421,7 @@ name = "mz-postgres-util"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "itertools 0.14.0",
  "mz-build-tools",
  "mz-cloud-resources",
  "mz-ore",
@@ -7445,6 +7453,7 @@ dependencies = [
  "anyhow",
  "backtrace",
  "flate2",
+ "itertools 0.14.0",
  "jemalloc_pprof",
  "mz-build-tools",
  "mz-ore",
@@ -7586,6 +7595,7 @@ version = "0.0.0"
 dependencies = [
  "chrono",
  "datadriven",
+ "itertools 0.14.0",
  "mz-lowertest",
  "mz-ore",
  "mz-repr",
@@ -7875,6 +7885,7 @@ name = "mz-sql-pretty"
 version = "0.0.0"
 dependencies = [
  "datadriven",
+ "itertools 0.14.0",
  "mz-ore",
  "mz-sql-parser",
  "pretty",

@@ -16,6 +16,7 @@ use std::sync::Arc;
 
 use futures::TryStreamExt;
 use futures::stream::{BoxStream, StreamExt};
+use itertools::Itertools;
 use mz_pgcopy::CopyCsvFormatParams;
 use mz_repr::{Datum, RelationDesc, Row, RowArena};
 use serde::{Deserialize, Serialize};

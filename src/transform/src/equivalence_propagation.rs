@@ -30,6 +30,7 @@
 
 use std::collections::BTreeMap;
 
+use itertools::Itertools;
 use mz_expr::{Id, MirRelationExpr, MirScalarExpr};
 use mz_repr::Datum;
 use tracing::debug;

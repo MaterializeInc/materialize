@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use itertools::Itertools;
 use mz_repr::{Datum, Row};
 use mz_storage_types::errors::DecodeErrorKind;
 use mz_storage_types::sources::encoding::CsvEncoding;
