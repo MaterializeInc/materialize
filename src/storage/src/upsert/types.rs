@@ -510,7 +510,7 @@ impl<T: Eq, O> StateValue<T, O> {
                     // Note that if the new value is _smaller_ than the `value_xor`, and
                     // the values at the end are zeroed out, we can shrink the buffer. This
                     // is extremely sensitive code, so we don't (yet) do that.
-                    for (acc, val) in value_xor.iter_mut().zip(bincode_buffer.drain(..)) {
+                    for (acc, val) in value_xor.iter_mut().zip_eq(bincode_buffer.drain(..)) {
                         *acc ^= val;
                     }
                 }
@@ -565,7 +565,7 @@ impl<T: Eq, O> StateValue<T, O> {
                 }
                 for (acc, val) in value_xor
                     .iter_mut()
-                    .zip(other_consolidating.value_xor.iter())
+                    .zip_eq(other_consolidating.value_xor.iter())
                 {
                     *acc ^= val;
                 }

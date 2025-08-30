@@ -192,7 +192,7 @@ impl Value {
             (Datum::List(record), ScalarType::Record { fields, .. }) => {
                 let fields = record
                     .iter()
-                    .zip(fields)
+                    .zip_eq(fields)
                     .map(|(e, (_name, ty))| Value::from_datum(e, &ty.scalar_type))
                     .collect();
                 Some(Value::Record(fields))
@@ -496,7 +496,7 @@ impl Value {
                     Type::Record(fields) => fields,
                     _ => unreachable!(),
                 };
-                for (f, ty) in fields.iter().zip(field_types) {
+                for (f, ty) in fields.iter().zip_eq(field_types) {
                     buf.put_u32(ty.oid());
                     encode_element(buf, f.as_ref(), ty)?;
                 }
@@ -892,7 +892,7 @@ fn pg_len(what: &str, len: usize) -> Result<i32, io::Error> {
 /// every datum in `row`.
 pub fn values_from_row(row: &RowRef, typ: &RelationType) -> Vec<Option<Value>> {
     row.iter()
-        .zip(typ.column_types.iter())
+        .zip_eq(typ.column_types.iter())
         .map(|(col, typ)| Value::from_datum(col, &typ.scalar_type))
         .collect()
 }

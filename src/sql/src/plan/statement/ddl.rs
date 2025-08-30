@@ -184,7 +184,7 @@ static MANAGED_REPLICA_PATTERN: std::sync::LazyLock<regex::Regex> =
 /// - all the listed columns are types that have meaningful Persist-level ordering.
 fn check_partition_by(desc: &RelationDesc, partition_by: Vec<Ident>) -> Result<(), PlanError> {
     for (idx, ((desc_name, desc_type), partition_name)) in
-        desc.iter().zip(partition_by.into_iter()).enumerate()
+        desc.iter().zip_eq(partition_by.into_iter()).enumerate()
     {
         let partition_name = normalize::column_name(partition_name);
         if *desc_name != partition_name {
@@ -3139,7 +3139,7 @@ pub fn plan_create_continual_task(
 
                 // Update ct nullability as necessary. The `ne` above verified that the
                 // types are the same len.
-                let zip_types = || desc.iter_types().zip(desc_query.iter_types());
+                let zip_eq_types = || desc.iter_types().zip_eq(desc_query.iter_types());
                 let updated = zip_types().any(|(ct, q)| q.nullable && !ct.nullable);
                 if updated {
                     let new_types = zip_types().map(|(ct, q)| {
@@ -3150,7 +3150,7 @@ pub fn plan_create_continual_task(
                         ct
                     });
                     *desc = RelationDesc::from_names_and_types(
-                        desc.iter_names().cloned().zip(new_types),
+                        desc.iter_names().cloned().zip_eq(new_types),
                     );
                 }
 

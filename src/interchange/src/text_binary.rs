@@ -31,7 +31,7 @@ impl TextEncoder {
 impl Encode for TextEncoder {
     fn encode_unchecked(&self, row: mz_repr::Row) -> Vec<u8> {
         let mut buf = BytesMut::new();
-        for ((_, typ), val) in self.columns.iter().zip(row.iter()) {
+        for ((_, typ), val) in self.columns.iter().zip_eq(row.iter()) {
             if let Some(pgrepr_value) = mz_pgrepr::Value::from_datum(val, &typ.scalar_type) {
                 pgrepr_value.encode_text(&mut buf);
             }
@@ -59,7 +59,7 @@ impl BinaryEncoder {
 impl Encode for BinaryEncoder {
     fn encode_unchecked(&self, row: mz_repr::Row) -> Vec<u8> {
         let mut buf = BytesMut::new();
-        for ((_, typ), val) in self.columns.iter().zip(row.iter()) {
+        for ((_, typ), val) in self.columns.iter().zip_eq(row.iter()) {
             if let Some(pgrepr_value) = mz_pgrepr::Value::from_datum(val, &typ.scalar_type) {
                 pgrepr_value
                     .encode_binary(&mz_pgrepr::Type::from(&typ.scalar_type), &mut buf)

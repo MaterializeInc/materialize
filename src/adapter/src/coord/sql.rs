@@ -76,7 +76,7 @@ impl Coordinator {
         let params = params
             .datums
             .into_iter()
-            .zip(params.execute_types)
+            .zip_eq(params.execute_types)
             .collect();
         let result_formats = vec![mz_pgwire_common::Format::Text; desc.arity()];
         let logging = session.mint_logging(sql, Some(&stmt), now);

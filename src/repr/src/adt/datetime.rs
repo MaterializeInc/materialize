@@ -3598,7 +3598,7 @@ mod tests {
             times.sort();
             packed.sort();
 
-            for (time, packed) in times.into_iter().zip(packed.into_iter()) {
+            for (time, packed) in times.into_iter().zip_eq(packed.into_iter()) {
                 let rnd = packed.into_value();
                 prop_assert_eq!(time, rnd);
             }

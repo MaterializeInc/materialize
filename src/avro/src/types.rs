@@ -417,7 +417,7 @@ impl Value {
             }
             (&Value::Record(ref record_fields), SchemaPiece::Record { fields, .. }) => {
                 fields.len() == record_fields.len()
-                    && fields.iter().zip(record_fields.iter()).all(
+                    && fields.iter().zip_eq(record_fields.iter()).all(
                         |(field, &(ref name, ref value))| {
                             let node = schema.step(&field.schema);
                             field.name == *name && value.validate(node)

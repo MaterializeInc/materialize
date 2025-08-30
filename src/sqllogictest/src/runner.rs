@@ -323,7 +323,7 @@ pub struct Outcomes {
 
 impl ops::AddAssign<Outcomes> for Outcomes {
     fn add_assign(&mut self, rhs: Outcomes) {
-        for (lhs, rhs) in self.stats.iter_mut().zip(rhs.stats.iter()) {
+        for (lhs, rhs) in self.stats.iter_mut().zip_eq(rhs.stats.iter()) {
             *lhs += rhs
         }
     }

@@ -186,7 +186,7 @@ impl IsCompatible for Option<MySqlColumnMeta> {
                     && self_enum
                         .values
                         .iter()
-                        .zip(other_enum.values.iter())
+                        .zip_eq(other_enum.values.iter())
                         .all(|(self_val, other_val)| self_val == other_val)
             }
             (Some(MySqlColumnMeta::Json), Some(MySqlColumnMeta::Json)) => true,

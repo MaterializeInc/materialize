@@ -197,7 +197,7 @@ impl EquivalencePropagation {
                 // Traverse `body` first to assemble equivalences to push to `value`.
                 // Descend without a key for `id`, treating the absence as the identity for union.
                 // `Get` nodes with identifier `id` will populate the equivalence classes with the intersection of their guarantees.
-                let mut children_rev = expr.children_mut().rev().zip(derived.children_rev());
+                let mut children_rev = expr.children_mut().rev().zip_eq(derived.children_rev());
 
                 let body = children_rev.next().unwrap();
                 let value = children_rev.next().unwrap();
@@ -223,7 +223,7 @@ impl EquivalencePropagation {
                 }
             }
             MirRelationExpr::LetRec { .. } => {
-                let mut child_iter = expr.children_mut().rev().zip(derived.children_rev());
+                let mut child_iter = expr.children_mut().rev().zip_eq(derived.children_rev());
                 // Continue in `body` with the outer equivalences.
                 let (body, view) = child_iter.next().unwrap();
                 self.apply(body, view, outer_equivalences, get_equivalences, ctx);
@@ -504,7 +504,7 @@ impl EquivalencePropagation {
                 // Revisit each child, determining the information to present to it, and recurring.
                 let mut columns = 0;
                 for ((index, child), expr) in
-                    children.into_iter().enumerate().zip(inputs.iter_mut())
+                    children.into_iter().enumerate().zip_eq(inputs.iter_mut())
                 {
                     let child_arity = child.value::<Arity>().expect("Arity required");
 
@@ -677,7 +677,7 @@ impl EquivalencePropagation {
                 );
             }
             MirRelationExpr::Union { .. } => {
-                for (child, derived) in expr.children_mut().rev().zip(derived.children_rev()) {
+                for (child, derived) in expr.children_mut().rev().zip_eq(derived.children_rev()) {
                     self.apply(
                         child,
                         derived,

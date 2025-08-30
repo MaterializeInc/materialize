@@ -1381,7 +1381,7 @@ where
         // aggregate, instead of having to do a hierarchical reduction.
         let partial = partial.explode_one(move |(key, values)| {
             let mut output = Vec::new();
-            for (row, func) in values.into_iter().zip(aggr_funcs.iter()) {
+            for (row, func) in values.into_iter().zip_eq(aggr_funcs.iter()) {
                 output.push(monoids::get_monoid(row, func).expect(
                     "hierarchical aggregations are expected to have monoid implementations",
                 ));
@@ -1592,7 +1592,7 @@ where
                         let mut datums_local = datums1.borrow();
                         datums_local.extend(datum_iter);
                         let key_len = datums_local.len();
-                        for (aggr, accum) in full_aggrs.iter().zip(accums) {
+                        for (aggr, accum) in full_aggrs.iter().zip_eq(accums) {
                             datums_local.push(finalize_accum(&aggr.func, accum, total));
                         }
 
@@ -1608,7 +1608,7 @@ where
                 },
                 move |key, input, output| {
                     let (ref accums, total) = input[0].1;
-                    for (aggr, accum) in err_full_aggrs.iter().zip(accums) {
+                    for (aggr, accum) in err_full_aggrs.iter().zip_eq(accums) {
                         // We first test here if inputs without net-positive records are present,
                         // producing an error to the logs and to the query output if that is the case.
                         if total == Diff::ZERO && !accum.is_zero() {
@@ -1650,7 +1650,7 @@ where
                     let datum_iter = key.to_datum_iter();
                     let mut datums_local = datums2.borrow();
                     datums_local.extend(datum_iter);
-                    for (aggr, accum) in full_aggrs2.iter().zip(accums) {
+                    for (aggr, accum) in full_aggrs2.iter().zip_eq(accums) {
                         datums_local.push(finalize_accum(&aggr.func, accum, total));
                     }
 

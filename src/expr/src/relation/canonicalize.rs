@@ -148,7 +148,7 @@ pub fn canonicalize_equivalence_classes(equivalences: &mut Vec<Vec<MirScalarExpr
     equivalences.resize(classes.len(), Vec::new());
     equivalences
         .iter_mut()
-        .zip(classes)
+        .zip_eq(classes)
         .for_each(|(equivalence, class)| {
             equivalence.extend(
                 class

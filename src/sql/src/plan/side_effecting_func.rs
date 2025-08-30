@@ -218,7 +218,7 @@ fn extract_sef_call(
         allow_parameters: true,
         allow_windows: false,
     };
-    for (arg, ty) in args.iter().zip(sef_impl.param_types) {
+    for (arg, ty) in args.iter().zip_eq(sef_impl.param_types) {
         // If we encounter an error when planning the argument expression, that
         // error is unrelated to planning the function call and can be returned
         // directly to the user.

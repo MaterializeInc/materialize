@@ -666,7 +666,7 @@ impl<T: Clone> RenderPlan<T> {
 
         for stage in self.binds {
             let partition = stage.partition_among(parts);
-            for (plan, stage) in part_plans.iter_mut().zip(partition) {
+            for (plan, stage) in part_plans.iter_mut().zip_eq(partition) {
                 plan.binds.push(stage);
             }
         }
@@ -691,13 +691,13 @@ impl<T: Clone> BindStage<T> {
 
         for LetBind { id, value } in self.lets {
             let partition = value.partition_among(parts);
-            for (stage, value) in part_binds.iter_mut().zip(partition) {
+            for (stage, value) in part_binds.iter_mut().zip_eq(partition) {
                 stage.lets.push(LetBind { id, value });
             }
         }
         for RecBind { id, value, limit } in self.recs {
             let partition = value.partition_among(parts);
-            for (stage, value) in part_binds.iter_mut().zip(partition) {
+            for (stage, value) in part_binds.iter_mut().zip_eq(partition) {
                 stage.recs.push(RecBind { id, value, limit });
             }
         }
@@ -723,7 +723,7 @@ impl<T: Clone> LetFreePlan<T> {
 
         for (id, node) in self.nodes {
             let partition = node.expr.partition_among(parts);
-            for (plan, expr) in part_plans.iter_mut().zip(partition) {
+            for (plan, expr) in part_plans.iter_mut().zip_eq(partition) {
                 plan.nodes.insert(
                     id,
                     Node {

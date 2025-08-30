@@ -183,7 +183,7 @@ async fn execute_promsql_query(
         let mut label_values = desc
             .columns
             .iter()
-            .zip(row)
+            .zip_eq(row)
             .filter(|(col, _)| col.name != query.value_column_name)
             .map(|(_, val)| val.as_str().expect("must be string"))
             .collect::<Vec<_>>();
@@ -191,7 +191,7 @@ async fn execute_promsql_query(
         let value = desc
             .columns
             .iter()
-            .zip(row)
+            .zip_eq(row)
             .find(|(col, _)| col.name == query.value_column_name)
             .map(|(_, val)| val.as_str().unwrap_or("0").parse::<f64>().unwrap_or(0.0))
             .unwrap_or(0.0);

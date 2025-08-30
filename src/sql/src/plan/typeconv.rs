@@ -1139,7 +1139,7 @@ pub fn plan_coerce<'a>(
                 _ => vec![ScalarType::String; exprs.len()],
             };
             let mut out = vec![];
-            for (e, coerce_to) in exprs.into_iter().zip(coercions) {
+            for (e, coerce_to) in exprs.into_iter().zip_eq(coercions) {
                 out.push(plan_coerce(ecx, e, &coerce_to)?);
             }
             HirScalarExpr::call_variadic(

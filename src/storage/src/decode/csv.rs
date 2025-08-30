@@ -130,7 +130,7 @@ impl CsvDecoderState {
                         if let Ok(Some(row)) = &result {
                             let mismatched = row
                                 .iter()
-                                .zip(self.header_names.iter().flatten())
+                                .zip_eq(self.header_names.iter().flatten())
                                 .enumerate()
                                 .find(|(_, (actual, expected))| actual.unwrap_str() != &**expected);
                             if let Some((i, (actual, expected))) = mismatched {

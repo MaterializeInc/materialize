@@ -392,7 +392,7 @@ impl<T: Timestamp + Lattice> Trace<T> {
             let parts = batch
                 .parts
                 .into_iter()
-                .zip(batch.descs.iter().map(Some).chain(std::iter::repeat(None)))
+                .zip_eq(batch.descs.iter().map(Some).chain(std::iter::repeat(None)))
                 .map(|(id, desc)| pop_batch(id, desc))
                 .collect::<Result<Vec<_>, _>>()?;
             let len = parts.iter().map(|p| (*p).batch.len).sum();

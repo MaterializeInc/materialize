@@ -3229,7 +3229,7 @@ impl Coordinator {
         );
 
         let catalog = self.catalog_mut();
-        for (id, plan) in catalog_ids.into_iter().zip(dataflows) {
+        for (id, plan) in catalog_ids.into_iter().zip_eq(dataflows) {
             catalog.set_physical_plan(id, plan);
         }
 

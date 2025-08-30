@@ -821,7 +821,7 @@ impl<'a> Desugarer<'a> {
                 }
                 match normalize::op(op)? {
                     "=" | "<>" => {
-                        let mut pairs = left.iter_mut().zip(right);
+                        let mut pairs = left.iter_mut().zip_eq(right);
                         let mut new = pairs
                             .next()
                             .map(|(l, r)| l.take().equals(r.take()))
@@ -842,7 +842,7 @@ impl<'a> Desugarer<'a> {
                         };
                         let (l, r) = (left.last_mut().unwrap(), right.last_mut().unwrap());
                         let mut new = l.take().binop(op.clone(), r.take());
-                        for (l, r) in left.iter_mut().zip(right).rev().skip(1) {
+                        for (l, r) in left.iter_mut().zip_eq(right).rev().skip(1) {
                             new = l
                                 .clone()
                                 .binop(Op::bare(strict_op), r.clone())

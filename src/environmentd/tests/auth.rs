@@ -377,7 +377,7 @@ async fn run_tests<'a>(header: &str, server: &test_util::TestServer, tests: &[Te
                                 (WebSocketResponse::Row(actual_row), Some(expected_row), _) => {
                                     assert_eq!(actual_row.len(), expected_row.len());
                                     for (actual_col, expected_col) in
-                                        actual_row.into_iter().zip(expected_row.iter())
+                                        actual_row.into_iter().zip_eq(expected_row.iter())
                                     {
                                         assert_eq!(&actual_col.to_string(), expected_col);
                                     }

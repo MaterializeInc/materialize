@@ -435,7 +435,7 @@ impl<'a> MirRelationExprDeserializeContext<'a> {
                     let row = test_spec_to_row(
                         parse_vec_of_literals(&token)?
                             .iter()
-                            .zip(&typ.column_types)
+                            .zip_eq(&typ.column_types)
                             .map(|(dat, col_typ)| (&dat[..], &col_typ.scalar_type)),
                     )?;
                     rows.push((row, Diff::ONE));

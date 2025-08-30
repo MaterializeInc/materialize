@@ -634,7 +634,7 @@ impl Pretty {
                 if let Some(operand) = operand {
                     docs.push(self.doc_expr(operand));
                 }
-                for (c, r) in conditions.iter().zip(results) {
+                for (c, r) in conditions.iter().zip_eq(results) {
                     let when = nest_title("WHEN", self.doc_expr(c));
                     let then = nest_title("THEN", self.doc_expr(r));
                     docs.push(nest(when, then));

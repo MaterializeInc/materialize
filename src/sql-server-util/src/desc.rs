@@ -1137,8 +1137,12 @@ mod tests {
             tiberius::ColumnData::I32(Some(42)),
             tiberius::ColumnData::Bit(Some(true)),
         ];
-        let sql_server_row_a =
-            tiberius::Row::build(sql_server_columns.iter().cloned().zip(data_a.into_iter()));
+        let sql_server_row_a = tiberius::Row::build(
+            sql_server_columns
+                .iter()
+                .cloned()
+                .zip_eq(data_a.into_iter()),
+        );
 
         let data_b = [
             tiberius::ColumnData::String(Some("foo bar".into())),
@@ -1146,7 +1150,7 @@ mod tests {
             tiberius::ColumnData::Bit(Some(false)),
         ];
         let sql_server_row_b =
-            tiberius::Row::build(sql_server_columns.into_iter().zip(data_b.into_iter()));
+            tiberius::Row::build(sql_server_columns.into_iter().zip_eq(data_b.into_iter()));
 
         let mut rnd_row = Row::default();
         let arena = RowArena::default();
