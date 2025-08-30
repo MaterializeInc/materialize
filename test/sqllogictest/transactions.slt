@@ -1353,6 +1353,104 @@ type_mod false  integer The␠packed␠type␠identifier␠of␠the␠column.
 statement ok
 COMMIT;
 
+statement ok
+CREATE TABLE t1(x text, y text);
+
+statement ok
+INSERT INTO t1 VALUES (5, 6), (7, 8);
+
+# Test PREPARE FETCH.
+simple
+BEGIN;
+DECLARE c1 CURSOR FOR (
+  SELECT count(1) FROM t1
+  UNION ALL
+  SELECT count(1) FROM t1
+);
+PREPARE p1 AS FETCH 1 c1;
+EXECUTE p1;
+ROLLBACK;
+----
+COMPLETE 0
+COMPLETE 0
+COMPLETE 0
+2
+COMPLETE 1
+COMPLETE 0
+
+# Now declare a new cursor with the same name in a different transaction, and test that we realize that the meaning of
+# p1 has changed.
+# TODO: Currently, we have a bug here, see: https://github.com/MaterializeInc/database-issues/issues/9634
+simple
+BEGIN;
+DECLARE c1 CURSOR FOR (
+  SELECT x, y FROM t1
+);
+EXECUTE p1;
+ROLLBACK;
+----
+error parsing response from server: failed to fill whole buffer
+
+# PREPARE FETCH with a SUBSCRIBE
+simple
+BEGIN;
+DECLARE c1 CURSOR FOR SUBSCRIBE (
+  SELECT count(1) FROM t1
+  UNION ALL
+  SELECT count(1) FROM t1
+);
+PREPARE p2 AS FETCH 0 c1;
+EXECUTE p2;
+ROLLBACK;
+----
+COMPLETE 0
+COMPLETE 0
+COMPLETE 0
+COMPLETE 0
+COMPLETE 0
+
+# The transaction ended, so the portal is gone.
+query error db error: ERROR: portal "c1" does not exist
+EXECUTE p2;
+
+# Do the same as above, but commit the transaction. Counter-intuitively, the portal disappears also if you commit the
+# transaction.
+simple
+BEGIN;
+DECLARE c1 CURSOR FOR SUBSCRIBE (
+  SELECT count(1) FROM t1
+  UNION ALL
+  SELECT count(1) FROM t1
+);
+PREPARE p3 AS FETCH 0 c1;
+EXECUTE p3;
+COMMIT;
+----
+COMPLETE 0
+COMPLETE 0
+COMPLETE 0
+COMPLETE 0
+COMPLETE 0
+
+query error db error: ERROR: portal "c1" does not exist
+EXECUTE p3;
+
+# DECLARE CURSOR FOR FETCH
+# (tests that `describe_fetch` is correct when called from `describe_declare`)
+simple
+BEGIN;
+DECLARE c1 CURSOR FOR SELECT count(1) FROM t1;
+DECLARE c2 CURSOR FOR FETCH 1 c1;
+FETCH 3 c2;
+ROLLBACK;
+----
+COMPLETE 0
+COMPLETE 0
+COMPLETE 0
+2
+COMPLETE 1
+COMPLETE 0
+
 # Cleanup.
 
 statement ok
