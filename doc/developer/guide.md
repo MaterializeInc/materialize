@@ -294,7 +294,7 @@ drive the process:
 
 ```shell
 cd materialize
-bin/environmentd [--release] [<environmentd arg>...]
+bin/environmentd [--release] [--optimized] [<environmentd arg>...]
 ```
 
 ### WebAssembly / WASM
