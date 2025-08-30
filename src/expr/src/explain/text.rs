@@ -405,8 +405,6 @@ impl MirRelationExpr {
             } => {
                 assert_eq!(ids.len(), values.len());
                 assert_eq!(ids.len(), limits.len());
-                let bindings =
-                    itertools::izip!(ids.iter(), values.iter(), limits.iter()).collect::<Vec<_>>();
                 let head = body.as_ref();
 
                 // Determine whether all `limits` are the same.
@@ -427,7 +425,8 @@ impl MirRelationExpr {
                     }
                     writeln!(f)?;
                     ctx.indented(|ctx| {
-                        for (id, value, limit) in bindings.iter() {
+                        let bindings = ids.iter().zip_eq(values).zip_eq(limits);
+                        for ((id, value), limit) in bindings {
                             write!(f, "{}cte", ctx.indent)?;
                             if all_limits_same.is_none() {
                                 if let Some(limit) = limit {
