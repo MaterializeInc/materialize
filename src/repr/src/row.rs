@@ -31,6 +31,7 @@ use uuid::Uuid;
 
 use crate::adt::array::{
     Array, ArrayDimension, ArrayDimensions, InvalidArrayError, MAX_ARRAY_DIMENSIONS,
+    WrongCardinality,
 };
 use crate::adt::date::Date;
 use crate::adt::interval::Interval;
@@ -2267,10 +2268,10 @@ impl RowPacker<'_> {
         };
         if nelements != cardinality {
             self.row.data.truncate(start);
-            return Err(InvalidArrayError::WrongCardinality {
+            return Err(InvalidArrayError::WrongCardinality(WrongCardinality {
                 actual: nelements,
                 expected: cardinality,
-            }
+            })
             .into());
         }
 
@@ -2342,10 +2343,10 @@ impl RowPacker<'_> {
         };
         if nelements != cardinality {
             self.row.data.truncate(start);
-            return Err(InvalidArrayError::WrongCardinality {
+            return Err(InvalidArrayError::WrongCardinality(WrongCardinality {
                 actual: nelements,
                 expected: cardinality,
-            });
+            }));
         }
 
         Ok(())
@@ -3164,10 +3165,10 @@ mod tests {
         );
         assert_eq!(
             res,
-            Err(InvalidArrayError::WrongCardinality {
+            Err(InvalidArrayError::WrongCardinality(WrongCardinality {
                 actual: 2,
                 expected: 6,
-            })
+            }))
         );
         assert!(row.data.is_empty());
     }
