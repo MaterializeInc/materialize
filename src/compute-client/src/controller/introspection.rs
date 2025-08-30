@@ -51,8 +51,6 @@ struct IntrospectionSink<T> {
     replica_frontiers_tx: DifferentialSender<T>,
     /// Sender for [`IntrospectionType::ComputeDependencies`] updates.
     compute_dependencies_tx: DifferentialSender<T>,
-    /// Sender for [`IntrospectionType::ComputeOperatorHydrationStatus`] updates.
-    compute_operator_hydration_status_tx: DifferentialSender<T>,
     /// Sender for [`IntrospectionType::ComputeMaterializedViewRefreshes`] updates.
     compute_materialized_view_refreshes_tx: DifferentialSender<T>,
     /// Sender for [`IntrospectionType::WallclockLagHistory`] updates.
@@ -71,8 +69,6 @@ impl<T: Timestamp> IntrospectionSink<T> {
                 .differential_introspection_tx(ReplicaFrontiers),
             compute_dependencies_tx: storage_controller
                 .differential_introspection_tx(ComputeDependencies),
-            compute_operator_hydration_status_tx: storage_controller
-                .differential_introspection_tx(ComputeOperatorHydrationStatus),
             compute_materialized_view_refreshes_tx: storage_controller
                 .differential_introspection_tx(ComputeMaterializedViewRefreshes),
             wallclock_lag_history_tx: storage_controller
@@ -100,9 +96,6 @@ impl<T: Timestamp> IntrospectionSink<T> {
             Frontiers => send_differential(&self.frontiers_tx, updates),
             ReplicaFrontiers => send_differential(&self.replica_frontiers_tx, updates),
             ComputeDependencies => send_differential(&self.compute_dependencies_tx, updates),
-            ComputeOperatorHydrationStatus => {
-                send_differential(&self.compute_operator_hydration_status_tx, updates);
-            }
             ComputeMaterializedViewRefreshes => {
                 send_differential(&self.compute_materialized_view_refreshes_tx, updates);
             }

@@ -118,13 +118,6 @@ message ProtoSubscribeBatch {
 
 message ProtoStatusResponse {
   oneof kind {
-    ProtoOperatorHydrationStatus operator_hydration = 1;
+    google.protobuf.Empty placeholder = 1;
   }
-}
-
-message ProtoOperatorHydrationStatus {
-  mz_repr.global_id.ProtoGlobalId collection_id = 1;
-  uint64 lir_id = 2;
-  uint64 worker_id = 3;
-  bool hydrated = 4;
 }
