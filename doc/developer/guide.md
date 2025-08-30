@@ -378,6 +378,8 @@ psql -U mz_system -h localhost -p 6877 materialize
 
 In order to run Materialize with large clusters and more memory available, you have to set a license key. Set `export MZ_LICENSE_KEY=$HOME/license-key` and write the `materialize dev license key` from 1Password into that file. In order to have `mzcompose` based tests pick up the license key, set `export MZ_CI_LICENSE_KEY=$(cat $MZ_LICENSE_KEY)`.
 
+Our debug builds use a lot more stack space than our release builds, so they often run into stack overflows. You can work around this by setting the `RUST_MIN_STACK` environment variable to a higher value when running `bin/environmentd` (or `bin/sqllogictest`), e.g. 100000000.
+
 ## Console UI
 
 Console can point at your local environmentd. To use this feature, pass the

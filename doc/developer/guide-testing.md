@@ -159,9 +159,11 @@ You can run a sqllogictest file like so:
 $ bin/sqllogictest [--release] -- test/sqllogictest/TESTFILE.slt
 ```
 
-For larger test files, it is imperative that you compile in release mode, i.e.,
-by passing the `--release` flag as above. The extra compile time will quickly be
-made up for by a much faster execution.
+When running many test files (or extremely large test files), it can be beneficial
+to compile in release mode, i.e., by passing the `--release` flag as above. The
+extra compile time will quickly be made up for by a much faster execution.
+
+Our debug builds use a lot more stack space than our release builds, so they often run into stack overflows. You can work around this by setting the `RUST_MIN_STACK` environment variable to a higher value when running `bin/sqllogictest`, e.g. 100000000.
 
 To add logging for tests, append `-vv`, e.g.:
 
