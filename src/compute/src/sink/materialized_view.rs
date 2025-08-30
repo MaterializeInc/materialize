@@ -122,7 +122,6 @@ use std::sync::Arc;
 
 use differential_dataflow::{AsCollection, Collection, Hashable};
 use futures::StreamExt;
-use mz_compute_types::dyncfgs::ENABLE_MV_APPEND_SMEARING;
 use mz_compute_types::sinks::{ComputeSinkDesc, MaterializedViewSinkConnection};
 use mz_dyncfg::ConfigSet;
 use mz_ore::cast::CastFrom;
@@ -265,7 +264,6 @@ where
         as_of.clone(),
         compute_state.read_only_rx.clone(),
         &desired,
-        Rc::clone(&compute_state.worker_config),
     );
 
     let (batches, write_token) = write::render(
@@ -476,7 +474,6 @@ mod mint {
         as_of: Antichain<Timestamp>,
         mut read_only_rx: watch::Receiver<bool>,
         desired: &DesiredStreams<S>,
-        worker_config: Rc<ConfigSet>,
     ) -> (
         DesiredStreams<S>,
         DescsStream<S>,
@@ -543,7 +540,7 @@ mod mint {
             let mut cap_set = CapabilitySet::from_elem(desc_cap);
 
             let read_only = *read_only_rx.borrow_and_update();
-            let mut state = State::new(sink_id, worker_count, as_of, read_only, worker_config);
+            let mut state = State::new(sink_id, worker_count, as_of, read_only);
 
             // Create a stream that reports advancements of the target shard's frontier and updates
             // the shared sink frontier.
@@ -646,8 +643,6 @@ mod mint {
         ///
         /// In read-only mode, minting of batch descriptions is disabled.
         read_only: bool,
-        /// Dynamic configuration.
-        worker_config: Rc<ConfigSet>,
     }
 
     impl State {
@@ -656,7 +651,6 @@ mod mint {
             worker_count: usize,
             as_of: Antichain<Timestamp>,
             read_only: bool,
-            worker_config: Rc<ConfigSet>,
         ) -> Self {
             // Initializing `persist_frontier` to the `as_of` ensures that the first minted batch
             // description will have a `lower` of `as_of` or beyond, and thus that we don't spend
@@ -671,7 +665,6 @@ mod mint {
                 next_append_worker: 0,
                 last_lower: None,
                 read_only,
-                worker_config,
             }
         }
 
@@ -733,10 +726,7 @@ mod mint {
             let append_worker = self.next_append_worker;
             let desc = BatchDescription::new(lower, upper, append_worker);
 
-            if ENABLE_MV_APPEND_SMEARING.get(&self.worker_config) {
-                self.next_append_worker = (self.next_append_worker + 1) % self.worker_count;
-            }
-
+            self.next_append_worker = (append_worker + 1) % self.worker_count;
             self.last_lower = Some(desc.lower.clone());
 
             self.trace(format!("minted batch description: {desc:?}"));

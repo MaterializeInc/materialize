@@ -36,13 +36,6 @@ pub const ENABLE_CORRECTION_V2: Config<bool> = Config::new(
     "Whether compute should use the new MV sink correction buffer implementation.",
 );
 
-/// Whether the MV sink should distribute appends among workers.
-pub const ENABLE_MV_APPEND_SMEARING: Config<bool> = Config::new(
-    "enable_compute_mv_append_smearing",
-    true,
-    "Whether the MV sink should distribute appends among workers.",
-);
-
 /// Whether to enable temporal bucketing in compute.
 pub const ENABLE_TEMPORAL_BUCKETING: Config<bool> = Config::new(
     "enable_compute_temporal_bucketing",
@@ -390,7 +383,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_MZ_JOIN_CORE)
         .add(&ENABLE_MZ_JOIN_CORE_V2)
         .add(&ENABLE_CORRECTION_V2)
-        .add(&ENABLE_MV_APPEND_SMEARING)
         .add(&ENABLE_TEMPORAL_BUCKETING)
         .add(&TEMPORAL_BUCKETING_SUMMARY)
         .add(&LINEAR_JOIN_YIELDING)
