@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use differential_dataflow::consolidation::consolidate_updates;
-use differential_dataflow::difference::Semigroup;
+use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures::Stream;
@@ -117,7 +117,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + TotalOrder + Lattice + Codec64 + Sync,
-    D: Semigroup + Codec64 + Send + Sync,
+    D: Monoid + Codec64 + Send + Sync,
 {
     fn new(snapshot_parts: Vec<LeasedBatchPart<T>>, listen: Listen<K, V, T, D>) -> Self {
         Subscribe {
@@ -154,7 +154,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + TotalOrder + Lattice + Codec64 + Sync,
-    D: Semigroup + Codec64 + Send + Sync,
+    D: Monoid + Codec64 + Send + Sync,
 {
     /// Equivalent to `next`, but rather than returning a [`LeasedBatchPart`],
     /// fetches and returns the data from within it.
@@ -199,7 +199,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + TotalOrder + Lattice + Codec64 + Sync,
-    D: Semigroup + Codec64 + Send + Sync,
+    D: Monoid + Codec64 + Send + Sync,
 {
     /// Politely expires this subscribe, releasing its lease.
     ///
@@ -242,7 +242,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + TotalOrder + Lattice + Codec64 + Sync,
-    D: Semigroup + Codec64 + Send + Sync,
+    D: Monoid + Codec64 + Send + Sync,
 {
     async fn new(
         mut handle: ReadHandle<K, V, T, D>,
@@ -398,7 +398,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + TotalOrder + Lattice + Codec64 + Sync,
-    D: Semigroup + Codec64 + Send + Sync,
+    D: Monoid + Codec64 + Send + Sync,
 {
     /// Attempt to pull out the next values of this subscription.
     ///
@@ -473,7 +473,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + TotalOrder + Lattice + Codec64 + Sync,
-    D: Semigroup + Codec64 + Send + Sync,
+    D: Monoid + Codec64 + Send + Sync,
 {
     /// Fetches the contents of `part` and returns its lease.
     ///
@@ -558,7 +558,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + TotalOrder + Lattice + Codec64 + Sync,
-    D: Semigroup + Codec64 + Send + Sync,
+    D: Monoid + Codec64 + Send + Sync,
 {
     pub(crate) async fn new(
         cfg: PersistConfig,
@@ -917,7 +917,7 @@ where
     K: Debug + Codec + Ord,
     V: Debug + Codec + Ord,
     T: Timestamp + Lattice + Codec64 + Sync,
-    D: Semigroup + Ord + Codec64 + Send + Sync,
+    D: Monoid + Ord + Codec64 + Send + Sync,
 {
     /// Grab the next batch of consolidated data.
     pub async fn next(
@@ -964,7 +964,7 @@ where
     K: Debug + Codec + Ord,
     V: Debug + Codec + Ord,
     T: Timestamp + TotalOrder + Lattice + Codec64 + Sync,
-    D: Semigroup + Ord + Codec64 + Send + Sync,
+    D: Monoid + Ord + Codec64 + Send + Sync,
 {
     /// Generates a [Self::snapshot], and fetches all of the batches it
     /// contains.
@@ -1161,7 +1161,7 @@ where
     K: Debug + Codec + Ord,
     V: Debug + Codec + Ord,
     T: Timestamp + TotalOrder + Lattice + Codec64 + Sync,
-    D: Semigroup + Codec64 + Send + Sync,
+    D: Monoid + Codec64 + Send + Sync,
 {
     /// Generates a [Self::snapshot], and streams out all of the updates
     /// it contains in bounded memory.
@@ -1214,7 +1214,7 @@ where
     K: Debug + Codec + Ord,
     V: Debug + Codec + Ord,
     T: Timestamp + TotalOrder + Lattice + Codec64 + Sync,
-    D: Semigroup + Ord + Codec64 + Send + Sync,
+    D: Monoid + Ord + Codec64 + Send + Sync,
 {
     /// Test helper to generate a [Self::snapshot] call that is expected to
     /// succeed, process its batches, and then return its data sorted.

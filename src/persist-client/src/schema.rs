@@ -14,7 +14,7 @@ use std::fmt::Debug;
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
-use differential_dataflow::difference::Semigroup;
+use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use mz_ore::cast::CastFrom;
 use mz_persist_types::columnar::data_type;
@@ -94,7 +94,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64 + Sync,
-    D: Semigroup + Codec64,
+    D: Monoid + Codec64,
 {
     pub fn new(maps: Arc<SchemaCacheMaps<K, V>>, applier: Applier<K, V, T, D>) -> Self {
         let key_migration_by_ids = MigrationCacheMap {
@@ -342,7 +342,7 @@ where
     ) -> Result<Self, Schemas<K, V>>
     where
         T: Timestamp + Lattice + Codec64 + Sync,
-        D: Semigroup + Codec64,
+        D: Monoid + Codec64,
     {
         // At one point in time during our structured data migration, we deprecated the
         // already written schema IDs because we made all columns at the Arrow/Parquet

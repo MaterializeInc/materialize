@@ -24,7 +24,7 @@ use std::time::Instant;
 use anyhow::anyhow;
 use arrow::array::ArrayRef;
 use differential_dataflow::Hashable;
-use differential_dataflow::difference::Semigroup;
+use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use futures_util::StreamExt;
 use mz_ore::cast::CastFrom;
@@ -162,7 +162,7 @@ pub fn shard_source<'g, K, V, T, D, DT, G, C>(
 where
     K: Debug + Codec,
     V: Debug + Codec,
-    D: Semigroup + Codec64 + Send + Sync,
+    D: Monoid + Codec64 + Send + Sync,
     G: Scope,
     // TODO: Figure out how to get rid of the TotalOrder bound :(.
     G::Timestamp: Timestamp + Lattice + Codec64 + TotalOrder + Sync,
@@ -316,7 +316,7 @@ pub(crate) fn shard_source_descs<K, V, D, G>(
 where
     K: Debug + Codec,
     V: Debug + Codec,
-    D: Semigroup + Codec64 + Send + Sync,
+    D: Monoid + Codec64 + Send + Sync,
     G: Scope,
     // TODO: Figure out how to get rid of the TotalOrder bound :(.
     G::Timestamp: Timestamp + Lattice + Codec64 + TotalOrder + Sync,
@@ -602,7 +602,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64 + Sync,
-    D: Semigroup + Codec64 + Send + Sync,
+    D: Monoid + Codec64 + Send + Sync,
     G: Scope,
     G::Timestamp: Refines<T>,
 {
