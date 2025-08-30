@@ -216,7 +216,7 @@ async fn try_run_sql(
         Some(
             actual
                 .iter()
-                .zip(raw_actual.into_iter())
+                .zip_eq(raw_actual.into_iter())
                 .map(|(actual, unreplaced)| match unreplaced {
                     Some(raw_row) => raw_row,
                     None => actual.clone(),

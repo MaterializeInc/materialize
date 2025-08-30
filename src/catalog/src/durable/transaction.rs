@@ -460,7 +460,7 @@ impl<'a> Transaction<'a> {
         let oids = self.allocate_oids(amount, temporary_oids)?;
         let introspection_source_indexes: Vec<_> = introspection_source_indexes
             .into_iter()
-            .zip(oids)
+            .zip_eq(oids)
             .map(|((builtin, item_id, index_id), oid)| (builtin, item_id, index_id, oid))
             .collect();
         for (builtin, item_id, index_id, oid) in introspection_source_indexes {
@@ -1834,7 +1834,7 @@ impl<'a> Transaction<'a> {
         let oids = self.allocate_oids(amount, temporary_oids)?;
         let introspection_source_indexes: Vec<_> = introspection_source_indexes
             .into_iter()
-            .zip(oids)
+            .zip_eq(oids)
             .map(
                 |((cluster_id, name, item_id, index_id), oid)| IntrospectionSourceIndex {
                     cluster_id,

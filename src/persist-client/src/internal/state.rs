@@ -1102,7 +1102,7 @@ impl<T> HollowBatch<T> {
             })
             .filter(|range| !range.is_empty())
             .map(|range| &self.parts[range]);
-        run_metas.zip(run_parts)
+        run_metas.zip_eq(run_parts)
     }
 
     pub(crate) fn inline_bytes(&self) -> usize {

@@ -791,7 +791,7 @@ fn add_new_remove_old_builtin_items_migration(
     let new_builtin_ids = txn.allocate_system_item_ids(usize_to_u64(new_builtins.len()))?;
     let new_builtins: Vec<_> = new_builtins
         .into_iter()
-        .zip(new_builtin_ids.clone())
+        .zip_eq(new_builtin_ids.clone())
         .collect();
 
     // Look for migrated builtins.

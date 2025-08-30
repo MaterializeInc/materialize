@@ -44,7 +44,7 @@ fn encode_copy_row_binary(
     let mut buf = BytesMut::new();
     for (field, typ) in row
         .iter()
-        .zip(&typ.column_types)
+        .zip_eq(&typ.column_types)
         .map(|(datum, typ)| (mz_pgrepr::Value::from_datum(datum, &typ.scalar_type), typ))
     {
         match field {
@@ -821,7 +821,7 @@ pub fn decode_copy_format_csv(
         let mut row_builder = SharedRow::get();
         let mut row_packer = row_builder.packer();
 
-        for (typ, raw_value) in column_types.iter().zip(record.iter()) {
+        for (typ, raw_value) in column_types.iter().zip_eq(record.iter()) {
             if raw_value == null_as_bytes {
                 row_packer.push(Datum::Null);
             } else {

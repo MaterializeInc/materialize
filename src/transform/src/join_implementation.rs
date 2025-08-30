@@ -897,7 +897,7 @@ fn implement_arrangements<'a>(
         if let Some(mut lifted_mfp) = lifted_mfp {
             let column_map = new_join_mapper
                 .local_columns(index)
-                .zip(new_join_mapper.global_columns(index))
+                .zip_eq(new_join_mapper.global_columns(index))
                 .collect::<BTreeMap<_, _>>();
             lifted_mfp.permute_fn(
                 // globalize all input column references

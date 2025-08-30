@@ -1072,7 +1072,7 @@ where
             )
         }) {
             if let Some(desc) = stmt.desc().relation_desc.clone() {
-                for (format, ty) in result_formats.iter().zip(desc.iter_types()) {
+                for (format, ty) in result_formats.iter().zip_eq(desc.iter_types()) {
                     match (format, &ty.scalar_type) {
                         (Format::Binary, mz_repr::ScalarType::List { .. }) => {
                             return self

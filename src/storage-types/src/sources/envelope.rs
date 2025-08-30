@@ -304,7 +304,7 @@ impl UnplannedSourceEnvelope {
                                     scalar_type: ScalarType::Record {
                                         fields: key_desc
                                             .iter_names()
-                                            .zip(key_type.column_types.iter())
+                                            .zip_eq(key_type.column_types.iter())
                                             .map(|(name, ty)| (name.clone(), ty.clone()))
                                             .collect(),
                                         custom_id: None,

@@ -40,7 +40,7 @@ fn bench_sort_iter(rows: Vec<Vec<Datum>>, b: &mut Bencher) {
         || rows.clone(),
         |mut rows| {
             rows.sort_by(move |a, b| {
-                for (a, b) in a.iter().zip(b.iter()) {
+                for (a, b) in a.iter().zip_eq(b.iter()) {
                     match a.cmp(&b) {
                         Ordering::Equal => (),
                         non_equal => return non_equal,

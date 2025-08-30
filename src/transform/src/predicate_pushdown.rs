@@ -797,7 +797,7 @@ impl PredicatePushdown {
     ) {
         let new_inputs = inputs
             .drain(..)
-            .zip(push_downs)
+            .zip_eq(push_downs)
             .map(|(input, push_down)| {
                 if !push_down.is_empty() {
                     input.filter(push_down)

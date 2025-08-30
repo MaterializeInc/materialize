@@ -76,7 +76,7 @@ where
 {
     let value_fields = datums
         .into_iter()
-        .zip(names_types)
+        .zip_eq(names_types)
         .map(|(datum, (name, typ))| {
             (
                 name.to_string(),
@@ -195,7 +195,7 @@ impl ToJson for TypedDatum<'_> {
                 let list = datum.unwrap_list();
                 let fields: Map<String, serde_json::Value> = fields
                     .iter()
-                    .zip(&list)
+                    .zip_eq(&list)
                     .map(|((name, typ), datum)| {
                         let name = name.to_string();
                         let datum = TypedDatum::new(datum, typ);

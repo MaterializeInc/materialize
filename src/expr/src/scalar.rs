@@ -1201,7 +1201,7 @@ impl MirScalarExpr {
                                 func: VariadicFunc::And,
                                 exprs: rec_create_args1
                                     .into_iter()
-                                    .zip(rec_create_args2)
+                                    .zip_eq(rec_create_args2)
                                     .map(|(a, b)| MirScalarExpr::CallBinary {
                                         func: BinaryFunc::Eq,
                                         expr1: Box::new(a.clone()),

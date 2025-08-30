@@ -311,7 +311,7 @@ mod support {
                     if !new_type
                         .column_types
                         .iter()
-                        .zip(typ.column_types.iter())
+                        .zip_eq(typ.column_types.iter())
                         .all(|(t1, t2)| t1.scalar_type.base_eq(&t2.scalar_type))
                     {
                         Err(crate::TransformError::Internal(format!(
@@ -982,7 +982,7 @@ mod renumbering {
                         body,
                     } => {
                         stack.push(Err(body));
-                        for (id, value) in ids.iter().rev().zip(values.iter().rev()) {
+                        for (id, value) in ids.iter().rev().zip_eq(values.iter().rev()) {
                             stack.push(Ok(*id));
                             stack.push(Err(value));
                         }

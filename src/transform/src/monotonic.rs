@@ -47,7 +47,7 @@ impl MonotonicFlag {
                 }
                 _ => {}
             }
-            todo.extend(expr.children_mut().rev().zip(view.children_rev()))
+            todo.extend(expr.children_mut().rev().zip_eq(view.children_rev()))
         }
 
         mz_repr::explain::trace_plan(&*expr);

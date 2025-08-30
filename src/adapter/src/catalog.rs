@@ -2808,7 +2808,7 @@ mod tests {
                 let full_name = conn_catalog.resolve_full_name(item.name());
                 let actual_desc = item.desc(&full_name).expect("invalid item type");
                 for (index, ((actual_name, actual_typ), (expected_name, expected_typ))) in
-                    actual_desc.iter().zip(expected_desc.iter()).enumerate()
+                    actual_desc.iter().zip_eq(expected_desc.iter()).enumerate()
                 {
                     assert_eq!(
                         actual_name, expected_name,

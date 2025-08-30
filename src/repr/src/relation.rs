@@ -91,7 +91,8 @@ impl ColumnType {
                 };
 
                 let mut union_fields = Vec::with_capacity(fields.len());
-                for ((name, typ), (other_name, other_typ)) in fields.iter().zip(other_fields.iter())
+                for ((name, typ), (other_name, other_typ)) in
+                    fields.iter().zip_eq(other_fields.iter())
                 {
                     if name != other_name {
                         bail!(
@@ -1487,7 +1488,7 @@ pub fn arb_relation_desc_diff(
         })
         .prop_map(|(cols, types)| {
             cols.into_iter()
-                .zip(types)
+                .zip_eq(types)
                 .map(|(name, typ)| PropRelationDescDiff::ChangeType { name, typ })
                 .collect::<Vec<_>>()
         });

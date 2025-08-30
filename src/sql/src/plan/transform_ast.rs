@@ -821,7 +821,7 @@ impl<'a> Desugarer<'a> {
                 }
                 match normalize::op(op)? {
                     "=" | "<>" => {
-                        let mut pairs = left.iter_mut().zip(right);
+                        let mut pairs = left.iter_mut().zip_eq(right);
                         let mut new = pairs
                             .next()
                             .map(|(l, r)| l.take().equals(r.take()))

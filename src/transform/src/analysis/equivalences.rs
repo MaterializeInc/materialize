@@ -70,8 +70,8 @@ impl Analysis for Equivalences {
                     for (row, _cnt) in rows.iter() {
                         for ((datum, common), nullable) in row
                             .iter()
-                            .zip(common.iter_mut())
-                            .zip(nullable_cols.iter_mut())
+                            .zip_eq(common.iter_mut())
+                            .zip_eq(nullable_cols.iter_mut())
                         {
                             if Some(datum) != *common {
                                 *common = None;

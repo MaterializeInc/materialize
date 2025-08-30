@@ -773,7 +773,7 @@ where
         // to retrieve values from the map in the order given by `f_names`.
         Value::Object(map) if !f_names.is_empty() => {
             let mut fields = Vec::with_capacity(f_types.len());
-            for (name, typ) in f_names.iter().zip(f_types.iter()) {
+            for (name, typ) in f_names.iter().zip_eq(f_types.iter()) {
                 fields.push(from_json(&map[*name], typ, rti, ctx))
             }
             separated(" ", fields).to_string()
@@ -782,7 +782,7 @@ where
         // JSON.
         Value::Array(inner) if f_types.len() > 1 => {
             let mut fields = Vec::with_capacity(f_types.len());
-            for (v, typ) in inner.iter().zip(f_types.iter()) {
+            for (v, typ) in inner.iter().zip_eq(f_types.iter()) {
                 fields.push(from_json(v, typ, rti, ctx))
             }
             separated(" ", fields).to_string()
