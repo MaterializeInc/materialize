@@ -8,7 +8,7 @@ menu:
     weight: 39
 ---
 
-### Monitoring the snapshotting progress
+## Monitoring the snapshotting progress
 
 In the Materialize Console, the Overview page for the source displays the
 snapshotting progress.
@@ -69,6 +69,7 @@ Alternatively, the following query indicates the difference between the largest 
 ```sql
 SELECT
 	o.name,
+	o.id,
 	s.offset_committed,
 	s.offset_known,
 	s.offset_known - s.offset_committed AS offset_delta
@@ -76,3 +77,55 @@ FROM mz_internal.mz_source_statistics AS s
 INNER JOIN mz_objects AS o ON (s.id = o.id)
 WHERE s.snapshot_committed;
 ```
+
+## Monitoring data ingestion progress
+
+In the Materialize Console, you can go to the source overview page to view the
+data ingestion progress (e.g., rows_received, bytes_received, ingestion rate).
+
+Alternatively, you can query the
+[`mz_source_statistics`](/sql/system-catalog/mz_internal/#mz_source_statistics)
+table and look for ingestion statistics that advance over time:
+
+```mzsql
+SELECT
+    bytes_received,
+    messages_received,
+    updates_staged,
+    updates_committed
+FROM mz_internal.mz_source_statistics
+WHERE id = <SOURCE_ID>;
+```
+
+You can also look at statistics for individual worker threads to evaluate
+whether ingestion progress is skewed, but it's generally simplest to start
+by looking at the aggregate statistics for the whole source.
+
+The `bytes_received` and `messages_received` statistics should roughly match the
+external system's measure of progress. For example, the `bytes_received` and
+`messages_received` fields for a Kafka source should roughly match the upstream
+Kafka broker reports as the number of bytes (including the key) and number of
+messages transmitted, respectively.
+
+During the initial snapshot, `updates_committed` will remain at zero until all
+messages in the snapshot have been staged. Only then will `updates_committed`
+advance. This is expected, and not a cause for concern.
+
+After the initial snapshot, there should be relatively little skew between
+`updates_staged` and `updates_committed`. A large gap is usually an indication
+that the source has fallen behind, and that you likely need to scale it up.
+
+`messages_received` does not necessarily correspond with `updates_staged`
+and `updates_commmited`. For example, a source with `ENVELOPE UPSERT` can have _more_
+updates than messages, because messages can cause both deletions and insertions
+(i.e. when they update a value for a key), which are both counted in the
+`updates_*` statistics. There can also be _fewer_ updates than messages, as
+many messages for a single key can be consolidated if they occur within a (small)
+internally configured window. That said, `messages_received` making
+steady progress while `updates_staged`/`updates_committed` doesn't is also
+evidence that a source has fallen behind, and may need to be scaled up.
+
+Beware that these statistics periodically reset to zero, as internal components
+of the system restart. This is expected behavior. As a result, you should
+restrict your attention to how these statistics evolve over time, and not their
+absolute values at any moment in time.

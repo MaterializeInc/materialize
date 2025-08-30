@@ -8,6 +8,7 @@ menu:
     parent: "postgresql"
     name: "Amazon Aurora"
     identifier: "pg-amazon-aurora"
+    weight: 15
 ---
 
 This page shows you how to stream data from [Amazon Aurora for PostgreSQL](https://aws.amazon.com/rds/aurora/)

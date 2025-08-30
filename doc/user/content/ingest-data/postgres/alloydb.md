@@ -8,6 +8,7 @@ menu:
     parent: "postgresql"
     name: "AlloyDB"
     identifier: "pg-alloydb"
+    weight: 10
 ---
 
 This page shows you how to stream data from [AlloyDB for PostgreSQL](https://cloud.google.com/alloydb)
