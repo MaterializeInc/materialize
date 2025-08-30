@@ -18,6 +18,7 @@
 
 use std::collections::BTreeMap;
 
+use itertools::Itertools;
 use mz_expr::JoinImplementation::{Differential, IndexedFilter, Unimplemented};
 use mz_expr::visit::{Visit, VisitChildren};
 use mz_expr::{

@@ -13,6 +13,7 @@ use std::fmt::{self, Display, Formatter, Write as _};
 use std::time::SystemTime;
 
 use anyhow::{Context, bail};
+use itertools::Itertools;
 use md5::{Digest, Md5};
 use mz_ore::collections::CollectionExt;
 use mz_ore::retry::Retry;

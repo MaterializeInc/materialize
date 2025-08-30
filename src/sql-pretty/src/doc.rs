@@ -9,6 +9,7 @@
 
 //! Functions that convert SQL AST nodes to pretty Docs.
 
+use itertools::Itertools;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::*;
 use pretty::{Doc, RcDoc};

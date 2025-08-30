@@ -1045,6 +1045,7 @@ impl FixedSizeCodec<NaiveDateTime> for PackedNaiveDateTime {
 #[cfg(test)]
 mod test {
     use super::*;
+    use itertools::Itertools;
     use mz_ore::assert_err;
     use proptest::prelude::*;
 

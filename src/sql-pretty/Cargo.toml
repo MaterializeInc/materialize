@@ -10,6 +10,7 @@ publish = false
 workspace = true
 
 [dependencies]
+itertools = "0.14.0"
 mz-sql-parser = { path = "../sql-parser", default-features = false }
 pretty = "0.12.4"
 thiserror = "2.0.12"

@@ -17,7 +17,7 @@ use std::{iter, mem};
 
 use byteorder::{ByteOrder, NetworkEndian};
 use futures::future::{BoxFuture, FutureExt, pending};
-use itertools::{Itertools, izip};
+use itertools::Itertools;
 use mz_adapter::client::RecordFirstRowStream;
 use mz_adapter::session::{
     EndTransactionAction, InProgressRows, LifecycleTimestamps, PortalRefMut, PortalState,

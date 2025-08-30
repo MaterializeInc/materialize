@@ -30,6 +30,7 @@ use differential_dataflow::trace::Description;
 use differential_dataflow::trace::implementations::BatchContainer;
 use futures::Stream;
 use futures_util::StreamExt;
+use itertools::Itertools;
 use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
 use mz_ore::now::EpochMillis;

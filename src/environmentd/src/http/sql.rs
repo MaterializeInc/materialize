@@ -25,7 +25,7 @@ use futures::Future;
 use futures::future::BoxFuture;
 
 use http::StatusCode;
-use itertools::izip;
+use itertools::Itertools;
 use mz_adapter::client::RecordFirstRowStream;
 use mz_adapter::session::{EndTransactionAction, TransactionStatus};
 use mz_adapter::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};

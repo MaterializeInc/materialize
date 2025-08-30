@@ -2023,6 +2023,7 @@ impl FixedSizeCodec<NaiveTime> for PackedNaiveTime {
 
 #[cfg(test)]
 mod tests {
+    use itertools::Itertools;
     use mz_ore::assert_ok;
     use mz_proto::protobuf_roundtrip;
     use proptest::prelude::any;

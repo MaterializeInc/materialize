@@ -9,6 +9,7 @@
 
 #[cfg(test)]
 mod tests {
+    use itertools::Itertools;
     use mz_lowertest::{deserialize_optional_generic, tokenize};
     use mz_ore::str::separated;
     use mz_repr::ScalarType;

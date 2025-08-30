@@ -32,7 +32,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use itertools::zip_eq;
+use itertools::{Itertools, zip_eq};
 use mz_expr::{
     Id, JoinImplementation, JoinInputMapper, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT,
 };

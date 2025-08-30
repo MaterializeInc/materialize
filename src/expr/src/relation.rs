@@ -4317,6 +4317,7 @@ mod tests {
 mod structured_diff {
 
     use super::MirRelationExpr;
+    use itertools::Itertools;
 
     ///  An iterator over structured differences between two `MirRelationExpr` instances.
     pub struct MreDiff<'a> {

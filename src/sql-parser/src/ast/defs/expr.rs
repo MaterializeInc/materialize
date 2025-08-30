@@ -20,6 +20,7 @@
 
 use std::{fmt, mem};
 
+use itertools::Itertools;
 use mz_ore::soft_assert_eq_or_log;
 use mz_sql_lexer::keywords::*;
 

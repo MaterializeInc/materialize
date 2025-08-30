@@ -25,6 +25,7 @@
 use std::sync::{Arc, Mutex};
 
 use crossbeam_channel::TryRecvError;
+use itertools::Itertools;
 use mz_compute_client::protocol::command::ComputeCommand;
 use mz_compute_types::dataflows::{BuildDesc, DataflowDescription};
 use mz_ore::cast::CastFrom;

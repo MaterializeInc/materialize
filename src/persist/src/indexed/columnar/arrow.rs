@@ -16,6 +16,7 @@ use anyhow::anyhow;
 use arrow::array::{Array, ArrayData, ArrayRef, BinaryArray, Int64Array, RecordBatch, make_array};
 use arrow::buffer::{BooleanBuffer, Buffer, NullBuffer};
 use arrow::datatypes::ToByteSlice;
+use itertools::Itertools;
 use mz_dyncfg::Config;
 
 use crate::indexed::columnar::{ColumnarRecords, ColumnarRecordsStructuredExt};

@@ -10,12 +10,11 @@
 use std::collections::BTreeSet;
 
 use anyhow::bail;
+use mz_proto::{ProtoType, RustType, TryFromProtoError};
+use mz_repr::ColumnType;
 use proptest::prelude::any;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
-
-use mz_proto::{ProtoType, RustType, TryFromProtoError};
-use mz_repr::ColumnType;
 
 use self::proto_my_sql_column_desc::Meta;
 

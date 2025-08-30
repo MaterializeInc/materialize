@@ -9,6 +9,7 @@
 
 use std::collections::BTreeMap;
 
+use itertools::Itertools;
 use mz_expr::{AccessStrategy, EvalError, Id, LocalId, MirRelationExpr, MirScalarExpr};
 use mz_lowertest::*;
 use mz_ore::cast::CastFrom;

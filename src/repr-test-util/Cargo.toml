@@ -11,6 +11,7 @@ workspace = true
 
 [dependencies]
 chrono = { version = "0.4.39", default-features = false, features = ["serde", "std"] }
+itertools = "0.14.0"
 mz-lowertest = { path = "../lowertest" }
 mz-ore = { path = "../ore" }
 mz-repr = { path = "../repr" }

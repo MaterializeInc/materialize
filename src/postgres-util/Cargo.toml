@@ -11,6 +11,7 @@ workspace = true
 
 [dependencies]
 anyhow = "1.0.98"
+itertools = "0.14.0"
 mz-cloud-resources = { path = "../cloud-resources", optional = true }
 mz-ore = { path = "../ore", features = ["async"], optional = true }
 mz-proto = { path = "../proto", optional = true }

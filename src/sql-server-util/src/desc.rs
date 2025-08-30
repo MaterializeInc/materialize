@@ -992,9 +992,17 @@ impl SqlServerRowDecoder {
 
 #[cfg(test)]
 mod tests {
-    use chrono::NaiveDateTime;
     use std::collections::BTreeSet;
     use std::sync::Arc;
+
+    use chrono::NaiveDateTime;
+    use itertools::Itertools;
+    use mz_ore::assert_contains;
+    use mz_ore::collections::CollectionExt;
+    use mz_repr::adt::numeric::NumericMaxScale;
+    use mz_repr::adt::varchar::VarCharMaxLength;
+    use mz_repr::{Datum, RelationDesc, Row, RowArena, ScalarType};
+    use tiberius::RowTestExt;
 
     use crate::desc::{
         SqlServerCaptureInstanceRaw, SqlServerColumnDecodeType, SqlServerColumnDesc,
@@ -1002,12 +1010,6 @@ mod tests {
     };
 
     use super::SqlServerColumnRaw;
-    use mz_ore::assert_contains;
-    use mz_ore::collections::CollectionExt;
-    use mz_repr::adt::numeric::NumericMaxScale;
-    use mz_repr::adt::varchar::VarCharMaxLength;
-    use mz_repr::{Datum, RelationDesc, Row, RowArena, ScalarType};
-    use tiberius::RowTestExt;
 
     impl SqlServerColumnRaw {
         /// Create a new [`SqlServerColumnRaw`]. The specified `data_type` is

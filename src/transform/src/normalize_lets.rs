@@ -335,7 +335,7 @@ mod let_motion {
 
     use std::collections::{BTreeMap, BTreeSet};
 
-    use itertools::izip;
+    use itertools::Itertools;
     use mz_expr::{LetRecLimit, LocalId, MirRelationExpr};
     use mz_ore::stack::RecursionLimitError;
 
@@ -666,7 +666,7 @@ mod inlining {
 
     use std::collections::BTreeMap;
 
-    use itertools::izip;
+    use itertools::Itertools;
     use mz_expr::{Id, LetRecLimit, LocalId, MirRelationExpr};
 
     use crate::normalize_lets::support::replace_bindings_from_map;
@@ -930,6 +930,7 @@ mod renumbering {
 
     use std::collections::BTreeMap;
 
+    use itertools::Itertools;
     use mz_expr::{Id, LocalId, MirRelationExpr};
     use mz_ore::id_gen::IdGen;
 

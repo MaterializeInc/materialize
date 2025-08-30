@@ -9,6 +9,7 @@
 
 use std::fmt::Debug;
 
+use itertools::Itertools;
 use mz_catalog::durable::{DurableCatalogError, FenceError};
 use mz_compute_client::controller::error::{
     CollectionUpdateError, DataflowCreationError, InstanceMissing, PeekError, ReadPolicyError,

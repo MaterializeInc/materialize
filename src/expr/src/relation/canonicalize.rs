@@ -14,6 +14,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
+use itertools::Itertools;
 use mz_ore::soft_assert_or_log;
 use mz_repr::{ColumnType, ScalarType};
 use timely::Container;

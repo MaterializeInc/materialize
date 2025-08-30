@@ -24,6 +24,7 @@ use differential_dataflow::hashable::Hashable;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::trace::{Builder, Trace};
 use differential_dataflow::{Collection, Diff as _};
+use itertools::Itertools;
 use mz_compute_types::plan::reduce::{
     AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, KeyValPlan, MonotonicPlan,
     ReducePlan, ReductionType, SingleBasicPlan, reduction_type,
