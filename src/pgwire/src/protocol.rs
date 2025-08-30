@@ -37,7 +37,8 @@ use mz_ore::str::StrExt;
 use mz_ore::{assert_none, assert_ok, instrument};
 use mz_pgcopy::{CopyCsvFormatParams, CopyFormatParams, CopyTextFormatParams};
 use mz_pgwire_common::{
-    ConnectionCounter, ErrorResponse, Format, FrontendMessage, Severity, VERSION_3, VERSIONS,
+    ConnectionCounter, Cursor, ErrorResponse, Format, FrontendMessage, Severity, VERSION_3,
+    VERSIONS,
 };
 use mz_repr::user::InternalUserMetadata;
 use mz_repr::{
@@ -62,8 +63,14 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::{Instrument, debug, debug_span, warn};
 use uuid::Uuid;
 
-use crate::codec::FramedConn;
-use crate::message::{self, BackendMessage};
+use crate::codec::{
+    FramedConn, decode_password, decode_sasl_initial_response, decode_sasl_response,
+};
+use crate::message::{
+    self, BackendMessage, SASLServerFinalMessage, SASLServerFinalMessageKinds,
+    SASLServerFirstMessage,
+};
+use crate::server;
 
 /// Reports whether the given stream begins with a pgwire handshake.
 ///
@@ -180,7 +187,19 @@ where
                 .await?;
             conn.flush().await?;
             let password = match conn.recv().await? {
-                Some(FrontendMessage::Password { password }) => password,
+                Some(FrontendMessage::RawAuthentication(data)) => {
+                    match decode_password(Cursor::new(&data)).ok() {
+                        Some(FrontendMessage::Password { password }) => password,
+                        _ => {
+                            return conn
+                                .send(ErrorResponse::fatal(
+                                    SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
+                                    "expected Password message",
+                                ))
+                                .await;
+                        }
+                    }
+                }
                 _ => {
                     return conn
                         .send(ErrorResponse::fatal(
@@ -229,7 +248,19 @@ where
                 .await?;
             conn.flush().await?;
             let password = match conn.recv().await? {
-                Some(FrontendMessage::Password { password }) => Password(password),
+                Some(FrontendMessage::RawAuthentication(data)) => {
+                    match decode_password(Cursor::new(&data)).ok() {
+                        Some(FrontendMessage::Password { password }) => Password(password),
+                        _ => {
+                            return conn
+                                .send(ErrorResponse::fatal(
+                                    SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
+                                    "expected Password message",
+                                ))
+                                .await;
+                        }
+                    }
+                }
                 _ => {
                     return conn
                         .send(ErrorResponse::fatal(
@@ -259,6 +290,143 @@ where
                 external_metadata_rx: None,
                 internal_user_metadata: Some(InternalUserMetadata {
                     superuser: auth_response.superuser,
+                }),
+                helm_chart_version,
+            });
+            // No frontegg check, so auth session lasts indefinitely.
+            let auth_session = pending().right_future();
+            (session, auth_session)
+        }
+        Authenticator::Sasl(adapter_client) => {
+            // Start the handshake
+            conn.send(BackendMessage::AuthenticationSASL).await?;
+            conn.flush().await?;
+            // Get the initial response indicating chosen mechanism
+            let (mechanism, initial_response) = match conn.recv().await? {
+                Some(FrontendMessage::RawAuthentication(data)) => {
+                    match decode_sasl_initial_response(Cursor::new(&data)).ok() {
+                        Some(FrontendMessage::SASLInitialResponse {
+                            mechanism,
+                            initial_response,
+                        }) => (mechanism, initial_response),
+                        _ => {
+                            return conn
+                                .send(ErrorResponse::fatal(
+                                    SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
+                                    "expected SASLInitialResponse message",
+                                ))
+                                .await;
+                        }
+                    }
+                }
+                _ => {
+                    return conn
+                        .send(ErrorResponse::fatal(
+                            SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
+                            "expected SASLInitialResponse message",
+                        ))
+                        .await;
+                }
+            };
+
+            if mechanism != "SCRAM-SHA-256" {
+                return conn
+                    .send(ErrorResponse::fatal(
+                        SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
+                        "unsupported SASL mechanism",
+                    ))
+                    .await;
+            }
+
+            let server_first_message_raw = match adapter_client
+                .generate_sasl_challenge(&user, &initial_response.nonce)
+                .await
+            {
+                Ok(response) => {
+                    let server_first_message_raw = format!(
+                        "r={},s={},i={}",
+                        response.nonce, response.salt, response.iteration_count
+                    );
+                    conn.send(BackendMessage::AuthenticationSASLContinue(
+                        SASLServerFirstMessage {
+                            iteration_count: response.iteration_count,
+                            nonce: response.nonce,
+                            salt: response.salt,
+                        },
+                    ))
+                    .await?;
+                    conn.flush().await?;
+                    server_first_message_raw
+                }
+                Err(e) => {
+                    return conn.send(e.into_response(Severity::Fatal)).await;
+                }
+            };
+
+            let auth_resp = match conn.recv().await? {
+                Some(FrontendMessage::RawAuthentication(data)) => {
+                    println!("got raw auth: {:?}", data);
+                    match decode_sasl_response(Cursor::new(&data)).ok() {
+                        Some(FrontendMessage::SASLResponse(response)) => {
+                            let auth_message = format!(
+                                "{},{},{}",
+                                initial_response.client_first_message_bare_raw,
+                                server_first_message_raw,
+                                response.client_final_message_bare_raw
+                            );
+                            println!("auth message: {}", auth_message);
+                            match adapter_client
+                                .verify_sasl_proof(&user, &response.proof, &auth_message)
+                                .await
+                            {
+                                Ok(resp) => {
+                                    conn.send(BackendMessage::AuthenticationSASLFinal(
+                                        SASLServerFinalMessage {
+                                            kind: SASLServerFinalMessageKinds::Verifier(
+                                                resp.verifier,
+                                            ),
+                                            extensions: vec![],
+                                        },
+                                    ))
+                                    .await?;
+                                    conn.flush().await?;
+                                    resp.auth_resp
+                                }
+                                Err(e) => {
+                                    //FIXME: return correct error variant
+                                    return conn.send(e.into_response(Severity::Fatal)).await;
+                                }
+                            }
+                        }
+                        _ => {
+                            return conn
+                                .send(ErrorResponse::fatal(
+                                    SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
+                                    "expected SASLResponse message",
+                                ))
+                                .await;
+                        }
+                    }
+                }
+                _ => {
+                    println!("didn't get raw auth");
+                    return conn
+                        .send(ErrorResponse::fatal(
+                            SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
+                            "expected SASLResponse message",
+                        ))
+                        .await;
+                }
+            };
+
+            let session = adapter_client.new_session(SessionConfig {
+                conn_id: conn.conn_id().clone(),
+                uuid: conn_uuid,
+                user,
+                client_ip: conn.peer_addr().clone(),
+                external_metadata_rx: None,
+                internal_user_metadata: Some(InternalUserMetadata {
+                    superuser: auth_resp.superuser,
                 }),
                 helm_chart_version,
             });
@@ -664,7 +832,10 @@ where
             Some(FrontendMessage::CopyData(_))
             | Some(FrontendMessage::CopyDone)
             | Some(FrontendMessage::CopyFail(_))
-            | Some(FrontendMessage::Password { .. }) => State::Drain,
+            | Some(FrontendMessage::Password { .. })
+            | Some(FrontendMessage::RawAuthentication(_))
+            | Some(FrontendMessage::SASLInitialResponse { .. })
+            | Some(FrontendMessage::SASLResponse(_)) => State::Drain,
             None => State::Done,
         };
 

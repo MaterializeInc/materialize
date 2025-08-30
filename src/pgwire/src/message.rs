@@ -21,6 +21,9 @@ use mz_repr::{ColumnName, RelationDesc};
 pub enum BackendMessage {
     AuthenticationOk,
     AuthenticationCleartextPassword,
+    AuthenticationSASL,
+    AuthenticationSASLContinue(SASLServerFirstMessage),
+    AuthenticationSASLFinal(SASLServerFinalMessage),
     CommandComplete {
         tag: String,
     },
@@ -59,6 +62,13 @@ impl From<ErrorResponse> for BackendMessage {
 }
 
 #[derive(Debug)]
+pub struct SASLServerFirstMessage {
+    pub iteration_count: usize,
+    pub nonce: String,
+    pub salt: String,
+}
+
+#[derive(Debug)]
 pub struct FieldDescription {
     pub name: ColumnName,
     pub table_id: u32,
@@ -67,6 +77,58 @@ pub struct FieldDescription {
     pub type_len: i16,
     pub type_mod: i32,
     pub format: mz_pgwire_common::Format,
+}
+
+#[derive(Debug)]
+pub enum SASLScramServerError {
+    InvalidEncoding,
+    ExtensionsNotSupported,
+    InvalidProof,
+    ChannelBindingsDontMatch,
+    ServerDoesSupportChannelBinding,
+    ChannelBindingNotSupported,
+    UnsupportedChannelBindingType,
+    UnknownUser,
+    InvalidUsernameEncoding,
+    NoResources,
+    OtherError,
+    Extension(String),
+}
+
+impl std::fmt::Display for SASLScramServerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            SASLScramServerError::InvalidEncoding => "invalid-encoding",
+            SASLScramServerError::ExtensionsNotSupported => "extensions-not-supported",
+            SASLScramServerError::InvalidProof => "invalid-proof",
+            SASLScramServerError::ChannelBindingsDontMatch => "channel-bindings-dont-match",
+            SASLScramServerError::ServerDoesSupportChannelBinding => {
+                "server-does-support-channel-binding"
+            }
+            SASLScramServerError::ChannelBindingNotSupported => "channel-binding-not-supported",
+            SASLScramServerError::UnsupportedChannelBindingType => {
+                "unsupported-channel-binding-type"
+            }
+            SASLScramServerError::UnknownUser => "unknown-user",
+            SASLScramServerError::InvalidUsernameEncoding => "invalid-username-encoding",
+            SASLScramServerError::NoResources => "no-resources",
+            SASLScramServerError::OtherError => "other-error",
+            SASLScramServerError::Extension(ext) => ext,
+        };
+        write!(f, "{}", s)
+    }
+}
+
+#[derive(Debug)]
+pub enum SASLServerFinalMessageKinds {
+    Error(SASLScramServerError),
+    Verifier(String),
+}
+
+#[derive(Debug)]
+pub struct SASLServerFinalMessage {
+    pub kind: SASLServerFinalMessageKinds,
+    pub extensions: Vec<String>,
 }
 
 pub fn encode_row_description(

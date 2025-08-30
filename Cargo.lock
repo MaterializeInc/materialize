@@ -5407,6 +5407,7 @@ dependencies = [
  "arrow",
  "async-stream",
  "async-trait",
+ "base64 0.22.1",
  "bytes",
  "bytesize",
  "chrono",
