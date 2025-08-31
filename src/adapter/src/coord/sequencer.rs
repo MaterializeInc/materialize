@@ -765,6 +765,11 @@ impl Coordinator {
         }
     }
 
+    /// Inserts the rows from `constants` into the table identified by `id`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `constants` is not an `MirRelationExpr::Constant`.
     pub(crate) fn insert_constant(
         catalog: &Catalog,
         session: &mut Session,
