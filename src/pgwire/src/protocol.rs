@@ -17,7 +17,7 @@ use std::{iter, mem};
 
 use byteorder::{ByteOrder, NetworkEndian};
 use futures::future::{BoxFuture, FutureExt, pending};
-use itertools::izip;
+use itertools::{Itertools, izip};
 use mz_adapter::client::RecordFirstRowStream;
 use mz_adapter::session::{
     EndTransactionAction, InProgressRows, LifecycleTimestamps, Portal, PortalState, SessionConfig,
@@ -34,7 +34,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::netio::AsyncReady;
 use mz_ore::now::{EpochMillis, SYSTEM_TIME};
 use mz_ore::str::StrExt;
-use mz_ore::{assert_none, assert_ok, instrument};
+use mz_ore::{assert_none, assert_ok, instrument, soft_assert_eq_or_log};
 use mz_pgcopy::{CopyCsvFormatParams, CopyFormatParams, CopyTextFormatParams};
 use mz_pgwire_common::{
     ConnectionCounter, ErrorResponse, Format, FrontendMessage, Severity, VERSION_3, VERSIONS,
@@ -1949,13 +1949,39 @@ where
             ExecuteTimeout::WaitOnce => (true, None),
         };
 
+        // Sanity check that the various `RelationDesc`s match up.
+        {
+            let portal_name_desc = &self
+                .adapter_client
+                .session()
+                .get_portal_unverified(portal_name.as_str())
+                .expect("portal should exist")
+                .desc
+                .relation_desc;
+            if let Some(portal_name_desc) = portal_name_desc {
+                soft_assert_eq_or_log!(portal_name_desc, &row_desc);
+            }
+            if let Some(fetch_portal_name) = &fetch_portal_name {
+                let fetch_portal_desc = &self
+                    .adapter_client
+                    .session()
+                    .get_portal_unverified(fetch_portal_name)
+                    .expect("portal should exist")
+                    .desc
+                    .relation_desc;
+                if let Some(fetch_portal_desc) = fetch_portal_desc {
+                    soft_assert_eq_or_log!(fetch_portal_desc, &row_desc);
+                }
+            }
+        }
+
         self.conn.set_encode_state(
             row_desc
                 .typ()
                 .column_types
                 .iter()
                 .map(|ty| mz_pgrepr::Type::from(&ty.scalar_type))
-                .zip(result_formats)
+                .zip_eq(result_formats)
                 .collect(),
         );
 

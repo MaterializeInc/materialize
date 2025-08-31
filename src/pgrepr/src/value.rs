@@ -13,6 +13,7 @@ use std::{io, str};
 
 use bytes::{BufMut, BytesMut};
 use chrono::{DateTime, NaiveDateTime, NaiveTime, Utc};
+use itertools::Itertools;
 use mz_ore::cast::ReinterpretCast;
 use mz_pgwire_common::Format;
 use mz_repr::adt::array::ArrayDimension;
@@ -892,7 +893,7 @@ fn pg_len(what: &str, len: usize) -> Result<i32, io::Error> {
 /// every datum in `row`.
 pub fn values_from_row(row: &RowRef, typ: &RelationType) -> Vec<Option<Value>> {
     row.iter()
-        .zip(typ.column_types.iter())
+        .zip_eq(typ.column_types.iter())
         .map(|(col, typ)| Value::from_datum(col, &typ.scalar_type))
         .collect()
 }

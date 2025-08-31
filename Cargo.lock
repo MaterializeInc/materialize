@@ -7286,6 +7286,7 @@ dependencies = [
  "bytes",
  "chrono",
  "dec",
+ "itertools 0.14.0",
  "mz-ore",
  "mz-pgrepr-consts",
  "mz-pgwire-common",
