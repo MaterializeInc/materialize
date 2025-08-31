@@ -80,6 +80,7 @@ impl Coordinator {
             .collect();
         let result_formats = vec![mz_pgwire_common::Format::Text; desc.arity()];
         let logging = session.mint_logging(sql, Some(&stmt), now);
+        let session_state_revision = session.state_revision();
         session.set_portal(
             name,
             desc,
@@ -88,6 +89,7 @@ impl Coordinator {
             params,
             result_formats,
             catalog.transient_revision(),
+            session_state_revision,
         )?;
         Ok(())
     }
@@ -118,17 +120,18 @@ impl Coordinator {
             Some(ps) => ps,
             None => return Err(AdapterError::UnknownPreparedStatement(name.to_string())),
         };
-        if let Some(revision) = Self::verify_statement_revision(
+        if let Some(new_revision) = Self::verify_statement_revision(
             catalog,
             session,
             ps.stmt(),
             ps.desc(),
             ps.catalog_revision,
+            ps.session_state_revision,
         )? {
             let ps = session
                 .get_prepared_statement_mut_unverified(name)
                 .expect("known to exist");
-            ps.catalog_revision = revision;
+            (ps.catalog_revision, ps.session_state_revision) = new_revision;
         }
 
         Ok(())
@@ -150,28 +153,33 @@ impl Coordinator {
             portal.stmt.as_deref(),
             &portal.desc,
             portal.catalog_revision,
+            portal.session_state_revision,
         )? {
             let portal = session
                 .get_portal_unverified_mut(name)
                 .expect("known to exist");
-            portal.catalog_revision = revision;
+            portal.catalog_revision = revision.0;
         }
         Ok(())
     }
 
-    /// If the catalog and portal revisions don't match, re-describe the statement
-    /// and ensure its result type has not changed. Return `Some(x)` with the new
-    /// (valid) revision if its plan has changed. Return `None` if the revisions
-    /// match. Return an error if the plan has changed.
+    /// If the current catalog/session revisions don't match the given revisions, re-describe the
+    /// statement and ensure its result type has not changed. Return `Some((c, s))` with the new
+    /// (valid) catalog and session state revisions if its plan has changed. Return `None` if the
+    /// revisions match. Return an error if the plan has changed.
     fn verify_statement_revision(
         catalog: &Catalog,
         session: &Session,
         stmt: Option<&Statement<Raw>>,
         desc: &StatementDesc,
-        catalog_revision: u64,
-    ) -> Result<Option<u64>, AdapterError> {
-        let current_revision = catalog.transient_revision();
-        if catalog_revision != current_revision {
+        old_catalog_revision: u64,
+        old_session_state_revision: u64,
+    ) -> Result<Option<(u64, u64)>, AdapterError> {
+        let current_catalog_revision = catalog.transient_revision();
+        let current_session_state_revision = session.state_revision();
+        if old_catalog_revision != current_catalog_revision
+            || old_session_state_revision != current_session_state_revision
+        {
             let current_desc = Self::describe(
                 catalog,
                 session,
@@ -183,7 +191,10 @@ impl Coordinator {
                     "cached plan must not change result type".to_string(),
                 ))
             } else {
-                Ok(Some(current_revision))
+                Ok(Some((
+                    current_catalog_revision,
+                    current_session_state_revision,
+                )))
             }
         } else {
             Ok(None)

@@ -119,6 +119,12 @@ where
     #[derivative(Debug = "ignore")]
     qcell_owner: QCellOwner,
     session_oracles: BTreeMap<Timeline, InMemoryTimestampOracle<T, NowFn<T>>>,
+    /// Incremented when session state that is relevant to prepared statement planning changes.
+    /// Currently, only changes to `portals` are tracked. Changes to `prepared_statements` don't
+    /// need to be tracked, because prepared statements can't depend on other prepared statements.
+    /// TODO: We might want to track changes also to session variables.
+    /// (`Catalog::transient_revision` similarly tracks changes on the catalog side.)
+    state_revision: u64,
 }
 
 impl<T> SessionMetadata for Session<T>
@@ -344,6 +350,7 @@ impl<T: TimestampManipulation> Session<T> {
             external_metadata_rx,
             qcell_owner: QCellOwner::new(),
             session_oracles: BTreeMap::new(),
+            state_revision: 0,
         }
     }
 
@@ -457,6 +464,7 @@ impl<T: TimestampManipulation> Session<T> {
     pub fn clear_transaction(&mut self) -> TransactionStatus<T> {
         self.portals.clear();
         self.pcx = None;
+        self.state_revision += 1;
         mem::take(&mut self.transaction)
     }
 
@@ -633,6 +641,7 @@ impl<T: TimestampManipulation> Session<T> {
         raw_sql: String,
         desc: StatementDesc,
         catalog_revision: u64,
+        session_state_revision: u64,
         now: EpochMillis,
     ) {
         let logging = PreparedStatementLoggingInfo::still_to_log(
@@ -647,6 +656,7 @@ impl<T: TimestampManipulation> Session<T> {
             stmt,
             desc,
             catalog_revision,
+            session_state_revision,
             logging: Arc::new(QCell::new(&self.qcell_owner, logging)),
         };
         self.prepared_statements.insert(name, statement);
@@ -711,6 +721,7 @@ impl<T: TimestampManipulation> Session<T> {
         params: Vec<(Datum, ScalarType)>,
         result_formats: Vec<Format>,
         catalog_revision: u64,
+        session_state_revision: u64,
     ) -> Result<(), AdapterError> {
         // The empty portal can be silently replaced.
         if !portal_name.is_empty() && self.portals.contains_key(&portal_name) {
@@ -723,6 +734,7 @@ impl<T: TimestampManipulation> Session<T> {
                 stmt: stmt.map(Arc::new),
                 desc,
                 catalog_revision,
+                session_state_revision,
                 parameters: Params {
                     datums: Row::pack(params.iter().map(|(d, _t)| d)),
                     execute_types: params.into_iter().map(|(_d, t)| t).collect(),
@@ -734,6 +746,7 @@ impl<T: TimestampManipulation> Session<T> {
                 lifecycle_timestamps: None,
             },
         );
+        self.state_revision += 1;
         Ok(())
     }
 
@@ -741,6 +754,7 @@ impl<T: TimestampManipulation> Session<T> {
     ///
     /// If there is no such portal, this method does nothing. Returns whether that portal existed.
     pub fn remove_portal(&mut self, portal_name: &str) -> bool {
+        self.state_revision += 1;
         self.portals.remove(portal_name).is_some()
     }
 
@@ -754,6 +768,10 @@ impl<T: TimestampManipulation> Session<T> {
     /// Retrieves a mutable reference to the specified portal.
     ///
     /// If there is no such portal, returns `None`.
+    ///
+    /// Warning: Don't use this mutable reference to change the meaning of the portal, i.e., the
+    /// `stmt` or `desc` fields. (Or if you do for some reason, then please increment
+    /// `Session::state_revision`, so that dependent objects will know to re-plan.
     pub fn get_portal_unverified_mut(&mut self, portal_name: &str) -> Option<&mut Portal> {
         self.portals.get_mut(portal_name)
     }
@@ -767,6 +785,7 @@ impl<T: TimestampManipulation> Session<T> {
         parameters: Params,
         result_formats: Vec<Format>,
         catalog_revision: u64,
+        session_state_revision: u64,
     ) -> Result<String, AdapterError> {
         // See: https://github.com/postgres/postgres/blob/84f5c2908dad81e8622b0406beea580e40bb03ac/src/backend/utils/mmgr/portalmem.c#L234
 
@@ -775,10 +794,12 @@ impl<T: TimestampManipulation> Session<T> {
             match self.portals.entry(name.clone()) {
                 Entry::Occupied(_) => continue,
                 Entry::Vacant(entry) => {
+                    self.state_revision += 1;
                     entry.insert(Portal {
                         stmt: stmt.map(Arc::new),
                         desc,
                         catalog_revision,
+                        session_state_revision,
                         parameters,
                         result_formats,
                         state: PortalState::NotStarted,
@@ -910,6 +931,12 @@ impl<T: TimestampManipulation> Session<T> {
             None
         }
     }
+
+    /// Return the state_revision of the session, which can be used by dependent objects for knowing
+    /// when to re-plan due to session state changes.
+    pub fn state_revision(&self) -> u64 {
+        self.state_revision
+    }
 }
 
 /// A prepared statement.
@@ -920,6 +947,8 @@ pub struct PreparedStatement {
     desc: StatementDesc,
     /// The most recent catalog revision that has verified this statement.
     pub catalog_revision: u64,
+    /// The most recent session state revision that has verified this statement.
+    pub session_state_revision: u64,
     #[derivative(Debug = "ignore")]
     logging: Arc<QCell<PreparedStatementLoggingInfo>>,
 }
@@ -950,8 +979,10 @@ pub struct Portal {
     pub stmt: Option<Arc<Statement<Raw>>>,
     /// The statement description.
     pub desc: StatementDesc,
-    /// The most recent catalog revision that has verified this statement.
+    /// The most recent catalog revision that has verified this portal.
     pub catalog_revision: u64,
+    /// The most recent session state revision that has verified this portal.
+    pub session_state_revision: u64,
     /// The bound values for the parameters in the prepared statement, if any.
     pub parameters: Params,
     /// The desired output format for each column in the result set.

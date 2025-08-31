@@ -563,12 +563,14 @@ impl Coordinator {
                     {
                         ctx.retire(Err(AdapterError::PreparedStatementExists(plan.name)));
                     } else {
+                        let session_state_revision = ctx.session().state_revision();
                         ctx.session_mut().set_prepared_statement(
                             plan.name,
                             Some(plan.stmt),
                             plan.sql,
                             plan.desc,
                             self.catalog().transient_revision(),
+                            session_state_revision,
                             self.now(),
                         );
                         ctx.retire(Ok(ExecuteResponse::Prepare));

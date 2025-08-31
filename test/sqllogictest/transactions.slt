@@ -1379,17 +1379,36 @@ COMPLETE 1
 COMPLETE 0
 
 # Now declare a new cursor with the same name in a different transaction, and test that we realize that the meaning of
-# p1 has changed.
-# TODO: Currently, we have a bug here, see: https://github.com/MaterializeInc/database-issues/issues/9634
+# p1 has changed. This is a regression test for https://github.com/MaterializeInc/database-issues/issues/9634.
 simple
 BEGIN;
 DECLARE c1 CURSOR FOR (
   SELECT x, y FROM t1
 );
 EXECUTE p1;
+----
+db error: ERROR: cached plan must not change result type
+
+simple
 ROLLBACK;
 ----
-error parsing response from server: failed to fill whole buffer
+COMPLETE 0
+
+# Regression test for https://github.com/MaterializeInc/database-issues/issues/9634's portal case.
+simple
+BEGIN;
+DECLARE c1 CURSOR FOR SELECT x, y FROM t1;
+DECLARE c2 CURSOR FOR FETCH 1 c1;
+CLOSE c1;
+DECLARE c1 CURSOR FOR SELECT x FROM t1;
+FETCH 1 c2;
+----
+db error: ERROR: cached plan must not change result type
+
+simple
+ROLLBACK;
+----
+COMPLETE 0
 
 # PREPARE FETCH with a SUBSCRIBE
 simple
@@ -1410,7 +1429,7 @@ COMPLETE 0
 COMPLETE 0
 
 # The transaction ended, so the portal is gone.
-query error db error: ERROR: portal "c1" does not exist
+query error db error: ERROR: cursor "c1" does not exist
 EXECUTE p2;
 
 # Do the same as above, but commit the transaction. Counter-intuitively, the portal disappears also if you commit the
@@ -1432,7 +1451,7 @@ COMPLETE 0
 COMPLETE 0
 COMPLETE 0
 
-query error db error: ERROR: portal "c1" does not exist
+query error db error: ERROR: cursor "c1" does not exist
 EXECUTE p3;
 
 # DECLARE CURSOR FOR FETCH
