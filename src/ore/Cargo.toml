@@ -60,7 +60,7 @@ tokio = { version = "1.44.1", features = [
     "time",
 ], optional = true }
 tokio-openssl = { version = "0.6.5", optional = true }
-thiserror = "2.0.12"
+thiserror = "2.0.16"
 tracing-capture = { version = "0.1.0", optional = true }
 # TODO(guswynn): determine, when, if ever, we can remove `tracing-log`
 # The `tracing-log` feature here is load-bearing: While our busiest-logging dependency (`rdkafka`) is now hooked-up
@@ -68,7 +68,7 @@ tracing-capture = { version = "0.1.0", optional = true }
 # log lines we care about.
 # Note that this feature is distinct from `tracing`'s `log` feature, which has `tracing` macros emit `log` records if
 # there is no global `tracing` subscriber.
-tracing-subscriber = { version = "0.3.19", default-features = false, features = [
+tracing-subscriber = { version = "0.3.20", default-features = false, features = [
     "env-filter",
     "fmt",
     "json",
@@ -104,7 +104,7 @@ scopeguard = "1.2.0"
 serde_json = "1.0.127"
 tokio = { version = "1.44.1", features = ["macros", "rt-multi-thread"] }
 tokio-test = "0.4.4"
-tracing-subscriber = "0.3.19"
+tracing-subscriber = "0.3.20"
 
 [features]
 default = ["tokio-console", "workspace-hack", "mz-ore-proc/workspace-hack"]

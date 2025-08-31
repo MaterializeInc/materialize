@@ -53,8 +53,8 @@ num_enum = "0.7.4"
 ordered-float = { version = "5.0.0", features = ["serde"] }
 paste = "1.0.11"
 prost = { version = "0.13.5", features = ["no-recursion-limit"] }
-regex = "1.11.1"
-regex-syntax = "0.8.5"
+regex = "1.11.2"
+regex-syntax = "0.8.6"
 seahash = "4.1.0"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.127"
@@ -77,7 +77,7 @@ insta = "1.43"
 mz-expr-derive-impl = { path = "../expr-derive-impl", features = ["test"] }
 mz-expr-test-util = { path = "../expr-test-util" }
 mz-ore = { path = "../ore" }
-proc-macro2 = "1.0.95"
+proc-macro2 = "1.0.101"
 quote = "1"
 rand = "0.8.5"
 

@@ -26,7 +26,7 @@ mz-tracing = { path = "../tracing", default-features = false }
 sentry-tracing = { version = "0.38.1" }
 tracing = { version = "0.1.37" }
 tracing-capture = { version = "0.1.0", optional = true }
-tracing-subscriber = { version = "0.3.19", default-features = false }
+tracing-subscriber = { version = "0.3.20", default-features = false }
 opentelemetry = { version = "0.24.0", features = ["trace"] }
 opentelemetry_sdk = { version = "0.24.1", features = ["rt-tokio"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
