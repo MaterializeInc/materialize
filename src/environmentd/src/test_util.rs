@@ -751,6 +751,7 @@ impl Listeners {
             inner,
             metrics_registry,
             _temp_dir: temp_dir,
+            _scratch_dir: scratch_dir,
             _tracing_guard: tracing_guard,
         })
     }
@@ -760,7 +761,9 @@ impl Listeners {
 pub struct TestServer {
     pub inner: crate::Server,
     pub metrics_registry: MetricsRegistry,
+    /// The `TempDir`s are saved to prevent them from being dropped, and thus cleaned up too early.
     _temp_dir: Option<TempDir>,
+    _scratch_dir: TempDir,
     _tracing_guard: Option<TracingGuard>,
 }
 
