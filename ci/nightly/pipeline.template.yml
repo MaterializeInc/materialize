@@ -2311,7 +2311,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: orchestratord
-              args: [--scenario=defaults, --recreate-cluster]
+              args: [--action=noop, --properties=defaults, --recreate-cluster]
               ci-builder: stable
         agents:
           queue: hetzner-aarch64-16cpu-32gb
@@ -2323,7 +2323,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: orchestratord
-              args: [--scenario=individual, --recreate-cluster]
+              args: [--action=noop, --properties=individual, --recreate-cluster]
               ci-builder: stable
         agents:
           queue: hetzner-aarch64-16cpu-32gb
@@ -2335,19 +2335,79 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: orchestratord
-              args: [--scenario=combine, --runtime=7200, --recreate-cluster]
+              args: [--action=noop, --properties=combine, --runtime=7200, --recreate-cluster]
               ci-builder: stable
         agents:
           queue: hetzner-aarch64-16cpu-32gb
 
-      - id: orchestratord-upgrade
-        label: "Orchestratord test (upgrade)"
+      - id: orchestratord-upgrade-defaults
+        label: "Orchestratord test (upgrade, defaults)"
         depends_on: build-aarch64
         timeout_in_minutes: 180
         plugins:
           - ./ci/plugins/mzcompose:
               composition: orchestratord
-              args: [--scenario=upgrade, --runtime=7200, --recreate-cluster]
+              args: [--action=upgrade, --properties=defaults, --runtime=7200, --recreate-cluster]
+              ci-builder: stable
+        agents:
+          queue: hetzner-aarch64-8cpu-16gb
+
+      - id: orchestratord-upgrade-individual
+        label: "Orchestratord test (upgrade, individual props)"
+        depends_on: build-aarch64
+        timeout_in_minutes: 180
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: orchestratord
+              args: [--action=upgrade, --properties=individual, --runtime=7200, --recreate-cluster]
+              ci-builder: stable
+        agents:
+          queue: hetzner-aarch64-8cpu-16gb
+
+      - id: orchestratord-upgrade-combine
+        label: "Orchestratord test (upgrade, combine props)"
+        depends_on: build-aarch64
+        timeout_in_minutes: 180
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: orchestratord
+              args: [--action=upgrade, --properties=combine, --runtime=7200, --recreate-cluster]
+              ci-builder: stable
+        agents:
+          queue: hetzner-aarch64-8cpu-16gb
+
+      - id: orchestratord-upgrade-chain-defaults
+        label: "Orchestratord test (upgrade chain, defaults)"
+        depends_on: build-aarch64
+        timeout_in_minutes: 180
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: orchestratord
+              args: [--action=upgrade-chain, --properties=defaults, --runtime=7200, --recreate-cluster]
+              ci-builder: stable
+        agents:
+          queue: hetzner-aarch64-8cpu-16gb
+
+      - id: orchestratord-upgrade-chain-individual
+        label: "Orchestratord test (upgrade chain, individual props)"
+        depends_on: build-aarch64
+        timeout_in_minutes: 180
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: orchestratord
+              args: [--action=upgrade-chain, --properties=individual, --runtime=7200, --recreate-cluster]
+              ci-builder: stable
+        agents:
+          queue: hetzner-aarch64-8cpu-16gb
+
+      - id: orchestratord-upgrade-chain-combine
+        label: "Orchestratord test (upgrade chain, combine props)"
+        depends_on: build-aarch64
+        timeout_in_minutes: 180
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: orchestratord
+              args: [--action=upgrade-chain, --properties=combine, --runtime=7200, --recreate-cluster]
               ci-builder: stable
         agents:
           queue: hetzner-aarch64-16cpu-32gb

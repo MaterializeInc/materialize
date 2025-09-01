@@ -21,7 +21,7 @@ import signal
 import subprocess
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from enum import Enum
 from typing import Any
 
@@ -293,6 +293,9 @@ class BalancerdEnabled(Modification):
         definition["operator"]["balancerd"]["enabled"] = self.value
 
     def validate(self, mods: dict[type[Modification], Any]) -> None:
+        # TODO: Reenable when database-issues#9639 is fixed
+        return
+
         if MzVersion.parse_mz(mods[EnvironmentdImageRef]) < MzVersion.parse_mz(
             "v0.147.0"
         ):
@@ -970,7 +973,7 @@ class AuthenticatorKind(Modification):
                 bufsize=1,
             )
             time.sleep(1)
-            # ret = process.poll()
+            process.poll()
             assert process.stdout
             line = process.stdout.readline()
             if "Forwarding from" in line:
@@ -1006,17 +1009,16 @@ class AuthenticatorKind(Modification):
             os.killpg(os.getpgid(process.pid), signal.SIGTERM)
 
 
-class Scenario(Enum):
+class Properties(Enum):
+    Defaults = "defaults"
     Individual = "individual"
     Combine = "combine"
-    Defaults = "defaults"
+
+
+class Action(Enum):
+    Noop = "noop"
     Upgrade = "upgrade"
     UpgradeChain = "upgrade-chain"
-
-    @classmethod
-    def _missing_(cls, value):
-        if value == "random":
-            return cls(random.choice([elem.value for elem in cls]))
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -1031,7 +1033,16 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         help="Custom version tag to use",
     )
     parser.add_argument("--seed", type=str, default=random.randrange(1000000))
-    parser.add_argument("--scenario", type=str, default="all")
+    parser.add_argument("--scenario", type=str)
+    parser.add_argument(
+        "--action", type=str, default="noop", choices=[elem.value for elem in Action]
+    )
+    parser.add_argument(
+        "--properties",
+        type=str,
+        default="individual",
+        choices=[elem.value for elem in Properties],
+    )
     parser.add_argument("--modification", action="append", type=str, default=[])
     parser.add_argument("--runtime", type=int, help="Runtime in seconds")
     args = parser.parse_args()
@@ -1130,7 +1141,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             if mod_class.__name__ in args.modification
         ]
 
-    if not args.scenario[0].isalpha():
+    if args.scenario:
         assert not args.runtime
         assert not args.modification
         run_scenario(
@@ -1142,32 +1153,37 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         )
         return
 
-    scenario = Scenario(args.scenario)
-    if scenario == Scenario.Individual:
-        assert not args.runtime
-        for mod_class in mod_classes:
-            for value in mod_class.values():
-                run_scenario([[mod_class(value)]], definition)
-    elif scenario == Scenario.Combine:
-        assert args.runtime
+    if args.runtime:
         end_time = (
             datetime.datetime.now() + datetime.timedelta(seconds=args.runtime)
         ).timestamp()
-        while time.time() < end_time:
-            run_scenario(
-                [
-                    [
-                        mod_class(rng.choice(mod_class.good_values()))
-                        for mod_class in mod_classes
-                    ]
-                ],
-                definition,
-            )
-    elif scenario == Scenario.Defaults:
-        assert not args.runtime
-        mods = [mod_class(mod_class.default()) for mod_class in mod_classes]
-        run_scenario([mods], definition, modify=False)
-    elif scenario == Scenario.Upgrade:
+
+    action = Action(args.action)
+    properties = Properties(args.properties)
+
+    def get_mods() -> Iterator[list[Modification]]:
+        if properties == Properties.Defaults:
+            assert not args.runtime
+            yield [mod_class(mod_class.default()) for mod_class in mod_classes]
+        elif properties == Properties.Individual:
+            assert not args.runtime
+            for mod_class in mod_classes:
+                for value in mod_class.values():
+                    yield [mod_class(value)]
+        elif properties == Properties.Combine:
+            assert args.runtime
+            while time.time() < end_time:
+                yield [
+                    mod_class(rng.choice(mod_class.good_values()))
+                    for mod_class in mod_classes
+                ]
+        else:
+            raise ValueError(f"Unhandled properties value {properties}")
+
+    if action == Action.Noop:
+        for mod in get_mods():
+            run_scenario([mod], definition)
+    elif action == Action.Upgrade:
         assert args.runtime
         end_time = (
             datetime.datetime.now() + datetime.timedelta(seconds=args.runtime)
@@ -1177,16 +1193,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             versions = sorted(list(rng.sample(versions, 2)))
             run_scenario(
                 [
-                    [EnvironmentdImageRef(str(version))]
-                    + [
-                        mod_class(rng.choice(mod_class.good_values()))
-                        for mod_class in mod_classes
-                    ]
-                    for version in versions
+                    [EnvironmentdImageRef(str(version))] + mods
+                    for version, mods in zip(versions, get_mods())
                 ],
                 definition,
             )
-    elif scenario == Scenario.UpgradeChain:
+    elif action == Action.UpgradeChain:
         assert args.runtime
         end_time = (
             datetime.datetime.now() + datetime.timedelta(seconds=args.runtime)
@@ -1197,17 +1209,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             versions = sorted(list(rng.sample(versions, n)))
             run_scenario(
                 [
-                    [EnvironmentdImageRef(str(version))]
-                    + [
-                        mod_class(rng.choice(mod_class.good_values()))
-                        for mod_class in mod_classes
-                    ]
-                    for version in versions
+                    [EnvironmentdImageRef(str(version))] + mods
+                    for version, mods in zip(versions, get_mods())
                 ],
                 definition,
             )
     else:
-        raise ValueError(f"Unhandled scenario {scenario}")
+        raise ValueError(f"Unhandled action {action}")
 
 
 def setup(cluster: str):
@@ -1308,7 +1316,7 @@ def run_scenario(
         else:
             upgrade(definition)
         mod_dict = {mod.__class__: mod.value for mod in mods}
-        for subclass in all_modifications():
+        for subclass in all_subclasses(Modification):
             if subclass not in mod_dict:
                 mod_dict[subclass] = subclass.default()
         try:
