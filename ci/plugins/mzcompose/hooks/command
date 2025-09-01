@@ -19,6 +19,10 @@ mzcompose() {
     stdbuf --output=L --error=L bin/ci-builder run "$builder" bin/mzcompose --find "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" "$@"
 }
 
+kubectl() {
+    bin/ci-builder run stable kubectl --context="$K8S_CONTEXT" "$@"
+}
+
 faketty() {
     script -qfc "$(printf "%q " "$@")" /dev/null
 }
@@ -99,7 +103,7 @@ cleanup() {
     printf "\n%s" "$BUILDKITE_LABEL: test timed out" >> run.log
   fi
 
-  echo "--- Post command steps"
+  ci_unimportant_heading "Post command steps"
   # Run before potential "run down" in coverage
   docker ps --all --quiet | xargs --no-run-if-empty docker inspect | jq '
     .[]
@@ -125,6 +129,47 @@ cleanup() {
   netstat -panelot > netstat-panelot.log
   ps aux | sed -E "s/\S*mzp_\S*/[REDACTED]/g" > ps-aux.log
   docker stats --all --no-stream > docker-stats.log
+
+  if [ "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" = "orchestratord" ]; then
+      ci_unimportant_heading "orchestratord test: Uploading logs..."
+      K8S_CLUSTER_NAME=kind
+      K8S_CONTEXT="kind-$K8S_CLUSTER_NAME"
+      for pod in $(kubectl get pods -o name | grep -v -E 'kubernetes|minio|cockroach|redpanda'); do
+          kubectl logs --prefix=true "$pod" &>> kubectl-get-logs.log || true
+          kubectl logs --previous --prefix=true "$pod" &>> kubectl-get-logs-previous.log || true
+      done
+      kubectl get events > kubectl-get-events.log || true
+      kubectl get all > kubectl-get-all.log || true
+      kubectl get events > kubectl-get-events.log || true
+      kubectl get all > kubectl-get-all.log || true
+      kubectl describe all | awk '
+        BEGIN { redact=0 }
+        /^[[:space:]]*Environment:/ {
+          indent = match($0, /[^ ]/) - 1
+          print substr($0, 1, indent) "Environment: [REDACTED]"
+          redact = 1
+          next
+        }
+        redact {
+          current_indent = match($0, /[^ ]/) - 1
+          if (current_indent <= indent || NF == 0) {
+            redact = 0
+          } else {
+            next
+          }
+        }
+        { print }
+      ' > kubectl-describe-all.log || true
+      kubectl get pods -o wide > kubectl-pods-with-nodes.log || true
+
+      kubectl -n kube-system get events > kubectl-get-events-kube-system.log || true
+      kubectl -n kube-system get all > kubectl-get-all-kube-system.log || true
+      kubectl -n kube-system describe all > kubectl-describe-all-kube-system.log || true
+
+      mapfile -t artifacts < <(printf "kubectl-get-logs.log\nkubectl-get-logs-previous.log\nkubectl-get-events.log\nkubectl-get-all.log\nkubectl-describe-all.log\nkubectl-pods-with-nodes.log\nkubectl-get-events-kube-system.log\nkubectl-get-all-kube-system.log\nkubectl-describe-all-kube-system.log\nkail-output.log\n")
+      artifacts_str=$(IFS=";"; echo "${artifacts[*]}")
+      buildkite-agent artifact upload "$artifacts_str"
+  fi
 
   mv "$cores" . || true
 
@@ -174,7 +219,7 @@ cleanup() {
   mapfile -t artifacts < <(printf "run.log\nservices.log\njournalctl-merge.log\nnetstat-ant.log\nnetstat-panelot.log\nps-aux.log\ndocker-inspect.log\n"; find . -name 'junit_*.xml' -printf '%P\n'; find . -maxdepth 1 -name 'mz_debug_*.log' -printf '%P\n'; find . -maxdepth 1 -name 'slt*.diff' -printf '%P\n')
   artifacts_str=$(IFS=";"; echo "${artifacts[*]}")
 
-  echo "--- Running trufflehog to scan artifacts for secrets & uploading artifacts"
+  ci_unimportant_heading "Running trufflehog to scan artifacts for secrets & uploading artifacts"
   {
     bin/ci-builder run "$builder" trufflehog --no-update --no-verification --json --exclude-detectors=coda,dockerhub,box,npmtoken,github,snykkey,eightxeight,sumologickey,miro,fmfw,logzio,qase,cannyio,uplead,tatumio filesystem "${artifacts[@]}" | trufflehog_jq_filter_logs > trufflehog.log
   } &
@@ -187,7 +232,7 @@ cleanup() {
     buildkite-agent artifact upload "$artifacts_str" || true
   } &
   wait
-  echo "--- Annotating errors"
+  ci_unimportant_heading "Annotating errors"
   bin/ci-builder run "$builder" bin/ci-annotate-errors --test-cmd="$TEST_CMD" --test-desc="$TEST_DESC" --test-result="$TEST_RESULT" "${artifacts[@]}" trufflehog.log > ci-annotate-errors.log || CI_ANNOTATE_ERRORS_RESULT=$?
   buildkite-agent artifact upload "ci-annotate-errors.log" &
 
