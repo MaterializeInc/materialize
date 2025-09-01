@@ -232,12 +232,9 @@ impl<'a> CopyTextFormatParser<'a> {
     }
 
     fn check_bytes(&self, bytes: &[u8]) -> bool {
-        let remaining_bytes = self.data.len() - self.position;
-        remaining_bytes >= bytes.len()
-            && self.data[self.position..]
-                .iter()
-                .zip(bytes.iter())
-                .all(|(x, y)| x == y)
+        self.data
+            .get(self.position..self.position + bytes.len())
+            .map_or(false, |d| d == bytes)
     }
 
     fn consume_bytes(&mut self, bytes: &[u8]) -> bool {

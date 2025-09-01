@@ -603,14 +603,15 @@ where
     }
     if !f_names.is_empty() {
         // The JSON for named fields is
-        // `{"arg1":<val1>, ..}}`.
+        // `{"arg1":<val1>, ..}`.
         Ok(format!(
             "{{{}}}",
             separated(
                 ",",
                 f_names
                     .iter()
-                    .zip(f_values.into_iter())
+                    .take(f_values.len())
+                    .zip_eq(f_values.into_iter())
                     .map(|(n, v)| format!("\"{}\":{}", n, v))
             )
         ))

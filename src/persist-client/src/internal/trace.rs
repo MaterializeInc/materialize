@@ -389,10 +389,14 @@ impl<T: Timestamp + Lattice> Trace<T> {
         for (id, batch) in spine_batches {
             let level = batch.level;
 
+            let descs = batch.descs.iter().map(Some).chain(std::iter::repeat_n(
+                None,
+                batch.parts.len() - batch.descs.len(),
+            ));
             let parts = batch
                 .parts
                 .into_iter()
-                .zip(batch.descs.iter().map(Some).chain(std::iter::repeat(None)))
+                .zip_eq(descs)
                 .map(|(id, desc)| pop_batch(id, desc))
                 .collect::<Result<Vec<_>, _>>()?;
             let len = parts.iter().map(|p| (*p).batch.len).sum();

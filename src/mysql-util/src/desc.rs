@@ -182,12 +182,10 @@ impl IsCompatible for Option<MySqlColumnMeta> {
             (Some(MySqlColumnMeta::Enum(self_enum)), Some(MySqlColumnMeta::Enum(other_enum))) => {
                 // so as long as `self.values` is a compatible prefix of `other.values`, we can
                 // ignore extra values from `other.values`.
-                self_enum.values.len() <= other_enum.values.len()
-                    && self_enum
-                        .values
-                        .iter()
-                        .zip(other_enum.values.iter())
-                        .all(|(self_val, other_val)| self_val == other_val)
+                match other_enum.values.get(0..self_enum.values.len()) {
+                    Some(prefix) => self_enum.values == prefix,
+                    None => false,
+                }
             }
             (Some(MySqlColumnMeta::Json), Some(MySqlColumnMeta::Json)) => true,
             (Some(MySqlColumnMeta::Year), Some(MySqlColumnMeta::Year)) => true,

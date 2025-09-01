@@ -781,12 +781,16 @@ fn rocksdb_core_loop<K, V, M, O, IM, F>(
                         encoded_batch.shrink_to(reduced_capacity);
                     }
                 }
-                assert!(encoded_batch_buffers.len() >= batch_size);
+
+                let Some(encode_bufs) = encoded_batch_buffers.get_mut(0..batch_size) else {
+                    panic!(
+                        "Encoded buffers over-truncated. expected >= {batch_size} actual: {}",
+                        encoded_batch_buffers.len()
+                    );
+                };
 
                 // TODO(guswynn): sort by key before writing.
-                for ((key, value, diff), encode_buf) in
-                    batch.drain(..).zip(encoded_batch_buffers.iter_mut())
-                {
+                for ((key, value, diff), encode_buf) in batch.drain(..).zip_eq(encode_bufs) {
                     ret.processed_updates += 1;
 
                     match &value {
