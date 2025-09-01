@@ -1952,7 +1952,7 @@ class ZeroDowntimeDeployAction(Action):
         ):
             self.composition.up(mz_service, detach=True)
             self.composition.await_mz_deployment_status(
-                DeploymentStatus.READY_TO_PROMOTE, mz_service
+                DeploymentStatus.READY_TO_PROMOTE, mz_service, timeout=1800
             )
             self.composition.promote_mz(mz_service)
             self.composition.await_mz_deployment_status(
