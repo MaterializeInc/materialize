@@ -9,12 +9,15 @@
 
 //! An Optimizer that
 //! 1. Optimistically calls `optimize_mir_constant`.
-//! 2. Then, if we haven't arrived at a constant, it calls does real optimization:
+//! 2. Then, if we haven't arrived at a constant, it does real optimization:
 //!    - calls `prep_relation_expr` an `ExprPrepStyle` was given.
 //!    - calls `optimize_mir_local`, i.e., the logical optimizer.
 //!
 //! This is used for `CREATE VIEW` statements and in various other situations where no physical
 //! optimization is needed, such as for `INSERT` statements.
+//!
+//! TODO: We should split this into an optimizer that is just for views, and another optimizer
+//! for various other ad hoc things, such as `INSERT`, `COPY FROM`, etc.
 
 use std::time::Instant;
 
@@ -43,6 +46,8 @@ pub struct Optimizer<'a> {
     metrics: Option<OptimizerMetrics>,
     /// If present, the optimizer will call `prep_relation_expr` using the given `ExprPrepStyle`.
     expr_prep_style: Option<ExprPrepStyle<'a>>,
+    /// Whether to call `FoldConstants` with a size limit, or try to fold constants of any size.
+    fold_constants_limit: bool,
 }
 
 impl<'a> Optimizer<'a> {
@@ -52,10 +57,14 @@ impl<'a> Optimizer<'a> {
             config,
             metrics,
             expr_prep_style: None,
+            fold_constants_limit: true,
         }
     }
 
-    pub fn new_with_prep(
+    /// Creates an optimizer instance that also calls `prep_relation_expr` with the given
+    /// `ExprPrepStyle`, so that unmaterializable functions are resolved.
+    /// Additionally, this instance calls constant folding without a size limit.
+    pub fn new_with_prep_no_limit(
         config: OptimizerConfig,
         metrics: Option<OptimizerMetrics>,
         expr_prep_style: ExprPrepStyle<'a>,
@@ -65,6 +74,7 @@ impl<'a> Optimizer<'a> {
             config,
             metrics,
             expr_prep_style: Some(expr_prep_style),
+            fold_constants_limit: false,
         }
     }
 }
@@ -92,7 +102,7 @@ impl Optimize<HirRelationExpr> for Optimizer<'_> {
 
         // First, we run a very simple optimizer pipeline, which only folds constants. This takes
         // care of constant INSERTs. (This optimizer is also used for INSERTs, not just VIEWs.)
-        expr = optimize_mir_constant(expr, &mut transform_ctx)?;
+        expr = optimize_mir_constant(expr, &mut transform_ctx, self.fold_constants_limit)?;
 
         // MIR ⇒ MIR optimization (local)
         let expr = if expr.as_const().is_some() {

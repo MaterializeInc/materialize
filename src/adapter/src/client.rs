@@ -795,7 +795,7 @@ impl SessionClient {
             catalog_state,
         };
         let mut optimizer =
-            optimize::view::Optimizer::new_with_prep(optimizer_config.clone(), None, prep);
+            optimize::view::Optimizer::new_with_prep_no_limit(optimizer_config.clone(), None, prep);
 
         let result: Result<_, AdapterError> =
             mz_sql::plan::plan_copy_from(&pcx, &conn_catalog, id, columns, rows)

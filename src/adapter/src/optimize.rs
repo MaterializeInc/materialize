@@ -371,8 +371,9 @@ fn optimize_mir_local(
 fn optimize_mir_constant(
     expr: MirRelationExpr,
     ctx: &mut TransformCtx,
+    limit: bool,
 ) -> Result<MirRelationExpr, OptimizerError> {
-    let optimizer = mz_transform::Optimizer::constant_optimizer(ctx);
+    let optimizer = mz_transform::Optimizer::constant_optimizer(ctx, limit);
     let expr = optimizer.optimize(expr, ctx)?;
 
     // Trace the result of this phase.
