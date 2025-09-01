@@ -1375,7 +1375,7 @@ steps:
       depends_on: build-aarch64
       timeout_in_minutes: 1200
       concurrency: 1
-      concurrency_group: 'mz-e2e'
+      concurrency_group: 'cloud-canary'
       agents:
         # Requires real Mz access, CONFLUENT_CLOUD_DEVEX_KAFKA_USERNAME, etc.
         queue: linux-aarch64-small
