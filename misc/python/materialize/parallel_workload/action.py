@@ -698,6 +698,8 @@ class DropTableAction(Action):
             # Was dropped while we were acquiring lock
             if table not in exe.db.tables:
                 return False
+            if len(exe.db.tables) <= 2:
+                return False
 
             query = f"DROP TABLE {table}"
             exe.execute(query, http=Http.RANDOM)
@@ -894,6 +896,8 @@ class DropDatabaseAction(Action):
             # Was dropped while we were acquiring lock
             if db not in exe.db.dbs:
                 return False
+            if len(exe.db.dbs) <= 1:
+                return False
 
             query = f"DROP DATABASE {db} RESTRICT"
             exe.execute(query, http=Http.RANDOM)
@@ -928,6 +932,8 @@ class DropSchemaAction(Action):
         with schema.lock:
             # Was dropped while we were acquiring lock
             if schema not in exe.db.schemas:
+                return False
+            if len(exe.db.schemas) <= 1:
                 return False
 
             query = f"DROP SCHEMA {schema}"
@@ -1509,6 +1515,10 @@ class DropClusterAction(Action):
         with cluster.lock:
             # Was dropped while we were acquiring lock
             if cluster not in exe.db.clusters:
+                return False
+
+            # Avoid removing all clusters
+            if len(exe.db.clusters) <= 1:
                 return False
 
             query = f"DROP CLUSTER {cluster}"
