@@ -321,6 +321,7 @@ impl TrimStats for ProtoPrimitiveStats {
                     return;
                 }
 
+                #[allow(clippy::disallowed_methods)]
                 let common_prefix = lower
                     .char_indices()
                     .zip(upper.chars())
@@ -342,6 +343,7 @@ impl TrimStats for ProtoPrimitiveStats {
 
 impl TrimStats for ProtoPrimitiveBytesStats {
     fn trim(&mut self) {
+        #[allow(clippy::disallowed_methods)]
         let common_prefix = self
             .lower
             .iter()
