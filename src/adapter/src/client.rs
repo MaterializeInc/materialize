@@ -56,7 +56,7 @@ use crate::error::AdapterError;
 use crate::metrics::Metrics;
 use crate::optimize::{self, Optimize};
 use crate::session::{
-    EndTransactionAction, PreparedStatement, Session, SessionConfig, TransactionId,
+    EndTransactionAction, PreparedStatement, Session, SessionConfig, StateRevision, TransactionId,
 };
 use crate::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use crate::telemetry::{self, EventDetails, SegmentClientExt, StatementFailureType};
@@ -584,16 +584,12 @@ impl SessionClient {
 
         let desc = Coordinator::describe(&catalog, self.session(), stmt.clone(), param_types)?;
         let now = self.now();
-        let state_revision = self.session().state_revision();
-        self.session().set_prepared_statement(
-            name,
-            stmt,
-            sql,
-            desc,
-            catalog.transient_revision(),
-            state_revision,
-            now,
-        );
+        let state_revision = StateRevision {
+            catalog_revision: catalog.transient_revision(),
+            session_state_revision: self.session().state_revision(),
+        };
+        self.session()
+            .set_prepared_statement(name, stmt, sql, desc, state_revision, now);
         Ok(())
     }
 
@@ -613,7 +609,10 @@ impl SessionClient {
         let result_formats = vec![mz_pgwire_common::Format::Text; desc.arity()];
         let now = self.now();
         let logging = self.session().mint_logging(sql, Some(&stmt), now);
-        let session_state_revision = self.session().state_revision();
+        let state_revision = StateRevision {
+            catalog_revision: catalog.transient_revision(),
+            session_state_revision: self.session().state_revision(),
+        };
         self.session().set_portal(
             name,
             desc,
@@ -621,8 +620,7 @@ impl SessionClient {
             logging,
             params,
             result_formats,
-            catalog.transient_revision(),
-            session_state_revision,
+            state_revision,
         )?;
         Ok(())
     }

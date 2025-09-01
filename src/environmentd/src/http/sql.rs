@@ -1417,18 +1417,16 @@ async fn execute_stmt<S: ResultSender>(
 
     let desc = prep_stmt.desc().clone();
     let logging = Arc::clone(prep_stmt.logging());
-    let catalog_revision = prep_stmt.catalog_revision;
-    let session_state_revision = prep_stmt.session_state_revision;
-    let stmt = prep_stmt.stmt().cloned();
+    let stmt_ast = prep_stmt.stmt().cloned();
+    let state_revision = prep_stmt.state_revision;
     if let Err(err) = client.session().set_portal(
         EMPTY_PORTAL.into(),
         desc,
-        stmt,
+        stmt_ast,
         logging,
         params,
         result_formats,
-        catalog_revision,
-        session_state_revision,
+        state_revision,
     ) {
         return Ok(SqlResult::err(client, err).into());
     }

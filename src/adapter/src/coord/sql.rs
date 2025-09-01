@@ -22,7 +22,7 @@ use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReaso
 use crate::catalog::Catalog;
 use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::{Coordinator, Message};
-use crate::session::{Session, TransactionStatus};
+use crate::session::{Session, StateRevision, TransactionStatus};
 use crate::util::describe;
 use crate::{AdapterError, ExecuteContext, ExecuteResponse, metrics};
 
@@ -80,7 +80,10 @@ impl Coordinator {
             .collect();
         let result_formats = vec![mz_pgwire_common::Format::Text; desc.arity()];
         let logging = session.mint_logging(sql, Some(&stmt), now);
-        let session_state_revision = session.state_revision();
+        let state_revision = StateRevision {
+            catalog_revision: catalog.transient_revision(),
+            session_state_revision: session.state_revision(),
+        };
         session.set_portal(
             name,
             desc,
@@ -88,8 +91,7 @@ impl Coordinator {
             logging,
             params,
             result_formats,
-            catalog.transient_revision(),
-            session_state_revision,
+            state_revision,
         )?;
         Ok(())
     }
@@ -125,13 +127,12 @@ impl Coordinator {
             session,
             ps.stmt(),
             ps.desc(),
-            ps.catalog_revision,
-            ps.session_state_revision,
+            ps.state_revision,
         )? {
             let ps = session
                 .get_prepared_statement_mut_unverified(name)
                 .expect("known to exist");
-            (ps.catalog_revision, ps.session_state_revision) = new_revision;
+            ps.state_revision = new_revision;
         }
 
         Ok(())
@@ -147,18 +148,17 @@ impl Coordinator {
             Some(portal) => portal,
             None => return Err(AdapterError::UnknownCursor(name.to_string())),
         };
-        if let Some(revision) = Self::verify_statement_revision(
+        if let Some(new_revision) = Self::verify_statement_revision(
             self.catalog(),
             session,
             portal.stmt.as_deref(),
             &portal.desc,
-            portal.catalog_revision,
-            portal.session_state_revision,
+            portal.state_revision,
         )? {
             let portal = session
                 .get_portal_unverified_mut(name)
                 .expect("known to exist");
-            portal.catalog_revision = revision.0;
+            portal.state_revision = new_revision;
         }
         Ok(())
     }
@@ -172,14 +172,13 @@ impl Coordinator {
         session: &Session,
         stmt: Option<&Statement<Raw>>,
         desc: &StatementDesc,
-        old_catalog_revision: u64,
-        old_session_state_revision: u64,
-    ) -> Result<Option<(u64, u64)>, AdapterError> {
-        let current_catalog_revision = catalog.transient_revision();
-        let current_session_state_revision = session.state_revision();
-        if old_catalog_revision != current_catalog_revision
-            || old_session_state_revision != current_session_state_revision
-        {
+        old_state_revision: StateRevision,
+    ) -> Result<Option<StateRevision>, AdapterError> {
+        let current_state_revision = StateRevision {
+            catalog_revision: catalog.transient_revision(),
+            session_state_revision: session.state_revision(),
+        };
+        if old_state_revision != current_state_revision {
             let current_desc = Self::describe(
                 catalog,
                 session,
@@ -191,10 +190,7 @@ impl Coordinator {
                     "cached plan must not change result type".to_string(),
                 ))
             } else {
-                Ok(Some((
-                    current_catalog_revision,
-                    current_session_state_revision,
-                )))
+                Ok(Some(current_state_revision))
             }
         } else {
             Ok(None)

@@ -1102,18 +1102,16 @@ where
 
         let desc = stmt.desc().clone();
         let logging = Arc::clone(stmt.logging());
-        let catalog_revision = stmt.catalog_revision;
-        let session_state_revision = stmt.session_state_revision;
-        let stmt = stmt.stmt().cloned();
+        let stmt_ast = stmt.stmt().cloned();
+        let state_revision = stmt.state_revision;
         if let Err(err) = self.adapter_client.session().set_portal(
             portal_name,
             desc,
-            stmt,
+            stmt_ast,
             logging,
             params,
             result_formats,
-            catalog_revision,
-            session_state_revision,
+            state_revision,
         ) {
             return self.error(err.into_response(Severity::Error)).await;
         }

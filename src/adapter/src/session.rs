@@ -640,8 +640,7 @@ impl<T: TimestampManipulation> Session<T> {
         stmt: Option<Statement<Raw>>,
         raw_sql: String,
         desc: StatementDesc,
-        catalog_revision: u64,
-        session_state_revision: u64,
+        state_revision: StateRevision,
         now: EpochMillis,
     ) {
         let logging = PreparedStatementLoggingInfo::still_to_log(
@@ -655,8 +654,7 @@ impl<T: TimestampManipulation> Session<T> {
         let statement = PreparedStatement {
             stmt,
             desc,
-            catalog_revision,
-            session_state_revision,
+            state_revision,
             logging: Arc::new(QCell::new(&self.qcell_owner, logging)),
         };
         self.prepared_statements.insert(name, statement);
@@ -720,8 +718,7 @@ impl<T: TimestampManipulation> Session<T> {
         logging: Arc<QCell<PreparedStatementLoggingInfo>>,
         params: Vec<(Datum, ScalarType)>,
         result_formats: Vec<Format>,
-        catalog_revision: u64,
-        session_state_revision: u64,
+        state_revision: StateRevision,
     ) -> Result<(), AdapterError> {
         // The empty portal can be silently replaced.
         if !portal_name.is_empty() && self.portals.contains_key(&portal_name) {
@@ -734,8 +731,7 @@ impl<T: TimestampManipulation> Session<T> {
             Portal {
                 stmt: stmt.map(Arc::new),
                 desc,
-                catalog_revision,
-                session_state_revision,
+                state_revision,
                 parameters: Params {
                     datums: Row::pack(params.iter().map(|(d, _t)| d)),
                     execute_types: params.into_iter().map(|(_d, t)| t).collect(),
@@ -784,8 +780,7 @@ impl<T: TimestampManipulation> Session<T> {
         desc: StatementDesc,
         parameters: Params,
         result_formats: Vec<Format>,
-        catalog_revision: u64,
-        session_state_revision: u64,
+        state_revision: StateRevision,
     ) -> Result<String, AdapterError> {
         self.state_revision += 1;
 
@@ -798,8 +793,7 @@ impl<T: TimestampManipulation> Session<T> {
                     entry.insert(Portal {
                         stmt: stmt.map(Arc::new),
                         desc,
-                        catalog_revision,
-                        session_state_revision,
+                        state_revision,
                         parameters,
                         result_formats,
                         state: PortalState::NotStarted,
@@ -945,10 +939,8 @@ impl<T: TimestampManipulation> Session<T> {
 pub struct PreparedStatement {
     stmt: Option<Statement<Raw>>,
     desc: StatementDesc,
-    /// The most recent catalog revision that has verified this statement.
-    pub catalog_revision: u64,
-    /// The most recent session state revision that has verified this statement.
-    pub session_state_revision: u64,
+    /// The most recent state revision that has verified this statement.
+    pub state_revision: StateRevision,
     #[derivative(Debug = "ignore")]
     logging: Arc<QCell<PreparedStatementLoggingInfo>>,
 }
@@ -979,10 +971,8 @@ pub struct Portal {
     pub stmt: Option<Arc<Statement<Raw>>>,
     /// The statement description.
     pub desc: StatementDesc,
-    /// The most recent catalog revision that has verified this portal.
-    pub catalog_revision: u64,
-    /// The most recent session state revision that has verified this portal.
-    pub session_state_revision: u64,
+    /// The most recent state revision that has verified this portal.
+    pub state_revision: StateRevision,
     /// The bound values for the parameters in the prepared statement, if any.
     pub parameters: Params,
     /// The desired output format for each column in the result set.
@@ -995,6 +985,17 @@ pub struct Portal {
     pub state: PortalState,
     /// Statement lifecycle timestamps coming from `mz-pgwire`.
     pub lifecycle_timestamps: Option<LifecycleTimestamps>,
+}
+
+/// Points to a revision of catalog state and session state. When the current revisions are not the
+/// same as the revisions when a prepared statement or a portal was described, we need to check
+/// whether the description is still valid.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StateRevision {
+    /// A revision of the catalog.
+    pub catalog_revision: u64,
+    /// A revision of the session state.
+    pub session_state_revision: u64,
 }
 
 /// Execution states of a portal.
