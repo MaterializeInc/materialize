@@ -228,7 +228,9 @@ impl MySqlColumnDesc {
                             .all(|(self_val, other_val)| self_val == other_val)
                 } else {
                     // For the `UInt16` enum representation we support addition of new enums but
-                    // no other changes.
+                    // no other changes. We therefore weaken the assertion to allow for more variants
+                    // in the other `MySqlColumnMeta` which represents a schema newer than the schema
+                    // we snapshotted at.
                     self_enum.values.len() <= other_enum.values.len()
                         && self_enum
                             .values

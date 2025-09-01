@@ -458,9 +458,9 @@ fn parse_data_type(
         }
         "enum" => {
             // We must include the meta to ensure that we know during snapshot that
-            // the column must be cast to an integer. We will also continue to validate
-            // during replication and snapshot that the enums don't change outside
-            // of the addition of new variants not included in the list created here.
+            // the column must be cast to an integer. We will also include all known
+            // enum variants at this moment to ensure that we continue validate that
+            // replicated data still matches the snapshotted schema.
             let meta = MySqlColumnMeta::Enum(MySqlColumnMetaEnum {
                 values: enum_vals_from_column_type(info.column_type.as_str()).map_err(|_| {
                     UnsupportedDataType {
