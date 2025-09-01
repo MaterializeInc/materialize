@@ -13,6 +13,9 @@ from materialize.mzcompose import DEFAULT_MZ_ENVIRONMENT_ID, DEFAULT_MZ_VOLUMES
 from materialize.mzcompose.service import (
     Service,
     ServiceConfig,
+    ServiceDeploy,
+    ServiceDeployResources,
+    ServiceDeployResourceLimits,
 )
 
 
@@ -73,12 +76,14 @@ class Clusterd(Service):
         # ignored with a warning. Unfortunately no portable way of setting the
         # memory limit is known.
         if memory or cpu:
-            limits = {}
+            limits: ServiceDeployResourceLimits = {}
             if memory:
                 limits["memory"] = memory
             if cpu:
                 limits["cpus"] = cpu
-            config["deploy"] = {"resources": {"limits": limits}}
+            resources: ServiceDeployResources = {"limits": limits}
+            deploy: ServiceDeploy = {"resources": resources}
+            config["deploy"] = deploy
 
         config.update(
             {

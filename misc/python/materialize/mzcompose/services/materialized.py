@@ -28,6 +28,9 @@ from materialize.mzcompose import (
 from materialize.mzcompose.service import (
     Service,
     ServiceConfig,
+    ServiceDeploy,
+    ServiceDeployResources,
+    ServiceDeployResourceLimits,
     ServiceDependency,
 )
 from materialize.mzcompose.services.azurite import azure_blob_uri
@@ -296,12 +299,14 @@ class Materialized(Service):
         # ignored with a warning. Unfortunately no portable way of setting the
         # memory limit is known.
         if memory or cpu:
-            limits = {}
+            limits: ServiceDeployResourceLimits = {}
             if memory:
                 limits["memory"] = memory
             if cpu:
                 limits["cpus"] = cpu
-            config["deploy"] = {"resources": {"limits": limits}}
+            resources: ServiceDeployResources = {"limits": limits}
+            deploy: ServiceDeploy = {"resources": resources}
+            config["deploy"] = deploy
 
         # Sanity restarts are rather slow and rarely find a bug, running them
         # on main and releases is enough to prevent regressions.
