@@ -325,6 +325,7 @@ def run(
         threads.append(thread)
 
     num_queries = defaultdict(Counter)
+    num_failures = defaultdict(Counter)
     try:
         while time.time() < end_time:
             for thread in threads:
@@ -343,7 +344,7 @@ def run(
             print(
                 "QPS: "
                 + " ".join(
-                    f"{worker.num_queries.total() / REPORT_TIME:05.1f}"
+                    f"{worker.num_queries.total() / REPORT_TIME:05.1f} ({worker.num_failures.total() / worker.num_queries.total() * 100 if worker.num_queries.total() > 0 else 0:05.1f}%)"
                     for worker in workers
                 )
             )
@@ -352,7 +353,11 @@ def run(
                     num_queries[worker.action_list][action] += worker.num_queries[
                         action
                     ]
+                    num_failures[worker.action_list][action] += worker.num_failures[
+                        action
+                    ]
                 worker.num_queries.clear()
+                worker.num_failures.clear()
     except KeyboardInterrupt:
         print("Keyboard interrupt, exiting")
         for worker in workers:
@@ -372,7 +377,7 @@ def run(
                 print(
                     f"{thread.name} still running ({worker.exe.mz_service}): {worker.exe.last_log} ({worker.exe.last_status})"
                 )
-        print_stats(num_queries, workers, num_threads)
+        print_stats(num_queries, num_failures, workers, num_threads)
         if num_threads >= 50:
             # Under high load some queries can't finish quickly, especially UPDATE/DELETE
             os._exit(0)
@@ -421,31 +426,29 @@ def run(
         # else:
         #     raise ValueError("Sessions did not clean up within 30s of threads stopping")
     conn.close()
-    print_stats(num_queries, workers, num_threads)
+    print_stats(num_queries, num_failures, workers, num_threads)
 
 
 def print_stats(
     num_queries: defaultdict[ActionList, Counter[type[Action]]],
+    num_failures: defaultdict[ActionList, Counter[type[Action]]],
     workers: list[Worker],
     num_threads: int,
 ) -> None:
     ignored_errors: defaultdict[str, Counter[type[Action]]] = defaultdict(Counter)
-    num_failures = 0
     for worker in workers:
         for action_class, counter in worker.ignored_errors.items():
             ignored_errors[action_class].update(counter)
-    for counter in ignored_errors.values():
-        for count in counter.values():
-            num_failures += count
 
     total_queries = sum(sub.total() for sub in num_queries.values())
-    failed = 100.0 * num_failures / total_queries if total_queries else 0
+    total_failures = sum(sub.total() for sub in num_failures.values())
+    failed = 100.0 * total_failures / total_queries if total_queries else 0
     print(f"Queries executed: {total_queries} ({failed:.0f}% failed)")
     print("--- Action statistics:")
     for action_list in action_lists:
         text = ", ".join(
             [
-                f"{action_class.__name__.removesuffix('Action')}: {num_queries[action_list][action_class]}"
+                f"{action_class.__name__.removesuffix('Action')}: {num_queries[action_list][action_class]} ({num_failures[action_list][action_class]}% failed)"
                 for action_class in action_list.action_classes
             ]
         )
