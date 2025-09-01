@@ -47,7 +47,7 @@ SERVICES = [
         ],
     ),
     SchemaRegistry(),
-    Postgres(image="postgres:14.2"),
+    Postgres(),
     CockroachOrPostgresMetadata(),
     Minio(
         # We need a stable port exposed to the host since we can't pass any arguments
