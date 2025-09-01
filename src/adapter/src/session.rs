@@ -727,6 +727,7 @@ impl<T: TimestampManipulation> Session<T> {
         if !portal_name.is_empty() && self.portals.contains_key(&portal_name) {
             return Err(AdapterError::DuplicateCursor(portal_name));
         }
+        self.state_revision += 1;
         let param_types = desc.param_types.clone();
         self.portals.insert(
             portal_name,
@@ -746,7 +747,6 @@ impl<T: TimestampManipulation> Session<T> {
                 lifecycle_timestamps: None,
             },
         );
-        self.state_revision += 1;
         Ok(())
     }
 
@@ -787,14 +787,14 @@ impl<T: TimestampManipulation> Session<T> {
         catalog_revision: u64,
         session_state_revision: u64,
     ) -> Result<String, AdapterError> {
-        // See: https://github.com/postgres/postgres/blob/84f5c2908dad81e8622b0406beea580e40bb03ac/src/backend/utils/mmgr/portalmem.c#L234
+        self.state_revision += 1;
 
+        // See: https://github.com/postgres/postgres/blob/84f5c2908dad81e8622b0406beea580e40bb03ac/src/backend/utils/mmgr/portalmem.c#L234
         for i in 0usize.. {
             let name = format!("<unnamed portal {}>", i);
             match self.portals.entry(name.clone()) {
                 Entry::Occupied(_) => continue,
                 Entry::Vacant(entry) => {
-                    self.state_revision += 1;
                     entry.insert(Portal {
                         stmt: stmt.map(Arc::new),
                         desc,

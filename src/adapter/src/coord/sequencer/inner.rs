@@ -4639,7 +4639,7 @@ impl Coordinator {
         let stmt = ps.stmt().cloned();
         let desc = ps.desc().clone();
         let catalog_revision = ps.catalog_revision;
-        let session_state_revision = session.state_revision();
+        let session_state_revision = ps.session_state_revision;
         let logging = Arc::clone(ps.logging());
         session.create_new_portal(
             stmt,
