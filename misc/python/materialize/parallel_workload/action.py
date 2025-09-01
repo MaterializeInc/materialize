@@ -698,6 +698,8 @@ class DropTableAction(Action):
             # Was dropped while we were acquiring lock
             if table not in exe.db.tables:
                 return False
+            if len(exe.db.tables) <= 2:
+                return False
 
             query = f"DROP TABLE {table}"
             exe.execute(query, http=Http.RANDOM)
@@ -894,6 +896,8 @@ class DropDatabaseAction(Action):
             # Was dropped while we were acquiring lock
             if db not in exe.db.dbs:
                 return False
+            if len(exe.db.dbs) <= 1:
+                return False
 
             query = f"DROP DATABASE {db} RESTRICT"
             exe.execute(query, http=Http.RANDOM)
@@ -928,6 +932,8 @@ class DropSchemaAction(Action):
         with schema.lock:
             # Was dropped while we were acquiring lock
             if schema not in exe.db.schemas:
+                return False
+            if len(exe.db.schemas) <= 1:
                 return False
 
             query = f"DROP SCHEMA {schema}"
@@ -1511,6 +1517,10 @@ class DropClusterAction(Action):
             if cluster not in exe.db.clusters:
                 return False
 
+            # Avoid removing all clusters
+            if len(exe.db.clusters) <= 1:
+                return False
+
             query = f"DROP CLUSTER {cluster}"
             try:
                 exe.execute(query, http=Http.RANDOM)
@@ -1942,7 +1952,7 @@ class ZeroDowntimeDeployAction(Action):
         ):
             self.composition.up(mz_service, detach=True)
             self.composition.await_mz_deployment_status(
-                DeploymentStatus.READY_TO_PROMOTE, mz_service
+                DeploymentStatus.READY_TO_PROMOTE, mz_service, timeout=1800
             )
             self.composition.promote_mz(mz_service)
             self.composition.await_mz_deployment_status(

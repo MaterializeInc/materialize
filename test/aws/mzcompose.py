@@ -247,10 +247,10 @@ def test_s3tablesrest_connection(c: Composition, ctx: TestContext):
         customer_role = f"testdrive-{ctx.seed}-Customer"
         customer_role_arn = f"arn:aws:iam::{ctx.account_id}:role/{customer_role}"
         c.sql(
-            f"CREATE CONNECTION aws_assume_role TO AWS (ASSUME ROLE ARN '{customer_role_arn}')"
+            f"CREATE CONNECTION aws_assume_role_s3tablesrest TO AWS (ASSUME ROLE ARN '{customer_role_arn}')"
         )
         connection_id = c.sql_query(
-            "SELECT id FROM mz_connections WHERE name = 'aws_assume_role'"
+            "SELECT id FROM mz_connections WHERE name = 'aws_assume_role_s3tablesrest'"
         )[0][0]
 
         principal = c.sql_query(
@@ -289,7 +289,7 @@ def test_s3tablesrest_connection(c: Composition, ctx: TestContext):
         c.sleep(ctx.iam_propagation_seconds)
 
         c.sql(
-            f"CREATE CONNECTION s3tables TO ICEBERG CATALOG (CATALOG TYPE = 's3tablesrest', URL = 'https://s3tables.us-east-1.amazonaws.com/iceberg', WAREHOUSE = '{bucket['arn']}', AWS CONNECTION = aws_assume_role)"
+            f"CREATE CONNECTION s3tables TO ICEBERG CATALOG (CATALOG TYPE = 's3tablesrest', URL = 'https://s3tables.us-east-1.amazonaws.com/iceberg', WAREHOUSE = '{bucket['arn']}', AWS CONNECTION = aws_assume_role_s3tablesrest)"
         )
     finally:
         if bucket is not None:

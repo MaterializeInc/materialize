@@ -46,6 +46,7 @@ SERVICES = [
         additional_system_parameter_defaults={
             "unsafe_enable_unorchestrated_cluster_replicas": "true",
             "storage_dataflow_delay_sources_past_rehydration": "true",
+            "memory_limiter_interval": "0",
         },
         environment_extra=materialized_environment_extra,
         default_replication_factor=2,

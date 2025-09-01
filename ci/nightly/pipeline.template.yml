@@ -1362,7 +1362,7 @@ steps:
       depends_on: build-aarch64
       timeout_in_minutes: 1200
       concurrency: 1
-      concurrency_group: 'cloud-canary'
+      concurrency_group: 'mz-e2e'
       agents:
         queue: linux-aarch64-small
       plugins:
@@ -1375,7 +1375,7 @@ steps:
       depends_on: build-aarch64
       timeout_in_minutes: 1200
       concurrency: 1
-      concurrency_group: 'mz-e2e'
+      concurrency_group: 'cloud-canary'
       agents:
         # Requires real Mz access, CONFLUENT_CLOUD_DEVEX_KAFKA_USERNAME, etc.
         queue: linux-aarch64-small
@@ -1813,7 +1813,8 @@ steps:
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 90
         agents:
-          queue: hetzner-x86-64-8cpu-16gb
+          # Azure blob store uses more memory
+          queue: hetzner-x86-64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
