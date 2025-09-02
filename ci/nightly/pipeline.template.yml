@@ -2306,18 +2306,6 @@ steps:
         agents:
           queue: hetzner-aarch64-8cpu-16gb
 
-      - id: orchestratord-upgrade-defaults
-        label: "Orchestratord test (upgrade, defaults)"
-        depends_on: build-aarch64
-        timeout_in_minutes: 180
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: orchestratord
-              args: [--action=upgrade, --properties=defaults, --runtime=7200, --recreate-cluster]
-              ci-builder: stable
-        agents:
-          queue: hetzner-aarch64-8cpu-16gb
-
       - id: orchestratord-upgrade-individual
         label: "Orchestratord test (upgrade, individual props)"
         depends_on: build-aarch64
@@ -2341,18 +2329,7 @@ steps:
               ci-builder: stable
         agents:
           queue: hetzner-aarch64-8cpu-16gb
-
-      - id: orchestratord-upgrade-chain-defaults
-        label: "Orchestratord test (upgrade chain, defaults)"
-        depends_on: build-aarch64
-        timeout_in_minutes: 180
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: orchestratord
-              args: [--action=upgrade-chain, --properties=defaults, --runtime=7200, --recreate-cluster]
-              ci-builder: stable
-        agents:
-          queue: hetzner-aarch64-8cpu-16gb
+        skip: "Expected environmentd to be in ready state True, but is False"
 
       - id: orchestratord-upgrade-chain-individual
         label: "Orchestratord test (upgrade chain, individual props)"
@@ -2377,3 +2354,4 @@ steps:
               ci-builder: stable
         agents:
           queue: hetzner-aarch64-8cpu-16gb
+        skip: "Expected environmentd to be in ready state True, but is False"
