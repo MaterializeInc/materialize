@@ -42,9 +42,9 @@ use crate::plan::plan_utils::JoinSide;
 use crate::plan::scope::ScopeItem;
 use crate::plan::typeconv::CastContext;
 use crate::pure::error::{
-    CsrPurificationError, KafkaSinkPurificationError, KafkaSourcePurificationError,
-    LoadGeneratorSourcePurificationError, MySqlSourcePurificationError, PgSourcePurificationError,
-    SqlServerSourcePurificationError,
+    CsrPurificationError, IcebergSinkPurificationError, KafkaSinkPurificationError,
+    KafkaSourcePurificationError, LoadGeneratorSourcePurificationError,
+    MySqlSourcePurificationError, PgSourcePurificationError, SqlServerSourcePurificationError,
 };
 use crate::session::vars::VarError;
 
@@ -250,6 +250,7 @@ pub enum PlanError {
     PgSourcePurification(PgSourcePurificationError),
     KafkaSourcePurification(KafkaSourcePurificationError),
     KafkaSinkPurification(KafkaSinkPurificationError),
+    IcebergSinkPurification(IcebergSinkPurificationError),
     LoadGeneratorSourcePurification(LoadGeneratorSourcePurificationError),
     CsrPurification(CsrPurificationError),
     MySqlSourcePurification(MySqlSourcePurificationError),
@@ -350,6 +351,7 @@ impl PlanError {
             Self::LoadGeneratorSourcePurification(e) => e.detail(),
             Self::CsrPurification(e) => e.detail(),
             Self::KafkaSinkPurification(e) => e.detail(),
+            Self::IcebergSinkPurification(e) => e.detail(),
             Self::CreateReplicaFailStorageObjects { current_replica_count: current, internal_replica_count: internal, hypothetical_replica_count: target } => {
                 Some(format!(
                     "Currently have {} replica{}{}; command would result in {}",
@@ -762,6 +764,7 @@ impl fmt::Display for PlanError {
             Self::KafkaSourcePurification(e) => write!(f, "KAFKA source validation: {}", e),
             Self::LoadGeneratorSourcePurification(e) => write!(f, "LOAD GENERATOR source validation: {}", e),
             Self::KafkaSinkPurification(e) => write!(f, "KAFKA sink validation: {}", e),
+            Self::IcebergSinkPurification(e) => write!(f, "ICEBERG sink validation: {}", e),
             Self::CsrPurification(e) => write!(f, "CONFLUENT SCHEMA REGISTRY validation: {}", e),
             Self::MySqlSourcePurification(e) => write!(f, "MYSQL source validation: {}", e),
             Self::SqlServerSourcePurificationError(e) => write!(f, "SQL SERVER source validation: {}", e),
@@ -952,6 +955,12 @@ impl From<KafkaSourcePurificationError> for PlanError {
 impl From<KafkaSinkPurificationError> for PlanError {
     fn from(e: KafkaSinkPurificationError) -> Self {
         PlanError::KafkaSinkPurification(e)
+    }
+}
+
+impl From<IcebergSinkPurificationError> for PlanError {
+    fn from(e: IcebergSinkPurificationError) -> Self {
+        PlanError::IcebergSinkPurification(e)
     }
 }
 

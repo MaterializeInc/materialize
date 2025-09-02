@@ -67,26 +67,27 @@ use mz_sql_parser::ast::{
     CreateTypeStatement, CreateViewStatement, CreateWebhookSourceStatement, CsrConfigOption,
     CsrConfigOptionName, CsrConnection, CsrConnectionAvro, CsrConnectionProtobuf, CsrSeedProtobuf,
     CsvColumns, DeferredItemName, DocOnIdentifier, DocOnSchema, DropObjectsStatement,
-    DropOwnedStatement, Expr, Format, FormatSpecifier, Ident, IfExistsBehavior, IndexOption,
-    IndexOptionName, KafkaSinkConfigOption, KeyConstraint, LoadGeneratorOption,
-    LoadGeneratorOptionName, MaterializedViewOption, MaterializedViewOptionName, MySqlConfigOption,
-    MySqlConfigOptionName, NetworkPolicyOption, NetworkPolicyOptionName,
-    NetworkPolicyRuleDefinition, NetworkPolicyRuleOption, NetworkPolicyRuleOptionName,
-    PgConfigOption, PgConfigOptionName, ProtobufSchema, QualifiedReplica, RefreshAtOptionValue,
-    RefreshEveryOptionValue, RefreshOptionValue, ReplicaDefinition, ReplicaOption,
-    ReplicaOptionName, RoleAttribute, SetRoleVar, SourceErrorPolicy, SourceIncludeMetadata,
-    SqlServerConfigOption, SqlServerConfigOptionName, Statement, TableConstraint,
-    TableFromSourceColumns, TableFromSourceOption, TableFromSourceOptionName, TableOption,
-    TableOptionName, UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName,
-    UnresolvedSchemaName, Value, ViewDefinition, WithOptionValue,
+    DropOwnedStatement, Expr, Format, FormatSpecifier, IcebergSinkConfigOption, Ident,
+    IfExistsBehavior, IndexOption, IndexOptionName, KafkaSinkConfigOption, KeyConstraint,
+    LoadGeneratorOption, LoadGeneratorOptionName, MaterializedViewOption,
+    MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName, NetworkPolicyOption,
+    NetworkPolicyOptionName, NetworkPolicyRuleDefinition, NetworkPolicyRuleOption,
+    NetworkPolicyRuleOptionName, PgConfigOption, PgConfigOptionName, ProtobufSchema,
+    QualifiedReplica, RefreshAtOptionValue, RefreshEveryOptionValue, RefreshOptionValue,
+    ReplicaDefinition, ReplicaOption, ReplicaOptionName, RoleAttribute, SetRoleVar,
+    SourceErrorPolicy, SourceIncludeMetadata, SqlServerConfigOption, SqlServerConfigOptionName,
+    Statement, TableConstraint, TableFromSourceColumns, TableFromSourceOption,
+    TableFromSourceOptionName, TableOption, TableOptionName, UnresolvedDatabaseName,
+    UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value, ViewDefinition,
+    WithOptionValue,
 };
 use mz_sql_parser::ident;
 use mz_sql_parser::parser::StatementParseResult;
 use mz_storage_types::connections::inline::{ConnectionAccess, ReferencedConnection};
 use mz_storage_types::connections::{Connection, KafkaTopicOptions};
 use mz_storage_types::sinks::{
-    KafkaIdStyle, KafkaSinkConnection, KafkaSinkFormat, KafkaSinkFormatType, SinkEnvelope,
-    StorageSinkConnection,
+    IcebergSinkConnection, KafkaIdStyle, KafkaSinkConnection, KafkaSinkFormat, KafkaSinkFormatType,
+    SinkEnvelope, StorageSinkConnection,
 };
 use mz_storage_types::sources::encoding::{
     AvroEncoding, ColumnSpec, CsvEncoding, DataEncoding, ProtobufEncoding, RegexEncoding,
@@ -125,6 +126,7 @@ use crate::catalog::{
     CatalogCluster, CatalogDatabase, CatalogError, CatalogItem, CatalogItemType,
     CatalogRecordField, CatalogType, CatalogTypeDetails, ObjectType, SystemObjectType,
 };
+use crate::iceberg::IcebergSinkConfigOptionExtracted;
 use crate::kafka_util::{KafkaSinkConfigOptionExtracted, KafkaSourceConfigOptionExtracted};
 use crate::names::{
     Aug, CommentObjectId, DatabaseId, ObjectId, PartialItemName, QualifiedItemName,
@@ -3301,7 +3303,8 @@ generate_extracted_config!(
     CreateSinkOption,
     (Snapshot, bool),
     (PartitionStrategy, String),
-    (Version, u64)
+    (Version, u64),
+    (CommitInterval, Duration)
 );
 
 pub fn plan_create_sink(
@@ -3362,68 +3365,69 @@ fn plan_sink(
     }
     let desc = from.desc(&scx.catalog.resolve_full_name(from.name()))?;
     let key_indices = match &connection {
-        CreateSinkConnection::Kafka { key, .. } => {
-            if let Some(key) = key.clone() {
-                let key_columns = key
-                    .key_columns
-                    .into_iter()
-                    .map(normalize::column_name)
-                    .collect::<Vec<_>>();
-                let mut uniq = BTreeSet::new();
-                for col in key_columns.iter() {
-                    if !uniq.insert(col) {
-                        sql_bail!("duplicate column referenced in KEY: {}", col);
-                    }
+        CreateSinkConnection::Kafka { key: Some(key), .. }
+        | CreateSinkConnection::Iceberg { key: Some(key), .. } => {
+            let key_columns = key
+                .key_columns
+                .clone()
+                .into_iter()
+                .map(normalize::column_name)
+                .collect::<Vec<_>>();
+            let mut uniq = BTreeSet::new();
+            for col in key_columns.iter() {
+                if !uniq.insert(col) {
+                    sql_bail!("duplicate column referenced in KEY: {}", col);
                 }
-                let indices = key_columns
-                    .iter()
-                    .map(|col| -> anyhow::Result<usize> {
-                        let name_idx =
-                            desc.get_by_name(col)
-                                .map(|(idx, _type)| idx)
-                                .ok_or_else(|| {
-                                    sql_err!("column referenced in KEY does not exist: {}", col)
-                                })?;
-                        if desc.get_unambiguous_name(name_idx).is_none() {
-                            sql_err!("column referenced in KEY is ambiguous: {}", col);
-                        }
-                        Ok(name_idx)
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                let is_valid_key =
-                    desc.typ().keys.iter().any(|key_columns| {
-                        key_columns.iter().all(|column| indices.contains(column))
-                    });
-
-                if !is_valid_key && envelope == SinkEnvelope::Upsert {
-                    if key.not_enforced {
-                        scx.catalog
-                            .add_notice(PlanNotice::UpsertSinkKeyNotEnforced {
-                                key: key_columns.clone(),
-                                name: name.item.clone(),
-                            })
-                    } else {
-                        return Err(PlanError::UpsertSinkWithInvalidKey {
-                            name: from_name.full_name_str(),
-                            desired_key: key_columns.iter().map(|c| c.to_string()).collect(),
-                            valid_keys: desc
-                                .typ()
-                                .keys
-                                .iter()
-                                .map(|key| {
-                                    key.iter()
-                                        .map(|col| desc.get_name(*col).as_str().into())
-                                        .collect()
-                                })
-                                .collect(),
-                        });
-                    }
-                }
-                Some(indices)
-            } else {
-                None
             }
+            let indices = key_columns
+                .iter()
+                .map(|col| -> anyhow::Result<usize> {
+                    let name_idx =
+                        desc.get_by_name(col)
+                            .map(|(idx, _type)| idx)
+                            .ok_or_else(|| {
+                                sql_err!("column referenced in KEY does not exist: {}", col)
+                            })?;
+                    if desc.get_unambiguous_name(name_idx).is_none() {
+                        sql_err!("column referenced in KEY is ambiguous: {}", col);
+                    }
+                    Ok(name_idx)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let is_valid_key = desc
+                .typ()
+                .keys
+                .iter()
+                .any(|key_columns| key_columns.iter().all(|column| indices.contains(column)));
+
+            if !is_valid_key && envelope == SinkEnvelope::Upsert {
+                if key.not_enforced {
+                    scx.catalog
+                        .add_notice(PlanNotice::UpsertSinkKeyNotEnforced {
+                            key: key_columns.clone(),
+                            name: name.item.clone(),
+                        })
+                } else {
+                    return Err(PlanError::UpsertSinkWithInvalidKey {
+                        name: from_name.full_name_str(),
+                        desired_key: key_columns.iter().map(|c| c.to_string()).collect(),
+                        valid_keys: desc
+                            .typ()
+                            .keys
+                            .iter()
+                            .map(|key| {
+                                key.iter()
+                                    .map(|col| desc.get_name(*col).as_str().into())
+                                    .collect()
+                            })
+                            .collect(),
+                    });
+                }
+            }
+            Some(indices)
         }
+        CreateSinkConnection::Kafka { key: None, .. }
+        | CreateSinkConnection::Iceberg { key: None, .. } => None,
     };
 
     let headers_index = match &connection {
@@ -3497,6 +3501,19 @@ fn plan_sink(
             envelope,
             from.id(),
         )?,
+        CreateSinkConnection::Iceberg {
+            connection,
+            aws_connection,
+            options,
+            ..
+        } => iceberg_sink_builder(
+            scx,
+            connection,
+            aws_connection,
+            options,
+            relation_key_indices,
+            key_desc_and_indices,
+        )?,
     };
 
     let CreateSinkOptionExtracted {
@@ -3504,6 +3521,7 @@ fn plan_sink(
         version,
         partition_strategy: _,
         seen: _,
+        commit_interval: _,
     } = with_options.try_into()?;
 
     // WITH SNAPSHOT defaults to true
@@ -3662,6 +3680,67 @@ impl std::convert::TryFrom<Vec<CsrConfigOption<Aug>>> for CsrConfigOptionExtract
         }
         Ok(extracted)
     }
+}
+
+fn iceberg_sink_builder(
+    scx: &StatementContext,
+    catalog_connection: ResolvedItemName,
+    aws_connection: ResolvedItemName,
+    options: Vec<IcebergSinkConfigOption<Aug>>,
+    relation_key_indices: Option<Vec<usize>>,
+    key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
+) -> Result<StorageSinkConnection<ReferencedConnection>, PlanError> {
+    scx.require_feature_flag(&vars::ENABLE_ICEBERG_SINK)?;
+    let catalog_connection_item = scx.get_item_by_resolved_name(&catalog_connection)?;
+    let catalog_connection_id = catalog_connection_item.id();
+    let aws_connection_item = scx.get_item_by_resolved_name(&aws_connection)?;
+    let aws_connection_id = aws_connection_item.id();
+    if !matches!(
+        catalog_connection_item.connection()?,
+        Connection::IcebergCatalog(_)
+    ) {
+        sql_bail!(
+            "{} is not an iceberg catalog connection",
+            scx.catalog
+                .resolve_full_name(catalog_connection_item.name())
+                .to_string()
+                .quoted()
+        );
+    };
+
+    if !matches!(aws_connection_item.connection()?, Connection::Aws(_)) {
+        sql_bail!(
+            "{} is not an AWS connection",
+            scx.catalog
+                .resolve_full_name(aws_connection_item.name())
+                .to_string()
+                .quoted()
+        );
+    }
+
+    let IcebergSinkConfigOptionExtracted {
+        table,
+        namespace,
+        seen: _,
+    }: IcebergSinkConfigOptionExtracted = options.try_into()?;
+
+    let Some(table) = table else {
+        sql_bail!("Iceberg sink must specify TABLE");
+    };
+    let Some(namespace) = namespace else {
+        sql_bail!("Iceberg sink must specify NAMESPACE");
+    };
+
+    Ok(StorageSinkConnection::Iceberg(IcebergSinkConnection {
+        catalog_connection_id,
+        catalog_connection: catalog_connection_id,
+        aws_connection_id,
+        aws_connection: aws_connection_id,
+        table,
+        namespace,
+        relation_key_indices,
+        key_desc_and_indices,
+    }))
 }
 
 fn kafka_sink_builder(
