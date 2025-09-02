@@ -15,21 +15,22 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use differential_dataflow::consolidation::consolidate;
+use mz_compute_client::controller::error::InstanceMissing;
 use mz_compute_client::protocol::command::PeekTarget;
 use mz_compute_client::protocol::response::PeekResponse;
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::row::RowCollection;
 use mz_ore::cast::CastFrom;
 use mz_repr::Timestamp;
-use mz_repr::{RelationDesc, Row};
-use timely::progress::Antichain;
-use tokio::sync::oneshot;
-use uuid::Uuid;
-use mz_compute_client::controller::error::InstanceMissing;
 use mz_repr::global_id::TransientIdGen;
+use mz_repr::{RelationDesc, Row};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_storage_types::sources::Timeline;
 use mz_timestamp_oracle::TimestampOracle;
+use timely::progress::Antichain;
+use tokio::sync::oneshot;
+use uuid::Uuid;
+
 use crate::coord::peek::FastPathPlan;
 use crate::optimize::dataflows::ComputeInstanceSnapshot;
 
@@ -59,18 +60,24 @@ pub struct PeekClient {
 }
 
 impl PeekClient {
-
     ///////// todo: This is a temporary thing.
     // We should refactor stuff to make a snapshot optional, and rather than panicking in the
     // Controller when we try to do something with a non-existent collection, return a graceful
     // error, which we can handle in the peek sequencing code.
-    pub async fn snapshot(&self, compute_instance: ComputeInstanceId) -> Result<ComputeInstanceSnapshot, InstanceMissing> {
+    pub async fn snapshot(
+        &self,
+        compute_instance: ComputeInstanceId,
+    ) -> Result<ComputeInstanceSnapshot, InstanceMissing> {
         self.compute_instances
             .get(&compute_instance)
             .expect("/////// todo: return proper error")
             .call_sync(move |i| {
-                Ok(ComputeInstanceSnapshot::new_from_parts(compute_instance, i.snapshot()))
-            }).await
+                Ok(ComputeInstanceSnapshot::new_from_parts(
+                    compute_instance,
+                    i.snapshot(),
+                ))
+            })
+            .await
     }
 
     /// Acquire read holds on the required compute/storage collections.
