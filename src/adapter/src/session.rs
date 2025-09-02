@@ -765,11 +765,19 @@ impl<T: TimestampManipulation> Session<T> {
     ///
     /// If there is no such portal, returns `None`.
     ///
-    /// Warning: Don't use this mutable reference to change the meaning of the portal, i.e., the
-    /// `stmt` or `desc` fields. (Or if you do for some reason, then please increment
-    /// `Session::state_revision`, so that dependent objects will know to re-plan.
-    pub fn get_portal_unverified_mut(&mut self, portal_name: &str) -> Option<&mut Portal> {
-        self.portals.get_mut(portal_name)
+    /// Note: When using the returned `PortalRefMut`, there is no need to increment
+    /// `Session::state_revision`, because the portal's meaning is not changed.
+    pub fn get_portal_unverified_mut(&mut self, portal_name: &str) -> Option<PortalRefMut<'_>> {
+        self.portals.get_mut(portal_name).map(|p| PortalRefMut {
+            stmt: &p.stmt,
+            desc: &p.desc,
+            state_revision: &mut p.state_revision,
+            parameters: &mut p.parameters,
+            result_formats: &mut p.result_formats,
+            logging: &mut p.logging,
+            state: &mut p.state,
+            lifecycle_timestamps: &mut p.lifecycle_timestamps,
+        })
     }
 
     /// Creates and installs a new portal.
@@ -985,6 +993,29 @@ pub struct Portal {
     pub state: PortalState,
     /// Statement lifecycle timestamps coming from `mz-pgwire`.
     pub lifecycle_timestamps: Option<LifecycleTimestamps>,
+}
+
+/// A mutable reference to a portal, capturing its state and associated metadata. Importantly, it
+/// does _not_ give _mutable_ access to `stmt` and `desc`, which means that you do not need to
+/// increment `Session::state_revision` when modifying fields through a `PortalRefMut`, because the
+/// portal's meaning is not changed.
+pub struct PortalRefMut<'a> {
+    /// The statement that is bound to this portal.
+    pub stmt: &'a Option<Arc<Statement<Raw>>>,
+    /// The statement description.
+    pub desc: &'a StatementDesc,
+    /// The most recent state revision that has verified this portal.
+    pub state_revision: &'a mut StateRevision,
+    /// The bound values for the parameters in the prepared statement, if any.
+    pub parameters: &'a mut Params,
+    /// The desired output format for each column in the result set.
+    pub result_formats: &'a mut Vec<Format>,
+    /// A handle to metadata needed for statement logging.
+    pub logging: &'a mut Arc<QCell<PreparedStatementLoggingInfo>>,
+    /// The execution state of the portal.
+    pub state: &'a mut PortalState,
+    /// Statement lifecycle timestamps coming from `mz-pgwire`.
+    pub lifecycle_timestamps: &'a mut Option<LifecycleTimestamps>,
 }
 
 /// Points to a revision of catalog state and session state. When the current revisions are not the

@@ -158,7 +158,7 @@ impl Coordinator {
             let portal = session
                 .get_portal_unverified_mut(name)
                 .expect("known to exist");
-            portal.state_revision = new_revision;
+            *portal.state_revision = new_revision;
         }
         Ok(())
     }
