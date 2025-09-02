@@ -7,18 +7,31 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeMap;
-use std::sync::Arc;
+use crate::catalog::CatalogState;
+use crate::coord::peek::{FastPathPlan, PeekPlan, PlannedPeek};
+use crate::coord::timestamp_selection::TimestampDetermination;
+use crate::coord::{
+    Coordinator, ExplainContext, PeekStage, PeekStageCopyTo, PeekStageExplainPlan,
+    PeekStageExplainPushdown, PeekStageFinish, TargetCluster, catalog_serving,
+};
+use crate::explain::insights::PlanInsightsContext;
+use crate::optimize::Optimize;
+use crate::optimize::dataflows::DataflowBuilder;
+use crate::session::{Session, TransactionOps, TransactionStatus};
+use crate::{
+    AdapterError, AdapterNotice, CollectionIdBundle, ExecuteResponse, ReadHolds, SessionClient,
+    TimelineContext, TimestampContext, TimestampProvider, optimize,
+};
 use itertools::Either;
-use timely::progress::Antichain;
-use tracing::{debug, Span};
-use mz_adapter_types::dyncfgs::{CONSTRAINT_BASED_TIMESTAMP_SELECTION, PLAN_INSIGHTS_NOTICE_FAST_PATH_CLUSTERS_OPTIMIZE_DURATION};
+use mz_adapter_types::dyncfgs::{
+    CONSTRAINT_BASED_TIMESTAMP_SELECTION, PLAN_INSIGHTS_NOTICE_FAST_PATH_CLUSTERS_OPTIMIZE_DURATION,
+};
 use mz_adapter_types::timestamp_selection::ConstraintBasedTimestampSelection;
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::CollectionPlan;
 use mz_ore::soft_assert_or_log;
-use mz_repr::{GlobalId, Timestamp};
 use mz_repr::optimize::OverrideFrom;
+use mz_repr::{GlobalId, Timestamp};
 use mz_sql::catalog::CatalogCluster;
 use mz_sql::plan::{Plan, QueryWhen};
 use mz_sql::rbac;
@@ -27,19 +40,13 @@ use mz_sql::session::vars::IsolationLevel;
 use mz_sql_parser::ast::Statement;
 use mz_storage_types::sources::Timeline;
 use mz_transform::EmptyStatisticsOracle;
-use crate::{optimize, AdapterError, AdapterNotice, CollectionIdBundle, ExecuteResponse, ReadHolds, SessionClient, TimelineContext, TimestampContext, TimestampProvider};
-use crate::catalog::CatalogState;
-use crate::coord::{catalog_serving, Coordinator, ExplainContext, PeekStage, PeekStageCopyTo, PeekStageExplainPlan, PeekStageExplainPushdown, PeekStageFinish, TargetCluster};
-use crate::coord::peek::{FastPathPlan, PeekPlan, PlannedPeek};
-use crate::coord::timestamp_selection::TimestampDetermination;
-use crate::explain::insights::PlanInsightsContext;
-use crate::optimize::dataflows::DataflowBuilder;
-use crate::optimize::Optimize;
-use crate::session::{Session, TransactionOps, TransactionStatus};
+use std::collections::BTreeMap;
+use std::sync::Arc;
+use timely::progress::Antichain;
+use tracing::{Span, debug};
 ////// todo: separate crate imports
 
 impl SessionClient {
-
     pub(crate) async fn try_frontend_peek_inner(
         &mut self,
         portal_name: &str,
@@ -71,8 +78,8 @@ impl SessionClient {
             Some(stmt) => stmt,
             None => {
                 println!("try_frontend_peek_inner succeeded on an empty query");
-                return Ok(Some(ExecuteResponse::EmptyQuery))
-            },
+                return Ok(Some(ExecuteResponse::EmptyQuery));
+            }
         };
 
         ////// todo: metrics .query_total  (but only if we won't bail out somewhere below to the old code)
@@ -90,8 +97,8 @@ impl SessionClient {
             Plan::Select(select_plan) => select_plan,
             _ => {
                 println!("Bailing out from try_frontend_peek_inner, because it's not a SELECT");
-                return Ok(None)
-            },
+                return Ok(None);
+            }
         };
         let explain_ctx = ExplainContext::None; // EXPLAIN won't be handled here, only SELECT
 
@@ -105,27 +112,22 @@ impl SessionClient {
             // Use the current transaction's cluster.
             Some(cluster_id) => TargetCluster::Transaction(cluster_id),
             // If there isn't a current cluster set for a transaction, then try to auto route.
-            None => {
-                crate::coord::catalog_serving::auto_run_on_catalog_server(
-                    &conn_catalog,
-                    &session,
-                    &plan,
-                )
-            }
+            None => crate::coord::catalog_serving::auto_run_on_catalog_server(
+                &conn_catalog,
+                &session,
+                &plan,
+            ),
         };
-        let (target_cluster_id, target_cluster_name) =
-        {
+        let (target_cluster_id, target_cluster_name) = {
             let cluster = catalog.resolve_target_cluster(target_cluster, &session)?;
             (cluster.id.clone(), cluster.name.clone()) /////// todo: or just refs instead of clones?
         };
 
         ////// todo: statement logging: set_statement_execution_cluster
 
-        if let Err(e) = catalog_serving::check_cluster_restrictions(
-            &target_cluster_name,
-            &conn_catalog,
-            &plan,
-        ) {
+        if let Err(e) =
+            catalog_serving::check_cluster_restrictions(&target_cluster_name, &conn_catalog, &plan)
+        {
             return Err(e);
         }
 
@@ -201,8 +203,7 @@ impl SessionClient {
         // - whether it include indexes
         // - whether its transitive through views?
         let source_ids = select_plan.source.depends_on();
-        let mut timeline_context = catalog
-            .validate_timeline_context(source_ids.iter().copied())?;
+        let mut timeline_context = catalog.validate_timeline_context(source_ids.iter().copied())?;
         if matches!(timeline_context, TimelineContext::TimestampIndependent)
             && select_plan.source.contains_temporal()?
         {
@@ -231,13 +232,15 @@ impl SessionClient {
         let oracle_read_ts = match timeline {
             Some(timeline) if needs_linearized_read_ts => {
                 ////// todo: Does session.get_timestamp_oracle give us the
-                let oracle = self.peek_client().oracles.get(&timeline).expect("/////// todo");
+                let oracle = self
+                    .peek_client()
+                    .oracles
+                    .get(&timeline)
+                    .expect("/////// todo");
                 let oracle_read_ts = oracle.read_ts().await;
                 Some(oracle_read_ts)
             }
-            Some(_) | None => {
-                None
-            }
+            Some(_) | None => None,
         };
 
         // # From peek_real_time_recency
@@ -246,7 +249,8 @@ impl SessionClient {
         let vars = session.vars();
         if vars.real_time_recency()
             && vars.transaction_isolation() == &IsolationLevel::StrictSerializable
-            && !session.contains_read_timestamp() {
+            && !session.contains_read_timestamp()
+        {
             println!("Bailing out from try_frontend_peek_inner, because of real time recency");
             return Ok(None);
         }
@@ -264,7 +268,9 @@ impl SessionClient {
 
         // ## From sequence_peek_timestamp
 
-        let in_immediate_multi_stmt_txn = session.transaction().in_immediate_multi_stmt_txn(&select_plan.when);
+        let in_immediate_multi_stmt_txn = session
+            .transaction()
+            .in_immediate_multi_stmt_txn(&select_plan.when);
 
         // Fetch or generate a timestamp for this query and what the read holds would be if we need to set
         // them.
@@ -279,7 +285,9 @@ impl SessionClient {
             _ => {
                 let determine_bundle = if in_immediate_multi_stmt_txn {
                     ////////// todo: needs timedomain_for, which needs DataflowBuilder / index oracle / sufficient_collections
-                    println!("Bailing out from try_frontend_peek_inner, because of in_immediate_multi_stmt_txn");
+                    println!(
+                        "Bailing out from try_frontend_peek_inner, because of in_immediate_multi_stmt_txn"
+                    );
                     return Ok(None);
                 } else {
                     // If not in a transaction, use the source.
@@ -346,7 +354,9 @@ impl SessionClient {
         // expensive optimizations.
         let timestamp_context = determination.timestamp_context.clone();
         if session.vars().enable_session_cardinality_estimates() {
-            tracing::error!("Bailing out from try_frontend_peek_inner, because of enable_session_cardinality_estimates");
+            tracing::error!(
+                "Bailing out from try_frontend_peek_inner, because of enable_session_cardinality_estimates"
+            );
             return Ok(None);
         }
         let stats = Box::new(EmptyStatisticsOracle);
@@ -367,7 +377,8 @@ impl SessionClient {
                     // HIR ⇒ MIR lowering and MIR optimization (local)
                     let local_mir_plan = optimizer.catch_unwind_optimize(raw_expr)?;
                     // Attach resolved context required to continue the pipeline.
-                    let local_mir_plan = local_mir_plan.resolve(timestamp_context.clone(), &session_meta, stats);
+                    let local_mir_plan =
+                        local_mir_plan.resolve(timestamp_context.clone(), &session_meta, stats);
                     // MIR optimization (global), MIR ⇒ LIR lowering, and LIR optimization (global)
                     let global_lir_plan = optimizer.catch_unwind_optimize(local_mir_plan)?;
 
@@ -378,7 +389,9 @@ impl SessionClient {
                     Ok::<_, AdapterError>((global_lir_plan, optimization_finished_at))
                 })
             },
-        ).await.expect("///////// todo: handle JoinError")?;
+        )
+        .await
+        .expect("///////// todo: handle JoinError")?;
 
         // # From peek_finish
 
@@ -404,7 +417,9 @@ impl SessionClient {
                 p
             }
             PeekPlan::FastPath(FastPathPlan::PeekPersist(_, _, _)) => {
-                println!("Bailing out from try_frontend_peek_inner, because it's a Persist fast path peek");
+                println!(
+                    "Bailing out from try_frontend_peek_inner, because it's a Persist fast path peek"
+                );
                 return Ok(None);
             }
         };
@@ -414,7 +429,8 @@ impl SessionClient {
         let max_result_size = catalog.system_config().max_result_size();
 
         // Implement the peek, and capture the response.
-        let resp = self.peek_client()
+        let resp = self
+            .peek_client()
             .implement_fast_path_peek_plan(
                 fast_path_plan,
                 determination.timestamp_context.timestamp_or_default(),
@@ -441,22 +457,33 @@ impl SessionClient {
 
 struct FrontendPeekTimestampProvider<'a> {
     session_client: &'a SessionClient,
-    catalog_state: &'a CatalogState
+    catalog_state: &'a CatalogState,
 }
 
 /////// todo: reorganize the traits:
 // - There are things that are not possible and not needed to implement here.
 // - There are asyncness mismatches.
 impl TimestampProvider for FrontendPeekTimestampProvider<'_> {
-    fn compute_read_frontier(&self, _instance: ComputeInstanceId, _id: GlobalId) -> Antichain<Timestamp> {
+    fn compute_read_frontier(
+        &self,
+        _instance: ComputeInstanceId,
+        _id: GlobalId,
+    ) -> Antichain<Timestamp> {
         panic!(); /////// todo: hopefully not needed?
     }
 
-    fn compute_write_frontier(&self, _instance: ComputeInstanceId, _id: GlobalId) -> Antichain<Timestamp> {
+    fn compute_write_frontier(
+        &self,
+        _instance: ComputeInstanceId,
+        _id: GlobalId,
+    ) -> Antichain<Timestamp> {
         panic!(); /////// todo: hopefully not needed?
     }
 
-    fn storage_frontiers(&self, _ids: Vec<GlobalId>) -> Vec<(GlobalId, Antichain<Timestamp>, Antichain<Timestamp>)> {
+    fn storage_frontiers(
+        &self,
+        _ids: Vec<GlobalId>,
+    ) -> Vec<(GlobalId, Antichain<Timestamp>, Antichain<Timestamp>)> {
         panic!(); /////// todo: hopefully not needed?
     }
 
@@ -506,13 +533,7 @@ impl FrontendPeekTimestampProvider<'_> {
         timeline_context: &TimelineContext,
         oracle_read_ts: Option<Timestamp>,
         real_time_recency_ts: Option<Timestamp>,
-    ) -> Result<
-        (
-            TimestampDetermination<Timestamp>,
-            ReadHolds<Timestamp>,
-        ),
-        AdapterError,
-    > {
+    ) -> Result<(TimestampDetermination<Timestamp>, ReadHolds<Timestamp>), AdapterError> {
         let constraint_based = ConstraintBasedTimestampSelection::from_str(
             &CONSTRAINT_BASED_TIMESTAMP_SELECTION
                 .get(self.catalog_state().system_config().dyncfgs()),

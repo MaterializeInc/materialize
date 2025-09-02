@@ -51,7 +51,7 @@ use crate::catalog::Catalog;
 use crate::command::{
     AuthResponse, CatalogDump, CatalogSnapshot, Command, ExecuteResponse, Response,
 };
-use crate::coord::{read_policy, Coordinator, ExecuteContextExtra};
+use crate::coord::{Coordinator, ExecuteContextExtra, read_policy};
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
 use crate::optimize::dataflows::{EvalTime, ExprPrepStyle};
@@ -1057,7 +1057,9 @@ impl SessionClient {
         // We need to snatch the session out of self here, because if we just had a reference to it,
         // then we couldn't do other things with self.
         let mut session = self.session.take().expect("SessionClient invariant");
-        let r = self.try_frontend_peek_inner(portal_name, &mut session).await;
+        let r = self
+            .try_frontend_peek_inner(portal_name, &mut session)
+            .await;
         // Always put it back, even if we got an error.
         self.session = Some(session);
         r
