@@ -1,9 +1,9 @@
-
+{{- $console := .Get "console" | default "console" -}}
 1. Find your console service name.
 
    ```shell
    MZ_SVC_CONSOLE=$(kubectl -n materialize-environment get svc \
-     -o custom-columns="NAME:.metadata.name" --no-headers | grep console)
+     -o custom-columns="NAME:.metadata.name" --no-headers | grep {{$console}})
    echo $MZ_SVC_CONSOLE
    ```
 
