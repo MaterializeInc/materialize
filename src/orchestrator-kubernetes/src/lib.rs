@@ -583,10 +583,14 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         // `StatefulSet` is created is not permitted by Kubernetes, and we're
         // not yet smart enough to handle deleting and recreating the
         // `StatefulSet`.
-        let match_labels = btreemap! {
+        let mut match_labels = btreemap! {
             "environmentd.materialize.cloud/namespace".into() => self.namespace.clone(),
             "environmentd.materialize.cloud/service-id".into() => id.into(),
         };
+        for (key, value) in &self.config.service_labels {
+            match_labels.insert(key.clone(), value.clone());
+        }
+
         let mut labels = match_labels.clone();
         for (key, value) in labels_in {
             labels.insert(self.make_label_key(&key), value);
@@ -599,9 +603,6 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 format!("environmentd.materialize.cloud/port-{}", port.name),
                 "true".into(),
             );
-        }
-        for (key, value) in &self.config.service_labels {
-            labels.insert(key.clone(), value.clone());
         }
         let mut limits = BTreeMap::new();
         let mut requests = BTreeMap::new();
