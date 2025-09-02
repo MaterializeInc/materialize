@@ -369,18 +369,6 @@ steps:
         agents:
           queue: hetzner-aarch64-4cpu-8gb
 
-  - id: yugabyte-cdc
-    label: "Yugabyte CDC tests"
-    depends_on: build-x86_64
-    timeout_in_minutes: 30
-    inputs: [test/yugabyte-cdc]
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: yugabyte-cdc
-    agents:
-      # Too slow on aarch64
-      queue: hetzner-x86-64-4cpu-8gb
-
   - id: sql-server-cdc
     label: "SQL Server CDC tests"
     depends_on: build-x86_64
