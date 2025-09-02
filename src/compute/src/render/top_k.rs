@@ -71,12 +71,12 @@ where
             // integrated with: 1. The intra-timestamp thinning step in monotonic top-k, e.g., by
             // adding an error output there; 2. The validating reduction on basic top-k
             // (database-issues#7108).
-            let limit_err = match &top_k_plan {
+            let limit_expr = match &top_k_plan {
                 TopKPlan::MonotonicTop1(MonotonicTop1Plan { .. }) => None,
                 TopKPlan::MonotonicTopK(MonotonicTopKPlan { limit, .. }) => limit.as_ref(),
                 TopKPlan::Basic(BasicTopKPlan { limit, .. }) => limit.as_ref(),
             };
-            if let Some(expr) = limit_err {
+            if let Some(expr) = limit_expr {
                 // Produce errors from limit selectors that error or are
                 // negative, and nothing from limit selectors that do
                 // not. Note that even if expr.could_error() is false,
@@ -553,32 +553,34 @@ where
     );
 
     // Eagerly evaluate literal limits.
-    let literal_limit = limit
-        .as_ref()
-        .and_then(|l| l.as_literal_int64())
-        .map(Into::into);
+    let limit = limit.map(|l| match l.as_literal() {
+        Some(Ok(Datum::Null)) => Ok(Diff::MAX),
+        Some(Ok(d)) => Ok(Diff::from(d.unwrap_int64())),
+        _ => Err(l),
+    });
 
     let reduced = arranged.mz_reduce_abelian::<_, Bu, Tr>("Reduced TopK input", {
         move |mut hash_key, source, target: &mut Vec<(Tr::ValOwn, Diff)>| {
             // Unpack the limit, either into an integer literal or an expression to evaluate.
-            let limit: Option<Diff> = literal_limit.or_else(|| {
-                limit.as_ref().map(|l| {
+            let limit = match &limit {
+                Some(Ok(lit)) => Some(*lit),
+                Some(Err(expr)) => {
                     // Unpack `key` after skipping the hash and determine the limit.
                     // If the limit errors, use a zero limit; errors are surfaced elsewhere.
                     let temp_storage = mz_repr::RowArena::new();
                     let _hash = hash_key.next();
                     let mut key_datums = datum_vec.borrow();
                     key_datums.extend(hash_key);
-                    let datum_limit = l
+                    let datum_limit = expr
                         .eval(&key_datums, &temp_storage)
                         .unwrap_or(Datum::Int64(0));
-                    if datum_limit == Datum::Null {
-                        Diff::MAX
-                    } else {
-                        datum_limit.unwrap_int64().into()
-                    }
-                })
-            });
+                    Some(match datum_limit {
+                        Datum::Null => Diff::MAX,
+                        d => Diff::from(d.unwrap_int64()),
+                    })
+                }
+                None => None,
+            };
 
             if let Some(err) = Tr::ValOwn::into_error() {
                 for (datums, diff) in source.iter() {
