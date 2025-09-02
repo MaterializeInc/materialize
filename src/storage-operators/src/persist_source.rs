@@ -62,7 +62,7 @@ use timely::progress::Timestamp as TimelyTimestamp;
 use timely::progress::timestamp::PathSummary;
 use timely::scheduling::Activator;
 use tokio::sync::mpsc::UnboundedSender;
-use tracing::trace;
+use tracing::{error, trace};
 
 use crate::metrics::BackpressureMetrics;
 
@@ -611,7 +611,7 @@ impl PendingWork {
                             // Earlier we decided this Part doesn't need to be fetched, but to
                             // audit our logic we fetched it any way. If the MFP returned data it
                             // means our earlier decision to not fetch this part was incorrect.
-                            if let Some(_stats) = &is_filter_pushdown_audit {
+                            if let Some(stats) = &is_filter_pushdown_audit {
                                 // NB: The tag added by this scope is used for alerting. The panic
                                 // message may be changed arbitrarily, but the tag key and val must
                                 // stay the same.
@@ -621,7 +621,13 @@ impl PendingWork {
                                             .set_tag("alert_id", "persist_pushdown_audit_violation")
                                     },
                                     || {
-                                        // TODO: include more (redacted) information here.
+                                        error!(
+                                            ?stats,
+                                            name,
+                                            ?mfp,
+                                            ?result,
+                                            "persist filter pushdown correctness violation!"
+                                        );
                                         panic!(
                                             "persist filter pushdown correctness violation! {}",
                                             name
