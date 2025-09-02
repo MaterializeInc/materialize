@@ -6,6 +6,7 @@ menu:
     parent: "postgresql"
     name: "Neon"
     identifier: "pg-neon"
+    weight: 35
 ---
 
 {{< tip >}}

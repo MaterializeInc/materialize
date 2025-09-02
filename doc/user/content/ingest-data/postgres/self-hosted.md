@@ -6,8 +6,9 @@ aliases:
 menu:
   main:
     parent: "postgresql"
-    name: "Self-hosted"
+    name: "Self-hosted PostgreSQL"
     identifier: "pg-self-hosted"
+    weight: 50
 ---
 
 This page shows you how to stream data from a self-hosted PostgreSQL database to

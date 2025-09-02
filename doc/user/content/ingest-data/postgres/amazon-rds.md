@@ -11,6 +11,7 @@ menu:
     parent: "postgresql"
     name: "Amazon RDS"
     identifier: "pg-amazon-rds"
+    weight: 20
 ---
 
 This page shows you how to stream data from [Amazon RDS for PostgreSQL](https://aws.amazon.com/rds/postgresql/)
