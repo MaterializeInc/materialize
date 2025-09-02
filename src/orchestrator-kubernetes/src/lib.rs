@@ -570,6 +570,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             replicas_selector,
             disk_limit,
             node_selector,
+            clusterd_malloc_conf,
         }: ServiceConfig,
     ) -> Result<Box<dyn Service>, anyhow::Error> {
         // This is extremely cheap to clone, so just look into the lock once.
@@ -974,15 +975,26 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             }]
         });
 
-        let env = if self.config.coverage {
-            Some(vec![EnvVar {
+        let mut env = Vec::new();
+
+        if self.config.coverage {
+            env.push(EnvVar {
                 name: "LLVM_PROFILE_FILE".to_string(),
                 value: Some(format!("/coverage/{}-%p-%9m%c.profraw", self.namespace)),
                 ..Default::default()
-            }])
-        } else {
-            None
-        };
+            });
+        }
+
+        // Configure jemalloc's MALLOC_CONF environment symbol.
+        if let Some(malloc_conf) = clusterd_malloc_conf {
+            env.push(EnvVar {
+                name: "MALLOC_CONF".to_string(),
+                value: Some(malloc_conf),
+                ..Default::default()
+            });
+        }
+
+        let env = (!env.is_empty()).then_some(env);
 
         let mut volume_mounts = vec![];
 

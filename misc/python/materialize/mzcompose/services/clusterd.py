@@ -42,6 +42,7 @@ class Clusterd(Service):
             "MZ_SOFT_ASSERTIONS=1",
             "MZ_EAT_MY_DATA=1",
             f"CLUSTERD_PERSIST_PUBSUB_URL=http://{mz_service}:6879",
+            "MALLOC_CONF=thp:always",
             *environment_extra,
         ]
 
