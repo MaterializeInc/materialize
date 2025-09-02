@@ -96,9 +96,18 @@ def run(args: argparse.Namespace):
         dev=args.dev,
         cluster=args.kind_cluster_name,
     )
+
+    try:
+        subprocess.check_output(
+            ["helm", "status", "orchestratord", f"--namespace={args.namespace}"]
+        )
+        command = "upgrade"
+    except:
+        command = "install"
+
     helm_args = [
         "helm",
-        "install",
+        command,
         "orchestratord",
         "misc/helm-charts/operator",
         "--atomic",
