@@ -1095,6 +1095,14 @@ class FlipFlagsAction(Action):
         self.flags_with_values["persist_encoding_enable_dictionary"] = (
             BOOLEAN_FLAG_VALUES
         )
+        self.flags_with_values["persist_stats_audit_percent"] = [
+            "0",
+            "1",
+            "2",
+            "10",
+            "100",
+        ]
+        self.flags_with_values["persist_stats_audit_panic"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["persist_validate_part_bounds_on_read"] = (
             BOOLEAN_FLAG_VALUES
         )
@@ -1198,7 +1206,6 @@ class FlipFlagsAction(Action):
             "persist_blob_operation_attempt_timeout",
             "persist_blob_connect_timeout",
             "persist_blob_read_timeout",
-            "persist_stats_audit_percent",
             "persist_stats_collection_enabled",
             "persist_stats_filter_enabled",
             "persist_stats_budget_bytes",
