@@ -158,3 +158,31 @@ enum ProtoSqlServerCertificateValidationPolicy {
   SQL_SERVER_VERIFY_SYSTEM = 1;
   SQL_SERVER_VERIFY_CA = 2;
 }
+
+message ProtoRestIcebergCatalog {
+  string_or_secret.ProtoStringOrSecret credential = 1;
+  optional string scope = 2;
+  optional string warehouse = 3;
+}
+
+message ProtoS3TablesRestIcebergCatalog {
+  aws.ProtoAwsConnectionReference aws_connection = 1;
+  string warehouse = 2;
+}
+
+enum ProtoIcebergCatalogType {
+  ICEBERG_CATALOG_TYPE_REST = 0;
+  ICEBERG_CATALOG_TYPE_S3_TABLES_REST = 1;
+}
+
+message ProtoIcebergCatalogImpl {
+  oneof kind {
+    ProtoRestIcebergCatalog rest = 1;
+    ProtoS3TablesRestIcebergCatalog s3_tables_rest = 2;
+  }
+}
+
+message ProtoIcebergCatalogConnection {
+  ProtoIcebergCatalogImpl catalog = 1;
+  mz_repr.url.ProtoUrl uri = 2;
+}

@@ -149,6 +149,10 @@ mz_functions
 BASE TABLE
 materialize
 mz_catalog
+mz_iceberg_sinks
+BASE TABLE
+materialize
+mz_catalog
 mz_index_columns
 BASE TABLE
 materialize

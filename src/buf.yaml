@@ -75,6 +75,8 @@ breaking:
     - storage-types/src/connections/string_or_secret.proto
     # reason: does currently not require backward-compatibility
     - storage-types/src/parameters.proto
+    # reason: temporarily calm warn of renamed fields
+    - storage-types/src/sinks.proto
 lint:
   use:
     - DEFAULT

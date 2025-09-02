@@ -211,6 +211,7 @@ impl RustType<ProtoStorageSinkDesc> for StorageSinkDesc<CollectionMetadata, mz_r
 
 #[derive(Arbitrary, Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum SinkEnvelope {
+    Append,
     Debezium,
     Upsert,
 }
@@ -220,6 +221,7 @@ impl RustType<ProtoSinkEnvelope> for SinkEnvelope {
         use proto_sink_envelope::Kind;
         ProtoSinkEnvelope {
             kind: Some(match self {
+                SinkEnvelope::Append => Kind::Append(()),
                 SinkEnvelope::Debezium => Kind::Debezium(()),
                 SinkEnvelope::Upsert => Kind::Upsert(()),
             }),
@@ -232,6 +234,7 @@ impl RustType<ProtoSinkEnvelope> for SinkEnvelope {
             .kind
             .ok_or_else(|| TryFromProtoError::missing_field("ProtoSinkEnvelope::kind"))?;
         Ok(match kind {
+            Kind::Append(()) => SinkEnvelope::Append,
             Kind::Debezium(()) => SinkEnvelope::Debezium,
             Kind::Upsert(()) => SinkEnvelope::Upsert,
         })
@@ -241,6 +244,7 @@ impl RustType<ProtoSinkEnvelope> for SinkEnvelope {
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum StorageSinkConnection<C: ConnectionAccess = InlinedConnection> {
     Kafka(KafkaSinkConnection<C>),
+    Iceberg(IcebergSinkConnection<C>),
 }
 
 impl<C: ConnectionAccess> StorageSinkConnection<C> {
@@ -260,6 +264,17 @@ impl<C: ConnectionAccess> StorageSinkConnection<C> {
             (StorageSinkConnection::Kafka(s), StorageSinkConnection::Kafka(o)) => {
                 s.alter_compatible(id, o)?
             }
+            (StorageSinkConnection::Iceberg(s), StorageSinkConnection::Iceberg(o)) => {
+                s.alter_compatible(id, o)?
+            }
+            _ => {
+                tracing::warn!(
+                    "StorageSinkConnection incompatible:\nself:\n{:#?}\n\nother\n{:#?}",
+                    self,
+                    other
+                );
+                return Err(AlterError { id });
+            }
         }
 
         Ok(())
@@ -272,6 +287,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<StorageSinkConnection, R>
     fn into_inline_connection(self, r: R) -> StorageSinkConnection {
         match self {
             Self::Kafka(conn) => StorageSinkConnection::Kafka(conn.into_inline_connection(r)),
+            Self::Iceberg(conn) => StorageSinkConnection::Iceberg(conn.into_inline_connection(r)),
         }
     }
 }
@@ -283,6 +299,7 @@ impl RustType<ProtoStorageSinkConnection> for StorageSinkConnection {
         ProtoStorageSinkConnection {
             kind: Some(match self {
                 Self::Kafka(conn) => KafkaV2(conn.into_proto()),
+                Self::Iceberg(conn) => Iceberg(conn.into_proto()),
             }),
         }
     }
@@ -295,6 +312,7 @@ impl RustType<ProtoStorageSinkConnection> for StorageSinkConnection {
 
         Ok(match kind {
             KafkaV2(proto) => Self::Kafka(proto.into_rust()?),
+            Iceberg(proto) => Self::Iceberg(proto.into_rust()?),
         })
     }
 }
@@ -305,6 +323,10 @@ impl<C: ConnectionAccess> StorageSinkConnection<C> {
         use StorageSinkConnection::*;
         match self {
             Kafka(KafkaSinkConnection { connection_id, .. }) => Some(*connection_id),
+            Iceberg(IcebergSinkConnection {
+                catalog_connection_id: connection_id,
+                ..
+            }) => Some(*connection_id),
         }
     }
 
@@ -313,23 +335,20 @@ impl<C: ConnectionAccess> StorageSinkConnection<C> {
         use StorageSinkConnection::*;
         match self {
             Kafka(_) => "kafka",
+            Iceberg(_) => "iceberg",
         }
     }
 }
 
-impl RustType<proto_kafka_sink_connection_v2::ProtoKeyDescAndIndices>
-    for (RelationDesc, Vec<usize>)
-{
-    fn into_proto(&self) -> proto_kafka_sink_connection_v2::ProtoKeyDescAndIndices {
-        proto_kafka_sink_connection_v2::ProtoKeyDescAndIndices {
+impl RustType<ProtoKeyDescAndIndices> for (RelationDesc, Vec<usize>) {
+    fn into_proto(&self) -> ProtoKeyDescAndIndices {
+        ProtoKeyDescAndIndices {
             desc: Some(self.0.into_proto()),
             indices: self.1.into_proto(),
         }
     }
 
-    fn from_proto(
-        proto: proto_kafka_sink_connection_v2::ProtoKeyDescAndIndices,
-    ) -> Result<Self, TryFromProtoError> {
+    fn from_proto(proto: ProtoKeyDescAndIndices) -> Result<Self, TryFromProtoError> {
         Ok((
             proto
                 .desc
@@ -339,16 +358,14 @@ impl RustType<proto_kafka_sink_connection_v2::ProtoKeyDescAndIndices>
     }
 }
 
-impl RustType<proto_kafka_sink_connection_v2::ProtoRelationKeyIndicesVec> for Vec<usize> {
-    fn into_proto(&self) -> proto_kafka_sink_connection_v2::ProtoRelationKeyIndicesVec {
-        proto_kafka_sink_connection_v2::ProtoRelationKeyIndicesVec {
+impl RustType<ProtoRelationKeyIndicesVec> for Vec<usize> {
+    fn into_proto(&self) -> ProtoRelationKeyIndicesVec {
+        ProtoRelationKeyIndicesVec {
             relation_key_indices: self.into_proto(),
         }
     }
 
-    fn from_proto(
-        proto: proto_kafka_sink_connection_v2::ProtoRelationKeyIndicesVec,
-    ) -> Result<Self, TryFromProtoError> {
+    fn from_proto(proto: ProtoRelationKeyIndicesVec) -> Result<Self, TryFromProtoError> {
         proto.relation_key_indices.into_rust()
     }
 }
@@ -1034,3 +1051,150 @@ impl RustType<ProtoS3UploadInfo> for S3UploadInfo {
 
 pub const MIN_S3_SINK_FILE_SIZE: ByteSize = ByteSize::mb(16);
 pub const MAX_S3_SINK_FILE_SIZE: ByteSize = ByteSize::gb(4);
+
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct IcebergSinkConnection<C: ConnectionAccess = InlinedConnection> {
+    pub catalog_connection_id: CatalogItemId,
+    pub catalog_connection: C::IcebergCatalog,
+    pub aws_connection_id: CatalogItemId,
+    pub aws_connection: C::Aws,
+    /// A natural key of the sinked relation (view or source).
+    pub relation_key_indices: Option<Vec<usize>>,
+    /// The user-specified key for the sink.
+    pub key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
+    pub namespace: String,
+    pub table: String,
+}
+
+impl RustType<ProtoIcebergSinkConnection> for IcebergSinkConnection {
+    fn into_proto(&self) -> ProtoIcebergSinkConnection {
+        ProtoIcebergSinkConnection {
+            catalog_connection_id: Some(self.catalog_connection_id.into_proto()),
+            iceberg_connection: Some(self.catalog_connection.into_proto()),
+            aws_connection_id: Some(self.aws_connection_id.into_proto()),
+            aws_connection: Some(self.aws_connection.into_proto()),
+            key_desc_and_indices: self.key_desc_and_indices.into_proto(),
+            relation_key_indices: self.relation_key_indices.into_proto(),
+            namespace: self.namespace.clone(),
+            table: self.table.clone(),
+        }
+    }
+
+    fn from_proto(proto: ProtoIcebergSinkConnection) -> Result<Self, TryFromProtoError> {
+        Ok(IcebergSinkConnection {
+            catalog_connection_id: proto
+                .catalog_connection_id
+                .into_rust_if_some("ProtoIcebergSinkConnection::catalog_connection_id")?,
+            catalog_connection: proto
+                .iceberg_connection
+                .into_rust_if_some("ProtoIcebergSinkConnection::iceberg_connection")?,
+            aws_connection_id: proto
+                .aws_connection_id
+                .into_rust_if_some("ProtoIcebergSinkConnection::aws_connection_id")?,
+            aws_connection: proto
+                .aws_connection
+                .into_rust_if_some("ProtoIcebergSinkConnection::aws_connection")?,
+            key_desc_and_indices: proto.key_desc_and_indices.into_rust()?,
+            relation_key_indices: proto.relation_key_indices.into_rust()?,
+            namespace: proto.namespace,
+            table: proto.table,
+        })
+    }
+}
+
+impl<C: ConnectionAccess> IcebergSinkConnection<C> {
+    /// Determines if `self` is compatible with another `StorageSinkConnection`,
+    /// in such a way that it is possible to turn `self` into `other` through a
+    /// valid series of transformations (e.g. no transformation or `ALTER
+    /// CONNECTION`).
+    pub fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
+        if self == other {
+            return Ok(());
+        }
+        let IcebergSinkConnection {
+            catalog_connection_id: connection_id,
+            catalog_connection,
+            aws_connection_id,
+            aws_connection,
+            relation_key_indices,
+            key_desc_and_indices,
+            namespace,
+            table,
+        } = self;
+
+        let compatibility_checks = [
+            (
+                connection_id == &other.catalog_connection_id,
+                "connection_id",
+            ),
+            (
+                catalog_connection
+                    .alter_compatible(id, &other.catalog_connection)
+                    .is_ok(),
+                "catalog_connection",
+            ),
+            (
+                aws_connection_id == &other.aws_connection_id,
+                "aws_connection_id",
+            ),
+            (
+                aws_connection
+                    .alter_compatible(id, &other.aws_connection)
+                    .is_ok(),
+                "aws_connection",
+            ),
+            (
+                relation_key_indices == &other.relation_key_indices,
+                "relation_key_indices",
+            ),
+            (
+                key_desc_and_indices == &other.key_desc_and_indices,
+                "key_desc_and_indices",
+            ),
+            (namespace == &other.namespace, "namespace"),
+            (table == &other.table, "table"),
+        ];
+        for (compatible, field) in compatibility_checks {
+            if !compatible {
+                tracing::warn!(
+                    "IcebergSinkConnection incompatible at {field}:\nself:\n{:#?}\n\nother\n{:#?}",
+                    self,
+                    other
+                );
+
+                return Err(AlterError { id });
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl<R: ConnectionResolver> IntoInlineConnection<IcebergSinkConnection, R>
+    for IcebergSinkConnection<ReferencedConnection>
+{
+    fn into_inline_connection(self, r: R) -> IcebergSinkConnection {
+        let IcebergSinkConnection {
+            catalog_connection_id,
+            catalog_connection,
+            aws_connection_id,
+            aws_connection,
+            relation_key_indices,
+            key_desc_and_indices,
+            namespace,
+            table,
+        } = self;
+        IcebergSinkConnection {
+            catalog_connection_id,
+            catalog_connection: r
+                .resolve_connection(catalog_connection)
+                .unwrap_iceberg_catalog(),
+            aws_connection_id,
+            aws_connection: r.resolve_connection(aws_connection).unwrap_aws(),
+            relation_key_indices,
+            key_desc_and_indices,
+            namespace,
+            table,
+        }
+    }
+}
