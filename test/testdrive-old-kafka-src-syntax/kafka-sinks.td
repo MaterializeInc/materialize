@@ -57,7 +57,7 @@ goofus,gallant
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk1-${testdrive.seed}')
   WITH (badoption=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-contains:Expected one of PARTITION or SNAPSHOT or VERSION
+contains:Expected one of PARTITION or SNAPSHOT or VERSION or COMMIT
 
 ! CREATE SINK invalid_with_option
   IN CLUSTER ${arg.single-replica-cluster}
@@ -284,7 +284,7 @@ $ kafka-create-topic topic=snk9 partitions=4
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
   WITH (SIZE = 'scale=1,workers=2')
-contains:Expected one of PARTITION or SNAPSHOT or VERSION, found SIZE
+contains:Expected one of PARTITION or SNAPSHOT or VERSION or COMMIT, found SIZE
 
 # create sink with SNAPSHOT set
 > CREATE CLUSTER sink_with_options_cluster SIZE '${arg.default-storage-size}';

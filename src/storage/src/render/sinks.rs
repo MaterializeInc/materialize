@@ -216,5 +216,6 @@ where
 {
     match connection {
         StorageSinkConnection::Kafka(connection) => Box::new(connection.clone()),
+        StorageSinkConnection::Iceberg(_) => unimplemented!("iceberg sinks"),
     }
 }

@@ -206,6 +206,13 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object 
 3  topic            text
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_iceberg_sinks' ORDER BY position
+----
+1  id  text
+2  namespace  text
+3  table  text
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_list_types' ORDER BY position
 ----
 1  id  text
@@ -448,6 +455,7 @@ mz_databases
 mz_default_privileges
 mz_egress_ips
 mz_functions
+mz_iceberg_sinks
 mz_index_columns
 mz_indexes
 mz_kafka_connections

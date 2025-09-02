@@ -20,7 +20,7 @@ use mz_catalog::builtin::{
     MZ_AWS_PRIVATELINK_CONNECTIONS, MZ_BASE_TYPES, MZ_CLUSTER_REPLICA_SIZES, MZ_CLUSTER_REPLICAS,
     MZ_CLUSTER_SCHEDULES, MZ_CLUSTER_WORKLOAD_CLASSES, MZ_CLUSTERS, MZ_COLUMNS, MZ_COMMENTS,
     MZ_CONNECTIONS, MZ_CONTINUAL_TASKS, MZ_DATABASES, MZ_DEFAULT_PRIVILEGES, MZ_EGRESS_IPS,
-    MZ_FUNCTIONS, MZ_HISTORY_RETENTION_STRATEGIES, MZ_INDEX_COLUMNS, MZ_INDEXES,
+    MZ_FUNCTIONS, MZ_HISTORY_RETENTION_STRATEGIES, MZ_ICEBERG_SINKS, MZ_INDEX_COLUMNS, MZ_INDEXES,
     MZ_INTERNAL_CLUSTER_REPLICAS, MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS, MZ_KAFKA_SOURCE_TABLES,
     MZ_KAFKA_SOURCES, MZ_LICENSE_KEYS, MZ_LIST_TYPES, MZ_MAP_TYPES,
     MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES, MZ_MATERIALIZED_VIEWS, MZ_MYSQL_SOURCE_TABLES,
@@ -75,7 +75,7 @@ use mz_storage_types::connections::KafkaConnection;
 use mz_storage_types::connections::aws::{AwsAuth, AwsConnection};
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::connections::string_or_secret::StringOrSecret;
-use mz_storage_types::sinks::{KafkaSinkConnection, StorageSinkConnection};
+use mz_storage_types::sinks::{IcebergSinkConnection, KafkaSinkConnection, StorageSinkConnection};
 use mz_storage_types::sources::{
     GenericSourceConnection, KafkaSourceConnection, PostgresSourceConnection, SourceConnection,
 };
@@ -1605,6 +1605,19 @@ impl CatalogState {
                     diff,
                 ));
             }
+            StorageSinkConnection::Iceberg(IcebergSinkConnection {
+                namespace, table, ..
+            }) => {
+                updates.push(BuiltinTableUpdate::row(
+                    &*MZ_ICEBERG_SINKS,
+                    Row::pack_slice(&[
+                        Datum::String(&id.to_string()),
+                        Datum::String(namespace.as_str()),
+                        Datum::String(table.as_str()),
+                    ]),
+                    diff,
+                ));
+            }
         };
 
         let create_stmt = mz_sql::parse::parse(&sink.create_sql)
@@ -1616,7 +1629,10 @@ impl CatalogState {
 
         // The combined format string is used for the deprecated `format` column.
         let combined_format = sink.combined_format();
-        let (key_format, value_format) = sink.formats();
+        let (key_format, value_format) = match sink.formats() {
+            Some((key_format, value_format)) => (key_format, Some(value_format)),
+            None => (None, None),
+        };
 
         updates.push(BuiltinTableUpdate::row(
             &*MZ_SINKS,
@@ -1630,9 +1646,11 @@ impl CatalogState {
                 // size column now deprecated w/o linked clusters
                 Datum::Null,
                 Datum::from(envelope),
-                Datum::from(combined_format.as_ref()),
+                // FIXME: These key/value formats are kinda leaky! Should probably live in
+                // the kafka sink table.
+                Datum::from(combined_format.as_ref().map(|f| f.as_ref())),
                 Datum::from(key_format),
-                Datum::String(value_format),
+                Datum::from(value_format),
                 Datum::String(&sink.cluster_id.to_string()),
                 Datum::String(&owner_id.to_string()),
                 Datum::String(&sink.create_sql),

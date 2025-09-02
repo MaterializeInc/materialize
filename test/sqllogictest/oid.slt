@@ -1169,3 +1169,4 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 17057  mz_sql_server_source_tables
 17058  mz_license_keys
 17059  mz_role_auth
+17060  mz_iceberg_sinks
