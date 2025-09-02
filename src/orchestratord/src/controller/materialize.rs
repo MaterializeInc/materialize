@@ -601,10 +601,11 @@ impl k8s_controller::Context for Context {
             return result.map_err(Error::Anyhow);
         }
 
+        let balancer = balancer::Resources::new(&self.config, mz);
         if self.config.create_balancers {
-            result = balancer::Resources::new(&self.config, mz)
-                .apply(&client, &mz.namespace())
-                .await;
+            result = balancer.apply(&client, &mz.namespace()).await;
+        } else {
+            result = balancer.cleanup(&client, &mz.namespace()).await;
         }
 
         // and the console relies on the balancer service existing, which is
@@ -615,32 +616,33 @@ impl k8s_controller::Context for Context {
             return result.map_err(Error::Anyhow);
         }
 
+        let Some((_, environmentd_image_tag)) = mz.spec.environmentd_image_ref.rsplit_once(':')
+        else {
+            return Err(Error::Anyhow(anyhow::anyhow!(
+                "failed to parse environmentd image ref: {}",
+                mz.spec.environmentd_image_ref
+            )));
+        };
+        let console_image_tag = self
+            .config
+            .console_image_tag_map
+            .iter()
+            .find(|kv| kv.key == environmentd_image_tag)
+            .map(|kv| kv.value.clone())
+            .unwrap_or_else(|| self.config.console_image_tag_default.clone());
+        let console = console::Resources::new(
+            &self.config,
+            mz,
+            &matching_image_from_environmentd_image_ref(
+                &mz.spec.environmentd_image_ref,
+                "console",
+                Some(&console_image_tag),
+            ),
+        );
         if self.config.create_console {
-            let Some((_, environmentd_image_tag)) = mz.spec.environmentd_image_ref.rsplit_once(':')
-            else {
-                return Err(Error::Anyhow(anyhow::anyhow!(
-                    "failed to parse environmentd image ref: {}",
-                    mz.spec.environmentd_image_ref
-                )));
-            };
-            let console_image_tag = self
-                .config
-                .console_image_tag_map
-                .iter()
-                .find(|kv| kv.key == environmentd_image_tag)
-                .map(|kv| kv.value.clone())
-                .unwrap_or_else(|| self.config.console_image_tag_default.clone());
-            console::Resources::new(
-                &self.config,
-                mz,
-                &matching_image_from_environmentd_image_ref(
-                    &mz.spec.environmentd_image_ref,
-                    "console",
-                    Some(&console_image_tag),
-                ),
-            )
-            .apply(&client, &mz.namespace())
-            .await?;
+            console.apply(&client, &mz.namespace()).await?;
+        } else {
+            console.cleanup(&client, &mz.namespace()).await?;
         }
 
         result.map_err(Error::Anyhow)

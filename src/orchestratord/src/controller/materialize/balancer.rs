@@ -29,7 +29,7 @@ use crate::{
         matching_image_from_environmentd_image_ref,
         tls::{create_certificate, issuer_ref_defined},
     },
-    k8s::{apply_resource, get_resource},
+    k8s::{apply_resource, delete_resource, get_resource},
 };
 use mz_cloud_resources::crd::{
     generated::cert_manager::certificates::Certificate, materialize::v1alpha1::Materialize,
@@ -70,6 +70,7 @@ impl Resources {
             trace!("creating new balancerd external certificate");
             apply_resource(&certificate_api, certificate).await?;
         }
+
         trace!("creating new balancerd deployment");
         apply_resource(&deployment_api, &*self.balancerd_deployment).await?;
 
@@ -92,6 +93,30 @@ impl Resources {
         }
 
         Ok(Some(Action::requeue(Duration::from_secs(1))))
+    }
+
+    #[instrument]
+    pub async fn cleanup(
+        &self,
+        client: &Client,
+        namespace: &str,
+    ) -> Result<Option<Action>, anyhow::Error> {
+        let certificate_api: Api<Certificate> = Api::namespaced(client.clone(), namespace);
+        let deployment_api: Api<Deployment> = Api::namespaced(client.clone(), namespace);
+        let service_api: Api<Service> = Api::namespaced(client.clone(), namespace);
+
+        trace!("deleting balancerd service");
+        delete_resource(&service_api, &self.balancerd_service.name_unchecked()).await?;
+
+        trace!("deleting balancerd deployment");
+        delete_resource(&deployment_api, &self.balancerd_deployment.name_unchecked()).await?;
+
+        if let Some(certificate) = &*self.balancerd_external_certificate {
+            trace!("deleting balancerd external certificate");
+            delete_resource(&certificate_api, &certificate.name_unchecked()).await?;
+        }
+
+        Ok(None)
     }
 }
 
