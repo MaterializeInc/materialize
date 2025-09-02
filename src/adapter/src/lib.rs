@@ -43,10 +43,10 @@ mod command;
 mod coord;
 mod error;
 mod explain;
+mod frontend_peek;
 mod notice;
 mod optimize;
 mod util;
-mod frontend_peek;
 
 pub mod catalog;
 pub mod client;
