@@ -24,13 +24,14 @@ generates a new value each time the environment is recreated, resulting in:
 
 ## Level 1: Basic configuration (Intra-Region Recovery)
 
-Because Materialize is deterministic and its infrastructure runs on a container
-scheduler (AWS EKS), basic Materialize configuration provides intra-region
-disaster recovery **as long as**:
+Because Materialize is deterministic, we recommend running on a container
+scheduler (such as AWS EKS, GCP GKE, Azure AKS). With this setup, the basic
+configuration provides intra-region disaster recovery as long as:
 
-- Materialize can spin up a new pod somewhere in the region, and
+- The scheduler is able to launch a new pod (or equivalent workload) within the
+  region, and
 
-- S3 is available.
+- The underlying object storage service remains available.
 
 In such cases, your mean time to recovery is the **same as your compute
 cluster's rehydration time**.
@@ -44,13 +45,20 @@ business' risk tolerance.
 
 ## Level 2:  Multi-replica clusters (High availability across AZs)
 
-{{< note >}}
-The hybrid strategy is available if your deployment uses a [three-tier or a
-two-tier architecture](/manage/operational-guidelines/).
-{{</ note >}}
+Materialize supports multi-replica clusters. To enable distribution of replicas
+across Availability Zones (AZs), specify `cluster_topology_spread_min_domains`
+value greater than 1; e.g.,
 
-Materialize supports multi-replica clusters, allowing for distribution across
-Availability Zones (AZs):
+```yaml
+materialize_instances = [
+  {
+    ...
+    environmentd_extra_args = [
+      "--system-parameter-default=cluster_topology_spread_min_domains=3"
+    ]
+  }
+]
+```
 
 {{< include-md file="shared-content/multi-replica-az.md" >}}
 
@@ -67,9 +75,9 @@ AZ level failures for those clusters:
 As such, your compute and serving clusters will continue to serve up-to-date
 data uninterrupted in the case of a replica failure.
 
-{{< annotation type="💡 Cost and work capacity" >}}
+{{< annotation type="💡 Work capacity" >}}
 
-{{< include-md file="shared-content/cluster-replica-cost-capacity-notes.md" >}}
+Replicas are exact copies of one another: each replica must do exactly the same work as all the other replicas of the cluster(i.e., maintain the same dataflows and process the same queries). To increase the capacity of a cluster, you must increase its size.
 
 {{</ annotation >}}
 
