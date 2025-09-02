@@ -73,31 +73,29 @@ where
             // (database-issues#7108).
             let limit_err = match &top_k_plan {
                 TopKPlan::MonotonicTop1(MonotonicTop1Plan { .. }) => None,
-                TopKPlan::MonotonicTopK(MonotonicTopKPlan { limit, .. }) => Some(limit),
-                TopKPlan::Basic(BasicTopKPlan { limit, .. }) => Some(limit),
+                TopKPlan::MonotonicTopK(MonotonicTopKPlan { limit, .. }) => limit.as_ref(),
+                TopKPlan::Basic(BasicTopKPlan { limit, .. }) => limit.as_ref(),
             };
-            if let Some(limit) = limit_err {
-                if let Some(expr) = limit {
-                    // Produce errors from limit selectors that error or are
-                    // negative, and nothing from limit selectors that do
-                    // not. Note that even if expr.could_error() is false,
-                    // the expression might still return a negative limit and
-                    // thus needs to be checked.
-                    let expr = expr.clone();
-                    let mut datum_vec = mz_repr::DatumVec::new();
-                    let errors = ok_input.flat_map(move |row| {
-                        let temp_storage = mz_repr::RowArena::new();
-                        let datums = datum_vec.borrow_with(&row);
-                        match expr.eval(&datums[..], &temp_storage) {
-                            Ok(l) if l != Datum::Null && l.unwrap_int64() < 0 => {
-                                Some(EvalError::NegLimit.into())
-                            }
-                            Ok(_) => None,
-                            Err(e) => Some(e.into()),
+            if let Some(expr) = limit_err {
+                // Produce errors from limit selectors that error or are
+                // negative, and nothing from limit selectors that do
+                // not. Note that even if expr.could_error() is false,
+                // the expression might still return a negative limit and
+                // thus needs to be checked.
+                let expr = expr.clone();
+                let mut datum_vec = mz_repr::DatumVec::new();
+                let errors = ok_input.flat_map(move |row| {
+                    let temp_storage = mz_repr::RowArena::new();
+                    let datums = datum_vec.borrow_with(&row);
+                    match expr.eval(&datums[..], &temp_storage) {
+                        Ok(l) if l != Datum::Null && l.unwrap_int64() < 0 => {
+                            Some(EvalError::NegLimit.into())
                         }
-                    });
-                    err_collection = err_collection.concat(&errors);
-                }
+                        Ok(_) => None,
+                        Err(e) => Some(e.into()),
+                    }
+                });
+                err_collection = err_collection.concat(&errors);
             }
 
             let ok_result = match top_k_plan {
@@ -554,13 +552,17 @@ where
         "Arranged TopK input",
     );
 
+    // Eagerly evaluate literal limits.
+    let literal_limit = limit
+        .as_ref()
+        .and_then(|l| l.as_literal_int64())
+        .map(Into::into);
+
     let reduced = arranged.mz_reduce_abelian::<_, Bu, Tr>("Reduced TopK input", {
         move |mut hash_key, source, target: &mut Vec<(Tr::ValOwn, Diff)>| {
             // Unpack the limit, either into an integer literal or an expression to evaluate.
-            let limit: Option<Diff> = limit.as_ref().map(|l| {
-                if let Some(l) = l.as_literal_int64() {
-                    l.into()
-                } else {
+            let limit: Option<Diff> = literal_limit.or_else(|| {
+                limit.as_ref().map(|l| {
                     // Unpack `key` after skipping the hash and determine the limit.
                     // If the limit errors, use a zero limit; errors are surfaced elsewhere.
                     let temp_storage = mz_repr::RowArena::new();
@@ -575,7 +577,7 @@ where
                     } else {
                         datum_limit.unwrap_int64().into()
                     }
-                }
+                })
             });
 
             if let Some(err) = Tr::ValOwn::into_error() {
@@ -850,10 +852,26 @@ pub mod monoids {
     use serde::{Deserialize, Serialize};
 
     /// A monoid containing a row and an ordering.
-    #[derive(Eq, PartialEq, Debug, Clone, Serialize, Deserialize, Hash, Default)]
+    #[derive(Eq, PartialEq, Debug, Serialize, Deserialize, Hash, Default)]
     pub struct Top1Monoid {
         pub row: Row,
         pub order_key: Vec<ColumnOrder>,
+    }
+
+    impl Clone for Top1Monoid {
+        #[inline]
+        fn clone(&self) -> Self {
+            Self {
+                row: self.row.clone(),
+                order_key: self.order_key.clone(),
+            }
+        }
+
+        #[inline]
+        fn clone_from(&mut self, source: &Self) {
+            self.row.clone_from(&source.row);
+            self.order_key.clone_from(&source.order_key);
+        }
     }
 
     impl Multiply<Diff> for Top1Monoid {
