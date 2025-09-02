@@ -1459,6 +1459,11 @@ steps:
             args: [--no-cleanup]
             ci-builder: stable
       branches: "main v*.* *azure* *tf* *terraform* *helm* *self-managed* *orchestratord*"
+      # Unreliable port-forward to Azure
+      retry:
+        automatic:
+          - exit_status: 1
+            limit: 1
 
   - group: "Output consistency"
     key: output-consistency
@@ -2108,8 +2113,8 @@ steps:
   - id: 0dt
     label: Zero downtime
     depends_on: build-x86_64
-    timeout_in_minutes: 240
-    parallelism: 2
+    timeout_in_minutes: 300
+    parallelism: 3
     plugins:
       - ./ci/plugins/mzcompose:
           composition: 0dt
