@@ -312,6 +312,13 @@ impl Connection<InlinedConnection> {
             o => unreachable!("{o:?} is not a Kafka connection"),
         }
     }
+
+    pub fn unwrap_iceberg_catalog(self) -> <InlinedConnection as ConnectionAccess>::IcebergCatalog {
+        match self {
+            Self::IcebergCatalog(conn) => conn,
+            o => unreachable!("{o:?} is not an Iceberg catalog connection"),
+        }
+    }
 }
 
 /// An error returned by [`Connection::validate`].
@@ -449,7 +456,7 @@ impl<C: ConnectionAccess> IcebergCatalogConnection<C> {
 }
 
 impl IcebergCatalogConnection<InlinedConnection> {
-    async fn connect(
+    pub async fn connect(
         &self,
         storage_configuration: &StorageConfiguration,
         in_task: InTask,

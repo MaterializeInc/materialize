@@ -1518,6 +1518,9 @@ fn encode_collection<G: Scope>(
                                 dbz_format(&mut row_buf.packer(), value);
                                 Some(row_buf.clone())
                             }
+                            SinkEnvelope::Append => {
+                                unreachable!("Kafka sink does not support ENVELOPE APPEND, this should have been checked by the planner")
+                            }
                         };
                         let value = value.map(|value| value_encoder.encode_unchecked(value));
                         let message = KafkaMessage {
