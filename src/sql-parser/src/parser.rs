@@ -2362,9 +2362,9 @@ impl<'a> Parser<'a> {
             TO => true,
             _ => unreachable!(),
         };
-        let connection_type = match self.expect_one_of_keywords(&[
-            AWS, KAFKA, CONFLUENT, POSTGRES, SSH, SQL, MYSQL, YUGABYTE, ICEBERG,
-        ])? {
+        let connection_type = match self
+            .expect_one_of_keywords(&[AWS, KAFKA, CONFLUENT, POSTGRES, SSH, SQL, MYSQL, ICEBERG])?
+        {
             AWS => {
                 if self.parse_keyword(PRIVATELINK) {
                     CreateConnectionType::AwsPrivatelink
@@ -2387,7 +2387,6 @@ impl<'a> Parser<'a> {
                 CreateConnectionType::SqlServer
             }
             MYSQL => CreateConnectionType::MySql,
-            YUGABYTE => CreateConnectionType::Yugabyte,
             ICEBERG => {
                 self.expect_keyword(CATALOG)?;
                 CreateConnectionType::IcebergCatalog
@@ -3300,7 +3299,7 @@ impl<'a> Parser<'a> {
     fn parse_create_source_connection(
         &mut self,
     ) -> Result<CreateSourceConnection<Raw>, ParserError> {
-        match self.expect_one_of_keywords(&[KAFKA, POSTGRES, SQL, MYSQL, LOAD, YUGABYTE])? {
+        match self.expect_one_of_keywords(&[KAFKA, POSTGRES, SQL, MYSQL, LOAD])? {
             POSTGRES => {
                 self.expect_keyword(CONNECTION)?;
                 let connection = self.parse_raw_name()?;
@@ -3314,23 +3313,6 @@ impl<'a> Parser<'a> {
                 };
 
                 Ok(CreateSourceConnection::Postgres {
-                    connection,
-                    options,
-                })
-            }
-            YUGABYTE => {
-                self.expect_keyword(CONNECTION)?;
-                let connection = self.parse_raw_name()?;
-
-                let options = if self.consume_token(&Token::LParen) {
-                    let options = self.parse_comma_separated(Parser::parse_pg_connection_option)?;
-                    self.expect_token(&Token::RParen)?;
-                    options
-                } else {
-                    vec![]
-                };
-
-                Ok(CreateSourceConnection::Yugabyte {
                     connection,
                     options,
                 })

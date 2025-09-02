@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use anyhow::{Context, anyhow, bail};
+use anyhow::{Context, anyhow};
 use iceberg::{Catalog, CatalogBuilder};
 use iceberg_catalog_rest::{
     REST_CATALOG_PROP_URI, REST_CATALOG_PROP_WAREHOUSE, RestCatalogBuilder,
@@ -32,7 +32,6 @@ use mz_ore::future::{InTask, OreFutureExt};
 use mz_ore::netio::DUMMY_DNS_PORT;
 use mz_ore::netio::resolve_address;
 use mz_ore::num::NonNeg;
-use mz_postgres_util::tunnel::PostgresFlavor;
 use mz_proto::tokio_postgres::any_ssl_mode;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::url::any_url;
@@ -1562,9 +1561,6 @@ pub struct PostgresConnection<C: ConnectionAccess = InlinedConnection> {
     pub tls_root_cert: Option<StringOrSecret>,
     /// An optional TLS client certificate for authentication.
     pub tls_identity: Option<TlsIdentity>,
-    /// The kind of postgres server we are connecting to. This can be vanilla, for a normal
-    /// postgres server or some other system that is pg compatible, like Yugabyte, Aurora, etc.
-    pub flavor: PostgresFlavor,
 }
 
 impl<R: ConnectionResolver> IntoInlineConnection<PostgresConnection, R>
@@ -1581,7 +1577,6 @@ impl<R: ConnectionResolver> IntoInlineConnection<PostgresConnection, R>
             tls_mode,
             tls_root_cert,
             tls_identity,
-            flavor,
         } = self;
 
         PostgresConnection {
@@ -1594,7 +1589,6 @@ impl<R: ConnectionResolver> IntoInlineConnection<PostgresConnection, R>
             tls_mode,
             tls_root_cert,
             tls_identity,
-            flavor,
         }
     }
 }
@@ -1757,18 +1751,12 @@ impl PostgresConnection<InlinedConnection> {
                 InTask::No,
             )
             .await?;
-        let client = config
+        config
             .connect(
                 "connection validation",
                 &storage_configuration.connection_context.ssh_tunnel_manager,
             )
             .await?;
-        use PostgresFlavor::*;
-        match (client.server_flavor(), &self.flavor) {
-            (Vanilla, Yugabyte) => bail!("Expected to find PostgreSQL server, found Yugabyte."),
-            (Yugabyte, Vanilla) => bail!("Expected to find Yugabyte server, found PostgreSQL."),
-            (Vanilla, Vanilla) | (Yugabyte, Yugabyte) => {}
-        }
         Ok(())
     }
 }
@@ -1777,7 +1765,6 @@ impl<C: ConnectionAccess> AlterCompatible for PostgresConnection<C> {
     fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
         let PostgresConnection {
             tunnel,
-            flavor,
             // All non-tunnel options may change arbitrarily
             host: _,
             port: _,
@@ -1789,10 +1776,7 @@ impl<C: ConnectionAccess> AlterCompatible for PostgresConnection<C> {
             tls_identity: _,
         } = self;
 
-        let compatibility_checks = [
-            (tunnel.alter_compatible(id, &other.tunnel).is_ok(), "tunnel"),
-            (flavor == &other.flavor, "flavor"),
-        ];
+        let compatibility_checks = [(tunnel.alter_compatible(id, &other.tunnel).is_ok(), "tunnel")];
 
         for (compatible, field) in compatibility_checks {
             if !compatible {
@@ -1821,7 +1805,6 @@ impl RustType<ProtoPostgresConnection> for PostgresConnection {
             tls_root_cert: self.tls_root_cert.into_proto(),
             tls_identity: self.tls_identity.into_proto(),
             tunnel: Some(self.tunnel.into_proto()),
-            flavor: Some(self.flavor.into_proto()),
         }
     }
 
@@ -1842,9 +1825,6 @@ impl RustType<ProtoPostgresConnection> for PostgresConnection {
                 .into_rust_if_some("ProtoPostgresConnection::tls_mode")?,
             tls_root_cert: proto.tls_root_cert.into_rust()?,
             tls_identity: proto.tls_identity.into_rust()?,
-            flavor: proto
-                .flavor
-                .into_rust_if_some("ProtoPostgresConnection::flavor")?,
         })
     }
 }

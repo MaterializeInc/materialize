@@ -12,7 +12,6 @@ syntax = "proto3";
 package mz_storage_types.connections;
 
 import "google/protobuf/empty.proto";
-import "postgres-util/src/tunnel.proto";
 import "proto/src/tokio_postgres.proto";
 import "repr/src/catalog_item_id.proto";
 import "repr/src/url.proto";
@@ -75,6 +74,8 @@ message ProtoCsrConnectionHttpAuth {
 }
 
 message ProtoPostgresConnection {
+  reserved 9, 10, 11, 13;
+
   string host = 1;
   uint32 port = 2;
   string database = 3;
@@ -84,7 +85,6 @@ message ProtoPostgresConnection {
   string_or_secret.ProtoStringOrSecret tls_root_cert = 7;
   ProtoTlsIdentity tls_identity = 8;
   ProtoTunnel tunnel = 12;
-  mz_postgres_util.tunnel.ProtoPostgresFlavor flavor = 13;
 }
 
 message ProtoTunnel {

@@ -2106,12 +2106,6 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
-        name: enable_yugabyte_connection,
-        desc: "Create a YUGABYTE connection",
-        default: false,
-        enable_for_item_parsing: false,
-    },
-    {
         name: enable_continual_task_create,
         desc: "CREATE CONTINUAL TASK",
         default: false,
