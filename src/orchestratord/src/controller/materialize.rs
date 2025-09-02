@@ -22,6 +22,7 @@ use k8s_openapi::{
 use kube::{Api, Client, Resource, ResourceExt, api::PostParams, runtime::controller::Action};
 use serde::Deserialize;
 use tracing::{debug, trace};
+use uuid::Uuid;
 
 use crate::metrics::Metrics;
 use mz_cloud_provider::CloudProvider;
@@ -335,6 +336,23 @@ impl k8s_controller::Context for Context {
             self.update_status(&mz_api, mz, status, true).await?;
             // Updating the status should trigger a reconciliation
             // which will include a status this time.
+            return Ok(None);
+        }
+
+        if mz.spec.request_rollout.is_nil() || mz.spec.environment_id.is_nil() {
+            let mut mz = mz.clone();
+            if mz.spec.request_rollout.is_nil() {
+                mz.spec.request_rollout = Uuid::new_v4();
+            }
+            if mz.spec.environment_id.is_nil() {
+                mz.spec.environment_id = Uuid::new_v4();
+            }
+            mz_api
+                .replace(&mz.name_unchecked(), &PostParams::default(), &mz)
+                .await?;
+            // Updating the spec should also trigger a reconciliation.
+            // We can't do that as part of the above check because you can't
+            // update both the spec and the status in a single api call.
             return Ok(None);
         }
 

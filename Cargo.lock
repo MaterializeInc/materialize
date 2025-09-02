@@ -7024,6 +7024,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "urlencoding",
+ "uuid",
  "workspace-hack",
 ]
 
