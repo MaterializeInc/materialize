@@ -30,6 +30,7 @@ use mz_persist_client::fetch::{FetchedBlob, FetchedPart};
 use mz_persist_client::operators::shard_source::{
     ErrorHandler, FilterResult, SnapshotMode, shard_source,
 };
+use mz_persist_client::stats::STATS_AUDIT_PANIC;
 use mz_persist_types::Codec64;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::columnar::{ColumnEncoder, Schema};
@@ -460,12 +461,14 @@ where
         let activator = Activator::new(operator_info.address, activations);
         // Maintain a list of work to do
         let mut pending_work = std::collections::VecDeque::new();
+        let panic_on_audit_failure = STATS_AUDIT_PANIC.handle(&cfg);
 
         move |_frontier| {
             fetched_input.for_each(|time, data| {
                 let capability = time.retain();
                 for fetched_blob in data.drain(..) {
                     pending_work.push_back(PendingWork {
+                        panic_on_audit_failure: panic_on_audit_failure.get(),
                         capability: capability.clone(),
                         part: PendingPart::Unparsed(fetched_blob),
                     })
@@ -507,6 +510,8 @@ where
 
 /// Pending work to read from fetched parts
 struct PendingWork {
+    /// Whether to panic if a part fails an audit, or to just pass along the audited data.
+    panic_on_audit_failure: bool,
     /// The time at which the work should happen.
     capability: Capability<(mz_repr::Timestamp, Subtime)>,
     /// Pending fetched part.
@@ -628,10 +633,12 @@ impl PendingWork {
                                             ?result,
                                             "persist filter pushdown correctness violation!"
                                         );
-                                        panic!(
-                                            "persist filter pushdown correctness violation! {}",
-                                            name
-                                        );
+                                        if self.panic_on_audit_failure {
+                                            panic!(
+                                                "persist filter pushdown correctness violation! {}",
+                                                name
+                                            );
+                                        }
                                     },
                                 );
                             }
