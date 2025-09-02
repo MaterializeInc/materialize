@@ -80,6 +80,12 @@ pub const ENABLE_PAUSED_CLUSTER_READHOLD_DOWNGRADE: Config<bool> = Config::new(
     "Aggressively downgrade input read holds for indexes on zero-replica clusters.",
 );
 
+pub const ENABLE_TRANSPARENT_HUGEPAGES: Config<bool> = Config::new(
+    "enable_transparent_hugepages",
+    false,
+    "Enable transparent hugepages in clusterd with jemalloc.",
+);
+
 /// Adds the full set of all controller `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -90,6 +96,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&WALLCLOCK_LAG_HISTOGRAM_PERIOD_INTERVAL)
         .add(&ENABLE_TIMELY_ZERO_COPY)
         .add(&ENABLE_TIMELY_ZERO_COPY_LGALLOC)
+        .add(&ENABLE_TRANSPARENT_HUGEPAGES)
         .add(&TIMELY_ZERO_COPY_LIMIT)
         .add(&ARRANGEMENT_EXERT_PROPORTIONALITY)
         .add(&ENABLE_CTP_CLUSTER_PROTOCOLS)

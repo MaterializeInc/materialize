@@ -28,7 +28,7 @@ use mz_compute_types::config::{ComputeReplicaConfig, ComputeReplicaLogging};
 use mz_controller_types::dyncfgs::{
     ARRANGEMENT_EXERT_PROPORTIONALITY, CONTROLLER_PAST_GENERATION_REPLICA_CLEANUP_RETRY_INTERVAL,
     ENABLE_CTP_CLUSTER_PROTOCOLS, ENABLE_TIMELY_ZERO_COPY, ENABLE_TIMELY_ZERO_COPY_LGALLOC,
-    TIMELY_ZERO_COPY_LIMIT,
+    ENABLE_TRANSPARENT_HUGEPAGES, TIMELY_ZERO_COPY_LIMIT,
 };
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_orchestrator::NamespacedOrchestrator;
@@ -819,6 +819,7 @@ where
                 }],
                 disk_limit,
                 node_selector: location.allocation.selectors,
+                enable_transparent_hugepages: ENABLE_TRANSPARENT_HUGEPAGES.get(&self.dyncfg),
             },
         )?;
 

@@ -113,6 +113,7 @@ def get_minimal_system_parameters(
         "enable_sql_server_source": "true",
         "enable_statement_lifecycle_logging": "true",
         "enable_compute_temporal_bucketing": "true",
+        "enabel_transparent_hugepages": "true",
         "enable_variadic_left_join_lowering": "true",
         "enable_worker_core_affinity": "true",
         "grpc_client_http2_keep_alive_timeout": "5s",
@@ -564,6 +565,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "enable_ctp_cluster_protocols",
     "enable_paused_cluster_readhold_downgrade",
     "force_swap_for_cc_sizes",
+    "enable_transparent_hugepages",
 ]
 
 

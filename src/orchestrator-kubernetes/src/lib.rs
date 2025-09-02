@@ -568,6 +568,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             replicas_selector,
             disk_limit,
             node_selector,
+            enable_transparent_hugepages,
         }: ServiceConfig,
     ) -> Result<Box<dyn Service>, anyhow::Error> {
         // This is extremely cheap to clone, so just look into the lock once.
@@ -971,7 +972,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             }]
         });
 
-        let env = if self.config.coverage {
+        let mut env = if self.config.coverage {
             Some(vec![EnvVar {
                 name: "LLVM_PROFILE_FILE".to_string(),
                 value: Some(format!("/coverage/{}-%p-%9m%c.profraw", self.namespace)),
@@ -980,6 +981,20 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         } else {
             None
         };
+
+        // Configure jemalloc to use transparent hugepages.
+        if enable_transparent_hugepages {
+            let var = EnvVar {
+                name: "MALLOC_CONF".to_string(),
+                value: Some("thp:always".to_string()),
+                ..Default::default()
+            };
+            if let Some(env) = &mut env {
+                env.push(var);
+            } else {
+                env = Some(vec![var]);
+            }
+        }
 
         let mut volume_mounts = vec![];
 

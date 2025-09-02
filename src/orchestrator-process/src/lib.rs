@@ -345,6 +345,7 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
             cpu_limit: config.cpu_limit,
             scale: config.scale,
             labels: config.labels,
+            enable_transparent_hugepages: config.enable_transparent_hugepages,
             disk,
         };
 
@@ -461,6 +462,8 @@ struct EnsureServiceConfig {
     pub labels: BTreeMap<String, String>,
     /// Whether scratch disk space should be allocated for the service.
     pub disk: bool,
+    /// Whether to enable transparent hugepages.
+    pub enable_transparent_hugepages: bool,
 }
 
 /// A task executing blocking work for a [`NamespacedProcessOrchestrator`] in the background.
@@ -572,6 +575,7 @@ impl OrchestratorWorker {
             scale,
             labels,
             disk,
+            enable_transparent_hugepages,
         }: EnsureServiceConfig,
     ) -> Result<(), anyhow::Error> {
         let full_id = self.config.full_id(&id);
@@ -686,6 +690,7 @@ impl OrchestratorWorker {
                         memory_limit,
                         cpu_limit,
                         launch_spec: self.config.launch_spec,
+                        enable_transparent_hugepages,
                     }),
                 );
 
@@ -791,6 +796,7 @@ impl OrchestratorWorker {
             memory_limit,
             cpu_limit,
             launch_spec,
+            enable_transparent_hugepages,
         }: ServiceProcessConfig,
     ) -> impl Future<Output = ()> + use<> {
         let suppress_output = self.config.suppress_output;
@@ -838,6 +844,9 @@ impl OrchestratorWorker {
                     memory_limit.as_ref(),
                     cpu_limit.as_ref(),
                 );
+                if enable_transparent_hugepages {
+                    cmd.env("MALLOC_CONF", "thp:always");
+                }
                 info!(
                     "launching {full_id}-{i} via {} {}...",
                     cmd.as_std().get_program().to_string_lossy(),
@@ -933,6 +942,7 @@ struct ServiceProcessConfig {
     memory_limit: Option<MemoryLimit>,
     cpu_limit: Option<CpuLimit>,
     launch_spec: LaunchSpec,
+    enable_transparent_hugepages: bool,
 }
 
 struct ServiceProcessPort {
