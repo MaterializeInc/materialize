@@ -454,6 +454,70 @@ class EnvironmentdImageRef(Modification):
         ), f"Expected environmentd image {expected}, but found {image}"
 
 
+class NumMaterializeEnvironments(Modification):
+    # Only done intentionally
+    pick_by_default = False
+
+    @classmethod
+    def values(cls) -> list[Any]:
+        return [1, 2]
+
+    @classmethod
+    def default(cls) -> Any:
+        return 1
+
+    def modify(self, definition: dict[str, Any]) -> None:
+        if self.value == 2:
+            definition["materialize2"] = copy.deepcopy(definition["materialize"])
+            definition["materialize2"]["metadata"][
+                "name"
+            ] = "12345678-1234-1234-1234-123456789013"
+        elif self.value == 1:
+            if "materialize2" in definition:
+                del definition["materialize2"]
+        else:
+            raise ValueError(f"Unhandled value {self.value}")
+
+    def validate(self, mods: dict[type[Modification], Any]) -> None:
+        service_names = (
+            spawn.capture(
+                [
+                    "kubectl",
+                    "get",
+                    "services",
+                    "-n",
+                    "materialize-environment",
+                    "-o",
+                    "name",
+                ],
+                stderr=subprocess.DEVNULL,
+            )
+            .strip()
+            .split("\n")
+        )
+        for service_name in service_names:
+            if not "-cluster-" in service_name:
+                continue
+            data = json.loads(
+                spawn.capture(
+                    [
+                        "kubectl",
+                        "get",
+                        "endpoints",
+                        service_name.removeprefix("service/"),
+                        "-n",
+                        "materialize-environment",
+                        "-o",
+                        "json",
+                    ]
+                )
+            )
+            addresses = data["subsets"][0]["addresses"]
+            assert (
+                len(addresses) == 1
+            ), f"Expected 1 address for clusterd, but found {addresses}"
+
+
 class TelemetryEnabled(Modification):
     @classmethod
     def values(cls) -> list[Any]:
@@ -1130,6 +1194,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     definition["materialize"]["spec"]["environmentdImageRef"] = get_image(
         c.compose["services"]["environmentd"]["image"], args.tag
     )
+    # kubectl get endpoints mzel5y3f42l6-cluster-u1-replica-u1-gen-1 -n materialize-environment -o json
+    # more than one address
 
     rng = random.Random(args.seed)
 
@@ -1164,6 +1230,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     def get_mods() -> Iterator[list[Modification]]:
         if properties == Properties.Defaults:
             assert not args.runtime
+            # TODO: Enable when https://github.com/MaterializeInc/materialize/pull/33489 is merged
+            # yield [NumMaterializeEnvironments(2)]
             yield [mod_class(mod_class.default()) for mod_class in mod_classes]
         elif properties == Properties.Individual:
             assert not args.runtime
@@ -1406,17 +1474,17 @@ def upgrade(definition: dict[str, Any]) -> None:
 
 
 def run(definition: dict[str, Any], expect_fail: bool) -> None:
-    apply_input = yaml.dump_all(
-        [
-            definition["namespace"],
-            definition["secret"],
-            definition["materialize"],
-        ]
-    )
+    defs = [
+        definition["namespace"],
+        definition["secret"],
+        definition["materialize"],
+    ]
+    if "materialize2" in definition:
+        defs.append(definition["materialize2"])
     try:
         spawn.runv(
             ["kubectl", "apply", "-f", "-"],
-            stdin=apply_input.encode(),
+            stdin=yaml.dump_all(defs).encode(),
         )
     except subprocess.CalledProcessError as e:
         print(f"Failed to apply: {e.stdout}\nSTDERR:{e.stderr}")
