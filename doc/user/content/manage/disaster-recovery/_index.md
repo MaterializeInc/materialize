@@ -29,9 +29,11 @@ scheduler (such as AWS EKS, GCP GKE, Azure AKS). With this setup, the basic
 configuration provides intra-region disaster recovery as long as:
 
 - The scheduler is able to launch a new pod (or equivalent workload) within the
-  region, and
+  region;
 
-- The underlying object storage service remains available.
+- The underlying object storage service remains available; and
+
+- The metadata database is available.
 
 In such cases, your mean time to recovery is the **same as your compute
 cluster's rehydration time**.

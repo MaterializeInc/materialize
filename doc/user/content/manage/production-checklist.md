@@ -30,9 +30,11 @@ recovery](/manage/disaster-recovery/#level-1-basic-configuration-intra-region-re
 as long as:
 
 - The scheduler is able to launch a new pod (or equivalent workload) within the
-  region, and
+  region;
 
-- The underlying object storage service remains available.
+- The underlying object storage service remains available; and
+
+- The metadata database is available.
 
 ## Use multi-replica clusters distributed across Availability Zones
 
