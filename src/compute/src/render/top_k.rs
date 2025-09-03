@@ -71,31 +71,32 @@ where
             // integrated with: 1. The intra-timestamp thinning step in monotonic top-k, e.g., by
             // adding an error output there; 2. The validating reduction on basic top-k
             // (database-issues#7108).
-            let limit_expr = match &top_k_plan {
-                TopKPlan::MonotonicTop1(MonotonicTop1Plan { .. }) => None,
-                TopKPlan::MonotonicTopK(MonotonicTopKPlan { limit, .. }) => limit.as_ref(),
-                TopKPlan::Basic(BasicTopKPlan { limit, .. }) => limit.as_ref(),
-            };
-            if let Some(expr) = limit_expr {
-                // Produce errors from limit selectors that error or are
-                // negative, and nothing from limit selectors that do
-                // not. Note that even if expr.could_error() is false,
-                // the expression might still return a negative limit and
-                // thus needs to be checked.
-                let expr = expr.clone();
-                let mut datum_vec = mz_repr::DatumVec::new();
-                let errors = ok_input.flat_map(move |row| {
-                    let temp_storage = mz_repr::RowArena::new();
-                    let datums = datum_vec.borrow_with(&row);
-                    match expr.eval(&datums[..], &temp_storage) {
-                        Ok(l) if l != Datum::Null && l.unwrap_int64() < 0 => {
-                            Some(EvalError::NegLimit.into())
+
+            match top_k_plan.limit().map(|l| (l.as_literal(), l)) {
+                None => {}
+                Some((Some(Ok(literal)), _))
+                    if literal == Datum::Null || literal.unwrap_int64() >= 0 => {}
+                Some((_, expr)) => {
+                    // Produce errors from limit selectors that error or are
+                    // negative, and nothing from limit selectors that do
+                    // not. Note that even if expr.could_error() is false,
+                    // the expression might still return a negative limit and
+                    // thus needs to be checked.
+                    let expr = expr.clone();
+                    let mut datum_vec = mz_repr::DatumVec::new();
+                    let errors = ok_input.flat_map(move |row| {
+                        let temp_storage = mz_repr::RowArena::new();
+                        let datums = datum_vec.borrow_with(&row);
+                        match expr.eval(&datums[..], &temp_storage) {
+                            Ok(l) if l != Datum::Null && l.unwrap_int64() < 0 => {
+                                Some(EvalError::NegLimit.into())
+                            }
+                            Ok(_) => None,
+                            Err(e) => Some(e.into()),
                         }
-                        Ok(_) => None,
-                        Err(e) => Some(e.into()),
-                    }
-                });
-                err_collection = err_collection.concat(&errors);
+                    });
+                    err_collection = err_collection.concat(&errors);
+                }
             }
 
             let ok_result = match top_k_plan {

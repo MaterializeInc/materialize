@@ -126,6 +126,32 @@ impl TopKPlan {
             }
         }
     }
+
+    /// Return the limit of the TopK, if any.
+    pub fn limit(&self) -> Option<&mz_expr::MirScalarExpr> {
+        match self {
+            TopKPlan::MonotonicTop1(MonotonicTop1Plan {
+                group_key: _,
+                order_key: _,
+                must_consolidate: _,
+            }) => None,
+            TopKPlan::MonotonicTopK(MonotonicTopKPlan {
+                limit,
+                arity: _,
+                must_consolidate: _,
+                group_key: _,
+                order_key: _,
+            }) => limit.as_ref(),
+            TopKPlan::Basic(BasicTopKPlan {
+                limit,
+                group_key: _,
+                order_key: _,
+                arity: _,
+                offset: _,
+                buckets: _,
+            }) => limit.as_ref(),
+        }
+    }
 }
 
 impl RustType<ProtoTopKPlan> for TopKPlan {
