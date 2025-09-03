@@ -116,6 +116,7 @@ steps:
           - "ci/deploy/npm.py"
           - "bin/wasm-build"
           - "misc/wasm"
+          - "src"
         depends_on: []
         timeout_in_minutes: 20
         agents:

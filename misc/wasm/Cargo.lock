@@ -613,12 +613,13 @@ dependencies = [
 
 [[package]]
 name = "hyper-util"
-version = "0.1.12"
+version = "0.1.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf9f1e950e0d9d1d3c47184416723cf29c0d1f93bd8cccf37e4beb6b44f31710"
+checksum = "8d9b05277c7e8da2c93a568989bb6207bef0112e8d17df7a6eda4a3cf143bc5e"
 dependencies = [
  "bytes",
  "futures-channel",
+ "futures-core",
  "futures-util",
  "http",
  "http-body",
@@ -798,15 +799,6 @@ checksum = "469fb0b9cefa57e3ef31275ee7cacb78f2fdca44e4765491884a2b119d4eb130"
 
 [[package]]
 name = "itertools"
-version = "0.12.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba291022dbbd398a455acf126c1e341954079855bc60dfdda641363bd6922569"
-dependencies = [
- "either",
-]
-
-[[package]]
-name = "itertools"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285"
@@ -937,7 +929,7 @@ dependencies = [
  "http",
  "hyper-tls",
  "hyper-util",
- "itertools 0.14.0",
+ "itertools",
  "mz-ore-proc",
  "native-tls",
  "num",
@@ -992,6 +984,7 @@ name = "mz-sql-lexer-wasm"
 version = "0.0.0"
 dependencies = [
  "lol_alloc",
+ "mz-ore",
  "mz-sql-lexer",
  "wasm-bindgen",
 ]
@@ -1003,7 +996,7 @@ dependencies = [
  "anyhow",
  "bytesize",
  "enum-kinds",
- "itertools 0.14.0",
+ "itertools",
  "mz-ore",
  "mz-ore-build",
  "mz-sql-lexer",
@@ -1039,7 +1032,7 @@ name = "mz-walkabout"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools",
  "mz-ore-build",
  "quote",
  "syn 1.0.109",
@@ -1470,7 +1463,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
 dependencies = [
  "anyhow",
- "itertools 0.12.1",
+ "itertools",
  "proc-macro2",
  "quote",
  "syn 2.0.101",
@@ -1924,9 +1917,9 @@ dependencies = [
 
 [[package]]
 name = "smallvec"
-version = "1.15.0"
+version = "1.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8917285742e9f3e1683f0a9c4e6b57960b7314d0b08d30d1ecd426713ee2eee9"
+checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
 
 [[package]]
 name = "socket2"
