@@ -904,6 +904,14 @@ sqlfunc!(
     }
 );
 
+sqlfunc!(
+    #[sqlname = "normalize"]
+    fn normalize_nfc<'a>(a: &'a str) -> String {
+        use unicode_normalization::UnicodeNormalization;
+        a.nfc().collect()
+    }
+);
+
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct IsLikeMatch(pub like_pattern::Matcher);
 

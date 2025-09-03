@@ -333,6 +333,7 @@ message ProtoUnaryFunc {
     google.protobuf.Empty map_length = 186;
     google.protobuf.Empty upper = 187;
     google.protobuf.Empty lower = 188;
+    google.protobuf.Empty normalize_nfc = 336;
     google.protobuf.Empty cos = 189;
     google.protobuf.Empty acos = 190;
     google.protobuf.Empty cosh = 191;
@@ -596,6 +597,7 @@ message ProtoBinaryFunc {
     google.protobuf.Empty position = 114;
     google.protobuf.Empty right = 115;
     google.protobuf.Empty repeat_string = 116;
+    google.protobuf.Empty normalize = 300;
     google.protobuf.Empty trim = 117;
     google.protobuf.Empty trim_leading = 118;
     google.protobuf.Empty trim_trailing = 119;

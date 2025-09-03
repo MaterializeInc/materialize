@@ -75,6 +75,7 @@ mod binary;
 mod encoding;
 pub(crate) mod format;
 pub(crate) mod impls;
+mod normalization;
 
 pub use impls::*;
 
@@ -3498,6 +3499,7 @@ pub enum BinaryFunc {
     Position,
     Right,
     RepeatString,
+    Normalize,
     Trim,
     TrimLeading,
     TrimTrailing,
@@ -3777,6 +3779,7 @@ impl BinaryFunc {
             BinaryFunc::Power => power(a, b),
             BinaryFunc::PowerNumeric => power_numeric(a, b),
             BinaryFunc::RepeatString => repeat_string(a, b, temp_storage),
+            BinaryFunc::Normalize => normalize_string(a, b, temp_storage),
             BinaryFunc::GetBit => get_bit(a, b),
             BinaryFunc::GetByte => get_byte(a, b),
             BinaryFunc::ConstantTimeEqBytes => constant_time_eq_bytes(a, b),
@@ -3968,7 +3971,7 @@ impl BinaryFunc {
             Encode => ScalarType::String.nullable(in_nullable),
             Decode => ScalarType::Bytes.nullable(in_nullable),
             Power => ScalarType::Float64.nullable(in_nullable),
-            RepeatString => input1_type.scalar_type.nullable(in_nullable),
+            RepeatString | Normalize => input1_type.scalar_type.nullable(in_nullable),
 
             AddNumeric | DivNumeric | LogNumeric | ModNumeric | MulNumeric | PowerNumeric
             | RoundNumeric | SubNumeric => {
@@ -4174,6 +4177,7 @@ impl BinaryFunc {
             | Position
             | Right
             | RepeatString
+            | Normalize
             | Trim
             | TrimLeading
             | TrimTrailing
@@ -4416,6 +4420,7 @@ impl BinaryFunc {
             | Power
             | PowerNumeric
             | RepeatString
+            | Normalize
             | ArrayRemove
             | ListRemove
             | LikeEscape
@@ -4745,6 +4750,7 @@ impl BinaryFunc {
             BinaryFunc::PrettySql => (false, false),
             BinaryFunc::RegexpReplace { .. } => (false, false),
             BinaryFunc::StartsWith => (false, false),
+            BinaryFunc::Normalize => (false, false),
         }
     }
 }
@@ -4932,6 +4938,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::Power => f.write_str("power"),
             BinaryFunc::PowerNumeric => f.write_str("power_numeric"),
             BinaryFunc::RepeatString => f.write_str("repeat"),
+            BinaryFunc::Normalize => f.write_str("normalize"),
             BinaryFunc::GetBit => f.write_str("get_bit"),
             BinaryFunc::GetByte => f.write_str("get_byte"),
             BinaryFunc::ConstantTimeEqBytes => f.write_str("constant_time_compare_bytes"),
@@ -5132,6 +5139,7 @@ impl Arbitrary for BinaryFunc {
             Just(BinaryFunc::Position).boxed(),
             Just(BinaryFunc::Right).boxed(),
             Just(BinaryFunc::RepeatString).boxed(),
+            Just(BinaryFunc::Normalize).boxed(),
             Just(BinaryFunc::Trim).boxed(),
             Just(BinaryFunc::TrimLeading).boxed(),
             Just(BinaryFunc::TrimTrailing).boxed(),
@@ -5329,6 +5337,7 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
             BinaryFunc::Position => Position(()),
             BinaryFunc::Right => Right(()),
             BinaryFunc::RepeatString => RepeatString(()),
+            BinaryFunc::Normalize => Normalize(()),
             BinaryFunc::Trim => Trim(()),
             BinaryFunc::TrimLeading => TrimLeading(()),
             BinaryFunc::TrimTrailing => TrimTrailing(()),
@@ -5544,6 +5553,7 @@ impl RustType<ProtoBinaryFunc> for BinaryFunc {
                 Position(()) => Ok(BinaryFunc::Position),
                 Right(()) => Ok(BinaryFunc::Right),
                 RepeatString(()) => Ok(BinaryFunc::RepeatString),
+                Normalize(()) => Ok(BinaryFunc::Normalize),
                 Trim(()) => Ok(BinaryFunc::Trim),
                 TrimLeading(()) => Ok(BinaryFunc::TrimLeading),
                 TrimTrailing(()) => Ok(BinaryFunc::TrimTrailing),
@@ -6044,6 +6054,7 @@ derive_unary!(
     MapBuildFromRecordList,
     Upper,
     Lower,
+    NormalizeNfc,
     Cos,
     Acos,
     Cosh,
@@ -6857,6 +6868,7 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             UnaryFunc::MapLength(_) => MapLength(()),
             UnaryFunc::Upper(_) => Upper(()),
             UnaryFunc::Lower(_) => Lower(()),
+            UnaryFunc::NormalizeNfc(_) => NormalizeNfc(()),
             UnaryFunc::Cos(_) => Cos(()),
             UnaryFunc::Acos(_) => Acos(()),
             UnaryFunc::Cosh(_) => Cosh(()),
@@ -7353,6 +7365,7 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 MapLength(()) => Ok(impls::MapLength.into()),
                 Upper(()) => Ok(impls::Upper.into()),
                 Lower(()) => Ok(impls::Lower.into()),
+                NormalizeNfc(()) => Ok(impls::NormalizeNfc.into()),
                 Cos(()) => Ok(impls::Cos.into()),
                 Acos(()) => Ok(impls::Acos.into()),
                 Cosh(()) => Ok(impls::Cosh.into()),
@@ -7890,6 +7903,17 @@ fn repeat_string<'a>(
         return Err(EvalError::LengthTooLarge);
     }
     Ok(Datum::String(temp_storage.push_string(string.repeat(len))))
+}
+
+fn normalize_string<'a>(
+    text: Datum<'a>,
+    form: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let text = text.unwrap_str();
+    let form = normalization::lookup_form(form.unwrap_str())?;
+    let normalized = form.normalize(text);
+    Ok(Datum::String(temp_storage.push_string(normalized)))
 }
 
 fn replace<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {

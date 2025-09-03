@@ -2300,6 +2300,10 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(UInt32, UInt32) => Operation::nullary(|_ecx| catalog_name_only!("mod")) => UInt32, oid::FUNC_MOD_UINT32_OID;
             params!(UInt64, UInt64) => Operation::nullary(|_ecx| catalog_name_only!("mod")) => UInt64, oid::FUNC_MOD_UINT64_OID;
         },
+        "normalize" => Scalar {
+            params!(String) => UnaryFunc::NormalizeNfc(func::NormalizeNfc) => String, 4350;
+            params!(String, String) => BinaryFunc::Normalize => String, 4350;
+        },
         "now" => Scalar {
             params!() => UnmaterializableFunc::CurrentTimestamp => TimestampTz, 1299;
         },
