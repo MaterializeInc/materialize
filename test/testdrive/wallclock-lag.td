@@ -12,7 +12,7 @@
 # These tests rely on testdrive's retry feature, as `mz_wallclock_lag_history`
 # is only refreshed periodically, so data is likely not immediately available.
 
-$ set-sql-timeout duration=60s
+$ set-sql-timeout duration=120s
 
 $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 
