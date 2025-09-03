@@ -631,7 +631,7 @@ impl Default for FuseAndCollapse {
                 // Some optimizations fight against this, and we want to be sure to end as a
                 // `MirRelationExpr::Constant` if that is the case, so that subsequent use can
                 // clearly see this.
-                Box::new(fold_constants_fixpoint()),
+                Box::new(fold_constants_fixpoint(true)),
             ],
         }
     }
@@ -672,6 +672,8 @@ pub fn fuse_and_collapse_fixpoint() -> Fixpoint {
 /// Does constant folding to a fixpoint: An expression all of whose leaves are constants, of size
 /// small enough to be inlined and folded should reach a single `MirRelationExpr::Constant`.
 ///
+/// If `limit` is false, it does constant folding even on large constants.
+///
 /// This needs to call `FoldConstants` together with `NormalizeLets` in a fixpoint loop, because
 /// currently `FoldConstants` doesn't inline CTEs, so these two need to alternate until fixpoint.
 ///
@@ -679,13 +681,17 @@ pub fn fuse_and_collapse_fixpoint() -> Fixpoint {
 /// Let.
 ///
 /// We also call `ReduceScalars`, because that does constant folding inside scalar expressions.
-pub fn fold_constants_fixpoint() -> Fixpoint {
+pub fn fold_constants_fixpoint(limit: bool) -> Fixpoint {
     Fixpoint {
         name: "fold_constants_fixpoint",
         limit: 100,
         transforms: vec![
             Box::new(FoldConstants {
-                limit: Some(FOLD_CONSTANTS_LIMIT),
+                limit: if limit {
+                    Some(FOLD_CONSTANTS_LIMIT)
+                } else {
+                    None
+                },
             }),
             Box::new(canonicalization::ReduceScalars),
             Box::new(NormalizeLets::new(false)),
@@ -833,7 +839,7 @@ impl Optimizer {
                 limit: 100,
                 transforms: vec![
                     Box::new(EquivalencePropagation::default()),
-                    Box::new(fold_constants_fixpoint()),
+                    Box::new(fold_constants_fixpoint(true)),
                     Box::new(Demand::default()),
                     // Demand might have introduced dummies, so let's also do a ProjectionPushdown.
                     Box::new(ProjectionPushdown::default()),
@@ -862,7 +868,7 @@ impl Optimizer {
             // - The rendering expects some invariants about Let/LetRecs.
             // - `CollectIndexRequests` needs a normalized plan.
             //   https://github.com/MaterializeInc/database-issues/issues/6371
-            Box::new(fold_constants_fixpoint()),
+            Box::new(fold_constants_fixpoint(true)),
             Box::new(
                 Typecheck::new(ctx.typecheck())
                     .disallow_new_globals()
@@ -913,7 +919,7 @@ impl Optimizer {
                     // The last RelationCSE before JoinImplementation should be with
                     // inline_mfp = true.
                     Box::new(cse::relation_cse::RelationCSE::new(true)),
-                    Box::new(fold_constants_fixpoint()),
+                    Box::new(fold_constants_fixpoint(true)),
                 ],
             }),
             Box::new(
@@ -954,10 +960,10 @@ impl Optimizer {
 
     /// Builds a tiny optimizer, which just folds constants. For more details, see
     /// [fold_constants_fixpoint].
-    pub fn constant_optimizer(_ctx: &mut TransformCtx) -> Self {
+    pub fn constant_optimizer(_ctx: &mut TransformCtx, limit: bool) -> Self {
         Self {
             name: "fast_path_optimizer",
-            transforms: vec![Box::new(fold_constants_fixpoint())],
+            transforms: vec![Box::new(fold_constants_fixpoint(limit))],
         }
     }
 

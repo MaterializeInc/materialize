@@ -214,3 +214,148 @@ ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"XX000"}
 ReadyForQuery {"status":"I"}
 ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"XX000"},{"typ":"M","value":"COPY delimiter and quote must be different"}]}
 ReadyForQuery {"status":"I"}
+
+# Regression test for https://github.com/MaterializeInc/database-issues/issues/9632
+send
+Query {"query": "CREATE TABLE t2 (t timestamptz default now(), x int, y text)"}
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "COPY t2 (x, y) FROM STDIN WITH (FORMAT CSV)"}
+CopyData "1,one\n"
+CopyData "2,\"two\"\n"
+CopyData "3,\"\"\"three\"\"\"\n"
+CopyData "4,\"fo,ur\"\n"
+CopyData "5,\"\"\n"
+CopyData "6,\n"
+CopyDone
+Query {"query": "SELECT count(*) FROM t2"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+----
+CopyIn {"format":"text","column_formats":["text","text"]}
+CommandComplete {"tag":"COPY 6"}
+ReadyForQuery {"status":"I"}
+RowDescription {"fields":[{"name":"count"}]}
+DataRow {"fields":["6"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+
+# Test our error msg for mz_now as a default value.
+send
+Query {"query": "CREATE TABLE t3 (t timestamptz default mz_now(), x int, y text)"}
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "COPY t3 (x, y) FROM STDIN WITH (FORMAT CSV)"}
+CopyData "1,one\n"
+CopyData "2,\"two\"\n"
+CopyData "3,\"\"\"three\"\"\"\n"
+CopyData "4,\"fo,ur\"\n"
+CopyData "5,\"\"\n"
+CopyData "6,\n"
+CopyDone
+----
+
+until
+ReadyForQuery
+----
+CopyIn {"format":"text","column_formats":["text","text"]}
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"0A000"},{"typ":"M","value":"cannot call mz_now in this "}]}
+ReadyForQuery {"status":"I"}
+
+# Test some more exotic unmaterializable functions as default values.
+send
+Query {"query": "CREATE TABLE t4 (t text default current_database(), x int, y text)"}
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "COPY t4 (x, y) FROM STDIN WITH (FORMAT CSV)"}
+CopyData "1,one\n"
+CopyData "2,\"two\"\n"
+CopyData "3,\"\"\"three\"\"\"\n"
+CopyData "4,\"fo,ur\"\n"
+CopyData "5,\"\"\n"
+CopyData "6,\n"
+CopyDone
+Query {"query": "SELECT * FROM t4"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+----
+CopyIn {"format":"text","column_formats":["text","text"]}
+CommandComplete {"tag":"COPY 6"}
+ReadyForQuery {"status":"I"}
+RowDescription {"fields":[{"name":"t"},{"name":"x"},{"name":"y"}]}
+DataRow {"fields":["materialize","5","NULL"]}
+DataRow {"fields":["materialize","6","NULL"]}
+DataRow {"fields":["materialize","1","one"]}
+DataRow {"fields":["materialize","2","two"]}
+DataRow {"fields":["materialize","4","fo,ur"]}
+DataRow {"fields":["materialize","3","\"three\""]}
+CommandComplete {"tag":"SELECT 6"}
+ReadyForQuery {"status":"I"}
+
+# `current_user()` depends on both the `Session` and the `CatalogState`.
+# This test also has a non-trivial expression in the default value.
+send
+Query {"query": "CREATE TABLE t5 (t text default 'user:' || current_user(), x int, y text)"}
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "COPY t5 (x, y) FROM STDIN WITH (FORMAT CSV)"}
+CopyData "1,one\n"
+CopyData "2,\"two\"\n"
+CopyData "3,\"\"\"three\"\"\"\n"
+CopyData "4,\"fo,ur\"\n"
+CopyData "5,\"\"\n"
+CopyData "6,\n"
+CopyDone
+Query {"query": "SELECT * FROM t5"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+----
+CopyIn {"format":"text","column_formats":["text","text"]}
+CommandComplete {"tag":"COPY 6"}
+ReadyForQuery {"status":"I"}
+RowDescription {"fields":[{"name":"t"},{"name":"x"},{"name":"y"}]}
+DataRow {"fields":["user:materialize","5","NULL"]}
+DataRow {"fields":["user:materialize","6","NULL"]}
+DataRow {"fields":["user:materialize","1","one"]}
+DataRow {"fields":["user:materialize","2","two"]}
+DataRow {"fields":["user:materialize","4","fo,ur"]}
+DataRow {"fields":["user:materialize","3","\"three\""]}
+CommandComplete {"tag":"SELECT 6"}
+ReadyForQuery {"status":"I"}

@@ -54,6 +54,7 @@ use crate::command::{
 use crate::coord::{Coordinator, ExecuteContextExtra};
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
+use crate::optimize::dataflows::{EvalTime, ExprPrepStyle};
 use crate::optimize::{self, Optimize};
 use crate::session::{
     EndTransactionAction, PreparedStatement, Session, SessionConfig, TransactionId,
@@ -780,12 +781,21 @@ impl SessionClient {
         // self.session returns a mut ref, so we can't call it twice.
         let pcx = self.session().pcx().clone();
 
+        let session_meta = self.session().meta();
+
         let catalog = self.catalog_snapshot("insert_rows").await;
         let conn_catalog = catalog.for_session(self.session());
+        let catalog_state = conn_catalog.state();
 
         // Collect optimizer parameters.
         let optimizer_config = optimize::OptimizerConfig::from(conn_catalog.system_vars());
-        let mut optimizer = optimize::view::Optimizer::new(optimizer_config, None);
+        let prep = ExprPrepStyle::OneShot {
+            logical_time: EvalTime::NotAvailable,
+            session: &session_meta,
+            catalog_state,
+        };
+        let mut optimizer =
+            optimize::view::Optimizer::new_with_prep_no_limit(optimizer_config.clone(), None, prep);
 
         let result: Result<_, AdapterError> =
             mz_sql::plan::plan_copy_from(&pcx, &conn_catalog, id, columns, rows)
