@@ -70,33 +70,47 @@ The representation types will look like the following:
 
 ```rust
 pub enum ReprScalarType {
-  Bool,
-  Int16,
-  Int32,
-  Int64,
-  UInt8, // also includes SqlScalarType::PgLegacyChar
-  UInt16,
-  UInt32, // also includes SqlScalarType::{Oid,RegClass,RegProc,RegType}
-  UInt64,
-  Float32,
-  Float64,
-  Numeric,
-  Date,
-  Time,
-  Timestamp  { precision: Option<TimestampPrecision>, },
-  TimestampTz { precision: Option<TimestampPrecision>, },
-  MzTimestamp,
-  Interval,
-  Bytes,
-  Jsonb,
-  String, // also includes SqlScalarType::{VarChar,Char,PgLegacyName}
-  Uuid,
-  Array(Box<ReprScalarType>), // also includes SqlScalarType::Int2Vector
-  List { element_type: Box<ReprScalarType> }, // also includes SqlScalarType::Record
-  Map { value_type: Box<ReprScalarType> },
-  Range { element_type: Box<ReprScalarType> },
-  MzAclItem,
-  AclItem,
+    Bool,
+    Int16,
+    Int32,
+    Int64,
+    UInt8, // also includes SqlScalarType::PgLegacyChar
+    UInt16,
+    UInt32, // also includes SqlScalarType::{Oid,RegClass,RegProc,RegType}
+    UInt64,
+    Float32,
+    Float64,
+    Numeric,
+    Date,
+    Time,
+    Timestamp {
+        precision: Option<TimestampPrecision>,
+    },
+    TimestampTz {
+        precision: Option<TimestampPrecision>,
+    },
+    MzTimestamp,
+    Interval,
+    Bytes,
+    Jsonb,
+    String, // also includes SqlScalarType::{VarChar,Char,PgLegacyName}
+    Uuid,
+    Array(Box<ReprScalarType>),
+    Int2Vector, // differs from Array enough to stick around
+    List {
+        element_type: Box<ReprScalarType>,
+    },
+    Record {
+        fields: Box<[ReprColumnType]>,
+    },
+    Map {
+        value_type: Box<ReprScalarType>,
+    },
+    Range {
+        element_type: Box<ReprScalarType>,
+    },
+    MzAclItem,
+    AclItem,
 }
 
 pub struct ReprColumnType {
@@ -114,7 +128,10 @@ In `EXPLAIN PLAN`s, we will report `ReprScalarType`s with `r`-prefixed names, wh
 ### What changes?
 
   - Rename `ScalarType` to `SqlScalarType`; ditto `ColumnType` and `RelationType`.
-  - Introduce `ReprScalarType` and a corresponding `ReprColumnType` and (possibliy) `ReprRelationType`. Add a `From` instance to compile `Sql*` types to `Reper*` types.
+  - Introduce `ReprScalarType` and a corresponding `ReprColumnType` and (possibliy) `ReprRelationType`. Add a `From` instance to compile `Sql*` types to `Repr*` types.
+
+These first two steps are in [#33321](https://github.com/MaterializeInc/materialize/pull/33321).
+
   - Adapt `MirScalarExpr`, `MirRelationExpr`, `PlanNode`, and `Expr` to use `ReprColumnType`.
     + `TableFunc` uses `ScalarType`. We can split into `Sql` and `Repr` versions, or have it take the type as a parameter.
     + `AggregateFunc` is already split; the `expr` crate's `MapAgg` can use `ReprScalarType`.
