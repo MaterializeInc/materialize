@@ -510,8 +510,8 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
                     tracing::warn!(
                         %e,
                         "timely-{} source({}) failed to commit offsets: resume_upper={}",
-                        config.id,
                         config.worker_id,
+                        config.id,
                         resume_upper.pretty()
                     );
                 }
@@ -525,8 +525,8 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
                         tracing::warn!(
                             %e,
                             "timely-{} source({}) failed to commit offsets: resume_upper={}",
-                            config.id,
                             config.worker_id,
+                            config.id,
                             frontier.pretty()
                         );
                     }
