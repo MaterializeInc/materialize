@@ -249,7 +249,7 @@ Explained Query:
       →Consolidating Union
         →Unarranged Raw Stream
           →Distinct GroupAggregate
-            →Fused Map/Filter/Project
+            →Fused with Child Map/Filter/Project
               Project: #0
                 →Arranged materialize.public.t
                   Key: (#0{a})
@@ -277,7 +277,7 @@ Explained Query:
   →Threshold Diffs #0
     →Arrange (#0)
       →Consolidating Union
-        →Fused Map/Filter/Project
+        →Fused with Child Map/Filter/Project
           Project: #0
             →Arranged materialize.public.t
               Key: (#0{a})
@@ -342,7 +342,7 @@ Explained Query:
         Aggregations: min, max
         Key:
           Project: ()
-        →Fused Map/Filter/Project
+        →Fused with Child Map/Filter/Project
           Project: #0
             →Arranged materialize.public.t
               Key: (#0{a})
@@ -358,7 +358,7 @@ Explained Query:
             Map: null, null
               →Consolidating Union
                 →Negate Diffs
-                  →Fused Map/Filter/Project
+                  →Fused with Child Map/Filter/Project
                     Project: ()
                       →Arranged l0
                         Key: ()
@@ -464,12 +464,12 @@ Explained Query:
               filter=((#0{a} < #1{a}))
             →Arrange (empty key)
               →Distinct GroupAggregate
-                →Fused Map/Filter/Project
+                →Fused with Child Map/Filter/Project
                   Project: #0
                     →Arranged materialize.public.t
                       Key: (#0{a})
             →Arrange (empty key)
-              →Fused Map/Filter/Project
+              →Fused with Child Map/Filter/Project
                 Project: #0
                   →Read materialize.public.mv
   →Return
@@ -484,11 +484,11 @@ Explained Query:
             filter=((#0{b} > #1{b}))
           →Arrange (empty key)
             →Distinct GroupAggregate
-              →Fused Map/Filter/Project
+              →Fused with Child Map/Filter/Project
                 Project: #1
                   →Read l0
           →Arrange (empty key)
-            →Fused Map/Filter/Project
+            →Fused with Child Map/Filter/Project
               Project: #1
                 →Read materialize.public.mv
 
@@ -507,7 +507,7 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
 Explained Query:
   →With
     cte l0 =
-      →Fused Map/Filter/Project
+      →Fused with Child Map/Filter/Project
         Project: #1
           →Arranged materialize.public.t
             Key: (#0{a})
@@ -553,7 +553,7 @@ Explained Query:
             Map: null
               →Consolidating Union
                 →Negate Diffs
-                  →Fused Map/Filter/Project
+                  →Fused with Child Map/Filter/Project
                     Project: #0
                       →Read l3
                 →Unarranged Raw Stream
@@ -566,7 +566,7 @@ Explained Query:
             Map: null
               →Consolidating Union
                 →Negate Diffs
-                  →Fused Map/Filter/Project
+                  →Fused with Child Map/Filter/Project
                     Project: #0
                       →Read l4
                 →Unarranged Raw Stream
@@ -594,7 +594,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
 Explained Query:
   →With
     cte l0 =
-      →Fused Map/Filter/Project
+      →Fused with Child Map/Filter/Project
         Filter: (#1{b}) IS NOT NULL
           →Arranged materialize.public.t
             Key: (#0{a})
@@ -603,7 +603,7 @@ Explained Query:
         →Stream l0
     cte l2 =
       →Arrange (#0{b})
-        →Fused Map/Filter/Project
+        →Fused with Child Map/Filter/Project
           Project: #1
             →Read l0
     cte l3 =
@@ -631,14 +631,14 @@ Explained Query:
                 Join stage 0 in %0 with lookup key #0{b}
                 →Arranged l2
                 →Distinct GroupAggregate
-                  →Fused Map/Filter/Project
+                  →Fused with Child Map/Filter/Project
                     Project: #1
                       →Read l3
-            →Fused Map/Filter/Project
+            →Fused with Child Map/Filter/Project
               Project: ()
                 →Arranged materialize.public.t
                   Key: (#0{a})
-      →Fused Map/Filter/Project
+      →Fused with Child Map/Filter/Project
         Project: #0, #2
           →Read l3
 
@@ -658,7 +658,7 @@ Explained Query:
   →With
     cte l0 =
       →Arrange (empty key)
-        →Fused Map/Filter/Project
+        →Fused with Child Map/Filter/Project
           Project: #2
           Map: (#0{a} * #1{b})
             →Arranged materialize.public.t
@@ -703,7 +703,7 @@ materialize.public.iv_a_idx:
     →Stream materialize.public.iv
 
 materialize.public.iv:
-  →Fused Map/Filter/Project
+  →Fused with Child Map/Filter/Project
     Filter: (#0{a}) IS NOT NULL
       →Arranged materialize.public.t
         Key: (#0{a})
@@ -776,7 +776,7 @@ FROM
 Explained Query:
   →With
     cte l0 =
-      →Fused Map/Filter/Project
+      →Fused with Child Map/Filter/Project
         Project: #0
           →Arranged materialize.public.t
             Key: (#0{a})
@@ -814,7 +814,7 @@ Explained Query:
           Join stage 0 in %1
           →Arrange (empty key)
             →Distinct GroupAggregate
-              →Fused Map/Filter/Project
+              →Fused with Child Map/Filter/Project
                 Project: #0
                   →Read l2
           →Arranged l1
@@ -835,7 +835,7 @@ Explained Query:
   →With
     cte l0 =
       →Arrange (empty key)
-        →Fused Map/Filter/Project
+        →Fused with Child Map/Filter/Project
           Project: #0
             →Arranged materialize.public.t
               Key: (#0{a})
@@ -865,7 +865,7 @@ WHERE t1.b = t2.b AND t2.b = t3.b
 Explained Query:
   →With
     cte l0 =
-      →Fused Map/Filter/Project
+      →Fused with Child Map/Filter/Project
         Filter: (#1{b}) IS NOT NULL
           →Arranged materialize.public.t
             Key: (#0{a})
@@ -886,7 +886,7 @@ Explained Query:
       →Arranged l1
       →Arranged l1
       →Arrange (#0{b})
-        →Fused Map/Filter/Project
+        →Fused with Child Map/Filter/Project
           Project: #1
             →Read l0
 
@@ -929,7 +929,7 @@ Explained Query:
     →Arranged materialize.public.t
     →Arranged materialize.public.u
     →Arrange (#0{e}, #1{f})
-      →Fused Map/Filter/Project
+      →Fused with Child Map/Filter/Project
         Filter: (#0{e}) IS NOT NULL AND (#1{f}) IS NOT NULL
           →Arranged materialize.public.v
             Key: (#0{e})
@@ -958,7 +958,7 @@ Explained Query:
     →Arranged materialize.public.t
     →Arranged materialize.public.u
     →Arrange (#0{e}, #1{f})
-      →Fused Map/Filter/Project
+      →Fused with Child Map/Filter/Project
         Filter: (#0{e}) IS NOT NULL AND (#1{f}) IS NOT NULL
           →Arranged materialize.public.v
             Key: (#0{e})
@@ -1283,7 +1283,7 @@ Explained Query:
   →Map/Filter/Project
     Project: #1
     Map: record_get[0](#0)
-      →Fused Table Function unnest_list
+      →Fused with Child Table Function unnest_list
         →Non-incremental GroupAggregate
           Aggregation: lag[ignore_nulls=true, order_by=[#0 asc nulls_last]](row(row(row(#0), row(#0{x}, 3, "default")), (#0{x} || #0{x})))
         Key:
@@ -1305,7 +1305,7 @@ Explained Query:
   →Map/Filter/Project
     Project: #1
     Map: record_get[0](#0)
-      →Fused Table Function unnest_list
+      →Fused with Child Table Function unnest_list
         →Non-incremental GroupAggregate
           Aggregation: first_value[order_by=[#0 asc nulls_last] rows between 5 preceding and current row](row(row(row(#0), #0{x}), (#0{x} || #0{x})))
         Key:
@@ -1408,7 +1408,7 @@ Explained Query:
     Join stage 0 in %1 with lookup key #0{c}
     →Arranged materialize.public.t
     →Arrange (#0{c})
-      →Fused Map/Filter/Project
+      →Fused with Child Map/Filter/Project
         Project: #1, #0
         Filter: (#1{c}) IS NOT NULL
           →Arranged materialize.public.u
@@ -1484,7 +1484,7 @@ Explained Query:
             map=((#0{a} + #0{a}), (#1{b} + #2{b}))
           →Arranged l0
           →Arranged l0
-        →Fused Map/Filter/Project
+        →Fused with Child Map/Filter/Project
           Filter: (#1{b} > 5)
             →Arranged materialize.public.t
               Key: (#0{a})
@@ -1511,7 +1511,7 @@ Explained Query:
   →With
     cte l0 =
       →Arrange (#1{b})
-        →Fused Map/Filter/Project
+        →Fused with Child Map/Filter/Project
           Filter: (#1{b}) IS NOT NULL
             →Arranged materialize.public.t
               Key: (#0{a})
@@ -1524,7 +1524,7 @@ Explained Query:
             map=((#1{a} + #2{a}), (#0{b} + #0{b}))
           →Arranged l0
           →Arranged l0
-        →Fused Map/Filter/Project
+        →Fused with Child Map/Filter/Project
           Filter: (#1{b} > 5)
             →Arranged materialize.public.t
               Key: (#0{a})
@@ -1572,7 +1572,7 @@ Explained Query:
             map=((#1{a} + #2{a}), (#0{b} + #0{b}))
           →Arranged l0
           →Arranged l0
-        →Fused Map/Filter/Project
+        →Fused with Child Map/Filter/Project
           Filter: (#1{b} > 5)
             →Arranged materialize.public.t_non_null
               Key: (#0{a})
@@ -1607,7 +1607,7 @@ Explained Query:
           →Arranged materialize.public.t_non_null
         →Arrange ((#1{b} + 1))
           →Arranged materialize.public.t_non_null
-      →Fused Map/Filter/Project
+      →Fused with Child Map/Filter/Project
         Filter: (#1{b} > 5)
           →Arranged materialize.public.t_non_null
             Key: (#0{a})
@@ -1675,7 +1675,7 @@ Explained Query:
       →Arranged materialize.public.t
       →Arrange (#0)
         →Constant (1 row)
-    →Fused Map/Filter/Project
+    →Fused with Child Map/Filter/Project
       Project: #1, #0
       Filter: (#1{c} = 3)
         →Arranged materialize.public.u
@@ -1898,7 +1898,7 @@ Explained Query:
         Map: 0
           →Consolidating Union
             →Negate Diffs
-              →Fused Map/Filter/Project
+              →Fused with Child Map/Filter/Project
                 Project: ()
                   →Arranged l0
                     Key: ()
@@ -1937,7 +1937,7 @@ Explained Query:
         Map: 0
           →Consolidating Union
             →Negate Diffs
-              →Fused Map/Filter/Project
+              →Fused with Child Map/Filter/Project
                 Project: ()
                   →Arranged l0
                     Key: ()
@@ -1971,7 +1971,7 @@ Explained Query:
         Map: 0
           →Consolidating Union
             →Negate Diffs
-              →Fused Map/Filter/Project
+              →Fused with Child Map/Filter/Project
                 Project: ()
                   →Arranged l0
                     Key: ()
@@ -2014,7 +2014,7 @@ Explained Query:
     cte l0 =
       →Non-monotonic TopK
         Offset 1
-        →Fused Map/Filter/Project
+        →Fused with Child Map/Filter/Project
           Project: #2
           Map: (#0{a} * #1{b})
             →Read materialize.public.t4
@@ -2024,7 +2024,7 @@ Explained Query:
         →Table Function guard_subquery_size(#0)
           →Accumulable GroupAggregate
             Simple aggregates: count(*)
-            →Fused Map/Filter/Project
+            →Fused with Child Map/Filter/Project
               Project: ()
                 →Read l0
   →Return
@@ -2044,13 +2044,47 @@ Explained Query:
                 →Negate Diffs
                   →Unarranged Raw Stream
                     →Distinct GroupAggregate
-                      →Fused Map/Filter/Project
+                      →Fused with Child Map/Filter/Project
                         Project: ()
                           →Read l1
                 →Constant (1 row)
 
 Source materialize.public.t4
   project=(#0, #1)
+
+Target cluster: no_replicas
+
+EOF
+
+# MFP fused with parent ArrangeBy
+statement ok
+CREATE TABLE tnn (w int not null, x int not null, y int not null);
+
+statement ok
+CREATE TABLE unn (y int not null, x int not null);
+
+statement ok
+CREATE INDEX tnn_idx ON tnn(x, y);
+
+statement ok
+CREATE INDEX unn_idx ON unn(y, x);
+
+query T multiline
+EXPLAIN
+SELECT * FROM tnn JOIN unn USING (x, y);
+----
+Explained Query:
+  →Differential Join %0 » %1
+    Join stage 0 in %1 with lookup key #0{y}, #1{x}
+    →Arrange (#2{y}, #1{x})
+      →Fused with Parent Map/Filter/Project
+        Project: #2, #0, #1
+        →Arranged materialize.public.tnn
+    →Arranged materialize.public.unn
+
+Used Indexes:
+  - materialize.public.tnn_idx (*** full scan ***)
+  - materialize.public.unn_idx (differential join)
 
 Target cluster: no_replicas
 
@@ -2071,12 +2105,12 @@ Explained Query:
       map=((#0{a} = #1{b}))
     →Arrange (empty key)
       →Distinct GroupAggregate
-        →Fused Map/Filter/Project
+        →Fused with Child Map/Filter/Project
           Project: #0
             →Read materialize.public.t
     →Arrange (empty key)
       →Distinct GroupAggregate
-        →Fused Map/Filter/Project
+        →Fused with Child Map/Filter/Project
           Project: #1
             →Read materialize.public.t
 

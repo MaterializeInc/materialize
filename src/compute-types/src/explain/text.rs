@@ -120,7 +120,7 @@ impl Plan {
                     }
                     GetPlan::Arrangement(key, Some(val), mfp) => {
                         if !mfp.is_identity() {
-                            writeln!(f, "{}→Fused Map/Filter/Project", ctx.indent)?;
+                            writeln!(f, "{}→Fused with Child Map/Filter/Project", ctx.indent)?;
                             ctx.indent += 1;
                             mode.expr(mfp, None).fmt_default_text(f, ctx)?;
                             ctx.indent += 1;
@@ -135,7 +135,7 @@ impl Plan {
                     }
                     GetPlan::Arrangement(key, None, mfp) => {
                         if !mfp.is_identity() {
-                            writeln!(f, "{}→Fused Map/Filter/Project", ctx.indent)?;
+                            writeln!(f, "{}→Fused with Child Map/Filter/Project", ctx.indent)?;
                             ctx.indent += 1;
                             mode.expr(mfp, None).fmt_default_text(f, ctx)?;
                             ctx.indent += 1;
@@ -148,7 +148,7 @@ impl Plan {
                     }
                     GetPlan::Collection(mfp) => {
                         if !mfp.is_identity() {
-                            writeln!(f, "{}→Fused Map/Filter/Project", ctx.indent)?;
+                            writeln!(f, "{}→Fused with Child Map/Filter/Project", ctx.indent)?;
                             ctx.indent += 1;
                             mode.expr(mfp, None).fmt_default_text(f, ctx)?;
                             ctx.indent += 1;
@@ -232,7 +232,7 @@ impl Plan {
             } => {
                 ctx.indent.set();
                 if !mfp_after.expressions.is_empty() || !mfp_after.predicates.is_empty() {
-                    writeln!(f, "{}→Fused Map/Filter/Project", ctx.indent)?;
+                    writeln!(f, "{}→Fused with Child Map/Filter/Project", ctx.indent)?;
                     ctx.indent += 1;
                     mode.expr(mfp_after, None).fmt_default_text(f, ctx)?;
                     ctx.indent += 1;
@@ -294,7 +294,7 @@ impl Plan {
             } => {
                 ctx.indent.set();
                 if !mfp_after.expressions.is_empty() || !mfp_after.predicates.is_empty() {
-                    writeln!(f, "{}→Fused Map/Filter/Project", ctx.indent)?;
+                    writeln!(f, "{}→Fused with Child Map/Filter/Project", ctx.indent)?;
                     ctx.indent += 1;
                     mode.expr(mfp_after, None).fmt_default_text(f, ctx)?;
                     ctx.indent += 1;
@@ -342,7 +342,11 @@ impl Plan {
                         }) = &plan
                         {
                             if *fused_unnest_list {
-                                writeln!(f, "{}→Fused Table Function unnest_list", ctx.indent)?;
+                                writeln!(
+                                    f,
+                                    "{}→Fused with Child Table Function unnest_list",
+                                    ctx.indent
+                                )?;
                                 ctx.indent += 1;
                             }
                         }
@@ -494,6 +498,7 @@ impl Plan {
                 input_mfp,
                 forms,
             } => {
+                ctx.indent.set();
                 if forms.raw && forms.arranged.is_empty() {
                     soft_assert_or_log!(forms.raw, "raw stream with no arrangements");
                     writeln!(f, "{}→Unarranged Raw Stream{annotations}", ctx.indent)?;
@@ -515,14 +520,15 @@ impl Plan {
                     writeln!(f, "{annotations}")?;
                 }
 
-                ctx.indented(|ctx| {
-                    if !input_mfp.expressions.is_empty() || !input_mfp.predicates.is_empty() {
-                        writeln!(f, "{}Pre-process Map/Filter/Project", ctx.indent)?;
-                        ctx.indented(|ctx| mode.expr(input_mfp, None).fmt_default_text(f, ctx))?;
-                    }
+                if !input_mfp.is_identity() {
+                    ctx.indent += 1;
+                    writeln!(f, "{}→Fused with Parent Map/Filter/Project", ctx.indent)?;
+                    ctx.indented(|ctx| mode.expr(input_mfp, None).fmt_default_text(f, ctx))?;
+                }
 
-                    input.fmt_text(f, ctx)
-                })?;
+                ctx.indent += 1;
+                input.fmt_text(f, ctx)?;
+                ctx.indent.reset();
             }
         }
 
