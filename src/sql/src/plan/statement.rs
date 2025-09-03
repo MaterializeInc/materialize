@@ -16,7 +16,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use mz_repr::namespaces::is_system_schema;
 use mz_repr::{
-    CatalogItemId, ColumnIndex, ColumnType, RelationDesc, RelationVersionSelector, ScalarType,
+    CatalogItemId, ColumnIndex, RelationDesc, RelationVersionSelector, SqlColumnType, SqlScalarType,
 };
 use mz_sql_parser::ast::{
     ColumnDef, ColumnName, ConnectionDefaultAwsPrivatelink, CreateMaterializedViewStatement,
@@ -64,7 +64,7 @@ pub struct StatementDesc {
     /// produces rows.
     pub relation_desc: Option<RelationDesc>,
     /// The determined types of the parameters in the statement, if any.
-    pub param_types: Vec<ScalarType>,
+    pub param_types: Vec<SqlScalarType>,
     /// Whether the statement is a `COPY` statement.
     pub is_copy: bool,
 }
@@ -87,7 +87,7 @@ impl StatementDesc {
             .unwrap_or(0)
     }
 
-    fn with_params(mut self, param_types: Vec<ScalarType>) -> Self {
+    fn with_params(mut self, param_types: Vec<SqlScalarType>) -> Self {
         self.param_types = param_types;
         self
     }
@@ -105,7 +105,7 @@ pub fn describe(
     pcx: &PlanContext,
     catalog: &dyn SessionCatalog,
     stmt: Statement<Aug>,
-    param_types_in: &[Option<ScalarType>],
+    param_types_in: &[Option<SqlScalarType>],
 ) -> Result<StatementDesc, PlanError> {
     let mut param_types = BTreeMap::new();
     for (i, ty) in param_types_in.iter().enumerate() {
@@ -488,7 +488,7 @@ pub struct StatementContext<'a> {
     pub catalog: &'a dyn SessionCatalog,
     /// The types of the parameters in the query. This is filled in as planning
     /// occurs.
-    pub param_types: RefCell<BTreeMap<usize, ScalarType>>,
+    pub param_types: RefCell<BTreeMap<usize, SqlScalarType>>,
     /// Whether the statement contains an expression that can make the exact column list
     /// ambiguous. For example `NATURAL JOIN` or `SELECT *`. This is filled in as planning occurs.
     pub ambiguous_columns: RefCell<bool>,
@@ -842,7 +842,7 @@ impl<'a> StatementContext<'a> {
         self.require_feature_flag(flag).is_ok()
     }
 
-    pub fn finalize_param_types(self) -> Result<Vec<ScalarType>, PlanError> {
+    pub fn finalize_param_types(self) -> Result<Vec<SqlScalarType>, PlanError> {
         let param_types = self.param_types.into_inner();
         let mut out = vec![];
         for (i, (n, typ)) in param_types.into_iter().enumerate() {
@@ -856,13 +856,13 @@ impl<'a> StatementContext<'a> {
 
     /// The returned String is more detailed when the `postgres_compat` flag is not set. However,
     /// the flag should be set in, e.g., the implementation of the `pg_typeof` function.
-    pub fn humanize_scalar_type(&self, typ: &ScalarType, postgres_compat: bool) -> String {
+    pub fn humanize_scalar_type(&self, typ: &SqlScalarType, postgres_compat: bool) -> String {
         self.catalog.humanize_scalar_type(typ, postgres_compat)
     }
 
     /// The returned String is more detailed when the `postgres_compat` flag is not set. However,
     /// the flag should be set in, e.g., the implementation of the `pg_typeof` function.
-    pub fn humanize_column_type(&self, typ: &ColumnType, postgres_compat: bool) -> String {
+    pub fn humanize_column_type(&self, typ: &SqlColumnType, postgres_compat: bool) -> String {
         self.catalog.humanize_column_type(typ, postgres_compat)
     }
 

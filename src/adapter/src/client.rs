@@ -33,7 +33,7 @@ use mz_ore::result::ResultExt;
 use mz_ore::task::AbortOnDropHandle;
 use mz_ore::thread::JoinOnDropHandle;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_repr::{CatalogItemId, ColumnIndex, Row, ScalarType};
+use mz_repr::{CatalogItemId, ColumnIndex, Row, SqlScalarType};
 use mz_sql::ast::{Raw, Statement};
 use mz_sql::catalog::{EnvironmentId, SessionCatalog};
 use mz_sql::session::hint::ApplicationNameHint;
@@ -567,7 +567,7 @@ impl SessionClient {
         name: String,
         stmt: Option<Statement<Raw>>,
         sql: String,
-        param_types: Vec<Option<ScalarType>>,
+        param_types: Vec<Option<SqlScalarType>>,
     ) -> Result<(), AdapterError> {
         let catalog = self.catalog_snapshot("prepare").await;
 

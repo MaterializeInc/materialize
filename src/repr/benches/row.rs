@@ -20,7 +20,7 @@ use mz_persist_types::columnar::{ColumnDecoder, Schema};
 use mz_persist_types::part::{Part, PartBuilder};
 use mz_repr::adt::date::Date;
 use mz_repr::adt::numeric::Numeric;
-use mz_repr::{ColumnType, Datum, ProtoRow, RelationDesc, Row, ScalarType};
+use mz_repr::{Datum, ProtoRow, RelationDesc, Row, SqlColumnType, SqlScalarType};
 use rand::distributions::{Alphanumeric, DistString};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -299,30 +299,30 @@ fn bench_roundtrip(c: &mut Criterion) {
     let schema = RelationDesc::from_names_and_types(vec![
         (
             "a",
-            ColumnType {
+            SqlColumnType {
                 nullable: false,
-                scalar_type: ScalarType::Bool,
+                scalar_type: SqlScalarType::Bool,
             },
         ),
         (
             "b",
-            ColumnType {
+            SqlColumnType {
                 nullable: true,
-                scalar_type: ScalarType::Bool,
+                scalar_type: SqlScalarType::Bool,
             },
         ),
         (
             "c",
-            ColumnType {
+            SqlColumnType {
                 nullable: false,
-                scalar_type: ScalarType::String,
+                scalar_type: SqlScalarType::String,
             },
         ),
         (
             "d",
-            ColumnType {
+            SqlColumnType {
                 nullable: true,
-                scalar_type: ScalarType::String,
+                scalar_type: SqlScalarType::String,
             },
         ),
     ]);
@@ -425,7 +425,7 @@ fn bench_json(c: &mut Criterion) {
 
     group.bench_function("encode/structured2", |b| {
         let schema =
-            RelationDesc::from_names_and_types(vec![("a", ScalarType::Jsonb.nullable(false))]);
+            RelationDesc::from_names_and_types(vec![("a", SqlScalarType::Jsonb.nullable(false))]);
         b.iter(|| {
             let mut builder = PartBuilder::new(&schema, &UnitSchema);
             for _ in 0..NUM_ROWS {
@@ -438,7 +438,7 @@ fn bench_json(c: &mut Criterion) {
 
     group.bench_function("decode/structured2", |b| {
         let schema =
-            RelationDesc::from_names_and_types(vec![("a", ScalarType::Jsonb.nullable(false))]);
+            RelationDesc::from_names_and_types(vec![("a", SqlScalarType::Jsonb.nullable(false))]);
         let mut builder = PartBuilder::new(&schema, &UnitSchema);
         builder.push(&row, &(), 1u64, 1i64);
         let part = builder.finish();
@@ -473,7 +473,7 @@ fn bench_string(c: &mut Criterion) {
 
     group.bench_function("encode/structured2", |b| {
         let schema =
-            RelationDesc::from_names_and_types(vec![("a", ScalarType::String.nullable(false))]);
+            RelationDesc::from_names_and_types(vec![("a", SqlScalarType::String.nullable(false))]);
         b.iter(|| {
             let mut builder = PartBuilder::new(&schema, &UnitSchema);
             for _ in 0..NUM_ROWS {
@@ -486,7 +486,7 @@ fn bench_string(c: &mut Criterion) {
 
     group.bench_function("decode/structured2", |b| {
         let schema =
-            RelationDesc::from_names_and_types(vec![("a", ScalarType::String.nullable(false))]);
+            RelationDesc::from_names_and_types(vec![("a", SqlScalarType::String.nullable(false))]);
         let mut builder = PartBuilder::new(&schema, &UnitSchema);
         builder.push(&row, &(), 1u64, 1i64);
         let part = builder.finish();

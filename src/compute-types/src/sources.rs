@@ -10,7 +10,7 @@
 //! Types for describing dataflow sources.
 
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use mz_repr::RelationType;
+use mz_repr::SqlRelationType;
 use mz_storage_types::controller::CollectionMetadata;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -29,7 +29,7 @@ pub struct SourceInstanceDesc<M> {
     /// Additional metadata used by the storage client of a compute instance to read it.
     pub storage_metadata: M,
     /// The relation type of this source
-    pub typ: RelationType,
+    pub typ: SqlRelationType,
 }
 
 impl RustType<ProtoSourceInstanceDesc> for SourceInstanceDesc<CollectionMetadata> {

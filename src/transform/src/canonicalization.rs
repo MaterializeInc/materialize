@@ -25,7 +25,7 @@ pub use topk_elision::TopKElision;
 use mz_expr::MirRelationExpr;
 
 use crate::TransformCtx;
-use crate::analysis::{DerivedBuilder, RelationType};
+use crate::analysis::{DerivedBuilder, SqlRelationType};
 
 /// A transform that visits each AST node and reduces scalar expressions.
 #[derive(Debug)]
@@ -47,7 +47,7 @@ impl crate::Transform for ReduceScalars {
         ctx: &mut TransformCtx,
     ) -> Result<(), crate::TransformError> {
         let mut builder = DerivedBuilder::new(ctx.features);
-        builder.require(RelationType);
+        builder.require(SqlRelationType);
         let derived = builder.visit(&*relation);
 
         // Descend the AST, reducing scalar expressions.
@@ -70,8 +70,8 @@ impl crate::Transform for ReduceScalars {
                 MirRelationExpr::Filter { predicates, .. } => {
                     let input_type = view
                         .last_child()
-                        .value::<RelationType>()
-                        .expect("RelationType required")
+                        .value::<SqlRelationType>()
+                        .expect("SqlRelationType required")
                         .as_ref()
                         .unwrap();
                     for predicate in predicates.iter_mut() {
@@ -82,8 +82,8 @@ impl crate::Transform for ReduceScalars {
                 MirRelationExpr::FlatMap { exprs, .. } => {
                     let input_type = view
                         .last_child()
-                        .value::<RelationType>()
-                        .expect("RelationType required")
+                        .value::<SqlRelationType>()
+                        .expect("SqlRelationType required")
                         .as_ref()
                         .unwrap();
                     for expr in exprs.iter_mut() {
@@ -93,8 +93,8 @@ impl crate::Transform for ReduceScalars {
                 MirRelationExpr::Map { scalars, .. } => {
                     // Use the output type, to incorporate the types of `scalars` as they land.
                     let output_type = view
-                        .value::<RelationType>()
-                        .expect("RelationType required")
+                        .value::<SqlRelationType>()
+                        .expect("SqlRelationType required")
                         .as_ref()
                         .unwrap();
                     let input_arity = output_type.len() - scalars.len();
@@ -108,8 +108,8 @@ impl crate::Transform for ReduceScalars {
                     let input_types = children
                         .iter()
                         .flat_map(|c| {
-                            c.value::<RelationType>()
-                                .expect("RelationType required")
+                            c.value::<SqlRelationType>()
+                                .expect("SqlRelationType required")
                                 .as_ref()
                                 .unwrap()
                                 .iter()
@@ -135,8 +135,8 @@ impl crate::Transform for ReduceScalars {
                 } => {
                     let input_type = view
                         .last_child()
-                        .value::<RelationType>()
-                        .expect("RelationType required")
+                        .value::<SqlRelationType>()
+                        .expect("SqlRelationType required")
                         .as_ref()
                         .unwrap();
                     for key in group_key.iter_mut() {
@@ -149,8 +149,8 @@ impl crate::Transform for ReduceScalars {
                 MirRelationExpr::TopK { limit, .. } => {
                     let input_type = view
                         .last_child()
-                        .value::<RelationType>()
-                        .expect("RelationType required")
+                        .value::<SqlRelationType>()
+                        .expect("SqlRelationType required")
                         .as_ref()
                         .unwrap();
                     if let Some(limit) = limit {

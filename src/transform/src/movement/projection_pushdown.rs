@@ -485,7 +485,7 @@ impl ProjectionPushdown {
     pub fn update_projection_around_get(
         &self,
         relation: &mut MirRelationExpr,
-        applied_projections: &BTreeMap<Id, (Vec<usize>, mz_repr::RelationType)>,
+        applied_projections: &BTreeMap<Id, (Vec<usize>, mz_repr::SqlRelationType)>,
     ) {
         relation.visit_pre_mut(|e| {
             if let MirRelationExpr::Project { input, outputs } = e {

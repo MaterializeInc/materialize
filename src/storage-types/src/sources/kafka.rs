@@ -21,7 +21,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::future::InTask;
 use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
 use mz_repr::adt::numeric::Numeric;
-use mz_repr::{CatalogItemId, ColumnType, Datum, GlobalId, RelationDesc, Row, ScalarType};
+use mz_repr::{CatalogItemId, Datum, GlobalId, RelationDesc, Row, SqlColumnType, SqlScalarType};
 use mz_timely_util::order::{Extrema, Partitioned};
 use proptest::prelude::any;
 use proptest_derive::Arbitrary;
@@ -94,12 +94,12 @@ pub static KAFKA_PROGRESS_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
     RelationDesc::builder()
         .with_column(
             "partition",
-            ScalarType::Range {
-                element_type: Box::new(ScalarType::Numeric { max_scale: None }),
+            SqlScalarType::Range {
+                element_type: Box::new(SqlScalarType::Numeric { max_scale: None }),
             }
             .nullable(false),
         )
-        .with_column("offset", ScalarType::UInt64.nullable(true))
+        .with_column("offset", SqlScalarType::UInt64.nullable(true))
         .finish()
 });
 
@@ -201,13 +201,13 @@ impl<C: ConnectionAccess> SourceConnection for KafkaSourceConnection<C> {
 
     fn default_key_desc(&self) -> RelationDesc {
         RelationDesc::builder()
-            .with_column("key", ScalarType::Bytes.nullable(true))
+            .with_column("key", SqlScalarType::Bytes.nullable(true))
             .finish()
     }
 
     fn default_value_desc(&self) -> RelationDesc {
         RelationDesc::builder()
-            .with_column("value", ScalarType::Bytes.nullable(true))
+            .with_column("value", SqlScalarType::Bytes.nullable(true))
             .finish()
     }
 
@@ -335,37 +335,37 @@ impl RustType<ProtoKafkaSourceConnection> for KafkaSourceConnection<InlinedConne
 /// Return the column types used to describe the metadata columns of a kafka source export.
 pub fn kafka_metadata_columns_desc(
     metadata_columns: &Vec<(String, KafkaMetadataKind)>,
-) -> Vec<(&str, ColumnType)> {
+) -> Vec<(&str, SqlColumnType)> {
     metadata_columns
         .iter()
         .map(|(name, kind)| {
             let typ = match kind {
-                KafkaMetadataKind::Partition => ScalarType::Int32.nullable(false),
-                KafkaMetadataKind::Offset => ScalarType::UInt64.nullable(false),
+                KafkaMetadataKind::Partition => SqlScalarType::Int32.nullable(false),
+                KafkaMetadataKind::Offset => SqlScalarType::UInt64.nullable(false),
                 KafkaMetadataKind::Timestamp => {
-                    ScalarType::Timestamp { precision: None }.nullable(false)
+                    SqlScalarType::Timestamp { precision: None }.nullable(false)
                 }
                 KafkaMetadataKind::Header {
                     use_bytes: true, ..
-                } => ScalarType::Bytes.nullable(true),
+                } => SqlScalarType::Bytes.nullable(true),
                 KafkaMetadataKind::Header {
                     use_bytes: false, ..
-                } => ScalarType::String.nullable(true),
-                KafkaMetadataKind::Headers => ScalarType::List {
-                    element_type: Box::new(ScalarType::Record {
+                } => SqlScalarType::String.nullable(true),
+                KafkaMetadataKind::Headers => SqlScalarType::List {
+                    element_type: Box::new(SqlScalarType::Record {
                         fields: [
                             (
                                 "key".into(),
-                                ColumnType {
+                                SqlColumnType {
                                     nullable: false,
-                                    scalar_type: ScalarType::String,
+                                    scalar_type: SqlScalarType::String,
                                 },
                             ),
                             (
                                 "value".into(),
-                                ColumnType {
+                                SqlColumnType {
                                     nullable: true,
-                                    scalar_type: ScalarType::Bytes,
+                                    scalar_type: SqlScalarType::Bytes,
                                 },
                             ),
                         ]

@@ -36,8 +36,8 @@ use enum_kinds::EnumKind;
 use mz_ore::cast::ReinterpretCast;
 use mz_ore::collections::CollectionExt;
 use mz_ore::result::ResultExt;
-use mz_repr::RelationType;
-use mz_repr::{ColumnType, Datum, RelationDesc, RowArena, ScalarType};
+use mz_repr::SqlRelationType;
+use mz_repr::{Datum, RelationDesc, RowArena, SqlColumnType, SqlScalarType};
 use mz_sql_parser::ast::{CteBlock, Expr, Function, FunctionArgs, Select, SelectItem, SetExpr};
 
 use crate::ast::{Query, SelectStatement};
@@ -212,7 +212,7 @@ fn extract_sef_call(
         qcx: &qcx,
         name: sef_impl.name,
         scope: &Scope::empty(),
-        relation_type: &RelationType::empty(),
+        relation_type: &SqlRelationType::empty(),
         allow_aggregates: false,
         allow_subqueries: false,
         allow_parameters: true,
@@ -260,9 +260,9 @@ pub struct SideEffectingFuncImpl {
     /// The OID of the function.
     pub oid: u32,
     /// The parameter types for the function.
-    pub param_types: &'static [ScalarType],
+    pub param_types: &'static [SqlScalarType],
     /// The return type of the function.
-    pub return_type: ColumnType,
+    pub return_type: SqlColumnType,
     /// A function that will produce a `SideEffectingFunc` given arguments
     /// that have been evaluated to `Datum`s.
     pub plan_fn: fn(&[Datum]) -> SideEffectingFunc,
@@ -285,8 +285,8 @@ pub static PG_CATALOG_SEF_BUILTINS: LazyLock<BTreeMap<u32, SideEffectingFuncImpl
 const PG_CANCEL_BACKEND: SideEffectingFuncImpl = SideEffectingFuncImpl {
     name: "pg_cancel_backend",
     oid: 2171,
-    param_types: &[ScalarType::Int32],
-    return_type: ScalarType::Bool.nullable(false),
+    param_types: &[SqlScalarType::Int32],
+    return_type: SqlScalarType::Bool.nullable(false),
     plan_fn: |datums| -> SideEffectingFunc {
         SideEffectingFunc::PgCancelBackend {
             connection_id: u32::reinterpret_cast(datums[0].unwrap_int32()),

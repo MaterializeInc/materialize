@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Maintains a catalog of valid casts between [`mz_repr::ScalarType`]s, as well as
+//! Maintains a catalog of valid casts between [`mz_repr::SqlScalarType`]s, as well as
 //! other cast-related functions.
 
 use std::cell::RefCell;
@@ -18,7 +18,9 @@ use dynfmt::{Format, SimpleCurlyFormat};
 use itertools::Itertools;
 use mz_expr::func::{CastArrayToJsonb, CastListToJsonb};
 use mz_expr::{VariadicFunc, func};
-use mz_repr::{ColumnName, ColumnType, Datum, RelationType, ScalarBaseType, ScalarType};
+use mz_repr::{
+    ColumnName, Datum, SqlColumnType, SqlRelationType, SqlScalarBaseType, SqlScalarType,
+};
 
 use crate::catalog::TypeCategory;
 use crate::plan::error::PlanError;
@@ -70,13 +72,17 @@ type Cast = Box<dyn FnOnce(HirScalarExpr) -> HirScalarExpr>;
 /// templates, we'd have to enumerate every possible list -> list conversion,
 /// which is impractical.
 struct CastTemplate(
-    Box<dyn Fn(&ExprContext, CastContext, &ScalarType, &ScalarType) -> Option<Cast> + Send + Sync>,
+    Box<
+        dyn Fn(&ExprContext, CastContext, &SqlScalarType, &SqlScalarType) -> Option<Cast>
+            + Send
+            + Sync,
+    >,
 );
 
 impl CastTemplate {
     fn new<T, C>(t: T) -> CastTemplate
     where
-        T: Fn(&ExprContext, CastContext, &ScalarType, &ScalarType) -> Option<C>
+        T: Fn(&ExprContext, CastContext, &SqlScalarType, &SqlScalarType) -> Option<C>
             + Send
             + Sync
             + 'static,
@@ -248,15 +254,15 @@ static REGTYPE_TO_STRING: LazyLock<String> = LazyLock::new(|| {
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
 pub enum CastContext {
     /// Implicit casts are "no-brainer" casts that apply automatically in
-    /// expressions. They are typically lossless, such as `ScalarType::Int32` to
-    /// `ScalarType::Int64`.
+    /// expressions. They are typically lossless, such as `SqlScalarType::Int32` to
+    /// `SqlScalarType::Int64`.
     Implicit,
     /// Assignment casts are "reasonable" casts that make sense to apply
     /// automatically in `INSERT` statements, but are surprising enough that
     /// they don't apply implicitly in expressions.
     Assignment,
     /// Explicit casts are casts that are possible but may be surprising, like
-    /// casting `ScalarType::Json` to `ScalarType::Int32`, and therefore they do
+    /// casting `SqlScalarType::Json` to `SqlScalarType::Int32`, and therefore they do
     /// not happen unless explicitly requested by the user with a cast operator.
     Explicit,
     /// Coerced casts permit different behavior when a type is coerced from a
@@ -290,9 +296,9 @@ macro_rules! casts(
     }};
 );
 
-static VALID_CASTS: LazyLock<BTreeMap<(ScalarBaseType, ScalarBaseType), CastImpl>> = LazyLock::new(
-    || {
-        use ScalarBaseType::*;
+static VALID_CASTS: LazyLock<BTreeMap<(SqlScalarBaseType, SqlScalarBaseType), CastImpl>> =
+    LazyLock::new(|| {
+        use SqlScalarBaseType::*;
         use UnaryFunc::*;
 
         casts! {
@@ -696,7 +702,7 @@ static VALID_CASTS: LazyLock<BTreeMap<(ScalarBaseType, ScalarBaseType), CastImpl
                     return None;
                 }
 
-                if let (l @ ScalarType::Record {custom_id: Some(..), ..}, r) = (from_type, to_type) {
+                if let (l @ SqlScalarType::Record {custom_id: Some(..), ..}, r) = (from_type, to_type) {
                     // Changing `from`'s custom_id requires at least Assignment context
                     if ccx == CastContext::Implicit && l != r {
                         return None;
@@ -740,7 +746,7 @@ static VALID_CASTS: LazyLock<BTreeMap<(ScalarBaseType, ScalarBaseType), CastImpl
             }),
             (List, List) => Implicit: CastTemplate::new(|ecx, ccx, from_type, to_type| {
 
-                if let (l @ ScalarType::List {custom_id: Some(..), ..}, r) = (from_type, to_type) {
+                if let (l @ SqlScalarType::List {custom_id: Some(..), ..}, r) = (from_type, to_type) {
                     // Changing `from`'s custom_id requires at least Assignment context
                     if ccx == CastContext::Implicit && !l.base_eq(r) {
                         return None;
@@ -861,16 +867,15 @@ static VALID_CASTS: LazyLock<BTreeMap<(ScalarBaseType, ScalarBaseType), CastImpl
                 )
             )")
         }
-    },
-);
+    });
 
-/// Get casts directly between two [`ScalarType`]s, with control over the
+/// Get casts directly between two [`SqlScalarType`]s, with control over the
 /// allowed [`CastContext`].
 fn get_cast(
     ecx: &ExprContext,
     ccx: CastContext,
-    from: &ScalarType,
-    to: &ScalarType,
+    from: &SqlScalarType,
+    to: &SqlScalarType,
 ) -> Option<Cast> {
     use CastContext::*;
 
@@ -887,17 +892,18 @@ fn get_cast(
     template.and_then(|template| (template.0)(ecx, ccx, from, to))
 }
 
-/// Converts an expression to `ScalarType::String`.
+/// Converts an expression to `SqlScalarType::String`.
 ///
 /// All types are convertible to string, so this never fails.
 pub fn to_string(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
-    plan_cast(ecx, CastContext::Explicit, expr, &ScalarType::String).expect("cast known to exist")
+    plan_cast(ecx, CastContext::Explicit, expr, &SqlScalarType::String)
+        .expect("cast known to exist")
 }
 
-/// Converts an expression to `ScalarType::Jsonb`.
+/// Converts an expression to `SqlScalarType::Jsonb`.
 ///
 /// The rules are as follows:
-///   * `ScalarType::Boolean`s become JSON booleans.
+///   * `SqlScalarType::Boolean`s become JSON booleans.
 ///   * All numeric types are converted to `Float64`s, then become JSON numbers.
 ///   * Records are converted to a JSON object where the record's field names
 ///     are the keys of the object, and the record's fields are recursively
@@ -905,7 +911,7 @@ pub fn to_string(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
 ///   * Other types are converted to strings by their usual cast function an
 //      become JSON strings.
 pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
-    use ScalarType::*;
+    use SqlScalarType::*;
 
     match ecx.scalar_type(&expr) {
         Bool | Jsonb | Numeric { .. } => {
@@ -924,7 +930,7 @@ pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
             for (i, (name, _ty)) in fields.iter().enumerate() {
                 exprs.push(HirScalarExpr::literal(
                     Datum::String(name),
-                    ScalarType::String,
+                    SqlScalarType::String,
                 ));
                 exprs.push(to_jsonb(
                     ecx,
@@ -945,7 +951,7 @@ pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
                 qcx: &qcx,
                 name: "to_jsonb",
                 scope: &Scope::empty(),
-                relation_type: &RelationType::new(vec![element_type.clone().nullable(true)]),
+                relation_type: &SqlRelationType::new(vec![element_type.clone().nullable(true)]),
                 allow_aggregates: false,
                 allow_subqueries: false,
                 allow_parameters: false,
@@ -1000,7 +1006,7 @@ pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
     }
 }
 
-/// Guesses the most-common type among a set of [`ScalarType`]s that all members
+/// Guesses the most-common type among a set of [`SqlScalarType`]s that all members
 /// can be cast to. Returns `None` if a common type cannot be deduced.
 ///
 /// Note that this function implements the type-determination components of
@@ -1011,7 +1017,7 @@ pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
 pub fn guess_best_common_type(
     ecx: &ExprContext,
     types: &[CoercibleScalarType],
-) -> Result<ScalarType, PlanError> {
+) -> Result<SqlScalarType, PlanError> {
     // This function is a translation of `select_common_type` in PostgreSQL with
     // the addition of our near match logic, which supports Materialize
     // non-linear type promotions.
@@ -1043,7 +1049,7 @@ pub fn guess_best_common_type(
                 let guess = guess_best_common_type(ecx, &guesses)?;
                 fields.push((name, guess.nullable(nullable)));
             }
-            return Ok(ScalarType::Record {
+            return Ok(SqlScalarType::Record {
                 fields: fields.into(),
                 custom_id: None,
             });
@@ -1054,15 +1060,18 @@ pub fn guess_best_common_type(
     let mut types: Vec<_> = types.into_iter().filter_map(|v| v.as_coerced()).collect();
 
     // In the case of mixed ints and uints, replace uints with their near match
-    let contains_int = types
-        .iter()
-        .any(|t| matches!(t, ScalarType::Int16 | ScalarType::Int32 | ScalarType::Int64));
+    let contains_int = types.iter().any(|t| {
+        matches!(
+            t,
+            SqlScalarType::Int16 | SqlScalarType::Int32 | SqlScalarType::Int64
+        )
+    });
 
     for t in types.iter_mut() {
         if contains_int
             && matches!(
                 t,
-                ScalarType::UInt16 | ScalarType::UInt32 | ScalarType::UInt64
+                SqlScalarType::UInt16 | SqlScalarType::UInt32 | SqlScalarType::UInt64
             )
         {
             *t = t.near_match().expect("unsigned ints have near matches")
@@ -1073,7 +1082,7 @@ pub fn guess_best_common_type(
 
     let mut candidate = match types.next() {
         // If no known types, fall back to `String`.
-        None => return Ok(ScalarType::String),
+        None => return Ok(SqlScalarType::String),
         // Start by guessing the first type.
         Some(t) => t,
     };
@@ -1109,7 +1118,7 @@ pub fn guess_best_common_type(
 pub fn plan_coerce<'a>(
     ecx: &'a ExprContext,
     e: CoercibleScalarExpr,
-    coerce_to: &ScalarType,
+    coerce_to: &SqlScalarType,
 ) -> Result<HirScalarExpr, PlanError> {
     use CoercibleScalarExpr::*;
 
@@ -1119,7 +1128,7 @@ pub fn plan_coerce<'a>(
         LiteralNull => HirScalarExpr::literal_null(coerce_to.clone()),
 
         LiteralString(s) => {
-            let lit = HirScalarExpr::literal(Datum::String(&s), ScalarType::String);
+            let lit = HirScalarExpr::literal(Datum::String(&s), SqlScalarType::String);
             // Per PostgreSQL, string literal explicitly casts to the base type.
             // The caller is responsible for applying any desired modifiers
             // (with either implicit or explicit semantics) via a separate call
@@ -1131,12 +1140,12 @@ pub fn plan_coerce<'a>(
         LiteralRecord(exprs) => {
             let arity = exprs.len();
             let coercions = match coerce_to {
-                ScalarType::Record { fields, .. } if fields.len() == arity => fields
+                SqlScalarType::Record { fields, .. } if fields.len() == arity => fields
                     .iter()
                     .map(|(_name, ty)| &ty.scalar_type)
                     .cloned()
                     .collect(),
-                _ => vec![ScalarType::String; exprs.len()],
+                _ => vec![SqlScalarType::String; exprs.len()],
             };
             let mut out = vec![];
             for (e, coerce_to) in exprs.into_iter().zip(coercions) {
@@ -1178,16 +1187,16 @@ pub fn plan_coerce<'a>(
 pub fn plan_hypothetical_cast(
     ecx: &ExprContext,
     ccx: CastContext,
-    from: &ScalarType,
-    to: &ScalarType,
+    from: &SqlScalarType,
+    to: &SqlScalarType,
 ) -> Option<mz_expr::MirScalarExpr> {
     // Reconstruct an expression context where the expression is evaluated on
     // the "first column" of some imaginary row.
     let mut scx = ecx.qcx.scx.clone();
     scx.param_types = RefCell::new(BTreeMap::new());
     let qcx = QueryContext::root(&scx, ecx.qcx.lifetime);
-    let relation_type = RelationType {
-        column_types: vec![ColumnType {
+    let relation_type = SqlRelationType {
+        column_types: vec![SqlColumnType {
             nullable: true,
             scalar_type: from.clone(),
         }],
@@ -1215,7 +1224,7 @@ pub fn plan_hypothetical_cast(
         .ok()
 }
 
-/// Plans a cast between [`ScalarType`]s, specifying which types of casts are
+/// Plans a cast between [`SqlScalarType`]s, specifying which types of casts are
 /// permitted using [`CastContext`].
 ///
 /// # Errors
@@ -1228,7 +1237,7 @@ pub fn plan_cast(
     ecx: &ExprContext,
     ccx: CastContext,
     expr: HirScalarExpr,
-    to: &ScalarType,
+    to: &SqlScalarType,
 ) -> Result<HirScalarExpr, PlanError> {
     let from = ecx.scalar_type(&expr);
 
@@ -1253,13 +1262,13 @@ pub fn plan_cast(
     let to_category = TypeCategory::from_type(to);
     if from_category == TypeCategory::String && to_category != TypeCategory::String {
         // Converting from stringlike to something non-stringlike. Handle as if
-        // `from` were a `ScalarType::String.
-        cast_inner(&ScalarType::String, to, expr)
+        // `from` were a `SqlScalarType::String.
+        cast_inner(&SqlScalarType::String, to, expr)
     } else if from_category != TypeCategory::String && to_category == TypeCategory::String {
         // Converting from non-stringlike to something stringlike. Convert to a
-        // `ScalarType::String` and then to the desired type.
-        let expr = cast_inner(&from, &ScalarType::String, expr)?;
-        cast_inner(&ScalarType::String, to, expr)
+        // `SqlScalarType::String` and then to the desired type.
+        let expr = cast_inner(&from, &SqlScalarType::String, expr)?;
+        cast_inner(&SqlScalarType::String, to, expr)
     } else {
         // Standard cast.
         cast_inner(&from, to, expr)
@@ -1270,8 +1279,8 @@ pub fn plan_cast(
 pub fn can_cast(
     ecx: &ExprContext,
     ccx: CastContext,
-    cast_from: &ScalarType,
-    cast_to: &ScalarType,
+    cast_from: &SqlScalarType,
+    cast_to: &SqlScalarType,
 ) -> bool {
     get_cast(ecx, ccx, cast_from, cast_to).is_some()
 }

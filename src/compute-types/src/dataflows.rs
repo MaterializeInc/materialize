@@ -16,7 +16,7 @@ use mz_expr::{CollectionPlan, MirRelationExpr, MirScalarExpr, OptimizedMirRelati
 use mz_ore::soft_assert_or_log;
 use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::refresh_schedule::RefreshSchedule;
-use mz_repr::{GlobalId, RelationType};
+use mz_repr::{GlobalId, SqlRelationType};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::time_dependence::TimeDependence;
 use proptest::prelude::{Arbitrary, any};
@@ -48,8 +48,8 @@ pub struct DataflowDescription<P, S: 'static = (), T = mz_repr::Timestamp> {
     /// dependencies of later objects on prior identifiers.
     pub objects_to_build: Vec<BuildDesc<P>>,
     /// Indexes to be made available to be shared with other dataflows
-    /// (id of new index, description of index, relationtype of base source/view/table)
-    pub index_exports: BTreeMap<GlobalId, (IndexDesc, RelationType)>,
+    /// (id of new index, description of index, SqlRelationType of base source/view/table)
+    pub index_exports: BTreeMap<GlobalId, (IndexDesc, SqlRelationType)>,
     /// sinks to be created
     /// (id of new sink, description of sink)
     pub sink_exports: BTreeMap<GlobalId, ComputeSinkDesc<S, T>>,
@@ -159,7 +159,7 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
         &mut self,
         id: GlobalId,
         desc: IndexDesc,
-        typ: RelationType,
+        typ: SqlRelationType,
         monotonic: bool,
     ) {
         self.index_imports.insert(
@@ -173,7 +173,7 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
     }
 
     /// Imports a source and makes it available as `id`.
-    pub fn import_source(&mut self, id: GlobalId, typ: RelationType, monotonic: bool) {
+    pub fn import_source(&mut self, id: GlobalId, typ: SqlRelationType, monotonic: bool) {
         // Import the source with no linear operators applied to it.
         // They may be populated by whole-dataflow optimization.
         self.source_imports.insert(
@@ -199,7 +199,7 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
     ///
     /// Future uses of `import_index` in other dataflow descriptions may use `id`,
     /// as long as this dataflow has not been terminated in the meantime.
-    pub fn export_index(&mut self, id: GlobalId, description: IndexDesc, on_type: RelationType) {
+    pub fn export_index(&mut self, id: GlobalId, description: IndexDesc, on_type: SqlRelationType) {
         // We first create a "view" named `id` that ensures that the
         // data are correctly arranged and available for export.
         self.insert_plan(
@@ -699,9 +699,9 @@ impl ProtoMapEntry<GlobalId, IndexImport> for ProtoIndexImport {
     }
 }
 
-impl ProtoMapEntry<GlobalId, (IndexDesc, RelationType)> for ProtoIndexExport {
+impl ProtoMapEntry<GlobalId, (IndexDesc, SqlRelationType)> for ProtoIndexExport {
     fn from_rust<'a>(
-        (id, (index_desc, typ)): (&'a GlobalId, &'a (IndexDesc, RelationType)),
+        (id, (index_desc, typ)): (&'a GlobalId, &'a (IndexDesc, SqlRelationType)),
     ) -> Self {
         ProtoIndexExport {
             id: Some(id.into_proto()),
@@ -710,7 +710,7 @@ impl ProtoMapEntry<GlobalId, (IndexDesc, RelationType)> for ProtoIndexExport {
         }
     }
 
-    fn into_rust(self) -> Result<(GlobalId, (IndexDesc, RelationType)), TryFromProtoError> {
+    fn into_rust(self) -> Result<(GlobalId, (IndexDesc, SqlRelationType)), TryFromProtoError> {
         Ok((
             self.id.into_rust_if_some("ProtoIndexExport::id")?,
             (
@@ -878,7 +878,7 @@ proptest::prop_compose! {
     fn any_dataflow_index_import()(
         id in any::<GlobalId>(),
         desc in any::<IndexDesc>(),
-        typ in any::<RelationType>(),
+        typ in any::<SqlRelationType>(),
         monotonic in any::<bool>(),
     ) -> (GlobalId, IndexImport) {
         (id, IndexImport {desc, typ, monotonic})
@@ -889,8 +889,8 @@ proptest::prop_compose! {
     fn any_dataflow_index_export()(
         id in any::<GlobalId>(),
         index in any::<IndexDesc>(),
-        typ in any::<RelationType>(),
-    ) -> (GlobalId, (IndexDesc, RelationType)) {
+        typ in any::<SqlRelationType>(),
+    ) -> (GlobalId, (IndexDesc, SqlRelationType)) {
         (id, (index, typ))
     }
 }
@@ -931,7 +931,7 @@ pub struct IndexImport {
     /// Description of index.
     pub desc: IndexDesc,
     /// Schema and keys of the object the index is on.
-    pub typ: RelationType,
+    pub typ: SqlRelationType,
     /// Whether the index will supply monotonic data.
     pub monotonic: bool,
 }
