@@ -57,6 +57,17 @@ SERVICES = [
     ),
 ]
 
+SCENARIO_TPCH_STRONG = "tpch_strong"
+SCENARIO_TPCH_MV_STRONG = "tpch_mv_strong"
+SCENARIO_AUCTION_STRONG = "auction_strong"
+SCENARIO_AUCTION_WEAK = "auction_weak"
+ALL_SCENARIOS = [
+    SCENARIO_TPCH_STRONG,
+    SCENARIO_TPCH_MV_STRONG,
+    SCENARIO_AUCTION_STRONG,
+    SCENARIO_AUCTION_WEAK,
+]
+
 
 class ConnectionHandler:
     def __init__(self, new_connection: Callable[[], psycopg.Connection]) -> None:
@@ -327,7 +338,6 @@ class TpchScenarioMV(Scenario):
                 "CREATE MATERIALIZED VIEW mv_lineitem AS SELECT * FROM lineitem;",
                 "SELECT count(*) > 0 FROM mv_lineitem;",
             ],
-            size_of_index="mv_lineitem",
         )
 
         time.sleep(3)
@@ -348,7 +358,6 @@ class TpchScenarioMV(Scenario):
         runner.measure(
             "peek_serving",
             "peek_materialized_view_key_fast_path",
-            size_of_index="mv_lineitem",
             setup=[],
             query=[
                 "SELECT * FROM mv_lineitem WHERE l_orderkey = 123412341234 and l_linenumber = 123",
@@ -360,7 +369,6 @@ class TpchScenarioMV(Scenario):
         runner.measure(
             "peek_serving",
             "peek_materialized_view_non_key_slow_path",
-            size_of_index="mv_lineitem",
             setup=[],
             query=[
                 "WITH data AS (SELECT * FROM mv_lineitem WHERE l_tax = 123) SELECT * FROM data, t;",
@@ -371,7 +379,6 @@ class TpchScenarioMV(Scenario):
         runner.measure(
             "peek_serving",
             "peek_materialized_view_non_key_fast_path",
-            size_of_index="mv_lineitem",
             setup=[],
             query=[
                 "SELECT * FROM mv_lineitem WHERE l_tax = 123;",
@@ -382,7 +389,6 @@ class TpchScenarioMV(Scenario):
         runner.measure(
             "materialized_view_formation",
             "materialized_view_restart",
-            size_of_index="mv_lineitem",
             setup=[
                 "SELECT count(*) > 0 FROM mv_lineitem;",
                 "ALTER CLUSTER c SET (REPLICATION FACTOR 0);",
@@ -841,7 +847,128 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     """
     Run the bench workflow by default
     """
-    workflow_bench(c, parser)
+    parser.add_argument(
+        "--cleanup",
+        default=False,
+        action=argparse.BooleanOptionalAction,
+        help="Destroy the region at the end of the workflow.",
+    )
+    parser.add_argument(
+        "--record",
+        default=f"results_{int(time.time())}.csv",
+        help="CSV file to store results.",
+    )
+    parser.add_argument(
+        "--analyze",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Analyze results after completing test.",
+    )
+    parser.add_argument(
+        "--target",
+        default="cloud",
+        choices=["cloud", "docker"],
+        help="Target to deploy to (default: cloud).",
+    )
+    parser.add_argument(
+        "--max-scale", type=int, default=32, help="Maximum scale to test."
+    )
+    parser.add_argument(
+        "scenarios",
+        nargs="*",
+        default=ALL_SCENARIOS,
+        help="Scenarios to run.",
+    )
+
+    args = parser.parse_args()
+    scenarios = set(args.scenarios)
+    unknown = scenarios - set(ALL_SCENARIOS)
+    if unknown:
+        raise ValueError(f"Unknown scenarios: {unknown}")
+    print(f"Running scenarios: {', '.join(scenarios)}")
+
+    if args.target == "cloud":
+        target: BenchTarget = CloudTarget(c)
+    elif args.target == "docker":
+        target = DockerTarget(c)
+    else:
+        raise ValueError(f"Unknown target: {args.target}")
+
+    max_scale = args.max_scale
+    if target.max_scale() is not None:
+        max_scale = min(max_scale, target.max_scale())
+
+    if args.cleanup:
+        target.cleanup()
+
+    target.initialize()
+
+    def process(name: str) -> None:
+        with c.test_case(name):
+            test_failed = True
+            try:
+                conn = ConnectionHandler(target.new_connection)
+
+                with open(args.record, "w") as f:
+                    f.write(
+                        "scenario,scale,mode,category,test_name,cluster_size,repetition,size_bytes,time_ms\n"
+                    )
+                    if SCENARIO_TPCH_STRONG in scenarios:
+                        print("--- Running TPC-H Index strong scaling")
+                        run_scenario_strong(
+                            scenario=TpchScenario(8, target.replica_size_for_scale(1)),
+                            results_file=f,
+                            connection=conn,
+                            target=target,
+                            max_scale=max_scale,
+                        )
+                    if SCENARIO_TPCH_MV_STRONG in scenarios:
+                        print("--- Running TPC-H Materialized view strong scaling")
+                        run_scenario_strong(
+                            scenario=TpchScenarioMV(
+                                8, target.replica_size_for_scale(1)
+                            ),
+                            results_file=f,
+                            connection=conn,
+                            target=target,
+                            max_scale=max_scale,
+                        )
+                    if SCENARIO_AUCTION_STRONG in scenarios:
+                        print("--- Running Auction strong scaling")
+                        run_scenario_strong(
+                            scenario=AuctionScenario(
+                                3, target.replica_size_for_scale(1)
+                            ),
+                            results_file=f,
+                            connection=conn,
+                            target=target,
+                            max_scale=max_scale,
+                        )
+                    if SCENARIO_AUCTION_WEAK in scenarios:
+                        print("--- Running Auction weak scaling")
+                        run_scenario_weak(
+                            scenario=AuctionScenario(3, "none"),
+                            results_file=f,
+                            connection=conn,
+                            target=target,
+                            max_scale=max_scale,
+                        )
+                test_failed = False
+            finally:
+                # Clean up
+                if args.cleanup:
+                    target.cleanup()
+
+            if buildkite.is_in_buildkite():
+                buildkite.upload_artifact(args.record, cwd=MZ_ROOT, quiet=True)
+
+            if args.analyze:
+                analyze_file(args.record)
+
+            assert not test_failed
+
+    scenarios = buildkite.shard_list(sorted(args.scenarios), lambda s: s)
+    c.test_parts(scenarios, process)
 
 
 class BenchTarget:
@@ -938,109 +1065,6 @@ class DockerTarget(BenchTarget):
         return 16
 
 
-def workflow_bench(c: Composition, parser: WorkflowArgumentParser) -> None:
-    """Deploy the current source to the cloud and run tests."""
-
-    parser.add_argument(
-        "--cleanup",
-        default=False,
-        action=argparse.BooleanOptionalAction,
-        help="Destroy the region at the end of the workflow.",
-    )
-    parser.add_argument(
-        "--record",
-        default=f"results_{int(time.time())}.csv",
-        help="CSV file to store results.",
-    )
-    parser.add_argument(
-        "--analyze",
-        default=True,
-        action=argparse.BooleanOptionalAction,
-        help="Analyze results after completing test.",
-    )
-    parser.add_argument(
-        "--target",
-        default="cloud",
-        choices=["cloud", "docker"],
-        help="Target to deploy to (default: cloud).",
-    )
-    parser.add_argument(
-        "--max-scale", type=int, default=32, help="Maximum scale to test."
-    )
-
-    args = parser.parse_args()
-
-    if args.target == "cloud":
-        target: BenchTarget = CloudTarget(c)
-    elif args.target == "docker":
-        target = DockerTarget(c)
-    else:
-        raise ValueError(f"Unknown target: {args.target}")
-
-    max_scale = args.max_scale
-    if target.max_scale() is not None:
-        max_scale = min(max_scale, target.max_scale())
-
-    target.initialize()
-
-    if args.cleanup:
-        target.cleanup()
-
-    test_failed = True
-    try:
-        conn = ConnectionHandler(target.new_connection)
-
-        with open(args.record, "w") as f:
-            f.write(
-                "scenario,scale,mode,category,test_name,cluster_size,repetition,size_bytes,time_ms\n"
-            )
-            print("+++ Running TPC-H Index strong scaling")
-            run_scenario_strong(
-                scenario=TpchScenario(8, target.replica_size_for_scale(1)),
-                results_file=f,
-                connection=conn,
-                target=target,
-                max_scale=max_scale,
-            )
-            print("+++ Running TPC-H Materialized view strong scaling")
-            run_scenario_strong(
-                scenario=TpchScenarioMV(8, target.replica_size_for_scale(1)),
-                results_file=f,
-                connection=conn,
-                target=target,
-                max_scale=max_scale,
-            )
-            print("+++ Running Auction strong scaling")
-            run_scenario_strong(
-                scenario=AuctionScenario(3, target.replica_size_for_scale(1)),
-                results_file=f,
-                connection=conn,
-                target=target,
-                max_scale=max_scale,
-            )
-            print("+++ Running Auction weak scaling")
-            run_scenario_weak(
-                scenario=AuctionScenario(3, "none"),
-                results_file=f,
-                connection=conn,
-                target=target,
-                max_scale=max_scale,
-            )
-        test_failed = False
-    finally:
-        # Clean up
-        if args.cleanup:
-            target.cleanup()
-
-    if buildkite.is_in_buildkite():
-        buildkite.upload_artifact(args.record, cwd=MZ_ROOT, quiet=True)
-
-    if args.analyze:
-        analyze_file(args.record)
-
-    assert not test_failed
-
-
 def run_scenario_strong(
     scenario: Scenario,
     results_file: Any,
@@ -1080,7 +1104,7 @@ def run_scenario_strong(
             break
         replica_size = target.replica_size_for_scale(replica_scale)
         print(
-            f"+++ Running strong scenario {scenario.name()} with replica size {replica_size}"
+            f"--- Running strong scenario {scenario.name()} with replica size {replica_size}"
         )
         # Create a cluster with the specified size
         runner.run_query("DROP CLUSTER IF EXISTS c CASCADE")
@@ -1117,7 +1141,7 @@ def run_scenario_weak(
             break
         replica_size = target.replica_size_for_scale(replica_scale)
         print(
-            f"+++ Running weak scenario {scenario.name()} with replica size {replica_size}"
+            f"--- Running weak scenario {scenario.name()} with replica size {replica_size}"
         )
         scenario.replica_size = replica_size
         scenario.scale = initial_scale * replica_scale
@@ -1139,7 +1163,7 @@ def run_scenario_weak(
             runner.run_query(f"SELECT COUNT(*) > 0 FROM {name};")
 
         # Create a cluster with the specified size
-        print(f"+++ Loading complete; creating cluster with size {replica_size}")
+        print(f"--- Loading complete; creating cluster with size {replica_size}")
         runner.run_query("DROP CLUSTER IF EXISTS c CASCADE")
         runner.run_query(f"CREATE CLUSTER c SIZE '{replica_size}'")
         runner.run_query("SET cluster = 'c';")
