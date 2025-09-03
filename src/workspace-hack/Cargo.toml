@@ -40,7 +40,6 @@ bitflags = { version = "2.9.0", default-features = false, features = ["std"] }
 brotli = { version = "8.0.2" }
 bstr = { version = "1.12.0" }
 bytemuck = { version = "1.23.1", default-features = false, features = ["latest_stable_rust"] }
-byteorder = { version = "1.5.0" }
 bytes = { version = "1.10.1", features = ["serde"] }
 chrono = { version = "0.4.41", features = ["serde"] }
 clap = { version = "4.5.23", features = ["derive", "env", "string", "wrap_help"] }
@@ -147,7 +146,7 @@ tower = { version = "0.5.2", default-features = false, features = ["balance", "b
 tower-http = { version = "0.6.6", features = ["auth", "cors", "decompression-br", "decompression-deflate", "decompression-gzip", "decompression-zstd", "map-response-body", "trace", "util"] }
 tracing = { version = "0.1.41", features = ["log"] }
 tracing-core = { version = "0.1.34" }
-tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json"] }
+tracing-subscriber = { version = "0.3.20", features = ["env-filter", "json"] }
 tungstenite = { version = "0.24.0" }
 uncased = { version = "0.9.10" }
 unicode-bidi = { version = "0.3.18" }
@@ -183,7 +182,6 @@ bitflags = { version = "2.9.0", default-features = false, features = ["std"] }
 brotli = { version = "8.0.2" }
 bstr = { version = "1.12.0" }
 bytemuck = { version = "1.23.1", default-features = false, features = ["latest_stable_rust"] }
-byteorder = { version = "1.5.0" }
 bytes = { version = "1.10.1", features = ["serde"] }
 cc = { version = "1.2.30", default-features = false, features = ["parallel"] }
 chrono = { version = "0.4.41", features = ["serde"] }
@@ -293,7 +291,7 @@ tower = { version = "0.5.2", default-features = false, features = ["balance", "b
 tower-http = { version = "0.6.6", features = ["auth", "cors", "decompression-br", "decompression-deflate", "decompression-gzip", "decompression-zstd", "map-response-body", "trace", "util"] }
 tracing = { version = "0.1.41", features = ["log"] }
 tracing-core = { version = "0.1.34" }
-tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json"] }
+tracing-subscriber = { version = "0.3.20", features = ["env-filter", "json"] }
 tungstenite = { version = "0.24.0" }
 uncased = { version = "0.9.10" }
 unicode-bidi = { version = "0.3.18" }
