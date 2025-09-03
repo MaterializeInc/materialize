@@ -12,6 +12,7 @@ Reproduces cluster spec sheet results on Materialize Cloud.
 """
 
 import argparse
+import csv
 import glob
 import itertools
 import os
@@ -112,14 +113,14 @@ class ScenarioRunner:
         scale: int,
         mode: str,
         connection: ConnectionHandler,
-        results_file: Any,
+        results_writer: csv.DictWriter,
         replica_size: Any,
     ) -> None:
         self.scenario = scenario
         self.scale = scale
         self.mode = mode
         self.connection = connection
-        self.results_file = results_file
+        self.results_writer = results_writer
         self.replica_size = replica_size
 
     def add_result(
@@ -130,10 +131,19 @@ class ScenarioRunner:
         size_bytes: int | None,
         time: float,
     ) -> None:
-        self.results_file.write(
-            f"{self.scenario},{self.scale},{self.mode},{category},{name},{self.replica_size},{repetition},{size_bytes},{int(time * 1_000)}\n"
+        self.results_writer.writerow(
+            {
+                "scenario": self.scenario,
+                "scale": self.scale,
+                "mode": self.mode,
+                "category": category,
+                "test_name": name,
+                "cluster_size": self.replica_size,
+                "repetition": repetition,
+                "size_bytes": size_bytes,
+                "time_ms": int(time * 1000),
+            }
         )
-        self.results_file.flush()
 
     def run_query(self, query: str, fetch: bool = False, **params) -> list | None:
         query = dedent(query).strip()
@@ -346,7 +356,6 @@ class TpchScenarioMV(Scenario):
         runner.measure(
             "peek_serving",
             "peek_materialized_view_key_slow_path",
-            size_of_index="mv_lineitem",
             setup=[],
             query=[
                 "WITH data AS (SELECT * FROM mv_lineitem WHERE l_orderkey = 123412341234 and l_linenumber = 123) SELECT * FROM data, t;",
@@ -747,7 +756,7 @@ class AuctionScenario(Scenario):
             size_of_index="bids_id_idx",
             setup=[],
             query=[
-                "SELECT * FROM bids, auctions WHERE bids.auction_id = auctions.id LIMIT 0;",
+                "SELECT * FROM bids, auctions WHERE bids.auction_id = auctions.id LIMIT 1;",
             ],
             repetitions=3,
         )
@@ -764,7 +773,7 @@ class AuctionScenario(Scenario):
                     id, count(amount), max(amount), sum(amount), min(amount)
                 FROM bids
                 GROUP BY id
-                LIMIT 0;
+                LIMIT 1;
                 """,
             ],
             repetitions=3,
@@ -782,7 +791,7 @@ class AuctionScenario(Scenario):
                         id, count(amount), max(amount), sum(amount), min(amount)
                     FROM bids
                     GROUP BY id
-                    LIMIT 0
+                    LIMIT 1
                 )
                 """,
                 "FETCH 1 e;",
@@ -873,6 +882,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "--max-scale", type=int, default=32, help="Maximum scale to test."
     )
+    parser.add_argument("--scale-tpch", type=int, default=8, help="TPCH scale factor.")
+    parser.add_argument(
+        "--scale-auction", type=int, default=3, help="TPCH scale factor."
+    )
     parser.add_argument(
         "scenarios",
         nargs="*",
@@ -902,73 +915,88 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         target.cleanup()
 
     target.initialize()
+    results_file = open(args.record, "w", newline="")
+    results_writer = csv.DictWriter(
+        results_file,
+        fieldnames=[
+            "scenario",
+            "scale",
+            "mode",
+            "category",
+            "test_name",
+            "cluster_size",
+            "repetition",
+            "size_bytes",
+            "time_ms",
+        ],
+    )
+    results_writer.writeheader()
 
-    def process(name: str) -> None:
-        with c.test_case(name):
-            test_failed = True
-            try:
-                conn = ConnectionHandler(target.new_connection)
+    def process(scenario: str) -> None:
+        with c.test_case(scenario):
+            conn = ConnectionHandler(target.new_connection)
 
-                with open(args.record, "w") as f:
-                    f.write(
-                        "scenario,scale,mode,category,test_name,cluster_size,repetition,size_bytes,time_ms\n"
-                    )
-                    if SCENARIO_TPCH_STRONG in scenarios:
-                        print("--- Running TPC-H Index strong scaling")
-                        run_scenario_strong(
-                            scenario=TpchScenario(8, target.replica_size_for_scale(1)),
-                            results_file=f,
-                            connection=conn,
-                            target=target,
-                            max_scale=max_scale,
-                        )
-                    if SCENARIO_TPCH_MV_STRONG in scenarios:
-                        print("--- Running TPC-H Materialized view strong scaling")
-                        run_scenario_strong(
-                            scenario=TpchScenarioMV(
-                                8, target.replica_size_for_scale(1)
-                            ),
-                            results_file=f,
-                            connection=conn,
-                            target=target,
-                            max_scale=max_scale,
-                        )
-                    if SCENARIO_AUCTION_STRONG in scenarios:
-                        print("--- Running Auction strong scaling")
-                        run_scenario_strong(
-                            scenario=AuctionScenario(
-                                3, target.replica_size_for_scale(1)
-                            ),
-                            results_file=f,
-                            connection=conn,
-                            target=target,
-                            max_scale=max_scale,
-                        )
-                    if SCENARIO_AUCTION_WEAK in scenarios:
-                        print("--- Running Auction weak scaling")
-                        run_scenario_weak(
-                            scenario=AuctionScenario(3, "none"),
-                            results_file=f,
-                            connection=conn,
-                            target=target,
-                            max_scale=max_scale,
-                        )
-                test_failed = False
-            finally:
-                # Clean up
-                if args.cleanup:
-                    target.cleanup()
+            if scenario == SCENARIO_TPCH_STRONG:
+                print("--- Running TPC-H Index strong scaling")
+                run_scenario_strong(
+                    scenario=TpchScenario(
+                        args.scale_tpch, target.replica_size_for_scale(1)
+                    ),
+                    results_writer=results_writer,
+                    connection=conn,
+                    target=target,
+                    max_scale=max_scale,
+                )
+            if scenario == SCENARIO_TPCH_MV_STRONG:
+                print("--- Running TPC-H Materialized view strong scaling")
+                run_scenario_strong(
+                    scenario=TpchScenarioMV(
+                        args.scale_tpch, target.replica_size_for_scale(1)
+                    ),
+                    results_writer=results_writer,
+                    connection=conn,
+                    target=target,
+                    max_scale=max_scale,
+                )
+            if scenario == SCENARIO_AUCTION_STRONG:
+                print("--- Running Auction strong scaling")
+                run_scenario_strong(
+                    scenario=AuctionScenario(
+                        args.scale_auction, target.replica_size_for_scale(1)
+                    ),
+                    results_writer=results_writer,
+                    connection=conn,
+                    target=target,
+                    max_scale=max_scale,
+                )
+            if scenario == SCENARIO_AUCTION_WEAK:
+                print("--- Running Auction weak scaling")
+                run_scenario_weak(
+                    scenario=AuctionScenario(args.scale_auction, "none"),
+                    results_writer=results_writer,
+                    connection=conn,
+                    target=target,
+                    max_scale=max_scale,
+                )
 
-            if buildkite.is_in_buildkite():
-                buildkite.upload_artifact(args.record, cwd=MZ_ROOT, quiet=True)
+    test_failed = True
+    try:
+        scenarios = buildkite.shard_list(sorted(args.scenarios), lambda s: s)
+        c.test_parts(scenarios, process)
+        test_failed = False
+    finally:
+        results_file.close()
+        # Clean up
+        if args.cleanup:
+            target.cleanup()
 
-            if args.analyze:
-                analyze_file(args.record)
+    assert not test_failed
 
-            assert not test_failed
+    if buildkite.is_in_buildkite():
+        buildkite.upload_artifact(args.record, cwd=MZ_ROOT, quiet=True)
 
-    scenarios = buildkite.shard_list(sorted(args.scenarios), lambda s: s)
-    c.test_parts(scenarios, process)
+    if args.analyze:
+        analyze_file(args.record)
 
 
 class BenchTarget:
@@ -1067,7 +1095,7 @@ class DockerTarget(BenchTarget):
 
 def run_scenario_strong(
     scenario: Scenario,
-    results_file: Any,
+    results_writer: csv.DictWriter,
     connection: ConnectionHandler,
     target: BenchTarget,
     max_scale: int,
@@ -1082,7 +1110,7 @@ def run_scenario_strong(
         scenario.scale,
         "strong",
         connection,
-        results_file,
+        results_writer,
         replica_size=None,
     )
 
@@ -1119,7 +1147,7 @@ def run_scenario_strong(
 
 def run_scenario_weak(
     scenario: Scenario,
-    results_file: Any,
+    results_writer: csv.DictWriter,
     connection: ConnectionHandler,
     target: BenchTarget,
     max_scale: int,
@@ -1150,7 +1178,7 @@ def run_scenario_weak(
             scenario.scale,
             "weak",
             connection,
-            results_file,
+            results_writer,
             replica_size,
         )
         for query in scenario.drop():
@@ -1199,6 +1227,12 @@ def analyze_file(file: str):
                 return float(match.group(1)) / 100.0
             elif match.group(3):  # 'C' matches
                 return float(match.group(1))
+        match = re.search(r"(?:scale=)(\d+)(?:,workers=)(\d+)", s)
+        if match:
+            # We don't have credits in docker, so approximate it
+            # 100cc == 2 workers
+            if match.group(1) and match.group(2):
+                return float(match.group(1)) * float(match.group(2)) / 2
         raise ValueError(f"Invalid cluster size format: {s}")
 
     df = pd.read_csv(file)
