@@ -23,7 +23,7 @@ use k8s_openapi::{
     },
     apimachinery::pkg::{apis::meta::v1::LabelSelector, util::intstr::IntOrString},
 };
-use kube::{Api, Client, api::ObjectMeta, runtime::controller::Action};
+use kube::{Api, Client, ResourceExt, api::ObjectMeta, runtime::controller::Action};
 use maplit::btreemap;
 use mz_server_core::listeners::AuthenticatorKind;
 use serde::Serialize;
@@ -31,7 +31,7 @@ use tracing::trace;
 
 use crate::{
     controller::materialize::tls::{create_certificate, issuer_ref_defined},
-    k8s::apply_resource,
+    k8s::{apply_resource, delete_resource},
 };
 use mz_cloud_resources::crd::{
     generated::cert_manager::certificates::Certificate, materialize::v1alpha1::Materialize,
@@ -82,11 +82,12 @@ impl Resources {
         let service_api: Api<Service> = Api::namespaced(client.clone(), namespace);
         let certificate_api: Api<Certificate> = Api::namespaced(client.clone(), namespace);
 
+        trace!("creating new network policies");
         for network_policy in &self.network_policies {
             apply_resource(&network_policy_api, network_policy).await?;
         }
 
-        trace!("creating new console deployment");
+        trace!("creating new console configmap");
         apply_resource(&configmap_api, &self.console_configmap).await?;
 
         trace!("creating new console deployment");
@@ -98,6 +99,39 @@ impl Resources {
         if let Some(certificate) = &*self.console_external_certificate {
             trace!("creating new console external certificate");
             apply_resource(&certificate_api, certificate).await?;
+        }
+
+        Ok(None)
+    }
+
+    pub async fn cleanup(
+        &self,
+        client: &Client,
+        namespace: &str,
+    ) -> Result<Option<Action>, anyhow::Error> {
+        let network_policy_api: Api<NetworkPolicy> = Api::namespaced(client.clone(), namespace);
+        let configmap_api: Api<ConfigMap> = Api::namespaced(client.clone(), namespace);
+        let deployment_api: Api<Deployment> = Api::namespaced(client.clone(), namespace);
+        let service_api: Api<Service> = Api::namespaced(client.clone(), namespace);
+        let certificate_api: Api<Certificate> = Api::namespaced(client.clone(), namespace);
+
+        if let Some(certificate) = &*self.console_external_certificate {
+            trace!("deleting console external certificate");
+            delete_resource(&certificate_api, &certificate.name_unchecked()).await?;
+        }
+
+        trace!("deleting console service");
+        delete_resource(&service_api, &self.console_service.name_unchecked()).await?;
+
+        trace!("deleting console deployment");
+        delete_resource(&deployment_api, &self.console_deployment.name_unchecked()).await?;
+
+        trace!("deleting console configmap");
+        delete_resource(&configmap_api, &self.console_configmap.name_unchecked()).await?;
+
+        trace!("deleting network policies");
+        for network_policy in &self.network_policies {
+            delete_resource(&network_policy_api, &network_policy.name_unchecked()).await?;
         }
 
         Ok(None)
