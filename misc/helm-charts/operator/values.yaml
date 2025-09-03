@@ -214,8 +214,16 @@ environmentd:
   tolerations:
 
 clusterd:
-  # -- Node selector to use for clusterd pods spawned by the operator
+  # -- Node selector to use for all clusterd pods spawned by the operator
   nodeSelector:
+  # -- Additional node selector to use for clusterd pods when using an LVM scratch disk.
+  # This will be merged with the values in `nodeSelector`.
+  scratchfsNodeSelector:
+    materialize.cloud/scratch-fs: "true"
+  # -- Additional node selector to use for clusterd pods when using swap.
+  # This will be merged with the values in `nodeSelector`.
+  swapNodeSelector:
+    materialize.cloud/swap: "true"
   # -- Affinity to use for clusterd pods spawned by the operator
   affinity:
   # -- Tolerations to use for clusterd pods spawned by the operator
