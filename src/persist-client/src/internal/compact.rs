@@ -694,13 +694,13 @@ where
                         .map(|(run_id, _, _, _)| run_id.1.expect("run_id should be present"))
                         .collect::<BTreeSet<_>>();
                     match batch_ids.iter().exactly_one().ok() {
-                        Some(batch_id) => {
+                        Some(batch_id) if run_ids.len() > 1 => {
                             CompactionInput::PartialBatch(
                                 *batch_id,
                                 run_ids
                             )
                         }
-                        None => input_id_range(batch_ids),
+                        _ => input_id_range(batch_ids),
                     }
                 } else {
                     input_id_range(batch_ids)
