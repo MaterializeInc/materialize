@@ -1156,17 +1156,16 @@ class Database:
         for relation in self:
             relation.create(exe)
 
-        if False:  # Questionable use
-            result = composition.run(
-                "sqlsmith",
-                "--target=host=materialized port=6875 dbname=materialize user=materialize",
-                "--exclude-catalog",
-                "--dump-state",
-                capture=True,
-                capture_stderr=True,
-                rm=True,
-            )
-            self.sqlsmith_state = result.stdout
+        result = composition.run(
+            "sqlsmith",
+            "--target=host=materialized port=6875 dbname=materialize user=materialize",
+            "--exclude-catalog",
+            "--dump-state",
+            capture=True,
+            capture_stderr=True,
+            rm=True,
+        )
+        self.sqlsmith_state = result.stdout
 
     def drop(self, exe: Executor) -> None:
         for db in self.dbs:
@@ -1183,16 +1182,15 @@ class Database:
             src.executor.mz_conn.close()
 
     def update_sqlsmith_state(self, composition: Composition) -> None:
-        if False:  # Questionable use
-            result = composition.run(
-                "sqlsmith",
-                "--target=host=materialized port=6875 dbname=materialize user=materialize",
-                "--exclude-catalog",
-                "--read-state",
-                "--dump-state",
-                stdin=self.sqlsmith_state,
-                capture=True,
-                capture_stderr=True,
-                rm=True,
-            )
-            self.sqlsmith_state = result.stdout
+        result = composition.run(
+            "sqlsmith",
+            "--target=host=materialized port=6875 dbname=materialize user=materialize",
+            "--exclude-catalog",
+            "--read-state",
+            "--dump-state",
+            stdin=self.sqlsmith_state,
+            capture=True,
+            capture_stderr=True,
+            rm=True,
+        )
+        self.sqlsmith_state = result.stdout

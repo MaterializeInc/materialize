@@ -81,7 +81,8 @@ known_errors = [
     "Expected right parenthesis, found left parenthesis",  # Should fix, but only happens rarely with cast+coalesce
     "invalid selection: operation may only refer to user-defined tables",  # Seems expected when using catalog tables
     "Unsupported temporal predicate",  # Expected, see https://github.com/MaterializeInc/database-issues/issues/5288
-    "Unsupported temporal operatrion: NotEq",
+    "Unsupported temporal operation: NotEq",
+    "Unsupported binary temporal operation: NotEq",
     "OneShot plan has temporal constraints",  # Expected, see https://github.com/MaterializeInc/database-issues/issues/5288
     "internal error: cannot evaluate unmaterializable function",  # Currently expected, see https://github.com/MaterializeInc/database-issues/issues/4083
     "string is not a valid identifier:",  # Expected in parse_ident & quote_ident
