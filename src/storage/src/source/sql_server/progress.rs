@@ -171,8 +171,8 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                     Some(committed_upper) = committed_uppers.next() => {
                         let Some(committed_upper) = committed_upper.as_option() else {
                             // It's possible that the source has been dropped, in which case this can
-                            // observe an empty upper. There's no action to take in that case as
-                            // this dataflow will be dropped.
+                            // observe an empty upper. This operator should continue to loop until
+                            // the drop dataflow propagates.
                             continue;
                         };
 
