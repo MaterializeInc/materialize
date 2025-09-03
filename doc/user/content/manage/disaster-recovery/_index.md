@@ -45,9 +45,12 @@ business' risk tolerance.
 
 ## Level 2:  Multi-replica clusters (High availability across AZs)
 
-Materialize supports multi-replica clusters. To enable distribution of replicas
-across Availability Zones (AZs), specify `cluster_topology_spread_min_domains`
-value greater than 1; e.g.,
+Materialize supports multi-replica clusters. If your region has multiple
+Availability Zones (AZs), you can enable distribution of replicas across the AZs
+in your region. To do so, specify `cluster_topology_spread_min_domains` value
+greater than 1 (up to the number of AZs in your region). For example, if your
+region has 3 AZs available, you can set `cluster_topology_spread_min_domains` to
+3:
 
 ```yaml
 materialize_instances = [
@@ -63,7 +66,7 @@ materialize_instances = [
 {{< include-md file="shared-content/multi-replica-az.md" >}}
 
 Multi-replica **compute clusters** and multi-replica **serving clusters**
-(excluding sink clusters) with replicas distributed across AZs provide DR
+(excluding sink clusters) with replicas distributed across AZs provide
 resilience against: machine-level failures; rack and building-level outages; and
 AZ level failures for those clusters:
 

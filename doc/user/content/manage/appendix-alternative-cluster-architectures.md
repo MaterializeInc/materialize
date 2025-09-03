@@ -4,7 +4,7 @@ description: "If the recommended 3-tier architecture is infeasible, can use a 2-
 menu:
   main:
     parent: "operational-guidelines"
-    weight: 5
+    weight: 20
 ---
 
 If the [recommended three-tier
