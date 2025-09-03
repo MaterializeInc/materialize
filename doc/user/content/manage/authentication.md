@@ -64,17 +64,20 @@ spec:
 
 #### Logging in and creating users
 
+Initially, only the `mz_system` user [^1] is available. To create additional
+users:
+
+1. Login as the `mz_system` user, using the
+`external_login_password_mz_system` password,
 ![Image of Materialize Console login screen with mz_system user](/images/mz_system_login.png
 "Materialize Console login screen with mz_system user")
 
-Initially, only the `mz_system` user [^1] is available. To create additional
-users, login as the `mz_system` user, using the
-`external_login_password_mz_system` password, and use
-[`CREATE ROLE ... WITH LOGIN PASSWORD ...`](/sql/create-role):
+1. Use [`CREATE ROLE ... WITH LOGIN PASSWORD ...`](/sql/create-role) to create
+   new users:
 
-```mzsql
-CREATE ROLE <user> WITH LOGIN PASSWORD '<password>';
-```
+   ```mzsql
+   CREATE ROLE <user> WITH LOGIN PASSWORD '<password>';
+   ```
 
 [^1]: The `mz_system` user is also used by the Materialize Operator for upgrades
 and maintenance tasks.
