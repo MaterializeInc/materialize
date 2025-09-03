@@ -1744,16 +1744,22 @@ impl<T: Timestamp + Lattice> Spine<T> {
         self.introduce_batch(batch, usize::cast_from(index.trailing_zeros()), log);
     }
 
-    /// True iff there is at most one HollowBatch in `self.merging`.
+    /// True iff there is at most one SpineBatch across all layers.
     ///
-    /// When true, there is no maintenance work to perform in the trace, other
-    /// than compaction. We do not yet have logic in place to determine if
-    /// compaction would improve a trace, so for now we are ignoring that.
+    /// When true, there is no structural merge work to perform in the trace.
+    /// Spine merges operate on SpineBatches (the per-layer structural units),
+    /// not on the inner HollowBatch parts within a single SpineBatch. With
+    /// incremental compaction it is common to have a single SpineBatch that
+    /// contains many inner parts (some possibly empty). We intentionally
+    /// consider this state "reduced" to avoid repeatedly injecting synthetic
+    /// empty batches when only intra-batch compaction remains.
     fn reduced(&self) -> bool {
-        self.spine_batches()
-            .flat_map(|b| b.parts.as_slice())
-            .count()
-            < 2
+        // Consider the trace "reduced" when there is at most one SpineBatch across all
+        // layers, regardless of how many inner hollow parts that batch contains. Inner
+        // parts can be cleaned up by compaction, which we intentionally ignore here to
+        // avoid repeatedly injecting empty batches when only structure-level compaction
+        // remains.
+        self.spine_batches().count() < 2
     }
 
     /// Describes the merge progress of layers in the trace.
