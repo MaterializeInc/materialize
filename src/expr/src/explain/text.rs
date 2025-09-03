@@ -13,9 +13,9 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 
-use mz_ore::soft_assert_eq_or_log;
 use mz_ore::str::{Indent, IndentLike, StrExt, closure_to_display, separated};
 use mz_ore::treat_as_equal::TreatAsEqual;
+use mz_ore::{soft_assert_eq_or_log, soft_assert_no_log};
 use mz_repr::explain::text::DisplayText;
 use mz_repr::explain::{
     CompactScalars, ExprHumanizer, HumanizedAnalyses, IndexUsageType, Indices,
@@ -1165,6 +1165,7 @@ impl HumanizerMode for HumanizedNotice {
 
     /// Write `ident`.
     fn humanize_ident(_col: usize, ident: Ident, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        soft_assert_no_log!(ident.as_str() != "?column?");
         write!(f, "{ident}")
     }
 }
@@ -1186,6 +1187,7 @@ impl HumanizerMode for HumanizedExplain {
 
     /// Write `#c{ident}`.
     fn humanize_ident(col: usize, ident: Ident, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        soft_assert_no_log!(ident.as_str() != "?column?");
         write!(f, "#{col}{{{ident}}}")
     }
 }
@@ -1233,7 +1235,7 @@ where
             // We don't have name inferred for this column.
             _ => {
                 // Don't show dummy column names.
-                if self.expr.1.as_ref() == "\"?column?\"" {
+                if self.expr.1.as_ref() == "?column?" {
                     write!(f, "#{}", self.expr.0)
                 } else {
                     M::humanize_ident(*self.expr.0, Ident::new_unchecked(self.expr.1.as_ref()), f)

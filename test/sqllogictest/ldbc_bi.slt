@@ -556,7 +556,7 @@ Explained Query:
                         ReadIndex on=message message_messageid=[delta join lookup] // { arity: 13 }
     Return // { arity: 4 }
       Project (#0{name}, #3..=#5) // { arity: 4 }
-        Map (coalesce(#1{count}, 0), coalesce(#2{count}, 0), abs((#3{"?column?"} - #4{"?column?"}))) // { arity: 6 }
+        Map (coalesce(#1{count}, 0), coalesce(#2{count}, 0), abs((#3 - #4))) // { arity: 6 }
           Union // { arity: 3 }
             Map (null, null) // { arity: 3 }
               Union // { arity: 1 }
@@ -1495,7 +1495,7 @@ Explained Query:
               Project (#0{id}, #0{id}, #1{count}) // { arity: 3 }
                 Get l5 // { arity: 2 }
     Return // { arity: 5 }
-      Map (coalesce(#2{sum}, 0), (bigint_to_numeric(#1{score}) + #3{"?column?"})) // { arity: 5 }
+      Map (coalesce(#2{sum}, 0), (bigint_to_numeric(#1{score}) + #3)) // { arity: 5 }
         Reduce group_by=[#0, #1] aggregates=[sum(case when (#3) IS NULL then null else #2 end)] // { arity: 3 }
           Project (#0, #1, #6, #7) // { arity: 4 }
             Join on=(#0 = #2{person1id} AND #5{person2id} = case when (#4) IS NULL then null else #3{person2id} end) type=delta // { arity: 8 }

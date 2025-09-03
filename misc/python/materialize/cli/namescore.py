@@ -37,9 +37,10 @@ def find_slt_files() -> list[str]:
     return slt_files
 
 
-def namescore(filename: str) -> tuple[int, int]:
+def namescore(filename: str) -> tuple[int, int, int]:
     """Calculate the namescore of a file"""
     named_refs = 0
+    unknown_cols = 0
     refs = 0
     with open(filename) as f:
         content = f.read()
@@ -48,7 +49,9 @@ def namescore(filename: str) -> tuple[int, int]:
 
             if match.group(1):
                 named_refs += 1
-    return (named_refs, refs)
+                if match.group(1) == '{"?column?"}':
+                    unknown_cols += 1
+    return (named_refs, unknown_cols, refs)
 
 
 def main() -> None:
@@ -70,23 +73,26 @@ of given files (or all SLT files in $MZ_ROOT/test/sqllogictest by default)""",
     tests = args.tests or find_slt_files()
 
     named_refs = 0
+    unknown_cols = 0
     refs = 0
     nonames = 0
     total = len(tests)
     for test in tests:
-        nr, r = namescore(test)
+        nr, uc, r = namescore(test)
         if r == 0:
             assert nr == 0
+            assert uc == 0
             nonames += 1
             continue
 
         print(
-            f"{test.removeprefix(str(SLT_ROOT) + os.sep)}: {nr / r * 100:.2f}% ({nr} / {r})"
+            f"{test.removeprefix(str(SLT_ROOT) + os.sep)}: {nr / r * 100:.2f}% ({nr} / {r}; {uc} unknown columns)"
         )
         named_refs += nr
+        unknown_cols += uc
         refs += r
     print(
-        f"\nOverall namescore: {named_refs / refs * 100:.2f}% ({named_refs} / {refs}); {nonames} files with no column references / {total} total files"
+        f"\nOverall namescore: {named_refs / refs * 100:.2f}% ({named_refs} / {refs}; {unknown_cols} unknown columns); {nonames} files with no column references / {total} total files"
     )
 
 

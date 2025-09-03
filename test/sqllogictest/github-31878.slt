@@ -85,7 +85,7 @@ Explained Query:
           ReadStorage materialize.public.t1
   Return
     Project (#1)
-      Map ((#0{"?column?"} + 5))
+      Map ((#0 + 5))
         Union
           Get l0
           Map (null)
