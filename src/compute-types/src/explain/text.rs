@@ -498,6 +498,7 @@ impl Plan {
                 input_mfp,
                 forms,
             } => {
+                ctx.indent.set();
                 if forms.raw && forms.arranged.is_empty() {
                     soft_assert_or_log!(forms.raw, "raw stream with no arrangements");
                     writeln!(f, "{}→Unarranged Raw Stream{annotations}", ctx.indent)?;
@@ -519,14 +520,15 @@ impl Plan {
                     writeln!(f, "{annotations}")?;
                 }
 
-                ctx.indented(|ctx| {
-                    if !input_mfp.is_identity() {
-                        writeln!(f, "{}→Fused with Parent Map/Filter/Project", ctx.indent)?;
-                        ctx.indented(|ctx| mode.expr(input_mfp, None).fmt_default_text(f, ctx))?;
-                    }
+                if !input_mfp.is_identity() {
+                    ctx.indent += 1;
+                    writeln!(f, "{}→Fused with Parent Map/Filter/Project", ctx.indent)?;
+                    ctx.indented(|ctx| mode.expr(input_mfp, None).fmt_default_text(f, ctx))?;
+                }
 
-                    input.fmt_text(f, ctx)
-                })?;
+                ctx.indent += 1;
+                input.fmt_text(f, ctx)?;
+                ctx.indent.reset();
             }
         }
 
