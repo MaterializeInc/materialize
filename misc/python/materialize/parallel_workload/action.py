@@ -1277,7 +1277,6 @@ class FlipFlagsAction(Action):
             "storage_upsert_max_snapshot_batch_buffering",
             "storage_rocksdb_cleanup_tries",
             "storage_suspend_and_restart_delay",
-            "storage_sink_snapshot_frontier",
             "storage_reclock_to_latest",
             "storage_use_continual_feedback_upsert",
             "storage_server_maintenance_interval",
