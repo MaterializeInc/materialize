@@ -55,7 +55,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
     config: RawSourceCreationConfig,
     connection: SqlServerConnectionDetails,
     outputs: BTreeMap<GlobalId, SourceOutputInfo>,
-    resume_uppers: impl futures::Stream<Item = Antichain<Lsn>> + 'static,
+    committed_uppers: impl futures::Stream<Item = Antichain<Lsn>> + 'static,
     extras: SqlServerSourceExtras,
 ) -> (
     TimelyStream<G, ProgressStatisticsUpdate>,
@@ -126,7 +126,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
             // This stream of "resume uppers" tracks all of the Lsn's that we have durably
             // committed for all subsources/exports and thus we can notify the upstream that the
             // change tables can be cleaned up.
-            let mut resume_uppers = std::pin::pin!(resume_uppers);
+            let mut committed_uppers = std::pin::pin!(committed_uppers);
             let cleanup_change_table = CDC_CLEANUP_CHANGE_TABLE.handle(config.config.config_set());
             let cleanup_max_deletes = CDC_CLEANUP_CHANGE_TABLE_MAX_DELETES.handle(config.config.config_set());
             let capture_instances: BTreeSet<_> = outputs.into_values().map(|info| info.capture_instance).collect();
@@ -168,8 +168,8 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
 
                         prev_offset_known = Some(known_lsn);
                     },
-                    Some(resume_upper) = resume_uppers.next() => {
-                        let Some(resume_upper) = resume_upper.as_option() else {
+                    Some(committed_upper) = committed_uppers.next() => {
+                        let Some(committed_upper) = committed_upper.as_option() else {
                             // It's possible that the source has been dropped, in which case this can
                             // observe an empty upper. There's no action to take in that case as
                             // this dataflow will be dropped.
@@ -187,7 +187,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                                 let cleanup_result = mz_sql_server_util::inspect::cleanup_change_table(
                                     &mut client,
                                     instance,
-                                    resume_upper,
+                                    committed_upper,
                                     cleanup_max_deletes.get(),
                                 ).await;
                                 // TODO(sql_server2): Track this in a more user observable way.
@@ -200,10 +200,10 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                         // Update any listeners with our most recently committed LSN.
                         if let Some(prev_known_lsn) = prev_offset_known {
                             let known_lsn_abrv = prev_known_lsn.abbreviate();
-                            let commit_lsn_abrv = resume_upper.abbreviate();
+                            let commit_lsn_abrv = committed_upper.abbreviate();
                             emit_stats(&stats_cap[0], known_lsn_abrv, commit_lsn_abrv);
                         }
-                        prev_offset_committed = Some(*resume_upper);
+                        prev_offset_committed = Some(*committed_upper);
                     }
                 };
             }
