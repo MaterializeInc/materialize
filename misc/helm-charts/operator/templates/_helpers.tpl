@@ -118,6 +118,19 @@ Helper template to process cluster sizes based on storage class configuration
             {{- $_ := set $newConfig "swap_enabled" true }}
         {{- end }}
 
+        {{- if (not (index $newConfig "selectors")) }}
+            {{- $_ := set $newConfig "selectors" dict }}
+        {{- end }}
+        {{- if $newConfig.swap_enabled }}
+            {{- if $.Values.clusterd.swapNodeSelector }}
+                {{- $_ := merge $newConfig.selectors $.Values.clusterd.swapNodeSelector }}
+            {{- end }}
+        {{- else if $.Values.storage.storageClass.name }}
+            {{- if $.Values.clusterd.scratchfsNodeSelector }}
+                {{- $_ := merge $newConfig.selectors $.Values.clusterd.scratchfsNodeSelector }}
+            {{- end }}
+        {{- end }}
+
         {{- $_ := set $newConfig "is_cc" true }}
         {{- $_ := set $result $size $newConfig }}
     {{- end }}
