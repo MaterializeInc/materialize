@@ -243,8 +243,8 @@ pub struct ServiceConfig {
     pub disk_limit: Option<DiskLimit>,
     /// Node selector for this service.
     pub node_selector: BTreeMap<String, String>,
-    /// Whether to enable transparent hugepages.
-    pub enable_transparent_hugepages: bool,
+    /// Optional jemalloc configuration.
+    pub clusterd_malloc_conf: Option<String>,
 }
 
 /// A named port associated with a service.

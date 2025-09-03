@@ -1322,7 +1322,7 @@ class FlipFlagsAction(Action):
             "enable_mz_join_core_v2",
             "force_swap_for_cc_sizes",
             "enable_with_ordinality_legacy_fallback",
-            "enable_transparent_hugepages",
+            "clusterd_malloc_conf",
         ]
 
     def run(self, exe: Executor) -> bool:
