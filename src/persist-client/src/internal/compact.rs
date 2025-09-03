@@ -695,10 +695,21 @@ where
                         .collect::<BTreeSet<_>>();
                     match batch_ids.iter().exactly_one().ok() {
                         Some(batch_id) => {
-                            CompactionInput::PartialBatch(
-                                *batch_id,
-                                run_ids
-                            )
+                            // We are compacting runs from exactly one batch. Decide whether this
+                            // chunk represents the entire batch or only a subset of its runs.
+
+                            let full_run_count = req.inputs
+                                .iter()
+                                .find(|x| x.id == *batch_id)
+                                .map(|b| b.batch.run_meta.len())
+                                .expect("trying to replace with an ID not present in input!");
+
+                            let covers_whole_batch = run_ids.len() == full_run_count;
+                            if !covers_whole_batch {
+                                CompactionInput::PartialBatch(*batch_id, run_ids)
+                            } else {
+                                input_id_range(batch_ids)
+                            }
                         }
                         None => input_id_range(batch_ids),
                     }
