@@ -40,7 +40,7 @@ use std::sync::Arc;
 
 use futures::StreamExt;
 use mz_ore::future::InTask;
-use mz_sql_server_util::cdc::CdcEvent;
+use mz_sql_server_util::cdc::{CdcEvent, SqlServerSnapshotMetadata};
 use mz_sql_server_util::config::TunnelConfig;
 use mz_sql_server_util::{Client, Config};
 use tracing_subscriber::EnvFilter;
@@ -83,10 +83,13 @@ async fn main() -> Result<(), anyhow::Error> {
 
     for table in tables {
         // Get an initial snapshot of the table.
-        let (lsn, stats, snapshot) = cdc_handle
+        let (snapshot_metadata, snapshot) = cdc_handle
             .snapshot(&table, 1, mz_repr::GlobalId::User(1))
             .await?;
 
+        let SqlServerSnapshotMetadata {
+            lsn, count: stats, ..
+        } = snapshot_metadata;
         tracing::info!("snapshot stats: {stats:?}");
 
         instance_to_lsn.insert(Arc::clone(&table.capture_instance.name), lsn);
