@@ -23,7 +23,7 @@ ALTER SYSTEM SET enable_repeat_row  = true
 -1
 
 ! SELECT * FROM data
-contains:Invalid data in source, saw retractions (1) for row that does not exist: [Int64(1), UInt32(1)]
+contains:Invalid data in source, saw retractions (1) for row that does not exist: [Int64
 
 > INSERT INTO base VALUES (1, 1, -1)
 
@@ -31,7 +31,7 @@ contains:Invalid data in source, saw retractions (1) for row that does not exist
 -2
 
 ! SELECT * FROM data
-contains:Invalid data in source, saw retractions (2) for row that does not exist: [Int64(1), UInt32(1)]
+contains:Invalid data in source, saw retractions (2) for row that does not exist: [Int64
 
 # regression scenario per database-issues#5246, with non-monotonic rendering
 > CREATE VIEW topk AS

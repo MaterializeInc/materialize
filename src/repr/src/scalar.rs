@@ -68,7 +68,7 @@ use crate::{CatalogItemId, ColumnName, ColumnType, DatumList, DatumMap, Row, Row
 /// the outer `Datum`). The idiom we've devised for this is a series of
 /// functions on `repr::row::RowPacker` prefixed with `push_`.
 ///
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd, EnumKind)]
+#[derive(Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd, EnumKind)]
 #[enum_kind(DatumKind)]
 pub enum Datum<'a> {
     /// The `false` boolean value.
@@ -166,6 +166,50 @@ pub enum Datum<'a> {
     // This order of variants of this enum determines how nulls sort. We
     // have decided that nulls should sort last in Materialize, so all
     // other datum variants should appear before `Null`.
+}
+
+impl Debug for Datum<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use mz_ore::str::*;
+        match self {
+            Datum::False => write!(f, "False"),
+            Datum::True => write!(f, "True"),
+            Datum::Int16(x) => f.debug_tuple("Int16").field(&redact(x)).finish(),
+            Datum::Int32(x) => f.debug_tuple("Int32").field(&redact(x)).finish(),
+            Datum::Int64(x) => f.debug_tuple("Int64").field(&redact(x)).finish(),
+            Datum::UInt8(x) => f.debug_tuple("UInt8").field(&redact(x)).finish(),
+            Datum::UInt16(x) => f.debug_tuple("UInt16").field(&redact(x)).finish(),
+            Datum::UInt32(x) => f.debug_tuple("UInt32").field(&redact(x)).finish(),
+            Datum::UInt64(x) => f.debug_tuple("UInt64").field(&redact(x)).finish(),
+            Datum::Float32(x) => f.debug_tuple("Float32").field(&redact(x)).finish(),
+            Datum::Float64(x) => f.debug_tuple("Float64").field(&redact(x)).finish(),
+            Datum::Date(x) => f.debug_tuple("Date").field(&redact(x)).finish(),
+            Datum::Time(x) => f.debug_tuple("Time").field(&redact(x)).finish(),
+            Datum::Timestamp(x) => f
+                .debug_tuple("Timestamp")
+                .field(&redact(x.to_naive()))
+                .finish(),
+            Datum::TimestampTz(x) => f
+                .debug_tuple("TimestampTz")
+                .field(&redact(<DateTime<Utc>>::from(*x)))
+                .finish(),
+            Datum::Interval(x) => f.debug_tuple("Interval").field(&redact(x)).finish(),
+            Datum::Bytes(x) => f.debug_tuple("Bytes").field(&redact(x)).finish(),
+            Datum::String(x) => f.debug_tuple("String").field(&redact(x)).finish(),
+            Datum::Array(x) => f.debug_tuple("Array").field(x).finish(),
+            Datum::List(x) => f.debug_tuple("List").field(x).finish(),
+            Datum::Map(x) => f.debug_tuple("Map").field(x).finish(),
+            Datum::Numeric(x) => f.debug_tuple("Numeric").field(&redact(&x.0)).finish(),
+            Datum::JsonNull => f.debug_tuple("JsonNull").finish(),
+            Datum::Uuid(x) => f.debug_tuple("Uuid").field(&redact(x)).finish(),
+            Datum::MzTimestamp(x) => f.debug_tuple("MzTimestamp").field(&redact(x)).finish(),
+            Datum::Range(x) => f.debug_tuple("Range").field(&redact(x)).finish(),
+            Datum::MzAclItem(x) => f.debug_tuple("MzAclItem").field(&redact(x)).finish(),
+            Datum::AclItem(x) => f.debug_tuple("AclItem").field(&redact(x)).finish(),
+            Datum::Dummy => f.debug_tuple("Dummy").finish(),
+            Datum::Null => f.debug_tuple("Null").finish(),
+        }
+    }
 }
 
 impl TryFrom<Datum<'_>> for bool {
