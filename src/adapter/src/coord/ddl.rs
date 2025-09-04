@@ -32,7 +32,6 @@ use mz_ore::now::to_datetime;
 use mz_ore::retry::Retry;
 use mz_ore::str::StrExt;
 use mz_ore::task;
-use mz_postgres_util::tunnel::PostgresFlavor;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::{CatalogItemId, GlobalId, Timestamp};
 use mz_sql::catalog::{CatalogCluster, CatalogClusterReplica, CatalogSchema};
@@ -715,19 +714,11 @@ impl Coordinator {
                                             e.display_with_causes()
                                         )
                                     })?;
-
-                                // Yugabyte does not support waiting for the replication to become
-                                // inactive before dropping it. That is fine though because in that
-                                // case dropping will fail and we'll go around the retry loop which
-                                // is effectively the same as waiting 60 seconds.
-                                let should_wait = match connection.flavor {
-                                    PostgresFlavor::Vanilla => true,
-                                    PostgresFlavor::Yugabyte => false,
-                                };
+                                // TODO (maz): since this is always true now, can we drop it?
                                 mz_postgres_util::drop_replication_slots(
                                     &ssh_tunnel_manager,
                                     config.clone(),
-                                    &[(&replication_slot_name, should_wait)],
+                                    &[(&replication_slot_name, true)],
                                 )
                                 .await?;
 

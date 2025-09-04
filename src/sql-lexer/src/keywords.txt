@@ -529,6 +529,5 @@ Workload
 Write
 Year
 Years
-Yugabyte
 Zone
 Zones

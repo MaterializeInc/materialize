@@ -144,7 +144,6 @@ use differential_dataflow::AsCollection;
 use futures::{StreamExt as _, TryStreamExt};
 use mz_ore::cast::CastFrom;
 use mz_ore::future::InTask;
-use mz_postgres_util::tunnel::PostgresFlavor;
 use mz_postgres_util::{Client, PostgresError, simple_query_opt};
 use mz_repr::{Datum, DatumVec, Diff, Row};
 use mz_sql_parser::ast::{Ident, display::AstDisplay};
@@ -290,20 +289,12 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 let main_slot = &connection.publication_details.slot;
                 let snapshot_info = match export_snapshot(&client, main_slot, false).await {
                     Ok(info) => info,
-                    Err(err @ TransientError::ReplicationSlotAlreadyExists) => {
-                        match connection.connection.flavor {
-                            // If we're connecting to a vanilla we have the option of exporting a
-                            // snapshot via a temporary slot
-                            PostgresFlavor::Vanilla => {
-                                let tmp_slot = format!(
-                                    "mzsnapshot_{}",
-                                    uuid::Uuid::new_v4()).replace('-', ""
-                                );
-                                export_snapshot(&client, &tmp_slot, true).await?
-                            }
-                            // No salvation for Yugabyte
-                            PostgresFlavor::Yugabyte => return Err(err),
-                        }
+                    Err(TransientError::ReplicationSlotAlreadyExists) => {
+                        let tmp_slot = format!(
+                            "mzsnapshot_{}",
+                            uuid::Uuid::new_v4()).replace('-', ""
+                        );
+                        export_snapshot(&client, &tmp_slot, true).await?
                     }
                     Err(err) => return Err(err),
                 };

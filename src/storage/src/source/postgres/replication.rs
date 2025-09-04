@@ -86,7 +86,6 @@ use mz_ore::collections::HashSet;
 use mz_ore::future::InTask;
 use mz_ore::iter::IteratorExt;
 use mz_postgres_util::PostgresError;
-use mz_postgres_util::tunnel::PostgresFlavor;
 use mz_postgres_util::{Client, simple_query_opt};
 use mz_repr::{Datum, DatumVec, Diff, Row};
 use mz_sql_parser::ast::{Ident, display::AstDisplay};
@@ -167,12 +166,6 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 
     let (stats_output, stats_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
     let (probe_output, probe_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
-
-    // Yugabyte doesn't support LSN probing currently.
-    let probe_stream = match connection.connection.flavor {
-        PostgresFlavor::Vanilla => Some(probe_stream),
-        PostgresFlavor::Yugabyte => None,
-    };
 
     let mut rewind_input =
         builder.new_disconnected_input(rewind_stream, Exchange::new(move |_| slot_reader));
@@ -624,7 +617,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
         replication_updates,
         upper_stream,
         stats_stream,
-        probe_stream,
+        Some(probe_stream),
         errors,
         button.press_on_drop(),
     )

@@ -45,8 +45,6 @@ pub enum PgSourcePurificationError {
     UnrecognizedTypes { cols: Vec<(String, Oid)> },
     #[error("{0} is not a POSTGRES CONNECTION")]
     NotPgConnection(FullItemName),
-    #[error("{0} is not a YUGABYTE CONNECTION")]
-    NotYugabyteConnection(FullItemName),
     #[error("CONNECTION must specify PUBLICATION")]
     ConnectionMissingPublication,
     #[error("PostgreSQL server has insufficient number of replication slots available")]

@@ -384,9 +384,7 @@ fn ast_rewrite_sources_to_tables(
             // migrated above. All we need to do is remove the subsource-related
             // options from this statement since they are no longer relevant.
             Statement::CreateSource(CreateSourceStatement {
-                connection:
-                    mut conn @ (CreateSourceConnection::Postgres { .. }
-                    | CreateSourceConnection::Yugabyte { .. }),
+                connection: mut conn @ CreateSourceConnection::Postgres { .. },
                 name,
                 if_not_exists,
                 in_cluster,
@@ -401,7 +399,6 @@ fn ast_rewrite_sources_to_tables(
             }) => {
                 let options = match &mut conn {
                     CreateSourceConnection::Postgres { options, .. } => options,
-                    CreateSourceConnection::Yugabyte { options, .. } => options,
                     _ => unreachable!("match determined above"),
                 };
                 // This option storing text columns on the primary source statement is redundant

@@ -17,7 +17,6 @@ use itertools::Itertools;
 use maplit::btreemap;
 use mz_ore::num::NonNeg;
 use mz_ore::str::StrExt;
-use mz_postgres_util::tunnel::PostgresFlavor;
 use mz_repr::CatalogItemId;
 use mz_sql_parser::ast::ConnectionOptionName::*;
 use mz_sql_parser::ast::display::AstDisplay;
@@ -144,7 +143,7 @@ pub(super) fn validate_options_per_connection_type(
             SaslPassword,
             SecurityProtocol,
         ],
-        CreateConnectionType::Postgres | CreateConnectionType::Yugabyte => &[
+        CreateConnectionType::Postgres => &[
             AwsPrivatelink,
             Database,
             Host,
@@ -387,11 +386,7 @@ impl ConnectionOptionExtracted {
                     tunnel,
                 })
             }
-            CreateConnectionType::Postgres | CreateConnectionType::Yugabyte => {
-                if matches!(connection_type, CreateConnectionType::Yugabyte) {
-                    scx.require_feature_flag(&vars::ENABLE_YUGABYTE_CONNECTION)?;
-                }
-
+            CreateConnectionType::Postgres => {
                 let cert = self.ssl_certificate;
                 let key = self.ssl_key.map(|secret| secret.into());
                 let tls_identity = match (cert, key) {
@@ -441,11 +436,6 @@ impl ConnectionOptionExtracted {
                     user: self
                         .user
                         .ok_or_else(|| sql_err!("USER option is required"))?,
-                    flavor: match connection_type {
-                        CreateConnectionType::Postgres => PostgresFlavor::Vanilla,
-                        CreateConnectionType::Yugabyte => PostgresFlavor::Yugabyte,
-                        _ => unreachable!(),
-                    },
                 })
             }
             CreateConnectionType::Ssh => {

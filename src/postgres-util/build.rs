@@ -24,10 +24,7 @@ fn main() {
         .emit_rerun_if_changed(false)
         .compile_protos_with_config(
             config,
-            &[
-                "postgres-util/src/desc.proto",
-                "postgres-util/src/tunnel.proto",
-            ],
+            &["postgres-util/src/desc.proto"],
             &[PathBuf::from(".."), mz_build_tools::protoc_include()],
         )
         .unwrap_or_else(|e| panic!("{e}"))

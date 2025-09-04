@@ -558,13 +558,6 @@ CREATE CONNECTION pgconn TO POSTGRES (HOST = foo, PORT = 1234, SSL CERTIFICATE A
 CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("pgconn")]), connection_type: Postgres, if_not_exists: false, values: [ConnectionOption { name: Host, value: Some(UnresolvedItemName(UnresolvedItemName([Ident("foo")]))) }, ConnectionOption { name: Port, value: Some(Value(Number("1234"))) }, ConnectionOption { name: SslCertificateAuthority, value: Some(Value(String("foo"))) }, ConnectionOption { name: SshTunnel, value: Some(Item(Name(UnresolvedItemName([Ident("tun")])))) }, ConnectionOption { name: Database, value: Some(Value(String("db"))) }, ConnectionOption { name: Password, value: Some(Value(String("pw"))) }, ConnectionOption { name: SslCertificate, value: Some(Value(String("cert"))) }, ConnectionOption { name: SslKey, value: Some(Value(String("key"))) }, ConnectionOption { name: SslMode, value: Some(Value(String("mode"))) }, ConnectionOption { name: User, value: Some(Value(String("postgres"))) }], with_options: [] })
 
 parse-statement
-CREATE CONNECTION yugabyteconn FOR YUGABYTE HOST foo, PORT 1234, SSL CERTIFICATE AUTHORITY 'foo', SSH TUNNEL tun, DATABASE 'db', PASSWORD 'pw', SSL CERTIFICATE 'cert', SSL KEY 'key', SSL MODE 'mode', USER 'postgres'
-----
-CREATE CONNECTION yugabyteconn TO YUGABYTE (HOST = foo, PORT = 1234, SSL CERTIFICATE AUTHORITY = 'foo', SSH TUNNEL = tun, DATABASE = 'db', PASSWORD = 'pw', SSL CERTIFICATE = 'cert', SSL KEY = 'key', SSL MODE = 'mode', USER = 'postgres')
-=>
-CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("yugabyteconn")]), connection_type: Yugabyte, if_not_exists: false, values: [ConnectionOption { name: Host, value: Some(UnresolvedItemName(UnresolvedItemName([Ident("foo")]))) }, ConnectionOption { name: Port, value: Some(Value(Number("1234"))) }, ConnectionOption { name: SslCertificateAuthority, value: Some(Value(String("foo"))) }, ConnectionOption { name: SshTunnel, value: Some(Item(Name(UnresolvedItemName([Ident("tun")])))) }, ConnectionOption { name: Database, value: Some(Value(String("db"))) }, ConnectionOption { name: Password, value: Some(Value(String("pw"))) }, ConnectionOption { name: SslCertificate, value: Some(Value(String("cert"))) }, ConnectionOption { name: SslKey, value: Some(Value(String("key"))) }, ConnectionOption { name: SslMode, value: Some(Value(String("mode"))) }, ConnectionOption { name: User, value: Some(Value(String("postgres"))) }], with_options: [] })
-
-parse-statement
 CREATE CONNECTION pgconn TO POSTGRES (AWS PRIVATELINK db.schema.item, PORT 1234)
 ----
 CREATE CONNECTION pgconn TO POSTGRES (AWS PRIVATELINK = db.schema.item, PORT = 1234)
@@ -661,13 +654,6 @@ CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION 'red');
 CREATE SOURCE psychic FROM POSTGRES CONNECTION pgconn (PUBLICATION = 'red')
 =>
 CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("psychic")]), in_cluster: None, col_names: [], connection: Postgres { connection: Name(UnresolvedItemName([Ident("pgconn")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("red"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], external_references: None, progress_subsource: None })
-
-parse-statement
-CREATE SOURCE psychic FROM YUGABYTE CONNECTION pgconn (PUBLICATION 'red');
-----
-CREATE SOURCE psychic FROM YUGABYTE CONNECTION pgconn (PUBLICATION = 'red')
-=>
-CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("psychic")]), in_cluster: None, col_names: [], connection: Yugabyte { connection: Name(UnresolvedItemName([Ident("pgconn")])), options: [PgConfigOption { name: Publication, value: Some(Value(String("red"))) }] }, include_metadata: [], format: None, envelope: None, if_not_exists: false, key_constraint: None, with_options: [], external_references: None, progress_subsource: None })
 
 parse-statement
 CREATE SUBSOURCE mz_subsource (c int) OF SOURCE public.foo.mz_source WITH (EXTERNAL REFERENCE = public.foo.bar, EXCLUDE COLUMNS (bar), TEXT COLUMNS (baz, foobar), DETAILS = 'details');

@@ -29,7 +29,6 @@ use mz_ore::collections::{CollectionExt, HashSet};
 use mz_ore::num::NonNeg;
 use mz_ore::soft_panic_or_log;
 use mz_ore::str::StrExt;
-use mz_postgres_util::tunnel::PostgresFlavor;
 use mz_proto::RustType;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
@@ -926,28 +925,8 @@ pub fn plan_create_source(
         CreateSourceConnection::Postgres {
             connection,
             options,
-        }
-        | CreateSourceConnection::Yugabyte {
-            connection,
-            options,
         } => {
-            let (source_flavor, flavor_name) = match source_connection {
-                CreateSourceConnection::Postgres { .. } => (PostgresFlavor::Vanilla, "PostgreSQL"),
-                CreateSourceConnection::Yugabyte { .. } => (PostgresFlavor::Yugabyte, "Yugabyte"),
-                _ => unreachable!(),
-            };
-
             let connection_item = scx.get_item_by_resolved_name(connection)?;
-            let connection_mismatch = match connection_item.connection()? {
-                Connection::Postgres(conn) => source_flavor != conn.flavor,
-                _ => true,
-            };
-            if connection_mismatch {
-                sql_bail!(
-                    "{} is not a {flavor_name} connection",
-                    scx.catalog.resolve_full_name(connection_item.name())
-                )
-            }
 
             let PgConfigOptionExtracted {
                 details,

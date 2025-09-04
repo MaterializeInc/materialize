@@ -31,7 +31,6 @@ use mz_ore::str::StrExt;
 use mz_ore::{assert_none, soft_panic_or_log};
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_postgres_util::replication::WalLevel;
-use mz_postgres_util::tunnel::PostgresFlavor;
 use mz_proto::RustType;
 use mz_repr::{CatalogItemId, RelationDesc, RelationVersionSelector, Timestamp, strconv};
 use mz_sql_parser::ast::display::AstDisplay;
@@ -53,15 +52,15 @@ use mz_sql_parser::ast::{
 };
 use mz_sql_server_util::desc::SqlServerTableDesc;
 use mz_storage_types::configuration::StorageConfiguration;
+use mz_storage_types::connections::Connection;
 use mz_storage_types::connections::inline::IntoInlineConnection;
-use mz_storage_types::connections::{Connection, PostgresConnection};
 use mz_storage_types::errors::ContextCreationError;
 use mz_storage_types::sources::load_generator::LoadGeneratorOutput;
 use mz_storage_types::sources::mysql::MySqlSourceDetails;
 use mz_storage_types::sources::postgres::PostgresSourcePublicationDetails;
 use mz_storage_types::sources::{
-    GenericSourceConnection, PostgresSourceConnection, SourceConnection, SourceDesc,
-    SourceExportStatementDetails, SqlServerSourceExtras,
+    GenericSourceConnection, SourceConnection, SourceDesc, SourceExportStatementDetails,
+    SqlServerSourceExtras,
 };
 use prost::Message;
 use protobuf_native::MessageLite;
@@ -641,7 +640,7 @@ async fn purify_create_source(
         CreateSourceConnection::Kafka { .. } => {
             &mz_storage_types::sources::kafka::KAFKA_PROGRESS_DESC
         }
-        CreateSourceConnection::Postgres { .. } | CreateSourceConnection::Yugabyte { .. } => {
+        CreateSourceConnection::Postgres { .. } => {
             &mz_storage_types::sources::postgres::PG_PROGRESS_DESC
         }
         CreateSourceConnection::SqlServer { .. } => {
@@ -789,53 +788,21 @@ async fn purify_create_source(
 
             format_options = SourceFormatOptions::Kafka { topic };
         }
-        source_connection @ CreateSourceConnection::Postgres { .. }
-        | source_connection @ CreateSourceConnection::Yugabyte { .. } => {
-            let (source_flavor, connection, options) = match source_connection {
-                CreateSourceConnection::Postgres {
-                    connection,
-                    options,
-                } => (PostgresFlavor::Vanilla, connection, options),
-                CreateSourceConnection::Yugabyte {
-                    connection,
-                    options,
-                } => (PostgresFlavor::Yugabyte, connection, options),
-                _ => unreachable!(),
-            };
+        CreateSourceConnection::Postgres {
+            connection,
+            options,
+        } => {
             let connection = {
                 let item = scx.get_item_by_resolved_name(connection)?;
                 match item.connection().map_err(PlanError::from)? {
                     Connection::Postgres(connection) => {
-                        let connection = connection.clone().into_inline_connection(&catalog);
-                        if connection.flavor != source_flavor {
-                            match source_flavor {
-                                PostgresFlavor::Vanilla => {
-                                    Err(PgSourcePurificationError::NotPgConnection(
-                                        scx.catalog.resolve_full_name(item.name()),
-                                    ))
-                                }
-                                PostgresFlavor::Yugabyte => {
-                                    Err(PgSourcePurificationError::NotYugabyteConnection(
-                                        scx.catalog.resolve_full_name(item.name()),
-                                    ))
-                                }
-                            }
-                        } else {
-                            Ok(connection)
-                        }
+                        connection.clone().into_inline_connection(&catalog)
                     }
-                    _ => match source_flavor {
-                        PostgresFlavor::Vanilla => Err(PgSourcePurificationError::NotPgConnection(
-                            scx.catalog.resolve_full_name(item.name()),
-                        )),
-                        PostgresFlavor::Yugabyte => {
-                            Err(PgSourcePurificationError::NotYugabyteConnection(
-                                scx.catalog.resolve_full_name(item.name()),
-                            ))
-                        }
-                    },
+                    _ => Err(PgSourcePurificationError::NotPgConnection(
+                        scx.catalog.resolve_full_name(item.name()),
+                    ))?,
                 }
-            }?;
+            };
             let crate::plan::statement::PgConfigOptionExtracted {
                 publication,
                 text_columns,
@@ -1464,14 +1431,7 @@ async fn purify_alter_source_add_subsources(
 ) -> Result<PurifiedStatement, PlanError> {
     // Validate this is a source that can have subsources added.
     match desc.connection {
-        GenericSourceConnection::Postgres(PostgresSourceConnection {
-            connection:
-                PostgresConnection {
-                    flavor: PostgresFlavor::Vanilla,
-                    ..
-                },
-            ..
-        }) => {}
+        GenericSourceConnection::Postgres(_) => {}
         GenericSourceConnection::MySql(_) => {}
         GenericSourceConnection::SqlServer(_) => {}
         _ => sql_bail!(
