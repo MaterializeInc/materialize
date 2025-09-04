@@ -1362,7 +1362,7 @@ steps:
       depends_on: build-aarch64
       timeout_in_minutes: 1200
       concurrency: 1
-      concurrency_group: 'mz-e2e'
+      concurrency_group: 'cloud-canary'
       agents:
         queue: linux-aarch64-small
       plugins:
