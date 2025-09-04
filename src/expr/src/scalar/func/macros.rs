@@ -162,14 +162,14 @@ macro_rules! sqlfunc {
                 fn test_sqlfunc_macro() {
                     use crate::func::EagerUnaryFunc;
                     let f = super::[<$fn_name:camel>];
-                    let input_type = mz_repr::SqlColumnType {
-                        scalar_type: mz_repr::SqlScalarType::Float32,
+                    let input_type = mz_repr::ColumnType {
+                        scalar_type: mz_repr::ScalarType::Float32,
                         nullable: true,
                     };
                     let output_type_nullable = f.output_type(input_type);
 
-                    let input_type = mz_repr::SqlColumnType {
-                        scalar_type: mz_repr::SqlScalarType::Float32,
+                    let input_type = mz_repr::ColumnType {
+                        scalar_type: mz_repr::ScalarType::Float32,
                         nullable: false,
                     };
                     let output_type_nonnullable = f.output_type(input_type);
@@ -184,8 +184,8 @@ macro_rules! sqlfunc {
                     #[derive(Debug)]
                     #[allow(unused)]
                     struct Info {
-                        output_type_nullable: mz_repr::SqlColumnType,
-                        output_type_nonnullable: mz_repr::SqlColumnType,
+                        output_type_nullable: mz_repr::ColumnType,
+                        output_type_nonnullable: mz_repr::ColumnType,
                         preserves_uniqueness: bool,
                         inverse: Option<crate::UnaryFunc>,
                         is_monotone: bool,
@@ -215,7 +215,7 @@ macro_rules! sqlfunc {
 
 #[cfg(test)]
 mod test {
-    use mz_repr::SqlScalarType;
+    use mz_repr::ScalarType;
 
     use crate::EvalError;
     use crate::scalar::func::LazyUnaryFunc;
@@ -255,30 +255,30 @@ mod test {
     #[mz_ore::test]
     fn output_types_infallible() {
         assert_eq!(
-            Infallible1.output_type(SqlScalarType::Float32.nullable(true)),
-            SqlScalarType::Float32.nullable(true)
+            Infallible1.output_type(ScalarType::Float32.nullable(true)),
+            ScalarType::Float32.nullable(true)
         );
         assert_eq!(
-            Infallible1.output_type(SqlScalarType::Float32.nullable(false)),
-            SqlScalarType::Float32.nullable(false)
-        );
-
-        assert_eq!(
-            Infallible2.output_type(SqlScalarType::Float32.nullable(true)),
-            SqlScalarType::Float32.nullable(false)
-        );
-        assert_eq!(
-            Infallible2.output_type(SqlScalarType::Float32.nullable(false)),
-            SqlScalarType::Float32.nullable(false)
+            Infallible1.output_type(ScalarType::Float32.nullable(false)),
+            ScalarType::Float32.nullable(false)
         );
 
         assert_eq!(
-            Infallible3.output_type(SqlScalarType::Float32.nullable(true)),
-            SqlScalarType::Float32.nullable(true)
+            Infallible2.output_type(ScalarType::Float32.nullable(true)),
+            ScalarType::Float32.nullable(false)
         );
         assert_eq!(
-            Infallible3.output_type(SqlScalarType::Float32.nullable(false)),
-            SqlScalarType::Float32.nullable(true)
+            Infallible2.output_type(ScalarType::Float32.nullable(false)),
+            ScalarType::Float32.nullable(false)
+        );
+
+        assert_eq!(
+            Infallible3.output_type(ScalarType::Float32.nullable(true)),
+            ScalarType::Float32.nullable(true)
+        );
+        assert_eq!(
+            Infallible3.output_type(ScalarType::Float32.nullable(false)),
+            ScalarType::Float32.nullable(true)
         );
     }
 
@@ -315,30 +315,30 @@ mod test {
     #[mz_ore::test]
     fn output_types_fallible() {
         assert_eq!(
-            Fallible1.output_type(SqlScalarType::Float32.nullable(true)),
-            SqlScalarType::Float32.nullable(true)
+            Fallible1.output_type(ScalarType::Float32.nullable(true)),
+            ScalarType::Float32.nullable(true)
         );
         assert_eq!(
-            Fallible1.output_type(SqlScalarType::Float32.nullable(false)),
-            SqlScalarType::Float32.nullable(false)
-        );
-
-        assert_eq!(
-            Fallible2.output_type(SqlScalarType::Float32.nullable(true)),
-            SqlScalarType::Float32.nullable(false)
-        );
-        assert_eq!(
-            Fallible2.output_type(SqlScalarType::Float32.nullable(false)),
-            SqlScalarType::Float32.nullable(false)
+            Fallible1.output_type(ScalarType::Float32.nullable(false)),
+            ScalarType::Float32.nullable(false)
         );
 
         assert_eq!(
-            Fallible3.output_type(SqlScalarType::Float32.nullable(true)),
-            SqlScalarType::Float32.nullable(true)
+            Fallible2.output_type(ScalarType::Float32.nullable(true)),
+            ScalarType::Float32.nullable(false)
         );
         assert_eq!(
-            Fallible3.output_type(SqlScalarType::Float32.nullable(false)),
-            SqlScalarType::Float32.nullable(true)
+            Fallible2.output_type(ScalarType::Float32.nullable(false)),
+            ScalarType::Float32.nullable(false)
+        );
+
+        assert_eq!(
+            Fallible3.output_type(ScalarType::Float32.nullable(true)),
+            ScalarType::Float32.nullable(true)
+        );
+        assert_eq!(
+            Fallible3.output_type(ScalarType::Float32.nullable(false)),
+            ScalarType::Float32.nullable(true)
         );
     }
 }
@@ -367,7 +367,7 @@ macro_rules! derive_unary {
                 }
             }
 
-            pub fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
+            pub fn output_type(&self, input_type: ColumnType) -> ColumnType {
                 match self {
                     $(Self::$name(f) => LazyUnaryFunc::output_type(f, input_type),)*
                 }

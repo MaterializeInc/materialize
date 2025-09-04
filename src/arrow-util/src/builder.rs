@@ -24,7 +24,7 @@ use arrow::record_batch::RecordBatch;
 use chrono::Timelike;
 use mz_ore::cast::CastFrom;
 use mz_repr::adt::jsonb::JsonbRef;
-use mz_repr::{Datum, RelationDesc, Row, SqlScalarType};
+use mz_repr::{Datum, RelationDesc, Row, ScalarType};
 
 pub struct ArrowBuilder {
     columns: Vec<ArrowColumn>,
@@ -135,36 +135,34 @@ impl ArrowBuilder {
     }
 }
 
-/// Return the appropriate Arrow DataType for the given SqlScalarType, plus a string
+/// Return the appropriate Arrow DataType for the given ScalarType, plus a string
 /// that should be used as part of the Arrow 'Extension Type' name for fields using
 /// this type: <https://arrow.apache.org/docs/format/Columnar.html#extension-types>
-fn scalar_to_arrow_datatype(
-    scalar_type: &SqlScalarType,
-) -> Result<(DataType, String), anyhow::Error> {
+fn scalar_to_arrow_datatype(scalar_type: &ScalarType) -> Result<(DataType, String), anyhow::Error> {
     let (data_type, extension_name) = match scalar_type {
-        SqlScalarType::Bool => (DataType::Boolean, "boolean"),
-        SqlScalarType::Int16 => (DataType::Int16, "smallint"),
-        SqlScalarType::Int32 => (DataType::Int32, "integer"),
-        SqlScalarType::Int64 => (DataType::Int64, "bigint"),
-        SqlScalarType::UInt16 => (DataType::UInt16, "uint2"),
-        SqlScalarType::UInt32 => (DataType::UInt32, "uint4"),
-        SqlScalarType::UInt64 => (DataType::UInt64, "uint8"),
-        SqlScalarType::Float32 => (DataType::Float32, "real"),
-        SqlScalarType::Float64 => (DataType::Float64, "double"),
-        SqlScalarType::Date => (DataType::Date32, "date"),
+        ScalarType::Bool => (DataType::Boolean, "boolean"),
+        ScalarType::Int16 => (DataType::Int16, "smallint"),
+        ScalarType::Int32 => (DataType::Int32, "integer"),
+        ScalarType::Int64 => (DataType::Int64, "bigint"),
+        ScalarType::UInt16 => (DataType::UInt16, "uint2"),
+        ScalarType::UInt32 => (DataType::UInt32, "uint4"),
+        ScalarType::UInt64 => (DataType::UInt64, "uint8"),
+        ScalarType::Float32 => (DataType::Float32, "real"),
+        ScalarType::Float64 => (DataType::Float64, "double"),
+        ScalarType::Date => (DataType::Date32, "date"),
         // The resolution of our time and timestamp types is microseconds, which is lucky
         // since the original parquet 'ConvertedType's support microsecond resolution but not
         // nanosecond resolution. The newer parquet 'LogicalType's support nanosecond resolution,
         // but many readers don't support them yet.
-        SqlScalarType::Time => (
+        ScalarType::Time => (
             DataType::Time64(arrow::datatypes::TimeUnit::Microsecond),
             "time",
         ),
-        SqlScalarType::Timestamp { .. } => (
+        ScalarType::Timestamp { .. } => (
             DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, None),
             "timestamp",
         ),
-        SqlScalarType::TimestampTz { .. } => (
+        ScalarType::TimestampTz { .. } => (
             DataType::Timestamp(
                 arrow::datatypes::TimeUnit::Microsecond,
                 // When appending values we always use UTC timestamps, and setting this to a non-empty
@@ -173,30 +171,30 @@ fn scalar_to_arrow_datatype(
             ),
             "timestamptz",
         ),
-        SqlScalarType::Bytes => (DataType::LargeBinary, "bytea"),
-        SqlScalarType::Char { length } => {
+        ScalarType::Bytes => (DataType::LargeBinary, "bytea"),
+        ScalarType::Char { length } => {
             if length.map_or(false, |l| l.into_u32() < i32::MAX.unsigned_abs()) {
                 (DataType::Utf8, "text")
             } else {
                 (DataType::LargeUtf8, "text")
             }
         }
-        SqlScalarType::VarChar { max_length } => {
+        ScalarType::VarChar { max_length } => {
             if max_length.map_or(false, |l| l.into_u32() < i32::MAX.unsigned_abs()) {
                 (DataType::Utf8, "text")
             } else {
                 (DataType::LargeUtf8, "text")
             }
         }
-        SqlScalarType::String => (DataType::LargeUtf8, "text"),
+        ScalarType::String => (DataType::LargeUtf8, "text"),
         // Parquet does have a UUID 'Logical Type' in parquet format 2.4+, but there is no arrow
         // UUID type, so we match the format (a 16-byte fixed-length binary array) ourselves.
-        SqlScalarType::Uuid => (DataType::FixedSizeBinary(16), "uuid"),
+        ScalarType::Uuid => (DataType::FixedSizeBinary(16), "uuid"),
         // Parquet does have a JSON 'Logical Type' in parquet format 2.4+, but there is no arrow
         // JSON type, so for now we represent JSON as 'large' utf8-encoded strings.
-        SqlScalarType::Jsonb => (DataType::LargeUtf8, "jsonb"),
-        SqlScalarType::MzTimestamp => (DataType::UInt64, "mz_timestamp"),
-        SqlScalarType::Numeric { max_scale } => {
+        ScalarType::Jsonb => (DataType::LargeUtf8, "jsonb"),
+        ScalarType::MzTimestamp => (DataType::UInt64, "mz_timestamp"),
+        ScalarType::Numeric { max_scale } => {
             // Materialize allows 39 digits of precision for numeric values, but allows
             // arbitrary scales among those values. e.g. 1e38 and 1e-39 are both valid in
             // the same column. However, Arrow/Parquet only allows static declaration of both
@@ -230,8 +228,8 @@ fn scalar_to_arrow_datatype(
         }
         // arrow::datatypes::IntervalUnit::MonthDayNano is not yet implemented in the arrow parquet writer
         // https://github.com/apache/arrow-rs/blob/0d031cc8aa81296cb1bdfedea7a7cb4ec6aa54ea/parquet/src/arrow/arrow_writer/mod.rs#L859
-        // SqlScalarType::Interval => DataType::Interval(arrow::datatypes::IntervalUnit::DayTime)
-        SqlScalarType::Array(inner) => {
+        // ScalarType::Interval => DataType::Interval(arrow::datatypes::IntervalUnit::DayTime)
+        ScalarType::Array(inner) => {
             // Postgres / MZ Arrays are weird, since they can be multi-dimensional but this is not
             // enforced in the type system, so can change per-value.
             // We use a struct type with two fields - one containing the array elements as a list
@@ -254,7 +252,7 @@ fn scalar_to_arrow_datatype(
             ));
             (DataType::Struct([list_field, dims_field].into()), "array")
         }
-        SqlScalarType::List {
+        ScalarType::List {
             element_type,
             custom_id: _,
         } => {
@@ -263,7 +261,7 @@ fn scalar_to_arrow_datatype(
             let field = field_with_typename("item", inner_type, true, &inner_name);
             (DataType::List(field.into()), "list")
         }
-        SqlScalarType::Map {
+        ScalarType::Map {
             value_type,
             custom_id: _,
         } => {

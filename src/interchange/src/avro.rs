@@ -31,7 +31,7 @@ mod tests {
     use mz_repr::adt::date::Date;
     use mz_repr::adt::numeric::{self, NumericMaxScale};
     use mz_repr::adt::timestamp::CheckedTimestamp;
-    use mz_repr::{Datum, RelationDesc, SqlScalarType};
+    use mz_repr::{Datum, RelationDesc, ScalarType};
     use ordered_float::OrderedFloat;
 
     use super::*;
@@ -63,8 +63,8 @@ mod tests {
 
         let desc = schema_to_relationdesc(parse_schema(schema)?)?;
         let expected_desc = RelationDesc::builder()
-            .with_column("f1", SqlScalarType::Int32.nullable(false))
-            .with_column("f2", SqlScalarType::String.nullable(false))
+            .with_column("f1", ScalarType::Int32.nullable(false))
+            .with_column("f2", ScalarType::String.nullable(false))
             .finish();
 
         assert_eq!(desc, expected_desc);
@@ -93,32 +93,32 @@ mod tests {
         // Simple transformations from primitive Avro Schema types
         // to Avro Values.
         let valid_pairings = vec![
-            (SqlScalarType::Bool, Datum::True, Value::Boolean(true)),
-            (SqlScalarType::Bool, Datum::False, Value::Boolean(false)),
-            (SqlScalarType::Int32, Datum::Int32(1), Value::Int(1)),
-            (SqlScalarType::Int64, Datum::Int64(1), Value::Long(1)),
+            (ScalarType::Bool, Datum::True, Value::Boolean(true)),
+            (ScalarType::Bool, Datum::False, Value::Boolean(false)),
+            (ScalarType::Int32, Datum::Int32(1), Value::Int(1)),
+            (ScalarType::Int64, Datum::Int64(1), Value::Long(1)),
             (
-                SqlScalarType::Float32,
+                ScalarType::Float32,
                 Datum::Float32(OrderedFloat::from(1f32)),
                 Value::Float(1f32),
             ),
             (
-                SqlScalarType::Float64,
+                ScalarType::Float64,
                 Datum::Float64(OrderedFloat::from(1f64)),
                 Value::Double(1f64),
             ),
             (
-                SqlScalarType::Date,
+                ScalarType::Date,
                 Datum::Date(Date::from_unix_epoch(date).unwrap()),
                 Value::Date(date),
             ),
             (
-                SqlScalarType::Timestamp { precision: None },
+                ScalarType::Timestamp { precision: None },
                 Datum::Timestamp(CheckedTimestamp::from_timestamplike(date_time).unwrap()),
                 Value::Timestamp(date_time),
             ),
             (
-                SqlScalarType::TimestampTz { precision: None },
+                ScalarType::TimestampTz { precision: None },
                 Datum::TimestampTz(
                     CheckedTimestamp::from_timestamplike(DateTime::from_naive_utc_and_offset(
                         date_time, Utc,
@@ -128,7 +128,7 @@ mod tests {
                 Value::Timestamp(date_time),
             ),
             (
-                SqlScalarType::Numeric {
+                ScalarType::Numeric {
                     max_scale: Some(NumericMaxScale::try_from(1_i64)?),
                 },
                 Datum::from(Numeric::from(1)),
@@ -139,7 +139,7 @@ mod tests {
                 }),
             ),
             (
-                SqlScalarType::Numeric { max_scale: None },
+                ScalarType::Numeric { max_scale: None },
                 Datum::from(Numeric::from(1)),
                 Value::Decimal(DecimalValue {
                     // equivalent to 1E39
@@ -152,12 +152,12 @@ mod tests {
                 }),
             ),
             (
-                SqlScalarType::Bytes,
+                ScalarType::Bytes,
                 Datum::Bytes(&bytes),
                 Value::Bytes(bytes.clone()),
             ),
             (
-                SqlScalarType::String,
+                ScalarType::String,
                 Datum::String(&string),
                 Value::String(string.clone()),
             ),

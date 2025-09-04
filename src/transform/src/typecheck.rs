@@ -22,7 +22,7 @@ use mz_expr::{
 use mz_ore::soft_panic_or_log;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
 use mz_repr::explain::{DummyHumanizer, ExprHumanizer};
-use mz_repr::{ColumnName, Row, SqlColumnType, SqlRelationType, SqlScalarBaseType, SqlScalarType};
+use mz_repr::{ColumnName, ColumnType, RelationType, Row, ScalarBaseType, ScalarType};
 
 /// Typechecking contexts as shared by various typechecking passes.
 ///
@@ -48,7 +48,7 @@ pub enum TypeError<'a> {
         /// The (unbound) identifier referenced
         id: Id,
         /// The type `id` was expected to have
-        typ: SqlRelationType,
+        typ: RelationType,
     },
     /// Dereference of a non-existent column
     NoSuchColumn {
@@ -64,11 +64,11 @@ pub enum TypeError<'a> {
         /// Expression with the bug
         source: &'a MirRelationExpr,
         /// The column type we found (`sub` type)
-        got: SqlColumnType,
+        got: ColumnType,
         /// The column type we expected (`sup` type)
-        expected: SqlColumnType,
+        expected: ColumnType,
         /// The difference between these types
-        diffs: Vec<SqlColumnTypeDifference>,
+        diffs: Vec<ColumnTypeDifference>,
         /// An explanatory message
         message: String,
     },
@@ -77,11 +77,11 @@ pub enum TypeError<'a> {
         /// Expression with the bug
         source: &'a MirRelationExpr,
         /// The column types we found (`sub` type)
-        got: Vec<SqlColumnType>,
+        got: Vec<ColumnType>,
         /// The column types we expected (`sup` type)
-        expected: Vec<SqlColumnType>,
+        expected: Vec<ColumnType>,
         /// The difference between these types
-        diffs: Vec<SqlRelationTypeDifference>,
+        diffs: Vec<RelationTypeDifference>,
         /// An explanatory message
         message: String,
     },
@@ -92,7 +92,7 @@ pub enum TypeError<'a> {
         /// A constant row
         got: Row,
         /// The expected type (which that row does not have)
-        expected: Vec<SqlColumnType>,
+        expected: Vec<ColumnType>,
         // TODO(mgree) with a good way to get the type of a Datum, we could give a diff here
     },
     /// Projection of a non-existent column
@@ -102,14 +102,14 @@ pub enum TypeError<'a> {
         /// The column projected
         got: Vec<usize>,
         /// The input columns (which don't have that column)
-        input_type: Vec<SqlColumnType>,
+        input_type: Vec<ColumnType>,
     },
     /// An equivalence class in a join was malformed
     BadJoinEquivalence {
         /// Expression with the bug
         source: &'a MirRelationExpr,
         /// The join equivalences
-        got: Vec<SqlColumnType>,
+        got: Vec<ColumnType>,
         /// The problem with the join equivalences
         message: String,
     },
@@ -120,7 +120,7 @@ pub enum TypeError<'a> {
         /// The bad column reference in the group key
         k: usize,
         /// The input columns (which don't have that column)
-        input_type: Vec<SqlColumnType>,
+        input_type: Vec<ColumnType>,
     },
     /// TopK ordering by non-existent column
     BadTopKOrdering {
@@ -129,7 +129,7 @@ pub enum TypeError<'a> {
         /// The ordering used
         order: ColumnOrder,
         /// The input columns (which don't work for that ordering)
-        input_type: Vec<SqlColumnType>,
+        input_type: Vec<ColumnType>,
     },
     /// LetRec bindings are malformed
     BadLetRecBindings {
@@ -161,13 +161,13 @@ impl<'a> From<RecursionLimitError> for TypeError<'a> {
     }
 }
 
-type Context = BTreeMap<Id, Vec<SqlColumnType>>;
+type Context = BTreeMap<Id, Vec<ColumnType>>;
 
 /// Characterizes differences between relation types
 ///
 /// Each constructor indicates a reason why some type `sub` was not a subtype of another type `sup`
 #[derive(Clone, Debug, Hash)]
-pub enum SqlRelationTypeDifference {
+pub enum RelationTypeDifference {
     /// `sub` and `sup` don't have the same number of columns
     Length {
         /// Length of `sub`
@@ -180,7 +180,7 @@ pub enum SqlRelationTypeDifference {
         /// The column at which `sub` and `sup` differ
         col: usize,
         /// The difference between `sub` and `sup`
-        diff: SqlColumnTypeDifference,
+        diff: ColumnTypeDifference,
     },
 }
 
@@ -189,27 +189,27 @@ pub enum SqlRelationTypeDifference {
 /// Each constructor indicates a reason why some type `sub` was not a subtype of another type `sup`
 /// There may be multiple reasons, e.g., `sub` may be missing fields and have fields of different types
 #[derive(Clone, Debug, Hash)]
-pub enum SqlColumnTypeDifference {
-    /// The `SqlScalarBaseType` of `sub` doesn't match that of `sup`
+pub enum ColumnTypeDifference {
+    /// The `ScalarBaseType` of `sub` doesn't match that of `sup`
     NotSubtype {
         /// Would-be subtype
-        sub: SqlScalarType,
+        sub: ScalarType,
         /// Would-be supertype
-        sup: SqlScalarType,
+        sup: ScalarType,
     },
     /// `sub` was nullable but `sup` was not
     Nullability {
         /// Would-be subtype
-        sub: SqlColumnType,
+        sub: ColumnType,
         /// Would-be supertype
-        sup: SqlColumnType,
+        sup: ColumnType,
     },
     /// Both `sub` and `sup` are a list, map, array, or range, but `sub`'s element type differed from `sup`s
     ElementType {
         /// The type constructor (list, array, etc.)
         ctor: String,
         /// The difference in the element type
-        element_type: Box<SqlColumnTypeDifference>,
+        element_type: Box<ColumnTypeDifference>,
     },
     /// `sub` and `sup` are both records, but `sub` is missing fields present in `sup`
     RecordMissingFields {
@@ -219,16 +219,16 @@ pub enum SqlColumnTypeDifference {
     /// `sub` and `sup` are both records, but some fields in `sub` are not subtypes of fields in `sup`
     RecordFields {
         /// The differences, by field
-        fields: Vec<(ColumnName, SqlColumnTypeDifference)>,
+        fields: Vec<(ColumnName, ColumnTypeDifference)>,
     },
 }
 
-impl SqlRelationTypeDifference {
+impl RelationTypeDifference {
     /// Returns the same type difference, but ignoring nullability
     ///
     /// Returns `None` when _all_ of the differences are due to nullability
     pub fn ignore_nullability(self) -> Option<Self> {
-        use SqlRelationTypeDifference::*;
+        use RelationTypeDifference::*;
 
         match self {
             Length { .. } => Some(self),
@@ -237,12 +237,12 @@ impl SqlRelationTypeDifference {
     }
 }
 
-impl SqlColumnTypeDifference {
+impl ColumnTypeDifference {
     /// Returns the same type difference, but ignoring nullability
     ///
     /// Returns `None` when _all_ of the differences are due to nullability
     pub fn ignore_nullability(self) -> Option<Self> {
-        use SqlColumnTypeDifference::*;
+        use ColumnTypeDifference::*;
 
         match self {
             Nullability { .. } => None,
@@ -275,13 +275,13 @@ impl SqlColumnTypeDifference {
 ///
 /// This function returns an empty list when `sub` is a subtype of `sup`
 pub fn relation_subtype_difference(
-    sub: &[SqlColumnType],
-    sup: &[SqlColumnType],
-) -> Vec<SqlRelationTypeDifference> {
+    sub: &[ColumnType],
+    sup: &[ColumnType],
+) -> Vec<RelationTypeDifference> {
     let mut diffs = Vec::new();
 
     if sub.len() != sup.len() {
-        diffs.push(SqlRelationTypeDifference::Length {
+        diffs.push(RelationTypeDifference::Length {
             len_sub: sub.len(),
             len_sup: sup.len(),
         });
@@ -297,7 +297,7 @@ pub fn relation_subtype_difference(
             .flat_map(|(col, (sub_ty, sup_ty))| {
                 column_subtype_difference(sub_ty, sup_ty)
                     .into_iter()
-                    .map(move |diff| SqlRelationTypeDifference::Column { col, diff })
+                    .map(move |diff| RelationTypeDifference::Column { col, diff })
             }),
     );
 
@@ -307,14 +307,11 @@ pub fn relation_subtype_difference(
 /// Returns a list of differences that make `sub` not a subtype of `sup`
 ///
 /// This function returns an empty list when `sub` is a subtype of `sup`
-pub fn column_subtype_difference(
-    sub: &SqlColumnType,
-    sup: &SqlColumnType,
-) -> Vec<SqlColumnTypeDifference> {
+pub fn column_subtype_difference(sub: &ColumnType, sup: &ColumnType) -> Vec<ColumnTypeDifference> {
     let mut diffs = scalar_subtype_difference(&sub.scalar_type, &sup.scalar_type);
 
     if sub.nullable && !sup.nullable {
-        diffs.push(SqlColumnTypeDifference::Nullability {
+        diffs.push(ColumnTypeDifference::Nullability {
             sub: sub.clone(),
             sup: sup.clone(),
         });
@@ -326,11 +323,8 @@ pub fn column_subtype_difference(
 /// Returns a list of differences that make `sub` not a subtype of `sup`
 ///
 /// This function returns an empty list when `sub` is a subtype of `sup`
-pub fn scalar_subtype_difference(
-    sub: &SqlScalarType,
-    sup: &SqlScalarType,
-) -> Vec<SqlColumnTypeDifference> {
-    use SqlScalarType::*;
+pub fn scalar_subtype_difference(sub: &ScalarType, sup: &ScalarType) -> Vec<ColumnTypeDifference> {
+    use ScalarType::*;
 
     let mut diffs = Vec::new();
 
@@ -366,11 +360,11 @@ pub fn scalar_subtype_difference(
             },
         )
         | (Array(sub_elt), Array(sup_elt)) => {
-            let ctor = format!("{:?}", SqlScalarBaseType::from(sub));
+            let ctor = format!("{:?}", ScalarBaseType::from(sub));
             diffs.extend(
                 scalar_subtype_difference(sub_elt, sup_elt)
                     .into_iter()
-                    .map(|diff| SqlColumnTypeDifference::ElementType {
+                    .map(|diff| ColumnTypeDifference::ElementType {
                         ctor: ctor.clone(),
                         element_type: Box::new(diff),
                     }),
@@ -405,8 +399,8 @@ pub fn scalar_subtype_difference(
         }
         (_, _) => {
             // TODO(mgree) confirm that we don't want to allow numeric subtyping
-            if SqlScalarBaseType::from(sub) != SqlScalarBaseType::from(sup) {
-                diffs.push(SqlColumnTypeDifference::NotSubtype {
+            if ScalarBaseType::from(sub) != ScalarBaseType::from(sup) {
+                diffs.push(ColumnTypeDifference::NotSubtype {
                     sub: sub.clone(),
                     sup: sup.clone(),
                 })
@@ -421,7 +415,7 @@ pub fn scalar_subtype_difference(
 ///
 /// In particular, the core types must be equal, and if a column in `sup` is nullable, that column should also be nullable in `sub`
 /// Conversely, it is okay to treat a known non-nullable column as nullable: `sub` may be nullable when `sup` is not
-pub fn is_subtype_of(sub: &[SqlColumnType], sup: &[SqlColumnType]) -> bool {
+pub fn is_subtype_of(sub: &[ColumnType], sup: &[ColumnType]) -> bool {
     if sub.len() != sup.len() {
         return false;
     }
@@ -493,7 +487,7 @@ impl Typecheck {
     ///
     /// It should be linear in the size of the AST.
     ///
-    /// ??? should we also compute keys and return a `SqlRelationType`?
+    /// ??? should we also compute keys and return a `RelationType`?
     ///   ggevay: Checking keys would have the same problem as checking nullability: key inference
     ///   is very heuristic (even more so than nullability inference), so it's almost impossible to
     ///   reliably keep it stable across transformations.
@@ -501,7 +495,7 @@ impl Typecheck {
         &self,
         expr: &'a MirRelationExpr,
         ctx: &Context,
-    ) -> Result<Vec<SqlColumnType>, TypeError<'a>> {
+    ) -> Result<Vec<ColumnType>, TypeError<'a>> {
         use MirRelationExpr::*;
 
         self.checked_recur(|tc| match expr {
@@ -523,7 +517,7 @@ impl Typecheck {
                         if datums
                             .iter()
                             .zip_eq(typ.column_types.iter())
-                            .any(|(d, ty)| d != &mz_repr::Datum::Dummy && !d.is_instance_of_sql(ty))
+                            .any(|(d, ty)| d != &mz_repr::Datum::Dummy && !d.is_instance_of(ty))
                         {
                             return Err(TypeError::BadConstantRow {
                                 source: expr,
@@ -637,17 +631,17 @@ impl Typecheck {
                     // filter condition must be boolean
                     // ignoring nullability: null is treated as false
                     // NB this behavior is slightly different from columns_match (for which we would set nullable to false in the expected type)
-                    if t.scalar_type != SqlScalarType::Bool {
+                    if t.scalar_type != ScalarType::Bool {
                         let sub = t.scalar_type.clone();
 
                         return Err(TypeError::MismatchColumn {
                             source: expr,
                             got: t,
-                            expected: SqlColumnType {
-                                scalar_type: SqlScalarType::Bool,
+                            expected: ColumnType {
+                                scalar_type: ScalarType::Bool,
                                 nullable: true,
                             },
-                            diffs: vec![SqlColumnTypeDifference::NotSubtype { sub, sup: SqlScalarType::Bool }],
+                            diffs: vec![ColumnTypeDifference::NotSubtype { sub, sup: ScalarType::Bool }],
                             message: "expected boolean condition".into(),
                         });
                     }
@@ -676,7 +670,7 @@ impl Typecheck {
                 }
 
                 for eq_class in equivalences {
-                    let mut t_exprs: Vec<SqlColumnType> = Vec::with_capacity(eq_class.len());
+                    let mut t_exprs: Vec<ColumnType> = Vec::with_capacity(eq_class.len());
 
                     let mut all_nullable = true;
 
@@ -712,7 +706,7 @@ impl Typecheck {
                                         source: expr,
                                         got: t_expr.clone(),
                                         expected: t_first.clone(),
-                                        diffs: vec![SqlColumnTypeDifference::Nullability { sub, sup }],
+                                        diffs: vec![ColumnTypeDifference::Nullability { sub, sup }],
                                         message: "equivalence class members have different nullability (and join equivalence checking is strict)".to_string(),
                                     };
 
@@ -768,10 +762,10 @@ impl Typecheck {
                         }
                     }
                     JoinImplementation::IndexedFilter(_coll_id, _idx_id, key, consts) => {
-                        let typ: Vec<SqlColumnType> = key
+                        let typ: Vec<ColumnType> = key
                             .iter()
                             .map(|k| tc.typecheck_scalar(k, expr, &t_in_global))
-                            .collect::<Result<Vec<SqlColumnType>, TypeError>>()?;
+                            .collect::<Result<Vec<ColumnType>, TypeError>>()?;
 
                         for row in consts {
                             let datums = row.unpack();
@@ -789,7 +783,7 @@ impl Typecheck {
                             if datums
                                 .iter()
                                 .zip_eq(typ.iter())
-                                .any(|(d, ty)| d != &mz_repr::Datum::Dummy && !d.is_instance_of_sql(ty))
+                                .any(|(d, ty)| d != &mz_repr::Datum::Dummy && !d.is_instance_of(ty))
                             {
                                 return Err(TypeError::BadConstantRow {
                                     source: expr,
@@ -878,7 +872,7 @@ impl Typecheck {
                             source: expr,
                             got: t_base.clone(),
                             expected: t_input,
-                            diffs: vec![SqlRelationTypeDifference::Length {
+                            diffs: vec![RelationTypeDifference::Length {
                                 len_sub,
                                 len_sup,
                             }],
@@ -1099,8 +1093,8 @@ impl Typecheck {
         &self,
         expr: &'a MirScalarExpr,
         source: &'a MirRelationExpr,
-        column_types: &[SqlColumnType],
-    ) -> Result<SqlColumnType, TypeError<'a>> {
+        column_types: &[ColumnType],
+    ) -> Result<ColumnType, TypeError<'a>> {
         use MirScalarExpr::*;
 
         self.checked_recur(|tc| match expr {
@@ -1117,8 +1111,7 @@ impl Typecheck {
                     let datums = row.unpack();
 
                     if datums.len() != 1
-                        || (datums[0] != mz_repr::Datum::Dummy
-                            && !datums[0].is_instance_of_sql(typ))
+                        || (datums[0] != mz_repr::Datum::Dummy && !datums[0].is_instance_of(typ))
                     {
                         return Err(TypeError::BadConstantRow {
                             source,
@@ -1150,19 +1143,19 @@ impl Typecheck {
                 // condition must be boolean
                 // ignoring nullability: null is treated as false
                 // NB this behavior is slightly different from columns_match (for which we would set nullable to false in the expected type)
-                if cond_type.scalar_type != SqlScalarType::Bool {
+                if cond_type.scalar_type != ScalarType::Bool {
                     let sub = cond_type.scalar_type.clone();
 
                     return Err(TypeError::MismatchColumn {
                         source,
                         got: cond_type,
-                        expected: SqlColumnType {
-                            scalar_type: SqlScalarType::Bool,
+                        expected: ColumnType {
+                            scalar_type: ScalarType::Bool,
                             nullable: true,
                         },
-                        diffs: vec![SqlColumnTypeDifference::NotSubtype {
+                        diffs: vec![ColumnTypeDifference::NotSubtype {
                             sub,
-                            sup: SqlScalarType::Bool,
+                            sup: ScalarType::Bool,
                         }],
                         message: "expected boolean condition".into(),
                     });
@@ -1190,8 +1183,8 @@ impl Typecheck {
         &self,
         expr: &'a AggregateExpr,
         source: &'a MirRelationExpr,
-        column_types: &[SqlColumnType],
-    ) -> Result<SqlColumnType, TypeError<'a>> {
+        column_types: &[ColumnType],
+    ) -> Result<ColumnType, TypeError<'a>> {
         self.checked_recur(|tc| {
             let t_in = tc.typecheck_scalar(&expr.expr, source, column_types)?;
 
@@ -1304,7 +1297,7 @@ impl crate::Transform for Typecheck {
 }
 
 /// Prints a type prettily with a given `ExprHumanizer`
-pub fn columns_pretty<H>(cols: &[SqlColumnType], humanizer: &H) -> String
+pub fn columns_pretty<H>(cols: &[ColumnType], humanizer: &H) -> String
 where
     H: ExprHumanizer,
 {
@@ -1326,7 +1319,7 @@ where
     s
 }
 
-impl SqlRelationTypeDifference {
+impl RelationTypeDifference {
     /// Pretty prints a type difference
     ///
     /// Always indents two spaces
@@ -1334,7 +1327,7 @@ impl SqlRelationTypeDifference {
     where
         H: ExprHumanizer,
     {
-        use SqlRelationTypeDifference::*;
+        use RelationTypeDifference::*;
         match self {
             Length { len_sub, len_sup } => {
                 writeln!(
@@ -1350,7 +1343,7 @@ impl SqlRelationTypeDifference {
     }
 }
 
-impl SqlColumnTypeDifference {
+impl ColumnTypeDifference {
     /// Pretty prints a type difference at a given indentation level
     pub fn humanize<H>(
         &self,
@@ -1361,7 +1354,7 @@ impl SqlColumnTypeDifference {
     where
         H: ExprHumanizer,
     {
-        use SqlColumnTypeDifference::*;
+        use ColumnTypeDifference::*;
 
         // indent
         write!(f, "{:indent$}", "")?;

@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 
 use mz_ore::cast::CastFrom;
 use mz_repr::explain::{DummyHumanizer, ExprHumanizer};
-use mz_repr::{GlobalId, SqlRelationType, SqlScalarType};
+use mz_repr::{GlobalId, RelationType, ScalarType};
 
 /// A catalog that holds types of objects previously created for the unit test.
 ///
@@ -19,7 +19,7 @@ use mz_repr::{GlobalId, SqlRelationType, SqlScalarType};
 /// later.
 #[derive(Debug, Default)]
 pub struct TestCatalog {
-    objects: BTreeMap<String, (GlobalId, Vec<String>, SqlRelationType)>,
+    objects: BTreeMap<String, (GlobalId, Vec<String>, RelationType)>,
     names: BTreeMap<GlobalId, String>,
 }
 
@@ -36,7 +36,7 @@ impl<'a> TestCatalog {
         &mut self,
         name: &str,
         cols: Vec<String>,
-        typ: SqlRelationType,
+        typ: RelationType,
         transient: bool,
     ) -> Result<GlobalId, String> {
         if self.objects.contains_key(name) {
@@ -52,7 +52,7 @@ impl<'a> TestCatalog {
         Ok(id)
     }
 
-    pub fn get(&'a self, name: &str) -> Option<&'a (GlobalId, Vec<String>, SqlRelationType)> {
+    pub fn get(&'a self, name: &str) -> Option<&'a (GlobalId, Vec<String>, RelationType)> {
         self.objects.get(name)
     }
 
@@ -83,7 +83,7 @@ impl ExprHumanizer for TestCatalog {
         self.humanize_id_unqualified(id).map(|name| vec![name])
     }
 
-    fn humanize_scalar_type(&self, ty: &SqlScalarType, postgres_compat: bool) -> String {
+    fn humanize_scalar_type(&self, ty: &ScalarType, postgres_compat: bool) -> String {
         DummyHumanizer.humanize_scalar_type(ty, postgres_compat)
     }
 

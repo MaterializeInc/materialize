@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    output_type_expr = \"SqlScalarType::Jsonb.nullable(true)\",\n    is_infix_op = true,\n    sqlname = \"-\",\n    propagates_nulls = true,\n    introduces_nulls = true\n)]\nfn jsonb_delete_int64<'a>(\n    a: Datum<'a>,\n    b: Datum<'a>,\n    temp_storage: &'a RowArena,\n) -> Datum<'a> {\n    let i = b.unwrap_int64();\n    match a {\n        Datum::List(list) => {\n            let i = if i >= 0 {\n                usize::cast_from(i.unsigned_abs())\n            } else {\n                let i = usize::cast_from(i.unsigned_abs());\n                (list.iter().count()).wrapping_sub(i)\n            };\n            let elems = list\n                .iter()\n                .enumerate()\n                .filter(|(i2, _e)| i != *i2)\n                .map(|(_, e)| e);\n            temp_storage.make_datum(|packer| packer.push_list(elems))\n        }\n        _ => Datum::Null,\n    }\n}\n"
+expression: "#[sqlfunc(\n    output_type_expr = \"ScalarType::Jsonb.nullable(true)\",\n    is_infix_op = true,\n    sqlname = \"-\",\n    propagates_nulls = true,\n    introduces_nulls = true\n)]\nfn jsonb_delete_int64<'a>(\n    a: Datum<'a>,\n    b: Datum<'a>,\n    temp_storage: &'a RowArena,\n) -> Datum<'a> {\n    let i = b.unwrap_int64();\n    match a {\n        Datum::List(list) => {\n            let i = if i >= 0 {\n                usize::cast_from(i.unsigned_abs())\n            } else {\n                let i = usize::cast_from(i.unsigned_abs());\n                (list.iter().count()).wrapping_sub(i)\n            };\n            let elems = list\n                .iter()\n                .enumerate()\n                .filter(|(i2, _e)| i != *i2)\n                .map(|(_, e)| e);\n            temp_storage.make_datum(|packer| packer.push_list(elems))\n        }\n        _ => Datum::Null,\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -30,11 +30,11 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for JsonbDeleteInt64 {
     }
     fn output_type(
         &self,
-        input_type_a: mz_repr::SqlColumnType,
-        input_type_b: mz_repr::SqlColumnType,
-    ) -> mz_repr::SqlColumnType {
+        input_type_a: mz_repr::ColumnType,
+        input_type_b: mz_repr::ColumnType,
+    ) -> mz_repr::ColumnType {
         use mz_repr::AsColumnType;
-        let output = SqlScalarType::Jsonb.nullable(true);
+        let output = ScalarType::Jsonb.nullable(true);
         let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
             self,
         );

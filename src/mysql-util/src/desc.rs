@@ -15,7 +15,7 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
-use mz_repr::SqlColumnType;
+use mz_repr::ColumnType;
 
 use self::proto_my_sql_column_desc::Meta;
 
@@ -211,7 +211,7 @@ pub struct MySqlColumnDesc {
     pub name: String,
     /// The intended data type of this column within Materialize
     /// If this is None, the column is intended to be skipped within Materialize
-    pub column_type: Option<SqlColumnType>,
+    pub column_type: Option<ColumnType>,
     /// Optional metadata about the column that may be necessary for decoding
     pub meta: Option<MySqlColumnMeta>,
 }

@@ -15,7 +15,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use mz_ore::soft_assert_or_log;
-use mz_repr::{SqlColumnType, SqlScalarType};
+use mz_repr::{ColumnType, ScalarType};
 use timely::Container;
 
 use crate::visit::Visit;
@@ -23,7 +23,7 @@ use crate::{MirScalarExpr, UnaryFunc, VariadicFunc, func};
 
 /// Canonicalize equivalence classes of a join and expressions contained in them.
 ///
-/// `input_types` can be the [SqlColumnType]s of the join or the [SqlColumnType]s of
+/// `input_types` can be the [ColumnType]s of the join or the [ColumnType]s of
 /// the individual inputs of the join in order.
 ///
 /// This function:
@@ -40,7 +40,7 @@ pub fn canonicalize_equivalences<'a, I>(
     equivalences: &mut Vec<Vec<MirScalarExpr>>,
     input_column_types: I,
 ) where
-    I: Iterator<Item = &'a Vec<SqlColumnType>>,
+    I: Iterator<Item = &'a Vec<ColumnType>>,
 {
     let column_types = input_column_types
         .flat_map(|f| f.clone())
@@ -214,14 +214,11 @@ where
 ///
 /// Additionally, it also removes IS NOT NULL predicates if there is another
 /// null rejecting predicate for the same sub-expression.
-pub fn canonicalize_predicates(
-    predicates: &mut Vec<MirScalarExpr>,
-    column_types: &[SqlColumnType],
-) {
+pub fn canonicalize_predicates(predicates: &mut Vec<MirScalarExpr>, column_types: &[ColumnType]) {
     soft_assert_or_log!(
         predicates
             .iter()
-            .all(|p| p.typ(column_types).scalar_type == SqlScalarType::Bool),
+            .all(|p| p.typ(column_types).scalar_type == ScalarType::Bool),
         "cannot canonicalize predicates that are not of type bool"
     );
 
@@ -369,7 +366,7 @@ pub fn canonicalize_predicates(
         (p.is_literal_false() || p.is_literal_null()) &&
         // This extra check is only needed if we determine that the soft-assert
         // at the top of this function would ever fail for a good reason.
-        p.typ(column_types).scalar_type == SqlScalarType::Bool
+        p.typ(column_types).scalar_type == ScalarType::Bool
     }) {
         // all rows get filtered away if any predicate is null or false.
         *predicates = vec![MirScalarExpr::literal_false()]
@@ -390,7 +387,7 @@ fn replace_subexpr_and_reduce(
     predicate: &mut MirScalarExpr,
     replace_if_equal_to: &MirScalarExpr,
     replace_with: &MirScalarExpr,
-    column_types: &[SqlColumnType],
+    column_types: &[ColumnType],
 ) -> bool {
     let mut changed = false;
     #[allow(deprecated)]

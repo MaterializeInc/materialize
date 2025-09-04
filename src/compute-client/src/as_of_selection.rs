@@ -862,7 +862,7 @@ mod tests {
     use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
     use mz_persist_types::{Codec64, ShardId};
     use mz_repr::Timestamp;
-    use mz_repr::{RelationDesc, RelationVersion, Row, SqlRelationType};
+    use mz_repr::{RelationDesc, RelationType, RelationVersion, Row};
     use mz_storage_client::client::TimestamplessUpdateBuilder;
     use mz_storage_client::controller::{CollectionDescription, StorageMetadata, StorageTxn};
     use mz_storage_client::storage_collections::{CollectionFrontiers, SnapshotCursor};
@@ -1125,7 +1125,7 @@ mod tests {
                         operators: Default::default(),
                     },
                     storage_metadata: Default::default(),
-                    typ: SqlRelationType::empty(),
+                    typ: RelationType::empty(),
                 };
                 (id, (desc, Default::default(), Default::default()))
             })
@@ -1140,7 +1140,7 @@ mod tests {
                         on_id: GlobalId::Transient(0),
                         key: Default::default(),
                     },
-                    typ: SqlRelationType::empty(),
+                    typ: RelationType::empty(),
                     monotonic: Default::default(),
                 };
                 (id, import)
@@ -1154,7 +1154,7 @@ mod tests {
                     on_id: GlobalId::Transient(0),
                     key: Default::default(),
                 };
-                let typ = SqlRelationType::empty();
+                let typ = RelationType::empty();
                 (id, (desc, typ))
             })
             .collect();

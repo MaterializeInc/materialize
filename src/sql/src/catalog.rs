@@ -947,7 +947,7 @@ impl TypeReference for IdReference {
 
 /// A type stored in the catalog.
 ///
-/// The variants correspond one-to-one with [`mz_repr::SqlScalarType`], but with type
+/// The variants correspond one-to-one with [`mz_repr::ScalarType`], but with type
 /// modifiers removed and with embedded types replaced with references to other
 /// types in the catalog.
 #[allow(missing_docs)]

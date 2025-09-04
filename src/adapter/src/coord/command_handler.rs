@@ -28,7 +28,7 @@ use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{instrument, soft_panic_or_log};
 use mz_repr::role_id::RoleId;
-use mz_repr::{Diff, SqlScalarType, Timestamp};
+use mz_repr::{Diff, ScalarType, Timestamp};
 use mz_sql::ast::{
     AlterConnectionAction, AlterConnectionStatement, AlterSourceAction, AstInfo, ConstantVisitor,
     CopyRelation, CopyStatement, CreateSourceOptionName, Raw, Statement, SubscribeStatement,
@@ -1461,7 +1461,7 @@ impl Coordinator {
                 .map(|(_idx, ty)| ty.clone())
                 .ok_or_else(|| name.clone())?;
             assert!(!body_column.nullable, "webhook body column is nullable!?");
-            assert_eq!(body_column.scalar_type, SqlScalarType::from(body_format));
+            assert_eq!(body_column.scalar_type, ScalarType::from(body_format));
 
             // Create a validator that can be called to validate a webhook request.
             let validator = validate_using.as_ref().map(|v| {

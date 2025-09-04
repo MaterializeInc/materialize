@@ -12,7 +12,7 @@
 //! This module houses the handlers for statements that manipulate the session,
 //! like `DISCARD` and `SET`.
 
-use mz_repr::{CatalogItemId, RelationDesc, RelationVersionSelector, SqlScalarType};
+use mz_repr::{CatalogItemId, RelationDesc, RelationVersionSelector, ScalarType};
 use mz_sql_parser::ast::InspectShardStatement;
 use std::time::Duration;
 use uncased::UncasedStr;
@@ -104,17 +104,17 @@ pub fn describe_show_variable(
 ) -> Result<StatementDesc, PlanError> {
     let desc = if variable.as_str() == UncasedStr::new("ALL") {
         RelationDesc::builder()
-            .with_column("name", SqlScalarType::String.nullable(false))
-            .with_column("setting", SqlScalarType::String.nullable(false))
-            .with_column("description", SqlScalarType::String.nullable(false))
+            .with_column("name", ScalarType::String.nullable(false))
+            .with_column("setting", ScalarType::String.nullable(false))
+            .with_column("description", ScalarType::String.nullable(false))
             .finish()
     } else if variable.as_str() == SCHEMA_ALIAS {
         RelationDesc::builder()
-            .with_column(variable.as_str(), SqlScalarType::String.nullable(true))
+            .with_column(variable.as_str(), ScalarType::String.nullable(true))
             .finish()
     } else {
         RelationDesc::builder()
-            .with_column(variable.as_str(), SqlScalarType::String.nullable(false))
+            .with_column(variable.as_str(), ScalarType::String.nullable(false))
             .finish()
     };
     Ok(StatementDesc::new(Some(desc)))
@@ -138,7 +138,7 @@ pub fn describe_inspect_shard(
     InspectShardStatement { .. }: InspectShardStatement,
 ) -> Result<StatementDesc, PlanError> {
     let desc = RelationDesc::builder()
-        .with_column("state", SqlScalarType::Jsonb.nullable(false))
+        .with_column("state", ScalarType::Jsonb.nullable(false))
         .finish();
     Ok(StatementDesc::new(Some(desc)))
 }
@@ -180,7 +180,7 @@ pub fn plan_discard(
 pub fn describe_declare(
     scx: &StatementContext,
     DeclareStatement { stmt, .. }: DeclareStatement<Aug>,
-    param_types_in: &[Option<SqlScalarType>],
+    param_types_in: &[Option<ScalarType>],
 ) -> Result<StatementDesc, PlanError> {
     let (stmt_resolved, _) = names::resolve(scx.catalog, *stmt)?;
     // Get the desc for the inner statement, but only for its parameters. The outer DECLARE doesn't

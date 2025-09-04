@@ -37,7 +37,7 @@ use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_proto::{RustType, TryFromProtoError};
-use mz_repr::{Diff, RelationDesc, SqlScalarType};
+use mz_repr::{Diff, RelationDesc, ScalarType};
 use mz_storage_types::StorageDiff;
 use mz_storage_types::sources::SourceData;
 use sha2::Digest;
@@ -1843,7 +1843,7 @@ pub fn shard_id(organization_id: Uuid, seed: usize) -> ShardId {
 /// shard backing the catalog.
 fn desc() -> RelationDesc {
     RelationDesc::builder()
-        .with_column("data", SqlScalarType::Jsonb.nullable(false))
+        .with_column("data", ScalarType::Jsonb.nullable(false))
         .finish()
 }
 

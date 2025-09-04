@@ -20,7 +20,7 @@ use mz_expr::{
 use mz_ore::cast::CastFrom;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_ore::{assert_none, soft_panic_or_log};
-use mz_repr::{Datum, Row, SqlColumnType, SqlRelationType, SqlScalarType};
+use mz_repr::{ColumnType, Datum, RelationType, Row, ScalarType};
 
 use crate::{TransformCtx, TransformError};
 
@@ -336,12 +336,10 @@ impl ColumnKnowledge {
                     // of the inputs since input keys are unnecessary for reducing
                     // `MirScalarExpr`s.
                     let folded_inputs_typ =
-                        inputs
-                            .iter()
-                            .fold(SqlRelationType::empty(), |mut typ, input| {
-                                typ.column_types.append(&mut input.typ().column_types);
-                                typ
-                            });
+                        inputs.iter().fold(RelationType::empty(), |mut typ, input| {
+                            typ.column_types.append(&mut input.typ().column_types);
+                            typ
+                        });
 
                     for equivalence in equivalences.iter_mut() {
                         let mut knowledge = DatumKnowledge::top();
@@ -508,7 +506,7 @@ enum DatumKnowledge {
     // A known literal value of a specific type.
     Lit {
         value: Result<mz_repr::Row, EvalError>,
-        typ: SqlScalarType,
+        typ: ScalarType,
     },
     // A value that cannot exist.
     Nothing,
@@ -526,16 +524,16 @@ impl From<&MirScalarExpr> for DatumKnowledge {
     }
 }
 
-impl From<(Datum<'_>, &SqlColumnType)> for DatumKnowledge {
-    fn from((d, t): (Datum<'_>, &SqlColumnType)) -> Self {
+impl From<(Datum<'_>, &ColumnType)> for DatumKnowledge {
+    fn from((d, t): (Datum<'_>, &ColumnType)) -> Self {
         let value = Ok(Row::pack_slice(std::slice::from_ref(&d)));
         let typ = t.scalar_type.clone();
         Self::Lit { value, typ }
     }
 }
 
-impl From<&SqlColumnType> for DatumKnowledge {
-    fn from(typ: &SqlColumnType) -> Self {
+impl From<&ColumnType> for DatumKnowledge {
+    fn from(typ: &ColumnType) -> Self {
         let nullable = typ.nullable;
         Self::Any { nullable }
     }
@@ -645,7 +643,7 @@ impl DatumKnowledge {
                 *self = Any { nullable }
             } else if s_typ != o_typ {
                 // Same value but different concrete types - strip all modifiers!
-                // This is identical to what SqlColumnType::union is doing.
+                // This is identical to what ColumnType::union is doing.
                 *s_typ = s_typ.without_modifiers();
             } else {
                 // Value and type coincide - do nothing!
@@ -770,7 +768,7 @@ impl DatumKnowledge {
 /// `knowledge_stack` is a pre-allocated vector but is expected not to contain any elements.
 fn optimize(
     expr: &mut MirScalarExpr,
-    column_types: &[SqlColumnType],
+    column_types: &[ColumnType],
     column_knowledge: &[DatumKnowledge],
     knowledge_stack: &mut Vec<DatumKnowledge>,
 ) -> Result<DatumKnowledge, TransformError> {

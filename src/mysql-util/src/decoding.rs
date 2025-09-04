@@ -19,7 +19,7 @@ use mz_repr::adt::date::Date;
 use mz_repr::adt::jsonb::JsonbPacker;
 use mz_repr::adt::numeric::{NUMERIC_DATUM_MAX_PRECISION, Numeric, get_precision, get_scale};
 use mz_repr::adt::timestamp::CheckedTimestamp;
-use mz_repr::{Datum, Row, RowPacker, SqlScalarType};
+use mz_repr::{Datum, Row, RowPacker, ScalarType};
 
 use crate::desc::MySqlColumnMeta;
 use crate::{MySqlColumnDesc, MySqlError, MySqlTableDesc};
@@ -90,12 +90,12 @@ fn pack_val_as_datum(
             }
         }
         value => match &column_type.scalar_type {
-            SqlScalarType::Bool => packer.push(Datum::from(from_value_opt::<bool>(value)?)),
-            SqlScalarType::UInt16 => packer.push(Datum::from(from_value_opt::<u16>(value)?)),
-            SqlScalarType::Int16 => packer.push(Datum::from(from_value_opt::<i16>(value)?)),
-            SqlScalarType::UInt32 => packer.push(Datum::from(from_value_opt::<u32>(value)?)),
-            SqlScalarType::Int32 => packer.push(Datum::from(from_value_opt::<i32>(value)?)),
-            SqlScalarType::UInt64 => {
+            ScalarType::Bool => packer.push(Datum::from(from_value_opt::<bool>(value)?)),
+            ScalarType::UInt16 => packer.push(Datum::from(from_value_opt::<u16>(value)?)),
+            ScalarType::Int16 => packer.push(Datum::from(from_value_opt::<i16>(value)?)),
+            ScalarType::UInt32 => packer.push(Datum::from(from_value_opt::<u32>(value)?)),
+            ScalarType::Int32 => packer.push(Datum::from(from_value_opt::<i32>(value)?)),
+            ScalarType::UInt64 => {
                 if let Some(MySqlColumnMeta::Bit(precision)) = &col_desc.meta {
                     let mut value = from_value_opt::<Vec<u8>>(value)?;
 
@@ -124,20 +124,20 @@ fn pack_val_as_datum(
                     packer.push(Datum::from(from_value_opt::<u64>(value)?))
                 }
             }
-            SqlScalarType::Int64 => packer.push(Datum::from(from_value_opt::<i64>(value)?)),
-            SqlScalarType::Float32 => packer.push(Datum::from(from_value_opt::<f32>(value)?)),
-            SqlScalarType::Float64 => packer.push(Datum::from(from_value_opt::<f64>(value)?)),
-            SqlScalarType::Char { length } => {
+            ScalarType::Int64 => packer.push(Datum::from(from_value_opt::<i64>(value)?)),
+            ScalarType::Float32 => packer.push(Datum::from(from_value_opt::<f32>(value)?)),
+            ScalarType::Float64 => packer.push(Datum::from(from_value_opt::<f64>(value)?)),
+            ScalarType::Char { length } => {
                 let val = from_value_opt::<String>(value)?;
                 check_char_length(length.map(|l| l.into_u32()), &val, col_desc)?;
                 packer.push(Datum::String(&val));
             }
-            SqlScalarType::VarChar { max_length } => {
+            ScalarType::VarChar { max_length } => {
                 let val = from_value_opt::<String>(value)?;
                 check_char_length(max_length.map(|l| l.into_u32()), &val, col_desc)?;
                 packer.push(Datum::String(&val));
             }
-            SqlScalarType::String => {
+            ScalarType::String => {
                 // Special case for string types, since this is the scalar type used for a column
                 // specified as a 'TEXT COLUMN'. In some cases we need to check the column
                 // metadata to know if the upstream value needs special handling
@@ -242,7 +242,7 @@ fn pack_val_as_datum(
                     }
                 }
             }
-            SqlScalarType::Jsonb => {
+            ScalarType::Jsonb => {
                 if let Value::Bytes(data) = value {
                     let packer = JsonbPacker::new(packer);
                     // TODO(guswynn): This still produces and extract allocation (in the
@@ -266,15 +266,15 @@ fn pack_val_as_datum(
                     ))?
                 }
             }
-            SqlScalarType::Bytes => {
+            ScalarType::Bytes => {
                 let data = from_value_opt::<Vec<u8>>(value)?;
                 packer.push(Datum::Bytes(&data));
             }
-            SqlScalarType::Date => {
+            ScalarType::Date => {
                 let date = Date::try_from(from_value_opt::<chrono::NaiveDate>(value)?)?;
                 packer.push(Datum::from(date));
             }
-            SqlScalarType::Timestamp { precision: _ } => {
+            ScalarType::Timestamp { precision: _ } => {
                 // Timestamps are encoded as different mysql_common::Value types depending on
                 // whether they are from a binlog event or a query, and depending on which
                 // mysql timestamp version is used. We handle those cases here
@@ -305,10 +305,10 @@ fn pack_val_as_datum(
                     chrono_timestamp,
                 )?)?);
             }
-            SqlScalarType::Time => {
+            ScalarType::Time => {
                 packer.push(Datum::from(from_value_opt::<chrono::NaiveTime>(value)?));
             }
-            SqlScalarType::Numeric { max_scale } => {
+            ScalarType::Numeric { max_scale } => {
                 // The wire-format of numeric types is a string when sent in a binary query
                 // response but is represented in a decimal binary format when sent in a binlog
                 // event. However the mysql-common crate abstracts this away and always returns

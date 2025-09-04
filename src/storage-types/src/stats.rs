@@ -13,7 +13,7 @@ use mz_expr::{ColumnSpecs, Interpreter, MapFilterProject, ResultSpec, Unmaterial
 use mz_persist_types::stats::{
     BytesStats, ColumnStatKinds, JsonStats, PartStats, PartStatsMetrics,
 };
-use mz_repr::{ColumnIndex, Datum, RelationDesc, RowArena, SqlColumnType, SqlScalarType};
+use mz_repr::{ColumnIndex, ColumnType, Datum, RelationDesc, RowArena, ScalarType};
 
 /// Bundles together a relation desc with the stats for a specific part, and translates between
 /// Persist's stats representation and the `ResultSpec`s that are used for eg. filter pushdown.
@@ -124,8 +124,8 @@ impl RelationPartStats<'_> {
             .expect("ok column should be nullable struct");
         let col_stats = ok_stats.some.cols.get(name.as_str())?;
 
-        if let SqlColumnType {
-            scalar_type: SqlScalarType::Jsonb,
+        if let ColumnType {
+            scalar_type: ScalarType::Jsonb,
             nullable,
         } = typ
         {
@@ -227,15 +227,15 @@ mod tests {
     use mz_persist_types::columnar::{ColumnDecoder, Schema};
     use mz_persist_types::part::PartBuilder;
     use mz_persist_types::stats::PartStats;
-    use mz_repr::{Datum, RelationDesc, Row, RowArena, SqlColumnType, SqlScalarType};
-    use mz_repr::{SqlRelationType, arb_datum_for_column};
+    use mz_repr::{ColumnType, Datum, RelationDesc, Row, RowArena, ScalarType};
+    use mz_repr::{RelationType, arb_datum_for_column};
     use proptest::prelude::*;
     use proptest::strategy::ValueTree;
 
     use super::*;
     use crate::sources::SourceData;
 
-    fn validate_stats(column_type: &SqlColumnType, datums: &[Datum<'_>]) -> Result<(), String> {
+    fn validate_stats(column_type: &ColumnType, datums: &[Datum<'_>]) -> Result<(), String> {
         let schema = RelationDesc::builder()
             .with_column("col", column_type.clone())
             .finish();
@@ -271,7 +271,7 @@ mod tests {
         Ok(())
     }
 
-    fn scalar_type_stats_roundtrip(scalar_type: SqlScalarType) {
+    fn scalar_type_stats_roundtrip(scalar_type: ScalarType) {
         // Non-nullable version of the column.
         let column_type = scalar_type.clone().nullable(false);
         for datum in scalar_type.interesting_datums() {
@@ -289,7 +289,7 @@ mod tests {
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // too slow
     fn all_scalar_types_stats_roundtrip() {
-        proptest!(|(scalar_type in any::<SqlScalarType>())| {
+        proptest!(|(scalar_type in any::<ScalarType>())| {
             // The proptest! macro interferes with rustfmt.
             scalar_type_stats_roundtrip(scalar_type)
         });
@@ -298,8 +298,8 @@ mod tests {
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // too slow
     fn all_datums_produce_valid_stats() {
-        // A strategy that will return a Vec of Datums for an arbitrary SqlColumnType.
-        let datums = any::<SqlColumnType>().prop_flat_map(|ty| {
+        // A strategy that will return a Vec of Datums for an arbitrary ColumnType.
+        let datums = any::<ColumnType>().prop_flat_map(|ty| {
             prop::collection::vec(arb_datum_for_column(ty.clone()), 0..128)
                 .prop_map(move |datums| (ty.clone(), datums))
         });
@@ -344,10 +344,10 @@ mod tests {
 
         // Note: We don't use the `Arbitrary` impl for `RelationDesc` because
         // it generates large column names which is not interesting to us.
-        let strat = proptest::collection::vec(any::<SqlColumnType>(), 1..max_cols)
+        let strat = proptest::collection::vec(any::<ColumnType>(), 1..max_cols)
             .prop_map(|cols| {
                 let col_names = (0..cols.len()).map(|i| i.to_string());
-                RelationDesc::new(SqlRelationType::new(cols), col_names)
+                RelationDesc::new(RelationType::new(cols), col_names)
             })
             .prop_flat_map(|desc| {
                 let rows = desc

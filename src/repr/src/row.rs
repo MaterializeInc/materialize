@@ -312,7 +312,7 @@ impl Arbitrary for Row {
     type Strategy = BoxedStrategy<Row>;
 
     fn arbitrary_with(size: Self::Parameters) -> Self::Strategy {
-        prop::collection::vec(arb_datum(true), size)
+        prop::collection::vec(arb_datum(), size)
             .prop_map(|items| {
                 let mut row = Row::default();
                 let mut packer = row.packer();
@@ -2929,7 +2929,7 @@ mod tests {
     use chrono::{DateTime, NaiveDate};
     use mz_ore::{assert_err, assert_none};
 
-    use crate::SqlScalarType;
+    use crate::ScalarType;
 
     use super::*;
 
@@ -2986,7 +2986,7 @@ mod tests {
 
         round_trip(vec![]);
         round_trip(
-            SqlScalarType::enumerate()
+            ScalarType::enumerate()
                 .iter()
                 .flat_map(|r#type| r#type.interesting_datums())
                 .collect(),

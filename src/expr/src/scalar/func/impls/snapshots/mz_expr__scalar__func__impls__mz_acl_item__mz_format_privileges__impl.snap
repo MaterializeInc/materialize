@@ -3,13 +3,13 @@ source: src/expr/src/scalar/func/impls/mz_acl_item.rs
 expression: info
 ---
 Info {
-    output_type_nullable: SqlColumnType {
+    output_type_nullable: ColumnType {
         scalar_type: Array(
             String,
         ),
         nullable: true,
     },
-    output_type_nonnullable: SqlColumnType {
+    output_type_nonnullable: ColumnType {
         scalar_type: Array(
             String,
         ),

@@ -57,13 +57,13 @@ const NANOSECONDS_PER_SECOND: i64 = 10i64.pow(9);
 
 pub const MAX_PRECISION: u8 = 6;
 
-/// The `max_precision` of a [`SqlScalarType::Timestamp`] or
-/// [`SqlScalarType::TimestampTz`].
+/// The `max_precision` of a [`ScalarType::Timestamp`] or
+/// [`ScalarType::TimestampTz`].
 ///
 /// This newtype wrapper ensures that the length is within the valid range.
 ///
-/// [`SqlScalarType::Timestamp`]: crate::SqlScalarType::Timestamp
-/// [`SqlScalarType::TimestampTz`]: crate::SqlScalarType::TimestampTz
+/// [`ScalarType::Timestamp`]: crate::ScalarType::Timestamp
+/// [`ScalarType::TimestampTz`]: crate::ScalarType::TimestampTz
 #[derive(
     Arbitrary,
     Debug,

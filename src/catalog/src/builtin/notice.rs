@@ -12,7 +12,7 @@ use std::sync::LazyLock;
 
 use mz_pgrepr::oid;
 use mz_repr::namespaces::MZ_INTERNAL_SCHEMA;
-use mz_repr::{RelationDesc, SqlScalarType};
+use mz_repr::{RelationDesc, ScalarType};
 use mz_sql::catalog::NameReference;
 
 use crate::builtin::{Builtin, BuiltinIndex, BuiltinTable, BuiltinView, MONITOR_SELECT};
@@ -20,7 +20,7 @@ use crate::builtin::{Builtin, BuiltinIndex, BuiltinTable, BuiltinView, MONITOR_S
 use super::{MONITOR_REDACTED_SELECT, SUPPORT_SELECT};
 
 pub static MZ_OPTIMIZER_NOTICES: LazyLock<BuiltinTable> = LazyLock::new(|| {
-    use SqlScalarType::{List, String, TimestampTz};
+    use ScalarType::{List, String, TimestampTz};
 
     BuiltinTable {
         name: "mz_optimizer_notices",
@@ -70,19 +70,19 @@ pub static MZ_NOTICES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_NOTICES_OID,
     desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::String.nullable(false))
-        .with_column("notice_type", SqlScalarType::String.nullable(false))
-        .with_column("message", SqlScalarType::String.nullable(false))
-        .with_column("hint", SqlScalarType::String.nullable(false))
-        .with_column("action", SqlScalarType::String.nullable(true))
-        .with_column("redacted_message", SqlScalarType::String.nullable(true))
-        .with_column("redacted_hint", SqlScalarType::String.nullable(true))
-        .with_column("redacted_action", SqlScalarType::String.nullable(true))
-        .with_column("action_type", SqlScalarType::String.nullable(true))
-        .with_column("object_id", SqlScalarType::String.nullable(true))
+        .with_column("id", ScalarType::String.nullable(false))
+        .with_column("notice_type", ScalarType::String.nullable(false))
+        .with_column("message", ScalarType::String.nullable(false))
+        .with_column("hint", ScalarType::String.nullable(false))
+        .with_column("action", ScalarType::String.nullable(true))
+        .with_column("redacted_message", ScalarType::String.nullable(true))
+        .with_column("redacted_hint", ScalarType::String.nullable(true))
+        .with_column("redacted_action", ScalarType::String.nullable(true))
+        .with_column("action_type", ScalarType::String.nullable(true))
+        .with_column("object_id", ScalarType::String.nullable(true))
         .with_column(
             "created_at",
-            SqlScalarType::TimestampTz { precision: None }.nullable(false),
+            ScalarType::TimestampTz { precision: None }.nullable(false),
         )
         .with_key(vec![0])
         .finish(),
@@ -149,16 +149,16 @@ pub static MZ_NOTICES_REDACTED: LazyLock<BuiltinView> = LazyLock::new(|| Builtin
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_NOTICES_REDACTED_OID,
     desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::String.nullable(false))
-        .with_column("notice_type", SqlScalarType::String.nullable(false))
-        .with_column("message", SqlScalarType::String.nullable(false))
-        .with_column("hint", SqlScalarType::String.nullable(false))
-        .with_column("action", SqlScalarType::String.nullable(true))
-        .with_column("action_type", SqlScalarType::String.nullable(true))
-        .with_column("object_id", SqlScalarType::String.nullable(true))
+        .with_column("id", ScalarType::String.nullable(false))
+        .with_column("notice_type", ScalarType::String.nullable(false))
+        .with_column("message", ScalarType::String.nullable(false))
+        .with_column("hint", ScalarType::String.nullable(false))
+        .with_column("action", ScalarType::String.nullable(true))
+        .with_column("action_type", ScalarType::String.nullable(true))
+        .with_column("object_id", ScalarType::String.nullable(true))
         .with_column(
             "created_at",
-            SqlScalarType::TimestampTz { precision: None }.nullable(false),
+            ScalarType::TimestampTz { precision: None }.nullable(false),
         )
         .with_key(vec![0])
         .finish(),

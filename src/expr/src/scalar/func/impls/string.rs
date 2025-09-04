@@ -26,7 +26,7 @@ use mz_repr::adt::regex::Regex;
 use mz_repr::adt::system::{Oid, PgLegacyChar};
 use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampPrecision};
 use mz_repr::adt::varchar::{VarChar, VarCharMaxLength};
-use mz_repr::{Datum, RowArena, SqlColumnType, SqlScalarType, strconv};
+use mz_repr::{ColumnType, Datum, RowArena, ScalarType, strconv};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -179,8 +179,8 @@ impl<'a> EagerUnaryFunc<'a> for CastStringToNumeric {
         Ok(d.into_inner())
     }
 
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::Numeric { max_scale: self.0 }.nullable(input.nullable)
+    fn output_type(&self, input: ColumnType) -> ColumnType {
+        ScalarType::Numeric { max_scale: self.0 }.nullable(input.nullable)
     }
 
     fn inverse(&self) -> Option<crate::UnaryFunc> {
@@ -227,8 +227,8 @@ impl<'a> EagerUnaryFunc<'a> for CastStringToTimestamp {
         Ok(updated)
     }
 
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::Timestamp { precision: self.0 }.nullable(input.nullable)
+    fn output_type(&self, input: ColumnType) -> ColumnType {
+        ScalarType::Timestamp { precision: self.0 }.nullable(input.nullable)
     }
 
     fn inverse(&self) -> Option<crate::UnaryFunc> {
@@ -274,8 +274,8 @@ impl<'a> EagerUnaryFunc<'a> for CastStringToTimestampTz {
         Ok(updated)
     }
 
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::TimestampTz { precision: self.0 }.nullable(input.nullable)
+    fn output_type(&self, input: ColumnType) -> ColumnType {
+        ScalarType::TimestampTz { precision: self.0 }.nullable(input.nullable)
     }
 
     fn inverse(&self) -> Option<crate::UnaryFunc> {
@@ -310,7 +310,7 @@ sqlfunc!(
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastStringToArray {
     // Target array's type.
-    pub return_ty: SqlScalarType,
+    pub return_ty: ScalarType,
     // The expression to cast the discovered array elements to the array's
     // element type.
     pub cast_expr: Box<MirScalarExpr>,
@@ -343,8 +343,8 @@ impl LazyUnaryFunc for CastStringToArray {
         Ok(temp_storage.try_make_datum(|packer| packer.try_push_array(&dims, datums))?)
     }
 
-    /// The output SqlColumnType of this function
-    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
+    /// The output ColumnType of this function
+    fn output_type(&self, input_type: ColumnType) -> ColumnType {
         self.return_ty.clone().nullable(input_type.nullable)
     }
 
@@ -383,7 +383,7 @@ impl fmt::Display for CastStringToArray {
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastStringToList {
     // Target list's type
-    pub return_ty: SqlScalarType,
+    pub return_ty: ScalarType,
     // The expression to cast the discovered list elements to the list's
     // element type.
     pub cast_expr: Box<MirScalarExpr>,
@@ -404,7 +404,7 @@ impl LazyUnaryFunc for CastStringToList {
             a.unwrap_str(),
             matches!(
                 self.return_ty.unwrap_list_element_type(),
-                SqlScalarType::List { .. }
+                ScalarType::List { .. }
             ),
             || Datum::Null,
             |elem_text| {
@@ -420,8 +420,8 @@ impl LazyUnaryFunc for CastStringToList {
         Ok(temp_storage.make_datum(|packer| packer.push_list(parsed_datums)))
     }
 
-    /// The output SqlColumnType of this function
-    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
+    /// The output ColumnType of this function
+    fn output_type(&self, input_type: ColumnType) -> ColumnType {
         self.return_ty
             .without_modifiers()
             .nullable(input_type.nullable)
@@ -462,7 +462,7 @@ impl fmt::Display for CastStringToList {
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastStringToMap {
     // Target map's value type
-    pub return_ty: SqlScalarType,
+    pub return_ty: ScalarType,
     // The expression used to cast the discovered values to the map's value
     // type.
     pub cast_expr: Box<MirScalarExpr>,
@@ -483,7 +483,7 @@ impl LazyUnaryFunc for CastStringToMap {
             a.unwrap_str(),
             matches!(
                 self.return_ty.unwrap_map_value_type(),
-                SqlScalarType::Map { .. }
+                ScalarType::Map { .. }
             ),
             |value_text| -> Result<Datum, EvalError> {
                 let value_text = match value_text {
@@ -507,8 +507,8 @@ impl LazyUnaryFunc for CastStringToMap {
         }))
     }
 
-    /// The output SqlColumnType of this function
-    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
+    /// The output ColumnType of this function
+    fn output_type(&self, input_type: ColumnType) -> ColumnType {
         self.return_ty.clone().nullable(input_type.nullable)
     }
 
@@ -568,8 +568,8 @@ impl<'a> EagerUnaryFunc<'a> for CastStringToChar {
         Ok(Char(s))
     }
 
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::Char {
+    fn output_type(&self, input: ColumnType) -> ColumnType {
+        ScalarType::Char {
             length: self.length,
         }
         .nullable(input.nullable)
@@ -603,7 +603,7 @@ impl fmt::Display for CastStringToChar {
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastStringToRange {
     // Target range's type
-    pub return_ty: SqlScalarType,
+    pub return_ty: ScalarType,
     // The expression to cast the discovered range elements to the range's
     // element type.
     pub cast_expr: Box<MirScalarExpr>,
@@ -638,8 +638,8 @@ impl LazyUnaryFunc for CastStringToRange {
         }))
     }
 
-    /// The output SqlColumnType of this function
-    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
+    /// The output ColumnType of this function
+    fn output_type(&self, input_type: ColumnType) -> ColumnType {
         self.return_ty
             .without_modifiers()
             .nullable(input_type.nullable)
@@ -702,8 +702,8 @@ impl<'a> EagerUnaryFunc<'a> for CastStringToVarChar {
         Ok(VarChar(s))
     }
 
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::VarChar {
+    fn output_type(&self, input: ColumnType) -> ColumnType {
+        ScalarType::VarChar {
             max_length: self.length,
         }
         .nullable(input.nullable)
@@ -772,9 +772,9 @@ impl LazyUnaryFunc for CastStringToInt2Vector {
         array_create_scalar(&datums, temp_storage)
     }
 
-    /// The output SqlColumnType of this function
-    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::Int2Vector.nullable(input_type.nullable)
+    /// The output ColumnType of this function
+    fn output_type(&self, input_type: ColumnType) -> ColumnType {
+        ScalarType::Int2Vector.nullable(input_type.nullable)
     }
 
     /// Whether this function will produce NULL on NULL input
@@ -915,8 +915,8 @@ impl<'a> EagerUnaryFunc<'a> for IsLikeMatch {
         self.0.is_match(haystack)
     }
 
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::Bool.nullable(input.nullable)
+    fn output_type(&self, input: ColumnType) -> ColumnType {
+        ScalarType::Bool.nullable(input.nullable)
     }
 }
 
@@ -942,8 +942,8 @@ impl<'a> EagerUnaryFunc<'a> for IsRegexpMatch {
         self.0.is_match(haystack)
     }
 
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::Bool.nullable(input.nullable)
+    fn output_type(&self, input: ColumnType) -> ColumnType {
+        ScalarType::Bool.nullable(input.nullable)
     }
 }
 
@@ -975,9 +975,9 @@ impl LazyUnaryFunc for RegexpMatch {
         regexp_match_static(haystack, temp_storage, &self.0)
     }
 
-    /// The output SqlColumnType of this function
-    fn output_type(&self, _input_type: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(true)
+    /// The output ColumnType of this function
+    fn output_type(&self, _input_type: ColumnType) -> ColumnType {
+        ScalarType::Array(Box::new(ScalarType::String)).nullable(true)
     }
 
     /// Whether this function will produce NULL on NULL input
@@ -1033,9 +1033,9 @@ impl LazyUnaryFunc for RegexpSplitToArray {
         regexp_split_to_array_re(haystack.unwrap_str(), &self.0, temp_storage)
     }
 
-    /// The output SqlColumnType of this function
-    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(input_type.nullable)
+    /// The output ColumnType of this function
+    fn output_type(&self, input_type: ColumnType) -> ColumnType {
+        ScalarType::Array(Box::new(ScalarType::String)).nullable(input_type.nullable)
     }
 
     /// Whether this function will produce NULL on NULL input
@@ -1107,9 +1107,9 @@ impl LazyUnaryFunc for QuoteIdent {
         Ok(Datum::String(r))
     }
 
-    /// The output SqlColumnType of this function
-    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::String.nullable(input_type.nullable)
+    /// The output ColumnType of this function
+    fn output_type(&self, input_type: ColumnType) -> ColumnType {
+        ScalarType::String.nullable(input_type.nullable)
     }
 
     /// Whether this function will produce NULL on NULL input

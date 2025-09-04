@@ -3,11 +3,11 @@ source: src/expr/src/scalar/func/impls/char.rs
 expression: info
 ---
 Info {
-    output_type_nullable: SqlColumnType {
+    output_type_nullable: ColumnType {
         scalar_type: String,
         nullable: true,
     },
-    output_type_nonnullable: SqlColumnType {
+    output_type_nonnullable: ColumnType {
         scalar_type: String,
         nullable: false,
     },

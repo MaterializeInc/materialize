@@ -15,7 +15,7 @@ use std::time::Duration;
 use mz_dyncfg::Config;
 use mz_ore::future::InTask;
 use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
-use mz_repr::{CatalogItemId, Datum, GlobalId, RelationDesc, Row, SqlScalarType};
+use mz_repr::{CatalogItemId, Datum, GlobalId, RelationDesc, Row, ScalarType};
 use mz_sql_server_util::cdc::Lsn;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -81,7 +81,7 @@ pub const OFFSET_KNOWN_INTERVAL: Config<Duration> = Config::new(
 
 pub static SQL_SERVER_PROGRESS_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
     RelationDesc::builder()
-        .with_column("lsn", SqlScalarType::Bytes.nullable(true))
+        .with_column("lsn", ScalarType::Bytes.nullable(true))
         .finish()
 });
 

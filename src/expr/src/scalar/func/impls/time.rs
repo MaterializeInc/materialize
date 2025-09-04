@@ -16,7 +16,7 @@ use mz_repr::adt::datetime::{DateTimeField, DateTimeUnits};
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::numeric::{DecimalLike, Numeric};
 use mz_repr::adt::timestamp::TimeLike;
-use mz_repr::{SqlColumnType, SqlScalarType, strconv};
+use mz_repr::{ColumnType, ScalarType, strconv};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -100,8 +100,8 @@ impl<'a> EagerUnaryFunc<'a> for ExtractTime {
         date_part_time_inner(self.0, a)
     }
 
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::Numeric { max_scale: None }.nullable(input.nullable)
+    fn output_type(&self, input: ColumnType) -> ColumnType {
+        ScalarType::Numeric { max_scale: None }.nullable(input.nullable)
     }
 }
 
@@ -124,8 +124,8 @@ impl<'a> EagerUnaryFunc<'a> for DatePartTime {
         date_part_time_inner(self.0, a)
     }
 
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::Float64.nullable(input.nullable)
+    fn output_type(&self, input: ColumnType) -> ColumnType {
+        ScalarType::Float64.nullable(input.nullable)
     }
 }
 
@@ -162,8 +162,8 @@ impl<'a> EagerUnaryFunc<'a> for TimezoneTime {
         timezone_time(self.tz, a, &self.wall_time)
     }
 
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::Time.nullable(input.nullable)
+    fn output_type(&self, input: ColumnType) -> ColumnType {
+        ScalarType::Time.nullable(input.nullable)
     }
 }
 

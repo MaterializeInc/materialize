@@ -9,7 +9,7 @@
 
 use std::collections::BTreeSet;
 
-use mz_repr::{ColumnName, Datum, RelationDesc, Row, SqlColumnType};
+use mz_repr::{ColumnName, ColumnType, Datum, RelationDesc, Row};
 
 pub trait Encode {
     fn encode_unchecked(&self, row: Row) -> Vec<u8>;
@@ -29,18 +29,18 @@ pub trait Encode {
 #[derive(Debug)]
 pub struct TypedDatum<'a> {
     pub datum: Datum<'a>,
-    pub typ: &'a SqlColumnType,
+    pub typ: &'a ColumnType,
 }
 
 impl<'a> TypedDatum<'a> {
     /// Pairs a datum and its type, for encoding.
-    pub fn new(datum: Datum<'a>, typ: &'a SqlColumnType) -> Self {
+    pub fn new(datum: Datum<'a>, typ: &'a ColumnType) -> Self {
         Self { datum, typ }
     }
 }
 
 /// Extracts deduplicated column names and types from a relation description.
-pub fn column_names_and_types(desc: RelationDesc) -> Vec<(ColumnName, SqlColumnType)> {
+pub fn column_names_and_types(desc: RelationDesc) -> Vec<(ColumnName, ColumnType)> {
     // Invent names for columns that don't have a name.
     let mut columns: Vec<_> = desc.into_iter().collect();
 

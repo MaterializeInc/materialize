@@ -21,7 +21,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::str::StrExt;
 use mz_pgrepr::oid;
 use mz_repr::role_id::RoleId;
-use mz_repr::{ColumnName, Datum, SqlRelationType, SqlScalarBaseType, SqlScalarType};
+use mz_repr::{ColumnName, Datum, RelationType, ScalarBaseType, ScalarType};
 
 use crate::ast::{SelectStatement, Statement};
 use crate::catalog::{CatalogType, TypeCategory, TypeReference};
@@ -69,50 +69,50 @@ impl TypeCategory {
     /// GROUP BY typcategory
     /// ORDER BY typcategory;
     /// ```
-    pub fn from_type(typ: &SqlScalarType) -> Self {
+    pub fn from_type(typ: &ScalarType) -> Self {
         // Keep this in sync with `from_catalog_type`.
         match typ {
-            SqlScalarType::Array(..) | SqlScalarType::Int2Vector => Self::Array,
-            SqlScalarType::Bool => Self::Boolean,
-            SqlScalarType::AclItem
-            | SqlScalarType::Bytes
-            | SqlScalarType::Jsonb
-            | SqlScalarType::Uuid
-            | SqlScalarType::MzAclItem => Self::UserDefined,
-            SqlScalarType::Date
-            | SqlScalarType::Time
-            | SqlScalarType::Timestamp { .. }
-            | SqlScalarType::TimestampTz { .. } => Self::DateTime,
-            SqlScalarType::Float32
-            | SqlScalarType::Float64
-            | SqlScalarType::Int16
-            | SqlScalarType::Int32
-            | SqlScalarType::Int64
-            | SqlScalarType::UInt16
-            | SqlScalarType::UInt32
-            | SqlScalarType::UInt64
-            | SqlScalarType::Oid
-            | SqlScalarType::RegClass
-            | SqlScalarType::RegProc
-            | SqlScalarType::RegType
-            | SqlScalarType::Numeric { .. } => Self::Numeric,
-            SqlScalarType::Interval => Self::Timespan,
-            SqlScalarType::List { .. } => Self::List,
-            SqlScalarType::PgLegacyChar
-            | SqlScalarType::PgLegacyName
-            | SqlScalarType::String
-            | SqlScalarType::Char { .. }
-            | SqlScalarType::VarChar { .. } => Self::String,
-            SqlScalarType::Record { custom_id, .. } => {
+            ScalarType::Array(..) | ScalarType::Int2Vector => Self::Array,
+            ScalarType::Bool => Self::Boolean,
+            ScalarType::AclItem
+            | ScalarType::Bytes
+            | ScalarType::Jsonb
+            | ScalarType::Uuid
+            | ScalarType::MzAclItem => Self::UserDefined,
+            ScalarType::Date
+            | ScalarType::Time
+            | ScalarType::Timestamp { .. }
+            | ScalarType::TimestampTz { .. } => Self::DateTime,
+            ScalarType::Float32
+            | ScalarType::Float64
+            | ScalarType::Int16
+            | ScalarType::Int32
+            | ScalarType::Int64
+            | ScalarType::UInt16
+            | ScalarType::UInt32
+            | ScalarType::UInt64
+            | ScalarType::Oid
+            | ScalarType::RegClass
+            | ScalarType::RegProc
+            | ScalarType::RegType
+            | ScalarType::Numeric { .. } => Self::Numeric,
+            ScalarType::Interval => Self::Timespan,
+            ScalarType::List { .. } => Self::List,
+            ScalarType::PgLegacyChar
+            | ScalarType::PgLegacyName
+            | ScalarType::String
+            | ScalarType::Char { .. }
+            | ScalarType::VarChar { .. } => Self::String,
+            ScalarType::Record { custom_id, .. } => {
                 if custom_id.is_some() {
                     Self::Composite
                 } else {
                     Self::Pseudo
                 }
             }
-            SqlScalarType::Map { .. } => Self::Pseudo,
-            SqlScalarType::MzTimestamp => Self::Numeric,
-            SqlScalarType::Range { .. } => Self::Range,
+            ScalarType::Map { .. } => Self::Pseudo,
+            ScalarType::MzTimestamp => Self::Numeric,
+            ScalarType::Range { .. } => Self::Range,
         }
     }
 
@@ -191,7 +191,7 @@ impl TypeCategory {
     /// WHERE typispreferred = true
     /// ORDER BY typcategory;
     /// ```
-    pub fn preferred_type(&self) -> Option<SqlScalarType> {
+    pub fn preferred_type(&self) -> Option<ScalarType> {
         match self {
             Self::Array
             | Self::BitString
@@ -204,11 +204,11 @@ impl TypeCategory {
             | Self::Range
             | Self::Unknown
             | Self::UserDefined => None,
-            Self::Boolean => Some(SqlScalarType::Bool),
-            Self::DateTime => Some(SqlScalarType::TimestampTz { precision: None }),
-            Self::Numeric => Some(SqlScalarType::Float64),
-            Self::String => Some(SqlScalarType::String),
-            Self::Timespan => Some(SqlScalarType::Interval),
+            Self::Boolean => Some(ScalarType::Bool),
+            Self::DateTime => Some(ScalarType::TimestampTz { precision: None }),
+            Self::Numeric => Some(ScalarType::Float64),
+            Self::String => Some(ScalarType::String),
+            Self::Timespan => Some(ScalarType::Interval),
         }
     }
 }
@@ -344,7 +344,7 @@ impl<R> Operation<R> {
 /// functions for details.
 pub fn sql_impl(
     expr: &str,
-) -> impl Fn(&QueryContext, Vec<SqlScalarType>) -> Result<HirScalarExpr, PlanError> + use<> {
+) -> impl Fn(&QueryContext, Vec<ScalarType>) -> Result<HirScalarExpr, PlanError> + use<> {
     let expr = mz_sql_parser::parser::parse_expr(expr).unwrap_or_else(|e| {
         panic!(
             "static function definition failed to parse {}: {}",
@@ -373,7 +373,7 @@ pub fn sql_impl(
             qcx: &qcx,
             name: "static function definition",
             scope: &Scope::empty(),
-            relation_type: &SqlRelationType::empty(),
+            relation_type: &RelationType::empty(),
             allow_aggregates: false,
             allow_subqueries: true,
             allow_parameters: true,
@@ -432,7 +432,7 @@ fn sql_impl_table_func_inner(
         Statement::Select(SelectStatement { query, as_of: None }) => query,
         _ => panic!("static function definition expected SELECT statement"),
     };
-    let invoke = move |qcx: &QueryContext, types: Vec<SqlScalarType>| {
+    let invoke = move |qcx: &QueryContext, types: Vec<ScalarType>| {
         // Reconstruct an expression context where the parameter types are
         // bound to the types of the expressions in `args`.
         let mut scx = qcx.scx.clone();
@@ -611,9 +611,9 @@ impl ParamList {
         }
     }
 
-    /// Matches a `&[SqlScalarType]` derived from the user's function argument
+    /// Matches a `&[ScalarType]` derived from the user's function argument
     /// against this `ParamList`'s permitted arguments.
-    fn exact_match(&self, types: &[&SqlScalarType]) -> bool {
+    fn exact_match(&self, types: &[&ScalarType]) -> bool {
         types.iter().enumerate().all(|(i, t)| self[i] == **t)
     }
 
@@ -666,7 +666,7 @@ impl From<Vec<ParamType>> for ParamList {
 /// "Compatible" parameters contrast with parameters that contain "Any" in their
 /// name, but not "Compatible." These parameters require all other "Any"-type
 /// parameters be of the same type from the perspective of
-/// [`SqlScalarType::base_eq`].
+/// [`ScalarType::base_eq`].
 ///
 /// For more details on polymorphic parameter resolution, see `PolymorphicSolution`.
 pub enum ParamType {
@@ -702,18 +702,18 @@ pub enum ParamType {
     /// A pseudotype permitting any map type, permitting other "Compatibility"-type
     /// parameters to find the best common type.
     MapAnyCompatible,
-    /// A pseudotype permitting any type except `SqlScalarType::List` and
-    /// `SqlScalarType::Array`, requiring other "Any"-type
+    /// A pseudotype permitting any type except `ScalarType::List` and
+    /// `ScalarType::Array`, requiring other "Any"-type
     /// parameters to be of the same type.
     NonVecAny,
-    /// A pseudotype permitting any type except `SqlScalarType::List` and
-    /// `SqlScalarType::Array`, requiring other "Compatibility"-type
+    /// A pseudotype permitting any type except `ScalarType::List` and
+    /// `ScalarType::Array`, requiring other "Compatibility"-type
     /// parameters to be of the same type.
     NonVecAnyCompatible,
     /// A standard parameter that accepts arguments that match its embedded
-    /// `SqlScalarType`.
-    Plain(SqlScalarType),
-    /// A polymorphic pseudotype permitting a `SqlScalarType::Record` of any type,
+    /// `ScalarType`.
+    Plain(ScalarType),
+    /// A polymorphic pseudotype permitting a `ScalarType::Record` of any type,
     /// but all records must be structurally equal.
     RecordAny,
     /// An pseudotype permitting any range type, requiring other "Any"-type
@@ -733,9 +733,9 @@ pub enum ParamType {
 
 impl ParamType {
     /// Does `self` accept arguments of type `t`?
-    fn accepts_type(&self, ecx: &ExprContext, t: &SqlScalarType) -> bool {
+    fn accepts_type(&self, ecx: &ExprContext, t: &ScalarType) -> bool {
         use ParamType::*;
-        use SqlScalarType::*;
+        use ScalarType::*;
 
         match self {
             Any | AnyElement | AnyCompatible | ListElementAnyCompatible => true,
@@ -752,7 +752,7 @@ impl ParamType {
 
     /// Does `t`'s [`TypeCategory`] prefer `self`? This question can make
     /// more sense with the understanding that pseudotypes are never preferred.
-    fn is_preferred_by(&self, t: &SqlScalarType) -> bool {
+    fn is_preferred_by(&self, t: &ScalarType) -> bool {
         if let Some(pt) = TypeCategory::from_type(t).preferred_type() {
             *self == pt
         } else {
@@ -762,8 +762,8 @@ impl ParamType {
 
     /// Is `self` the [`ParamType`] corresponding to `t`'s [near match] value?
     ///
-    /// [near match]: SqlScalarType::near_match
-    fn is_near_match(&self, t: &SqlScalarType) -> bool {
+    /// [near match]: ScalarType::near_match
+    fn is_near_match(&self, t: &ScalarType) -> bool {
         match (self, t.near_match()) {
             (ParamType::Plain(t), Some(near_match)) => t.structural_eq(near_match),
             _ => false,
@@ -834,8 +834,8 @@ impl ParamType {
     }
 }
 
-impl PartialEq<SqlScalarType> for ParamType {
-    fn eq(&self, other: &SqlScalarType) -> bool {
+impl PartialEq<ScalarType> for ParamType {
+    fn eq(&self, other: &ScalarType) -> bool {
         match self {
             ParamType::Plain(s) => s.base_eq(other),
             // Pseudotypes never equal concrete types
@@ -844,56 +844,56 @@ impl PartialEq<SqlScalarType> for ParamType {
     }
 }
 
-impl PartialEq<ParamType> for SqlScalarType {
+impl PartialEq<ParamType> for ScalarType {
     fn eq(&self, other: &ParamType) -> bool {
         other == self
     }
 }
 
-impl From<SqlScalarType> for ParamType {
-    fn from(s: SqlScalarType) -> ParamType {
+impl From<ScalarType> for ParamType {
+    fn from(s: ScalarType) -> ParamType {
         ParamType::Plain(s)
     }
 }
 
-impl From<SqlScalarBaseType> for ParamType {
-    fn from(s: SqlScalarBaseType) -> ParamType {
-        use SqlScalarBaseType::*;
+impl From<ScalarBaseType> for ParamType {
+    fn from(s: ScalarBaseType) -> ParamType {
+        use ScalarBaseType::*;
         let s = match s {
             Array | List | Map | Record | Range => {
                 panic!("use polymorphic parameters rather than {:?}", s);
             }
-            AclItem => SqlScalarType::AclItem,
-            Bool => SqlScalarType::Bool,
-            Int16 => SqlScalarType::Int16,
-            Int32 => SqlScalarType::Int32,
-            Int64 => SqlScalarType::Int64,
-            UInt16 => SqlScalarType::UInt16,
-            UInt32 => SqlScalarType::UInt32,
-            UInt64 => SqlScalarType::UInt64,
-            Float32 => SqlScalarType::Float32,
-            Float64 => SqlScalarType::Float64,
-            Numeric => SqlScalarType::Numeric { max_scale: None },
-            Date => SqlScalarType::Date,
-            Time => SqlScalarType::Time,
-            Timestamp => SqlScalarType::Timestamp { precision: None },
-            TimestampTz => SqlScalarType::TimestampTz { precision: None },
-            Interval => SqlScalarType::Interval,
-            Bytes => SqlScalarType::Bytes,
-            String => SqlScalarType::String,
-            Char => SqlScalarType::Char { length: None },
-            VarChar => SqlScalarType::VarChar { max_length: None },
-            PgLegacyChar => SqlScalarType::PgLegacyChar,
-            PgLegacyName => SqlScalarType::PgLegacyName,
-            Jsonb => SqlScalarType::Jsonb,
-            Uuid => SqlScalarType::Uuid,
-            Oid => SqlScalarType::Oid,
-            RegClass => SqlScalarType::RegClass,
-            RegProc => SqlScalarType::RegProc,
-            RegType => SqlScalarType::RegType,
-            Int2Vector => SqlScalarType::Int2Vector,
-            MzTimestamp => SqlScalarType::MzTimestamp,
-            MzAclItem => SqlScalarType::MzAclItem,
+            AclItem => ScalarType::AclItem,
+            Bool => ScalarType::Bool,
+            Int16 => ScalarType::Int16,
+            Int32 => ScalarType::Int32,
+            Int64 => ScalarType::Int64,
+            UInt16 => ScalarType::UInt16,
+            UInt32 => ScalarType::UInt32,
+            UInt64 => ScalarType::UInt64,
+            Float32 => ScalarType::Float32,
+            Float64 => ScalarType::Float64,
+            Numeric => ScalarType::Numeric { max_scale: None },
+            Date => ScalarType::Date,
+            Time => ScalarType::Time,
+            Timestamp => ScalarType::Timestamp { precision: None },
+            TimestampTz => ScalarType::TimestampTz { precision: None },
+            Interval => ScalarType::Interval,
+            Bytes => ScalarType::Bytes,
+            String => ScalarType::String,
+            Char => ScalarType::Char { length: None },
+            VarChar => ScalarType::VarChar { max_length: None },
+            PgLegacyChar => ScalarType::PgLegacyChar,
+            PgLegacyName => ScalarType::PgLegacyName,
+            Jsonb => ScalarType::Jsonb,
+            Uuid => ScalarType::Uuid,
+            Oid => ScalarType::Oid,
+            RegClass => ScalarType::RegClass,
+            RegProc => ScalarType::RegProc,
+            RegType => ScalarType::RegType,
+            Int2Vector => ScalarType::Int2Vector,
+            MzTimestamp => ScalarType::MzTimestamp,
+            MzAclItem => ScalarType::MzAclItem,
         };
         ParamType::Plain(s)
     }
@@ -938,14 +938,14 @@ impl From<ParamType> for ReturnType {
     }
 }
 
-impl From<SqlScalarBaseType> for ReturnType {
-    fn from(s: SqlScalarBaseType) -> ReturnType {
+impl From<ScalarBaseType> for ReturnType {
+    fn from(s: ScalarBaseType) -> ReturnType {
         ParamType::from(s).into()
     }
 }
 
-impl From<SqlScalarType> for ReturnType {
-    fn from(s: SqlScalarType) -> ReturnType {
+impl From<ScalarType> for ReturnType {
+    fn from(s: ScalarType) -> ReturnType {
         ParamType::Plain(s).into()
     }
 }
@@ -1173,7 +1173,7 @@ fn find_match<'a, R: std::fmt::Debug>(
 
     let mut found_known = false;
     let mut types_match = true;
-    let mut common_type: Option<SqlScalarType> = None;
+    let mut common_type: Option<ScalarType> = None;
 
     for (i, arg_type) in types.iter().enumerate() {
         let mut selected_category: Option<TypeCategory> = None;
@@ -1308,7 +1308,7 @@ enum PolymorphicCompatClass {
     /// work with `BestCommonList` are incommensurate with the parameter types
     /// used with `BestCommonMap`.
     BestCommonMap,
-    /// Represents type resolution for `SqlScalarType::Record` types, which e.g.
+    /// Represents type resolution for `ScalarType::Record` types, which e.g.
     /// ignores custom types and type modifications.
     ///
     /// In [PG], this is handled by invocation of the function calls that take
@@ -1340,7 +1340,7 @@ impl TryFrom<&ParamType> for PolymorphicCompatClass {
 }
 
 impl PolymorphicCompatClass {
-    fn compatible(&self, ecx: &ExprContext, from: &SqlScalarType, to: &SqlScalarType) -> bool {
+    fn compatible(&self, ecx: &ExprContext, from: &ScalarType, to: &ScalarType) -> bool {
         use PolymorphicCompatClass::*;
         match self {
             StructuralEq => from.structural_eq(to),
@@ -1359,7 +1359,7 @@ pub(crate) struct PolymorphicSolution {
     compat: Option<PolymorphicCompatClass>,
     seen: Vec<CoercibleScalarType>,
     /// An internal representation of the discovered polymorphic type.
-    key: Option<SqlScalarType>,
+    key: Option<ScalarType>,
 }
 
 impl PolymorphicSolution {
@@ -1399,7 +1399,7 @@ impl PolymorphicSolution {
             ListAny => seen.map_coerced(|array| array.unwrap_list_element_type().clone()),
             ArrayAny | ArrayAnyCompatible => seen.map_coerced(|array| array.unwrap_array_element_type().clone()),
             RangeAny | RangeAnyCompatible => seen.map_coerced(|range| range.unwrap_range_element_type().clone()),
-            ListElementAnyCompatible => seen.map_coerced(|el| SqlScalarType::List {
+            ListElementAnyCompatible => seen.map_coerced(|el| ScalarType::List {
                 custom_id: None,
                 element_type: Box::new(el),
             }),
@@ -1441,13 +1441,13 @@ impl PolymorphicSolution {
                 // will incorrectly guess string, which is incompatible with
                 // `BestCommonList`, `BestCommonMap`.
                 Some(t) => match t {
-                    PolymorphicCompatClass::BestCommonAny => Some(SqlScalarType::String),
-                    PolymorphicCompatClass::BestCommonList => Some(SqlScalarType::List {
+                    PolymorphicCompatClass::BestCommonAny => Some(ScalarType::String),
+                    PolymorphicCompatClass::BestCommonList => Some(ScalarType::List {
                         custom_id: None,
-                        element_type: Box::new(SqlScalarType::String),
+                        element_type: Box::new(ScalarType::String),
                     }),
-                    PolymorphicCompatClass::BestCommonMap => Some(SqlScalarType::Map {
-                        value_type: Box::new(SqlScalarType::String),
+                    PolymorphicCompatClass::BestCommonMap => Some(ScalarType::Map {
+                        value_type: Box::new(ScalarType::String),
                         custom_id: None,
                     }),
                     // Do not infer type.
@@ -1494,9 +1494,9 @@ impl PolymorphicSolution {
         true
     }
 
-    // Determines the appropriate `SqlScalarType` for the given `ParamType` based
+    // Determines the appropriate `ScalarType` for the given `ParamType` based
     // on the polymorphic solution.
-    fn target_for_param_type(&self, param: &ParamType) -> Option<SqlScalarType> {
+    fn target_for_param_type(&self, param: &ParamType) -> Option<ScalarType> {
         use ParamType::*;
         assert_eq!(
             self.compat,
@@ -1520,16 +1520,16 @@ impl PolymorphicSolution {
             ArrayAny | ArrayAnyCompatible => self
                 .key
                 .as_ref()
-                .map(|key| SqlScalarType::Array(Box::new(key.clone()))),
-            ListAny => self.key.as_ref().map(|key| SqlScalarType::List {
+                .map(|key| ScalarType::Array(Box::new(key.clone()))),
+            ListAny => self.key.as_ref().map(|key| ScalarType::List {
                 element_type: Box::new(key.clone()),
                 custom_id: None,
             }),
-            MapAny => self.key.as_ref().map(|key| SqlScalarType::Map {
+            MapAny => self.key.as_ref().map(|key| ScalarType::Map {
                 value_type: Box::new(key.clone()),
                 custom_id: None,
             }),
-            RangeAny | RangeAnyCompatible => self.key.as_ref().map(|key| SqlScalarType::Range {
+            RangeAny | RangeAnyCompatible => self.key.as_ref().map(|key| ScalarType::Range {
                 element_type: Box::new(key.clone()),
             }),
             ListElementAnyCompatible => self
@@ -1562,7 +1562,7 @@ fn coerce_args_to_types(
         .expect("polymorphic solution previously determined to be valid");
 
     let do_convert =
-        |arg: CoercibleScalarExpr, ty: &SqlScalarType| arg.cast_to(ecx, CastContext::Implicit, ty);
+        |arg: CoercibleScalarExpr, ty: &ScalarType| arg.cast_to(ecx, CastContext::Implicit, ty);
 
     let mut res_exprs = Vec::with_capacity(args.len());
     for (i, cexpr) in args.into_iter().enumerate() {
@@ -1607,7 +1607,7 @@ fn coerce_args_to_types(
     Ok(res_exprs)
 }
 
-/// Provides shorthand for converting `Vec<SqlScalarType>` into `Vec<ParamType>`.
+/// Provides shorthand for converting `Vec<ScalarType>` into `Vec<ParamType>`.
 macro_rules! params {
     ([$($p:expr),*], $v:ident...) => { ParamList::Variadic { leading: vec![$($p.into(),)*], trailing: $v.into() } };
     ($v:ident...) => { ParamList::Variadic { leading: vec![], trailing: $v.into() } };
@@ -1802,7 +1802,7 @@ macro_rules! privilege_fn {
 /// Correlates a built-in function name to its implementations.
 pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
     use ParamType::*;
-    use SqlScalarBaseType::*;
+    use ScalarBaseType::*;
     let mut builtins = builtins! {
         // Literal OIDs collected from PG 13 using a version of this query
         // ```sql
@@ -1825,7 +1825,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(Float64) => UnaryFunc::AbsFloat64(func::AbsFloat64) => Float64, 1395;
         },
         "aclexplode" => Table {
-            params!(SqlScalarType::Array(Box::new(SqlScalarType::AclItem))) =>  Operation::unary(move |_ecx, aclitems| {
+            params!(ScalarType::Array(Box::new(ScalarType::AclItem))) =>  Operation::unary(move |_ecx, aclitems| {
                 Ok(TableFuncPlan {
                     imp: TableFuncImpl::CallTable {
                         func: TableFunc::AclExplode,
@@ -1841,7 +1841,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             }) => ArrayAnyCompatible, 383;
         },
         "array_fill" => Scalar {
-            params!(AnyElement, SqlScalarType::Array(Box::new(SqlScalarType::Int32))) => Operation::binary(|ecx, elem, dims| {
+            params!(AnyElement, ScalarType::Array(Box::new(ScalarType::Int32))) => Operation::binary(|ecx, elem, dims| {
                 let elem_type = ecx.scalar_type(&elem);
 
                 let elem_type = match elem_type.array_of_self_elem_type() {
@@ -1856,8 +1856,8 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             }) => ArrayAny, 1193;
             params!(
                 AnyElement,
-                SqlScalarType::Array(Box::new(SqlScalarType::Int32)),
-                SqlScalarType::Array(Box::new(SqlScalarType::Int32))
+                ScalarType::Array(Box::new(ScalarType::Int32)),
+                ScalarType::Array(Box::new(ScalarType::Int32))
             ) => Operation::variadic(|ecx, exprs| {
                 let elem_type = ecx.scalar_type(&exprs[0]);
 
@@ -1951,9 +1951,9 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                     exprs.push(match ecx.scalar_type(&expr) {
                         // concat uses nonstandard bool -> string casts
                         // to match historical baggage in PostgreSQL.
-                        SqlScalarType::Bool => expr.call_unary(UnaryFunc::CastBoolToStringNonstandard(func::CastBoolToStringNonstandard)),
+                        ScalarType::Bool => expr.call_unary(UnaryFunc::CastBoolToStringNonstandard(func::CastBoolToStringNonstandard)),
                         // TODO(see <materialize#7572>): remove call to PadChar
-                        SqlScalarType::Char { length } => expr.call_unary(UnaryFunc::PadChar(func::PadChar { length })),
+                        ScalarType::Char { length } => expr.call_unary(UnaryFunc::PadChar(func::PadChar { length })),
                         _ => typeconv::to_string(ecx, expr)
                     });
                 }
@@ -1971,9 +1971,9 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                     exprs.push(match ecx.scalar_type(&expr) {
                         // concat uses nonstandard bool -> string casts
                         // to match historical baggage in PostgreSQL.
-                        SqlScalarType::Bool => expr.call_unary(UnaryFunc::CastBoolToStringNonstandard(func::CastBoolToStringNonstandard)),
+                        ScalarType::Bool => expr.call_unary(UnaryFunc::CastBoolToStringNonstandard(func::CastBoolToStringNonstandard)),
                         // TODO(see <materialize#7572>): remove call to PadChar
-                        SqlScalarType::Char { length } => expr.call_unary(UnaryFunc::PadChar(func::PadChar { length })),
+                        ScalarType::Char { length } => expr.call_unary(UnaryFunc::PadChar(func::PadChar { length })),
                         _ => typeconv::to_string(ecx, expr)
                     });
                 }
@@ -2014,7 +2014,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                 // TODO: this should be `name[]`. This is tricky in Materialize
                 // because `name` truncates to 63 characters but Materialize
                 // does not have a limit on identifier length.
-            }) => SqlScalarType::Array(Box::new(SqlScalarType::String)), 1403;
+            }) => ScalarType::Array(Box::new(ScalarType::String)), 1403;
         },
         "current_database" => Scalar {
             params!() => UnmaterializableFunc::CurrentDatabase => String, 861;
@@ -2025,10 +2025,10 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
         "current_setting" => Scalar {
             params!(String) => Operation::unary(|_ecx, name| {
                 current_settings(name, HirScalarExpr::literal_false())
-            }) => SqlScalarType::String, 2077;
+            }) => ScalarType::String, 2077;
             params!(String, Bool) => Operation::binary(|_ecx, name, missing_ok| {
                 current_settings(name, missing_ok)
-            }) => SqlScalarType::String, 3294;
+            }) => ScalarType::String, 3294;
         },
         "current_timestamp" => Scalar {
             params!() => UnmaterializableFunc::CurrentTimestamp => TimestampTz, oid::FUNC_CURRENT_TIMESTAMP_OID;
@@ -2085,14 +2085,14 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
         },
         "daterange" => Scalar {
             params!(Date, Date) => Operation::variadic(|_ecx, mut exprs| {
-                exprs.push(HirScalarExpr::literal(Datum::String("[)"), SqlScalarType::String));
-                Ok(HirScalarExpr::call_variadic(VariadicFunc::RangeCreate { elem_type: SqlScalarType::Date },
+                exprs.push(HirScalarExpr::literal(Datum::String("[)"), ScalarType::String));
+                Ok(HirScalarExpr::call_variadic(VariadicFunc::RangeCreate { elem_type: ScalarType::Date },
                     exprs))
-            }) => SqlScalarType::Range { element_type: Box::new(SqlScalarType::Date)}, 3941;
+            }) => ScalarType::Range { element_type: Box::new(ScalarType::Date)}, 3941;
             params!(Date, Date, String) => Operation::variadic(|_ecx, exprs| {
-                Ok(HirScalarExpr::call_variadic(VariadicFunc::RangeCreate { elem_type: SqlScalarType::Date },
+                Ok(HirScalarExpr::call_variadic(VariadicFunc::RangeCreate { elem_type: ScalarType::Date },
                     exprs))
-            }) => SqlScalarType::Range { element_type: Box::new(SqlScalarType::Date)}, 3942;
+            }) => ScalarType::Range { element_type: Box::new(ScalarType::Date)}, 3942;
         },
         "degrees" => Scalar {
             params!(Float64) => UnaryFunc::Degrees(func::Degrees) => Float64, 1608;
@@ -2166,25 +2166,25 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
         },
         "int4range" => Scalar {
             params!(Int32, Int32) => Operation::variadic(|_ecx, mut exprs| {
-                exprs.push(HirScalarExpr::literal(Datum::String("[)"), SqlScalarType::String));
-                Ok(HirScalarExpr::call_variadic(VariadicFunc::RangeCreate { elem_type: SqlScalarType::Int32 },
+                exprs.push(HirScalarExpr::literal(Datum::String("[)"), ScalarType::String));
+                Ok(HirScalarExpr::call_variadic(VariadicFunc::RangeCreate { elem_type: ScalarType::Int32 },
                     exprs))
-            }) => SqlScalarType::Range { element_type: Box::new(SqlScalarType::Int32)}, 3840;
+            }) => ScalarType::Range { element_type: Box::new(ScalarType::Int32)}, 3840;
             params!(Int32, Int32, String) => Operation::variadic(|_ecx, exprs| {
-                Ok(HirScalarExpr::call_variadic(VariadicFunc::RangeCreate { elem_type: SqlScalarType::Int32 },
+                Ok(HirScalarExpr::call_variadic(VariadicFunc::RangeCreate { elem_type: ScalarType::Int32 },
                     exprs))
-            }) => SqlScalarType::Range { element_type: Box::new(SqlScalarType::Int32)}, 3841;
+            }) => ScalarType::Range { element_type: Box::new(ScalarType::Int32)}, 3841;
         },
         "int8range" => Scalar {
             params!(Int64, Int64) => Operation::variadic(|_ecx, mut exprs| {
-                exprs.push(HirScalarExpr::literal(Datum::String("[)"), SqlScalarType::String));
-                Ok(HirScalarExpr::call_variadic(VariadicFunc::RangeCreate { elem_type: SqlScalarType::Int64 },
+                exprs.push(HirScalarExpr::literal(Datum::String("[)"), ScalarType::String));
+                Ok(HirScalarExpr::call_variadic(VariadicFunc::RangeCreate { elem_type: ScalarType::Int64 },
                     exprs))
-            }) => SqlScalarType::Range { element_type: Box::new(SqlScalarType::Int64)}, 3945;
+            }) => ScalarType::Range { element_type: Box::new(ScalarType::Int64)}, 3945;
             params!(Int64, Int64, String) => Operation::variadic(|_ecx, exprs| {
-                Ok(HirScalarExpr::call_variadic(VariadicFunc::RangeCreate { elem_type: SqlScalarType::Int64 },
+                Ok(HirScalarExpr::call_variadic(VariadicFunc::RangeCreate { elem_type: ScalarType::Int64 },
                     exprs))
-                }) => SqlScalarType::Range { element_type: Box::new(SqlScalarType::Int64)}, 3946;
+                }) => ScalarType::Range { element_type: Box::new(ScalarType::Int64)}, 3946;
         },
         "isempty" => Scalar {
             params!(RangeAny) => UnaryFunc::RangeEmpty(func::RangeEmpty) => Bool, 3850;
@@ -2281,13 +2281,13 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
         },
         "md5" => Scalar {
             params!(String) => Operation::unary(move |_ecx, input| {
-                let algorithm = HirScalarExpr::literal(Datum::String("md5"), SqlScalarType::String);
-                let encoding = HirScalarExpr::literal(Datum::String("hex"), SqlScalarType::String);
+                let algorithm = HirScalarExpr::literal(Datum::String("md5"), ScalarType::String);
+                let encoding = HirScalarExpr::literal(Datum::String("hex"), ScalarType::String);
                 Ok(input.call_binary(algorithm, BinaryFunc::DigestString).call_binary(encoding, BinaryFunc::Encode))
             }) => String, 2311;
             params!(Bytes) => Operation::unary(move |_ecx, input| {
-                let algorithm = HirScalarExpr::literal(Datum::String("md5"), SqlScalarType::String);
-                let encoding = HirScalarExpr::literal(Datum::String("hex"), SqlScalarType::String);
+                let algorithm = HirScalarExpr::literal(Datum::String("md5"), ScalarType::String);
+                let encoding = HirScalarExpr::literal(Datum::String("hex"), ScalarType::String);
                 Ok(input.call_binary(algorithm, BinaryFunc::DigestBytes).call_binary(encoding, BinaryFunc::Encode))
             }) => String, 2321;
         },
@@ -2305,14 +2305,14 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
         },
         "numrange" => Scalar {
             params!(Numeric, Numeric) => Operation::variadic(|_ecx, mut exprs| {
-                exprs.push(HirScalarExpr::literal(Datum::String("[)"), SqlScalarType::String));
-                Ok(HirScalarExpr::call_variadic(VariadicFunc::RangeCreate { elem_type: SqlScalarType::Numeric { max_scale: None } },
+                exprs.push(HirScalarExpr::literal(Datum::String("[)"), ScalarType::String));
+                Ok(HirScalarExpr::call_variadic(VariadicFunc::RangeCreate { elem_type: ScalarType::Numeric { max_scale: None } },
                     exprs))
-            }) =>  SqlScalarType::Range { element_type: Box::new(SqlScalarType::Numeric { max_scale: None })}, 3844;
+            }) =>  ScalarType::Range { element_type: Box::new(ScalarType::Numeric { max_scale: None })}, 3844;
             params!(Numeric, Numeric, String) => Operation::variadic(|_ecx, exprs| {
-                Ok(HirScalarExpr::call_variadic(VariadicFunc::RangeCreate { elem_type: SqlScalarType::Numeric { max_scale: None } },
+                Ok(HirScalarExpr::call_variadic(VariadicFunc::RangeCreate { elem_type: ScalarType::Numeric { max_scale: None } },
                     exprs))
-            }) => SqlScalarType::Range { element_type: Box::new(SqlScalarType::Numeric { max_scale: None })}, 3845;
+            }) => ScalarType::Range { element_type: Box::new(ScalarType::Numeric { max_scale: None })}, 3845;
         },
         "octet_length" => Scalar {
             params!(Bytes) => UnaryFunc::ByteLengthBytes(func::ByteLengthBytes) => Int32, 720;
@@ -2346,7 +2346,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
         "mz_row_size" => Scalar {
             params!(Any) => Operation::unary(|ecx, e| {
                 let s = ecx.scalar_type(&e);
-                if !matches!(s, SqlScalarType::Record{..}) {
+                if !matches!(s, ScalarType::Record{..}) {
                     sql_bail!("mz_row_size requires a record type");
                 }
                 Ok(e.call_unary(UnaryFunc::MzRowSize(func::MzRowSize)))
@@ -2355,10 +2355,10 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
         "parse_ident" => Scalar {
             params!(String) => Operation::unary(|_ecx, ident| {
                 Ok(ident.call_binary(HirScalarExpr::literal_true(), BinaryFunc::ParseIdent))
-            }) => SqlScalarType::Array(Box::new(SqlScalarType::String)),
+            }) => ScalarType::Array(Box::new(ScalarType::String)),
                 oid::FUNC_PARSE_IDENT_DEFAULT_STRICT;
             params!(String, Bool) => BinaryFunc::ParseIdent
-                => SqlScalarType::Array(Box::new(SqlScalarType::String)), 1268;
+                => ScalarType::Array(Box::new(ScalarType::String)), 1268;
         },
         "pg_encoding_to_char" => Scalar {
             // Materialize only supports UT8-encoded databases. Return 'UTF8' if Postgres'
@@ -2375,9 +2375,9 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
         // provided an invalid OID.
         "pg_get_constraintdef" => Scalar {
             params!(Oid) => Operation::unary(|_ecx, _oid|
-                Ok(HirScalarExpr::literal_null(SqlScalarType::String))) => String, 1387;
+                Ok(HirScalarExpr::literal_null(ScalarType::String))) => String, 1387;
             params!(Oid, Bool) => Operation::binary(|_ecx, _oid, _pretty|
-                Ok(HirScalarExpr::literal_null(SqlScalarType::String))) => String, 2508;
+                Ok(HirScalarExpr::literal_null(ScalarType::String))) => String, 2508;
         },
         // pg_get_indexdef reconstructs the creating command for an index. We only support
         // arrangement based indexes, so we can hardcode that in.
@@ -2531,7 +2531,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
         // native database, so we just return the null value.
         "pg_tablespace_location" => Scalar {
             params!(Oid) => Operation::unary(|_ecx, _e| {
-                Ok(HirScalarExpr::literal_null(SqlScalarType::String))
+                Ok(HirScalarExpr::literal_null(ScalarType::String))
             }) => String, 3778;
         },
         "pg_typeof" => Scalar {
@@ -2552,7 +2552,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                 // regtype, when we support that type. Document the function
                 // at that point. For now, it's useful enough to have this
                 // halfway version that returns a string.
-                Ok(HirScalarExpr::literal(Datum::String(&name), SqlScalarType::String))
+                Ok(HirScalarExpr::literal(Datum::String(&name), ScalarType::String))
             }) => String, 1619;
         },
         "position" => Scalar {
@@ -2575,8 +2575,8 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(String, Int32) => BinaryFunc::RepeatString => String, 1622;
         },
         "regexp_match" => Scalar {
-            params!(String, String) => VariadicFunc::RegexpMatch => SqlScalarType::Array(Box::new(SqlScalarType::String)), 3396;
-            params!(String, String, String) => VariadicFunc::RegexpMatch => SqlScalarType::Array(Box::new(SqlScalarType::String)), 3397;
+            params!(String, String) => VariadicFunc::RegexpMatch => ScalarType::Array(Box::new(ScalarType::String)), 3396;
+            params!(String, String, String) => VariadicFunc::RegexpMatch => ScalarType::Array(Box::new(ScalarType::String)), 3397;
         },
         "replace" => Scalar {
             params!(String, String, String) => VariadicFunc::Replace => String, 2087;
@@ -2730,7 +2730,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(Any) => Operation::unary(|ecx, e| {
                 // TODO(see <materialize#7572>): remove this
                 let e = match ecx.scalar_type(&e) {
-                    SqlScalarType::Char { length } => e.call_unary(UnaryFunc::PadChar(func::PadChar { length })),
+                    ScalarType::Char { length } => e.call_unary(UnaryFunc::PadChar(func::PadChar { length })),
                     _ => e,
                 };
                 Ok(typeconv::to_jsonb(ecx, e))
@@ -2749,25 +2749,25 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
         },
         "tsrange" => Scalar {
             params!(Timestamp, Timestamp) => Operation::variadic(|_ecx, mut exprs| {
-                exprs.push(HirScalarExpr::literal(Datum::String("[)"), SqlScalarType::String));
-                Ok(HirScalarExpr::call_variadic(VariadicFunc::RangeCreate { elem_type: SqlScalarType::Timestamp {precision: None}},
+                exprs.push(HirScalarExpr::literal(Datum::String("[)"), ScalarType::String));
+                Ok(HirScalarExpr::call_variadic(VariadicFunc::RangeCreate { elem_type: ScalarType::Timestamp {precision: None}},
                     exprs))
-            }) =>  SqlScalarType::Range { element_type: Box::new(SqlScalarType::Timestamp { precision: None})}, 3933;
+            }) =>  ScalarType::Range { element_type: Box::new(ScalarType::Timestamp { precision: None})}, 3933;
             params!(Timestamp, Timestamp, String) => Operation::variadic(|_ecx, exprs| {
-                Ok(HirScalarExpr::call_variadic(VariadicFunc::RangeCreate { elem_type: SqlScalarType::Timestamp {precision: None}},
+                Ok(HirScalarExpr::call_variadic(VariadicFunc::RangeCreate { elem_type: ScalarType::Timestamp {precision: None}},
                     exprs))
-            }) => SqlScalarType::Range { element_type: Box::new(SqlScalarType::Timestamp { precision: None})}, 3934;
+            }) => ScalarType::Range { element_type: Box::new(ScalarType::Timestamp { precision: None})}, 3934;
         },
         "tstzrange" => Scalar {
             params!(TimestampTz, TimestampTz) => Operation::variadic(|_ecx, mut exprs| {
-                exprs.push(HirScalarExpr::literal(Datum::String("[)"), SqlScalarType::String));
-                Ok(HirScalarExpr::call_variadic(VariadicFunc::RangeCreate { elem_type: SqlScalarType::TimestampTz {precision: None}},
+                exprs.push(HirScalarExpr::literal(Datum::String("[)"), ScalarType::String));
+                Ok(HirScalarExpr::call_variadic(VariadicFunc::RangeCreate { elem_type: ScalarType::TimestampTz {precision: None}},
                     exprs,))
-            }) =>  SqlScalarType::Range { element_type: Box::new(SqlScalarType::TimestampTz { precision: None})}, 3937;
+            }) =>  ScalarType::Range { element_type: Box::new(ScalarType::TimestampTz { precision: None})}, 3937;
             params!(TimestampTz, TimestampTz, String) => Operation::variadic(|_ecx, exprs| {
-                Ok(HirScalarExpr::call_variadic(VariadicFunc::RangeCreate { elem_type: SqlScalarType::TimestampTz {precision: None}},
+                Ok(HirScalarExpr::call_variadic(VariadicFunc::RangeCreate { elem_type: ScalarType::TimestampTz {precision: None}},
                     exprs))
-            }) => SqlScalarType::Range { element_type: Box::new(SqlScalarType::TimestampTz { precision: None})}, 3938;
+            }) => ScalarType::Range { element_type: Box::new(ScalarType::TimestampTz { precision: None})}, 3938;
         },
         "upper" => Scalar {
             params!(String) => UnaryFunc::Upper(func::Upper) => String, 871;
@@ -3110,7 +3110,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(Any) => Operation::unary_ordered(|ecx, e, order_by| {
                 // TODO(see <materialize#7572>): remove this
                 let e = match ecx.scalar_type(&e) {
-                    SqlScalarType::Char { length } => e.call_unary(UnaryFunc::PadChar(func::PadChar { length })),
+                    ScalarType::Char { length } => e.call_unary(UnaryFunc::PadChar(func::PadChar { length })),
                     _ => e,
                 };
                 // `AggregateFunc::JsonbAgg` filters out `Datum::Null` (it
@@ -3118,7 +3118,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                 // of the SQL function require that `Datum::Null` is treated
                 // as `Datum::JsonbNull`. This call to `coalesce` converts
                 // between the two semantics.
-                let json_null = HirScalarExpr::literal(Datum::JsonNull, SqlScalarType::Jsonb);
+                let json_null = HirScalarExpr::literal(Datum::JsonNull, ScalarType::Jsonb);
                 let e = HirScalarExpr::call_variadic(
                     VariadicFunc::Coalesce,
                     vec![typeconv::to_jsonb(ecx, e), json_null],
@@ -3130,22 +3130,22 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(Any, Any) => Operation::binary_ordered(|ecx, key, val, order_by| {
                 // TODO(see <materialize#7572>): remove this
                 let key = match ecx.scalar_type(&key) {
-                    SqlScalarType::Char { length } => key.call_unary(UnaryFunc::PadChar(func::PadChar { length })),
+                    ScalarType::Char { length } => key.call_unary(UnaryFunc::PadChar(func::PadChar { length })),
                     _ => key,
                 };
                 let val = match ecx.scalar_type(&val) {
-                    SqlScalarType::Char { length } => val.call_unary(UnaryFunc::PadChar(func::PadChar { length })),
+                    ScalarType::Char { length } => val.call_unary(UnaryFunc::PadChar(func::PadChar { length })),
                     _ => val,
                 };
 
-                let json_null = HirScalarExpr::literal(Datum::JsonNull, SqlScalarType::Jsonb);
+                let json_null = HirScalarExpr::literal(Datum::JsonNull, ScalarType::Jsonb);
                 let key = typeconv::to_string(ecx, key);
                 // `AggregateFunc::JsonbObjectAgg` uses the same underlying
                 // implementation as `AggregateFunc::MapAgg`, so it's our
                 // responsibility to apply the JSON-specific behavior of casting
                 // SQL nulls to JSON nulls; otherwise the produced `Datum::Map`
                 // can contain `Datum::Null` values that are not valid for the
-                // `SqlScalarType::Jsonb` type.
+                // `ScalarType::Jsonb` type.
                 let val = HirScalarExpr::call_variadic(
                     VariadicFunc::Coalesce,
                     vec![typeconv::to_jsonb(ecx, val), json_null],
@@ -3172,8 +3172,8 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(Bytes, Bytes) => Operation::binary(|_ecx, _l, _r| bail_unsupported!("string_agg on BYTEA")) => Bytes, 3545;
         },
         "string_to_array" => Scalar {
-            params!(String, String) => VariadicFunc::StringToArray => SqlScalarType::Array(Box::new(SqlScalarType::String)), 376;
-            params!(String, String, String) => VariadicFunc::StringToArray => SqlScalarType::Array(Box::new(SqlScalarType::String)), 394;
+            params!(String, String) => VariadicFunc::StringToArray => ScalarType::Array(Box::new(ScalarType::String)), 376;
+            params!(String, String, String) => VariadicFunc::StringToArray => ScalarType::Array(Box::new(ScalarType::String)), 394;
         },
         "sum" => Aggregate {
             params!(Int16) => AggregateFunc::SumInt16 => Int64, 2109;
@@ -3212,7 +3212,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                     VariadicFunc::RecordCreate {
                         field_names: vec![ColumnName::from("expr"), ColumnName::from("offset"), ColumnName::from("default")],
                     },
-                    vec![e, HirScalarExpr::literal(Datum::Int32(1), SqlScalarType::Int32), HirScalarExpr::literal_null(typ)],
+                    vec![e, HirScalarExpr::literal(Datum::Int32(1), ScalarType::Int32), HirScalarExpr::literal_null(typ)],
                 );
                 Ok((e, ValueWindowFunc::Lag))
             }) => AnyElement, 3106;
@@ -3244,7 +3244,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                     VariadicFunc::RecordCreate {
                         field_names: vec![ColumnName::from("expr"), ColumnName::from("offset"), ColumnName::from("default")],
                     },
-                    vec![e, HirScalarExpr::literal(Datum::Int32(1), SqlScalarType::Int32), HirScalarExpr::literal_null(typ)],
+                    vec![e, HirScalarExpr::literal(Datum::Int32(1), ScalarType::Int32), HirScalarExpr::literal_null(typ)],
                 );
                 Ok((e, ValueWindowFunc::Lead))
             }) => AnyElement, 3109;
@@ -3290,7 +3290,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                 Ok(TableFuncPlan {
                     imp: TableFuncImpl::CallTable {
                         func: TableFunc::GenerateSeriesInt32,
-                        exprs: vec![start, stop, HirScalarExpr::literal(Datum::Int32(1), SqlScalarType::Int32)],
+                        exprs: vec![start, stop, HirScalarExpr::literal(Datum::Int32(1), ScalarType::Int32)],
                     },
                     column_names: vec!["generate_series".into()],
                 })
@@ -3308,7 +3308,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                 Ok(TableFuncPlan {
                     imp: TableFuncImpl::CallTable {
                         func: TableFunc::GenerateSeriesInt64,
-                        exprs: vec![start, stop, HirScalarExpr::literal(Datum::Int64(1), SqlScalarType::Int64)],
+                        exprs: vec![start, stop, HirScalarExpr::literal(Datum::Int64(1), ScalarType::Int64)],
                     },
                     column_names: vec!["generate_series".into()],
                 })
@@ -3440,8 +3440,8 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(String, String) => BinaryFunc::Decode => Bytes, 1947;
         },
         "regexp_split_to_array" => Scalar {
-            params!(String, String) => VariadicFunc::RegexpSplitToArray => SqlScalarType::Array(Box::new(SqlScalarType::String)), 2767;
-            params!(String, String, String) => VariadicFunc::RegexpSplitToArray => SqlScalarType::Array(Box::new(SqlScalarType::String)), 2768;
+            params!(String, String) => VariadicFunc::RegexpSplitToArray => ScalarType::Array(Box::new(ScalarType::String)), 2767;
+            params!(String, String, String) => VariadicFunc::RegexpSplitToArray => ScalarType::Array(Box::new(ScalarType::String)), 2768;
         },
         "regexp_split_to_table" => Table {
             params!(String, String) => sql_impl_table_func("
@@ -3467,7 +3467,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                     },
                     column_names,
                 })
-            }) => ReturnType::set_of(SqlScalarType::Array(Box::new(SqlScalarType::String)).into()), 2763;
+            }) => ReturnType::set_of(ScalarType::Array(Box::new(ScalarType::String)).into()), 2763;
             params!(String, String, String) => Operation::variadic(move |_ecx, exprs| {
                 let column_names = vec!["regexp_matches".into()];
                 Ok(TableFuncPlan {
@@ -3477,7 +3477,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                     },
                     column_names,
                 })
-            }) => ReturnType::set_of(SqlScalarType::Array(Box::new(SqlScalarType::String)).into()), 2764;
+            }) => ReturnType::set_of(ScalarType::Array(Box::new(ScalarType::String)).into()), 2764;
         },
         "reverse" => Scalar {
             params!(String) => UnaryFunc::Reverse(func::Reverse) => String, 3062;
@@ -3533,7 +3533,7 @@ pub static INFORMATION_SCHEMA_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> =
 
 pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
     use ParamType::*;
-    use SqlScalarBaseType::*;
+    use ScalarBaseType::*;
     builtins! {
         "constant_time_eq" => Scalar {
             params!(Bytes, Bytes) => BinaryFunc::ConstantTimeEqBytes => Bool, oid::FUNC_CONSTANT_TIME_EQ_BYTES_OID;
@@ -3713,7 +3713,7 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
         },
         "list_agg" => Aggregate {
             params!(Any) => Operation::unary_ordered(|ecx, e, order_by| {
-                if let SqlScalarType::Char {.. }  = ecx.scalar_type(&e) {
+                if let ScalarType::Char {.. }  = ecx.scalar_type(&e) {
                     bail_unsupported!("list_agg on char");
                 };
                 // ListConcat excepts all inputs to be lists, so wrap all input datums into
@@ -3736,7 +3736,7 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                 ecx.require_feature_flag(&crate::session::vars::ENABLE_LIST_N_LAYERS)?;
                 let d = ecx.scalar_type(&e).unwrap_list_n_layers();
                 match i32::try_from(d) {
-                    Ok(d) => Ok(HirScalarExpr::literal(Datum::Int32(d), SqlScalarType::Int32)),
+                    Ok(d) => Ok(HirScalarExpr::literal(Datum::Int32(d), ScalarType::Int32)),
                     Err(_) => sql_bail!("list has more than {} layers", i32::MAX),
                 }
 
@@ -3746,7 +3746,7 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             vec![ListAny] => UnaryFunc::ListLength(func::ListLength) => Int32, oid::FUNC_LIST_LENGTH_OID;
         },
         "list_length_max" => Scalar {
-            vec![ListAny, Plain(SqlScalarType::Int64)] => Operation::binary(|ecx, lhs, rhs| {
+            vec![ListAny, Plain(ScalarType::Int64)] => Operation::binary(|ecx, lhs, rhs| {
                 ecx.require_feature_flag(&crate::session::vars::ENABLE_LIST_LENGTH_MAX)?;
                 let max_layer = ecx.scalar_type(&lhs).unwrap_list_n_layers();
                 Ok(lhs.call_binary(rhs, BinaryFunc::ListLengthMax { max_layer }))
@@ -3765,7 +3765,7 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(String, Any) => Operation::binary_ordered(|ecx, key, val, order_by| {
                 let (value_type, val) = match ecx.scalar_type(&val) {
                     // TODO(see <materialize#7572>): remove this
-                    SqlScalarType::Char { length } => (SqlScalarType::Char { length }, val.call_unary(UnaryFunc::PadChar(func::PadChar { length }))),
+                    ScalarType::Char { length } => (ScalarType::Char { length }, val.call_unary(UnaryFunc::PadChar(func::PadChar { length }))),
                     typ => (typ, val),
                 };
 
@@ -3805,9 +3805,9 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                 // This function only accepts lists of records whose schema is
                 // (text, T).
                 let value_type = match &ty {
-                    SqlScalarType::List { element_type, .. } => match &**element_type {
-                        SqlScalarType::Record { fields, .. } if fields.len() == 2 => {
-                            if fields[0].1.scalar_type != SqlScalarType::String {
+                    ScalarType::List { element_type, .. } => match &**element_type {
+                        ScalarType::Record { fields, .. } if fields.len() == 2 => {
+                            if fields[0].1.scalar_type != ScalarType::String {
                                 return err();
                             }
 
@@ -3830,7 +3830,7 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!() => UnmaterializableFunc::MzEnvironmentId => String, oid::FUNC_MZ_ENVIRONMENT_ID_OID;
         },
         "mz_is_superuser" => Scalar {
-            params!() => UnmaterializableFunc::MzIsSuperuser => SqlScalarType::Bool, oid::FUNC_MZ_IS_SUPERUSER;
+            params!() => UnmaterializableFunc::MzIsSuperuser => ScalarType::Bool, oid::FUNC_MZ_IS_SUPERUSER;
         },
         "mz_logical_timestamp" => Scalar {
             params!() => Operation::nullary(|_ecx| sql_bail!("mz_logical_timestamp() has been renamed to mz_now()")) => MzTimestamp, oid::FUNC_MZ_LOGICAL_TIMESTAMP_OID;
@@ -3850,7 +3850,7 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
         "pretty_sql" => Scalar {
             params!(String, Int32) => BinaryFunc::PrettySql => String, oid::FUNC_PRETTY_SQL;
             params!(String) => Operation::unary(|_ecx, s| {
-                let width = HirScalarExpr::literal(Datum::Int32(mz_sql_pretty::DEFAULT_WIDTH.try_into().expect("must fit")), SqlScalarType::Int32);
+                let width = HirScalarExpr::literal(Datum::Int32(mz_sql_pretty::DEFAULT_WIDTH.try_into().expect("must fit")), ScalarType::Int32);
                 Ok(s.call_binary(width, BinaryFunc::PrettySql))
             }) => String, oid::FUNC_PRETTY_SQL_NOWIDTH;
         },
@@ -3948,7 +3948,7 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
 
 pub static MZ_INTERNAL_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
     use ParamType::*;
-    use SqlScalarBaseType::*;
+    use ScalarBaseType::*;
     builtins! {
         "aclitem_grantor" => Scalar {
             params!(AclItem) => UnaryFunc::AclItemGrantor(func::AclItemGrantor) => Oid, oid::FUNC_ACL_ITEM_GRANTOR_OID;
@@ -3969,7 +3969,7 @@ pub static MZ_INTERNAL_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLo
             params!(MzAclItem, String) => BinaryFunc::MzAclItemContainsPrivilege => Bool, oid::FUNC_MZ_ACL_ITEM_CONTAINS_PRIVILEGE_OID;
         },
         "mz_aclexplode" => Table {
-            params!(SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem))) =>  Operation::unary(move |_ecx, mz_aclitems| {
+            params!(ScalarType::Array(Box::new(ScalarType::MzAclItem))) =>  Operation::unary(move |_ecx, mz_aclitems| {
                 Ok(TableFuncPlan {
                     imp: TableFuncImpl::CallTable {
                         func: TableFunc::MzAclExplode,
@@ -4006,7 +4006,7 @@ pub static MZ_INTERNAL_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLo
             ") => Oid, oid::FUNC_CONNECTION_OID_OID;
         },
         "mz_format_privileges" => Scalar {
-            params!(String) => UnaryFunc::MzFormatPrivileges(func::MzFormatPrivileges) => SqlScalarType::Array(Box::new(SqlScalarType::String)), oid::FUNC_MZ_FORMAT_PRIVILEGES_OID;
+            params!(String) => UnaryFunc::MzFormatPrivileges(func::MzFormatPrivileges) => ScalarType::Array(Box::new(ScalarType::String)), oid::FUNC_MZ_FORMAT_PRIVILEGES_OID;
         },
         "mz_name_rank" => Table {
             // Determines the id, rank of all objects that can be matched using
@@ -4015,7 +4015,7 @@ pub static MZ_INTERNAL_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLo
                 // Database
                 String,
                 // Schemas/search path
-                ParamType::Plain(SqlScalarType::Array(Box::new(SqlScalarType::String))),
+                ParamType::Plain(ScalarType::Array(Box::new(ScalarType::String))),
                 // Item name
                 String,
                 // Get rank among particular OID alias (e.g. regclass)
@@ -4100,7 +4100,7 @@ pub static MZ_INTERNAL_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLo
         // to the expected entry. For example, this helps us disambiguate cases
         // where e.g. types and functions have the same name.
         "mz_minimal_name_qualification" => Scalar {
-            params!(SqlScalarType::Array(Box::new(SqlScalarType::String)), String) => {
+            params!(ScalarType::Array(Box::new(ScalarType::String)), String) => {
                 sql_impl_func("(
                     SELECT
                     CASE
@@ -4144,7 +4144,7 @@ pub static MZ_INTERNAL_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLo
                     )
                 )
             )")
-            } => SqlScalarType::Array(Box::new(SqlScalarType::String)), oid::FUNC_MZ_MINIMINAL_NAME_QUALIFICATION;
+            } => ScalarType::Array(Box::new(ScalarType::String)), oid::FUNC_MZ_MINIMINAL_NAME_QUALIFICATION;
         },
         "mz_global_id_to_name" => Scalar {
             params!(String) => sql_impl_func("
@@ -4208,7 +4208,7 @@ pub static MZ_INTERNAL_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLo
                 FROM (
                     SELECT pg_catalog.parse_ident($1) AS ident
                 ) AS i
-            )") => SqlScalarType::Array(Box::new(SqlScalarType::String)), oid::FUNC_MZ_NORMALIZE_OBJECT_NAME;
+            )") => ScalarType::Array(Box::new(ScalarType::String)), oid::FUNC_MZ_NORMALIZE_OBJECT_NAME;
         },
         "mz_normalize_schema_name" => Scalar {
             params!(String) => sql_impl_func("
@@ -4232,13 +4232,13 @@ pub static MZ_INTERNAL_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLo
                 FROM (
                     SELECT pg_catalog.parse_ident($1) AS ident
                 ) AS i
-            )") => SqlScalarType::Array(Box::new(SqlScalarType::String)), oid::FUNC_MZ_NORMALIZE_SCHEMA_NAME;
+            )") => ScalarType::Array(Box::new(ScalarType::String)), oid::FUNC_MZ_NORMALIZE_SCHEMA_NAME;
         },
         "mz_render_typmod" => Scalar {
             params!(Oid, Int32) => BinaryFunc::MzRenderTypmod => String, oid::FUNC_MZ_RENDER_TYPMOD_OID;
         },
         "mz_role_oid_memberships" => Scalar {
-            params!() => UnmaterializableFunc::MzRoleOidMemberships => SqlScalarType::Map{ value_type: Box::new(SqlScalarType::Array(Box::new(SqlScalarType::String))), custom_id: None }, oid::FUNC_MZ_ROLE_OID_MEMBERSHIPS;
+            params!() => UnmaterializableFunc::MzRoleOidMemberships => ScalarType::Map{ value_type: Box::new(ScalarType::Array(Box::new(ScalarType::String))), custom_id: None }, oid::FUNC_MZ_ROLE_OID_MEMBERSHIPS;
         },
         // There is no regclass equivalent for databases to look up oids, so we have this helper function instead.
         "mz_database_oid" => Scalar {
@@ -4335,7 +4335,7 @@ pub static MZ_INTERNAL_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLo
 
 pub static MZ_UNSAFE_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
     use ParamType::*;
-    use SqlScalarBaseType::*;
+    use ScalarBaseType::*;
     builtins! {
         "mz_all" => Aggregate {
             params!(Any) => AggregateFunc::All => Bool, oid::FUNC_MZ_ALL_OID;
@@ -4353,22 +4353,22 @@ pub static MZ_UNSAFE_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock
             params!(Float64) => Operation::identity() => Float64, oid::FUNC_MZ_AVG_PROMOTION_F64_OID_INTERNAL_V1;
             params!(Int16) => Operation::unary(|ecx, e| {
                 typeconv::plan_cast(
-                    ecx, CastContext::Explicit, e, &SqlScalarType::Numeric {max_scale: None},
+                    ecx, CastContext::Explicit, e, &ScalarType::Numeric {max_scale: None},
                 )
             }) => Numeric, oid::FUNC_MZ_AVG_PROMOTION_I16_OID_INTERNAL_V1;
             params!(Int32) => Operation::unary(|ecx, e| {
                 typeconv::plan_cast(
-                    ecx, CastContext::Explicit, e, &SqlScalarType::Numeric {max_scale: None},
+                    ecx, CastContext::Explicit, e, &ScalarType::Numeric {max_scale: None},
                 )
             }) => Numeric, oid::FUNC_MZ_AVG_PROMOTION_I32_OID_INTERNAL_V1;
             params!(UInt16) => Operation::unary(|ecx, e| {
                 typeconv::plan_cast(
-                    ecx, CastContext::Explicit, e, &SqlScalarType::Numeric {max_scale: None},
+                    ecx, CastContext::Explicit, e, &ScalarType::Numeric {max_scale: None},
                 )
             }) => Numeric, oid::FUNC_MZ_AVG_PROMOTION_U16_OID_INTERNAL_V1;
             params!(UInt32) => Operation::unary(|ecx, e| {
                 typeconv::plan_cast(
-                    ecx, CastContext::Explicit, e, &SqlScalarType::Numeric {max_scale: None},
+                    ecx, CastContext::Explicit, e, &ScalarType::Numeric {max_scale: None},
                 )
             }) => Numeric, oid::FUNC_MZ_AVG_PROMOTION_U32_OID_INTERNAL_V1;
         },
@@ -4382,37 +4382,37 @@ pub static MZ_UNSAFE_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock
             params!(Float64) => Operation::identity() => Float64, oid::FUNC_MZ_AVG_PROMOTION_F64_OID;
             params!(Int16) => Operation::unary(|ecx, e| {
                 typeconv::plan_cast(
-                    ecx, CastContext::Explicit, e, &SqlScalarType::Numeric {max_scale: None},
+                    ecx, CastContext::Explicit, e, &ScalarType::Numeric {max_scale: None},
                 )
             }) => Numeric, oid::FUNC_MZ_AVG_PROMOTION_I16_OID;
             params!(Int32) => Operation::unary(|ecx, e| {
                 typeconv::plan_cast(
-                    ecx, CastContext::Explicit, e, &SqlScalarType::Numeric {max_scale: None},
+                    ecx, CastContext::Explicit, e, &ScalarType::Numeric {max_scale: None},
                 )
             }) => Numeric, oid::FUNC_MZ_AVG_PROMOTION_I32_OID;
             params!(Int64) => Operation::unary(|ecx, e| {
                 typeconv::plan_cast(
-                    ecx, CastContext::Explicit, e, &SqlScalarType::Numeric {max_scale: None},
+                    ecx, CastContext::Explicit, e, &ScalarType::Numeric {max_scale: None},
                 )
             }) => Numeric, oid::FUNC_MZ_AVG_PROMOTION_I64_OID;
             params!(UInt16) => Operation::unary(|ecx, e| {
                 typeconv::plan_cast(
-                    ecx, CastContext::Explicit, e, &SqlScalarType::Numeric {max_scale: None},
+                    ecx, CastContext::Explicit, e, &ScalarType::Numeric {max_scale: None},
                 )
             }) => Numeric, oid::FUNC_MZ_AVG_PROMOTION_U16_OID;
             params!(UInt32) => Operation::unary(|ecx, e| {
                 typeconv::plan_cast(
-                    ecx, CastContext::Explicit, e, &SqlScalarType::Numeric {max_scale: None},
+                    ecx, CastContext::Explicit, e, &ScalarType::Numeric {max_scale: None},
                 )
             }) => Numeric, oid::FUNC_MZ_AVG_PROMOTION_U32_OID;
             params!(UInt64) => Operation::unary(|ecx, e| {
                 typeconv::plan_cast(
-                    ecx, CastContext::Explicit, e, &SqlScalarType::Numeric {max_scale: None},
+                    ecx, CastContext::Explicit, e, &ScalarType::Numeric {max_scale: None},
                 )
             }) => Numeric, oid::FUNC_MZ_AVG_PROMOTION_U64_OID;
             params!(Numeric) => Operation::unary(|ecx, e| {
                 typeconv::plan_cast(
-                    ecx, CastContext::Explicit, e, &SqlScalarType::Numeric {max_scale: None},
+                    ecx, CastContext::Explicit, e, &ScalarType::Numeric {max_scale: None},
                 )
             }) => Numeric, oid::FUNC_MZ_AVG_PROMOTION_NUMERIC_OID;
         },
@@ -4432,7 +4432,7 @@ pub static MZ_UNSAFE_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock
 
 fn digest(algorithm: &'static str) -> Operation<HirScalarExpr> {
     Operation::unary(move |_ecx, input| {
-        let algorithm = HirScalarExpr::literal(Datum::String(algorithm), SqlScalarType::String);
+        let algorithm = HirScalarExpr::literal(Datum::String(algorithm), ScalarType::String);
         Ok(input.call_binary(algorithm, BinaryFunc::DigestBytes))
     })
 }
@@ -4442,7 +4442,7 @@ fn array_to_string(
     exprs: Vec<HirScalarExpr>,
 ) -> Result<HirScalarExpr, PlanError> {
     let elem_type = match ecx.scalar_type(&exprs[0]) {
-        SqlScalarType::Array(elem_type) => *elem_type,
+        ScalarType::Array(elem_type) => *elem_type,
         _ => unreachable!("array_to_string is guaranteed to receive array as first argument"),
     };
     Ok(HirScalarExpr::call_variadic(
@@ -4455,7 +4455,7 @@ fn array_to_string(
 pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
     use BinaryFunc::*;
     use ParamType::*;
-    use SqlScalarBaseType::*;
+    use ScalarBaseType::*;
     builtins! {
         // Literal OIDs collected from PG 13 using a version of this query
         // ```sql
@@ -4493,7 +4493,7 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
                 // To try to be compatible with both PostgreSQL and SQlite,
                 // we accept explicitly-typed arguments of any type, but try
                 // to coerce unknown-type arguments as `Float64`.
-                typeconv::plan_coerce(ecx, exprs.into_element(), &SqlScalarType::Float64)
+                typeconv::plan_coerce(ecx, exprs.into_element(), &ScalarType::Float64)
             }) => Any, oid::OP_UNARY_PLUS_OID;
             params!(Int16, Int16) => AddInt16 => Int16, 550;
             params!(Int32, Int32) => AddInt32 => Int32, 551;
@@ -4754,7 +4754,7 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
                     ecx,
                     CastContext::Explicit,
                     rhs,
-                    &SqlScalarType::String,
+                    &ScalarType::String,
                 )?;
                 Ok(lhs.call_binary(rhs, TextConcat))
             }) => String, 2779;
@@ -4763,7 +4763,7 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
                     ecx,
                     CastContext::Explicit,
                     lhs,
-                    &SqlScalarType::String,
+                    &ScalarType::String,
                 )?;
                 Ok(lhs.call_binary(rhs, TextConcat))
             }) => String, 2780;
@@ -4786,10 +4786,10 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
             params!(Jsonb, String) => JsonbGetStringStringify => String, 3477;
         },
         "#>" => Scalar {
-            params!(Jsonb, SqlScalarType::Array(Box::new(SqlScalarType::String))) => JsonbGetPath => Jsonb, 3213;
+            params!(Jsonb, ScalarType::Array(Box::new(ScalarType::String))) => JsonbGetPath => Jsonb, 3213;
         },
         "#>>" => Scalar {
-            params!(Jsonb, SqlScalarType::Array(Box::new(SqlScalarType::String))) => JsonbGetPathStringify => String, 3206;
+            params!(Jsonb, ScalarType::Array(Box::new(ScalarType::String))) => JsonbGetPathStringify => String, 3206;
         },
         "@>" => Scalar {
             params!(Jsonb, Jsonb) => JsonbContainsJsonb => Bool, 3246;
@@ -4857,10 +4857,10 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
             params!(MapAny, String) => MapContainsKey => Bool, oid::OP_CONTAINS_KEY_MAP_OID;
         },
         "?&" => Scalar {
-            params!(MapAny, SqlScalarType::Array(Box::new(SqlScalarType::String))) => MapContainsAllKeys => Bool, oid::OP_CONTAINS_ALL_KEYS_MAP_OID;
+            params!(MapAny, ScalarType::Array(Box::new(ScalarType::String))) => MapContainsAllKeys => Bool, oid::OP_CONTAINS_ALL_KEYS_MAP_OID;
         },
         "?|" => Scalar {
-            params!(MapAny, SqlScalarType::Array(Box::new(SqlScalarType::String))) => MapContainsAnyKeys => Bool, oid::OP_CONTAINS_ANY_KEYS_MAP_OID;
+            params!(MapAny, ScalarType::Array(Box::new(ScalarType::String))) => MapContainsAnyKeys => Bool, oid::OP_CONTAINS_ANY_KEYS_MAP_OID;
         },
         "&&" => Scalar {
             params!(RangeAny, RangeAny) => BinaryFunc::RangeOverlaps => Bool, 3888;
@@ -5106,7 +5106,7 @@ fn current_settings(
                 expr,
                 HirScalarExpr::literal(
                     Datum::String("unrecognized configuration parameter"),
-                    SqlScalarType::String,
+                    ScalarType::String,
                 ),
             ],
         ),

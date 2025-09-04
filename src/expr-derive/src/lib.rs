@@ -32,7 +32,7 @@
 /// * `output_type`: The output type of the function.
 /// * `output_type_expr`: An expression that evaluates to the output type. Applies to binary
 ///   functions only. The expression has access to the `input_type_a` and `input_type_b` variables,
-///   and should evaluate to a `SqlColumnType` value. Requires `introduces_nulls`, and conflicts with
+///   and should evaluate to a `ColumnType` value. Requires `introduces_nulls`, and conflicts with
 ///   `output_type`.
 /// * `could_error`: A boolean indicating whether the function could error.
 /// * `propagate_nulls`: A boolean indicating whether the function propagates nulls. Applies to

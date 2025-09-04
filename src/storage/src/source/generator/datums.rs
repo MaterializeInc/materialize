@@ -10,7 +10,7 @@
 use std::iter;
 
 use mz_ore::now::NowFn;
-use mz_repr::{Datum, Diff, Row, SqlScalarType};
+use mz_repr::{Datum, Diff, Row, ScalarType};
 use mz_storage_types::sources::MzOffset;
 use mz_storage_types::sources::load_generator::{Event, Generator, LoadGeneratorOutput};
 
@@ -26,7 +26,7 @@ impl Generator for Datums {
         _seed: Option<u64>,
         _resume_offset: MzOffset,
     ) -> Box<dyn Iterator<Item = (LoadGeneratorOutput, Event<Option<MzOffset>, (Row, Diff)>)>> {
-        let typs = SqlScalarType::enumerate();
+        let typs = ScalarType::enumerate();
         let mut datums: Vec<Vec<Datum>> = typs
             .iter()
             .map(|typ| typ.interesting_datums().collect())

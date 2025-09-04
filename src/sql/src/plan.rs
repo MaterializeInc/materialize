@@ -49,8 +49,8 @@ use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::role_id::RoleId;
 use mz_repr::{
-    CatalogItemId, ColumnIndex, ColumnName, Diff, GlobalId, RelationDesc, Row, SqlColumnType,
-    SqlRelationType, SqlScalarType, Timestamp, VersionedRelationDesc,
+    CatalogItemId, ColumnIndex, ColumnName, ColumnType, Diff, GlobalId, RelationDesc, RelationType,
+    Row, ScalarType, Timestamp, VersionedRelationDesc,
 };
 use mz_sql_parser::ast::{
     AlterSourceAddSubsourceOption, ClusterAlterOptionValue, ConnectionOptionName, QualifiedReplica,
@@ -859,7 +859,7 @@ pub struct SelectPlan {
 }
 
 impl SelectPlan {
-    pub fn immediate(rows: Vec<Row>, typ: SqlRelationType) -> Self {
+    pub fn immediate(rows: Vec<Row>, typ: RelationType) -> Self {
         let arity = typ.arity();
         SelectPlan {
             select: None,
@@ -1317,7 +1317,7 @@ pub struct AlterOwnerPlan {
 pub struct AlterTablePlan {
     pub relation_id: CatalogItemId,
     pub column_name: ColumnName,
-    pub column_type: SqlColumnType,
+    pub column_type: ColumnType,
     pub raw_sql_type: RawDataType,
 }
 
@@ -1583,12 +1583,12 @@ pub enum WebhookBodyFormat {
     Text,
 }
 
-impl From<WebhookBodyFormat> for SqlScalarType {
+impl From<WebhookBodyFormat> for ScalarType {
     fn from(value: WebhookBodyFormat) -> Self {
         match value {
-            WebhookBodyFormat::Json { .. } => SqlScalarType::Jsonb,
-            WebhookBodyFormat::Bytes => SqlScalarType::Bytes,
-            WebhookBodyFormat::Text => SqlScalarType::String,
+            WebhookBodyFormat::Json { .. } => ScalarType::Jsonb,
+            WebhookBodyFormat::Bytes => ScalarType::Bytes,
+            WebhookBodyFormat::Text => ScalarType::String,
         }
     }
 }
@@ -2055,9 +2055,9 @@ pub struct Params {
     /// The datums that were provided in the EXECUTE statement.
     pub datums: Row,
     /// The types of the datums provided in the EXECUTE statement.
-    pub execute_types: Vec<SqlScalarType>,
+    pub execute_types: Vec<ScalarType>,
     /// The types that the prepared statement expects based on its definition.
-    pub expected_types: Vec<SqlScalarType>,
+    pub expected_types: Vec<ScalarType>,
 }
 
 impl Params {

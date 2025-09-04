@@ -20,7 +20,7 @@ use mz_avro::types::{DecimalValue, ToAvro, Value};
 use mz_ore::cast::CastFrom;
 use mz_repr::adt::jsonb::JsonbRef;
 use mz_repr::adt::numeric::{self, NUMERIC_AGG_MAX_PRECISION, NUMERIC_DATUM_MAX_PRECISION};
-use mz_repr::{CatalogItemId, ColumnName, Datum, RelationDesc, Row, SqlColumnType, SqlScalarType};
+use mz_repr::{CatalogItemId, ColumnName, ColumnType, Datum, RelationDesc, Row, ScalarType};
 use serde_json::json;
 
 use crate::encode::{Encode, TypedDatum, column_names_and_types};
@@ -97,7 +97,7 @@ fn encode_message_unchecked(
     schema_id: i32,
     row: Row,
     schema: &Schema,
-    columns: &[(ColumnName, SqlColumnType)],
+    columns: &[(ColumnName, ColumnType)],
 ) -> Vec<u8> {
     let mut buf = vec![];
     encode_avro_header(&mut buf, schema_id);
@@ -126,7 +126,7 @@ impl DocTarget {
 
 /// Generates an Avro schema
 pub struct AvroSchemaGenerator {
-    columns: Vec<(ColumnName, SqlColumnType)>,
+    columns: Vec<(ColumnName, ColumnType)>,
     schema: Schema,
 }
 
@@ -201,14 +201,14 @@ impl AvroSchemaGenerator {
         &self.schema
     }
 
-    pub fn columns(&self) -> &[(ColumnName, SqlColumnType)] {
+    pub fn columns(&self) -> &[(ColumnName, ColumnType)] {
         &self.columns
     }
 }
 
 /// Manages encoding of Avro-encoded bytes.
 pub struct AvroEncoder {
-    columns: Vec<(ColumnName, SqlColumnType)>,
+    columns: Vec<(ColumnName, ColumnType)>,
     schema: Schema,
     schema_id: i32,
 }
@@ -250,7 +250,7 @@ impl Encode for AvroEncoder {
 }
 
 /// Encodes a sequence of `Datum` as Avro (key and value), using supplied column names and types.
-pub fn encode_datums_as_avro<'a, I>(datums: I, names_types: &[(ColumnName, SqlColumnType)]) -> Value
+pub fn encode_datums_as_avro<'a, I>(datums: I, names_types: &[(ColumnName, ColumnType)]) -> Value
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
@@ -278,32 +278,26 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
             }
         } else {
             let mut val = match &typ.scalar_type {
-                SqlScalarType::AclItem => Value::String(datum.unwrap_acl_item().to_string()),
-                SqlScalarType::Bool => Value::Boolean(datum.unwrap_bool()),
-                SqlScalarType::PgLegacyChar => {
+                ScalarType::AclItem => Value::String(datum.unwrap_acl_item().to_string()),
+                ScalarType::Bool => Value::Boolean(datum.unwrap_bool()),
+                ScalarType::PgLegacyChar => {
                     Value::Fixed(1, datum.unwrap_uint8().to_le_bytes().into())
                 }
-                SqlScalarType::Int16 => Value::Int(i32::from(datum.unwrap_int16())),
-                SqlScalarType::Int32 => Value::Int(datum.unwrap_int32()),
-                SqlScalarType::Int64 => Value::Long(datum.unwrap_int64()),
-                SqlScalarType::UInt16 => {
-                    Value::Fixed(2, datum.unwrap_uint16().to_be_bytes().into())
-                }
-                SqlScalarType::UInt32 => {
+                ScalarType::Int16 => Value::Int(i32::from(datum.unwrap_int16())),
+                ScalarType::Int32 => Value::Int(datum.unwrap_int32()),
+                ScalarType::Int64 => Value::Long(datum.unwrap_int64()),
+                ScalarType::UInt16 => Value::Fixed(2, datum.unwrap_uint16().to_be_bytes().into()),
+                ScalarType::UInt32 => Value::Fixed(4, datum.unwrap_uint32().to_be_bytes().into()),
+                ScalarType::UInt64 => Value::Fixed(8, datum.unwrap_uint64().to_be_bytes().into()),
+                ScalarType::Oid
+                | ScalarType::RegClass
+                | ScalarType::RegProc
+                | ScalarType::RegType => {
                     Value::Fixed(4, datum.unwrap_uint32().to_be_bytes().into())
                 }
-                SqlScalarType::UInt64 => {
-                    Value::Fixed(8, datum.unwrap_uint64().to_be_bytes().into())
-                }
-                SqlScalarType::Oid
-                | SqlScalarType::RegClass
-                | SqlScalarType::RegProc
-                | SqlScalarType::RegType => {
-                    Value::Fixed(4, datum.unwrap_uint32().to_be_bytes().into())
-                }
-                SqlScalarType::Float32 => Value::Float(datum.unwrap_float32()),
-                SqlScalarType::Float64 => Value::Double(datum.unwrap_float64()),
-                SqlScalarType::Numeric { max_scale } => {
+                ScalarType::Float32 => Value::Float(datum.unwrap_float32()),
+                ScalarType::Float64 => Value::Double(datum.unwrap_float64()),
+                ScalarType::Numeric { max_scale } => {
                     let mut d = datum.unwrap_numeric().0;
                     let (unscaled, precision, scale) = match max_scale {
                         Some(max_scale) => {
@@ -331,22 +325,22 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                         scale: usize::cast_from(scale),
                     })
                 }
-                SqlScalarType::Date => Value::Date(datum.unwrap_date().unix_epoch_days()),
-                SqlScalarType::Time => Value::Long({
+                ScalarType::Date => Value::Date(datum.unwrap_date().unix_epoch_days()),
+                ScalarType::Time => Value::Long({
                     let time = datum.unwrap_time();
                     i64::from(time.num_seconds_from_midnight()) * 1_000_000
                         + i64::from(time.nanosecond()) / 1_000
                 }),
-                SqlScalarType::Timestamp { .. } => {
+                ScalarType::Timestamp { .. } => {
                     Value::Timestamp(datum.unwrap_timestamp().to_naive())
                 }
-                SqlScalarType::TimestampTz { .. } => {
+                ScalarType::TimestampTz { .. } => {
                     Value::Timestamp(datum.unwrap_timestamptz().to_naive())
                 }
                 // SQL intervals and Avro durations differ quite a lot (signed
                 // vs unsigned, different int sizes), so SQL intervals are their
                 // own bespoke type.
-                SqlScalarType::Interval => Value::Fixed(16, {
+                ScalarType::Interval => Value::Fixed(16, {
                     let iv = datum.unwrap_interval();
                     let mut buf = Vec::with_capacity(16);
                     buf.extend(iv.months.to_le_bytes());
@@ -355,24 +349,22 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                     debug_assert_eq!(buf.len(), 16);
                     buf
                 }),
-                SqlScalarType::Bytes => Value::Bytes(Vec::from(datum.unwrap_bytes())),
-                SqlScalarType::String
-                | SqlScalarType::VarChar { .. }
-                | SqlScalarType::PgLegacyName => Value::String(datum.unwrap_str().to_owned()),
-                SqlScalarType::Char { length } => {
+                ScalarType::Bytes => Value::Bytes(Vec::from(datum.unwrap_bytes())),
+                ScalarType::String | ScalarType::VarChar { .. } | ScalarType::PgLegacyName => {
+                    Value::String(datum.unwrap_str().to_owned())
+                }
+                ScalarType::Char { length } => {
                     let s = mz_repr::adt::char::format_str_pad(datum.unwrap_str(), *length);
                     Value::String(s)
                 }
-                SqlScalarType::Jsonb => Value::Json(JsonbRef::from_datum(datum).to_serde_json()),
-                SqlScalarType::Uuid => Value::Uuid(datum.unwrap_uuid()),
-                ty @ (SqlScalarType::Array(..)
-                | SqlScalarType::Int2Vector
-                | SqlScalarType::List { .. }) => {
+                ScalarType::Jsonb => Value::Json(JsonbRef::from_datum(datum).to_serde_json()),
+                ScalarType::Uuid => Value::Uuid(datum.unwrap_uuid()),
+                ty @ (ScalarType::Array(..) | ScalarType::Int2Vector | ScalarType::List { .. }) => {
                     let list = match ty {
-                        SqlScalarType::Array(_) | SqlScalarType::Int2Vector => {
+                        ScalarType::Array(_) | ScalarType::Int2Vector => {
                             datum.unwrap_array().elements()
                         }
-                        SqlScalarType::List { .. } => datum.unwrap_list(),
+                        ScalarType::List { .. } => datum.unwrap_list(),
                         _ => unreachable!(),
                     };
 
@@ -381,7 +373,7 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                         .map(|datum| {
                             TypedDatum::new(
                                 datum,
-                                &SqlColumnType {
+                                &ColumnType {
                                     nullable: true,
                                     scalar_type: ty.unwrap_collection_element_type().clone(),
                                 },
@@ -391,14 +383,14 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                         .collect();
                     Value::Array(values)
                 }
-                SqlScalarType::Map { value_type, .. } => {
+                ScalarType::Map { value_type, .. } => {
                     let map = datum.unwrap_map();
                     let elements = map
                         .into_iter()
                         .map(|(key, datum)| {
                             let value = TypedDatum::new(
                                 datum,
-                                &SqlColumnType {
+                                &ColumnType {
                                     nullable: true,
                                     scalar_type: (**value_type).clone(),
                                 },
@@ -409,7 +401,7 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                         .collect();
                     Value::Map(elements)
                 }
-                SqlScalarType::Record { fields, .. } => {
+                ScalarType::Record { fields, .. } => {
                     let list = datum.unwrap_list();
                     let fields = fields
                         .iter()
@@ -423,11 +415,9 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                         .collect();
                     Value::Record(fields)
                 }
-                SqlScalarType::MzTimestamp => {
-                    Value::String(datum.unwrap_mz_timestamp().to_string())
-                }
-                SqlScalarType::Range { .. } => Value::String(datum.unwrap_range().to_string()),
-                SqlScalarType::MzAclItem => Value::String(datum.unwrap_mz_acl_item().to_string()),
+                ScalarType::MzTimestamp => Value::String(datum.unwrap_mz_timestamp().to_string()),
+                ScalarType::Range { .. } => Value::String(datum.unwrap_range().to_string()),
+                ScalarType::MzAclItem => Value::String(datum.unwrap_mz_acl_item().to_string()),
             };
             if typ.nullable {
                 val = Value::Union {

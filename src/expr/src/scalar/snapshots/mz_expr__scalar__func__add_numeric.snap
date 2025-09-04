@@ -30,9 +30,9 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for AddNumeric {
     }
     fn output_type(
         &self,
-        input_type_a: mz_repr::SqlColumnType,
-        input_type_b: mz_repr::SqlColumnType,
-    ) -> mz_repr::SqlColumnType {
+        input_type_a: mz_repr::ColumnType,
+        input_type_b: mz_repr::ColumnType,
+    ) -> mz_repr::ColumnType {
         use mz_repr::AsColumnType;
         let output = <Numeric>::as_column_type();
         let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(

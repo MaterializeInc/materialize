@@ -10,7 +10,7 @@
 use std::fmt;
 
 use mz_lowertest::MzReflect;
-use mz_repr::{Datum, Row, RowArena, SqlColumnType, SqlScalarType};
+use mz_repr::{ColumnType, Datum, Row, RowArena, ScalarType};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -21,7 +21,7 @@ use crate::{EvalError, MirScalarExpr};
     Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
 )]
 pub struct CastListToString {
-    pub ty: SqlScalarType,
+    pub ty: ScalarType,
 }
 
 impl LazyUnaryFunc for CastListToString {
@@ -40,8 +40,8 @@ impl LazyUnaryFunc for CastListToString {
         Ok(Datum::String(temp_storage.push_string(buf)))
     }
 
-    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::String.nullable(input_type.nullable)
+    fn output_type(&self, input_type: ColumnType) -> ColumnType {
+        ScalarType::String.nullable(input_type.nullable)
     }
 
     fn propagates_nulls(&self) -> bool {
@@ -104,8 +104,8 @@ impl LazyUnaryFunc for CastListToJsonb {
         Ok(temp_storage.push_unary_row(row))
     }
 
-    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::Jsonb.nullable(input_type.nullable)
+    fn output_type(&self, input_type: ColumnType) -> ColumnType {
+        ScalarType::Jsonb.nullable(input_type.nullable)
     }
 
     fn propagates_nulls(&self) -> bool {
@@ -142,7 +142,7 @@ impl fmt::Display for CastListToJsonb {
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastList1ToList2 {
     /// List2's type
-    pub return_ty: SqlScalarType,
+    pub return_ty: ScalarType,
     /// The expression to cast List1's elements to List2's elements' type
     pub cast_expr: Box<MirScalarExpr>,
 }
@@ -169,7 +169,7 @@ impl LazyUnaryFunc for CastList1ToList2 {
         Ok(temp_storage.make_datum(|packer| packer.push_list(cast_datums)))
     }
 
-    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
+    fn output_type(&self, input_type: ColumnType) -> ColumnType {
         self.return_ty
             .without_modifiers()
             .nullable(input_type.nullable)
@@ -226,8 +226,8 @@ impl LazyUnaryFunc for ListLength {
         }
     }
 
-    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::Int32.nullable(input_type.nullable)
+    fn output_type(&self, input_type: ColumnType) -> ColumnType {
+        ScalarType::Int32.nullable(input_type.nullable)
     }
 
     fn propagates_nulls(&self) -> bool {
