@@ -10,6 +10,7 @@
 //! Various utility methods used by the [`Coordinator`]. Ideally these are all
 //! put in more meaningfully named modules.
 
+use itertools::Itertools;
 use mz_adapter_types::connection::ConnectionId;
 use mz_ore::now::EpochMillis;
 use mz_repr::{Diff, GlobalId, ScalarType};
@@ -76,7 +77,7 @@ impl Coordinator {
         let params = params
             .datums
             .into_iter()
-            .zip(params.execute_types)
+            .zip_eq(params.execute_types)
             .collect();
         let result_formats = vec![mz_pgwire_common::Format::Text; desc.arity()];
         let logging = session.mint_logging(sql, Some(&stmt), now);

@@ -23,7 +23,7 @@
 use std::fmt;
 use std::ops::Deref;
 
-use itertools::{Itertools, izip};
+use itertools::Itertools;
 use mz_expr::explain::{HumanizedExplain, HumanizerMode, fmt_text_constant_rows};
 use mz_expr::{Id, MirScalarExpr};
 use mz_ore::soft_assert_or_log;
@@ -187,12 +187,12 @@ impl Plan {
                 limits,
                 body,
             } => {
-                let bindings = izip!(ids.iter(), values, limits).collect_vec();
                 let head = body.as_ref();
 
                 writeln!(f, "{}→With Mutually Recursive", ctx.indent)?;
                 ctx.indented(|ctx| {
-                    for (id, value, limit) in bindings.iter() {
+                    let bindings = ids.iter().zip_eq(values).zip_eq(limits);
+                    for ((id, value), limit) in bindings {
                         if let Some(limit) = limit {
                             writeln!(f, "{}cte {} {} =", ctx.indent, limit, *id)?;
                         } else {
@@ -655,12 +655,12 @@ impl Plan {
                 limits,
                 body,
             } => {
-                let bindings = izip!(ids.iter(), values, limits).collect_vec();
                 let head = body.as_ref();
 
                 writeln!(f, "{}With Mutually Recursive", ctx.indent)?;
                 ctx.indented(|ctx| {
-                    for (id, value, limit) in bindings.iter() {
+                    let bindings = ids.iter().zip_eq(values).zip_eq(limits);
+                    for ((id, value), limit) in bindings {
                         if let Some(limit) = limit {
                             writeln!(f, "{}cte {} {} =", ctx.indent, limit, *id)?;
                         } else {

@@ -32,7 +32,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use itertools::zip_eq;
+use itertools::{Itertools, zip_eq};
 use mz_expr::{
     Id, JoinImplementation, JoinInputMapper, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT,
 };
@@ -245,7 +245,7 @@ impl ProjectionPushdown {
                         input_mapper.split_column_set_by_input(columns_to_pushdown.iter());
 
                     // Recursively indicate the requirements.
-                    for (input, inp_columns) in inputs.iter_mut().zip(new_columns) {
+                    for (input, inp_columns) in inputs.iter_mut().zip_eq(new_columns) {
                         let inp_columns = inp_columns.into_iter().collect::<Vec<_>>();
                         self.action(input, &inp_columns, gets)?;
                     }
@@ -267,7 +267,7 @@ impl ProjectionPushdown {
                         input_mapper.split_column_set_by_input(columns_to_pushdown.iter());
 
                     // Recursively indicate the requirements.
-                    for (input, inp_columns) in inputs.iter_mut().zip(child_columns) {
+                    for (input, inp_columns) in inputs.iter_mut().zip_eq(child_columns) {
                         let inp_columns = inp_columns.into_iter().collect::<Vec<_>>();
                         self.action(input, &inp_columns, gets)?;
                     }

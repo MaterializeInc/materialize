@@ -40,6 +40,7 @@ use mz_compute_client::service::{ComputeClient, ComputeGrpcClient};
 use mz_controller_types::WatchSetId;
 use mz_dyncfg::{ConfigSet, ConfigUpdates};
 use mz_orchestrator::{NamespacedOrchestrator, Orchestrator, ServiceProcessMetrics};
+use mz_ore::cast::CastFrom;
 use mz_ore::id_gen::Gen;
 use mz_ore::instrument;
 use mz_ore::metrics::MetricsRegistry;
@@ -589,11 +590,11 @@ where
         let mut row = Row::default();
         let updates = metrics
             .iter()
-            .zip(0..)
-            .map(|(m, process_id)| {
+            .enumerate()
+            .map(|(process_id, m)| {
                 row.packer().extend(&[
                     Datum::String(&replica_id),
-                    Datum::UInt64(process_id),
+                    Datum::UInt64(u64::cast_from(process_id)),
                     m.cpu_nano_cores.into(),
                     m.memory_bytes.into(),
                     m.disk_usage_bytes.into(),

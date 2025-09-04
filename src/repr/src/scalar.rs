@@ -3029,7 +3029,7 @@ impl ScalarType {
                     && fields_a.len() == fields_b.len()
                     && fields_a
                         .iter()
-                        .zip(fields_b)
+                        .zip_eq(fields_b)
                         // Ignore nullability.
                         .all(|(a, b)| {
                             (a.0 == b.0 || structure_only)
@@ -4299,7 +4299,7 @@ fn arb_record(
         .prop_map(move |x| {
             let mut row = Row::default();
             row.packer().push_list(x.iter().map(Datum::from));
-            let entries: Vec<_> = names.clone().into_iter().zip(x).collect();
+            let entries: Vec<_> = names.clone().into_iter().zip_eq(x).collect();
             PropDict(row, entries)
         })
         .boxed()

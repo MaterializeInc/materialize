@@ -1265,7 +1265,7 @@ impl MirRelationExpr {
     /// each row can have an arbitrary multiplicity.
     pub fn constant_diff(rows: Vec<(Vec<Datum>, Diff)>, typ: RelationType) -> Self {
         for (row, _diff) in &rows {
-            for (datum, column_typ) in row.iter().zip(typ.column_types.iter()) {
+            for (datum, column_typ) in row.iter().zip_eq(typ.column_types.iter()) {
                 assert!(
                     datum.is_instance_of(column_typ),
                     "Expected datum of type {:?}, got value {:?}",
@@ -2253,7 +2253,7 @@ impl MirRelationExpr {
             {
                 let ids_values = values
                     .drain(..)
-                    .zip(ids)
+                    .zip_eq(ids)
                     .map(|(value, id)| (*id, value))
                     .collect::<Vec<_>>();
                 *expr = body.take_dangerous();
@@ -4317,6 +4317,7 @@ mod tests {
 mod structured_diff {
 
     use super::MirRelationExpr;
+    use itertools::Itertools;
 
     ///  An iterator over structured differences between two `MirRelationExpr` instances.
     pub struct MreDiff<'a> {
@@ -4407,7 +4408,7 @@ mod structured_diff {
                             return Some((expr1, expr2));
                         } else {
                             self.todo.push((body1, body2));
-                            self.todo.extend(values1.iter().zip(values2.iter()));
+                            self.todo.extend(values1.iter().zip_eq(values2.iter()));
                         }
                     }
                     (
@@ -4491,7 +4492,7 @@ mod structured_diff {
                         if inputs1.len() != inputs2.len() || eq1 != eq2 || impl1 != impl2 {
                             return Some((expr1, expr2));
                         } else {
-                            self.todo.extend(inputs1.iter().zip(inputs2.iter()));
+                            self.todo.extend(inputs1.iter().zip_eq(inputs2.iter()));
                         }
                     }
                     (
@@ -4574,7 +4575,7 @@ mod structured_diff {
                             return Some((expr1, expr2));
                         } else {
                             self.todo.push((base1, base2));
-                            self.todo.extend(inputs1.iter().zip(inputs2.iter()));
+                            self.todo.extend(inputs1.iter().zip_eq(inputs2.iter()));
                         }
                     }
                     (

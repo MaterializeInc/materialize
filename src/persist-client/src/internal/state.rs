@@ -30,6 +30,7 @@ use differential_dataflow::trace::Description;
 use differential_dataflow::trace::implementations::BatchContainer;
 use futures::Stream;
 use futures_util::StreamExt;
+use itertools::Itertools;
 use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
 use mz_ore::now::EpochMillis;
@@ -1102,7 +1103,7 @@ impl<T> HollowBatch<T> {
             })
             .filter(|range| !range.is_empty())
             .map(|range| &self.parts[range]);
-        run_metas.zip(run_parts)
+        run_metas.zip_eq(run_parts)
     }
 
     pub(crate) fn inline_bytes(&self) -> usize {

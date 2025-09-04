@@ -193,7 +193,7 @@ impl Value {
             (Datum::List(record), ScalarType::Record { fields, .. }) => {
                 let fields = record
                     .iter()
-                    .zip(fields)
+                    .zip_eq(fields)
                     .map(|(e, (_name, ty))| Value::from_datum(e, &ty.scalar_type))
                     .collect();
                 Some(Value::Record(fields))
@@ -497,7 +497,7 @@ impl Value {
                     Type::Record(fields) => fields,
                     _ => unreachable!(),
                 };
-                for (f, ty) in fields.iter().zip(field_types) {
+                for (f, ty) in fields.iter().zip_eq(field_types) {
                     buf.put_u32(ty.oid());
                     encode_element(buf, f.as_ref(), ty)?;
                 }

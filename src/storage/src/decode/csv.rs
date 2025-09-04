@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use itertools::Itertools;
 use mz_repr::{Datum, Row};
 use mz_storage_types::errors::DecodeErrorKind;
 use mz_storage_types::sources::encoding::CsvEncoding;
@@ -130,7 +131,7 @@ impl CsvDecoderState {
                         if let Ok(Some(row)) = &result {
                             let mismatched = row
                                 .iter()
-                                .zip(self.header_names.iter().flatten())
+                                .zip_eq(self.header_names.iter().flatten())
                                 .enumerate()
                                 .find(|(_, (actual, expected))| actual.unwrap_str() != &**expected);
                             if let Some((i, (actual, expected))) = mismatched {

@@ -19,6 +19,7 @@ mod projection_extraction;
 mod topk_elision;
 
 pub use flat_map_elimination::FlatMapElimination;
+use itertools::Itertools;
 pub use projection_extraction::ProjectionExtraction;
 pub use topk_elision::TopKElision;
 
@@ -158,7 +159,7 @@ impl crate::Transform for ReduceScalars {
                     }
                 }
             }
-            todo.extend(expr.children_mut().rev().zip(view.children_rev()))
+            todo.extend(expr.children_mut().rev().zip_eq(view.children_rev()))
         }
 
         mz_repr::explain::trace_plan(&*relation);

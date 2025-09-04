@@ -2023,6 +2023,7 @@ impl FixedSizeCodec<NaiveTime> for PackedNaiveTime {
 
 #[cfg(test)]
 mod tests {
+    use itertools::Itertools;
     use mz_ore::assert_ok;
     use mz_proto::protobuf_roundtrip;
     use proptest::prelude::any;
@@ -3598,7 +3599,7 @@ mod tests {
             times.sort();
             packed.sort();
 
-            for (time, packed) in times.into_iter().zip(packed.into_iter()) {
+            for (time, packed) in times.into_iter().zip_eq(packed.into_iter()) {
                 let rnd = packed.into_value();
                 prop_assert_eq!(time, rnd);
             }

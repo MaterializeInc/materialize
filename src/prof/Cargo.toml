@@ -14,6 +14,7 @@ workspace = true
 anyhow = "1.0.98"
 backtrace = "0.3.75"
 flate2 = "1.1.2"
+itertools = "0.14.0"
 jemalloc_pprof = { version = "0.7", optional = true }
 pprof_util = "0.7"
 mz-ore = { path = "../ore", default-features = false, features = ["async"] }

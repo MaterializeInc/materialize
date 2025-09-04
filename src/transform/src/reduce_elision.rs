@@ -114,7 +114,7 @@ impl ReduceElision {
 
             // This gets around an awkward borrow of both `expr` and `input` above.
             if !replaced {
-                todo.extend(expr.children_mut().rev().zip(view.children_rev()));
+                todo.extend(expr.children_mut().rev().zip_eq(view.children_rev()));
             }
         }
     }

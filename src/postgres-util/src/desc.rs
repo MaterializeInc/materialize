@@ -12,6 +12,7 @@
 use std::collections::BTreeSet;
 
 use anyhow::bail;
+use itertools::Itertools;
 use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
 use proptest::prelude::any;
 use proptest_derive::Arbitrary;
@@ -81,8 +82,8 @@ impl PostgresTableDesc {
 
         // Table columns cannot change position, so only need to ensure that
         // `self.columns` is a prefix of `other_cols`.
-        if self.columns.len() <= other_cols.len()
-            && self.columns.iter().zip(other_cols.iter()).all(|(s, o)| s.is_compatible(o, allow_type_to_change_by_col_num))
+        if let Some(prefix) = other_cols.get(0..self.columns.len())
+            && self.columns.iter().zip_eq(prefix.iter()).all(|(s, o)| s.is_compatible(o, allow_type_to_change_by_col_num))
             && &self.name == other_name
             && &self.oid == other_oid
             && &self.namespace == other_namespace

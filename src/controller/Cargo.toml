@@ -14,6 +14,7 @@ anyhow = "1.0.98"
 bytesize = "1.3.0"
 chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 futures = "0.3.31"
+itertools = "0.14.0"
 mz-build-info = { path = "../build-info" }
 mz-cluster-client = { path = "../cluster-client" }
 mz-compute-client = { path = "../compute-client" }

@@ -992,9 +992,17 @@ impl SqlServerRowDecoder {
 
 #[cfg(test)]
 mod tests {
-    use chrono::NaiveDateTime;
     use std::collections::BTreeSet;
     use std::sync::Arc;
+
+    use chrono::NaiveDateTime;
+    use itertools::Itertools;
+    use mz_ore::assert_contains;
+    use mz_ore::collections::CollectionExt;
+    use mz_repr::adt::numeric::NumericMaxScale;
+    use mz_repr::adt::varchar::VarCharMaxLength;
+    use mz_repr::{Datum, RelationDesc, Row, RowArena, ScalarType};
+    use tiberius::RowTestExt;
 
     use crate::desc::{
         SqlServerCaptureInstanceRaw, SqlServerColumnDecodeType, SqlServerColumnDesc,
@@ -1002,12 +1010,6 @@ mod tests {
     };
 
     use super::SqlServerColumnRaw;
-    use mz_ore::assert_contains;
-    use mz_ore::collections::CollectionExt;
-    use mz_repr::adt::numeric::NumericMaxScale;
-    use mz_repr::adt::varchar::VarCharMaxLength;
-    use mz_repr::{Datum, RelationDesc, Row, RowArena, ScalarType};
-    use tiberius::RowTestExt;
 
     impl SqlServerColumnRaw {
         /// Create a new [`SqlServerColumnRaw`]. The specified `data_type` is
@@ -1137,8 +1139,12 @@ mod tests {
             tiberius::ColumnData::I32(Some(42)),
             tiberius::ColumnData::Bit(Some(true)),
         ];
-        let sql_server_row_a =
-            tiberius::Row::build(sql_server_columns.iter().cloned().zip(data_a.into_iter()));
+        let sql_server_row_a = tiberius::Row::build(
+            sql_server_columns
+                .iter()
+                .cloned()
+                .zip_eq(data_a.into_iter()),
+        );
 
         let data_b = [
             tiberius::ColumnData::String(Some("foo bar".into())),
@@ -1146,7 +1152,7 @@ mod tests {
             tiberius::ColumnData::Bit(Some(false)),
         ];
         let sql_server_row_b =
-            tiberius::Row::build(sql_server_columns.into_iter().zip(data_b.into_iter()));
+            tiberius::Row::build(sql_server_columns.into_iter().zip_eq(data_b.into_iter()));
 
         let mut rnd_row = Row::default();
         let arena = RowArena::default();

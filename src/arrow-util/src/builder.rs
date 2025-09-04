@@ -22,6 +22,7 @@ use arrow::datatypes::{
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use chrono::Timelike;
+use itertools::Itertools;
 use mz_ore::cast::CastFrom;
 use mz_repr::adt::jsonb::JsonbRef;
 use mz_repr::{Datum, RelationDesc, Row, ScalarType};
@@ -123,7 +124,7 @@ impl ArrowBuilder {
     /// Appends a row to the builder.
     /// Errors if the row contains an unimplemented or out-of-range value.
     pub fn add_row(&mut self, row: &Row) -> Result<(), anyhow::Error> {
-        for (col, datum) in self.columns.iter_mut().zip(row.iter()) {
+        for (col, datum) in self.columns.iter_mut().zip_eq(row.iter()) {
             col.append_datum(datum)?;
         }
         self.row_size_bytes += row.byte_len();

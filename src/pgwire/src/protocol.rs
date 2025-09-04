@@ -17,7 +17,7 @@ use std::{iter, mem};
 
 use byteorder::{ByteOrder, NetworkEndian};
 use futures::future::{BoxFuture, FutureExt, pending};
-use itertools::{Itertools, izip};
+use itertools::Itertools;
 use mz_adapter::client::RecordFirstRowStream;
 use mz_adapter::session::{
     EndTransactionAction, InProgressRows, LifecycleTimestamps, PortalRefMut, PortalState,
@@ -1023,7 +1023,11 @@ where
         }
         let buf = RowArena::new();
         let mut params = vec![];
-        for (raw_param, mz_typ, format) in izip!(raw_params, param_types, param_formats) {
+        for ((raw_param, mz_typ), format) in raw_params
+            .into_iter()
+            .zip_eq(param_types)
+            .zip_eq(param_formats)
+        {
             let pg_typ = mz_pgrepr::Type::from(mz_typ);
             let datum = match raw_param {
                 None => Datum::Null,
@@ -1068,7 +1072,7 @@ where
             )
         }) {
             if let Some(desc) = stmt.desc().relation_desc.clone() {
-                for (format, ty) in result_formats.iter().zip(desc.iter_types()) {
+                for (format, ty) in result_formats.iter().zip_eq(desc.iter_types()) {
                     match (format, &ty.scalar_type) {
                         (Format::Binary, mz_repr::ScalarType::List { .. }) => {
                             return self

@@ -17,6 +17,7 @@ use std::pin::Pin;
 
 use async_trait::async_trait;
 use futures::stream::{Stream, StreamExt};
+use itertools::Itertools;
 use tokio_stream::StreamMap;
 use tracing::trace;
 
@@ -140,7 +141,7 @@ where
     async fn send(&mut self, cmd: C) -> Result<(), anyhow::Error> {
         trace!(command = ?cmd, "splitting command");
         let cmd_parts = self.state.split_command(cmd);
-        for (index, (shard, cmd_part)) in self.parts.iter_mut().zip(cmd_parts).enumerate() {
+        for (index, (shard, cmd_part)) in self.parts.iter_mut().zip_eq(cmd_parts).enumerate() {
             if let Some(cmd) = cmd_part {
                 trace!(shard = ?index, command = ?cmd, "sending command");
                 shard.send(cmd).await?;

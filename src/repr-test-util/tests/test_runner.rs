@@ -9,6 +9,7 @@
 
 #[cfg(test)]
 mod tests {
+    use itertools::Itertools;
     use mz_lowertest::{deserialize_optional_generic, tokenize};
     use mz_ore::str::separated;
     use mz_repr::ScalarType;
@@ -53,7 +54,7 @@ mod tests {
                 .map(|l| get_scalar_type_or_default(l, &mut std::iter::empty()))
                 .collect::<Result<Vec<_>, String>>()?
         };
-        let row = test_spec_to_row(litvals.iter().map(|s| &s[..]).zip(scalar_types.iter()))?;
+        let row = test_spec_to_row(litvals.iter().map(|s| &s[..]).zip_eq(scalar_types.iter()))?;
         let roundtrip_litvals = row
             .unpack()
             .into_iter()

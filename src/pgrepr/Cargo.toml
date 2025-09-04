@@ -14,6 +14,7 @@ byteorder = "1.4.3"
 bytes = "1.10.1"
 chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 dec = "0.4.8"
+itertools = "0.14.0"
 mz-ore = { path = "../ore", default-features = false }
 mz-pgrepr-consts = { path = "../pgrepr-consts", default-features = false }
 mz-pgwire-common = { path = "../pgwire-common", default-features = false }
@@ -23,7 +24,6 @@ postgres-types = { version = "0.2.5", features = [
     "with-uuid-1",
 ] }
 uuid = "1.17.0"
-itertools = "0.14.0"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [package.metadata.cargo-udeps.ignore]

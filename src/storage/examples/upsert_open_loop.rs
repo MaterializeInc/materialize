@@ -564,7 +564,7 @@ async fn run_benchmark(
         let probe = timely_worker.dataflow::<u64, _, _>(move |scope| {
             let mut source_streams = Vec::new();
 
-            for (source_id, rocks_options) in (0..num_sources).zip(rocksdb_options.iter()) {
+            for (source_id, rocks_options) in (0..num_sources).zip_eq(rocksdb_options.iter()) {
                 let source_rxs = Arc::clone(&source_rxs);
 
                 let source_stream = generator_source(scope, source_id, source_rxs);
@@ -1176,7 +1176,7 @@ impl IoThreadRocksDB {
                 let mut writes = rocksdb::WriteBatch::default();
 
                 // TODO(guswynn): sort by key before writing.
-                for ((k, v), get) in batches.into_iter().flat_map(|b| b.into_iter()).zip(gets) {
+                for ((k, v), get) in batches.into_iter().flat_map(|b| b.into_iter()).zip_eq(gets) {
                     writes.put(k.as_slice(), v.as_slice());
 
                     match get {

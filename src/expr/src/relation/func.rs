@@ -435,6 +435,7 @@ where
     let datums = order_aggregate_datums(datums, order_by);
 
     callers_temp_storage.reserve(datums.size_hint().0);
+    #[allow(clippy::disallowed_methods)]
     datums
         .into_iter()
         .map(|d| d.unwrap_list().iter())

@@ -15,6 +15,7 @@
 //! The Subset(X) notation means that the collection is a multiset subset of X:
 //! multiplicities of each record in Subset(X) are at most that of X.
 
+use itertools::Itertools;
 use mz_expr::MirRelationExpr;
 
 use crate::TransformCtx;
@@ -57,7 +58,7 @@ impl crate::Transform for ThresholdElision {
                     view = view.last_child();
                 }
             }
-            todo.extend(expr.children_mut().rev().zip(view.children_rev()))
+            todo.extend(expr.children_mut().rev().zip_eq(view.children_rev()))
         }
 
         mz_repr::explain::trace_plan(&*relation);

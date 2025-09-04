@@ -9,6 +9,7 @@
 
 use std::fmt::Debug;
 
+use itertools::Itertools;
 use mz_catalog::durable::{DurableCatalogError, FenceError};
 use mz_compute_client::controller::error::{
     CollectionUpdateError, DataflowCreationError, InstanceMissing, PeekError, ReadPolicyError,
@@ -463,7 +464,7 @@ pub fn verify_datum_desc(
         return Err(AdapterError::Internal(msg));
     }
 
-    for (i, (d, t)) in datums.iter().zip(col_types).enumerate() {
+    for (i, (d, t)) in datums.iter().zip_eq(col_types).enumerate() {
         if !d.is_instance_of(t) {
             let msg = format!(
                 "internal error: column {} is not of expected type {:?}: {:?}",

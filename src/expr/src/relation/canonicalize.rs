@@ -14,6 +14,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
+use itertools::Itertools;
 use mz_ore::soft_assert_or_log;
 use mz_repr::{ColumnType, ScalarType};
 use timely::Container;
@@ -148,7 +149,7 @@ pub fn canonicalize_equivalence_classes(equivalences: &mut Vec<Vec<MirScalarExpr
     equivalences.resize(classes.len(), Vec::new());
     equivalences
         .iter_mut()
-        .zip(classes)
+        .zip_eq(classes)
         .for_each(|(equivalence, class)| {
             equivalence.extend(
                 class

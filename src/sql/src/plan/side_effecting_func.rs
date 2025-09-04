@@ -33,6 +33,7 @@ use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
 use enum_kinds::EnumKind;
+use itertools::Itertools;
 use mz_ore::cast::ReinterpretCast;
 use mz_ore::collections::CollectionExt;
 use mz_ore::result::ResultExt;
@@ -218,7 +219,7 @@ fn extract_sef_call(
         allow_parameters: true,
         allow_windows: false,
     };
-    for (arg, ty) in args.iter().zip(sef_impl.param_types) {
+    for (arg, ty) in args.iter().zip_eq(sef_impl.param_types) {
         // If we encounter an error when planning the argument expression, that
         // error is unrelated to planning the function call and can be returned
         // directly to the user.

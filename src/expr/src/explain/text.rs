@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 
+use itertools::Itertools;
 use mz_ore::soft_assert_eq_or_log;
 use mz_ore::str::{Indent, IndentLike, StrExt, closure_to_display, separated};
 use mz_ore::treat_as_equal::TreatAsEqual;
@@ -405,8 +406,6 @@ impl MirRelationExpr {
             } => {
                 assert_eq!(ids.len(), values.len());
                 assert_eq!(ids.len(), limits.len());
-                let bindings =
-                    itertools::izip!(ids.iter(), values.iter(), limits.iter()).collect::<Vec<_>>();
                 let head = body.as_ref();
 
                 // Determine whether all `limits` are the same.
@@ -427,7 +426,8 @@ impl MirRelationExpr {
                     }
                     writeln!(f)?;
                     ctx.indented(|ctx| {
-                        for (id, value, limit) in bindings.iter() {
+                        let bindings = ids.iter().zip_eq(values).zip_eq(limits);
+                        for ((id, value), limit) in bindings {
                             write!(f, "{}cte", ctx.indent)?;
                             if all_limits_same.is_none() {
                                 if let Some(limit) = limit {

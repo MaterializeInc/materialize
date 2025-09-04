@@ -1319,7 +1319,7 @@ pub fn plan_params<'a>(
     let mut packer = datums.packer();
     let mut actual_types = Vec::new();
     let temp_storage = &RowArena::new();
-    for (i, (mut expr, expected_ty)) in params.into_iter().zip(&desc.param_types).enumerate() {
+    for (i, (mut expr, expected_ty)) in params.into_iter().zip_eq(&desc.param_types).enumerate() {
         transform_ast::transform(scx, &mut expr)?;
 
         let ecx = execute_expr_context(&qcx);
@@ -1895,7 +1895,7 @@ fn plan_set_expr(
             for (i, (left_type, right_type)) in left_type
                 .column_types
                 .iter()
-                .zip(right_type.column_types.iter())
+                .zip_eq(right_type.column_types.iter())
                 .enumerate()
             {
                 let types = &[
@@ -2785,7 +2785,7 @@ fn plan_scalar_table_funcs(
 
     // Munge the scope so table names match with the generated ids.
     let mut i = 0;
-    for (id, num_cols) in table_funcs.values().zip(num_cols) {
+    for (id, num_cols) in table_funcs.values().zip_eq(num_cols) {
         for _ in 0..num_cols {
             scope.items[i].table_name = Some(PartialItemName {
                 database: None,
@@ -5645,7 +5645,7 @@ fn plan_case<'a>(
 ) -> Result<HirScalarExpr, PlanError> {
     let mut cond_exprs = Vec::new();
     let mut result_exprs = Vec::new();
-    for (c, r) in conditions.iter().zip(results) {
+    for (c, r) in conditions.iter().zip_eq(results) {
         let c = match operand {
             Some(operand) => operand.clone().equals(c.clone()),
             None => c.clone(),
@@ -5665,7 +5665,11 @@ fn plan_case<'a>(
     )?;
     let mut expr = result_exprs.pop().unwrap();
     assert_eq!(cond_exprs.len(), result_exprs.len());
-    for (cexpr, rexpr) in cond_exprs.into_iter().zip(result_exprs).rev() {
+    for (cexpr, rexpr) in cond_exprs
+        .into_iter()
+        .rev()
+        .zip_eq(result_exprs.into_iter().rev())
+    {
         expr = HirScalarExpr::if_then_else(cexpr, rexpr, expr);
     }
     Ok(expr)

@@ -252,7 +252,7 @@ impl NonNullRequirements {
                         }
                     }
 
-                    for (input, columns) in inputs.iter_mut().zip(new_columns) {
+                    for (input, columns) in inputs.iter_mut().zip_eq(new_columns) {
                         self.action(input, columns, gets)?;
                     }
                     Ok(())

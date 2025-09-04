@@ -182,9 +182,19 @@ static MANAGED_REPLICA_PATTERN: std::sync::LazyLock<regex::Regex> =
 /// Given a relation desc and a column list, checks that:
 /// - the column list is a prefix of the desc;
 /// - all the listed columns are types that have meaningful Persist-level ordering.
-fn check_partition_by(desc: &RelationDesc, partition_by: Vec<Ident>) -> Result<(), PlanError> {
+fn check_partition_by(desc: &RelationDesc, mut partition_by: Vec<Ident>) -> Result<(), PlanError> {
+    if partition_by.len() > desc.len() {
+        tracing::error!(
+            "PARTITION BY contains more columns than the relation. (expected at most {}, got {})",
+            desc.len(),
+            partition_by.len()
+        );
+        partition_by.truncate(desc.len());
+    }
+
+    let desc_prefix = desc.iter().take(partition_by.len());
     for (idx, ((desc_name, desc_type), partition_name)) in
-        desc.iter().zip(partition_by.into_iter()).enumerate()
+        desc_prefix.zip_eq(partition_by).enumerate()
     {
         let partition_name = normalize::column_name(partition_name);
         if *desc_name != partition_name {
@@ -3139,7 +3149,7 @@ pub fn plan_create_continual_task(
 
                 // Update ct nullability as necessary. The `ne` above verified that the
                 // types are the same len.
-                let zip_types = || desc.iter_types().zip(desc_query.iter_types());
+                let zip_types = || desc.iter_types().zip_eq(desc_query.iter_types());
                 let updated = zip_types().any(|(ct, q)| q.nullable && !ct.nullable);
                 if updated {
                     let new_types = zip_types().map(|(ct, q)| {
@@ -3150,7 +3160,7 @@ pub fn plan_create_continual_task(
                         ct
                     });
                     *desc = RelationDesc::from_names_and_types(
-                        desc.iter_names().cloned().zip(new_types),
+                        desc.iter_names().cloned().zip_eq(new_types),
                     );
                 }
 

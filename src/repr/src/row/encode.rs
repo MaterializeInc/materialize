@@ -1466,7 +1466,7 @@ impl ColumnEncoder<Row> for RowColumnarEncoder {
 
     fn append(&mut self, val: &Row) {
         let mut num_datums = 0;
-        for (datum, encoder) in val.iter().zip(self.encoders.iter_mut()) {
+        for (datum, encoder) in val.iter().zip_eq(self.encoders.iter_mut()) {
             encoder.push(datum);
             num_datums += 1;
         }
