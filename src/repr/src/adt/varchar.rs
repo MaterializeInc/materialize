@@ -24,17 +24,17 @@ include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.varchar.rs"));
 pub const MAX_MAX_LENGTH: u32 = 10_485_760;
 
 /// A marker type indicating that a Rust string should be interpreted as a
-/// [`SqlScalarType::VarChar`].
+/// [`ScalarType::VarChar`].
 ///
-/// [`SqlScalarType::VarChar`]: crate::SqlScalarType::VarChar
+/// [`ScalarType::VarChar`]: crate::ScalarType::VarChar
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct VarChar<S: AsRef<str>>(pub S);
 
-/// The `max_length` of a [`SqlScalarType::VarChar`].
+/// The `max_length` of a [`ScalarType::VarChar`].
 ///
 /// This newtype wrapper ensures that the length is within the valid range.
 ///
-/// [`SqlScalarType::VarChar`]: crate::SqlScalarType::VarChar
+/// [`ScalarType::VarChar`]: crate::ScalarType::VarChar
 #[derive(
     Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, MzReflect,
 )]

@@ -10,7 +10,7 @@
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 
-use mz_repr::{Datum, Row, RowArena, SqlColumnType, SqlRelationType, SqlScalarType};
+use mz_repr::{ColumnType, Datum, RelationType, Row, RowArena, ScalarType};
 
 use crate::{
     BinaryFunc, EvalError, MapFilterProject, MfpPlan, MirScalarExpr, UnaryFunc,
@@ -177,9 +177,9 @@ impl<'a> ResultSpec<'a> {
     }
 
     /// A spec that matches all values of a given type.
-    pub fn has_type(col: &SqlColumnType, fallible: bool) -> ResultSpec<'a> {
+    pub fn has_type(col: &ColumnType, fallible: bool) -> ResultSpec<'a> {
         let values = match &col.scalar_type {
-            SqlScalarType::Bool => Values::Within(Datum::False, Datum::True),
+            ScalarType::Bool => Values::Within(Datum::False, Datum::True),
             // TODO: add bounds for other bounded types, like integers
             _ => Values::All,
         };
@@ -371,7 +371,7 @@ pub trait Interpreter {
 
     /// A literal value.
     /// (Stored as a row, because we can't own a Datum.)
-    fn literal(&self, result: &Result<Row, EvalError>, col_type: &SqlColumnType) -> Self::Summary;
+    fn literal(&self, result: &Result<Row, EvalError>, col_type: &ColumnType) -> Self::Summary;
 
     /// A call to an unmaterializable function.
     ///
@@ -493,7 +493,7 @@ impl<'a, E: Interpreter + ?Sized> Interpreter for MfpEval<'a, E> {
         }
     }
 
-    fn literal(&self, result: &Result<Row, EvalError>, col_type: &SqlColumnType) -> Self::Summary {
+    fn literal(&self, result: &Result<Row, EvalError>, col_type: &ColumnType) -> Self::Summary {
         self.evaluator.literal(result, col_type)
     }
 
@@ -707,7 +707,7 @@ impl SpecialBinary {
 
 #[derive(Clone, Debug)]
 pub struct ColumnSpec<'a> {
-    pub col_type: SqlColumnType,
+    pub col_type: ColumnType,
     pub range: ResultSpec<'a>,
 }
 
@@ -718,7 +718,7 @@ pub struct ColumnSpec<'a> {
 ///   expression might have. (See the `eval_` methods.)
 #[derive(Clone, Debug)]
 pub struct ColumnSpecs<'a> {
-    pub relation: &'a SqlRelationType,
+    pub relation: &'a RelationType,
     pub columns: Vec<ResultSpec<'a>>,
     pub unmaterializables: BTreeMap<UnmaterializableFunc, ResultSpec<'a>>,
     pub arena: &'a RowArena,
@@ -735,7 +735,7 @@ impl<'a> ColumnSpecs<'a> {
 
     /// Create a new, empty set of column specs. (Initially, the only assumption we make about the
     /// data in the column is that it matches the type.)
-    pub fn new(relation: &'a SqlRelationType, arena: &'a RowArena) -> Self {
+    pub fn new(relation: &'a RelationType, arena: &'a RowArena) -> Self {
         let columns = relation
             .column_types
             .iter()
@@ -789,7 +789,7 @@ impl<'a> ColumnSpecs<'a> {
                 Err(error) => *literal = Err(error),
                 Ok(datum) => {
                     assert!(
-                        datum.is_instance_of_sql(col_type),
+                        datum.is_instance_of(col_type),
                         "{datum:?} must be an instance of {col_type:?}"
                     );
                     match literal {
@@ -818,7 +818,7 @@ impl<'a> ColumnSpecs<'a> {
     /// A literal with the given type and a trivial default value. Callers should ensure that
     /// [Self::set_literal] is called on the resulting expression to give it a meaningful value
     /// before evaluating.
-    fn placeholder(col_type: SqlColumnType) -> MirScalarExpr {
+    fn placeholder(col_type: ColumnType) -> MirScalarExpr {
         MirScalarExpr::Literal(Err(EvalError::Internal("".into())), col_type)
     }
 }
@@ -832,7 +832,7 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
         ColumnSpec { col_type, range }
     }
 
-    fn literal(&self, result: &Result<Row, EvalError>, col_type: &SqlColumnType) -> Self::Summary {
+    fn literal(&self, result: &Result<Row, EvalError>, col_type: &ColumnType) -> Self::Summary {
         let col_type = col_type.clone();
         let range = self.eval_result(result.as_ref().map(|row| {
             self.arena
@@ -957,7 +957,7 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
     }
 
     fn cond(&self, cond: Self::Summary, then: Self::Summary, els: Self::Summary) -> Self::Summary {
-        let col_type = SqlColumnType {
+        let col_type = ColumnType {
             scalar_type: then.col_type.scalar_type,
             nullable: then.col_type.nullable || els.col_type.nullable,
         };
@@ -1039,11 +1039,7 @@ impl Interpreter for Trace {
         TraceSummary::Dynamic
     }
 
-    fn literal(
-        &self,
-        _result: &Result<Row, EvalError>,
-        _col_type: &SqlColumnType,
-    ) -> Self::Summary {
+    fn literal(&self, _result: &Result<Row, EvalError>, _col_type: &ColumnType) -> Self::Summary {
         TraceSummary::Constant
     }
 
@@ -1100,7 +1096,7 @@ impl Interpreter for Trace {
 mod tests {
     use itertools::Itertools;
     use mz_repr::adt::datetime::DateTimeUnits;
-    use mz_repr::{Datum, PropDatum, RowArena, SqlScalarType};
+    use mz_repr::{Datum, PropDatum, RowArena, ScalarType};
     use proptest::prelude::*;
     use proptest::sample::{Index, select};
 
@@ -1111,7 +1107,7 @@ mod tests {
 
     #[derive(Debug)]
     struct ExpressionData {
-        relation_type: SqlRelationType,
+        relation_type: RelationType,
         specs: Vec<ResultSpec<'static>>,
         rows: Vec<Row>,
         expr: MirScalarExpr,
@@ -1121,15 +1117,15 @@ mod tests {
     // type as argument, which means we need to list everything out explicitly here. Restrict our interest
     // to a reasonable number of functions, to keep things tractable
     // TODO: replace this with function-level info once it's available.
-    const NUM_TYPE: SqlScalarType = SqlScalarType::Numeric { max_scale: None };
-    static SCALAR_TYPES: &[SqlScalarType] = &[
-        SqlScalarType::Bool,
-        SqlScalarType::Jsonb,
+    const NUM_TYPE: ScalarType = ScalarType::Numeric { max_scale: None };
+    static SCALAR_TYPES: &[ScalarType] = &[
+        ScalarType::Bool,
+        ScalarType::Jsonb,
         NUM_TYPE,
-        SqlScalarType::Date,
-        SqlScalarType::Timestamp { precision: None },
-        SqlScalarType::MzTimestamp,
-        SqlScalarType::String,
+        ScalarType::Date,
+        ScalarType::Timestamp { precision: None },
+        ScalarType::MzTimestamp,
+        ScalarType::String,
     ];
 
     const INTERESTING_UNARY_FUNCS: &[UnaryFunc] = {
@@ -1149,20 +1145,20 @@ mod tests {
         ]
     };
 
-    fn unary_typecheck(func: &UnaryFunc, arg: &SqlColumnType) -> bool {
+    fn unary_typecheck(func: &UnaryFunc, arg: &ColumnType) -> bool {
         use UnaryFunc::*;
         match func {
             CastNumericToMzTimestamp(_) | NegNumeric(_) => arg.scalar_type.base_eq(&NUM_TYPE),
             CastJsonbToNumeric(_) | CastJsonbToBool(_) | CastJsonbToString(_) => {
-                arg.scalar_type.base_eq(&SqlScalarType::Jsonb)
+                arg.scalar_type.base_eq(&ScalarType::Jsonb)
             }
             ExtractTimestamp(_) | DateTruncTimestamp(_) => arg
                 .scalar_type
-                .base_eq(&SqlScalarType::Timestamp { precision: None }),
-            ExtractDate(_) => arg.scalar_type.base_eq(&SqlScalarType::Date),
-            Not(_) => arg.scalar_type.base_eq(&SqlScalarType::Bool),
+                .base_eq(&ScalarType::Timestamp { precision: None }),
+            ExtractDate(_) => arg.scalar_type.base_eq(&ScalarType::Date),
+            Not(_) => arg.scalar_type.base_eq(&ScalarType::Bool),
             IsNull(_) => true,
-            TryParseMonotonicIso8601Timestamp(_) => arg.scalar_type.base_eq(&SqlScalarType::String),
+            TryParseMonotonicIso8601Timestamp(_) => arg.scalar_type.base_eq(&ScalarType::String),
             _ => false,
         }
     }
@@ -1186,27 +1182,27 @@ mod tests {
         ]
     };
 
-    fn binary_typecheck(func: &BinaryFunc, arg0: &SqlColumnType, arg1: &SqlColumnType) -> bool {
+    fn binary_typecheck(func: &BinaryFunc, arg0: &ColumnType, arg1: &ColumnType) -> bool {
         use BinaryFunc::*;
         match func {
             AddTimestampInterval => {
                 arg0.scalar_type
-                    .base_eq(&SqlScalarType::Timestamp { precision: None })
-                    && arg1.scalar_type.base_eq(&SqlScalarType::Interval)
+                    .base_eq(&ScalarType::Timestamp { precision: None })
+                    && arg1.scalar_type.base_eq(&ScalarType::Interval)
             }
             AddNumeric | SubNumeric | MulNumeric | DivNumeric => {
                 arg0.scalar_type.base_eq(&NUM_TYPE) && arg1.scalar_type.base_eq(&NUM_TYPE)
             }
             Eq | Lt | Gt | Lte | Gte => arg0.scalar_type.base_eq(&arg1.scalar_type),
             DateTruncTimestamp => {
-                arg0.scalar_type.base_eq(&SqlScalarType::String)
+                arg0.scalar_type.base_eq(&ScalarType::String)
                     && arg1
                         .scalar_type
-                        .base_eq(&SqlScalarType::Timestamp { precision: None })
+                        .base_eq(&ScalarType::Timestamp { precision: None })
             }
             JsonbGetString | JsonbGetStringStringify => {
-                arg0.scalar_type.base_eq(&SqlScalarType::Jsonb)
-                    && arg1.scalar_type.base_eq(&SqlScalarType::String)
+                arg0.scalar_type.base_eq(&ScalarType::Jsonb)
+                    && arg1.scalar_type.base_eq(&ScalarType::String)
             }
             _ => false,
         }
@@ -1217,12 +1213,9 @@ mod tests {
         &[Coalesce, Greatest, Least, And, Or, Concat, ConcatWs]
     };
 
-    fn variadic_typecheck(func: &VariadicFunc, args: &[SqlColumnType]) -> bool {
+    fn variadic_typecheck(func: &VariadicFunc, args: &[ColumnType]) -> bool {
         use VariadicFunc::*;
-        fn all_eq<'a>(
-            iter: impl IntoIterator<Item = &'a SqlColumnType>,
-            other: &SqlScalarType,
-        ) -> bool {
+        fn all_eq<'a>(iter: impl IntoIterator<Item = &'a ColumnType>, other: &ScalarType) -> bool {
             iter.into_iter().all(|t| t.scalar_type.base_eq(other))
         }
         match func {
@@ -1230,14 +1223,14 @@ mod tests {
                 [] => true,
                 [first, rest @ ..] => all_eq(rest, &first.scalar_type),
             },
-            And | Or => all_eq(args, &SqlScalarType::Bool),
-            Concat => all_eq(args, &SqlScalarType::String),
-            ConcatWs => args.len() > 1 && all_eq(args, &SqlScalarType::String),
+            And | Or => all_eq(args, &ScalarType::Bool),
+            Concat => all_eq(args, &ScalarType::String),
+            ConcatWs => args.len() > 1 && all_eq(args, &ScalarType::String),
             _ => false,
         }
     }
 
-    fn gen_datums_for_type(typ: &SqlColumnType) -> BoxedStrategy<Datum<'static>> {
+    fn gen_datums_for_type(typ: &ColumnType) -> BoxedStrategy<Datum<'static>> {
         let mut values: Vec<Datum<'static>> = typ.scalar_type.interesting_datums().collect();
         if typ.nullable {
             values.push(Datum::Null)
@@ -1245,7 +1238,7 @@ mod tests {
         select(values).boxed()
     }
 
-    fn gen_column() -> impl Strategy<Value = (SqlColumnType, Datum<'static>, ResultSpec<'static>)> {
+    fn gen_column() -> impl Strategy<Value = (ColumnType, Datum<'static>, ResultSpec<'static>)> {
         let col_type = (select(SCALAR_TYPES), any::<bool>())
             .prop_map(|(t, b)| t.nullable(b))
             .prop_filter("need at least one value", |c| {
@@ -1268,8 +1261,8 @@ mod tests {
     }
 
     fn gen_expr_for_relation(
-        relation: &SqlRelationType,
-    ) -> BoxedStrategy<(MirScalarExpr, SqlColumnType)> {
+        relation: &RelationType,
+    ) -> BoxedStrategy<(MirScalarExpr, ColumnType)> {
         let column_gen = {
             let column_types = relation.column_types.clone();
             any::<Index>()
@@ -1360,7 +1353,7 @@ mod tests {
         let columns = prop::collection::vec(gen_column(), 1..10);
         columns.prop_flat_map(|data| {
             let (columns, datums, specs): (Vec<_>, Vec<_>, Vec<_>) = data.into_iter().multiunzip();
-            let relation = SqlRelationType::new(columns);
+            let relation = RelationType::new(columns);
             let row = Row::pack_slice(&datums);
             gen_expr_for_relation(&relation).prop_map(move |(expr, _)| ExpressionData {
                 relation_type: relation.clone(),
@@ -1385,7 +1378,7 @@ mod tests {
             Ok(())
         }
 
-        proptest!(|(datum in mz_repr::arb_datum(true))| {
+        proptest!(|(datum in mz_repr::arb_datum())| {
             check(datum)?;
         });
 
@@ -1463,7 +1456,7 @@ mod tests {
                         expr1: Box::new(MirScalarExpr::column(0)),
                         expr2: Box::new(Literal(
                             Ok(Row::pack_slice(&[Datum::Int32(1727694505)])),
-                            SqlScalarType::Int32.nullable(false),
+                            ScalarType::Int32.nullable(false),
                         )),
                     },
                 ),
@@ -1472,7 +1465,7 @@ mod tests {
             input_arity: 1,
         };
 
-        let relation = SqlRelationType::new(vec![SqlScalarType::Int32.nullable(true)]);
+        let relation = RelationType::new(vec![ScalarType::Int32.nullable(true)]);
         let arena = RowArena::new();
         let mut interpreter = ColumnSpecs::new(&relation, &arena);
         interpreter.push_column(0, ResultSpec::value(Datum::Int32(-1294725158)));
@@ -1486,12 +1479,12 @@ mod tests {
             func: VariadicFunc::Concat,
             exprs: vec![
                 MirScalarExpr::column(0),
-                MirScalarExpr::literal_ok(Datum::String("a"), SqlScalarType::String),
-                MirScalarExpr::literal_ok(Datum::String("b"), SqlScalarType::String),
+                MirScalarExpr::literal_ok(Datum::String("a"), ScalarType::String),
+                MirScalarExpr::literal_ok(Datum::String("b"), ScalarType::String),
             ],
         };
 
-        let relation = SqlRelationType::new(vec![SqlScalarType::String.nullable(false)]);
+        let relation = RelationType::new(vec![ScalarType::String.nullable(false)]);
         let arena = RowArena::new();
         let interpreter = ColumnSpecs::new(&relation, &arena);
         let spec = interpreter.expr(&expr);
@@ -1503,7 +1496,7 @@ mod tests {
         // Example inspired by the tumbling windows temporal filter in the docs
         let period_ms = MirScalarExpr::Literal(
             Ok(Row::pack_slice(&[Datum::Int64(10)])),
-            SqlScalarType::Int64.nullable(false),
+            ScalarType::Int64.nullable(false),
         );
         let expr = MirScalarExpr::CallBinary {
             func: BinaryFunc::Gte,
@@ -1523,7 +1516,7 @@ mod tests {
                 }),
             }),
         };
-        let relation = SqlRelationType::new(vec![SqlScalarType::Int64.nullable(false)]);
+        let relation = RelationType::new(vec![ScalarType::Int64.nullable(false)]);
 
         {
             // Non-overlapping windows
@@ -1578,12 +1571,12 @@ mod tests {
                 expr1: Box::new(MirScalarExpr::column(0)),
                 expr2: Box::new(MirScalarExpr::Literal(
                     Ok(Row::pack_slice(&["ts".into()])),
-                    SqlScalarType::String.nullable(false),
+                    ScalarType::String.nullable(false),
                 )),
             }),
         };
 
-        let relation = SqlRelationType::new(vec![SqlScalarType::Jsonb.nullable(true)]);
+        let relation = RelationType::new(vec![ScalarType::Jsonb.nullable(true)]);
         let mut interpreter = ColumnSpecs::new(&relation, &arena);
         interpreter.push_column(
             0,
@@ -1617,7 +1610,7 @@ mod tests {
             expr: Box::new(MirScalarExpr::column(0)),
         };
 
-        let relation = SqlRelationType::new(vec![SqlScalarType::String.nullable(true)]);
+        let relation = RelationType::new(vec![ScalarType::String.nullable(true)]);
         let mut interpreter = ColumnSpecs::new(&relation, &arena);
         interpreter.push_column(
             0,
@@ -1645,7 +1638,7 @@ mod tests {
             expr: Box::new(MirScalarExpr::column(0)),
         };
 
-        let relation = SqlRelationType::new(vec![SqlScalarType::String.nullable(true)]);
+        let relation = RelationType::new(vec![ScalarType::String.nullable(true)]);
         // Test the case where we have full timestamps as bounds.
         let mut interpreter = ColumnSpecs::new(&relation, &arena);
         interpreter.push_column(
@@ -1734,7 +1727,7 @@ mod tests {
             )),
         };
 
-        let relation = SqlRelationType::new(vec![SqlScalarType::MzTimestamp.nullable(true)]);
+        let relation = RelationType::new(vec![ScalarType::MzTimestamp.nullable(true)]);
         let mut interpreter = ColumnSpecs::new(&relation, &arena);
         interpreter.push_column(
             0,

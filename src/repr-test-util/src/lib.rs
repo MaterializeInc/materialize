@@ -17,7 +17,7 @@ use mz_ore::str::StrExt;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::strconv::parse_jsonb;
-use mz_repr::{Datum, Row, RowArena, SqlScalarType};
+use mz_repr::{Datum, Row, RowArena, ScalarType};
 use proc_macro2::TokenTree;
 
 /* #endregion */
@@ -39,7 +39,7 @@ where
 
 /// Constructs a `Row` from a sequence of `litval` and `littyp`.
 ///
-/// See [get_scalar_type_or_default] for creating a `SqlScalarType`.
+/// See [get_scalar_type_or_default] for creating a `ScalarType`.
 ///
 /// Generally, each `litval` can be parsed into a Datum in the manner you would
 /// imagine. Exceptions:
@@ -51,7 +51,7 @@ where
 /// * all flavors of numeric types
 pub fn test_spec_to_row<'a, I>(datum_iter: I) -> Result<Row, String>
 where
-    I: Iterator<Item = (&'a str, &'a SqlScalarType)>,
+    I: Iterator<Item = (&'a str, &'a ScalarType)>,
 {
     let temp_storage = RowArena::new();
     Row::try_pack(datum_iter.map(|(litval, littyp)| {
@@ -59,19 +59,19 @@ where
             Ok(Datum::Null)
         } else {
             match littyp {
-                SqlScalarType::Bool => Ok(Datum::from(parse_litval::<bool>(litval, "bool")?)),
-                SqlScalarType::Numeric { .. } => {
+                ScalarType::Bool => Ok(Datum::from(parse_litval::<bool>(litval, "bool")?)),
+                ScalarType::Numeric { .. } => {
                     Ok(Datum::from(parse_litval::<Numeric>(litval, "Numeric")?))
                 }
-                SqlScalarType::Int16 => Ok(Datum::from(parse_litval::<i16>(litval, "i16")?)),
-                SqlScalarType::Int32 => Ok(Datum::from(parse_litval::<i32>(litval, "i32")?)),
-                SqlScalarType::Int64 => Ok(Datum::from(parse_litval::<i64>(litval, "i64")?)),
-                SqlScalarType::Float32 => Ok(Datum::from(parse_litval::<f32>(litval, "f32")?)),
-                SqlScalarType::Float64 => Ok(Datum::from(parse_litval::<f64>(litval, "f64")?)),
-                SqlScalarType::String => Ok(Datum::from(
+                ScalarType::Int16 => Ok(Datum::from(parse_litval::<i16>(litval, "i16")?)),
+                ScalarType::Int32 => Ok(Datum::from(parse_litval::<i32>(litval, "i32")?)),
+                ScalarType::Int64 => Ok(Datum::from(parse_litval::<i64>(litval, "i64")?)),
+                ScalarType::Float32 => Ok(Datum::from(parse_litval::<f32>(litval, "f32")?)),
+                ScalarType::Float64 => Ok(Datum::from(parse_litval::<f64>(litval, "f64")?)),
+                ScalarType::String => Ok(Datum::from(
                     temp_storage.push_string(mz_lowertest::unquote(litval)),
                 )),
-                SqlScalarType::Timestamp { .. } => {
+                ScalarType::Timestamp { .. } => {
                     let datetime = if litval.contains('.') {
                         NaiveDateTime::parse_from_str(litval, "\"%Y-%m-%d %H:%M:%S%.f\"")
                     } else {
@@ -85,7 +85,7 @@ where
                         .unwrap(),
                     ))
                 }
-                SqlScalarType::Jsonb => parse_jsonb(&mz_lowertest::unquote(litval))
+                ScalarType::Jsonb => parse_jsonb(&mz_lowertest::unquote(litval))
                     .map(|jsonb| temp_storage.push_unary_row(jsonb.into_row()))
                     .map_err(|parse| format!("Invalid JSON literal: {:?}", parse)),
                 _ => Err(format!("Unsupported literal type {:?}", littyp)),
@@ -106,10 +106,10 @@ pub fn datum_to_test_spec(datum: Datum) -> String {
     }
 }
 
-/// Parses `SqlScalarType` from `scalar_type_stream` or infers it from `litval`
+/// Parses `ScalarType` from `scalar_type_stream` or infers it from `litval`
 ///
-/// See [mz_lowertest::to_json] for the syntax for specifying a `SqlScalarType`.
-/// If `scalar_type_stream` is empty, will attempt to guess a `SqlScalarType` for
+/// See [mz_lowertest::to_json] for the syntax for specifying a `ScalarType`.
+/// If `scalar_type_stream` is empty, will attempt to guess a `ScalarType` for
 /// the literal:
 /// * If `litval` is "true", "false", or "null", will return `Bool`.
 /// * Else if starts with `'"'`, will return String.
@@ -118,23 +118,22 @@ pub fn datum_to_test_spec(datum: Datum) -> String {
 pub fn get_scalar_type_or_default<I>(
     litval: &str,
     scalar_type_stream: &mut I,
-) -> Result<SqlScalarType, String>
+) -> Result<ScalarType, String>
 where
     I: Iterator<Item = TokenTree>,
 {
-    let typ: Option<SqlScalarType> =
-        deserialize_optional_generic(scalar_type_stream, "SqlScalarType")?;
+    let typ: Option<ScalarType> = deserialize_optional_generic(scalar_type_stream, "ScalarType")?;
     match typ {
         Some(typ) => Ok(typ),
         None => {
             if ["true", "false", "null"].contains(&litval) {
-                Ok(SqlScalarType::Bool)
+                Ok(ScalarType::Bool)
             } else if litval.starts_with('\"') {
-                Ok(SqlScalarType::String)
+                Ok(ScalarType::String)
             } else if litval.contains('.') {
-                Ok(SqlScalarType::Float64)
+                Ok(ScalarType::Float64)
             } else {
-                Ok(SqlScalarType::Int64)
+                Ok(ScalarType::Int64)
             }
         }
     }

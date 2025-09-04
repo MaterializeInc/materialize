@@ -15,7 +15,7 @@ use mz_expr::explain::{ExplainContext, ExplainSinglePlan};
 use mz_expr::visit::{Visit, VisitChildren};
 use mz_expr::{Id, LocalId};
 use mz_ore::stack::RecursionLimitError;
-use mz_repr::SqlRelationType;
+use mz_repr::RelationType;
 use mz_repr::explain::{AnnotatedPlan, Explain, ExplainError, ScalarOps, UnsupportedFormat};
 
 use crate::plan::{HirRelationExpr, HirScalarExpr};
@@ -112,7 +112,7 @@ pub fn normalize_subqueries<'a>(expr: &'a mut HirRelationExpr) -> Result<(), Rec
                         // generate a `Get(local_id)` to be used as a subquery replacement
                         let mut subquery = Get {
                             id: Id::Local(local_id.clone()),
-                            typ: SqlRelationType::empty(), // TODO (aalexandrov)
+                            typ: RelationType::empty(), // TODO (aalexandrov)
                         };
                         // swap the current subquery with the replacement
                         std::mem::swap(expr, &mut subquery);

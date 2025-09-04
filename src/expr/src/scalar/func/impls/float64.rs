@@ -14,7 +14,7 @@ use mz_lowertest::MzReflect;
 use mz_ore::cast::TryCastFrom;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
 use mz_repr::adt::timestamp::CheckedTimestamp;
-use mz_repr::{SqlColumnType, SqlScalarType, strconv};
+use mz_repr::{ColumnType, ScalarType, strconv};
 use serde::{Deserialize, Serialize};
 
 use crate::EvalError;
@@ -231,8 +231,8 @@ impl<'a> EagerUnaryFunc<'a> for CastFloat64ToNumeric {
         }
     }
 
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::Numeric { max_scale: self.0 }.nullable(input.nullable)
+    fn output_type(&self, input: ColumnType) -> ColumnType {
+        ScalarType::Numeric { max_scale: self.0 }.nullable(input.nullable)
     }
 
     fn inverse(&self) -> Option<crate::UnaryFunc> {

@@ -3,11 +3,11 @@ source: src/expr/src/scalar/func/impls/uint32.rs
 expression: info
 ---
 Info {
-    output_type_nullable: SqlColumnType {
+    output_type_nullable: ColumnType {
         scalar_type: UInt32,
         nullable: true,
     },
-    output_type_nonnullable: SqlColumnType {
+    output_type_nonnullable: ColumnType {
         scalar_type: UInt32,
         nullable: false,
     },

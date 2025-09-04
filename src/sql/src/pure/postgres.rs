@@ -16,7 +16,7 @@ use mz_expr::MirScalarExpr;
 use mz_postgres_util::Config;
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_proto::RustType;
-use mz_repr::{SqlColumnType, SqlRelationType, SqlScalarType};
+use mz_repr::{ColumnType, RelationType, ScalarType};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
     ColumnDef, CreateSubsourceOption, CreateSubsourceOptionName, CreateSubsourceStatement,
@@ -472,9 +472,9 @@ pub(crate) fn generate_column_casts(
     let cast_qcx = QueryContext::root(&cast_scx, QueryLifetime::Source);
     let mut column_types = vec![];
     for column in table.columns.iter() {
-        column_types.push(SqlColumnType {
+        column_types.push(ColumnType {
             nullable: column.nullable,
-            scalar_type: SqlScalarType::String,
+            scalar_type: ScalarType::String,
         });
     }
 
@@ -482,7 +482,7 @@ pub(crate) fn generate_column_casts(
         qcx: &cast_qcx,
         name: "plan_postgres_source_cast",
         scope: &Scope::empty(),
-        relation_type: &SqlRelationType {
+        relation_type: &RelationType {
             column_types,
             keys: vec![],
         },
@@ -518,13 +518,13 @@ pub(crate) fn generate_column_casts(
                         HirScalarExpr::call_variadic(
                             mz_expr::VariadicFunc::ErrorIfNull,
                             vec![
-                                HirScalarExpr::literal_null(SqlScalarType::String),
+                                HirScalarExpr::literal_null(ScalarType::String),
                                 HirScalarExpr::literal(
                                     mz_repr::Datum::from(
                                         format!("Unsupported type with OID {}", column.type_oid)
                                             .as_str(),
                                     ),
-                                    SqlScalarType::String,
+                                    ScalarType::String,
                                 ),
                             ],
                         )
@@ -568,7 +568,7 @@ pub(crate) fn generate_column_casts(
                                             column.name.clone())
                                             .as_str(),
                                     ),
-                                    SqlScalarType::String,
+                                    ScalarType::String,
                                 ),
                             ],
                             )

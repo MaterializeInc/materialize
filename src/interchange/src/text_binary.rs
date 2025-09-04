@@ -8,14 +8,14 @@
 // by the Apache License, Version 2.0.
 
 use bytes::BytesMut;
-use mz_repr::{ColumnName, RelationDesc, SqlColumnType};
+use mz_repr::{ColumnName, ColumnType, RelationDesc};
 
 use crate::encode::{Encode, column_names_and_types};
 use crate::envelopes;
 
 #[derive(Debug)]
 pub struct TextEncoder {
-    columns: Vec<(ColumnName, SqlColumnType)>,
+    columns: Vec<(ColumnName, ColumnType)>,
 }
 
 impl TextEncoder {
@@ -43,7 +43,7 @@ impl Encode for TextEncoder {
 
 #[derive(Debug)]
 pub struct BinaryEncoder {
-    columns: Vec<(ColumnName, SqlColumnType)>,
+    columns: Vec<(ColumnName, ColumnType)>,
 }
 
 impl BinaryEncoder {

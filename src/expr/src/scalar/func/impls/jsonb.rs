@@ -12,7 +12,7 @@ use std::fmt;
 use mz_lowertest::MzReflect;
 use mz_repr::adt::jsonb::{Jsonb, JsonbRef};
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
-use mz_repr::{Datum, Row, RowPacker, SqlColumnType, SqlScalarType, strconv};
+use mz_repr::{ColumnType, Datum, Row, RowPacker, ScalarType, strconv};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -128,8 +128,8 @@ impl<'a> EagerUnaryFunc<'a> for CastJsonbToNumeric {
         }
     }
 
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::Numeric { max_scale: self.0 }.nullable(input.nullable)
+    fn output_type(&self, input: ColumnType) -> ColumnType {
+        ScalarType::Numeric { max_scale: self.0 }.nullable(input.nullable)
     }
 
     fn is_monotone(&self) -> bool {

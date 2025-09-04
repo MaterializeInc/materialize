@@ -9,7 +9,7 @@
 
 use mz_adapter::catalog::Catalog;
 use mz_ore::collections::CollectionExt;
-use mz_repr::SqlScalarType;
+use mz_repr::ScalarType;
 use mz_sql::plan::PlanContext;
 
 #[mz_ore::test(tokio::test)]
@@ -18,117 +18,91 @@ async fn test_parameter_type_inference() {
     let test_cases = vec![
         (
             "SELECT $1, $2, $3",
-            vec![
-                SqlScalarType::String,
-                SqlScalarType::String,
-                SqlScalarType::String,
-            ],
+            vec![ScalarType::String, ScalarType::String, ScalarType::String],
         ),
         (
             "VALUES($1, $2, $3)",
-            vec![
-                SqlScalarType::String,
-                SqlScalarType::String,
-                SqlScalarType::String,
-            ],
+            vec![ScalarType::String, ScalarType::String, ScalarType::String],
         ),
         (
             "SELECT 1 GROUP BY $1, $2, $3",
-            vec![
-                SqlScalarType::String,
-                SqlScalarType::String,
-                SqlScalarType::String,
-            ],
+            vec![ScalarType::String, ScalarType::String, ScalarType::String],
         ),
         (
             "SELECT 1 ORDER BY $1, $2, $3",
-            vec![
-                SqlScalarType::String,
-                SqlScalarType::String,
-                SqlScalarType::String,
-            ],
+            vec![ScalarType::String, ScalarType::String, ScalarType::String],
         ),
         (
             "SELECT ($1), (((($2))))",
-            vec![SqlScalarType::String, SqlScalarType::String],
+            vec![ScalarType::String, ScalarType::String],
         ),
-        ("SELECT $1::pg_catalog.int4", vec![SqlScalarType::Int32]),
-        ("SELECT 1 WHERE $1", vec![SqlScalarType::Bool]),
-        ("SELECT 1 HAVING $1", vec![SqlScalarType::Bool]),
+        ("SELECT $1::pg_catalog.int4", vec![ScalarType::Int32]),
+        ("SELECT 1 WHERE $1", vec![ScalarType::Bool]),
+        ("SELECT 1 HAVING $1", vec![ScalarType::Bool]),
         (
             "SELECT 1 FROM (VALUES (1)) a JOIN (VALUES (1)) b ON $1",
-            vec![SqlScalarType::Bool],
+            vec![ScalarType::Bool],
         ),
         (
             "SELECT CASE WHEN $1 THEN 1 ELSE 0 END",
-            vec![SqlScalarType::Bool],
+            vec![ScalarType::Bool],
         ),
         (
             "SELECT CASE WHEN true THEN $1 ELSE $2 END",
-            vec![SqlScalarType::String, SqlScalarType::String],
+            vec![ScalarType::String, ScalarType::String],
         ),
         (
             "SELECT CASE WHEN true THEN $1 ELSE 1 END",
-            vec![SqlScalarType::Int32],
+            vec![ScalarType::Int32],
         ),
-        ("SELECT pg_catalog.abs($1)", vec![SqlScalarType::Float64]),
-        ("SELECT pg_catalog.ascii($1)", vec![SqlScalarType::String]),
+        ("SELECT pg_catalog.abs($1)", vec![ScalarType::Float64]),
+        ("SELECT pg_catalog.ascii($1)", vec![ScalarType::String]),
         (
             "SELECT coalesce($1, $2, $3)",
-            vec![
-                SqlScalarType::String,
-                SqlScalarType::String,
-                SqlScalarType::String,
-            ],
+            vec![ScalarType::String, ScalarType::String, ScalarType::String],
         ),
-        ("SELECT coalesce($1, 1)", vec![SqlScalarType::Int32]),
+        ("SELECT coalesce($1, 1)", vec![ScalarType::Int32]),
         (
             "SELECT pg_catalog.substr($1, $2)",
-            vec![SqlScalarType::String, SqlScalarType::Int32],
+            vec![ScalarType::String, ScalarType::Int32],
         ),
         (
             "SELECT pg_catalog.substring($1, $2)",
-            vec![SqlScalarType::String, SqlScalarType::Int32],
+            vec![ScalarType::String, ScalarType::Int32],
         ),
         (
             "SELECT $1 LIKE $2",
-            vec![SqlScalarType::String, SqlScalarType::String],
+            vec![ScalarType::String, ScalarType::String],
         ),
-        ("SELECT NOT $1", vec![SqlScalarType::Bool]),
-        (
-            "SELECT $1 AND $2",
-            vec![SqlScalarType::Bool, SqlScalarType::Bool],
-        ),
-        (
-            "SELECT $1 OR $2",
-            vec![SqlScalarType::Bool, SqlScalarType::Bool],
-        ),
-        ("SELECT +$1", vec![SqlScalarType::Float64]),
-        ("SELECT $1 < 1", vec![SqlScalarType::Int32]),
+        ("SELECT NOT $1", vec![ScalarType::Bool]),
+        ("SELECT $1 AND $2", vec![ScalarType::Bool, ScalarType::Bool]),
+        ("SELECT $1 OR $2", vec![ScalarType::Bool, ScalarType::Bool]),
+        ("SELECT +$1", vec![ScalarType::Float64]),
+        ("SELECT $1 < 1", vec![ScalarType::Int32]),
         (
             "SELECT $1 < $2",
-            vec![SqlScalarType::String, SqlScalarType::String],
+            vec![ScalarType::String, ScalarType::String],
         ),
-        ("SELECT $1 + 1", vec![SqlScalarType::Int32]),
+        ("SELECT $1 + 1", vec![ScalarType::Int32]),
         (
             "SELECT $1 + 1.0",
-            vec![SqlScalarType::Numeric { max_scale: None }],
+            vec![ScalarType::Numeric { max_scale: None }],
         ),
         (
             "SELECT '1970-01-01 00:00:00'::pg_catalog.timestamp + $1",
-            vec![SqlScalarType::Interval],
+            vec![ScalarType::Interval],
         ),
         (
             "SELECT $1 + '1970-01-01 00:00:00'::pg_catalog.timestamp",
-            vec![SqlScalarType::Interval],
+            vec![ScalarType::Interval],
         ),
         (
             "SELECT $1::pg_catalog.int4, $1 + $2",
-            vec![SqlScalarType::Int32, SqlScalarType::Int32],
+            vec![ScalarType::Int32, ScalarType::Int32],
         ),
         (
             "SELECT '[0, 1, 2]'::pg_catalog.jsonb - $1",
-            vec![SqlScalarType::String],
+            vec![ScalarType::String],
         ),
     ];
 

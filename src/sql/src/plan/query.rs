@@ -15,7 +15,7 @@
 //! E.g. `plan_query` is responsible for handling `sqlparser::ast::Query`.
 //! plan_* functions which correspond to operations on relations typically return a `HirRelationExpr`.
 //! plan_* functions which correspond to operations on scalars typically return a `HirScalarExpr`
-//! and a `SqlScalarType`. (The latter is because it's not always possible to infer from a
+//! and a `ScalarType`. (The latter is because it's not always possible to infer from a
 //! `HirScalarExpr` what the intended type is - notably in the case of decimals where the
 //! scale/precision are encoded only in the type).
 
@@ -63,8 +63,8 @@ use mz_repr::adt::numeric::{NUMERIC_DATUM_MAX_PRECISION, NumericMaxScale};
 use mz_repr::adt::timestamp::TimestampPrecision;
 use mz_repr::adt::varchar::VarCharMaxLength;
 use mz_repr::{
-    CatalogItemId, ColumnIndex, ColumnName, Datum, RelationDesc, RelationVersionSelector, Row,
-    RowArena, SqlColumnType, SqlRelationType, SqlScalarType, strconv,
+    CatalogItemId, ColumnIndex, ColumnName, ColumnType, Datum, RelationDesc, RelationType,
+    RelationVersionSelector, Row, RowArena, ScalarType, strconv,
 };
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit::Visit;
@@ -159,7 +159,7 @@ pub fn plan_root_query(
     }
 
     let typ = qcx.relation_type(&expr);
-    let typ = SqlRelationType::new(
+    let typ = RelationType::new(
         finishing
             .project
             .iter()
@@ -210,7 +210,7 @@ pub fn plan_ct_query(
     expr.finish_maintained(&mut finishing, group_size_hints);
 
     let typ = qcx.relation_type(&expr);
-    let typ = SqlRelationType::new(
+    let typ = RelationType::new(
         finishing
             .project
             .iter()
@@ -320,7 +320,7 @@ pub fn plan_insert_query(
         source_types.extend(desc.iter_types().map(|x| &x.scalar_type));
         ordering.extend(0..desc.arity());
     } else {
-        let column_by_name: BTreeMap<&ColumnName, (usize, &SqlColumnType)> = desc
+        let column_by_name: BTreeMap<&ColumnName, (usize, &ColumnType)> = desc
             .iter()
             .enumerate()
             .map(|(idx, (name, typ))| (name, (idx, typ)))
@@ -367,7 +367,7 @@ pub fn plan_insert_query(
             }
         }
         InsertSource::DefaultValues => {
-            HirRelationExpr::constant(vec![vec![]], SqlRelationType::empty())
+            HirRelationExpr::constant(vec![vec![]], RelationType::empty())
         }
     };
 
@@ -432,7 +432,7 @@ pub fn plan_insert_query(
             let typ = desc.typ().clone();
             (scope, typ)
         } else {
-            (Scope::empty(), SqlRelationType::empty())
+            (Scope::empty(), RelationType::empty())
         };
         let ecx = &ExprContext {
             qcx: &qcx,
@@ -447,7 +447,7 @@ pub fn plan_insert_query(
         let table_func_names = BTreeMap::new();
         let mut output_columns = vec![];
         let mut new_exprs = vec![];
-        let mut new_type = SqlRelationType::empty();
+        let mut new_type = RelationType::empty();
         for mut si in returning {
             transform_ast::transform(scx, &mut si)?;
             for (select_item, column_name) in expand_select_item(ecx, &si, &table_func_names)? {
@@ -566,7 +566,7 @@ pub fn plan_copy_item(
         table_desc
     } else {
         let columns: Vec<_> = columns.into_iter().map(normalize::column_name).collect();
-        let column_by_name: BTreeMap<&ColumnName, (ColumnIndex, &SqlColumnType)> = table_desc
+        let column_by_name: BTreeMap<&ColumnName, (ColumnIndex, &ColumnType)> = table_desc
             .iter_all()
             .map(|(idx, name, typ)| (name, (*idx, typ)))
             .collect();
@@ -592,7 +592,7 @@ pub fn plan_copy_item(
         }
 
         // The source data is a different shape than the destination table.
-        RelationDesc::new(SqlRelationType::new(source_types), names)
+        RelationDesc::new(RelationType::new(source_types), names)
     };
 
     Ok((item.id(), source_desc, ordering, mfp))
@@ -679,7 +679,7 @@ pub fn plan_copy_from_rows(
             x
         })
         .collect();
-    let typ = SqlRelationType::new(column_types);
+    let typ = RelationType::new(column_types);
     let expr = HirRelationExpr::Constant {
         rows,
         typ: typ.clone(),
@@ -818,7 +818,7 @@ pub fn plan_mutation_query_inner(
                 allow_parameters: true,
                 allow_windows: false,
             };
-            let expr = plan_expr(ecx, &expr)?.type_as(ecx, &SqlScalarType::Bool)?;
+            let expr = plan_expr(ecx, &expr)?.type_as(ecx, &ScalarType::Bool)?;
             get = get.filter(vec![expr]);
         }
     } else {
@@ -933,7 +933,7 @@ fn handle_mutation_using_clause(
         };
 
         // Plan the filter expression on `FROM, USING...`.
-        let mut expr = plan_expr(ecx, &expr)?.type_as(ecx, &SqlScalarType::Bool)?;
+        let mut expr = plan_expr(ecx, &expr)?.type_as(ecx, &ScalarType::Bool)?;
 
         // Rewrite all column referring to the `FROM` section of `joined` (i.e.
         // those to the right of `using_rel_expr`) to instead be correlated to
@@ -975,8 +975,8 @@ fn handle_mutation_using_clause(
 #[derive(Debug)]
 pub(crate) struct CastRelationError {
     pub(crate) column: usize,
-    pub(crate) source_type: SqlScalarType,
-    pub(crate) target_type: SqlScalarType,
+    pub(crate) source_type: ScalarType,
+    pub(crate) target_type: ScalarType,
 }
 
 /// Cast a relation from one type to another using the specified type of cast.
@@ -989,7 +989,7 @@ pub(crate) fn cast_relation<'a, I>(
     target_types: I,
 ) -> Result<HirRelationExpr, CastRelationError>
 where
-    I: IntoIterator<Item = &'a SqlScalarType>,
+    I: IntoIterator<Item = &'a ScalarType>,
 {
     let ecx = &ExprContext {
         qcx,
@@ -1007,7 +1007,7 @@ where
         let expr = HirScalarExpr::column(i);
         // We plan every cast and check the evaluated expressions rather than
         // checking the types directly because of some complex casting rules
-        // between types not expressed in `SqlScalarType` equality.
+        // between types not expressed in `ScalarType` equality.
         match typeconv::plan_cast(ecx, ccx, expr.clone(), target_typ) {
             Ok(cast_expr) => {
                 if expr == cast_expr {
@@ -1117,7 +1117,7 @@ pub fn plan_secret_as(
         allow_windows: false,
     };
     let expr = plan_expr(ecx, &expr)?
-        .type_as(ecx, &SqlScalarType::Bytes)?
+        .type_as(ecx, &ScalarType::Bytes)?
         .lower_uncorrelated()?;
     Ok(expr)
 }
@@ -1145,13 +1145,13 @@ pub fn plan_webhook_validate_using(
     let mut body_tuples = vec![];
     for CreateWebhookSourceBody { alias, use_bytes } in bodies {
         let scalar_type = use_bytes
-            .then_some(SqlScalarType::Bytes)
-            .unwrap_or(SqlScalarType::String);
+            .then_some(ScalarType::Bytes)
+            .unwrap_or(ScalarType::String);
         let name = alias
             .map(|a| a.into_string())
             .unwrap_or_else(|| "body".to_string());
 
-        column_typs.push(SqlColumnType {
+        column_typs.push(ColumnType {
             scalar_type,
             nullable: false,
         });
@@ -1173,14 +1173,14 @@ pub fn plan_webhook_validate_using(
 
     for CreateWebhookSourceHeader { alias, use_bytes } in headers {
         let value_type = use_bytes
-            .then_some(SqlScalarType::Bytes)
-            .unwrap_or(SqlScalarType::String);
+            .then_some(ScalarType::Bytes)
+            .unwrap_or(ScalarType::String);
         let name = alias
             .map(|a| a.into_string())
             .unwrap_or_else(|| "headers".to_string());
 
-        column_typs.push(SqlColumnType {
-            scalar_type: SqlScalarType::Map {
+        column_typs.push(ColumnType {
+            scalar_type: ScalarType::Map {
                 value_type: Box::new(value_type),
                 custom_id: None,
             },
@@ -1210,10 +1210,10 @@ pub fn plan_webhook_validate_using(
     {
         // Either provide the secret to the validation expression as Bytes or a String.
         let scalar_type = use_bytes
-            .then_some(SqlScalarType::Bytes)
-            .unwrap_or(SqlScalarType::String);
+            .then_some(ScalarType::Bytes)
+            .unwrap_or(ScalarType::String);
 
-        column_typs.push(SqlColumnType {
+        column_typs.push(ColumnType {
             scalar_type,
             nullable: false,
         });
@@ -1251,7 +1251,7 @@ pub fn plan_webhook_validate_using(
         });
     }
 
-    let relation_typ = SqlRelationType::new(column_typs);
+    let relation_typ = RelationType::new(column_typs);
     let desc = RelationDesc::new(relation_typ, column_names.clone());
     let scope = Scope::from_source(None, column_names);
 
@@ -1268,7 +1268,7 @@ pub fn plan_webhook_validate_using(
         allow_windows: false,
     };
     let expr = plan_expr(ecx, &expr)?
-        .type_as(ecx, &SqlScalarType::Bool)?
+        .type_as(ecx, &ScalarType::Bool)?
         .lower_uncorrelated()?;
     let validation = WebhookValidation {
         expression: expr,
@@ -1283,14 +1283,14 @@ pub fn plan_webhook_validate_using(
 pub fn plan_default_expr(
     scx: &StatementContext,
     expr: &Expr<Aug>,
-    target_ty: &SqlScalarType,
+    target_ty: &ScalarType,
 ) -> Result<HirScalarExpr, PlanError> {
     let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
     let ecx = &ExprContext {
         qcx: &qcx,
         name: "DEFAULT expression",
         scope: &Scope::empty(),
-        relation_type: &SqlRelationType::empty(),
+        relation_type: &RelationType::empty(),
         allow_aggregates: false,
         allow_subqueries: false,
         allow_parameters: false,
@@ -1345,7 +1345,7 @@ pub fn plan_params<'a>(
 }
 
 static EXECUTE_CONTEXT_SCOPE: LazyLock<Scope> = LazyLock::new(Scope::empty);
-static EXECUTE_CONTEXT_REL_TYPE: LazyLock<SqlRelationType> = LazyLock::new(SqlRelationType::empty);
+static EXECUTE_CONTEXT_REL_TYPE: LazyLock<RelationType> = LazyLock::new(RelationType::empty);
 
 /// Returns an `ExprContext` for the expressions in the parameters of an EXECUTE statement.
 pub(crate) fn execute_expr_context<'a>(qcx: &'a QueryContext<'a>) -> ExprContext<'a> {
@@ -1458,14 +1458,14 @@ fn plan_query_inner(qcx: &mut QueryContext, q: &Query<Aug>) -> Result<PlannedQue
                 qcx,
                 name: "LIMIT",
                 scope: &Scope::empty(),
-                relation_type: &SqlRelationType::empty(),
+                relation_type: &RelationType::empty(),
                 allow_aggregates: false,
                 allow_subqueries: true,
                 allow_parameters: true,
                 allow_windows: false,
             };
             let limit = plan_expr(ecx, quantity)?;
-            let limit = limit.cast_to(ecx, CastContext::Explicit, &SqlScalarType::Int64)?;
+            let limit = limit.cast_to(ecx, CastContext::Explicit, &ScalarType::Int64)?;
 
             let limit = if limit.is_constant() {
                 let arena = RowArena::new();
@@ -1475,10 +1475,8 @@ fn plan_query_inner(qcx: &mut QueryContext, q: &Query<Aug>) -> Result<PlannedQue
                 // that the error happened in a LIMIT clause, so that we have better error msg for
                 // something like `SELECT 5 LIMIT 'aaa'`.
                 match limit.eval(&[], &arena)? {
-                    d @ Datum::Int64(v) if v >= 0 => {
-                        HirScalarExpr::literal(d, SqlScalarType::Int64)
-                    }
-                    d @ Datum::Null => HirScalarExpr::literal(d, SqlScalarType::Int64),
+                    d @ Datum::Int64(v) if v >= 0 => HirScalarExpr::literal(d, ScalarType::Int64),
+                    d @ Datum::Null => HirScalarExpr::literal(d, ScalarType::Int64),
                     Datum::Int64(_) => sql_bail!("LIMIT must not be negative"),
                     _ => sql_bail!("constant LIMIT expression must reduce to an INT or NULL value"),
                 }
@@ -1498,25 +1496,25 @@ fn plan_query_inner(qcx: &mut QueryContext, q: &Query<Aug>) -> Result<PlannedQue
     };
 
     let offset = match &q.offset {
-        None => HirScalarExpr::literal(Datum::Int64(0), SqlScalarType::Int64),
+        None => HirScalarExpr::literal(Datum::Int64(0), ScalarType::Int64),
         Some(offset) => {
             let ecx = &ExprContext {
                 qcx,
                 name: "OFFSET",
                 scope: &Scope::empty(),
-                relation_type: &SqlRelationType::empty(),
+                relation_type: &RelationType::empty(),
                 allow_aggregates: false,
                 allow_subqueries: false,
                 allow_parameters: true,
                 allow_windows: false,
             };
             let offset = plan_expr(ecx, offset)?;
-            let offset = offset.cast_to(ecx, CastContext::Explicit, &SqlScalarType::Int64)?;
+            let offset = offset.cast_to(ecx, CastContext::Explicit, &ScalarType::Int64)?;
 
             let offset = if offset.is_constant() {
                 // Simplify it to a literal or error out. (E.g., the cast inserted above may fail.)
                 let offset_value = offset_into_value(offset)?;
-                HirScalarExpr::literal(Datum::Int64(offset_value), SqlScalarType::Int64)
+                HirScalarExpr::literal(Datum::Int64(offset_value), ScalarType::Int64)
             } else {
                 // The only case when this is allowed to not be a constant is if it contains
                 // parameters. (In which case, we'll later check that it's a constant after
@@ -1712,7 +1710,7 @@ pub fn plan_ctes(
                 for column in cte.columns.iter() {
                     desc_columns.push((
                         normalize::column_name(column.name.clone()),
-                        SqlColumnType {
+                        ColumnType {
                             scalar_type: scalar_type_from_sql(qcx.scx, &column.data_type)?,
                             nullable: true,
                         },
@@ -1755,7 +1753,7 @@ pub fn plan_ctes(
                 // Validate that the derived and proposed types are the same.
                 let derived_typ = qcx.relation_type(&val);
 
-                let type_err = |proposed_typ: &SqlRelationType, derived_typ: SqlRelationType| {
+                let type_err = |proposed_typ: &RelationType, derived_typ: RelationType| {
                     let cte_name = normalize::ident(cte.name.clone());
                     let proposed_typ = proposed_typ
                         .column_types
@@ -2085,7 +2083,7 @@ fn plan_values(
         qcx,
         name: "VALUES",
         scope: &Scope::empty(),
-        relation_type: &SqlRelationType::empty(),
+        relation_type: &RelationType::empty(),
         allow_aggregates: false,
         allow_subqueries: true,
         allow_parameters: true,
@@ -2161,7 +2159,7 @@ fn plan_values(
 fn plan_values_insert(
     qcx: &QueryContext,
     target_names: &[&ColumnName],
-    target_types: &[&SqlScalarType],
+    target_types: &[&ScalarType],
     values: &[Vec<Expr<Aug>>],
 ) -> Result<HirRelationExpr, PlanError> {
     assert!(!values.is_empty());
@@ -2174,7 +2172,7 @@ fn plan_values_insert(
         qcx,
         name: "VALUES",
         scope: &Scope::empty(),
-        relation_type: &SqlRelationType::empty(),
+        relation_type: &RelationType::empty(),
         allow_aggregates: false,
         allow_subqueries: true,
         allow_parameters: true,
@@ -2220,7 +2218,7 @@ fn plan_values_insert(
 }
 
 fn plan_join_identity() -> (HirRelationExpr, Scope) {
-    let typ = SqlRelationType::new(vec![]);
+    let typ = RelationType::new(vec![]);
     let expr = HirRelationExpr::constant(vec![vec![]], typ);
     let scope = Scope::empty();
     (expr, scope)
@@ -2310,7 +2308,7 @@ fn plan_select_from_where(
         };
         let expr = plan_expr(ecx, selection)
             .map_err(|e| sql_err!("WHERE clause error: {}", e))?
-            .type_as(ecx, &SqlScalarType::Bool)?;
+            .type_as(ecx, &ScalarType::Bool)?;
         relation_expr = relation_expr.filter(vec![expr]);
     }
 
@@ -2499,7 +2497,7 @@ fn plan_select_from_where(
             allow_parameters: true,
             allow_windows: false,
         };
-        let expr = plan_expr(ecx, having)?.type_as(ecx, &SqlScalarType::Bool)?;
+        let expr = plan_expr(ecx, having)?.type_as(ecx, &ScalarType::Bool)?;
         relation_expr = relation_expr.filter(vec![expr]);
     }
 
@@ -2557,7 +2555,7 @@ fn plan_select_from_where(
             allow_parameters: true,
             allow_windows: true,
         };
-        let expr = plan_expr(ecx, qualify)?.type_as(ecx, &SqlScalarType::Bool)?;
+        let expr = plan_expr(ecx, qualify)?.type_as(ecx, &ScalarType::Bool)?;
         relation_expr = relation_expr.filter(vec![expr]);
     }
 
@@ -2721,11 +2719,8 @@ fn plan_select_from_where(
                     relation_expr.map(map_exprs),
                     distinct_key,
                     order_by.iter().skip(distinct_len).cloned().collect(),
-                    Some(HirScalarExpr::literal(
-                        Datum::Int64(1),
-                        SqlScalarType::Int64,
-                    )),
-                    HirScalarExpr::literal(Datum::Int64(0), SqlScalarType::Int64),
+                    Some(HirScalarExpr::literal(Datum::Int64(1), ScalarType::Int64)),
+                    HirScalarExpr::literal(Datum::Int64(0), ScalarType::Int64),
                     group_size_hints.distinct_on_input_group_size,
                 );
             }
@@ -3269,7 +3264,7 @@ fn plan_table_function_internal(
         qcx,
         name: "table function arguments",
         scope: &Scope::empty(),
-        relation_type: &SqlRelationType::empty(),
+        relation_type: &RelationType::empty(),
         allow_aggregates: false,
         allow_subqueries: true,
         allow_parameters: true,
@@ -3357,11 +3352,11 @@ fn plan_table_function_internal(
             let expr = func::select_impl(ecx, FuncSpec::Func(name), impls, scalar_args, vec![])?;
             let output = expr.typ(
                 &qcx.outer_relation_types,
-                &SqlRelationType::new(vec![]),
+                &RelationType::new(vec![]),
                 &qcx.scx.param_types.borrow(),
             );
 
-            let relation = SqlRelationType::new(vec![output]);
+            let relation = RelationType::new(vec![output]);
 
             let function_ident = Ident::new(name.full_item_name().item.clone())?;
             let column_name = normalize::column_name(function_ident);
@@ -3634,7 +3629,7 @@ fn expand_select_item<'a>(
             // this operation is slow in Postgres too.
             let expr = plan_expr(ecx, sql_expr)?.type_as_any(ecx)?;
             let fields = match ecx.scalar_type(&expr) {
-                SqlScalarType::Record { fields, .. } => fields,
+                ScalarType::Record { fields, .. } => fields,
                 ty => sql_bail!(
                     "type {} is not composite",
                     ecx.humanize_scalar_type(&ty, false)
@@ -3742,7 +3737,7 @@ fn plan_join(
                 qcx: left_qcx,
                 name: "ON clause",
                 scope: &product_scope,
-                relation_type: &SqlRelationType::new(
+                relation_type: &RelationType::new(
                     left_qcx
                         .relation_type(&left)
                         .column_types
@@ -3755,7 +3750,7 @@ fn plan_join(
                 allow_parameters: true,
                 allow_windows: false,
             };
-            let on = plan_expr(ecx, expr)?.type_as(ecx, &SqlScalarType::Bool)?;
+            let on = plan_expr(ecx, expr)?.type_as(ecx, &ScalarType::Bool)?;
             let joined = left.join(right, on, kind);
             (joined, product_scope)
         }
@@ -3855,7 +3850,7 @@ fn plan_using_constraint(
         qcx: right_qcx,
         name: "USING clause",
         scope: &both_scope,
-        relation_type: &SqlRelationType::new(
+        relation_type: &RelationType::new(
             left_qcx
                 .relation_type(&left)
                 .column_types
@@ -4146,7 +4141,7 @@ fn plan_cast(
 fn plan_not(ecx: &ExprContext, expr: &Expr<Aug>) -> Result<CoercibleScalarExpr, PlanError> {
     let ecx = ecx.with_name("NOT argument");
     Ok(plan_expr(&ecx, expr)?
-        .type_as(&ecx, &SqlScalarType::Bool)?
+        .type_as(&ecx, &ScalarType::Bool)?
         .call_unary(UnaryFunc::Not(expr_func::Not))
         .into())
 }
@@ -4158,8 +4153,8 @@ fn plan_and(
 ) -> Result<CoercibleScalarExpr, PlanError> {
     let ecx = ecx.with_name("AND argument");
     Ok(HirScalarExpr::variadic_and(vec![
-        plan_expr(&ecx, left)?.type_as(&ecx, &SqlScalarType::Bool)?,
-        plan_expr(&ecx, right)?.type_as(&ecx, &SqlScalarType::Bool)?,
+        plan_expr(&ecx, left)?.type_as(&ecx, &ScalarType::Bool)?,
+        plan_expr(&ecx, right)?.type_as(&ecx, &ScalarType::Bool)?,
     ])
     .into())
 }
@@ -4171,8 +4166,8 @@ fn plan_or(
 ) -> Result<CoercibleScalarExpr, PlanError> {
     let ecx = ecx.with_name("OR argument");
     Ok(HirScalarExpr::variadic_or(vec![
-        plan_expr(&ecx, left)?.type_as(&ecx, &SqlScalarType::Bool)?,
-        plan_expr(&ecx, right)?.type_as(&ecx, &SqlScalarType::Bool)?,
+        plan_expr(&ecx, left)?.type_as(&ecx, &ScalarType::Bool)?,
+        plan_expr(&ecx, right)?.type_as(&ecx, &ScalarType::Bool)?,
     ])
     .into())
 }
@@ -4188,7 +4183,7 @@ fn plan_in_list(
         list.into_iter()
             .map(|e| {
                 let eq = lhs.clone().equals(e.clone());
-                plan_expr(&ecx, &eq)?.type_as(&ecx, &SqlScalarType::Bool)
+                plan_expr(&ecx, &eq)?.type_as(&ecx, &ScalarType::Bool)
             })
             .collect::<Result<Vec<HirScalarExpr>, PlanError>>()?,
     );
@@ -4230,9 +4225,7 @@ fn plan_field_access(
     let expr = plan_expr(ecx, expr)?.type_as_any(ecx)?;
     let ty = ecx.scalar_type(&expr);
     let i = match &ty {
-        SqlScalarType::Record { fields, .. } => {
-            fields.iter().position(|(name, _ty)| *name == field)
-        }
+        ScalarType::Record { fields, .. } => fields.iter().position(|(name, _ty)| *name == field),
         ty => sql_bail!(
             "column notation applied to type {}, which is not a composite type",
             ecx.humanize_scalar_type(ty, false)
@@ -4264,21 +4257,17 @@ fn plan_subscript(
     let expr = plan_expr(ecx, expr)?.type_as_any(ecx)?;
     let ty = ecx.scalar_type(&expr);
     match &ty {
-        SqlScalarType::Array(..) | SqlScalarType::Int2Vector => plan_subscript_array(
+        ScalarType::Array(..) | ScalarType::Int2Vector => plan_subscript_array(
             ecx,
             expr,
             positions,
             // Int2Vector uses 0-based indexing, while arrays use 1-based indexing, so we need to
             // adjust all Int2Vector subscript operations by 1 (both w/r/t input and the values we
             // track in its backing data).
-            if ty == SqlScalarType::Int2Vector {
-                1
-            } else {
-                0
-            },
+            if ty == ScalarType::Int2Vector { 1 } else { 0 },
         ),
-        SqlScalarType::Jsonb => plan_subscript_jsonb(ecx, expr, positions),
-        SqlScalarType::List { element_type, .. } => {
+        ScalarType::Jsonb => plan_subscript_jsonb(ecx, expr, positions),
+        ScalarType::List { element_type, .. } => {
             // `elem_type_name` is used only in error msgs, so we set `postgres_compat` to false.
             let elem_type_name = ecx.humanize_scalar_type(element_type, false);
             let n_layers = ty.unwrap_list_n_layers();
@@ -4326,11 +4315,7 @@ fn plan_subscript_array(
     let indexes = extract_scalar_subscript_from_positions(positions, "array")?;
 
     for i in indexes {
-        exprs.push(plan_expr(ecx, i)?.cast_to(
-            ecx,
-            CastContext::Explicit,
-            &SqlScalarType::Int64,
-        )?);
+        exprs.push(plan_expr(ecx, i)?.cast_to(ecx, CastContext::Explicit, &ScalarType::Int64)?);
     }
 
     Ok(HirScalarExpr::call_variadic(VariadicFunc::ArrayIndex { offset }, exprs).into())
@@ -4411,11 +4396,7 @@ fn plan_index_list(
     exprs.push(expr);
 
     for i in indexes {
-        exprs.push(plan_expr(ecx, i)?.cast_to(
-            ecx,
-            CastContext::Explicit,
-            &SqlScalarType::Int64,
-        )?);
+        exprs.push(plan_expr(ecx, i)?.cast_to(ecx, CastContext::Explicit, &ScalarType::Int64)?);
     }
 
     Ok((
@@ -4442,9 +4423,9 @@ fn plan_slice_list(
     let extract_position_or_default = |position, default| -> Result<HirScalarExpr, PlanError> {
         Ok(match position {
             Some(p) => {
-                plan_expr(ecx, p)?.cast_to(ecx, CastContext::Explicit, &SqlScalarType::Int64)?
+                plan_expr(ecx, p)?.cast_to(ecx, CastContext::Explicit, &ScalarType::Int64)?
             }
-            None => HirScalarExpr::literal(Datum::Int64(default), SqlScalarType::Int64),
+            None => HirScalarExpr::literal(Datum::Int64(default), ScalarType::Int64),
         })
     };
     for p in slices {
@@ -4472,15 +4453,15 @@ fn plan_like(
     let ecx = ecx.with_name("LIKE argument");
     let expr = plan_expr(&ecx, expr)?;
     let haystack = match ecx.scalar_type(&expr) {
-        CoercibleScalarType::Coerced(ref ty @ SqlScalarType::Char { length }) => expr
+        CoercibleScalarType::Coerced(ref ty @ ScalarType::Char { length }) => expr
             .type_as(&ecx, ty)?
             .call_unary(UnaryFunc::PadChar(expr_func::PadChar { length })),
-        _ => expr.cast_to(&ecx, Implicit, &SqlScalarType::String)?,
+        _ => expr.cast_to(&ecx, Implicit, &ScalarType::String)?,
     };
-    let mut pattern = plan_expr(&ecx, pattern)?.cast_to(&ecx, Implicit, &SqlScalarType::String)?;
+    let mut pattern = plan_expr(&ecx, pattern)?.cast_to(&ecx, Implicit, &ScalarType::String)?;
     if let Some(escape) = escape {
         pattern = pattern.call_binary(
-            plan_expr(&ecx, escape)?.cast_to(&ecx, Implicit, &SqlScalarType::String)?,
+            plan_expr(&ecx, escape)?.cast_to(&ecx, Implicit, &ScalarType::String)?,
             BinaryFunc::LikeEscape,
         );
     }
@@ -4498,7 +4479,7 @@ fn plan_subscript_jsonb(
     positions: &[SubscriptPosition<Aug>],
 ) -> Result<CoercibleScalarExpr, PlanError> {
     use CastContext::Implicit;
-    use SqlScalarType::{Int64, String};
+    use ScalarType::{Int64, String};
 
     // JSONB doesn't support the slicing syntax, so simply error if you
     // encounter any explicit slices.
@@ -4525,7 +4506,7 @@ fn plan_subscript_jsonb(
     let expr = expr.call_binary(
         HirScalarExpr::call_variadic(
             VariadicFunc::ArrayCreate {
-                elem_type: SqlScalarType::String,
+                elem_type: ScalarType::String,
             },
             exprs,
         ),
@@ -4573,7 +4554,7 @@ fn plan_list_subquery(
         |elem_type| {
             HirScalarExpr::literal(
                 Datum::empty_list(),
-                SqlScalarType::List {
+                ScalarType::List {
                     element_type: Box::new(elem_type),
                     custom_id: None,
                 },
@@ -4593,20 +4574,17 @@ fn plan_array_subquery(
         |elem_type| {
             matches!(
                 elem_type,
-                SqlScalarType::Char { .. }
-                    | SqlScalarType::Array { .. }
-                    | SqlScalarType::List { .. }
-                    | SqlScalarType::Map { .. }
+                ScalarType::Char { .. }
+                    | ScalarType::Array { .. }
+                    | ScalarType::List { .. }
+                    | ScalarType::Map { .. }
             )
         },
         |elem_type| VariadicFunc::ArrayCreate { elem_type },
         |order_by| AggregateFunc::ArrayConcat { order_by },
         BinaryFunc::ArrayArrayConcat,
         |elem_type| {
-            HirScalarExpr::literal(
-                Datum::empty_array(),
-                SqlScalarType::Array(Box::new(elem_type)),
-            )
+            HirScalarExpr::literal(Datum::empty_array(), ScalarType::Array(Box::new(elem_type)))
         },
         "[]",
     )
@@ -4624,10 +4602,10 @@ fn plan_vector_like_subquery<F1, F2, F3, F4>(
     vector_type_string: &str,
 ) -> Result<CoercibleScalarExpr, PlanError>
 where
-    F1: Fn(&SqlScalarType) -> bool,
-    F2: Fn(SqlScalarType) -> VariadicFunc,
+    F1: Fn(&ScalarType) -> bool,
+    F2: Fn(ScalarType) -> VariadicFunc,
     F3: Fn(Vec<ColumnOrder>) -> AggregateFunc,
-    F4: Fn(SqlScalarType) -> HirScalarExpr,
+    F4: Fn(ScalarType) -> HirScalarExpr,
 {
     if !ecx.allow_subqueries {
         sql_bail!("{} does not allow subqueries", ecx.name)
@@ -4767,7 +4745,7 @@ fn plan_map_subquery(
     let value_column = query.project[1];
     let value_type = query_types[value_column].clone().scalar_type();
 
-    if key_type != SqlScalarType::String {
+    if key_type != ScalarType::String {
         sql_bail!("cannot build map from subquery because first column is not of type text");
     }
 
@@ -4823,7 +4801,7 @@ fn plan_map_subquery(
             expr.select(),
             HirScalarExpr::literal(
                 Datum::empty_map(),
-                SqlScalarType::Map {
+                ScalarType::Map {
                     value_type: Box::new(value_type),
                     custom_id: None,
                 },
@@ -4870,7 +4848,7 @@ where
 fn plan_array(
     ecx: &ExprContext,
     exprs: &[Expr<Aug>],
-    type_hint: Option<&SqlScalarType>,
+    type_hint: Option<&ScalarType>,
 ) -> Result<CoercibleScalarExpr, PlanError> {
     // Plan each element expression.
     let mut out = vec![];
@@ -4889,11 +4867,11 @@ fn plan_array(
         // element type to coerce to. Need to be careful, though: if there's
         // evidence that any of the array elements are themselves arrays, we
         // want to coerce to the array type, not the element type.
-        Some(SqlScalarType::Array(elem_type)) => {
+        Some(ScalarType::Array(elem_type)) => {
             let multidimensional = out.iter().any(|e| {
                 matches!(
                     ecx.scalar_type(e),
-                    CoercibleScalarType::Coerced(SqlScalarType::Array(_))
+                    CoercibleScalarType::Coerced(ScalarType::Array(_))
                 )
             });
             if multidimensional {
@@ -4929,7 +4907,7 @@ fn plan_array(
     // semantics.
     if matches!(
         elem_type,
-        SqlScalarType::Char { .. } | SqlScalarType::List { .. } | SqlScalarType::Map { .. }
+        ScalarType::Char { .. } | ScalarType::List { .. } | ScalarType::Map { .. }
     ) {
         bail_unsupported!(format!("{}[]", ecx.humanize_scalar_type(&elem_type, false)));
     }
@@ -4940,17 +4918,17 @@ fn plan_array(
 fn plan_list(
     ecx: &ExprContext,
     exprs: &[Expr<Aug>],
-    type_hint: Option<&SqlScalarType>,
+    type_hint: Option<&ScalarType>,
 ) -> Result<CoercibleScalarExpr, PlanError> {
     let (elem_type, exprs) = if exprs.is_empty() {
-        if let Some(SqlScalarType::List { element_type, .. }) = type_hint {
+        if let Some(ScalarType::List { element_type, .. }) = type_hint {
             (element_type.without_modifiers(), vec![])
         } else {
             sql_bail!("cannot determine type of empty list");
         }
     } else {
         let type_hint = match type_hint {
-            Some(SqlScalarType::List { element_type, .. }) => Some(&**element_type),
+            Some(ScalarType::List { element_type, .. }) => Some(&**element_type),
             _ => None,
         };
 
@@ -4967,7 +4945,7 @@ fn plan_list(
         (ecx.scalar_type(&out[0]).without_modifiers(), out)
     };
 
-    if matches!(elem_type, SqlScalarType::Char { .. }) {
+    if matches!(elem_type, ScalarType::Char { .. }) {
         bail_unsupported!("char list");
     }
 
@@ -4977,24 +4955,24 @@ fn plan_list(
 fn plan_map(
     ecx: &ExprContext,
     entries: &[MapEntry<Aug>],
-    type_hint: Option<&SqlScalarType>,
+    type_hint: Option<&ScalarType>,
 ) -> Result<CoercibleScalarExpr, PlanError> {
     let (value_type, exprs) = if entries.is_empty() {
-        if let Some(SqlScalarType::Map { value_type, .. }) = type_hint {
+        if let Some(ScalarType::Map { value_type, .. }) = type_hint {
             (value_type.without_modifiers(), vec![])
         } else {
             sql_bail!("cannot determine type of empty map");
         }
     } else {
         let type_hint = match type_hint {
-            Some(SqlScalarType::Map { value_type, .. }) => Some(&**value_type),
+            Some(ScalarType::Map { value_type, .. }) => Some(&**value_type),
             _ => None,
         };
 
         let mut keys = vec![];
         let mut values = vec![];
         for MapEntry { key, value } in entries {
-            let key = plan_expr(ecx, key)?.type_as(ecx, &SqlScalarType::String)?;
+            let key = plan_expr(ecx, key)?.type_as(ecx, &ScalarType::String)?;
             let value = match value {
                 // Special case nested MAP expressions so we can plumb
                 // the type hint through.
@@ -5010,7 +4988,7 @@ fn plan_map(
         (value_type, out)
     };
 
-    if matches!(value_type, SqlScalarType::Char { .. }) {
+    if matches!(value_type, ScalarType::Char { .. }) {
         bail_unsupported!("char map");
     }
 
@@ -5037,7 +5015,7 @@ fn plan_map(
 pub fn coerce_homogeneous_exprs(
     ecx: &ExprContext,
     exprs: Vec<CoercibleScalarExpr>,
-    force_type: Option<&SqlScalarType>,
+    force_type: Option<&ScalarType>,
 ) -> Result<Vec<HirScalarExpr>, PlanError> {
     assert!(!exprs.is_empty());
 
@@ -5182,8 +5160,7 @@ fn plan_aggregate_common(
         //     <agg>(CASE WHEN <cond> THEN <expr> ELSE <identity>)
         //
         // where <identity> is the identity input for <agg>.
-        let cond =
-            plan_expr(&ecx.with_name("FILTER"), filter)?.type_as(ecx, &SqlScalarType::Bool)?;
+        let cond = plan_expr(&ecx.with_name("FILTER"), filter)?.type_as(ecx, &ScalarType::Bool)?;
         let expr_typ = ecx.scalar_type(&expr);
         expr = HirScalarExpr::if_then_else(
             cond,
@@ -5621,15 +5598,15 @@ fn plan_is_expr<'a>(
             expr.call_is_null()
         }
         IsExprConstruct::Unknown => {
-            let expr = expr.type_as(ecx, &SqlScalarType::Bool)?;
+            let expr = expr.type_as(ecx, &ScalarType::Bool)?;
             expr.call_is_null()
         }
         IsExprConstruct::True => {
-            let expr = expr.type_as(ecx, &SqlScalarType::Bool)?;
+            let expr = expr.type_as(ecx, &ScalarType::Bool)?;
             expr.call_unary(UnaryFunc::IsTrue(expr_func::IsTrue))
         }
         IsExprConstruct::False => {
-            let expr = expr.type_as(ecx, &SqlScalarType::Bool)?;
+            let expr = expr.type_as(ecx, &ScalarType::Bool)?;
             expr.call_unary(UnaryFunc::IsFalse(expr_func::IsFalse))
         }
         IsExprConstruct::DistinctFrom(expr2) => {
@@ -5673,7 +5650,7 @@ fn plan_case<'a>(
             Some(operand) => operand.clone().equals(c.clone()),
             None => c.clone(),
         };
-        let cexpr = plan_expr(ecx, &c)?.type_as(ecx, &SqlScalarType::Bool)?;
+        let cexpr = plan_expr(ecx, &c)?.type_as(ecx, &ScalarType::Bool)?;
         cond_exprs.push(cexpr);
         result_exprs.push(r);
     }
@@ -5701,30 +5678,24 @@ fn plan_literal<'a>(l: &'a Value) -> Result<CoercibleScalarExpr, PlanError> {
             if !s.contains(&['E', '.'][..]) {
                 // Maybe representable as an int?
                 if let Ok(n) = d.0.try_into() {
-                    (Datum::Int32(n), SqlScalarType::Int32)
+                    (Datum::Int32(n), ScalarType::Int32)
                 } else if let Ok(n) = d.0.try_into() {
-                    (Datum::Int64(n), SqlScalarType::Int64)
+                    (Datum::Int64(n), ScalarType::Int64)
                 } else {
-                    (
-                        Datum::Numeric(d),
-                        SqlScalarType::Numeric { max_scale: None },
-                    )
+                    (Datum::Numeric(d), ScalarType::Numeric { max_scale: None })
                 }
             } else {
-                (
-                    Datum::Numeric(d),
-                    SqlScalarType::Numeric { max_scale: None },
-                )
+                (Datum::Numeric(d), ScalarType::Numeric { max_scale: None })
             }
         }
         Value::HexString(_) => bail_unsupported!("hex string literals"),
         Value::Boolean(b) => match b {
-            false => (Datum::False, SqlScalarType::Bool),
-            true => (Datum::True, SqlScalarType::Bool),
+            false => (Datum::False, ScalarType::Bool),
+            true => (Datum::True, ScalarType::Bool),
         },
         Value::Interval(i) => {
             let i = literal::plan_interval(i)?;
-            (Datum::Interval(i), SqlScalarType::Interval)
+            (Datum::Interval(i), ScalarType::Interval)
         }
         Value::String(s) => return Ok(CoercibleScalarExpr::LiteralString(s.clone())),
         Value::Null => return Ok(CoercibleScalarExpr::LiteralNull),
@@ -5953,14 +5924,14 @@ fn window_frame_bound_ast_to_expr(bound: &WindowFrameBound) -> mz_expr::WindowFr
 pub fn scalar_type_from_sql(
     scx: &StatementContext,
     data_type: &ResolvedDataType,
-) -> Result<SqlScalarType, PlanError> {
+) -> Result<ScalarType, PlanError> {
     match data_type {
         ResolvedDataType::AnonymousList(elem_type) => {
             let elem_type = scalar_type_from_sql(scx, elem_type)?;
-            if matches!(elem_type, SqlScalarType::Char { .. }) {
+            if matches!(elem_type, ScalarType::Char { .. }) {
                 bail_unsupported!("char list");
             }
-            Ok(SqlScalarType::List {
+            Ok(ScalarType::List {
                 element_type: Box::new(elem_type),
                 custom_id: None,
             })
@@ -5970,14 +5941,14 @@ pub fn scalar_type_from_sql(
             value_type,
         } => {
             match scalar_type_from_sql(scx, key_type)? {
-                SqlScalarType::String => {}
+                ScalarType::String => {}
                 other => sql_bail!(
                     "map key type must be {}, got {}",
-                    scx.humanize_scalar_type(&SqlScalarType::String, false),
+                    scx.humanize_scalar_type(&ScalarType::String, false),
                     scx.humanize_scalar_type(&other, false)
                 ),
             }
-            Ok(SqlScalarType::Map {
+            Ok(ScalarType::Map {
                 value_type: Box::new(scalar_type_from_sql(scx, value_type)?),
                 custom_id: None,
             })
@@ -5993,7 +5964,7 @@ pub fn scalar_type_from_catalog(
     catalog: &dyn SessionCatalog,
     id: CatalogItemId,
     modifiers: &[i64],
-) -> Result<SqlScalarType, PlanError> {
+) -> Result<ScalarType, PlanError> {
     let entry = catalog.get_item(&id);
     let type_details = match entry.type_details() {
         Some(type_details) => type_details,
@@ -6036,7 +6007,7 @@ pub fn scalar_type_from_catalog(
             if modifiers.next().is_some() {
                 sql_bail!("type numeric supports at most two type modifiers");
             }
-            Ok(SqlScalarType::Numeric { max_scale: scale })
+            Ok(ScalarType::Numeric { max_scale: scale })
         }
         CatalogType::Char => {
             let mut modifiers = modifiers.iter().fuse();
@@ -6047,7 +6018,7 @@ pub fn scalar_type_from_catalog(
             if modifiers.next().is_some() {
                 sql_bail!("type character supports at most one type modifier");
             }
-            Ok(SqlScalarType::Char { length })
+            Ok(ScalarType::Char { length })
         }
         CatalogType::VarChar => {
             let mut modifiers = modifiers.iter().fuse();
@@ -6058,7 +6029,7 @@ pub fn scalar_type_from_catalog(
             if modifiers.next().is_some() {
                 sql_bail!("type character varying supports at most one type modifier");
             }
-            Ok(SqlScalarType::VarChar { max_length: length })
+            Ok(ScalarType::VarChar { max_length: length })
         }
         CatalogType::Timestamp => {
             let mut modifiers = modifiers.iter().fuse();
@@ -6069,7 +6040,7 @@ pub fn scalar_type_from_catalog(
             if modifiers.next().is_some() {
                 sql_bail!("type timestamp supports at most one type modifier");
             }
-            Ok(SqlScalarType::Timestamp { precision })
+            Ok(ScalarType::Timestamp { precision })
         }
         CatalogType::TimestampTz => {
             let mut modifiers = modifiers.iter().fuse();
@@ -6080,7 +6051,7 @@ pub fn scalar_type_from_catalog(
             if modifiers.next().is_some() {
                 sql_bail!("type timestamp with time zone supports at most one type modifier");
             }
-            Ok(SqlScalarType::TimestampTz { precision })
+            Ok(ScalarType::TimestampTz { precision })
         }
         t => {
             if !modifiers.is_empty() {
@@ -6092,7 +6063,7 @@ pub fn scalar_type_from_catalog(
             match t {
                 CatalogType::Array {
                     element_reference: element_id,
-                } => Ok(SqlScalarType::Array(Box::new(scalar_type_from_catalog(
+                } => Ok(ScalarType::Array(Box::new(scalar_type_from_catalog(
                     catalog,
                     *element_id,
                     modifiers,
@@ -6100,7 +6071,7 @@ pub fn scalar_type_from_catalog(
                 CatalogType::List {
                     element_reference: element_id,
                     element_modifiers,
-                } => Ok(SqlScalarType::List {
+                } => Ok(ScalarType::List {
                     element_type: Box::new(scalar_type_from_catalog(
                         catalog,
                         *element_id,
@@ -6113,7 +6084,7 @@ pub fn scalar_type_from_catalog(
                     key_modifiers: _,
                     value_reference: value_id,
                     value_modifiers,
-                } => Ok(SqlScalarType::Map {
+                } => Ok(ScalarType::Map {
                     value_type: Box::new(scalar_type_from_catalog(
                         catalog,
                         *value_id,
@@ -6123,11 +6094,11 @@ pub fn scalar_type_from_catalog(
                 }),
                 CatalogType::Range {
                     element_reference: element_id,
-                } => Ok(SqlScalarType::Range {
+                } => Ok(ScalarType::Range {
                     element_type: Box::new(scalar_type_from_catalog(catalog, *element_id, &[])?),
                 }),
                 CatalogType::Record { fields } => {
-                    let scalars: Box<[(ColumnName, SqlColumnType)]> = fields
+                    let scalars: Box<[(ColumnName, ColumnType)]> = fields
                         .iter()
                         .map(|f| {
                             let scalar_type = scalar_type_from_catalog(
@@ -6137,50 +6108,50 @@ pub fn scalar_type_from_catalog(
                             )?;
                             Ok((
                                 f.name.clone(),
-                                SqlColumnType {
+                                ColumnType {
                                     scalar_type,
                                     nullable: true,
                                 },
                             ))
                         })
                         .collect::<Result<Box<_>, PlanError>>()?;
-                    Ok(SqlScalarType::Record {
+                    Ok(ScalarType::Record {
                         fields: scalars,
                         custom_id: Some(id),
                     })
                 }
-                CatalogType::AclItem => Ok(SqlScalarType::AclItem),
-                CatalogType::Bool => Ok(SqlScalarType::Bool),
-                CatalogType::Bytes => Ok(SqlScalarType::Bytes),
-                CatalogType::Date => Ok(SqlScalarType::Date),
-                CatalogType::Float32 => Ok(SqlScalarType::Float32),
-                CatalogType::Float64 => Ok(SqlScalarType::Float64),
-                CatalogType::Int16 => Ok(SqlScalarType::Int16),
-                CatalogType::Int32 => Ok(SqlScalarType::Int32),
-                CatalogType::Int64 => Ok(SqlScalarType::Int64),
-                CatalogType::UInt16 => Ok(SqlScalarType::UInt16),
-                CatalogType::UInt32 => Ok(SqlScalarType::UInt32),
-                CatalogType::UInt64 => Ok(SqlScalarType::UInt64),
-                CatalogType::MzTimestamp => Ok(SqlScalarType::MzTimestamp),
-                CatalogType::Interval => Ok(SqlScalarType::Interval),
-                CatalogType::Jsonb => Ok(SqlScalarType::Jsonb),
-                CatalogType::Oid => Ok(SqlScalarType::Oid),
-                CatalogType::PgLegacyChar => Ok(SqlScalarType::PgLegacyChar),
-                CatalogType::PgLegacyName => Ok(SqlScalarType::PgLegacyName),
+                CatalogType::AclItem => Ok(ScalarType::AclItem),
+                CatalogType::Bool => Ok(ScalarType::Bool),
+                CatalogType::Bytes => Ok(ScalarType::Bytes),
+                CatalogType::Date => Ok(ScalarType::Date),
+                CatalogType::Float32 => Ok(ScalarType::Float32),
+                CatalogType::Float64 => Ok(ScalarType::Float64),
+                CatalogType::Int16 => Ok(ScalarType::Int16),
+                CatalogType::Int32 => Ok(ScalarType::Int32),
+                CatalogType::Int64 => Ok(ScalarType::Int64),
+                CatalogType::UInt16 => Ok(ScalarType::UInt16),
+                CatalogType::UInt32 => Ok(ScalarType::UInt32),
+                CatalogType::UInt64 => Ok(ScalarType::UInt64),
+                CatalogType::MzTimestamp => Ok(ScalarType::MzTimestamp),
+                CatalogType::Interval => Ok(ScalarType::Interval),
+                CatalogType::Jsonb => Ok(ScalarType::Jsonb),
+                CatalogType::Oid => Ok(ScalarType::Oid),
+                CatalogType::PgLegacyChar => Ok(ScalarType::PgLegacyChar),
+                CatalogType::PgLegacyName => Ok(ScalarType::PgLegacyName),
                 CatalogType::Pseudo => {
                     sql_bail!(
                         "cannot reference pseudo type {}",
                         catalog.resolve_full_name(entry.name()).to_string()
                     )
                 }
-                CatalogType::RegClass => Ok(SqlScalarType::RegClass),
-                CatalogType::RegProc => Ok(SqlScalarType::RegProc),
-                CatalogType::RegType => Ok(SqlScalarType::RegType),
-                CatalogType::String => Ok(SqlScalarType::String),
-                CatalogType::Time => Ok(SqlScalarType::Time),
-                CatalogType::Uuid => Ok(SqlScalarType::Uuid),
-                CatalogType::Int2Vector => Ok(SqlScalarType::Int2Vector),
-                CatalogType::MzAclItem => Ok(SqlScalarType::MzAclItem),
+                CatalogType::RegClass => Ok(ScalarType::RegClass),
+                CatalogType::RegProc => Ok(ScalarType::RegProc),
+                CatalogType::RegType => Ok(ScalarType::RegType),
+                CatalogType::String => Ok(ScalarType::String),
+                CatalogType::Time => Ok(ScalarType::Time),
+                CatalogType::Uuid => Ok(ScalarType::Uuid),
+                CatalogType::Int2Vector => Ok(ScalarType::Int2Vector),
+                CatalogType::MzAclItem => Ok(ScalarType::MzAclItem),
                 CatalogType::Numeric => unreachable!("handled above"),
                 CatalogType::Char => unreachable!("handled above"),
                 CatalogType::VarChar => unreachable!("handled above"),
@@ -6476,7 +6447,7 @@ pub struct QueryContext<'a> {
     /// The scopes of the outer relation expression.
     pub outer_scopes: Vec<Scope>,
     /// The type of the outer relation expressions.
-    pub outer_relation_types: Vec<SqlRelationType>,
+    pub outer_relation_types: Vec<RelationType>,
     /// CTEs for this query, mapping their assigned LocalIds to their definition.
     pub ctes: BTreeMap<LocalId, CteDesc>,
     /// A name manager, for interning column names that will be stored in HIR and MIR.
@@ -6503,13 +6474,13 @@ impl<'a> QueryContext<'a> {
         }
     }
 
-    fn relation_type(&self, expr: &HirRelationExpr) -> SqlRelationType {
+    fn relation_type(&self, expr: &HirRelationExpr) -> RelationType {
         expr.typ(&self.outer_relation_types, &self.scx.param_types.borrow())
     }
 
     /// Generate a new `QueryContext` appropriate to be used in subqueries of
     /// `self`.
-    fn derived_context(&self, scope: Scope, relation_type: SqlRelationType) -> QueryContext<'a> {
+    fn derived_context(&self, scope: Scope, relation_type: RelationType) -> QueryContext<'a> {
         let ctes = self.ctes.clone();
         let outer_scopes = iter::once(scope).chain(self.outer_scopes.clone()).collect();
         let outer_relation_types = iter::once(relation_type)
@@ -6532,7 +6503,7 @@ impl<'a> QueryContext<'a> {
     /// Derives a `QueryContext` for a scope that contains no columns.
     fn empty_derived_context(&self) -> QueryContext<'a> {
         let scope = Scope::empty();
-        let ty = SqlRelationType::empty();
+        let ty = RelationType::empty();
         self.derived_context(scope, ty)
     }
 
@@ -6592,7 +6563,7 @@ impl<'a> QueryContext<'a> {
 
     /// The returned String is more detailed when the `postgres_compat` flag is not set. However,
     /// the flag should be set in, e.g., the implementation of the `pg_typeof` function.
-    pub fn humanize_scalar_type(&self, typ: &SqlScalarType, postgres_compat: bool) -> String {
+    pub fn humanize_scalar_type(&self, typ: &ScalarType, postgres_compat: bool) -> String {
         self.scx.humanize_scalar_type(typ, postgres_compat)
     }
 }
@@ -6608,7 +6579,7 @@ pub struct ExprContext<'a> {
     pub scope: &'a Scope,
     /// The type of the current relation expression upon which this scalar
     /// expression will be evaluated.
-    pub relation_type: &'a SqlRelationType,
+    pub relation_type: &'a RelationType,
     /// Are aggregate functions allowed in this context
     pub allow_aggregates: bool,
     /// Are subqueries allowed in this context
@@ -6664,13 +6635,13 @@ impl<'a> ExprContext<'a> {
         self.qcx.scx.require_feature_flag(flag)
     }
 
-    pub fn param_types(&self) -> &RefCell<BTreeMap<usize, SqlScalarType>> {
+    pub fn param_types(&self) -> &RefCell<BTreeMap<usize, ScalarType>> {
         &self.qcx.scx.param_types
     }
 
     /// The returned String is more detailed when the `postgres_compat` flag is not set. However,
     /// the flag should be set in, e.g., the implementation of the `pg_typeof` function.
-    pub fn humanize_scalar_type(&self, typ: &SqlScalarType, postgres_compat: bool) -> String {
+    pub fn humanize_scalar_type(&self, typ: &ScalarType, postgres_compat: bool) -> String {
         self.qcx.scx.humanize_scalar_type(typ, postgres_compat)
     }
 

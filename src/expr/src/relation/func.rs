@@ -31,8 +31,8 @@ use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
 use mz_repr::adt::regex::Regex as ReprRegex;
 use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampLike};
 use mz_repr::{
-    ColumnName, Datum, Diff, Row, RowArena, RowPacker, SharedRow, SqlColumnType, SqlRelationType,
-    SqlScalarType, datum_size,
+    ColumnName, ColumnType, Datum, Diff, RelationType, Row, RowArena, RowPacker, ScalarType,
+    SharedRow, datum_size,
 };
 use num::{CheckedAdd, Integer, Signed, ToPrimitive};
 use ordered_float::OrderedFloat;
@@ -1873,14 +1873,14 @@ pub enum AggregateFunc {
     /// elements are columns used by `order_by`.
     MapAgg {
         order_by: Vec<ColumnOrder>,
-        value_type: SqlScalarType,
+        value_type: ScalarType,
     },
-    /// Accumulates `Datum::Array`s of `SqlScalarType::Record` whose first element is a `Datum::Array`
+    /// Accumulates `Datum::Array`s of `ScalarType::Record` whose first element is a `Datum::Array`
     /// into a single `Datum::Array` (the remaining fields are used by `order_by`).
     ArrayConcat {
         order_by: Vec<ColumnOrder>,
     },
-    /// Accumulates `Datum::List`s of `SqlScalarType::Record` whose first field is a `Datum::List`
+    /// Accumulates `Datum::List`s of `ScalarType::Record` whose first field is a `Datum::List`
     /// into a single `Datum::List` (the remaining fields are used by `order_by`).
     ListConcat {
         order_by: Vec<ColumnOrder>,
@@ -2003,7 +2003,7 @@ impl Arbitrary for AggregateFunc {
                 .boxed(),
             (
                 vec(proptest_any::<ColumnOrder>(), 1..4),
-                proptest_any::<SqlScalarType>(),
+                proptest_any::<ScalarType>(),
             )
                 .prop_map(|(order_by, value_type)| AggregateFunc::MapAgg {
                     order_by,
@@ -2719,35 +2719,35 @@ impl AggregateFunc {
     /// The output column type also contains nullability information, which
     /// is (without further information) true for aggregations that are not
     /// counts.
-    pub fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
+    pub fn output_type(&self, input_type: ColumnType) -> ColumnType {
         let scalar_type = match self {
-            AggregateFunc::Count => SqlScalarType::Int64,
-            AggregateFunc::Any => SqlScalarType::Bool,
-            AggregateFunc::All => SqlScalarType::Bool,
-            AggregateFunc::JsonbAgg { .. } => SqlScalarType::Jsonb,
-            AggregateFunc::JsonbObjectAgg { .. } => SqlScalarType::Jsonb,
-            AggregateFunc::SumInt16 => SqlScalarType::Int64,
-            AggregateFunc::SumInt32 => SqlScalarType::Int64,
-            AggregateFunc::SumInt64 => SqlScalarType::Numeric {
+            AggregateFunc::Count => ScalarType::Int64,
+            AggregateFunc::Any => ScalarType::Bool,
+            AggregateFunc::All => ScalarType::Bool,
+            AggregateFunc::JsonbAgg { .. } => ScalarType::Jsonb,
+            AggregateFunc::JsonbObjectAgg { .. } => ScalarType::Jsonb,
+            AggregateFunc::SumInt16 => ScalarType::Int64,
+            AggregateFunc::SumInt32 => ScalarType::Int64,
+            AggregateFunc::SumInt64 => ScalarType::Numeric {
                 max_scale: Some(NumericMaxScale::ZERO),
             },
-            AggregateFunc::SumUInt16 => SqlScalarType::UInt64,
-            AggregateFunc::SumUInt32 => SqlScalarType::UInt64,
-            AggregateFunc::SumUInt64 => SqlScalarType::Numeric {
+            AggregateFunc::SumUInt16 => ScalarType::UInt64,
+            AggregateFunc::SumUInt32 => ScalarType::UInt64,
+            AggregateFunc::SumUInt64 => ScalarType::Numeric {
                 max_scale: Some(NumericMaxScale::ZERO),
             },
-            AggregateFunc::MapAgg { value_type, .. } => SqlScalarType::Map {
+            AggregateFunc::MapAgg { value_type, .. } => ScalarType::Map {
                 value_type: Box::new(value_type.clone()),
                 custom_id: None,
             },
             AggregateFunc::ArrayConcat { .. } | AggregateFunc::ListConcat { .. } => {
                 match input_type.scalar_type {
                     // The input is wrapped in a Record if there's an ORDER BY, so extract it out.
-                    SqlScalarType::Record { ref fields, .. } => fields[0].1.scalar_type.clone(),
+                    ScalarType::Record { ref fields, .. } => fields[0].1.scalar_type.clone(),
                     _ => unreachable!(),
                 }
             }
-            AggregateFunc::StringAgg { .. } => SqlScalarType::String,
+            AggregateFunc::StringAgg { .. } => ScalarType::String,
             AggregateFunc::RowNumber { .. } => {
                 AggregateFunc::output_type_ranking_window_funcs(&input_type, "?row_number?")
             }
@@ -2766,8 +2766,8 @@ impl AggregateFunc {
                 let output_type_inner = Self::lag_lead_output_type_inner_from_encoded_args(fields[0].unwrap_record_element_type()[1]);
                 let column_name = Self::lag_lead_result_column_name(lag_lead_type);
 
-                SqlScalarType::List {
-                    element_type: Box::new(SqlScalarType::Record {
+                ScalarType::List {
+                    element_type: Box::new(ScalarType::Record {
                         fields: [
                             (column_name, output_type_inner),
                             (ColumnName::from("?orig_row?"), original_row_type),
@@ -2787,8 +2787,8 @@ impl AggregateFunc {
                     .clone()
                     .nullable(true); // null when the partition is empty
 
-                SqlScalarType::List {
-                    element_type: Box::new(SqlScalarType::Record {
+                ScalarType::List {
+                    element_type: Box::new(ScalarType::Record {
                         fields: [
                             (ColumnName::from("?first_value?"), value_type),
                             (ColumnName::from("?orig_row?"), original_row_type),
@@ -2808,8 +2808,8 @@ impl AggregateFunc {
                     .clone()
                     .nullable(true); // null when the partition is empty
 
-                SqlScalarType::List {
-                    element_type: Box::new(SqlScalarType::Record {
+                ScalarType::List {
+                    element_type: Box::new(ScalarType::Record {
                         fields: [
                             (ColumnName::from("?last_value?"), value_type),
                             (ColumnName::from("?orig_row?"), original_row_type),
@@ -2832,8 +2832,8 @@ impl AggregateFunc {
                     .nullable(true);
                 let wrapped_aggr_out_type = wrapped_aggregate.output_type(arg_type);
 
-                SqlScalarType::List {
-                    element_type: Box::new(SqlScalarType::Record {
+                ScalarType::List {
+                    element_type: Box::new(ScalarType::Record {
                         fields: [
                             (ColumnName::from("?window_agg?"), wrapped_aggr_out_type),
                             (ColumnName::from("?orig_row?"), original_row_type),
@@ -2861,10 +2861,10 @@ impl AggregateFunc {
                     )
                 }).collect_vec();
 
-                SqlScalarType::List {
-                    element_type: Box::new(SqlScalarType::Record {
+                ScalarType::List {
+                    element_type: Box::new(ScalarType::Record {
                         fields: [
-                            (ColumnName::from("?fused_window_agg?"), SqlScalarType::Record {
+                            (ColumnName::from("?fused_window_agg?"), ScalarType::Record {
                                 fields: out_fields.into(),
                                 custom_id: None,
                             }.nullable(false)),
@@ -2886,10 +2886,10 @@ impl AggregateFunc {
                     .nullable(false);
                 let encoded_args_type = fields[0].unwrap_record_element_type()[1].unwrap_record_element_type();
 
-                SqlScalarType::List {
-                    element_type: Box::new(SqlScalarType::Record {
+                ScalarType::List {
+                    element_type: Box::new(ScalarType::Record {
                         fields: [
-                            (ColumnName::from("?fused_value_window_func?"), SqlScalarType::Record {
+                            (ColumnName::from("?fused_value_window_func?"), ScalarType::Record {
                                 fields: encoded_args_type.into_iter().zip_eq(funcs).map(|(arg_type, func)| {
                                     match func {
                                         AggregateFunc::LagLead { lag_lead: lag_lead_type, .. } => {
@@ -2971,9 +2971,9 @@ impl AggregateFunc {
             // Use the nullability of the underlying column being aggregated, not the Records wrapping it
             AggregateFunc::StringAgg { .. } => match input_type.scalar_type {
                 // The outer Record wraps the input in the first position, and any ORDER BY expressions afterwards
-                SqlScalarType::Record { fields, .. } => match &fields[0].1.scalar_type {
+                ScalarType::Record { fields, .. } => match &fields[0].1.scalar_type {
                     // The inner Record is a (value, separator) tuple
-                    SqlScalarType::Record { fields, .. } => fields[0].1.nullable,
+                    ScalarType::Record { fields, .. } => fields[0].1.nullable,
                     _ => unreachable!(),
                 },
                 _ => unreachable!(),
@@ -2984,21 +2984,18 @@ impl AggregateFunc {
     }
 
     /// Compute output type for ROW_NUMBER, RANK, DENSE_RANK
-    fn output_type_ranking_window_funcs(
-        input_type: &SqlColumnType,
-        col_name: &str,
-    ) -> SqlScalarType {
+    fn output_type_ranking_window_funcs(input_type: &ColumnType, col_name: &str) -> ScalarType {
         match input_type.scalar_type {
-            SqlScalarType::Record { ref fields, .. } => SqlScalarType::List {
-                element_type: Box::new(SqlScalarType::Record {
+            ScalarType::Record { ref fields, .. } => ScalarType::List {
+                element_type: Box::new(ScalarType::Record {
                     fields: [
                         (
                             ColumnName::from(col_name),
-                            SqlScalarType::Int64.nullable(false),
+                            ScalarType::Int64.nullable(false),
                         ),
                         (ColumnName::from("?orig_row?"), {
                             let inner = match &fields[0].1.scalar_type {
-                                SqlScalarType::List { element_type, .. } => element_type.clone(),
+                                ScalarType::List { element_type, .. } => element_type.clone(),
                                 _ => unreachable!(),
                             };
                             inner.nullable(false)
@@ -3016,9 +3013,7 @@ impl AggregateFunc {
     /// Given the `EncodedArgs` part of `((OriginalRow, EncodedArgs), OrderByExprs...)`,
     /// this computes the type of the first field of the output type. (The first field is the
     /// real result, the rest is the original row.)
-    fn lag_lead_output_type_inner_from_encoded_args(
-        encoded_args_type: &SqlScalarType,
-    ) -> SqlColumnType {
+    fn lag_lead_output_type_inner_from_encoded_args(encoded_args_type: &ScalarType) -> ColumnType {
         // lag/lead have 3 arguments, and the output type is
         // the same as the first of these, but always nullable. (It's null when the
         // lag/lead computation reaches over the bounds of the window partition.)
@@ -3761,17 +3756,17 @@ pub enum TableFunc {
     /// being utterly undefined, and predicate pushdown trimming any fragments
     /// that might produce columns that will not be needed.
     GuardSubquerySize {
-        column_type: SqlScalarType,
+        column_type: ScalarType,
     },
     Repeat,
     UnnestArray {
-        el_typ: SqlScalarType,
+        el_typ: ScalarType,
     },
     UnnestList {
-        el_typ: SqlScalarType,
+        el_typ: ScalarType,
     },
     UnnestMap {
-        value_type: SqlScalarType,
+        value_type: ScalarType,
     },
     /// Given `n` input expressions, wraps them into `n / width` rows, each of
     /// `width` columns.
@@ -3779,14 +3774,14 @@ pub enum TableFunc {
     /// This function is not intended to be called directly by end users, but
     /// is useful in the planning of e.g. VALUES clauses.
     Wrap {
-        types: Vec<SqlColumnType>,
+        types: Vec<ColumnType>,
         width: usize,
     },
     GenerateSubscriptsArray,
     /// Execute some arbitrary scalar function as a table function.
     TabletizedScalar {
         name: String,
-        relation: SqlRelationType,
+        relation: RelationType,
     },
     RegexpMatches,
     /// Implements the WITH ORDINALITY clause.
@@ -4069,98 +4064,97 @@ impl TableFunc {
         }
     }
 
-    pub fn output_type(&self) -> SqlRelationType {
+    pub fn output_type(&self) -> RelationType {
         let (column_types, keys) = match self {
             TableFunc::AclExplode => {
                 let column_types = vec![
-                    SqlScalarType::Oid.nullable(false),
-                    SqlScalarType::Oid.nullable(false),
-                    SqlScalarType::String.nullable(false),
-                    SqlScalarType::Bool.nullable(false),
+                    ScalarType::Oid.nullable(false),
+                    ScalarType::Oid.nullable(false),
+                    ScalarType::String.nullable(false),
+                    ScalarType::Bool.nullable(false),
                 ];
                 let keys = vec![];
                 (column_types, keys)
             }
             TableFunc::MzAclExplode => {
                 let column_types = vec![
-                    SqlScalarType::String.nullable(false),
-                    SqlScalarType::String.nullable(false),
-                    SqlScalarType::String.nullable(false),
-                    SqlScalarType::Bool.nullable(false),
+                    ScalarType::String.nullable(false),
+                    ScalarType::String.nullable(false),
+                    ScalarType::String.nullable(false),
+                    ScalarType::Bool.nullable(false),
                 ];
                 let keys = vec![];
                 (column_types, keys)
             }
             TableFunc::JsonbEach { stringify: true } => {
                 let column_types = vec![
-                    SqlScalarType::String.nullable(false),
-                    SqlScalarType::String.nullable(true),
+                    ScalarType::String.nullable(false),
+                    ScalarType::String.nullable(true),
                 ];
                 let keys = vec![];
                 (column_types, keys)
             }
             TableFunc::JsonbEach { stringify: false } => {
                 let column_types = vec![
-                    SqlScalarType::String.nullable(false),
-                    SqlScalarType::Jsonb.nullable(false),
+                    ScalarType::String.nullable(false),
+                    ScalarType::Jsonb.nullable(false),
                 ];
                 let keys = vec![];
                 (column_types, keys)
             }
             TableFunc::JsonbObjectKeys => {
-                let column_types = vec![SqlScalarType::String.nullable(false)];
+                let column_types = vec![ScalarType::String.nullable(false)];
                 let keys = vec![];
                 (column_types, keys)
             }
             TableFunc::JsonbArrayElements { stringify: true } => {
-                let column_types = vec![SqlScalarType::String.nullable(true)];
+                let column_types = vec![ScalarType::String.nullable(true)];
                 let keys = vec![];
                 (column_types, keys)
             }
             TableFunc::JsonbArrayElements { stringify: false } => {
-                let column_types = vec![SqlScalarType::Jsonb.nullable(false)];
+                let column_types = vec![ScalarType::Jsonb.nullable(false)];
                 let keys = vec![];
                 (column_types, keys)
             }
             TableFunc::RegexpExtract(a) => {
                 let column_types = a
                     .capture_groups_iter()
-                    .map(|cg| SqlScalarType::String.nullable(cg.nullable))
+                    .map(|cg| ScalarType::String.nullable(cg.nullable))
                     .collect();
                 let keys = vec![];
                 (column_types, keys)
             }
             TableFunc::CsvExtract(n_cols) => {
-                let column_types = iter::repeat(SqlScalarType::String.nullable(false))
+                let column_types = iter::repeat(ScalarType::String.nullable(false))
                     .take(*n_cols)
                     .collect();
                 let keys = vec![];
                 (column_types, keys)
             }
             TableFunc::GenerateSeriesInt32 => {
-                let column_types = vec![SqlScalarType::Int32.nullable(false)];
+                let column_types = vec![ScalarType::Int32.nullable(false)];
                 let keys = vec![vec![0]];
                 (column_types, keys)
             }
             TableFunc::GenerateSeriesInt64 => {
-                let column_types = vec![SqlScalarType::Int64.nullable(false)];
+                let column_types = vec![ScalarType::Int64.nullable(false)];
                 let keys = vec![vec![0]];
                 (column_types, keys)
             }
             TableFunc::GenerateSeriesTimestamp => {
-                let column_types =
-                    vec![SqlScalarType::Timestamp { precision: None }.nullable(false)];
+                let column_types = vec![ScalarType::Timestamp { precision: None }.nullable(false)];
                 let keys = vec![vec![0]];
                 (column_types, keys)
             }
             TableFunc::GenerateSeriesTimestampTz => {
                 let column_types =
-                    vec![SqlScalarType::TimestampTz { precision: None }.nullable(false)];
+                    vec![ScalarType::TimestampTz { precision: None }.nullable(false)];
                 let keys = vec![vec![0]];
                 (column_types, keys)
             }
             TableFunc::GenerateSubscriptsArray => {
-                let column_types = vec![SqlScalarType::Int32.nullable(false)];
+                let column_types = vec![ScalarType::Int32.nullable(false)];
                 let keys = vec![vec![0]];
                 (column_types, keys)
             }
@@ -4186,7 +4180,7 @@ impl TableFunc {
             }
             TableFunc::UnnestMap { value_type } => {
                 let column_types = vec![
-                    SqlScalarType::String.nullable(false),
+                    ScalarType::String.nullable(false),
                     value_type.clone().nullable(true),
                 ];
                 let keys = vec![vec![0]];
@@ -4202,7 +4196,7 @@ impl TableFunc {
             }
             TableFunc::RegexpMatches => {
                 let column_types =
-                    vec![SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(false)];
+                    vec![ScalarType::Array(Box::new(ScalarType::String)).nullable(false)];
                 let keys = vec![];
 
                 (column_types, keys)
@@ -4210,7 +4204,7 @@ impl TableFunc {
             TableFunc::WithOrdinality(WithOrdinality { inner }) => {
                 let mut typ = inner.output_type();
                 // Add the ordinality column.
-                typ.column_types.push(SqlScalarType::Int64.nullable(false));
+                typ.column_types.push(ScalarType::Int64.nullable(false));
                 // The ordinality column is always a key.
                 typ.keys.push(vec![typ.column_types.len() - 1]);
                 (typ.column_types, typ.keys)
@@ -4220,9 +4214,9 @@ impl TableFunc {
         soft_assert_eq_no_log!(column_types.len(), self.output_arity());
 
         if !keys.is_empty() {
-            SqlRelationType::new(column_types).with_keys(keys)
+            RelationType::new(column_types).with_keys(keys)
         } else {
-            SqlRelationType::new(column_types)
+            RelationType::new(column_types)
         }
     }
 

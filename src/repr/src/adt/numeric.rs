@@ -96,11 +96,11 @@ pub mod str_serde {
     }
 }
 
-/// The `max_scale` of a [`SqlScalarType::Numeric`].
+/// The `max_scale` of a [`ScalarType::Numeric`].
 ///
 /// This newtype wrapper ensures that the scale is within the valid range.
 ///
-/// [`SqlScalarType::Numeric`]: crate::SqlScalarType::Numeric
+/// [`ScalarType::Numeric`]: crate::ScalarType::Numeric
 #[derive(
     Arbitrary,
     Debug,

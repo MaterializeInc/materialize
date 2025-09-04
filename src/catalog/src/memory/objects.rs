@@ -30,8 +30,8 @@ use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::role_id::RoleId;
 use mz_repr::{
-    CatalogItemId, ColumnName, Diff, GlobalId, RelationDesc, RelationVersion,
-    RelationVersionSelector, SqlColumnType, Timestamp, VersionedRelationDesc,
+    CatalogItemId, ColumnName, ColumnType, Diff, GlobalId, RelationDesc, RelationVersion,
+    RelationVersionSelector, Timestamp, VersionedRelationDesc,
 };
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{
@@ -2034,7 +2034,7 @@ impl CatalogItem {
     pub fn add_column(
         &mut self,
         name: ColumnName,
-        typ: SqlColumnType,
+        typ: ColumnType,
         sql: RawDataType,
     ) -> Result<RelationVersion, PlanError> {
         let CatalogItem::Table(table) = self else {

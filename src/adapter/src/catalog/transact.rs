@@ -42,7 +42,7 @@ use mz_persist_types::ShardId;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap, merge_mz_acl_items};
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, ColumnName, Diff, GlobalId, SqlColumnType, strconv};
+use mz_repr::{CatalogItemId, ColumnName, ColumnType, Diff, GlobalId, strconv};
 use mz_sql::ast::RawDataType;
 use mz_sql::catalog::{
     CatalogDatabase, CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem, CatalogRole,
@@ -96,7 +96,7 @@ pub enum Op {
         id: CatalogItemId,
         new_global_id: GlobalId,
         name: ColumnName,
-        typ: SqlColumnType,
+        typ: ColumnType,
         sql: RawDataType,
     },
     CreateDatabase {

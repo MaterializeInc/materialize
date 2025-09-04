@@ -15,7 +15,7 @@ use mz_repr::adt::date::Date;
 use mz_repr::adt::datetime::DateTimeUnits;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::adt::timestamp::{CheckedTimestamp, DateLike, TimestampPrecision};
-use mz_repr::{SqlColumnType, SqlScalarType, strconv};
+use mz_repr::{ColumnType, ScalarType, strconv};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -50,8 +50,8 @@ impl<'a> EagerUnaryFunc<'a> for CastDateToTimestamp {
         Ok(updated)
     }
 
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::Timestamp { precision: self.0 }.nullable(input.nullable)
+    fn output_type(&self, input: ColumnType) -> ColumnType {
+        ScalarType::Timestamp { precision: self.0 }.nullable(input.nullable)
     }
 
     fn preserves_uniqueness(&self) -> bool {
@@ -92,8 +92,8 @@ impl<'a> EagerUnaryFunc<'a> for CastDateToTimestampTz {
         Ok(updated)
     }
 
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::TimestampTz { precision: self.0 }.nullable(input.nullable)
+    fn output_type(&self, input: ColumnType) -> ColumnType {
+        ScalarType::TimestampTz { precision: self.0 }.nullable(input.nullable)
     }
 
     fn preserves_uniqueness(&self) -> bool {
@@ -160,8 +160,8 @@ impl<'a> EagerUnaryFunc<'a> for ExtractDate {
         extract_date_inner(self.0, a.into())
     }
 
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::Numeric { max_scale: None }.nullable(input.nullable)
+    fn output_type(&self, input: ColumnType) -> ColumnType {
+        ScalarType::Numeric { max_scale: None }.nullable(input.nullable)
     }
 
     fn is_monotone(&self) -> bool {

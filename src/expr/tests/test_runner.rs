@@ -15,15 +15,14 @@ mod test {
     use mz_lowertest::{MzReflect, deserialize, deserialize_optional, tokenize};
     use mz_ore::result::ResultExt;
     use mz_ore::str::separated;
-    use mz_repr::{RowArena, SqlColumnType, SqlRelationType};
+    use mz_repr::{ColumnType, RelationType, RowArena};
     use serde::{Deserialize, Serialize};
 
     fn reduce(s: &str) -> Result<MirScalarExpr, String> {
         let mut input_stream = tokenize(s)?.into_iter();
         let mut ctx = MirScalarExprDeserializeContext::default();
         let mut scalar: MirScalarExpr = deserialize(&mut input_stream, "MirScalarExpr", &mut ctx)?;
-        let typ: Vec<SqlColumnType> =
-            deserialize(&mut input_stream, "Vec<SqlColumnType> ", &mut ctx)?;
+        let typ: Vec<ColumnType> = deserialize(&mut input_stream, "Vec<ColumnType> ", &mut ctx)?;
         let before = scalar.typ(&typ);
         scalar.reduce(&typ);
         let after = scalar.typ(&typ);
@@ -42,8 +41,7 @@ mod test {
         let mut ctx = MirScalarExprDeserializeContext::default();
         let input_predicates: Vec<MirScalarExpr> =
             deserialize(&mut input_stream, "Vec<MirScalarExpr>", &mut ctx)?;
-        let typ: Vec<SqlColumnType> =
-            deserialize(&mut input_stream, "Vec<SqlColumnType>", &mut ctx)?;
+        let typ: Vec<ColumnType> = deserialize(&mut input_stream, "Vec<ColumnType>", &mut ctx)?;
         // predicate canonicalization is meant to produce the same output regardless of the
         // order of the input predicates.
         let mut predicates1 = input_predicates.clone();
@@ -108,8 +106,8 @@ mod test {
         let mut ctx = MirScalarExprDeserializeContext::default();
         let mut equivalences: Vec<Vec<MirScalarExpr>> =
             deserialize(&mut input_stream, "Vec<Vec<MirScalarExpr>>", &mut ctx)?;
-        let input_type: Vec<SqlColumnType> =
-            deserialize(&mut input_stream, "Vec<SqlColumnType>", &mut ctx)?;
+        let input_type: Vec<ColumnType> =
+            deserialize(&mut input_stream, "Vec<ColumnType>", &mut ctx)?;
         canonicalize_equivalences(&mut equivalences, std::iter::once(&input_type));
         Ok(equivalences)
     }
@@ -117,8 +115,7 @@ mod test {
     fn test_interpret(s: &str) -> Result<Vec<String>, String> {
         let mut input_stream = tokenize(s)?.into_iter();
         let mut ctx = MirScalarExprDeserializeContext::default();
-        let types: Vec<SqlColumnType> =
-            deserialize(&mut input_stream, "Vec<SqlColumnType>", &mut ctx)?;
+        let types: Vec<ColumnType> = deserialize(&mut input_stream, "Vec<ColumnType>", &mut ctx)?;
         let values: Vec<Vec<MirScalarExpr>> =
             deserialize(&mut input_stream, "Vec<Vec<MirScalarExpr>>", &mut ctx)?;
         let expr: MirScalarExpr = deserialize(&mut input_stream, "MirScalarExpr", &mut ctx)?;
@@ -126,7 +123,7 @@ mod test {
             deserialize(&mut input_stream, "Vec<MirScalarExpr>", &mut ctx)?;
 
         let arena = RowArena::new();
-        let relation = SqlRelationType::new(types);
+        let relation = RelationType::new(types);
         let mut interpreter = ColumnSpecs::new(&relation, &arena);
 
         let specs: Vec<_> = values

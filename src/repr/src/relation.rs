@@ -30,27 +30,27 @@ pub use crate::relation_and_scalar::{
     ProtoColumnMetadata, ProtoColumnName, ProtoColumnType, ProtoRelationDesc, ProtoRelationType,
     ProtoRelationVersion,
 };
-use crate::{Datum, ReprScalarType, Row, SqlScalarType, arb_datum_for_column};
+use crate::{Datum, Row, ScalarType, arb_datum_for_column};
 
 /// The type of a [`Datum`].
 ///
-/// [`SqlColumnType`] bundles information about the scalar type of a datum (e.g.,
+/// [`ColumnType`] bundles information about the scalar type of a datum (e.g.,
 /// Int32 or String) with its nullability.
 ///
 /// To construct a column type, either initialize the struct directly, or
-/// use the [`SqlScalarType::nullable`] method.
+/// use the [`ScalarType::nullable`] method.
 #[derive(
     Arbitrary, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect,
 )]
-pub struct SqlColumnType {
+pub struct ColumnType {
     /// The underlying scalar type (e.g., Int32 or String) of this column.
-    pub scalar_type: SqlScalarType,
+    pub scalar_type: ScalarType,
     /// Whether this datum can be null.
     #[serde(default = "return_true")]
     pub nullable: bool,
 }
 
-/// This method exists solely for the purpose of making SqlColumnType nullable by
+/// This method exists solely for the purpose of making ColumnType nullable by
 /// default in unit tests. The default value of a bool is false, and the only
 /// way to make an object take on any other value by default is to pass it a
 /// function that returns the desired default value. See
@@ -60,24 +60,24 @@ fn return_true() -> bool {
     true
 }
 
-impl SqlColumnType {
+impl ColumnType {
     pub fn union(&self, other: &Self) -> Result<Self, anyhow::Error> {
         match (&self.scalar_type, &other.scalar_type) {
             (scalar_type, other_scalar_type) if scalar_type == other_scalar_type => {
-                Ok(SqlColumnType {
+                Ok(ColumnType {
                     scalar_type: scalar_type.clone(),
                     nullable: self.nullable || other.nullable,
                 })
             }
             (scalar_type, other_scalar_type) if scalar_type.base_eq(other_scalar_type) => {
-                Ok(SqlColumnType {
+                Ok(ColumnType {
                     scalar_type: scalar_type.without_modifiers(),
                     nullable: self.nullable || other.nullable,
                 })
             }
             (
-                SqlScalarType::Record { fields, custom_id },
-                SqlScalarType::Record {
+                ScalarType::Record { fields, custom_id },
+                ScalarType::Record {
                     fields: other_fields,
                     custom_id: other_custom_id,
                 },
@@ -105,8 +105,8 @@ impl SqlColumnType {
                     };
                 }
 
-                Ok(SqlColumnType {
-                    scalar_type: SqlScalarType::Record {
+                Ok(ColumnType {
+                    scalar_type: ScalarType::Record {
                         fields: union_fields.into(),
                         custom_id: *custom_id,
                     },
@@ -121,7 +121,7 @@ impl SqlColumnType {
         }
     }
 
-    /// Consumes this `SqlColumnType` and returns a new `SqlColumnType` with its
+    /// Consumes this `ColumnType` and returns a new `ColumnType` with its
     /// nullability set to the specified boolean.
     pub fn nullable(mut self, nullable: bool) -> Self {
         self.nullable = nullable;
@@ -129,7 +129,7 @@ impl SqlColumnType {
     }
 }
 
-impl RustType<ProtoColumnType> for SqlColumnType {
+impl RustType<ProtoColumnType> for ColumnType {
     fn into_proto(&self) -> ProtoColumnType {
         ProtoColumnType {
             nullable: self.nullable,
@@ -138,7 +138,7 @@ impl RustType<ProtoColumnType> for SqlColumnType {
     }
 
     fn from_proto(proto: ProtoColumnType) -> Result<Self, TryFromProtoError> {
-        Ok(SqlColumnType {
+        Ok(ColumnType {
             nullable: proto.nullable,
             scalar_type: proto
                 .scalar_type
@@ -147,7 +147,7 @@ impl RustType<ProtoColumnType> for SqlColumnType {
     }
 }
 
-impl fmt::Display for SqlColumnType {
+impl fmt::Display for ColumnType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let nullable = if self.nullable { "Null" } else { "NotNull" };
         f.write_fmt(format_args!("{:?}:{}", self.scalar_type, nullable))
@@ -158,9 +158,9 @@ impl fmt::Display for SqlColumnType {
 #[derive(
     Arbitrary, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect,
 )]
-pub struct SqlRelationType {
+pub struct RelationType {
     /// The type for each column, in order.
-    pub column_types: Vec<SqlColumnType>,
+    pub column_types: Vec<ColumnType>,
     /// Sets of indices that are "keys" for the collection.
     ///
     /// Each element in this list is a set of column indices, each with the
@@ -174,18 +174,18 @@ pub struct SqlRelationType {
     pub keys: Vec<Vec<usize>>,
 }
 
-impl SqlRelationType {
-    /// Constructs a `SqlRelationType` representing the relation with no columns and
+impl RelationType {
+    /// Constructs a `RelationType` representing the relation with no columns and
     /// no keys.
     pub fn empty() -> Self {
-        SqlRelationType::new(vec![])
+        RelationType::new(vec![])
     }
 
-    /// Constructs a new `SqlRelationType` from specified column types.
+    /// Constructs a new `RelationType` from specified column types.
     ///
-    /// The `SqlRelationType` will have no keys.
-    pub fn new(column_types: Vec<SqlColumnType>) -> Self {
-        SqlRelationType {
+    /// The `RelationType` will have no keys.
+    pub fn new(column_types: Vec<ColumnType>) -> Self {
+        RelationType {
             column_types,
             keys: Vec::new(),
         }
@@ -225,13 +225,13 @@ impl SqlRelationType {
         }
     }
 
-    /// Returns all the [`SqlColumnType`]s, in order, for this relation.
-    pub fn columns(&self) -> &[SqlColumnType] {
+    /// Returns all the [`ColumnType`]s, in order, for this relation.
+    pub fn columns(&self) -> &[ColumnType] {
         &self.column_types
     }
 }
 
-impl RustType<ProtoRelationType> for SqlRelationType {
+impl RustType<ProtoRelationType> for RelationType {
     fn into_proto(&self) -> ProtoRelationType {
         ProtoRelationType {
             column_types: self.column_types.into_proto(),
@@ -240,7 +240,7 @@ impl RustType<ProtoRelationType> for SqlRelationType {
     }
 
     fn from_proto(proto: ProtoRelationType) -> Result<Self, TryFromProtoError> {
-        Ok(SqlRelationType {
+        Ok(RelationType {
             column_types: proto.column_types.into_rust()?,
             keys: proto.keys.into_rust()?,
         })
@@ -256,24 +256,6 @@ impl RustType<ProtoKey> for Vec<usize> {
 
     fn from_proto(proto: ProtoKey) -> Result<Self, TryFromProtoError> {
         proto.keys.into_rust()
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect)]
-pub struct ReprColumnType {
-    /// The underlying representation scalar type (e.g., Int32 or String) of this column.
-    pub scalar_type: ReprScalarType,
-    /// Whether this datum can be null.
-    #[serde(default = "return_true")]
-    pub nullable: bool,
-}
-
-impl From<SqlColumnType> for ReprColumnType {
-    fn from(sql_column_type: SqlColumnType) -> Self {
-        ReprColumnType {
-            scalar_type: sql_column_type.scalar_type.into(),
-            nullable: sql_column_type.nullable,
-        }
     }
 }
 
@@ -502,7 +484,7 @@ impl RustType<ProtoRelationVersion> for RelationVersion {
 struct ColumnMetadata {
     /// Name of the column.
     name: ColumnName,
-    /// Index into a [`SqlRelationType`] for this column.
+    /// Index into a [`RelationType`] for this column.
     typ_idx: usize,
     /// Version this column was added at.
     added: RelationVersion,
@@ -512,7 +494,7 @@ struct ColumnMetadata {
 
 /// A description of the shape of a relation.
 ///
-/// It bundles a [`SqlRelationType`] with `ColumnMetadata` for each column in
+/// It bundles a [`RelationType`] with `ColumnMetadata` for each column in
 /// the relation.
 ///
 /// # Examples
@@ -520,11 +502,11 @@ struct ColumnMetadata {
 /// A `RelationDesc`s is typically constructed via its builder API:
 ///
 /// ```
-/// use mz_repr::{SqlColumnType, RelationDesc, SqlScalarType};
+/// use mz_repr::{ColumnType, RelationDesc, ScalarType};
 ///
 /// let desc = RelationDesc::builder()
-///     .with_column("id", SqlScalarType::Int64.nullable(false))
-///     .with_column("price", SqlScalarType::Float64.nullable(true))
+///     .with_column("id", ScalarType::Int64.nullable(false))
+///     .with_column("price", ScalarType::Float64.nullable(true))
 ///     .finish();
 /// ```
 ///
@@ -535,7 +517,7 @@ struct ColumnMetadata {
 /// ```
 /// use mz_repr::RelationDesc;
 ///
-/// # fn plan_query(_: &str) -> mz_repr::SqlRelationType { mz_repr::SqlRelationType::new(vec![]) }
+/// # fn plan_query(_: &str) -> mz_repr::RelationType { mz_repr::RelationType::new(vec![]) }
 /// let relation_type = plan_query("SELECT * FROM table");
 /// let names = (0..relation_type.arity()).map(|i| match i {
 ///     0 => "first",
@@ -545,18 +527,18 @@ struct ColumnMetadata {
 /// let desc = RelationDesc::new(relation_type, names);
 /// ```
 ///
-/// Next to the [`SqlRelationType`] we maintain a map of `ColumnIndex` to
+/// Next to the [`RelationType`] we maintain a map of `ColumnIndex` to
 /// `ColumnMetadata`, where [`ColumnIndex`] is a stable identifier for a
 /// column throughout the lifetime of the relation. This allows a
 /// [`RelationDesc`] to represent a projection over a version of itself.
 ///
 /// ```
 /// use std::collections::BTreeSet;
-/// use mz_repr::{ColumnIndex, RelationDesc, SqlScalarType};
+/// use mz_repr::{ColumnIndex, RelationDesc, ScalarType};
 ///
 /// let desc = RelationDesc::builder()
-///     .with_column("name", SqlScalarType::String.nullable(false))
-///     .with_column("email", SqlScalarType::String.nullable(false))
+///     .with_column("name", ScalarType::String.nullable(false))
+///     .with_column("email", ScalarType::String.nullable(false))
 ///     .finish();
 ///
 /// // Project away the second column.
@@ -568,18 +550,18 @@ struct ColumnMetadata {
 /// // But retained the second.
 /// assert!(proj.contains_index(&ColumnIndex::from_raw(1)));
 ///
-/// // The underlying `SqlRelationType` also contains a single column.
+/// // The underlying `RelationType` also contains a single column.
 /// assert_eq!(proj.typ().arity(), 1);
 /// ```
 ///
 /// To maintain this stable mapping and track the lifetime of a column (e.g.
 /// when adding or dropping a column) we use `ColumnMetadata`. It maintains
-/// the index in [`SqlRelationType`] that corresponds to a given column, and the
+/// the index in [`RelationType`] that corresponds to a given column, and the
 /// version at which this column was added or dropped.
 ///
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct RelationDesc {
-    typ: SqlRelationType,
+    typ: RelationType,
     metadata: BTreeMap<ColumnIndex, ColumnMetadata>,
 }
 
@@ -667,7 +649,7 @@ impl RelationDesc {
     /// with no columns and no keys.
     pub fn empty() -> Self {
         RelationDesc {
-            typ: SqlRelationType::empty(),
+            typ: RelationType::empty(),
             metadata: BTreeMap::default(),
         }
     }
@@ -682,14 +664,14 @@ impl RelationDesc {
         self.typ().column_types.len()
     }
 
-    /// Constructs a new `RelationDesc` from a `SqlRelationType` and an iterator
+    /// Constructs a new `RelationDesc` from a `RelationType` and an iterator
     /// over column names.
     ///
     /// # Panics
     ///
-    /// Panics if the arity of the `SqlRelationType` is not equal to the number of
+    /// Panics if the arity of the `RelationType` is not equal to the number of
     /// items in `names`.
-    pub fn new<I, N>(typ: SqlRelationType, names: I) -> Self
+    pub fn new<I, N>(typ: RelationType, names: I) -> Self
     where
         I: IntoIterator<Item = N>,
         N: Into<ColumnName>,
@@ -718,12 +700,12 @@ impl RelationDesc {
     pub fn from_names_and_types<I, T, N>(iter: I) -> Self
     where
         I: IntoIterator<Item = (N, T)>,
-        T: Into<SqlColumnType>,
+        T: Into<ColumnType>,
         N: Into<ColumnName>,
     {
         let (names, types): (Vec<_>, Vec<_>) = iter.into_iter().unzip();
         let types = types.into_iter().map(Into::into).collect();
-        let typ = SqlRelationType::new(types);
+        let typ = RelationType::new(types);
         Self::new(typ, names)
     }
 
@@ -803,12 +785,12 @@ impl RelationDesc {
     }
 
     /// Returns the relation type underlying this relation description.
-    pub fn typ(&self) -> &SqlRelationType {
+    pub fn typ(&self) -> &RelationType {
         &self.typ
     }
 
     /// Returns an iterator over the columns in this relation.
-    pub fn iter(&self) -> impl Iterator<Item = (&ColumnName, &SqlColumnType)> {
+    pub fn iter(&self) -> impl Iterator<Item = (&ColumnName, &ColumnType)> {
         self.metadata.values().map(|meta| {
             let typ = &self.typ.columns()[meta.typ_idx];
             (&meta.name, typ)
@@ -816,7 +798,7 @@ impl RelationDesc {
     }
 
     /// Returns an iterator over the types of the columns in this relation.
-    pub fn iter_types(&self) -> impl Iterator<Item = &SqlColumnType> {
+    pub fn iter_types(&self) -> impl Iterator<Item = &ColumnType> {
         self.typ.column_types.iter()
     }
 
@@ -826,7 +808,7 @@ impl RelationDesc {
     }
 
     /// Returns an iterator over the columns in this relation, with all their metadata.
-    pub fn iter_all(&self) -> impl Iterator<Item = (&ColumnIndex, &ColumnName, &SqlColumnType)> {
+    pub fn iter_all(&self) -> impl Iterator<Item = (&ColumnIndex, &ColumnName, &ColumnType)> {
         self.metadata.iter().map(|(col_idx, metadata)| {
             let col_typ = &self.typ.columns()[metadata.typ_idx];
             (col_idx, &metadata.name, col_typ)
@@ -852,7 +834,7 @@ impl RelationDesc {
     /// Returns the index and type of the column named `name`. If no column with
     /// the specified name exists, returns `None`. If multiple columns have the
     /// specified name, the leftmost column is returned.
-    pub fn get_by_name(&self, name: &ColumnName) -> Option<(usize, &SqlColumnType)> {
+    pub fn get_by_name(&self, name: &ColumnName) -> Option<(usize, &ColumnType)> {
         self.iter_names()
             .position(|n| n == name)
             .map(|i| (i, &self.typ.column_types[i]))
@@ -893,12 +875,12 @@ impl RelationDesc {
             .name
     }
 
-    /// Gets the [`SqlColumnType`] of the column at `idx`.
+    /// Gets the [`ColumnType`] of the column at `idx`.
     ///
     /// # Panics
     ///
     /// Panics if no column exists at `idx`.
-    pub fn get_type(&self, idx: &ColumnIndex) -> &SqlColumnType {
+    pub fn get_type(&self, idx: &ColumnIndex) -> &ColumnType {
         let typ_idx = self.metadata.get(idx).expect("should exist").typ_idx;
         &self.typ.column_types[typ_idx]
     }
@@ -950,7 +932,7 @@ impl RelationDesc {
             retain
         });
 
-        // Update SqlColumnType.
+        // Update ColumnType.
         let mut idx = 0;
         new_desc.typ.column_types.retain(|_| {
             let keep = demands.contains(&idx);
@@ -985,7 +967,7 @@ impl Arbitrary for RelationDesc {
 /// Returns a [`Strategy`] that generates an arbitrary [`RelationDesc`] with a number columns
 /// within the range provided.
 pub fn arb_relation_desc(num_cols: std::ops::Range<usize>) -> impl Strategy<Value = RelationDesc> {
-    proptest::collection::btree_map(any::<ColumnName>(), any::<SqlColumnType>(), num_cols)
+    proptest::collection::btree_map(any::<ColumnName>(), any::<ColumnType>(), num_cols)
         .prop_map(RelationDesc::from_names_and_types)
 }
 
@@ -1003,8 +985,8 @@ pub fn arb_relation_desc_projection(desc: RelationDesc) -> impl Strategy<Value =
 }
 
 impl IntoIterator for RelationDesc {
-    type Item = (ColumnName, SqlColumnType);
-    type IntoIter = Box<dyn Iterator<Item = (ColumnName, SqlColumnType)>>;
+    type Item = (ColumnName, ColumnType);
+    type IntoIter = Box<dyn Iterator<Item = (ColumnName, ColumnType)>>;
 
     fn into_iter(self) -> Self::IntoIter {
         let iter = self
@@ -1046,7 +1028,7 @@ impl fmt::Display for NotNullViolation {
 #[derive(Clone, Default, Debug, PartialEq, Eq)]
 pub struct RelationDescBuilder {
     /// Columns of the relation.
-    columns: Vec<(ColumnName, SqlColumnType)>,
+    columns: Vec<(ColumnName, ColumnType)>,
     /// Sets of indices that are "keys" for the collection.
     keys: Vec<Vec<usize>>,
 }
@@ -1056,7 +1038,7 @@ impl RelationDescBuilder {
     pub fn with_column<N: Into<ColumnName>>(
         mut self,
         name: N,
-        ty: SqlColumnType,
+        ty: ColumnType,
     ) -> RelationDescBuilder {
         let name = name.into();
         self.columns.push((name, ty));
@@ -1067,7 +1049,7 @@ impl RelationDescBuilder {
     pub fn with_columns<I, T, N>(mut self, iter: I) -> Self
     where
         I: IntoIterator<Item = (N, T)>,
-        T: Into<SqlColumnType>,
+        T: Into<ColumnType>,
         N: Into<ColumnName>,
     {
         self.columns
@@ -1151,7 +1133,7 @@ impl VersionedRelationDesc {
     pub fn add_column<N, T>(&mut self, name: N, typ: T) -> RelationVersion
     where
         N: Into<ColumnName>,
-        T: Into<SqlColumnType>,
+        T: Into<ColumnType>,
     {
         let latest_version = self.latest_version();
         let new_version = latest_version.bump();
@@ -1257,7 +1239,7 @@ impl VersionedRelationDesc {
         //
         // For example, consider columns "a", "b", and "c" with indexes 0, 1,
         // and 2. If we drop column "b" then we'll have "a" and "c" with column
-        // indexes 0 and 2, but their indices in SqlRelationType will be 0 and 1.
+        // indexes 0 and 2, but their indices in RelationType will be 0 and 1.
         for (col_idx, meta) in valid_columns {
             let new_meta = ColumnMetadata {
                 name: meta.name.clone(),
@@ -1291,7 +1273,7 @@ impl VersionedRelationDesc {
             })
             .collect();
 
-        let relation_type = SqlRelationType { column_types, keys };
+        let relation_type = RelationType { column_types, keys };
 
         RelationDesc {
             typ: relation_type,
@@ -1376,20 +1358,10 @@ impl VersionedRelationDesc {
 /// exercise schema migrations.
 #[derive(Debug)]
 pub enum PropRelationDescDiff {
-    AddColumn {
-        name: ColumnName,
-        typ: SqlColumnType,
-    },
-    DropColumn {
-        name: ColumnName,
-    },
-    ToggleNullability {
-        name: ColumnName,
-    },
-    ChangeType {
-        name: ColumnName,
-        typ: SqlColumnType,
-    },
+    AddColumn { name: ColumnName, typ: ColumnType },
+    DropColumn { name: ColumnName },
+    ToggleNullability { name: ColumnName },
+    ChangeType { name: ColumnName, typ: ColumnType },
 }
 
 impl PropRelationDescDiff {
@@ -1433,7 +1405,7 @@ impl PropRelationDescDiff {
                     .typ
                     .column_types
                     .get_mut(pos)
-                    .expect("ColumnNames and SqlColumnTypes out of sync!");
+                    .expect("ColumnNames and ColumnTypes out of sync!");
                 col_type.nullable = !col_type.nullable;
             }
             PropRelationDescDiff::ChangeType { name, typ } => {
@@ -1444,7 +1416,7 @@ impl PropRelationDescDiff {
                     .typ
                     .column_types
                     .get_mut(pos)
-                    .expect("ColumnNames and SqlColumnTypes out of sync!");
+                    .expect("ColumnNames and ColumnTypes out of sync!");
                 *col_type = typ;
             }
         }
@@ -1461,7 +1433,7 @@ pub fn arb_relation_desc_diff(
     let num_add_columns = Union::new_weighted(vec![(100, Just(0..8)), (1, Just(8..64))]);
     let add_columns_strat = num_add_columns
         .prop_flat_map(|num_columns| {
-            proptest::collection::vec((any::<ColumnName>(), any::<SqlColumnType>()), num_columns)
+            proptest::collection::vec((any::<ColumnName>(), any::<ColumnType>()), num_columns)
         })
         .prop_map(|cols| {
             cols.into_iter()
@@ -1510,7 +1482,7 @@ pub fn arb_relation_desc_diff(
             set
         })
         .prop_flat_map(|cols| {
-            proptest::collection::vec(any::<SqlColumnType>(), cols.len())
+            proptest::collection::vec(any::<ColumnType>(), cols.len())
                 .prop_map(move |types| (cols.clone(), types))
         })
         .prop_map(|(cols, types)| {
@@ -1546,8 +1518,8 @@ mod tests {
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `pipe2` on OS `linux`
     fn smoktest_at_version() {
         let desc = RelationDesc::builder()
-            .with_column("a", SqlScalarType::Bool.nullable(true))
-            .with_column("z", SqlScalarType::String.nullable(false))
+            .with_column("a", ScalarType::Bool.nullable(true))
+            .with_column("z", ScalarType::String.nullable(false))
             .finish();
 
         let mut versioned_desc = VersionedRelationDesc {
@@ -1564,7 +1536,7 @@ mod tests {
         let v3 = versioned_desc.at_version(RelationVersionSelector::specific(3));
         assert_eq!(desc, v3);
 
-        let v1 = versioned_desc.add_column("b", SqlScalarType::Bytes.nullable(false));
+        let v1 = versioned_desc.add_column("b", ScalarType::Bytes.nullable(false));
         assert_eq!(v1, RelationVersion(1));
 
         let v1 = versioned_desc.at_version(RelationVersionSelector::Specific(v1));
@@ -1651,8 +1623,8 @@ mod tests {
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `pipe2` on OS `linux`
     fn test_dropping_columns_with_keys() {
         let desc = RelationDesc::builder()
-            .with_column("a", SqlScalarType::Bool.nullable(true))
-            .with_column("z", SqlScalarType::String.nullable(false))
+            .with_column("a", ScalarType::Bool.nullable(true))
+            .with_column("z", ScalarType::String.nullable(false))
             .with_key(vec![1])
             .finish();
 
@@ -1736,8 +1708,8 @@ mod tests {
     fn roundtrip_relation_desc_without_metadata() {
         let typ = ProtoRelationType {
             column_types: vec![
-                SqlScalarType::String.nullable(false).into_proto(),
-                SqlScalarType::Bool.nullable(true).into_proto(),
+                ScalarType::String.nullable(false).into_proto(),
+                ScalarType::Bool.nullable(true).into_proto(),
             ],
             keys: vec![],
         };
@@ -1788,18 +1760,18 @@ mod tests {
     #[should_panic(expected = "column named 'a' already exists!")]
     fn test_add_column_with_same_name_panics() {
         let desc = RelationDesc::builder()
-            .with_column("a", SqlScalarType::Bool.nullable(true))
+            .with_column("a", ScalarType::Bool.nullable(true))
             .finish();
         let mut versioned = VersionedRelationDesc::new(desc);
 
-        let _ = versioned.add_column("a", SqlScalarType::String.nullable(false));
+        let _ = versioned.add_column("a", ScalarType::String.nullable(false));
     }
 
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `pipe2` on OS `linux`
     fn test_add_column_with_same_name_prev_dropped() {
         let desc = RelationDesc::builder()
-            .with_column("a", SqlScalarType::Bool.nullable(true))
+            .with_column("a", ScalarType::Bool.nullable(true))
             .finish();
         let mut versioned = VersionedRelationDesc::new(desc);
 
@@ -1815,7 +1787,7 @@ mod tests {
         }
         "###);
 
-        let v2 = versioned.add_column("a", SqlScalarType::String.nullable(false));
+        let v2 = versioned.add_column("a", ScalarType::String.nullable(false));
         let v2 = versioned.at_version(RelationVersionSelector::Specific(v2));
         insta::assert_json_snapshot!(v2, @r###"
         {
@@ -1844,9 +1816,9 @@ mod tests {
     #[cfg_attr(miri, ignore)]
     fn apply_demand() {
         let desc = RelationDesc::builder()
-            .with_column("a", SqlScalarType::String.nullable(true))
-            .with_column("b", SqlScalarType::Int64.nullable(false))
-            .with_column("c", SqlScalarType::Time.nullable(false))
+            .with_column("a", ScalarType::String.nullable(true))
+            .with_column("b", ScalarType::Int64.nullable(false))
+            .with_column("c", ScalarType::Time.nullable(false))
             .finish();
         let desc = desc.apply_demand(&BTreeSet::from([0, 2]));
         assert_eq!(desc.arity(), 2);

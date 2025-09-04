@@ -50,7 +50,7 @@ use mz_ore::future::OreFutureExt;
 use mz_ore::retry::Retry;
 use mz_repr::adt::numeric::{NUMERIC_DATUM_MAX_PRECISION, NumericMaxScale};
 use mz_repr::adt::timestamp::TimestampPrecision;
-use mz_repr::{ColumnName, RelationDesc, SqlColumnType, SqlScalarType};
+use mz_repr::{ColumnName, ColumnType, RelationDesc, ScalarType};
 use tracing::warn;
 
 use crate::avro::is_null;
@@ -72,7 +72,7 @@ pub fn schema_to_relationdesc(schema: Schema) -> Result<RelationDesc, anyhow::Er
 
 /// Convert an Avro schema to a series of columns and names, flattening the top-level record,
 /// if the top node is indeed a record.
-fn validate_schema_1(schema: SchemaNode) -> anyhow::Result<Vec<(ColumnName, SqlColumnType)>> {
+fn validate_schema_1(schema: SchemaNode) -> anyhow::Result<Vec<(ColumnName, ColumnType)>> {
     let mut columns = vec![];
     let mut seen_avro_nodes = Default::default();
     match schema.inner {
@@ -98,7 +98,7 @@ fn get_union_columns<'a>(
     seen_avro_nodes: &mut BTreeSet<usize>,
     schema: SchemaNode<'a>,
     base_name: Option<&str>,
-) -> anyhow::Result<Vec<(ColumnName, SqlColumnType)>> {
+) -> anyhow::Result<Vec<(ColumnName, ColumnType)>> {
     let us = match schema.inner {
         SchemaPiece::Union(us) => us,
         _ => panic!("This function should only be called on unions."),
@@ -168,7 +168,7 @@ fn get_named_columns<'a>(
     seen_avro_nodes: &mut BTreeSet<usize>,
     schema: SchemaNode<'a>,
     base_name: Option<&str>,
-) -> anyhow::Result<Vec<(ColumnName, SqlColumnType)>> {
+) -> anyhow::Result<Vec<(ColumnName, ColumnType)>> {
     if let SchemaPiece::Union(_) = schema.inner {
         get_union_columns(seen_avro_nodes, schema, base_name)
     } else {
@@ -188,7 +188,7 @@ fn get_named_columns<'a>(
 fn validate_schema_2(
     seen_avro_nodes: &mut BTreeSet<usize>,
     schema: SchemaNode,
-) -> anyhow::Result<SqlScalarType> {
+) -> anyhow::Result<ScalarType> {
     Ok(match schema.inner {
         SchemaPiece::Union(_) => {
             let columns = get_union_columns(seen_avro_nodes, schema, None)?;
@@ -205,16 +205,16 @@ fn validate_schema_2(
             column_type.scalar_type
         }
         SchemaPiece::Null => bail!("null outside of union types is not supported"),
-        SchemaPiece::Boolean => SqlScalarType::Bool,
-        SchemaPiece::Int => SqlScalarType::Int32,
-        SchemaPiece::Long => SqlScalarType::Int64,
-        SchemaPiece::Float => SqlScalarType::Float32,
-        SchemaPiece::Double => SqlScalarType::Float64,
-        SchemaPiece::Date => SqlScalarType::Date,
-        SchemaPiece::TimestampMilli => SqlScalarType::Timestamp {
+        SchemaPiece::Boolean => ScalarType::Bool,
+        SchemaPiece::Int => ScalarType::Int32,
+        SchemaPiece::Long => ScalarType::Int64,
+        SchemaPiece::Float => ScalarType::Float32,
+        SchemaPiece::Double => ScalarType::Float64,
+        SchemaPiece::Date => ScalarType::Date,
+        SchemaPiece::TimestampMilli => ScalarType::Timestamp {
             precision: Some(TimestampPrecision::try_from(3).unwrap()),
         },
-        SchemaPiece::TimestampMicro => SqlScalarType::Timestamp {
+        SchemaPiece::TimestampMicro => ScalarType::Timestamp {
             precision: Some(TimestampPrecision::try_from(6).unwrap()),
         },
         SchemaPiece::Decimal {
@@ -226,15 +226,15 @@ fn validate_schema_2(
                     NUMERIC_DATUM_MAX_PRECISION
                 )
             }
-            SqlScalarType::Numeric {
+            ScalarType::Numeric {
                 max_scale: Some(NumericMaxScale::try_from(*scale)?),
             }
         }
-        SchemaPiece::Bytes | SchemaPiece::Fixed { .. } => SqlScalarType::Bytes,
-        SchemaPiece::String | SchemaPiece::Enum { .. } => SqlScalarType::String,
+        SchemaPiece::Bytes | SchemaPiece::Fixed { .. } => ScalarType::Bytes,
+        SchemaPiece::String | SchemaPiece::Enum { .. } => ScalarType::String,
 
-        SchemaPiece::Json => SqlScalarType::Jsonb,
-        SchemaPiece::Uuid => SqlScalarType::Uuid,
+        SchemaPiece::Json => ScalarType::Jsonb,
+        SchemaPiece::Uuid => ScalarType::Uuid,
         SchemaPiece::Record { fields, .. } => {
             let mut columns = vec![];
             for f in fields {
@@ -258,7 +258,7 @@ fn validate_schema_2(
                     seen_avro_nodes.remove(&named_idx);
                 }
             }
-            SqlScalarType::Record {
+            ScalarType::Record {
                 fields: columns.into(),
                 custom_id: None,
             }
@@ -277,7 +277,7 @@ fn validate_schema_2(
                 }
             }
             let next_node = schema.step(inner);
-            let ret = SqlScalarType::List {
+            let ret = ScalarType::List {
                 element_type: Box::new(validate_schema_2(seen_avro_nodes, next_node)?),
                 custom_id: None,
             };
@@ -286,7 +286,7 @@ fn validate_schema_2(
             }
             ret
         }
-        SchemaPiece::Map(inner) => SqlScalarType::Map {
+        SchemaPiece::Map(inner) => ScalarType::Map {
             value_type: Box::new(validate_schema_2(seen_avro_nodes, schema.step(inner))?),
             custom_id: None,
         },

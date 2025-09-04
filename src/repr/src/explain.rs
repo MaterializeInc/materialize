@@ -45,7 +45,7 @@ use crate::explain::dot::{DisplayDot, dot_string};
 use crate::explain::json::{DisplayJson, json_string};
 use crate::explain::text::{DisplayText, text_string};
 use crate::optimize::OptimizerFeatureOverrides;
-use crate::{GlobalId, SqlColumnType, SqlScalarType};
+use crate::{ColumnType, GlobalId, ScalarType};
 
 pub mod dot;
 pub mod json;
@@ -158,7 +158,7 @@ pub struct ExplainConfig {
     pub subtree_size: bool,
     /// Show the number of columns, i.e., the `Arity` Analysis.
     pub arity: bool,
-    /// Show the types, i.e., the `SqlRelationType` Analysis.
+    /// Show the types, i.e., the `RelationType` Analysis.
     pub types: bool,
     /// Show the sets of unique keys, i.e., the `UniqueKeys` Analysis.
     pub keys: bool,
@@ -442,13 +442,13 @@ pub trait ExprHumanizer: fmt::Debug {
     /// Used in, e.g., EXPLAIN and error msgs, in which case exact Postgres compatibility is less
     /// important than showing as much detail as possible. Also used in `pg_typeof`, where Postgres
     /// compatibility is more important.
-    fn humanize_scalar_type(&self, ty: &SqlScalarType, postgres_compat: bool) -> String;
+    fn humanize_scalar_type(&self, ty: &ScalarType, postgres_compat: bool) -> String;
 
     /// Returns a human-readable name for the specified column type.
     /// Used in, e.g., EXPLAIN and error msgs, in which case exact Postgres compatibility is less
     /// important than showing as much detail as possible. Also used in `pg_typeof`, where Postgres
     /// compatibility is more important.
-    fn humanize_column_type(&self, typ: &SqlColumnType, postgres_compat: bool) -> String {
+    fn humanize_column_type(&self, typ: &ColumnType, postgres_compat: bool) -> String {
         format!(
             "{}{}",
             self.humanize_scalar_type(&typ.scalar_type, postgres_compat),
@@ -512,7 +512,7 @@ impl<'a> ExprHumanizer for ExprHumanizerExt<'a> {
         }
     }
 
-    fn humanize_scalar_type(&self, ty: &SqlScalarType, postgres_compat: bool) -> String {
+    fn humanize_scalar_type(&self, ty: &ScalarType, postgres_compat: bool) -> String {
         self.inner.humanize_scalar_type(ty, postgres_compat)
     }
 
@@ -579,7 +579,7 @@ impl ExprHumanizer for DummyHumanizer {
         None
     }
 
-    fn humanize_scalar_type(&self, ty: &SqlScalarType, _postgres_compat: bool) -> String {
+    fn humanize_scalar_type(&self, ty: &ScalarType, _postgres_compat: bool) -> String {
         // The debug implementation is better than nothing.
         format!("{:?}", ty)
     }
@@ -638,7 +638,7 @@ pub struct Analyses {
     pub non_negative: Option<bool>,
     pub subtree_size: Option<usize>,
     pub arity: Option<usize>,
-    pub types: Option<Option<Vec<SqlColumnType>>>,
+    pub types: Option<Option<Vec<ColumnType>>>,
     pub keys: Option<Vec<Vec<usize>>>,
     pub cardinality: Option<String>,
     pub column_names: Option<Vec<String>>,

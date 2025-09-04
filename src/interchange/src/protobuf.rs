@@ -11,7 +11,7 @@ use std::collections::BTreeSet;
 
 use anyhow::{Context, anyhow, bail};
 use mz_ore::str::StrExt;
-use mz_repr::{ColumnName, Datum, Row, RowPacker, SqlColumnType, SqlScalarType};
+use mz_repr::{ColumnName, ColumnType, Datum, Row, RowPacker, ScalarType};
 use prost_reflect::{
     Cardinality, DescriptorPool, DynamicMessage, FieldDescriptor, Kind, MessageDescriptor,
     ReflectMessage, Value,
@@ -21,7 +21,7 @@ use prost_reflect::{
 #[derive(Debug, PartialEq)]
 pub struct DecodedDescriptors {
     message_descriptor: MessageDescriptor,
-    columns: Vec<(ColumnName, SqlColumnType)>,
+    columns: Vec<(ColumnName, ColumnType)>,
     message_name: String,
 }
 
@@ -56,7 +56,7 @@ impl DecodedDescriptors {
     /// In other words, the return value describes the shape of the rows that
     /// will be produced by a [`Decoder`] constructed from this
     /// `DecodedDescriptors`.
-    pub fn columns(&self) -> &[(ColumnName, SqlColumnType)] {
+    pub fn columns(&self) -> &[(ColumnName, ColumnType)] {
         &self.columns
     }
 }
@@ -114,16 +114,16 @@ impl Decoder {
 fn derive_column_type(
     seen_messages: &mut BTreeSet<String>,
     field: &FieldDescriptor,
-) -> Result<SqlColumnType, anyhow::Error> {
+) -> Result<ColumnType, anyhow::Error> {
     if field.is_map() {
         bail!("Protobuf map fields are not supported");
     }
 
     let ty = derive_inner_type(seen_messages, field.kind())?;
     if field.is_list() {
-        Ok(SqlColumnType {
+        Ok(ColumnType {
             nullable: false,
-            scalar_type: SqlScalarType::List {
+            scalar_type: ScalarType::List {
                 element_type: Box::new(ty.scalar_type),
                 custom_id: None,
             },
@@ -136,18 +136,18 @@ fn derive_column_type(
 fn derive_inner_type(
     seen_messages: &mut BTreeSet<String>,
     ty: Kind,
-) -> Result<SqlColumnType, anyhow::Error> {
+) -> Result<ColumnType, anyhow::Error> {
     match ty {
-        Kind::Bool => Ok(SqlScalarType::Bool.nullable(false)),
-        Kind::Int32 | Kind::Sint32 | Kind::Sfixed32 => Ok(SqlScalarType::Int32.nullable(false)),
-        Kind::Int64 | Kind::Sint64 | Kind::Sfixed64 => Ok(SqlScalarType::Int64.nullable(false)),
-        Kind::Uint32 | Kind::Fixed32 => Ok(SqlScalarType::UInt32.nullable(false)),
-        Kind::Uint64 | Kind::Fixed64 => Ok(SqlScalarType::UInt64.nullable(false)),
-        Kind::Float => Ok(SqlScalarType::Float32.nullable(false)),
-        Kind::Double => Ok(SqlScalarType::Float64.nullable(false)),
-        Kind::String => Ok(SqlScalarType::String.nullable(false)),
-        Kind::Bytes => Ok(SqlScalarType::Bytes.nullable(false)),
-        Kind::Enum(_) => Ok(SqlScalarType::String.nullable(false)),
+        Kind::Bool => Ok(ScalarType::Bool.nullable(false)),
+        Kind::Int32 | Kind::Sint32 | Kind::Sfixed32 => Ok(ScalarType::Int32.nullable(false)),
+        Kind::Int64 | Kind::Sint64 | Kind::Sfixed64 => Ok(ScalarType::Int64.nullable(false)),
+        Kind::Uint32 | Kind::Fixed32 => Ok(ScalarType::UInt32.nullable(false)),
+        Kind::Uint64 | Kind::Fixed64 => Ok(ScalarType::UInt64.nullable(false)),
+        Kind::Float => Ok(ScalarType::Float32.nullable(false)),
+        Kind::Double => Ok(ScalarType::Float64.nullable(false)),
+        Kind::String => Ok(ScalarType::String.nullable(false)),
+        Kind::Bytes => Ok(ScalarType::Bytes.nullable(false)),
+        Kind::Enum(_) => Ok(ScalarType::String.nullable(false)),
         Kind::Message(m) => {
             if seen_messages.contains(m.name()) {
                 bail!("Recursive types are not supported: {}", m.name());
@@ -160,7 +160,7 @@ fn derive_inner_type(
                 fields.push((column_name, column_type))
             }
             seen_messages.remove(m.name());
-            let ty = SqlScalarType::Record {
+            let ty = ScalarType::Record {
                 fields: fields.into(),
                 custom_id: None,
             };

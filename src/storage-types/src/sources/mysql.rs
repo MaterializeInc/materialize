@@ -17,7 +17,7 @@ use std::sync::LazyLock;
 use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
 use mz_repr::CatalogItemId;
 use mz_repr::GlobalId;
-use mz_repr::{Datum, RelationDesc, Row, SqlScalarType};
+use mz_repr::{Datum, RelationDesc, Row, ScalarType};
 use mz_timely_util::order::Partitioned;
 use mz_timely_util::order::Step;
 use proptest::prelude::any;
@@ -71,9 +71,9 @@ impl<R: ConnectionResolver> IntoInlineConnection<MySqlSourceConnection, R>
 
 pub static MYSQL_PROGRESS_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
     RelationDesc::builder()
-        .with_column("source_id_lower", SqlScalarType::Uuid.nullable(false))
-        .with_column("source_id_upper", SqlScalarType::Uuid.nullable(false))
-        .with_column("transaction_id", SqlScalarType::UInt64.nullable(true))
+        .with_column("source_id_lower", ScalarType::Uuid.nullable(false))
+        .with_column("source_id_upper", ScalarType::Uuid.nullable(false))
+        .with_column("transaction_id", ScalarType::UInt64.nullable(true))
         .finish()
 });
 

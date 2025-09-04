@@ -22,10 +22,10 @@ use mz_expr::canonicalize::{UnionFind, canonicalize_equivalence_classes};
 use mz_expr::explain::{HumanizedExplain, HumanizerMode};
 use mz_expr::{AggregateFunc, Id, MirRelationExpr, MirScalarExpr};
 use mz_ore::str::{bracketed, separated};
-use mz_repr::{Datum, SqlColumnType};
+use mz_repr::{ColumnType, Datum};
 
 use crate::analysis::{Analysis, Lattice};
-use crate::analysis::{Arity, SqlRelationType};
+use crate::analysis::{Arity, RelationType};
 use crate::analysis::{Derived, DerivedBuilder};
 
 /// Pulls up and pushes down predicate information represented as equivalences
@@ -41,7 +41,7 @@ impl Analysis for Equivalences {
 
     fn announce_dependencies(builder: &mut DerivedBuilder) {
         builder.require(Arity);
-        builder.require(SqlRelationType); // needed for expression reduction.
+        builder.require(RelationType); // needed for expression reduction.
     }
 
     fn derive(
@@ -165,7 +165,7 @@ impl Analysis for Equivalences {
                     let mut class = predicates.clone();
                     class.push(MirScalarExpr::literal_ok(
                         Datum::True,
-                        mz_repr::SqlScalarType::Bool,
+                        mz_repr::ScalarType::Bool,
                     ));
                     equivalences.classes.push(class);
                 }
@@ -270,7 +270,7 @@ impl Analysis for Equivalences {
             MirRelationExpr::ArrangeBy { .. } => results.get(index - 1).unwrap().clone(),
         };
 
-        let expr_type = depends.results::<SqlRelationType>()[index].as_ref();
+        let expr_type = depends.results::<RelationType>()[index].as_ref();
         equivalences
             .as_mut()
             .map(|e| e.minimize(expr_type.map(|x| &x[..])));
@@ -413,7 +413,7 @@ impl EqClassesImpl {
     /// Extract the equivalences
     pub fn extract_equivalences(
         &mut self,
-        columns: Option<&[SqlColumnType]>,
+        columns: Option<&[ColumnType]>,
     ) -> Vec<Vec<MirScalarExpr>> {
         match self {
             EqClassesImpl::EquivalenceClasses(classes) => classes.classes.clone(),
@@ -467,7 +467,7 @@ impl EquivalenceClassesWithholdingErrors {
     /// Minimize the equivalence classes, and return the result, reintroducing any held back classes.
     pub fn extract_equivalences(
         &mut self,
-        columns: Option<&[SqlColumnType]>,
+        columns: Option<&[ColumnType]>,
     ) -> Vec<Vec<MirScalarExpr>> {
         self.equivalence_classes.minimize(columns);
 
@@ -648,7 +648,7 @@ impl EquivalenceClasses {
     /// Update `self` to maintain the same equivalences which potentially reducing along `Ord::le`.
     ///
     /// Informally this means simplifying constraints, removing redundant constraints, and unifying equivalence classes.
-    pub fn minimize(&mut self, columns: Option<&[SqlColumnType]>) {
+    pub fn minimize(&mut self, columns: Option<&[ColumnType]>) {
         // Repeatedly, we reduce each of the classes themselves, then unify the classes.
         // This should strictly reduce complexity, and reach a fixed point.
         // Ideally it is *confluent*, arriving at the same fixed point no matter the order of operations.
@@ -838,7 +838,7 @@ impl EquivalenceClasses {
     ///   1. Performs per-expression reduction, including the class structure to replace subexpressions.
     ///   2. Applies idiom detection to e.g. unpack expressions equivalence to literal true or false.
     ///   3. Restores the equivalence class invariants.
-    fn minimize_once(&mut self, columns: Option<&[SqlColumnType]>) -> bool {
+    fn minimize_once(&mut self, columns: Option<&[ColumnType]>) -> bool {
         // 1. Reduce each expression
         //
         // This reduction first looks for subexpression substitutions that can be performed,

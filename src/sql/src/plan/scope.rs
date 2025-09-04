@@ -473,7 +473,7 @@ impl Scope {
         // reoccurence of the expr might want to have a different type.
         //
         // This is most evident in the case of literal `NULL` values. The first
-        // occurrence is likely to be cast as `SqlScalarType::String`, but
+        // occurrence is likely to be cast as `ScalarType::String`, but
         // subsequent `NULL` values should be untyped.
         if matches!(expr, Expr::Value(_)) {
             return None;

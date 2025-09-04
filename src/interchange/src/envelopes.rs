@@ -18,9 +18,7 @@ use differential_dataflow::{AsCollection, Collection};
 use itertools::{EitherOrBoth, Itertools};
 use maplit::btreemap;
 use mz_ore::cast::CastFrom;
-use mz_repr::{
-    CatalogItemId, ColumnName, Datum, Diff, Row, RowPacker, SqlColumnType, SqlScalarType,
-};
+use mz_repr::{CatalogItemId, ColumnName, ColumnType, Datum, Diff, Row, RowPacker, ScalarType};
 use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;
@@ -139,11 +137,11 @@ pub static ENVELOPE_CUSTOM_NAMES: LazyLock<BTreeMap<CatalogItemId, String>> = La
 });
 
 pub(crate) fn dbz_envelope(
-    names_and_types: Vec<(ColumnName, SqlColumnType)>,
-) -> Vec<(ColumnName, SqlColumnType)> {
-    let row = SqlColumnType {
+    names_and_types: Vec<(ColumnName, ColumnType)>,
+) -> Vec<(ColumnName, ColumnType)> {
+    let row = ColumnType {
         nullable: true,
-        scalar_type: SqlScalarType::Record {
+        scalar_type: ScalarType::Record {
             fields: names_and_types.into(),
             custom_id: Some(DBZ_ROW_TYPE_ID),
         },

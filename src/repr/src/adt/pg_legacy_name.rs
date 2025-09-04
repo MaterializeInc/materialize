@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 /// The number of bytes required **by PostgreSQL** to store a value of type
-/// [`SqlScalarType::PgLegacyName`](crate::SqlScalarType::PgLegacyName).
+/// [`ScalarType::PgLegacyName`](crate::ScalarType::PgLegacyName).
 ///
 /// Corresponds to the `NAMEDATALEN` constant in the PostgreSQL source code.
 ///
@@ -19,7 +19,7 @@
 const PG_NAMEDATALEN: usize = 64;
 
 /// The maximum number of bytes that may be stored in a value of type
-/// [`SqlScalarType::PgLegacyName`](crate::SqlScalarType::PgLegacyName).
+/// [`ScalarType::PgLegacyName`](crate::ScalarType::PgLegacyName).
 pub const NAME_MAX_BYTES: usize = PG_NAMEDATALEN - 1;
 
 /// A Rust type representing a PostgreSQL `name` type.

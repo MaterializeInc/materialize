@@ -127,7 +127,7 @@ struct CteDesc {
     new_id: mz_expr::LocalId,
     /// The relation type of the CTE including the columns from the outer
     /// context at the beginning.
-    relation_type: SqlRelationType,
+    relation_type: RelationType,
     /// The outer relation the CTE was applied to.
     outer_relation: MirRelationExpr,
 }
@@ -191,7 +191,7 @@ impl HirRelationExpr {
                 transform_hir::split_subquery_predicates(&mut other)?;
                 transform_hir::try_simplify_quantified_comparisons(&mut other)?;
                 transform_hir::fuse_window_functions(&mut other, &context)?;
-                MirRelationExpr::constant(vec![vec![]], SqlRelationType::new(vec![])).let_in(
+                MirRelationExpr::constant(vec![vec![]], RelationType::new(vec![])).let_in(
                     &mut id_gen,
                     |id_gen, get_outer| {
                         other.applied_to(
@@ -376,7 +376,7 @@ impl HirRelationExpr {
                             id.clone(),
                             CteDesc {
                                 new_id: mir_id,
-                                relation_type: SqlRelationType::new(
+                                relation_type: RelationType::new(
                                     outer_column_types
                                         .iter()
                                         .cloned()
@@ -1176,7 +1176,7 @@ impl HirScalarExpr {
                          _subquery_map: &Option<&_>,
                          order_by_mir: Vec<MirScalarExpr>,
                          original_row_record,
-                         original_row_record_type: SqlScalarType| {
+                         original_row_record_type: ScalarType| {
                             let agg_input = MirScalarExpr::CallVariadic {
                                 func: mz_expr::VariadicFunc::ListCreate {
                                     elem_type: original_row_record_type.clone(),
@@ -1193,11 +1193,11 @@ impl HirScalarExpr {
                                 },
                                 exprs: agg_input,
                             };
-                            let list_type = SqlScalarType::List {
+                            let list_type = ScalarType::List {
                                 element_type: Box::new(original_row_record_type),
                                 custom_id: None,
                             };
-                            let agg_input_type = SqlScalarType::Record {
+                            let agg_input_type = ScalarType::Record {
                                 fields: std::iter::once(&list_type)
                                     .map(|t| {
                                         (ColumnName::from("?column?"), t.clone().nullable(false))
@@ -1255,7 +1255,7 @@ impl HirScalarExpr {
                                 },
                                 exprs: vec![original_row_record, mir_encoded_args],
                             };
-                            let fn_input_record_type = SqlScalarType::Record {
+                            let fn_input_record_type = ScalarType::Record {
                                 fields: fn_input_record_fields,
                                 custom_id: None,
                             }
@@ -1274,7 +1274,7 @@ impl HirScalarExpr {
                                 exprs: agg_input,
                             };
 
-                            let agg_input_type = SqlScalarType::Record {
+                            let agg_input_type = ScalarType::Record {
                                 fields: [(
                                     ColumnName::from("?column?"),
                                     fn_input_record_type.nullable(false),
@@ -1363,8 +1363,8 @@ impl HirScalarExpr {
             &Option<&BTreeMap<HirScalarExpr, usize>>,
             Vec<MirScalarExpr>,
             MirScalarExpr,
-            SqlScalarType,
-        ) -> Result<(MirScalarExpr, SqlColumnType), PlanError>,
+            ScalarType,
+        ) -> Result<(MirScalarExpr, ColumnType), PlanError>,
     {
         // Example MIRs for a window function (specifically, a window aggregation):
         //
@@ -1478,7 +1478,7 @@ impl HirScalarExpr {
                         },
                         exprs: (0..input_arity).map(MirScalarExpr::column).collect_vec(),
                     };
-                    let original_row_record_type = SqlScalarType::Record {
+                    let original_row_record_type = ScalarType::Record {
                         fields,
                         custom_id: None,
                     };
@@ -1892,7 +1892,7 @@ where
             // rows, whereas if it had been correlated it would not (and *could*
             // not) have been computed if outer had no rows, but the callers of
             // this function don't mind these somewhat-weird semantics.
-            MirRelationExpr::constant(vec![vec![]], SqlRelationType::new(vec![]))
+            MirRelationExpr::constant(vec![vec![]], RelationType::new(vec![]))
         } else {
             get_outer.clone().distinct_by(key.clone())
         };
@@ -1977,7 +1977,7 @@ fn apply_scalar_subquery(
                 } else {
                     counts
                         .filter(vec![MirScalarExpr::column(inner_arity).call_binary(
-                            MirScalarExpr::literal_ok(Datum::Int64(1), SqlScalarType::Int64),
+                            MirScalarExpr::literal_ok(Datum::Int64(1), ScalarType::Int64),
                             mz_expr::BinaryFunc::Gt,
                         )])
                         .project((0..inner_arity).collect::<Vec<_>>())
@@ -2023,7 +2023,7 @@ fn apply_existential_subquery(
                 .map(vec![MirScalarExpr::literal_true()]);
 
             // append False to anything that didn't return any rows
-            get_inner.lookup(id_gen, exists, vec![(Datum::False, SqlScalarType::Bool)])
+            get_inner.lookup(id_gen, exists, vec![(Datum::False, ScalarType::Bool)])
         },
     )
 }
@@ -2067,7 +2067,7 @@ fn attempt_outer_equijoin(
     left: MirRelationExpr,
     right: MirRelationExpr,
     on: MirScalarExpr,
-    on_subquery_types: Vec<SqlColumnType>,
+    on_subquery_types: Vec<ColumnType>,
     kind: JoinKind,
     oa: usize,
     id_gen: &mut mz_ore::id_gen::IdGen,

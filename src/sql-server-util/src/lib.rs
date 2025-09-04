@@ -19,7 +19,7 @@ use futures::future::BoxFuture;
 use futures::{FutureExt, Stream, StreamExt, TryStreamExt};
 use mz_ore::netio::DUMMY_DNS_PORT;
 use mz_ore::result::ResultExt;
-use mz_repr::SqlScalarType;
+use mz_repr::ScalarType;
 use smallvec::{SmallVec, smallvec};
 use tiberius::ToSql;
 use tokio::net::TcpStream;
@@ -883,7 +883,7 @@ pub enum SqlServerDecodeError {
     #[error("can't decode {sql_server_type:?} as {mz_type:?}")]
     Unsupported {
         sql_server_type: SqlServerColumnDecodeType,
-        mz_type: SqlScalarType,
+        mz_type: ScalarType,
     },
 }
 

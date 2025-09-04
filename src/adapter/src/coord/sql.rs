@@ -12,7 +12,7 @@
 
 use mz_adapter_types::connection::ConnectionId;
 use mz_ore::now::EpochMillis;
-use mz_repr::{Diff, GlobalId, SqlScalarType};
+use mz_repr::{Diff, GlobalId, ScalarType};
 use mz_sql::names::{Aug, ResolvedIds};
 use mz_sql::plan::{Params, StatementDesc};
 use mz_sql::session::metadata::SessionMetadata;
@@ -101,7 +101,7 @@ impl Coordinator {
         catalog: &Catalog,
         session: &Session,
         stmt: Option<Statement<Raw>>,
-        param_types: Vec<Option<SqlScalarType>>,
+        param_types: Vec<Option<ScalarType>>,
     ) -> Result<StatementDesc, AdapterError> {
         if let Some(stmt) = stmt {
             describe(catalog, stmt, &param_types, session)

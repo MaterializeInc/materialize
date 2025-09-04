@@ -190,7 +190,7 @@ impl PgCopyUploader {
 mod tests {
     use bytesize::ByteSize;
     use mz_pgcopy::CopyFormatParams;
-    use mz_repr::{ColumnName, Datum, SqlColumnType, SqlRelationType};
+    use mz_repr::{ColumnName, ColumnType, Datum, RelationType};
     use uuid::Uuid;
 
     use super::*;
@@ -223,8 +223,8 @@ mod tests {
         };
         let sink_id = GlobalId::User(123);
         let batch = 456;
-        let typ: SqlRelationType = SqlRelationType::new(vec![SqlColumnType {
-            scalar_type: mz_repr::SqlScalarType::String,
+        let typ: RelationType = RelationType::new(vec![ColumnType {
+            scalar_type: mz_repr::ScalarType::String,
             nullable: true,
         }]);
         let column_names = vec![ColumnName::from("col1")];

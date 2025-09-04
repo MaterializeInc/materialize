@@ -249,16 +249,16 @@ mod support {
     /// It only refreshes the nullability and unique key information. As this information can regress,
     /// we do not error if the type weakens, even though that may be something we want to look into.
     ///
-    /// The method relies on the `analysis::{UniqueKeys, SqlRelationType}` analyses to improve its type
+    /// The method relies on the `analysis::{UniqueKeys, RelationType}` analyses to improve its type
     /// information for `LetRec` stages.
     pub(super) fn refresh_types(
         expr: &mut MirRelationExpr,
         features: &OptimizerFeatures,
     ) -> Result<(), crate::TransformError> {
         // Assemble type information once for the whole expression.
-        use crate::analysis::{DerivedBuilder, SqlRelationType, UniqueKeys};
+        use crate::analysis::{DerivedBuilder, RelationType, UniqueKeys};
         let mut builder = DerivedBuilder::new(features);
-        builder.require(SqlRelationType);
+        builder.require(RelationType);
         builder.require(UniqueKeys);
         let derived = builder.visit(expr);
         let derived_view = derived.as_view();
@@ -276,15 +276,15 @@ mod support {
                 // The `skip(1)` skips the `body` child, and is followed by binding children.
                 for (id, view) in ids.iter().rev().zip_eq(view.children_rev().skip(1)) {
                     let cols = view
-                        .value::<SqlRelationType>()
-                        .expect("SqlRelationType required")
+                        .value::<RelationType>()
+                        .expect("RelationType required")
                         .clone()
                         .expect("Expression not well typed");
                     let keys = view
                         .value::<UniqueKeys>()
                         .expect("UniqueKeys required")
                         .clone();
-                    types.insert(*id, mz_repr::SqlRelationType::new(cols).with_keys(keys));
+                    types.insert(*id, mz_repr::RelationType::new(cols).with_keys(keys));
                 }
             }
             todo.extend(expr.children().rev().zip_eq(view.children_rev()));

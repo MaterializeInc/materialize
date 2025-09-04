@@ -15,7 +15,7 @@ use mz_ore::now::SYSTEM_TIME;
 use mz_persist_client::ShardId;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_types::codec_impls::UnitSchema;
-use mz_repr::{RelationDesc, SqlScalarType, Timestamp};
+use mz_repr::{RelationDesc, ScalarType, Timestamp};
 use mz_storage_types::StorageDiff;
 use mz_storage_types::sources::SourceData;
 
@@ -42,9 +42,9 @@ pub async fn run_force_compaction(
     };
 
     let relation_desc = RelationDesc::builder()
-        .with_column("key", SqlScalarType::String.nullable(true))
-        .with_column("f1", SqlScalarType::String.nullable(true))
-        .with_column("f2", SqlScalarType::Int64.nullable(true))
+        .with_column("key", ScalarType::String.nullable(true))
+        .with_column("f1", ScalarType::String.nullable(true))
+        .with_column("f2", ScalarType::Int64.nullable(true))
         .finish();
 
     mz_persist_client::cli::admin::force_compaction::<SourceData, (), Timestamp, StorageDiff>(
