@@ -509,10 +509,10 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
                     offset_commit_metrics.offset_commit_failures.inc();
                     tracing::warn!(
                         %e,
-                        "timely-{} source({}) failed to commit offsets: resume_upper={}",
-                        config.worker_id,
-                        config.id,
-                        resume_upper.pretty()
+                        "timely-{worker_id} source({source_id}) failed to commit offsets: resume_upper={upper}",
+                        worker_id = config.worker_id,
+                        source_id = config.id,
+                        upper = resume_upper.pretty()
                     );
                 }
             }
@@ -524,10 +524,10 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
                         offset_commit_metrics.offset_commit_failures.inc();
                         tracing::warn!(
                             %e,
-                            "timely-{} source({}) failed to commit offsets: resume_upper={}",
-                            config.worker_id,
-                            config.id,
-                            frontier.pretty()
+                            "timely-{worker_id} source({source_id}) failed to commit offsets: resume_upper={upper}",
+                            worker_id = config.worker_id,
+                            source_id = config.id,
+                            upper = frontier.pretty()
                         );
                     }
                 }
