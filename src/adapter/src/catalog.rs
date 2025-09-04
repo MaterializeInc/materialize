@@ -97,7 +97,7 @@ pub use crate::catalog::transact::{
 };
 use crate::command::CatalogDump;
 use crate::coord::TargetCluster;
-use crate::session::{PreparedStatement, Session};
+use crate::session::{Portal, PreparedStatement, Session};
 use crate::util::ResultExt;
 use crate::{AdapterError, AdapterNotice, ExecuteResponse};
 
@@ -429,6 +429,7 @@ pub struct ConnCatalog<'a> {
     search_path: Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)>,
     role_id: RoleId,
     prepared_statements: Option<&'a BTreeMap<String, PreparedStatement>>,
+    portals: Option<&'a BTreeMap<String, Portal>>,
     notices_tx: UnboundedSender<AdapterNotice>,
 }
 
@@ -1794,6 +1795,11 @@ impl SessionCatalog for ConnCatalog<'_> {
             .as_ref()
             .map(|ps| ps.get(name).map(|ps| ps.desc()))
             .flatten()
+    }
+
+    fn get_portal_desc_unverified(&self, portal_name: &str) -> Option<&StatementDesc> {
+        self.portals
+            .and_then(|portals| portals.get(portal_name).map(|portal| &portal.desc))
     }
 
     fn active_database(&self) -> Option<&DatabaseId> {

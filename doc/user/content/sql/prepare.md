@@ -15,7 +15,7 @@ menu:
 Field | Use
 ------|-----
 name | A name for this particular prepared statement that you can later use to execute or deallocate a statement. The name must be unique within a session.
-statement  |  Any `SELECT`, `INSERT`, `UPDATE`, or `DELETE` statement.
+statement  |  Any `SELECT`, `INSERT`, `UPDATE`, `DELETE`, or `FETCH` statement.
 
 ## Details
 

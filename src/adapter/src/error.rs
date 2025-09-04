@@ -890,7 +890,10 @@ impl From<mz_sql::catalog::CatalogError> for AdapterError {
 
 impl From<PlanError> for AdapterError {
     fn from(e: PlanError) -> AdapterError {
-        AdapterError::PlanError(e)
+        match e {
+            PlanError::UnknownCursor(name) => AdapterError::UnknownCursor(name),
+            _ => AdapterError::PlanError(e),
+        }
     }
 }
 
