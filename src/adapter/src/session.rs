@@ -119,6 +119,12 @@ where
     #[derivative(Debug = "ignore")]
     qcell_owner: QCellOwner,
     session_oracles: BTreeMap<Timeline, InMemoryTimestampOracle<T, NowFn<T>>>,
+    /// Incremented when session state that is relevant to prepared statement planning changes.
+    /// Currently, only changes to `portals` are tracked. Changes to `prepared_statements` don't
+    /// need to be tracked, because prepared statements can't depend on other prepared statements.
+    /// TODO: We might want to track changes also to session variables.
+    /// (`Catalog::transient_revision` similarly tracks changes on the catalog side.)
+    state_revision: u64,
 }
 
 impl<T> SessionMetadata for Session<T>
@@ -344,6 +350,7 @@ impl<T: TimestampManipulation> Session<T> {
             external_metadata_rx,
             qcell_owner: QCellOwner::new(),
             session_oracles: BTreeMap::new(),
+            state_revision: 0,
         }
     }
 
@@ -457,6 +464,7 @@ impl<T: TimestampManipulation> Session<T> {
     pub fn clear_transaction(&mut self) -> TransactionStatus<T> {
         self.portals.clear();
         self.pcx = None;
+        self.state_revision += 1;
         mem::take(&mut self.transaction)
     }
 
@@ -632,7 +640,7 @@ impl<T: TimestampManipulation> Session<T> {
         stmt: Option<Statement<Raw>>,
         raw_sql: String,
         desc: StatementDesc,
-        catalog_revision: u64,
+        state_revision: StateRevision,
         now: EpochMillis,
     ) {
         let logging = PreparedStatementLoggingInfo::still_to_log(
@@ -646,7 +654,7 @@ impl<T: TimestampManipulation> Session<T> {
         let statement = PreparedStatement {
             stmt,
             desc,
-            catalog_revision,
+            state_revision,
             logging: Arc::new(QCell::new(&self.qcell_owner, logging)),
         };
         self.prepared_statements.insert(name, statement);
@@ -710,19 +718,20 @@ impl<T: TimestampManipulation> Session<T> {
         logging: Arc<QCell<PreparedStatementLoggingInfo>>,
         params: Vec<(Datum, SqlScalarType)>,
         result_formats: Vec<Format>,
-        catalog_revision: u64,
+        state_revision: StateRevision,
     ) -> Result<(), AdapterError> {
         // The empty portal can be silently replaced.
         if !portal_name.is_empty() && self.portals.contains_key(&portal_name) {
             return Err(AdapterError::DuplicateCursor(portal_name));
         }
+        self.state_revision += 1;
         let param_types = desc.param_types.clone();
         self.portals.insert(
             portal_name,
             Portal {
                 stmt: stmt.map(Arc::new),
                 desc,
-                catalog_revision,
+                state_revision,
                 parameters: Params {
                     datums: Row::pack(params.iter().map(|(d, _t)| d)),
                     execute_types: params.into_iter().map(|(_d, t)| t).collect(),
@@ -741,6 +750,7 @@ impl<T: TimestampManipulation> Session<T> {
     ///
     /// If there is no such portal, this method does nothing. Returns whether that portal existed.
     pub fn remove_portal(&mut self, portal_name: &str) -> bool {
+        self.state_revision += 1;
         self.portals.remove(portal_name).is_some()
     }
 
@@ -754,8 +764,20 @@ impl<T: TimestampManipulation> Session<T> {
     /// Retrieves a mutable reference to the specified portal.
     ///
     /// If there is no such portal, returns `None`.
-    pub fn get_portal_unverified_mut(&mut self, portal_name: &str) -> Option<&mut Portal> {
-        self.portals.get_mut(portal_name)
+    ///
+    /// Note: When using the returned `PortalRefMut`, there is no need to increment
+    /// `Session::state_revision`, because the portal's meaning is not changed.
+    pub fn get_portal_unverified_mut(&mut self, portal_name: &str) -> Option<PortalRefMut<'_>> {
+        self.portals.get_mut(portal_name).map(|p| PortalRefMut {
+            stmt: &p.stmt,
+            desc: &p.desc,
+            state_revision: &mut p.state_revision,
+            parameters: &mut p.parameters,
+            result_formats: &mut p.result_formats,
+            logging: &mut p.logging,
+            state: &mut p.state,
+            lifecycle_timestamps: &mut p.lifecycle_timestamps,
+        })
     }
 
     /// Creates and installs a new portal.
@@ -766,10 +788,11 @@ impl<T: TimestampManipulation> Session<T> {
         desc: StatementDesc,
         parameters: Params,
         result_formats: Vec<Format>,
-        catalog_revision: u64,
+        state_revision: StateRevision,
     ) -> Result<String, AdapterError> {
-        // See: https://github.com/postgres/postgres/blob/84f5c2908dad81e8622b0406beea580e40bb03ac/src/backend/utils/mmgr/portalmem.c#L234
+        self.state_revision += 1;
 
+        // See: https://github.com/postgres/postgres/blob/84f5c2908dad81e8622b0406beea580e40bb03ac/src/backend/utils/mmgr/portalmem.c#L234
         for i in 0usize.. {
             let name = format!("<unnamed portal {}>", i);
             match self.portals.entry(name.clone()) {
@@ -778,7 +801,7 @@ impl<T: TimestampManipulation> Session<T> {
                     entry.insert(Portal {
                         stmt: stmt.map(Arc::new),
                         desc,
-                        catalog_revision,
+                        state_revision,
                         parameters,
                         result_formats,
                         state: PortalState::NotStarted,
@@ -910,6 +933,12 @@ impl<T: TimestampManipulation> Session<T> {
             None
         }
     }
+
+    /// Return the state_revision of the session, which can be used by dependent objects for knowing
+    /// when to re-plan due to session state changes.
+    pub fn state_revision(&self) -> u64 {
+        self.state_revision
+    }
 }
 
 /// A prepared statement.
@@ -918,8 +947,8 @@ impl<T: TimestampManipulation> Session<T> {
 pub struct PreparedStatement {
     stmt: Option<Statement<Raw>>,
     desc: StatementDesc,
-    /// The most recent catalog revision that has verified this statement.
-    pub catalog_revision: u64,
+    /// The most recent state revision that has verified this statement.
+    pub state_revision: StateRevision,
     #[derivative(Debug = "ignore")]
     logging: Arc<QCell<PreparedStatementLoggingInfo>>,
 }
@@ -950,8 +979,8 @@ pub struct Portal {
     pub stmt: Option<Arc<Statement<Raw>>>,
     /// The statement description.
     pub desc: StatementDesc,
-    /// The most recent catalog revision that has verified this statement.
-    pub catalog_revision: u64,
+    /// The most recent state revision that has verified this portal.
+    pub state_revision: StateRevision,
     /// The bound values for the parameters in the prepared statement, if any.
     pub parameters: Params,
     /// The desired output format for each column in the result set.
@@ -964,6 +993,40 @@ pub struct Portal {
     pub state: PortalState,
     /// Statement lifecycle timestamps coming from `mz-pgwire`.
     pub lifecycle_timestamps: Option<LifecycleTimestamps>,
+}
+
+/// A mutable reference to a portal, capturing its state and associated metadata. Importantly, it
+/// does _not_ give _mutable_ access to `stmt` and `desc`, which means that you do not need to
+/// increment `Session::state_revision` when modifying fields through a `PortalRefMut`, because the
+/// portal's meaning is not changed.
+pub struct PortalRefMut<'a> {
+    /// The statement that is bound to this portal.
+    pub stmt: &'a Option<Arc<Statement<Raw>>>,
+    /// The statement description.
+    pub desc: &'a StatementDesc,
+    /// The most recent state revision that has verified this portal.
+    pub state_revision: &'a mut StateRevision,
+    /// The bound values for the parameters in the prepared statement, if any.
+    pub parameters: &'a mut Params,
+    /// The desired output format for each column in the result set.
+    pub result_formats: &'a mut Vec<Format>,
+    /// A handle to metadata needed for statement logging.
+    pub logging: &'a mut Arc<QCell<PreparedStatementLoggingInfo>>,
+    /// The execution state of the portal.
+    pub state: &'a mut PortalState,
+    /// Statement lifecycle timestamps coming from `mz-pgwire`.
+    pub lifecycle_timestamps: &'a mut Option<LifecycleTimestamps>,
+}
+
+/// Points to a revision of catalog state and session state. When the current revisions are not the
+/// same as the revisions when a prepared statement or a portal was described, we need to check
+/// whether the description is still valid.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StateRevision {
+    /// A revision of the catalog.
+    pub catalog_revision: u64,
+    /// A revision of the session state.
+    pub session_state_revision: u64,
 }
 
 /// Execution states of a portal.

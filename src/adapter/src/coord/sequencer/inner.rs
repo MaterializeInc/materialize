@@ -4638,9 +4638,9 @@ impl Coordinator {
             .expect("known to exist");
         let stmt = ps.stmt().cloned();
         let desc = ps.desc().clone();
-        let revision = ps.catalog_revision;
+        let state_revision = ps.state_revision;
         let logging = Arc::clone(ps.logging());
-        session.create_new_portal(stmt, logging, desc, plan.params, Vec::new(), revision)
+        session.create_new_portal(stmt, logging, desc, plan.params, Vec::new(), state_revision)
     }
 
     #[instrument]

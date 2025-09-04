@@ -17,11 +17,11 @@ use std::{iter, mem};
 
 use byteorder::{ByteOrder, NetworkEndian};
 use futures::future::{BoxFuture, FutureExt, pending};
-use itertools::izip;
+use itertools::{Itertools, izip};
 use mz_adapter::client::RecordFirstRowStream;
 use mz_adapter::session::{
-    EndTransactionAction, InProgressRows, LifecycleTimestamps, Portal, PortalState, SessionConfig,
-    TransactionStatus,
+    EndTransactionAction, InProgressRows, LifecycleTimestamps, PortalRefMut, PortalState,
+    SessionConfig, TransactionStatus,
 };
 use mz_adapter::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use mz_adapter::{
@@ -34,7 +34,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::netio::AsyncReady;
 use mz_ore::now::{EpochMillis, SYSTEM_TIME};
 use mz_ore::str::StrExt;
-use mz_ore::{assert_none, assert_ok, instrument};
+use mz_ore::{assert_none, assert_ok, instrument, soft_assert_eq_or_log};
 use mz_pgcopy::{CopyCsvFormatParams, CopyFormatParams, CopyTextFormatParams};
 use mz_pgwire_common::{
     ConnectionCounter, ErrorResponse, Format, FrontendMessage, Severity, VERSION_3, VERSIONS,
@@ -725,7 +725,7 @@ where
             .get_portal_unverified_mut(EMPTY_PORTAL)
             .expect("unnamed portal should be present");
 
-        portal.lifecycle_timestamps = Some(lifecycle_timestamps);
+        *portal.lifecycle_timestamps = Some(lifecycle_timestamps);
 
         let stmt_desc = portal.desc.clone();
         if !stmt_desc.param_types.is_empty() {
@@ -1101,17 +1101,17 @@ where
         }
 
         let desc = stmt.desc().clone();
-        let revision = stmt.catalog_revision;
         let logging = Arc::clone(stmt.logging());
-        let stmt = stmt.stmt().cloned();
+        let stmt_ast = stmt.stmt().cloned();
+        let state_revision = stmt.state_revision;
         if let Err(err) = self.adapter_client.session().set_portal(
             portal_name,
             desc,
-            stmt,
+            stmt_ast,
             logging,
             params,
             result_formats,
-            revision,
+            state_revision,
         ) {
             return self.error(err.into_response(Severity::Error)).await;
         }
@@ -1154,7 +1154,7 @@ where
                 }
             };
 
-            portal.lifecycle_timestamps = received.map(LifecycleTimestamps::new);
+            *portal.lifecycle_timestamps = received.map(LifecycleTimestamps::new);
 
             // In an aborted transaction, reject all commands except COMMIT/ROLLBACK.
             let txn_exit_stmt = is_txn_exit_stmt(portal.stmt.as_deref());
@@ -1171,7 +1171,7 @@ where
             }
 
             let row_desc = portal.desc.relation_desc.clone();
-            match &mut portal.state {
+            match portal.state {
                 PortalState::NotStarted => {
                     // Start a transaction if we aren't in one.
                     self.ensure_transaction(1, "execute").await?;
@@ -1380,7 +1380,7 @@ where
             .session()
             .get_portal_unverified_mut(name)
             .expect("portal should exist");
-        portal.state = PortalState::Completed(None);
+        *portal.state = PortalState::Completed(None);
     }
 
     async fn fetch(
@@ -1947,13 +1947,39 @@ where
             ExecuteTimeout::WaitOnce => (true, None),
         };
 
+        // Sanity check that the various `RelationDesc`s match up.
+        {
+            let portal_name_desc = &self
+                .adapter_client
+                .session()
+                .get_portal_unverified(portal_name.as_str())
+                .expect("portal should exist")
+                .desc
+                .relation_desc;
+            if let Some(portal_name_desc) = portal_name_desc {
+                soft_assert_eq_or_log!(portal_name_desc, &row_desc);
+            }
+            if let Some(fetch_portal_name) = &fetch_portal_name {
+                let fetch_portal_desc = &self
+                    .adapter_client
+                    .session()
+                    .get_portal_unverified(fetch_portal_name)
+                    .expect("portal should exist")
+                    .desc
+                    .relation_desc;
+                if let Some(fetch_portal_desc) = fetch_portal_desc {
+                    soft_assert_eq_or_log!(fetch_portal_desc, &row_desc);
+                }
+            }
+        }
+
         self.conn.set_encode_state(
             row_desc
                 .typ()
                 .column_types
                 .iter()
                 .map(|ty| mz_pgrepr::Type::from(&ty.scalar_type))
-                .zip(result_formats)
+                .zip_eq(result_formats)
                 .collect(),
         );
 
@@ -2079,7 +2105,7 @@ where
 
         // Always return rows back, even if it's empty. This prevents an unclosed
         // portal from re-executing after it has been emptied.
-        portal.state = PortalState::InProgress(Some(rows));
+        *portal.state = PortalState::InProgress(Some(rows));
 
         let fetch_portal = fetch_portal_name.map(|name| {
             self.adapter_client
@@ -2493,7 +2519,7 @@ fn describe_rows(stmt_desc: &StatementDesc, formats: &[Format]) -> BackendMessag
 type GetResponse = fn(
     max_rows: ExecuteCount,
     total_sent_rows: usize,
-    fetch_portal: Option<&mut Portal>,
+    fetch_portal: Option<PortalRefMut>,
 ) -> BackendMessage;
 
 // A GetResponse used by send_rows during execute messages on portals or for
@@ -2501,7 +2527,7 @@ type GetResponse = fn(
 fn portal_exec_message(
     max_rows: ExecuteCount,
     total_sent_rows: usize,
-    _fetch_portal: Option<&mut Portal>,
+    _fetch_portal: Option<PortalRefMut>,
 ) -> BackendMessage {
     // If max_rows is not specified, we will always send back a CommandComplete. If
     // max_rows is specified, we only send CommandComplete if there were more rows
@@ -2523,11 +2549,11 @@ fn portal_exec_message(
 fn fetch_message(
     _max_rows: ExecuteCount,
     total_sent_rows: usize,
-    fetch_portal: Option<&mut Portal>,
+    fetch_portal: Option<PortalRefMut>,
 ) -> BackendMessage {
     let tag = format!("FETCH {}", total_sent_rows);
     if let Some(portal) = fetch_portal {
-        portal.state = PortalState::Completed(Some(tag.clone()));
+        *portal.state = PortalState::Completed(Some(tag.clone()));
     }
     BackendMessage::CommandComplete { tag }
 }

@@ -20,6 +20,7 @@ use async_trait::async_trait;
 use bytes::{Buf, BufMut, BytesMut};
 use bytesize::ByteSize;
 use futures::{SinkExt, TryStreamExt, sink};
+use itertools::Itertools;
 use mz_adapter_types::connection::ConnectionId;
 use mz_ore::cast::CastFrom;
 use mz_ore::future::OreSinkExt;
@@ -304,7 +305,7 @@ impl Encoder<BackendMessage> for Codec {
             }
             BackendMessage::DataRow(fields) => {
                 dst.put_length_i16(fields.len())?;
-                for (f, (ty, format)) in fields.iter().zip(&self.encode_state) {
+                for (f, (ty, format)) in fields.iter().zip_eq(&self.encode_state) {
                     if let Some(f) = f {
                         let base = dst.len();
                         dst.put_u32(0);
