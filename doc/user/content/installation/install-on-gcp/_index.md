@@ -550,7 +550,7 @@ components:
 
    {{< tab "Via port forwarding" >}}
 
-   {{% self-managed/port-forwarding-handling %}}
+   {{% self-managed/port-forwarding-handling console="console-lb"%}}
 
    {{</ tab>}}
    {{</ tabs >}}
