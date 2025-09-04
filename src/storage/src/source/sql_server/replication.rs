@@ -327,7 +327,12 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                         .expect("resume_upper has at least one value");
                     (Arc::clone(&src_info.capture_instance), resume_lsn)
                 })
-                .collect();
+                .fold(BTreeMap::new(), |mut map, (capture_instance, resume_lsn)| {
+                    map.entry(Arc::clone(&capture_instance))
+                    .and_modify(|existing| *existing = std::cmp::min(*existing, resume_lsn))
+                    .or_insert(resume_lsn);
+                    map
+                });
 
             tracing::info!(%config.id, ?resume_lsns, "timely-{} replication starting", config.worker_id);
             for instance in capture_instances.keys() {
