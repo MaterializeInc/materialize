@@ -20,9 +20,9 @@ use differential_dataflow::logging::{
 };
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, Timestamp};
-use mz_timely_util::containers::{
-    Col2ValBatcher, ColumnBuilder, ProvidedBuilder, columnar_exchange,
-};
+use mz_timely_util::columnar::builder::ColumnBuilder;
+use mz_timely_util::columnar::{Col2ValBatcher, columnar_exchange};
+use mz_timely_util::containers::ProvidedBuilder;
 use mz_timely_util::replay::MzReplay;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::channels::pushers::buffer::Session;

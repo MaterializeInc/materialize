@@ -36,7 +36,7 @@ use mz_compute_client::logging::{ComputeLog, DifferentialLog, LogVariant, Timely
 use mz_expr::{MirScalarExpr, permutation_for_arrangement};
 use mz_repr::{Datum, Diff, Row, RowPacker, RowRef, Timestamp};
 use mz_timely_util::activator::RcActivator;
-use mz_timely_util::containers::ColumnBuilder;
+use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::operator::consolidate_pact;
 
 use crate::logging::compute::Logger as ComputeLogger;

@@ -31,7 +31,8 @@ use mz_repr::{DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena, SharedRow
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::builder_async::{ButtonHandle, PressOnDropButton};
-use mz_timely_util::containers::{Col2ValBatcher, ColumnBuilder, columnar_exchange};
+use mz_timely_util::columnar::builder::ColumnBuilder;
+use mz_timely_util::columnar::{Col2ValBatcher, columnar_exchange};
 use mz_timely_util::operator::{CollectionExt, StreamExt};
 use timely::Container;
 use timely::container::CapacityContainerBuilder;
