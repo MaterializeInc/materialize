@@ -230,7 +230,6 @@ class TableFromMySqlSource(TableFromSourceBase):
 
 
 @externally_idempotent(False)
-@disabled("https://github.com/MaterializeInc/database-issues/issues/9647")
 class TableFromSqlServerSource(TableFromSourceBase):
     suffix = "tbl_from_sql_server_source"
 
