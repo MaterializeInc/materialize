@@ -14,9 +14,12 @@ Pass `--cleanup` to disable the region after the test.
 
 # Running
 
-The workload runs as part of the release qualification pipeline.
 
-# Running manually
+## Running via Buildkite
+
+The workload runs as part of the release qualification pipeline in Buildkite.
+
+## Running manually in Cloud
 
 To run the cloud canary test manually, a set of environment variables need to be made available locally:
 
@@ -35,4 +38,13 @@ Once the environment variables have been set, you can run:
 ```
 cd test/cluster-spec-sheet
 ./mzcompose run default
+```
+
+## Running in Docker
+
+To run the test in local Docker containers, set the `--target` parameter to `docker`.
+In this case, the environment variables are not required.
+
+```
+bin/mzcompose --find cluster-spec-sheet run default --target=docker
 ```

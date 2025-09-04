@@ -550,5 +550,6 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: cluster-spec-sheet
               run: default
+              args: [--cleanup]
         agents:
           queue: linux-aarch64-small

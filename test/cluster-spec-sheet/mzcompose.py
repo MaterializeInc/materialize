@@ -274,8 +274,6 @@ class TpchScenario(Scenario):
             size_of_index="lineitem_primary_idx",
         )
 
-        time.sleep(3)
-
         # Peek against index
         runner.measure(
             "peek_serving",
