@@ -121,6 +121,7 @@ class Executor:
         explainable: bool = False,
         http: Http = Http.NO,
         fetch: bool = False,
+        cluster_replica: str | None = None,
     ) -> None:
         is_http = (
             http == Http.RANDOM and self.rng.choice([True, False])
@@ -142,6 +143,10 @@ class Executor:
                         raise QueryError(str(e), query)
                 else:
                     try:
+                        if cluster_replica:
+                            self.cur.execute(
+                                f"SET cluster_replica = {cluster_replica}".encode()
+                            )
                         if query == "commit;":
                             self.log("commit")
                             self.cur.connection.commit()
@@ -232,3 +237,5 @@ class Executor:
                     raise
         finally:
             self.last_status = "finished"
+            if cluster_replica:
+                self.cur.execute("RESET cluster_replica")

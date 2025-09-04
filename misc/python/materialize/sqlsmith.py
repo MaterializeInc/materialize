@@ -81,6 +81,8 @@ known_errors = [
     "Expected right parenthesis, found left parenthesis",  # Should fix, but only happens rarely with cast+coalesce
     "invalid selection: operation may only refer to user-defined tables",  # Seems expected when using catalog tables
     "Unsupported temporal predicate",  # Expected, see https://github.com/MaterializeInc/database-issues/issues/5288
+    "Unsupported temporal operation: NotEq",
+    "Unsupported binary temporal operation: NotEq",
     "OneShot plan has temporal constraints",  # Expected, see https://github.com/MaterializeInc/database-issues/issues/5288
     "internal error: cannot evaluate unmaterializable function",  # Currently expected, see https://github.com/MaterializeInc/database-issues/issues/4083
     "string is not a valid identifier:",  # Expected in parse_ident & quote_ident
@@ -136,4 +138,6 @@ known_errors = [
     "key cannot be null",  # expected, see PR materialize#25941
     "regexp_extract must specify at least one capture group",
     "array_fill with arrays not yet supported",
+    "The fast_path_optimizer shouldn't make a fast path plan slow path.",  # TODO: Remove when database-issues#9645 is fixed
+    "Window function performance issue: `reduce_unnest_list_fusion` failed",  # TODO: Remove when database-issues#9644 is fixed
 ]
