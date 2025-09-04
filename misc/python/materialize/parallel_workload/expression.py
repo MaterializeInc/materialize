@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import random
+from enum import Enum
 
 from materialize.data_ingest.data_type import (
     DATA_TYPES,
@@ -35,7 +36,7 @@ from materialize.data_ingest.data_type import (
     UInt4,
     UInt8,
 )
-from materialize.parallel_workload.database import (
+from materialize.parallel_workload.column import (
     Column,
     KafkaColumn,
     MySqlColumn,
@@ -44,11 +45,17 @@ from materialize.parallel_workload.database import (
 )
 
 
+class ExprKind(Enum):
+    ALL = 1
+    WRITE = 2
+    MATERIALIZABLE = 3
+
+
 class FuncOp:
-    def __init__(self, text: str, params: list, materializable: bool = True):
+    def __init__(self, text: str, params: list, unsupported: ExprKind = ExprKind.ALL):
         self.text = text
         self.params = params
-        self.materializable = materializable
+        self.unsupported = unsupported
 
 
 FUNC_OPS: dict[type[DataType], list[FuncOp]] = {dt: [] for dt in DATA_TYPES}
@@ -120,14 +127,14 @@ FUNC_OPS[Text] += [
     FuncOp("{} || {}", [Text, Text]),
     FuncOp("reverse{}", [Text]),
     FuncOp("{} -> {}", [TextTextMap, Text]),
-    FuncOp("mz_environment_id()", [], materializable=False),
-    FuncOp("mz_version()", [], materializable=False),
-    FuncOp("current_database()", [], materializable=False),
-    FuncOp("current_catalog()", [], materializable=False),
-    FuncOp("current_user()", [], materializable=False),
-    FuncOp("current_role()", [], materializable=False),
-    FuncOp("session_user()", [], materializable=False),
-    FuncOp("current_schema()", [], materializable=False),
+    FuncOp("mz_environment_id()", [], unsupported=ExprKind.MATERIALIZABLE),
+    FuncOp("mz_version()", [], unsupported=ExprKind.MATERIALIZABLE),
+    FuncOp("current_database()", [], unsupported=ExprKind.MATERIALIZABLE),
+    FuncOp("current_catalog()", [], unsupported=ExprKind.MATERIALIZABLE),
+    FuncOp("current_user()", [], unsupported=ExprKind.MATERIALIZABLE),
+    FuncOp("current_role()", [], unsupported=ExprKind.MATERIALIZABLE),
+    FuncOp("session_user()", [], unsupported=ExprKind.MATERIALIZABLE),
+    FuncOp("current_schema()", [], unsupported=ExprKind.MATERIALIZABLE),
 ]
 
 FUNC_OPS[Int] += [
@@ -137,7 +144,7 @@ FUNC_OPS[Int] += [
     FuncOp("ascii{}", [Text]),
     FuncOp("position({} in {})", [Text, Text]),
     FuncOp("length{}", [Text]),
-    FuncOp("mz_version_num()", [], materializable=False),
+    FuncOp("mz_version_num()", [], unsupported=ExprKind.MATERIALIZABLE),
     FuncOp("{} - {}", [Date, Date]),
 ]
 
@@ -147,13 +154,13 @@ FUNC_OPS[Timestamp] += [
     FuncOp("{} + {}", [Date, Time]),
     FuncOp("{} + {}", [Timestamp, Interval]),
     FuncOp("{} - {}", [Timestamp, Interval]),
-    FuncOp("now()", [], materializable=False),
-    FuncOp("current_timestamp()", [], materializable=False),
+    FuncOp("now()", [], unsupported=ExprKind.MATERIALIZABLE),
+    FuncOp("current_timestamp()", [], unsupported=ExprKind.MATERIALIZABLE),
     FuncOp("cast({} as Timestamp)", [MzTimestamp]),
 ]
 
 FUNC_OPS[MzTimestamp] += [
-    FuncOp("mz_now()", [], materializable=False),
+    FuncOp("mz_now()", [], unsupported=ExprKind.WRITE),
 ]
 
 FUNC_OPS[Interval] += [
@@ -176,15 +183,24 @@ def expression(
         | (list[PostgresColumn] | (list[SqlServerColumn] | list[KafkaColumn]))
     ),
     rng: random.Random,
+    kind: ExprKind = ExprKind.ALL,
     level: int = 0,
 ) -> str:
-    if level < 120:
-        if FUNC_OPS[data_type] and rng.random() < 0.3:
+    if level < 60:
+        if FUNC_OPS[data_type] and rng.random() < 0.5:
             fnop = rng.choice(FUNC_OPS[data_type])
-            exprs = [
-                f"({expression(dt, columns, rng, level + 1)})" for dt in fnop.params
-            ]
-            return fnop.text.format(*exprs)
+            if (
+                kind == ExprKind.ALL
+                or (kind == ExprKind.WRITE and fnop.unsupported != ExprKind.WRITE)
+                or (
+                    kind == ExprKind.MATERIALIZABLE and fnop.unsupported == ExprKind.ALL
+                )
+            ):
+                exprs = [
+                    f"({expression(dt, columns, rng, kind, level + 1)})"
+                    for dt in fnop.params
+                ]
+                return fnop.text.format(*exprs)
 
         if rng.random() < 0.9:
             for col in random.sample(columns, len(columns)):

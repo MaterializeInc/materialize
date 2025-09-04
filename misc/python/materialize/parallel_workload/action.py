@@ -24,7 +24,7 @@ from psycopg import Connection
 from psycopg.errors import OperationalError
 
 import materialize.parallel_workload.database
-from materialize.data_ingest.data_type import NUMBER_TYPES, Text, TextTextMap
+from materialize.data_ingest.data_type import NUMBER_TYPES, Boolean, Text, TextTextMap
 from materialize.data_ingest.query_error import QueryError
 from materialize.data_ingest.row import Operation
 from materialize.mzcompose import get_default_system_parameters
@@ -71,7 +71,7 @@ from materialize.parallel_workload.database import (
     WebhookSource,
 )
 from materialize.parallel_workload.executor import Executor, Http
-from materialize.parallel_workload.expression import expression
+from materialize.parallel_workload.expression import ExprKind, expression
 from materialize.parallel_workload.settings import Complexity, Scenario
 from materialize.sqlsmith import known_errors
 
@@ -137,6 +137,12 @@ class Action:
             "must be owner of",
             "HTTP read timeout",
             "result exceeds max size of",
+            "timestamp out of range",
+            "numeric field overflow",
+            "division by zero",
+            "out of range",
+            "cannot evaluate unmaterializable function",  # TODO: Remove when https://github.com/MaterializeInc/database-issues/issues/9657 is fixed
+            "Window function performance issue",  # TODO: Remove when https://github.com/MaterializeInc/database-issues/issues/9644 is fixed
         ]
         if exe.db.complexity in (Complexity.DDL, Complexity.DDLOnly):
             result.extend(
@@ -263,10 +269,6 @@ class SelectAction(Action):
                 "in the same timedomain",
                 'is not allowed from the "mz_catalog_server" cluster',
                 "timed out before ingesting the source's visible frontier when real-time-recency query issued",
-                "timestamp out of range",
-                "numeric field overflow",
-                "division by zero",
-                "out of range",
             ]
         )
         if exe.db.complexity == Complexity.DDL:
@@ -315,16 +317,27 @@ class SelectAction(Action):
         else:
             expressions = "*"
 
-        query = f"SELECT {expressions} FROM {obj_name} "
+        query = f"SELECT {expressions} FROM {obj_name}"
 
         if join:
             column2 = self.rng.choice(columns)
-            query += f"JOIN {obj2_name} ON {column} = {column2}"
+            query += f" JOIN {obj2_name} ON {column} = {column2}"
 
         if self.rng.choice([True, False]):
-            query = f"{query} UNION ALL {query}"
+            query += f" WHERE {expression(Boolean, all_columns, self.rng)}"
 
-        query += " LIMIT 1"
+        if self.rng.choice([True, False]):
+            query += f" UNION ALL SELECT {expressions} FROM {obj_name}"
+
+            if join:
+                column2 = self.rng.choice(columns)
+                query += f" JOIN {obj2_name} ON {column} = {column2}"
+
+            if self.rng.choice([True, False]):
+                query += f" WHERE {expression(Boolean, all_columns, self.rng)}"
+
+        if self.rng.choice([True, False]):
+            query += f" LIMIT {self.rng.randint(0, 1000)}"
 
         rtr = self.rng.choice([True, False])
         if rtr:
@@ -439,7 +452,16 @@ class CopyToS3Action(Action):
             location = exe.db.s3_path
             exe.db.s3_path += 1
         format = "csv" if self.rng.choice([True, False]) else "parquet"
-        query = f"COPY (SELECT * FROM {obj_name}) TO 's3://copytos3/{location}' WITH (AWS CONNECTION = aws_conn, FORMAT = '{format}')"
+        if self.rng.random() < 0.9:
+            expressions = ", ".join(
+                [
+                    expression(self.rng.choice(list(DATA_TYPES)), obj.columns, self.rng)
+                    for i in range(self.rng.randint(1, 10))
+                ]
+            )
+        else:
+            expressions = "*"
+        query = f"COPY (SELECT {expressions} FROM {obj_name} WHERE {expression(Boolean, obj.columns, self.rng)}) TO 's3://copytos3/{location}' WITH (AWS CONNECTION = aws_conn, FORMAT = '{format}')"
 
         exe.execute(query, explainable=False, http=Http.NO, fetch=False)
         return True
@@ -516,12 +538,18 @@ class InsertReturningAction(Action):
         all_column_values = ", ".join(f"({v})" for v in column_values)
         query = f"INSERT INTO {table} ({column_names}) VALUES {all_column_values}"
         returning_exprs = []
-        if self.rng.choice([True, False]):
-            returning_exprs.append("0")
+        if self.rng.random() < 0.5:
+            returning_exprs += [
+                expression(
+                    self.rng.choice(list(DATA_TYPES)),
+                    table.columns,
+                    self.rng,
+                    kind=ExprKind.WRITE,
+                )
+                for i in range(self.rng.randint(1, 10))
+            ]
         elif self.rng.choice([True, False]):
             returning_exprs.append("*")
-        else:
-            returning_exprs.append(column_names)
         if returning_exprs:
             query += f" RETURNING {', '.join(returning_exprs)}"
         exe.execute(query, http=Http.RANDOM)
@@ -580,13 +608,9 @@ class UpdateAction(Action):
         if not table:
             table = self.rng.choice(exe.db.tables)
 
-        column1 = table.columns[0]
+        table.columns[0]
         column2 = self.rng.choice(table.columns)
-        query = f"UPDATE {table} SET {column2.name(True)} = {column2.value(self.rng, True)} WHERE "
-        if column1.data_type == TextTextMap:
-            query += f"map_length({column1.name(True)}) = map_length({column1.value(self.rng, True)})"
-        else:
-            query += f"{column1.name(True)} = {column1.value(self.rng, True)}"
+        query = f"UPDATE {table} SET {column2.name(True)} = {column2.value(self.rng, True)} WHERE {expression(Boolean, table.columns, self.rng, kind=ExprKind.WRITE)}"
         exe.execute(query, http=Http.RANDOM)
         exe.insert_table = table.table_id
         return True
@@ -602,15 +626,7 @@ class DeleteAction(Action):
         table = self.rng.choice(exe.db.tables)
         query = f"DELETE FROM {table}"
         if self.rng.random() < 0.95:
-            query += " WHERE true"
-            # TODO: Generic expression generator
-            for column in table.columns:
-                if column.data_type == TextTextMap:
-                    query += f" AND map_length({column.name(True)}) = map_length({column.value(self.rng, True)})"
-                else:
-                    query += (
-                        f" AND {column.name(True)} = {column.value(self.rng, True)}"
-                    )
+            query += f" WHERE {expression(Boolean, table.columns, self.rng, kind=ExprKind.WRITE)}"
         exe.execute(query, http=Http.RANDOM)
         exe.commit()
         result = exe.cur.rowcount
@@ -1395,7 +1411,6 @@ class FlipFlagsAction(Action):
 
 class CreateViewAction(Action):
     def run(self, exe: Executor) -> bool:
-        # TODO: Use expressions
         with exe.db.lock:
             if len(exe.db.views) >= MAX_VIEWS:
                 return False
@@ -1891,7 +1906,11 @@ class KillAction(Action):
     ):
         super().__init__(rng, composition)
         self.system_param_fn = system_param_fn
-        self.system_parameters = {"memory_limiter_interval": "0"}
+        self.system_parameters = {
+            "memory_limiter_interval": "0",
+            # TODO: Remove when https://github.com/MaterializeInc/database-issues/issues/9656 is fixed
+            "persist_stats_audit_percent": "0",
+        }
         self.azurite = azurite
         self.sanity_restart = sanity_restart
 
@@ -1960,7 +1979,11 @@ class ZeroDowntimeDeployAction(Action):
                 healthcheck=LEADER_STATUS_HEALTHCHECK,
                 metadata_store="cockroach",
                 default_replication_factor=2,
-                additional_system_parameter_defaults={"memory_limiter_interval": "0"},
+                additional_system_parameter_defaults={
+                    "memory_limiter_interval": "0",
+                    # TODO: Remove when https://github.com/MaterializeInc/database-issues/issues/9656 is fixed
+                    "persist_stats_audit_percent": "0",
+                },
             ),
         ):
             self.composition.up(mz_service, detach=True)
@@ -2480,7 +2503,7 @@ read_action_list = ActionList(
     [
         (SelectAction, 100),
         (SelectOneAction, 1),
-        (SQLsmithAction, 30),
+        # (SQLsmithAction, 30),  # Questionable use
         (CopyToS3Action, 100),
         # (SetClusterAction, 1),  # SET cluster cannot be called in an active transaction
         (CommitRollbackAction, 30),
@@ -2538,11 +2561,11 @@ ddl_action_list = ActionList(
         (DropViewAction, 8),
         (CreateRoleAction, 2),
         (DropRoleAction, 2),
-        (CreateClusterAction, 2),
-        (DropClusterAction, 2),
+        (CreateClusterAction, 1),
+        (DropClusterAction, 1),
         (SwapClusterAction, 10),
-        (CreateClusterReplicaAction, 4),
-        (DropClusterReplicaAction, 4),
+        (CreateClusterReplicaAction, 2),
+        (DropClusterReplicaAction, 2),
         (SetClusterAction, 1),
         (CreateWebhookSourceAction, 2),
         (DropWebhookSourceAction, 2),
