@@ -27,7 +27,7 @@ use crate::connections::inline::{
     ReferencedConnection,
 };
 use crate::controller::AlterError;
-use crate::sources::{SourceConnection, SourceExportDetails, SourceTimestamp};
+use crate::sources::{SourceConnection, SourceTimestamp};
 
 include!(concat!(
     env!("OUT_DIR"),
@@ -159,10 +159,6 @@ impl<C: ConnectionAccess> SourceConnection for SqlServerSource<C> {
 
     fn connection_id(&self) -> Option<CatalogItemId> {
         Some(self.catalog_id)
-    }
-
-    fn primary_export_details(&self) -> super::SourceExportDetails {
-        SourceExportDetails::None
     }
 
     fn supports_read_only(&self) -> bool {

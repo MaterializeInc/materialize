@@ -1157,22 +1157,42 @@ impl CatalogState {
             }) => CatalogItem::Source(Source {
                 create_sql: Some(source.create_sql),
                 data_source: match source.data_source {
-                    mz_sql::plan::DataSourceDesc::Ingestion(ingestion_desc) => {
-                        DataSourceDesc::Ingestion {
-                            ingestion_desc,
-                            cluster_id: match in_cluster {
-                                Some(id) => id,
-                                None => {
-                                    return Err((
-                                        AdapterError::Unstructured(anyhow::anyhow!(
-                                            "ingestion-based sources must have cluster specified"
-                                        )),
-                                        cached_expr,
-                                    ));
-                                }
-                            },
-                        }
-                    }
+                    mz_sql::plan::DataSourceDesc::Ingestion(desc) => DataSourceDesc::Ingestion {
+                        desc,
+                        cluster_id: match in_cluster {
+                            Some(id) => id,
+                            None => {
+                                return Err((
+                                    AdapterError::Unstructured(anyhow::anyhow!(
+                                        "ingestion-based sources must have cluster specified"
+                                    )),
+                                    cached_expr,
+                                ));
+                            }
+                        },
+                    },
+                    mz_sql::plan::DataSourceDesc::OldSyntaxIngestion {
+                        desc,
+                        progress_subsource,
+                        data_config,
+                        details,
+                    } => DataSourceDesc::OldSyntaxIngestion {
+                        desc,
+                        progress_subsource,
+                        data_config,
+                        details,
+                        cluster_id: match in_cluster {
+                            Some(id) => id,
+                            None => {
+                                return Err((
+                                    AdapterError::Unstructured(anyhow::anyhow!(
+                                        "ingestion-based sources must have cluster specified"
+                                    )),
+                                    cached_expr,
+                                ));
+                            }
+                        },
+                    },
                     mz_sql::plan::DataSourceDesc::IngestionExport {
                         ingestion_id,
                         external_reference,
@@ -2516,10 +2536,9 @@ impl CatalogState {
                 CatalogItem::Source(source) => {
                     let source_cw = source.custom_logical_compaction_window.unwrap_or_default();
                     match source.data_source {
-                        DataSourceDesc::Ingestion { .. } => {
-                            cws.entry(source_cw).or_default().insert(item_id);
-                        }
-                        DataSourceDesc::IngestionExport { .. } => {
+                        DataSourceDesc::Ingestion { .. }
+                        | DataSourceDesc::OldSyntaxIngestion { .. }
+                        | DataSourceDesc::IngestionExport { .. } => {
                             cws.entry(source_cw).or_default().insert(item_id);
                         }
                         DataSourceDesc::Introspection(_)
