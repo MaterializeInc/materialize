@@ -751,13 +751,13 @@ class Interval(DataType):
             return "INTERVAL '178956970 years 7 months 2147483647 days 2562047788:00:54.775807'"
 
         if record_size == RecordSize.TINY:
-            return f"INTERVAL '{rng.random()}' MINUTE"
+            return f"INTERVAL '{rng.random():.0f}' MINUTE"
         elif record_size == RecordSize.SMALL:
-            return f"INTERVAL '{rng.uniform(-100, 100)} days {rng.uniform(-100, 100)} seconds'"
+            return f"INTERVAL '{rng.uniform(-100, 100):.0f} days {rng.uniform(-100, 100):.0f} seconds'"
         elif record_size == RecordSize.MEDIUM:
-            return f"INTERVAL '{rng.uniform(-100, 100)} years {rng.uniform(-100, 100)} days {rng.uniform(-100, 100)} seconds'"
+            return f"INTERVAL '{rng.uniform(-100, 100):.0f} years {rng.uniform(-100, 100):.0f} days {rng.uniform(-100, 100):.0f} seconds'"
         elif record_size == RecordSize.LARGE:
-            return f"INTERVAL '{rng.uniform(-178956970, 178956970)} years {rng.uniform(-365, 365)} days {rng.uniform(-1000000000, 1000000000)} seconds'"
+            return f"INTERVAL '{rng.uniform(-178956970, 178956970):.0f} years {rng.uniform(-365, 365):.0f} days {rng.uniform(-1000000000, 1000000000):.0f} seconds'"
         else:
             raise ValueError(f"Unexpected record size {record_size}")
 
@@ -806,6 +806,7 @@ DATA_TYPES_FOR_AVRO = sorted(
             Time,
             Date,
             Timestamp,
+            MzTimestamp,
             Oid,
             Numeric,
             Numeric383,
@@ -863,6 +864,7 @@ DATA_TYPES_FOR_SQL_SERVER = sorted(
             Date,
             Time,
             Timestamp,
+            MzTimestamp,
             Float,
             Double,
         }

@@ -10,7 +10,6 @@
 import random
 import threading
 from collections.abc import Iterator
-from copy import copy
 from enum import Enum
 
 from pg8000.native import identifier, literal
@@ -22,6 +21,7 @@ from materialize.data_ingest.data_type import (
     DATA_TYPES_FOR_MYSQL,
     DATA_TYPES_FOR_SQL_SERVER,
     NUMBER_TYPES,
+    Boolean,
     Bytea,
     DataType,
     Jsonb,
@@ -41,9 +41,18 @@ from materialize.data_ingest.workload import WORKLOADS
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.sql_server import SqlServer
+from materialize.parallel_workload.column import (
+    Column,
+    KafkaColumn,
+    MySqlColumn,
+    PostgresColumn,
+    SqlServerColumn,
+    WebhookColumn,
+    naughtify,
+)
 from materialize.parallel_workload.executor import Executor
+from materialize.parallel_workload.expression import ExprKind, expression
 from materialize.parallel_workload.settings import Complexity, Scenario
-from materialize.util import naughty_strings
 
 MAX_COLUMNS = 5
 MAX_INCLUDE_HEADERS = 5
@@ -76,23 +85,6 @@ MAX_INITIAL_SQL_SERVER_SOURCES = 1
 MAX_INITIAL_POSTGRES_SOURCES = 1
 MAX_INITIAL_KAFKA_SINKS = 1
 
-NAUGHTY_IDENTIFIERS = False
-
-
-def naughtify(name: str) -> str:
-    """Makes a string into a naughty identifier, always returns the same
-    identifier when called with the same input."""
-    global NAUGHTY_IDENTIFIERS
-
-    if not NAUGHTY_IDENTIFIERS:
-        return name
-
-    strings = naughty_strings()
-    # This rng is just to get a more interesting integer for the name
-    index = sum([10**i * c for i, c in enumerate(name.encode())]) % len(strings)
-    # Keep them short so we can combine later with other identifiers, 255 char limit
-    return f"{name}_{strings[index].encode('utf-8')[:16].decode('utf-8', 'ignore')}"
-
 
 class BodyFormat(Enum):
     TEXT = 1
@@ -107,52 +99,6 @@ class BodyFormat(Enum):
         if self == BodyFormat.BYTES:
             return Bytea
         raise ValueError(f"Unknown body format {self.name}")
-
-
-class Column:
-    column_id: int
-    data_type: type[DataType]
-    db_object: "DBObject"
-    nullable: bool
-    default: str | None
-    raw_name: str
-
-    def __init__(
-        self,
-        rng: random.Random,
-        column_id: int,
-        data_type: type[DataType],
-        db_object: "DBObject",
-    ):
-        self.column_id = column_id
-        self.data_type = data_type
-        self.db_object = db_object
-        self.nullable = rng.choice([True, False])
-        self.default = rng.choice(
-            [None, str(data_type.random_value(rng, in_query=True))]
-        )
-        self.raw_name = f"c-{self.column_id}-{self.data_type.name()}"
-
-    def name(self, in_query: bool = False) -> str:
-        return (
-            identifier(naughtify(self.raw_name))
-            if in_query
-            else naughtify(self.raw_name)
-        )
-
-    def __str__(self) -> str:
-        return f"{self.db_object}.{self.name(True)}"
-
-    def value(self, rng: random.Random, in_query: bool = False) -> str:
-        return str(self.data_type.random_value(rng, in_query=in_query))
-
-    def create(self) -> str:
-        result = f"{self.name(True)} {self.data_type.name()}"
-        if self.default:
-            result += f" DEFAULT {self.default}"
-        if not self.nullable:
-            result += " NOT NULL"
-        return result
 
 
 class DB:
@@ -253,10 +199,9 @@ class View(DBObject):
     view_id: int
     base_object: DBObject
     base_object2: DBObject | None
-    source_columns: list[Column]
+    expressions: list[str]
+    columns: list[Column]
     materialized: bool
-    join_column: Column | None
-    join_column2: Column | None
     assert_not_null: list[Column]
     rename: int
     schema: Schema
@@ -279,28 +224,19 @@ class View(DBObject):
         all_columns = list(base_object.columns) + (
             list(base_object2.columns) if base_object2 else []
         )
-        self.source_columns = [
-            column
-            for column in rng.sample(all_columns, k=rng.randint(1, len(all_columns)))
+        self.data_types = [
+            rng.choice(list(DATA_TYPES)) for i in range(rng.randint(1, MAX_COLUMNS))
         ]
-        self.columns = [copy(column) for column in self.source_columns]
-        for column in self.columns:
-            column.raw_name = f"{column.raw_name}-{column.db_object.name()}"
-            column.db_object = self
+        self.expressions = [
+            expression(data_type, all_columns, rng, kind=ExprKind.MATERIALIZABLE)
+            for data_type in self.data_types
+        ]
+        self.columns = [
+            Column(rng, i, data_type, self)
+            for i, data_type in enumerate(self.data_types)
+        ]
 
         self.materialized = rng.choice([True, False])
-
-        self.assert_not_null = (
-            [
-                column
-                for column in rng.sample(
-                    self.columns, k=rng.randint(1, len(self.columns))
-                )
-                if not column.nullable
-            ]
-            if self.materialized
-            else []
-        )
 
         self.refresh = (
             rng.choice(
@@ -317,15 +253,16 @@ class View(DBObject):
         )
 
         if base_object2:
-            self.join_column = rng.choice(base_object.columns)
-            self.join_column2 = None
-            columns = [
-                c
-                for c in base_object2.columns
-                if c.data_type == self.join_column.data_type
+            self.on_expr = expression(
+                Boolean, all_columns, rng, kind=ExprKind.MATERIALIZABLE
+            )
+
+        self.union = rng.random() < 0.1
+        if self.union:
+            self.expressions2 = [
+                expression(data_type, all_columns, rng, kind=ExprKind.MATERIALIZABLE)
+                for data_type in self.data_types
             ]
-            if columns:
-                self.join_column2 = rng.choice(columns)
 
     def name(self) -> str:
         if self.rename:
@@ -340,9 +277,14 @@ class View(DBObject):
             query = "CREATE MATERIALIZED VIEW"
         else:
             query = "CREATE VIEW"
-        columns_str = ", ".join(
-            f"{source_column} AS {column.name(True)}"
-            for source_column, column in zip(self.source_columns, self.columns)
+
+        expressions_str = ", ".join(
+            [
+                f"({expression})::{data_type.name()} AS {column.name(True)}"
+                for expression, data_type, column in zip(
+                    self.expressions, self.data_types, self.columns
+                )
+            ]
         )
 
         query += f" {self}"
@@ -352,41 +294,30 @@ class View(DBObject):
         if self.refresh:
             options.append(f"REFRESH {self.refresh}")
 
-        if self.assert_not_null:
-            options.extend(
-                [f"ASSERT NOT NULL {c.name(True)}" for c in self.assert_not_null]
-            )
-
         if options:
             query += f" WITH ({', '.join(options)})"
 
-        query += f" AS SELECT {columns_str} FROM {self.base_object}"
-        if self.base_object2:
-            query += f" JOIN {self.base_object2}"
-            if self.join_column2:
-                query += " ON "
-                # TODO: Generic expression generator
-                if self.join_column2.data_type == TextTextMap:
-                    query += f"map_length({self.join_column}) = map_length({self.join_column2})"
-                else:
-                    query += f"{self.join_column} = {self.join_column2}"
-            else:
-                query += " ON TRUE"
+        def select_str(exprs: str) -> str:
+            select = f"SELECT {exprs} FROM {self.base_object}"
+            if self.base_object2:
+                select += f" JOIN {self.base_object2} ON {self.on_expr}"
+            return select
+
+        query += f" AS {select_str(expressions_str)}"
+
+        if self.union:
+            expressions_str2 = ", ".join(
+                [
+                    f"({expression})::{data_type.name()} AS {column.name(True)}"
+                    for expression, data_type, column in zip(
+                        self.expressions2, self.data_types, self.columns
+                    )
+                ]
+            )
+
+            query += f" UNION ALL {select_str(expressions_str2)}"
 
         exe.execute(query)
-
-
-class WebhookColumn(Column):
-    def __init__(
-        self, name: str, data_type: type[DataType], nullable: bool, db_object: DBObject
-    ):
-        self.raw_name = name
-        self.data_type = data_type
-        self.nullable = nullable
-        self.db_object = db_object
-
-    def name(self, in_query: bool = False) -> str:
-        return identifier(self.raw_name) if in_query else self.raw_name
 
 
 class WebhookSource(DBObject):
@@ -469,19 +400,6 @@ class WebhookSource(DBObject):
         if self.check_expr:
             query += f" CHECK (WITH (BODY, HEADERS) {self.check_expr})"
         exe.execute(query)
-
-
-class KafkaColumn(Column):
-    def __init__(
-        self, name: str, data_type: type[DataType], nullable: bool, db_object: DBObject
-    ):
-        self.raw_name = name
-        self.data_type = data_type
-        self.nullable = nullable
-        self.db_object = db_object
-
-    def name(self, in_query: bool = False) -> str:
-        return identifier(self.raw_name) if in_query else self.raw_name
 
 
 class KafkaSource(DBObject):
@@ -631,19 +549,6 @@ class KafkaSink(DBObject):
         exe.execute(query)
 
 
-class MySqlColumn(Column):
-    def __init__(
-        self, name: str, data_type: type[DataType], nullable: bool, db_object: DBObject
-    ):
-        self.raw_name = name
-        self.data_type = data_type
-        self.nullable = nullable
-        self.db_object = db_object
-
-    def name(self, in_query: bool = False) -> str:
-        return identifier(self.raw_name) if in_query else self.raw_name
-
-
 class MySqlSource(DBObject):
     source_id: int
     cluster: "Cluster"
@@ -699,19 +604,6 @@ class MySqlSource(DBObject):
         self.executor.create(logging_exe=exe)
 
 
-class PostgresColumn(Column):
-    def __init__(
-        self, name: str, data_type: type[DataType], nullable: bool, db_object: DBObject
-    ):
-        self.raw_name = name
-        self.data_type = data_type
-        self.nullable = nullable
-        self.db_object = db_object
-
-    def name(self, in_query: bool = False) -> str:
-        return identifier(self.raw_name) if in_query else self.raw_name
-
-
 class PostgresSource(DBObject):
     source_id: int
     cluster: "Cluster"
@@ -765,19 +657,6 @@ class PostgresSource(DBObject):
 
     def create(self, exe: Executor) -> None:
         self.executor.create(logging_exe=exe)
-
-
-class SqlServerColumn(Column):
-    def __init__(
-        self, name: str, data_type: type[DataType], nullable: bool, db_object: DBObject
-    ):
-        self.raw_name = name
-        self.data_type = data_type
-        self.nullable = nullable
-        self.db_object = db_object
-
-    def name(self, in_query: bool = False) -> str:
-        return identifier(self.raw_name) if in_query else self.raw_name
 
 
 class SqlServerSource(DBObject):
@@ -1156,16 +1035,17 @@ class Database:
         for relation in self:
             relation.create(exe)
 
-        result = composition.run(
-            "sqlsmith",
-            "--target=host=materialized port=6875 dbname=materialize user=materialize",
-            "--exclude-catalog",
-            "--dump-state",
-            capture=True,
-            capture_stderr=True,
-            rm=True,
-        )
-        self.sqlsmith_state = result.stdout
+        # Questionable use
+        # result = composition.run(
+        #     "sqlsmith",
+        #     "--target=host=materialized port=6875 dbname=materialize user=materialize",
+        #     "--exclude-catalog",
+        #     "--dump-state",
+        #     capture=True,
+        #     capture_stderr=True,
+        #     rm=True,
+        # )
+        # self.sqlsmith_state = result.stdout
 
     def drop(self, exe: Executor) -> None:
         for db in self.dbs:
