@@ -25,7 +25,7 @@ serde_json = "1.0.127"
 tokio = { version = "1.44.1", default-features = false }
 tracing = "0.1.37"
 tracing-subscriber = "0.3.19"
-uuid = "1.17.0"
+uuid = "1.18.1"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
