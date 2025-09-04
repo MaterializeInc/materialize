@@ -125,7 +125,7 @@ Operation | Computes
 [`date`](../types/date) `+` [`interval`](../types/interval) | [`timestamp`](../types/timestamp)
 [`date`](../types/date) `-` [`interval`](../types/interval) | [`timestamp`](../types/timestamp)
 [`date`](../types/date) `+` [`time`](../types/time) | [`timestamp`](../types/timestamp)
-[`date`](../types/date) `-` [`date`](../types/date) | [`interval`](../types/interval)
+[`date`](../types/date) `-` [`date`](../types/date) | [`integer`](../types/integer)
 [`timestamp`](../types/timestamp) `+` [`interval`](../types/interval) | [`timestamp`](../types/timestamp)
 [`timestamp`](../types/timestamp) `-` [`interval`](../types/interval) | [`timestamp`](../types/timestamp)
 [`timestamp`](../types/timestamp) `-` [`timestamp`](../types/timestamp) | [`interval`](../types/interval)
