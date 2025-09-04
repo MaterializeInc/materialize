@@ -44,11 +44,9 @@ message ProtoSourceExportDataConfig {
 }
 
 message ProtoSourceDesc {
-  reserved 2, 3, 4;
+  reserved 2, 3, 4, 6, 7;
   ProtoSourceConnection connection = 1;
   mz_proto.ProtoDuration timestamp_interval = 5;
-  ProtoSourceExportDataConfig primary_export = 6;
-  ProtoSourceExportDetails primary_export_details = 7;
 }
 
 message ProtoSourceConnection {
