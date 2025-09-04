@@ -312,18 +312,27 @@ impl<T: IdGenerator, A: IdAllocatorInner> serde::Serialize for IdHandle<T, A> {
 }
 
 mod internal {
+    use std::fmt::Debug;
     use std::sync::Arc;
 
     use crate::cast::CastFrom;
     use crate::id_gen::{IdAllocator, IdAllocatorInner};
 
-    #[derive(Debug)]
     pub struct IdHandleInner<T, A: IdAllocatorInner> {
         /// A handle to the [`IdAllocator`] used to allocated the provided id.
         pub(super) allocator: IdAllocator<A>,
         /// The actual ID that was allocated.
         pub(super) id: T,
         stored: u32,
+    }
+
+    impl<T: Debug, A: IdAllocatorInner> Debug for IdHandleInner<T, A> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("IdHandleInner")
+                .field("id", &self.id)
+                .field("stored", &self.stored)
+                .finish_non_exhaustive()
+        }
     }
 
     impl<T, A: IdAllocatorInner> IdHandleInner<T, A>
