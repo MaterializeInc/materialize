@@ -10,7 +10,7 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.98"
+anyhow = "1.0.99"
 chrono = { version = "0.4.39", default-features = false }
 futures = "0.3.31"
 k8s-openapi = { version = "0.25.0", features = ["schemars", "v1_31"] }
@@ -26,7 +26,7 @@ tracing = "0.1.37"
 uuid = { version = "1.17", features = ["serde", "v4"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
-async-trait = { version = "0.1.88", optional = true }
+async-trait = { version = "0.1.89", optional = true }
 mz-repr = { path = "../repr", default-features = false, optional = true }
 
 [dev-dependencies]

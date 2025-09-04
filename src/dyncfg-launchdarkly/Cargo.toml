@@ -11,7 +11,7 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.98"
+anyhow = "1.0.99"
 humantime = "2.2.0"
 hyper-tls = "0.5.0"
 launchdarkly-server-sdk = { version = "2.5.1", default-features = false }
