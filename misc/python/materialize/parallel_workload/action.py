@@ -71,6 +71,7 @@ from materialize.parallel_workload.database import (
     WebhookSource,
 )
 from materialize.parallel_workload.executor import Executor, Http
+from materialize.parallel_workload.expression import expression
 from materialize.parallel_workload.settings import Complexity, Scenario
 from materialize.sqlsmith import known_errors
 
@@ -262,6 +263,10 @@ class SelectAction(Action):
                 "in the same timedomain",
                 'is not allowed from the "mz_catalog_server" cluster',
                 "timed out before ingesting the source's visible frontier when real-time-recency query issued",
+                "timestamp out of range",
+                "numeric field overflow",
+                "division by zero",
+                "out of range",
             ]
         )
         if exe.db.complexity == Complexity.DDL:
@@ -293,10 +298,10 @@ class SelectAction(Action):
 
         if self.rng.choice([True, False]):
             expressions = ", ".join(
-                str(column)
-                for column in self.rng.sample(
-                    all_columns, k=self.rng.randint(1, len(all_columns))
-                )
+                [
+                    expression(self.rng.choice(list(DATA_TYPES)), all_columns, self.rng)
+                    for i in range(self.rng.randint(1, 10))
+                ]
             )
             if self.rng.choice([True, False]):
                 column1 = self.rng.choice(all_columns)
@@ -315,6 +320,9 @@ class SelectAction(Action):
         if join:
             column2 = self.rng.choice(columns)
             query += f"JOIN {obj2_name} ON {column} = {column2}"
+
+        if self.rng.choice([True, False]):
+            query = f"{query} UNION ALL {query}"
 
         query += " LIMIT 1"
 
@@ -1380,6 +1388,7 @@ class FlipFlagsAction(Action):
 
 class CreateViewAction(Action):
     def run(self, exe: Executor) -> bool:
+        # TODO: Use expressions
         with exe.db.lock:
             if len(exe.db.views) >= MAX_VIEWS:
                 return False

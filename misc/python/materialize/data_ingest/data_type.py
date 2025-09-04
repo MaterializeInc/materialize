@@ -648,6 +648,34 @@ class Timestamp(DataType):
             return "timestamp"
 
 
+class MzTimestamp(DataType):
+    @staticmethod
+    def random_value(
+        rng: random.Random,
+        record_size: RecordSize = RecordSize.LARGE,
+        in_query: bool = False,
+    ) -> Any:
+        if rng.randrange(100) == 0:
+            return "MZ_TIMESTAMP '1970-01-01'"
+        if rng.randrange(100) == 0:
+            return "MZ_TIMESTAMP '99999-12-31'"
+
+        return f"MZ_TIMESTAMP '{rng.randrange(1970, 100000)}-{rng.randrange(1, 13)}-{rng.randrange(1, 29)}'"
+
+    @staticmethod
+    def numeric_value(num: int, in_query: bool = False) -> Any:
+        day = num % 28
+        month = num // 28 % 12
+        year = 1970 + (num // 336)
+        return f"MZ_TIMESTAMP '{year}-{month}-{day}'"
+
+    @staticmethod
+    def name(backend: Backend = Backend.MATERIALIZE) -> str:
+        if backend != Backend.MATERIALIZE:
+            raise ValueError("Unsupported")
+        return "mz_timestamp"
+
+
 class Date(DataType):
     @staticmethod
     def random_value(
