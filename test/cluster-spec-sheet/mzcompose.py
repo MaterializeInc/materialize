@@ -1260,18 +1260,18 @@ def analyze_file(file: str):
     df["credit_time"] = df["ccredit_per_s"] * df["time_ms"] / 1000.0
 
     base_name = os.path.basename(file).split(".")[0]
-    plot_dir = os.path.join(MZ_ROOT, "test", "cluster-spec-sheet", "plots", base_name)
+    plot_dir = os.path.join("test", "cluster-spec-sheet", "plots", base_name)
     os.makedirs(plot_dir, exist_ok=True)
 
     def save_plot(data_frame: pd.DataFrame, benchmark: str, variant: str, unit: str):
         all_files = []
 
         base_file_name = os.path.join(plot_dir, f"{benchmark}_{variant}_{unit}")
-        file_path = f"{base_file_name}.png"
-        plt.savefig(file_path)
+        file_path = f"{base_file_name}.svg"
+        plt.savefig(MZ_ROOT / file_path)
         all_files.append(file_path)
         file_path = f"{base_file_name}.html"
-        data_frame.to_html(file_path)
+        data_frame.to_html(MZ_ROOT / file_path)
         all_files.append(file_path)
         print(f"+++ Plot for {benchmark} {variant} [{unit}]")
         print(data_frame.to_string())
@@ -1409,6 +1409,7 @@ def plot_time_ms(data: pd.DataFrame, query: str, title: str) -> pd.DataFrame | N
         ylabel="Time [ms]",
         logy=False,
         title=f"{title}\n{dropped}",
+        grid=True,
     )
     return filtered
 
@@ -1435,6 +1436,7 @@ def plot_credit_time(data: pd.DataFrame, query: str, title: str) -> pd.DataFrame
         ylabel="Cost [centi-credits]",
         logy=False,
         title=f"{title}\n{dropped}",
+        grid=True,
     )
     return filtered
 
