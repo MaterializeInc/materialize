@@ -816,7 +816,6 @@ impl Run for PosCommand {
                     "skip-end" => skip_end::run_skip_end(),
                     "sql-server-connect" => sql_server::run_connect(builtin, state).await,
                     "sql-server-execute" => sql_server::run_execute(builtin, state).await,
-                    "sql-server-set-from-sql" => sql_server::run_set_from_sql(builtin, state).await,
                     "persist-force-compaction" => {
                         persist::run_force_compaction(builtin, state).await
                     }

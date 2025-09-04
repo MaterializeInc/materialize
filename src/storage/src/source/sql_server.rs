@@ -74,6 +74,8 @@ pub enum TransientError {
     ReplicationEOF,
     #[error(transparent)]
     SqlServer(#[from] SqlServerError),
+    #[error("programming error: {0}")]
+    ProgrammingError(String),
     #[error(transparent)]
     Generic(#[from] anyhow::Error),
 }
