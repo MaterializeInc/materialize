@@ -532,18 +532,21 @@ mod tests {
         assert_eq!(column_align2.iter().collect::<Vec<_>>(), vec![&1, &2, &3]);
     }
 
+    /// Assert the desired contents of raw_columnar_bytes so that diagnosing test failures is
+    /// easier.
+    #[mz_ore::test]
+    fn test_column_known_bytes() {
+        let mut column: Column<i32> = Default::default();
+        column.push_into(1);
+        column.push_into(2);
+        column.push_into(3);
+        let mut data = Vec::new();
+        column.into_bytes(&mut std::io::Cursor::new(&mut data));
+        assert_eq!(data, raw_columnar_bytes());
+    }
+
     #[mz_ore::test]
     fn test_column_from_bytes() {
-        {
-            let mut column: Column<i32> = Default::default();
-            column.push_into(1);
-            column.push_into(2);
-            column.push_into(3);
-            let mut data = Vec::new();
-            column.into_bytes(&mut std::io::Cursor::new(&mut data));
-            println!("data: {:?}", data);
-        }
-
         let raw = raw_columnar_bytes();
 
         let buf = vec![0; raw.len() + 8];
