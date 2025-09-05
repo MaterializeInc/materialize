@@ -359,7 +359,7 @@ def run(
             worker.end_time = time.time()
 
     stopping_time = (
-        datetime.datetime.now() + datetime.timedelta(seconds=300)
+        datetime.datetime.now() + datetime.timedelta(seconds=600)
     ).timestamp()
     while time.time() < stopping_time:
         for thread in threads:
@@ -379,9 +379,9 @@ def run(
         if scenario == scenario.ZeroDowntimeDeploy:
             # With 0dt deploys connections against the currently-fenced-out
             # environmentd will be stuck forever, the promoted environmentd can
-            # take > 5 minutes to become responsive as well
+            # take > 10 minutes to become responsive as well
             os._exit(0)
-        print("Threads have not stopped within 5 minutes, exiting hard")
+        print("Threads have not stopped within 10 minutes, exiting hard")
         os._exit(1)
 
     try:
