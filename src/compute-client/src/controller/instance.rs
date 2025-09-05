@@ -26,8 +26,7 @@ use mz_compute_types::sinks::{
 };
 use mz_compute_types::sources::SourceInstanceDesc;
 use mz_controller_types::dyncfgs::{
-    ENABLE_PAUSED_CLUSTER_READHOLD_DOWNGRADE, ENABLE_WALLCLOCK_LAG_HISTOGRAM_COLLECTION,
-    WALLCLOCK_LAG_RECORDING_INTERVAL,
+    ENABLE_PAUSED_CLUSTER_READHOLD_DOWNGRADE, WALLCLOCK_LAG_RECORDING_INTERVAL,
 };
 use mz_dyncfg::ConfigSet;
 use mz_expr::RowSetFinishing;
@@ -607,10 +606,6 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             let collection_unreadable = PartialOrder::less_equal(&write_frontier, &read_frontier);
             if collection_unreadable {
                 unreadable_collections.insert(id);
-            }
-
-            if !ENABLE_WALLCLOCK_LAG_HISTOGRAM_COLLECTION.get(&self.dyncfg) {
-                continue;
             }
 
             if let Some(stash) = &mut collection.wallclock_lag_histogram_stash {
