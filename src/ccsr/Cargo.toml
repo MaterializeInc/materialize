@@ -10,7 +10,7 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.98"
+anyhow = "1.0.99"
 native-tls = "0.2.14"
 openssl = { version = "0.10.73", features = ["vendored"] }
 reqwest = { version = "0.11.13", features = [
