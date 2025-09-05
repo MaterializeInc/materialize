@@ -1002,6 +1002,12 @@ async fn auth(
                 });
             }
         },
+        Authenticator::Sasl(_) => {
+            // Not supported for HTTP
+            return Err(AuthError::MissingHttpAuthentication {
+                include_www_authenticate_header,
+            });
+        }
         Authenticator::None => {
             // If no authentication, use whatever is in the HTTP auth
             // header (without checking the password), or fall back to the
