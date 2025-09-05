@@ -110,6 +110,13 @@ scenarios, we recommend separating your workloads into multiple clusters for
 
 ### 2. Start ingesting data
 
+{{< note >}}
+For a new SQL Server source, if none of the replicating tables
+are receiving write queries, snapshotting may take up to an additional 5 minutes
+to complete. For details, see [Snapshot latency for inactive
+databases](#considerations).
+{{</ note >}}
+
 Now that you've configured your database network, you can connect Materialize to
 your SQL Server database and start ingesting data. The exact steps depend on your
 networking configuration, so start by selecting the relevant option.
@@ -125,7 +132,6 @@ networking configuration, so start by selecting the relevant option.
 {{< /tab >}}
 
 {{< /tabs >}}
-
 
 [//]: # "TODO(morsapaes) Replace these Step 6. and 7. with guidance using the
 new progress metrics in mz_source_statistics + console monitoring, when
