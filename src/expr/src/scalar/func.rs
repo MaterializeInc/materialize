@@ -107,7 +107,7 @@ impl RustType<crate::scalar::ProtoNormalizationForm> for NormalizationForm {
     }
 
     fn from_proto(proto: crate::scalar::ProtoNormalizationForm) -> Result<Self, TryFromProtoError> {
-        match proto as i32 {
+        match i32::from(proto) {
             0 => Ok(NormalizationForm::Nfc),
             1 => Ok(NormalizationForm::Nfd),
             2 => Ok(NormalizationForm::Nfkc),
