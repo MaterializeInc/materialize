@@ -25,13 +25,11 @@ use mz_expr::MirScalarExpr;
 use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_storage_types::errors::DataflowError;
-use mz_timely_util::operator::{CollectionExt, StreamExt};
-use timely::container::{CapacityContainerBuilder, ContainerBuilder};
+use mz_timely_util::operator::{CollectionExt, SessionFor, StreamExt};
+use timely::container::CapacityContainerBuilder;
+use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::channels::pushers::Tee;
-use timely::dataflow::channels::pushers::buffer::Session;
 use timely::dataflow::operators::{Map, OkErr};
-use timely::dataflow::{Scope, ScopeParent};
 use timely::progress::Antichain;
 use timely::progress::timestamp::Refines;
 
@@ -309,20 +307,6 @@ where
         CollectionBundle::from_collections(oks, errs)
     }
 }
-
-/// A session with lifetime `'a` in a scope `G` with a container builder `CB`.
-///
-/// This is a shorthand primarily for the reson of readability.
-type SessionFor<'a, G, CB> = Session<
-    'a,
-    <G as ScopeParent>::Timestamp,
-    CB,
-    timely::dataflow::channels::pushers::Counter<
-        <G as ScopeParent>::Timestamp,
-        <CB as ContainerBuilder>::Container,
-        Tee<<G as ScopeParent>::Timestamp, <CB as ContainerBuilder>::Container>,
-    >,
->;
 
 /// Constructs a `half_join` from supplied arguments.
 ///

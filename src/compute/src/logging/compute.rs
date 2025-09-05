@@ -19,14 +19,15 @@ use columnar::{Columnar, Ref};
 use differential_dataflow::Collection;
 use differential_dataflow::collection::AsCollection;
 use differential_dataflow::trace::{BatchReader, Cursor};
+use mz_compute_client::logging::ComputeLog::DataflowCurrent;
 use mz_compute_types::plan::LirId;
 use mz_ore::cast::CastFrom;
-use mz_repr::{Datum, Diff, GlobalId, Timestamp};
-use mz_timely_util::columnar::Column;
+use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
 use mz_timely_util::columnar::builder::ColumnBuilder;
+use mz_timely_util::columnar::{Col2ValBatcher, Column, columnar_exchange};
 use mz_timely_util::containers::ProvidedBuilder;
 use mz_timely_util::replay::MzReplay;
-use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::operators::Operator;
 use timely::dataflow::operators::core::Map;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
@@ -36,7 +37,7 @@ use timely::{Container, Data};
 use tracing::error;
 use uuid::Uuid;
 
-use crate::extensions::arrange::MzArrange;
+use crate::extensions::arrange::{MzArrange, MzArrangeCore};
 use crate::logging::{
     ComputeLog, EventQueue, LogCollection, LogVariant, OutputSessionColumnar, OutputSessionVec,
     PermutedRowPacker, SharedLoggingState, Update,
@@ -346,7 +347,7 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
         let (mut lir_mapping_out, lir_mapping) = demux.new_output();
         let (mut dataflow_global_ids_out, dataflow_global_ids) = demux.new_output();
 
-        let mut demux_state = DemuxState::new(scheduler);
+        let mut demux_state = DemuxState::new(scheduler, scope.index());
         demux.build(move |_capability| {
             move |_frontiers| {
                 let mut export = export_out.activate();
@@ -365,7 +366,7 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
 
                 input.for_each(|cap, data| {
                     let mut output_sessions = DemuxOutput {
-                        export: export.session(&cap),
+                        export: export.session_with_builder(&cap),
                         frontier: frontier.session(&cap),
                         import_frontier: import_frontier.session(&cap),
                         peek: peek.session(&cap),
@@ -398,17 +399,7 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
         let worker_id = scope.index();
 
         // Encode the contents of each logging stream into its expected `Row` format.
-        let mut packer = PermutedRowPacker::new(ComputeLog::DataflowCurrent);
-        let dataflow_current = export.as_collection().map({
-            let mut scratch = String::new();
-            move |datum| {
-                packer.pack_slice_owned(&[
-                    make_string_datum(datum.export_id, &mut scratch),
-                    Datum::UInt64(u64::cast_from(worker_id)),
-                    Datum::UInt64(u64::cast_from(datum.dataflow_index)),
-                ])
-            }
-        });
+        let dataflow_current: Collection<_, (Row, Row), Diff, _> = export.as_collection();
         let mut packer = PermutedRowPacker::new(ComputeLog::FrontierCurrent);
         let frontier_current = frontier.as_collection().map({
             let mut scratch = String::new();
@@ -547,8 +538,8 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
         });
 
         use ComputeLog::*;
+        let columnar_logs = [(DataflowCurrent, dataflow_current)];
         let logs = [
-            (DataflowCurrent, dataflow_current),
             (FrontierCurrent, frontier_current),
             (ImportFrontierCurrent, import_frontier_current),
             (PeekCurrent, peek_current),
@@ -565,6 +556,22 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
 
         // Build the output arrangements.
         let mut collections = BTreeMap::new();
+        for (variant, collection) in columnar_logs {
+            let variant = LogVariant::Compute(variant);
+            if config.index_logs.contains_key(&variant) {
+                let trace = collection
+                    .mz_arrange_core::<_, Col2ValBatcher<_, _, _, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+                        ExchangeCore::<ColumnBuilder<_>, _>::new_core(columnar_exchange::<Row, Row, Timestamp, Diff>),
+                        &format!("Arrange {variant:?}"),
+                    )
+                    .trace;
+                let collection = LogCollection {
+                    trace,
+                    token: Rc::clone(&token),
+                };
+                collections.insert(variant, collection);
+            }
+        }
         for (variant, collection) in logs {
             let variant = LogVariant::Compute(variant);
             if config.index_logs.contains_key(&variant) {
@@ -603,6 +610,10 @@ where
 struct DemuxState<A> {
     /// The timely scheduler.
     scheduler: A,
+    /// The index of this worker.
+    worker_id: usize,
+    /// A reusable scratch string for formatting IDs.
+    scratch_string: String,
     /// State tracked per dataflow export.
     exports: BTreeMap<GlobalId, ExportState>,
     /// Maps live dataflows to counts of their exports.
@@ -619,12 +630,16 @@ struct DemuxState<A> {
     lir_mapping: BTreeMap<GlobalId, BTreeMap<LirId, LirMetadata>>,
     /// Dataflow -> `GlobalId` mapping (many-to-one).
     dataflow_global_ids: BTreeMap<usize, BTreeSet<GlobalId>>,
+    /// A row packer for the exports output.
+    export_packer: PermutedRowPacker,
 }
 
 impl<A: Scheduler> DemuxState<A> {
-    fn new(scheduler: A) -> Self {
+    fn new(scheduler: A, worker_id: usize) -> Self {
         Self {
             scheduler,
+            worker_id,
+            scratch_string: String::new(),
             exports: Default::default(),
             dataflow_export_counts: Default::default(),
             dataflow_drop_times: Default::default(),
@@ -633,6 +648,7 @@ impl<A: Scheduler> DemuxState<A> {
             arrangement_size: Default::default(),
             lir_mapping: Default::default(),
             dataflow_global_ids: Default::default(),
+            export_packer: PermutedRowPacker::new(DataflowCurrent),
         }
     }
 }
@@ -673,7 +689,7 @@ struct ArrangementSizeState {
 
 /// Bundled output sessions used by the demux operator.
 struct DemuxOutput<'a> {
-    export: OutputSessionVec<'a, Update<ExportDatum>>,
+    export: OutputSessionColumnar<'a, Update<(Row, Row)>>,
     frontier: OutputSessionVec<'a, Update<FrontierDatum>>,
     import_frontier: OutputSessionVec<'a, Update<ImportFrontierDatum>>,
     peek: OutputSessionVec<'a, Update<PeekDatum>>,
@@ -686,12 +702,6 @@ struct DemuxOutput<'a> {
     error_count: OutputSessionVec<'a, Update<ErrorCountDatum>>,
     lir_mapping: OutputSessionColumnar<'a, Update<LirMappingDatum>>,
     dataflow_global_ids: OutputSessionVec<'a, Update<DataflowGlobalDatum>>,
-}
-
-#[derive(Clone)]
-struct ExportDatum {
-    export_id: GlobalId,
-    dataflow_index: usize,
 }
 
 #[derive(Clone)]
@@ -813,10 +823,11 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
     ) {
         let export_id = Columnar::into_owned(export_id);
         let ts = self.ts();
-        let datum = ExportDatum {
-            export_id,
-            dataflow_index,
-        };
+        let datum = self.state.export_packer.pack_slice(&[
+            make_string_datum(export_id, &mut self.state.scratch_string),
+            Datum::UInt64(u64::cast_from(self.state.worker_id)),
+            Datum::UInt64(u64::cast_from(dataflow_index)),
+        ]);
         self.output.export.give((datum, ts, Diff::ONE));
 
         let existing = self
@@ -854,10 +865,11 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
         let ts = self.ts();
         let dataflow_index = export.dataflow_index;
 
-        let datum = ExportDatum {
-            export_id,
-            dataflow_index,
-        };
+        let datum = self.state.export_packer.pack_slice(&[
+            make_string_datum(export_id, &mut self.state.scratch_string),
+            Datum::UInt64(u64::cast_from(self.state.worker_id)),
+            Datum::UInt64(u64::cast_from(dataflow_index)),
+        ]);
         self.output.export.give((datum, ts, Diff::MINUS_ONE));
 
         match self.state.dataflow_export_counts.get_mut(&dataflow_index) {
