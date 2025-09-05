@@ -75,7 +75,6 @@ mod binary;
 mod encoding;
 pub(crate) mod format;
 pub(crate) mod impls;
-mod normalization;
 
 pub use impls::*;
 
@@ -83,41 +82,6 @@ pub use impls::*;
 /// passing without changing. 100MiB is probably higher than what we want, but it's better than no
 /// limit.
 const MAX_STRING_BYTES: usize = 1024 * 1024 * 100;
-
-/// Normalization forms for Unicode normalization.
-#[derive(
-    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
-)]
-pub enum NormalizationForm {
-    Nfc,
-    Nfd,
-    Nfkc,
-    Nfkd,
-}
-
-impl RustType<crate::scalar::ProtoNormalizationForm> for NormalizationForm {
-    fn into_proto(&self) -> crate::scalar::ProtoNormalizationForm {
-        use crate::scalar::ProtoNormalizationForm as Proto;
-        match self {
-            NormalizationForm::Nfc => Proto::try_from(0).unwrap(),
-            NormalizationForm::Nfd => Proto::try_from(1).unwrap(),
-            NormalizationForm::Nfkc => Proto::try_from(2).unwrap(),
-            NormalizationForm::Nfkd => Proto::try_from(3).unwrap(),
-        }
-    }
-
-    fn from_proto(proto: crate::scalar::ProtoNormalizationForm) -> Result<Self, TryFromProtoError> {
-        match i32::from(proto) {
-            0 => Ok(NormalizationForm::Nfc),
-            1 => Ok(NormalizationForm::Nfd),
-            2 => Ok(NormalizationForm::Nfkc),
-            3 => Ok(NormalizationForm::Nfkd),
-            _ => Err(TryFromProtoError::unknown_enum_variant(
-                "ProtoNormalizationForm",
-            )),
-        }
-    }
-}
 
 #[derive(
     Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,

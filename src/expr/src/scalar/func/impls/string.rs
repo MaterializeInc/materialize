@@ -909,14 +909,16 @@ pub fn normalize_with_form<'a>(
     form_str: Datum<'a>,
     temp_storage: &'a RowArena,
 ) -> Result<Datum<'a>, EvalError> {
+    use unicode_normalization::UnicodeNormalization;
+    
     let text = text.unwrap_str();
     let form_str = form_str.unwrap_str();
 
-    let form = match form_str.to_uppercase().as_str() {
-        "NFC" => crate::scalar::func::NormalizationForm::Nfc,
-        "NFD" => crate::scalar::func::NormalizationForm::Nfd,
-        "NFKC" => crate::scalar::func::NormalizationForm::Nfkc,
-        "NFKD" => crate::scalar::func::NormalizationForm::Nfkd,
+    let normalized = match form_str.to_uppercase().as_str() {
+        "NFC" => text.nfc().collect(),
+        "NFD" => text.nfd().collect(),
+        "NFKC" => text.nfkc().collect(),
+        "NFKD" => text.nfkd().collect(),
         _ => {
             return Err(EvalError::InvalidParameterValue(
                 format!("invalid normalization form: {}", form_str).into(),
@@ -924,7 +926,6 @@ pub fn normalize_with_form<'a>(
         }
     };
 
-    let normalized = form.normalize(text);
     Ok(Datum::String(temp_storage.push_string(normalized)))
 }
 
