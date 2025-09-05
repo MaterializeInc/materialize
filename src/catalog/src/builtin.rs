@@ -4982,7 +4982,7 @@ pub static MZ_CLUSTER_REPLICA_FRONTIERS: LazyLock<BuiltinSource> =
                 "The next timestamp at which the output may change.",
             ),
         ]),
-        is_retained_metrics_object: false,
+        is_retained_metrics_object: true,
         access: vec![PUBLIC_SELECT],
     });
 
@@ -5019,7 +5019,7 @@ pub static MZ_FRONTIERS: LazyLock<BuiltinSource> = LazyLock::new(|| BuiltinSourc
             "The next timestamp at which the output may change.",
         ),
     ]),
-    is_retained_metrics_object: false,
+    is_retained_metrics_object: true,
     access: vec![PUBLIC_SELECT],
 });
 
