@@ -298,6 +298,10 @@ Negative
 Network
 New
 Next
+Nfc
+Nfd
+Nfkc
+Nfkd
 No
 Nocreatecluster
 Nocreatedb
@@ -307,6 +311,7 @@ Noinherit
 Nologin
 Non
 None
+Normalize
 Nosuperuser
 Not
 Notice

@@ -32,6 +32,13 @@ import "repr/src/relation_and_scalar.proto";
 import "repr/src/row.proto";
 import "repr/src/strconv.proto";
 
+enum ProtoNormalizationForm {
+  PROTO_NORMALIZATION_FORM_NFC = 0;
+  PROTO_NORMALIZATION_FORM_NFD = 1;
+  PROTO_NORMALIZATION_FORM_NFKC = 2;
+  PROTO_NORMALIZATION_FORM_NFKD = 3;
+}
+
 message ProtoMirScalarExpr {
   message ProtoColumn {
     uint64 index = 1;
@@ -333,7 +340,6 @@ message ProtoUnaryFunc {
     google.protobuf.Empty map_length = 186;
     google.protobuf.Empty upper = 187;
     google.protobuf.Empty lower = 188;
-    google.protobuf.Empty normalize_nfc = 336;
     google.protobuf.Empty cos = 189;
     google.protobuf.Empty acos = 190;
     google.protobuf.Empty cosh = 191;

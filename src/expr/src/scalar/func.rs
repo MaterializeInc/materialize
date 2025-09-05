@@ -84,6 +84,41 @@ pub use impls::*;
 /// limit.
 const MAX_STRING_BYTES: usize = 1024 * 1024 * 100;
 
+/// Normalization forms for Unicode normalization.
+#[derive(
+    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
+)]
+pub enum NormalizationForm {
+    Nfc,
+    Nfd,
+    Nfkc,
+    Nfkd,
+}
+
+impl RustType<crate::scalar::ProtoNormalizationForm> for NormalizationForm {
+    fn into_proto(&self) -> crate::scalar::ProtoNormalizationForm {
+        use crate::scalar::ProtoNormalizationForm as Proto;
+        match self {
+            NormalizationForm::Nfc => Proto::try_from(0).unwrap(),
+            NormalizationForm::Nfd => Proto::try_from(1).unwrap(),
+            NormalizationForm::Nfkc => Proto::try_from(2).unwrap(),
+            NormalizationForm::Nfkd => Proto::try_from(3).unwrap(),
+        }
+    }
+
+    fn from_proto(proto: crate::scalar::ProtoNormalizationForm) -> Result<Self, TryFromProtoError> {
+        match proto as i32 {
+            0 => Ok(NormalizationForm::Nfc),
+            1 => Ok(NormalizationForm::Nfd),
+            2 => Ok(NormalizationForm::Nfkc),
+            3 => Ok(NormalizationForm::Nfkd),
+            _ => Err(TryFromProtoError::unknown_enum_variant(
+                "ProtoNormalizationForm",
+            )),
+        }
+    }
+}
+
 #[derive(
     Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
 )]
@@ -3779,7 +3814,7 @@ impl BinaryFunc {
             BinaryFunc::Power => power(a, b),
             BinaryFunc::PowerNumeric => power_numeric(a, b),
             BinaryFunc::RepeatString => repeat_string(a, b, temp_storage),
-            BinaryFunc::Normalize => normalize_string(a, b, temp_storage),
+            BinaryFunc::Normalize => normalize_with_form(a, b, temp_storage),
             BinaryFunc::GetBit => get_bit(a, b),
             BinaryFunc::GetByte => get_byte(a, b),
             BinaryFunc::ConstantTimeEqBytes => constant_time_eq_bytes(a, b),
@@ -6054,7 +6089,6 @@ derive_unary!(
     MapBuildFromRecordList,
     Upper,
     Lower,
-    NormalizeNfc,
     Cos,
     Acos,
     Cosh,
@@ -6868,7 +6902,6 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
             UnaryFunc::MapLength(_) => MapLength(()),
             UnaryFunc::Upper(_) => Upper(()),
             UnaryFunc::Lower(_) => Lower(()),
-            UnaryFunc::NormalizeNfc(_) => NormalizeNfc(()),
             UnaryFunc::Cos(_) => Cos(()),
             UnaryFunc::Acos(_) => Acos(()),
             UnaryFunc::Cosh(_) => Cosh(()),
@@ -7365,7 +7398,6 @@ impl RustType<ProtoUnaryFunc> for UnaryFunc {
                 MapLength(()) => Ok(impls::MapLength.into()),
                 Upper(()) => Ok(impls::Upper.into()),
                 Lower(()) => Ok(impls::Lower.into()),
-                NormalizeNfc(()) => Ok(impls::NormalizeNfc.into()),
                 Cos(()) => Ok(impls::Cos.into()),
                 Acos(()) => Ok(impls::Acos.into()),
                 Cosh(()) => Ok(impls::Cosh.into()),
@@ -7903,17 +7935,6 @@ fn repeat_string<'a>(
         return Err(EvalError::LengthTooLarge);
     }
     Ok(Datum::String(temp_storage.push_string(string.repeat(len))))
-}
-
-fn normalize_string<'a>(
-    text: Datum<'a>,
-    form: Datum<'a>,
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let text = text.unwrap_str();
-    let form = normalization::lookup_form(form.unwrap_str())?;
-    let normalized = form.normalize(text);
-    Ok(Datum::String(temp_storage.push_string(normalized)))
 }
 
 fn replace<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {

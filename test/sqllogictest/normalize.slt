@@ -131,13 +131,13 @@ true
 # U+D55C (한) = U+1112 (ᄒ) + U+1161 (ᅡ) + U+11AB (ᆫ)
 # U+AE00 (글) = U+1100 (ᄀ) + U+1173 (ᅳ) + U+11AF (ᆯ)
 query T
-SELECT normalize('한글', 'NFC')
+SELECT normalize('한글', NFC)
 ----
 한글
 
 # Korean decomposed form should be different
 query T
-SELECT normalize('한글', 'NFC') = normalize('한글', 'NFD')
+SELECT normalize('한글', NFC) = normalize('한글', 'NFD')
 ----
 false
 
@@ -203,4 +203,3 @@ SELECT id, normalize(text, 'NFKC') FROM test_normalize ORDER BY id
 
 statement ok
 DROP TABLE test_normalize
-

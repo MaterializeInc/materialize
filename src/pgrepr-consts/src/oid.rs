@@ -110,6 +110,7 @@ pub const FUNC_PG_DIGEST_STRING: u32 = 12001;
 pub const FUNC_PG_DIGEST_BYTES: u32 = 12002;
 pub const FUNC_PG_HMAC_STRING: u32 = 12003;
 pub const FUNC_PG_HMAC_BYTES: u32 = 12004;
+pub const FUNC_NORMALIZE_OID: u32 = 4350;
 
 // Materialize-specific builtin OIDs.
 pub const TYPE_LIST_OID: u32 = 16_384;
