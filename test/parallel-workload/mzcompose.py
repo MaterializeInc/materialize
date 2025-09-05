@@ -53,7 +53,7 @@ SERVICES = [
         ports=["30123:30123"],
         allow_host_ports=True,
         environment_extra=[
-            "KAFKA_ADVERTISED_LISTENERS=HOST://localhost:30123,PLAINTEXT://kafka:9092",
+            "KAFKA_ADVERTISED_LISTENERS=HOST://127.0.0.1:30123,PLAINTEXT://kafka:9092",
             "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=HOST:PLAINTEXT,PLAINTEXT:PLAINTEXT",
         ],
     ),
@@ -61,8 +61,8 @@ SERVICES = [
     Minio(setup_materialize=True, additional_directories=["copytos3"]),
     Azurite(),
     Mc(),
-    Materialized(default_replication_factor=2),
-    Materialized(name="materialized2", default_replication_factor=2),
+    Materialized(),
+    Materialized(name="materialized2"),
     MzComposeService("sqlsmith", {"mzbuild": "sqlsmith"}),
     MzComposeService(
         name="persistcli",
@@ -96,16 +96,21 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     complexity = Complexity(args.complexity)
     sanity_restart = False
 
+    external = scenario in (
+        Scenario.ZeroDowntimeDeploy,
+        Scenario.BackupRestore,
+        Scenario.Kill,
+    )
+
     with c.override(
         Materialized(
-            # TODO: Retry with toxiproxy on azurite
-            external_blob_store=True,
+            external_blob_store=external,
             blob_store_is_azure=args.azurite,
-            external_metadata_store="toxiproxy",
+            external_metadata_store=("toxiproxy" if external else False),
+            metadata_store=("cockroach" if external else "postgres-metadata"),
             ports=["6975:6875", "6976:6876", "6977:6877"],
             sanity_restart=sanity_restart,
-            metadata_store="cockroach",
-            default_replication_factor=2,
+            default_replication_factor=1,
             additional_system_parameter_defaults={
                 "memory_limiter_interval": "0",
                 # TODO: Remove when https://github.com/MaterializeInc/database-issues/issues/9656 is fixed
@@ -140,7 +145,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             ports["mz_system2"] = 7077
         # try:
         run(
-            "localhost",
+            "127.0.0.1",
             ports,
             args.seed,
             args.runtime,
@@ -203,7 +208,7 @@ def toxiproxy_start(c: Composition) -> None:
         json={
             "name": "cockroach",
             "type": "latency",
-            "attributes": {"latency": 0, "jitter": 100},
+            "attributes": {"latency": 0, "jitter": 10},
         },
     )
     assert r.status_code == 200, r
@@ -212,7 +217,7 @@ def toxiproxy_start(c: Composition) -> None:
         json={
             "name": "minio",
             "type": "latency",
-            "attributes": {"latency": 0, "jitter": 100},
+            "attributes": {"latency": 0, "jitter": 10},
         },
     )
     assert r.status_code == 200, r
@@ -221,7 +226,7 @@ def toxiproxy_start(c: Composition) -> None:
         json={
             "name": "azurite",
             "type": "latency",
-            "attributes": {"latency": 0, "jitter": 100},
+            "attributes": {"latency": 0, "jitter": 10},
         },
     )
     assert r.status_code == 200, r

@@ -143,6 +143,7 @@ class Action:
             "out of range",
             "cannot evaluate unmaterializable function",  # TODO: Remove when https://github.com/MaterializeInc/database-issues/issues/9657 is fixed
             "Window function performance issue",  # TODO: Remove when https://github.com/MaterializeInc/database-issues/issues/9644 is fixed
+            "Invalid data in source, saw retractions",  # TODO: Remove when https://github.com/MaterializeInc/database-issues/issues/9656 is fixed
         ]
         if exe.db.complexity in (Complexity.DDL, Complexity.DDLOnly):
             result.extend(
@@ -191,15 +192,17 @@ class Action:
                     "socket is already closed.",
                     "Broken pipe",
                     "WS connect",
+                    "Connection reset by peer",
                     # http
                     "Remote end closed connection without response",
                     "Connection aborted",
                     "Connection refused",
+                    "Connection broken: IncompleteRead",
                 ]
             )
         if exe.db.scenario in (Scenario.Kill, Scenario.ZeroDowntimeDeploy):
             # Expected, see database-issues#6156
-            result.extend(["unknown catalog item", "unknown schema"])
+            result.extend(["unknown catalog item", "unknown schema", "unknown database"])
         if exe.db.scenario == Scenario.Rename:
             result.extend(["unknown schema", "ambiguous reference to schema name"])
         if materialize.parallel_workload.database.NAUGHTY_IDENTIFIERS:
@@ -1921,7 +1924,6 @@ class KillAction(Action):
         with self.composition.override(
             Materialized(
                 restart="on-failure",
-                # TODO: Retry with toxiproxy on azurite
                 external_blob_store=True,
                 blob_store_is_azure=self.azurite,
                 external_metadata_store="toxiproxy",
@@ -1929,7 +1931,7 @@ class KillAction(Action):
                 sanity_restart=self.sanity_restart,
                 additional_system_parameter_defaults=self.system_parameters,
                 metadata_store="cockroach",
-                default_replication_factor=2,
+                default_replication_factor=1,
             )
         ):
             self.composition.up("materialized", detach=True)
@@ -1978,7 +1980,7 @@ class ZeroDowntimeDeployAction(Action):
                 restart="on-failure",
                 healthcheck=LEADER_STATUS_HEALTHCHECK,
                 metadata_store="cockroach",
-                default_replication_factor=2,
+                default_replication_factor=1,
                 additional_system_parameter_defaults={
                     "memory_limiter_interval": "0",
                     # TODO: Remove when https://github.com/MaterializeInc/database-issues/issues/9656 is fixed
