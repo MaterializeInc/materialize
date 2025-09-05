@@ -43,18 +43,24 @@ Create a user that Materialize will use to connect when ingesting data.
       GRANT EXECUTE ON sys.fn_cdc_get_max_lsn TO materialize_role;
       GRANT EXECUTE ON sys.fn_cdc_increment_lsn TO materialize_role;
 
+      GRANT VIEW SERVER STATE TO materialize;
       GO -- The GO terminator may be unsupported or unnecessary for your client.
       ```
 
-1. In the database from which which you want to ingest data, create a second
-   `materialize` user with `db_datareader` role (replace `<DATABASE_NAME>` with
-   your database name):
+1. In the database from which which you want to ingest data,
+
+   1. Create a second `materialize` user and a second `materialize_role`.
+
+   1. Add `materialize` user as a member to the `materialize_role` and
+   `db_datareader` roles (replace `<DATABASE_NAME>` with your database name).
 
    ```sql
    USE <DATABASE_NAME>;
 
-   -- Use the same user name as the one created in master
+   -- Use the same user name and role name as those created in master
    CREATE USER materialize FOR LOGIN materialize;
+   CREATE ROLE materialize_role;
+   ALTER ROLE materialize_role ADD MEMBER materialize;
    ALTER ROLE db_datareader ADD MEMBER materialize;
    GO -- The GO terminator may be unsupported or unnecessary for your client.
    ```
