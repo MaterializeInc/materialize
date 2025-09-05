@@ -22,7 +22,9 @@ use itertools::Itertools;
 use mz_ore::cast::CastFrom;
 use mz_ore::future::InTask;
 use mz_repr::{Diff, GlobalId, Row, RowArena};
-use mz_sql_server_util::cdc::{CdcEvent, Lsn, Operation as CdcOperation};
+use mz_sql_server_util::cdc::{
+    CdcEvent, Lsn, Operation as CdcOperation, SqlServerSnapshotMetadata,
+};
 use mz_sql_server_util::inspect::get_latest_restore_history_id;
 use mz_storage_types::errors::{DataflowError, DecodeError, DecodeErrorKind};
 use mz_storage_types::sources::SqlServerSource;
@@ -39,6 +41,7 @@ use timely::dataflow::operators::{CapabilitySet, Concat, Map};
 use timely::dataflow::{Scope, Stream as TimelyStream};
 use timely::progress::{Antichain, Timestamp};
 
+use crate::metrics::source::sql_server::SqlServerSourceMetrics;
 use crate::source::RawSourceCreationConfig;
 use crate::source::sql_server::{
     DefiniteError, ReplicationError, SourceOutputInfo, TransientError,
@@ -59,6 +62,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
     config: RawSourceCreationConfig,
     outputs: BTreeMap<GlobalId, SourceOutputInfo>,
     source: SqlServerSource,
+    metrics: SqlServerSourceMetrics,
 ) -> (
     StackedCollection<G, (u64, Result<SourceMessage, DataflowError>)>,
     TimelyStream<G, Infallible>,
@@ -133,6 +137,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                     .map(|i| i.as_ref());
 
             let snapshot_tables = mz_sql_server_util::inspect::get_tables_for_capture_instance(&mut client, snapshot_instances).await?;
+            metrics.tables.set(u64::cast_from(snapshot_tables.len()));
 
             // validate that the restore_history_id hasn't changed
             let current_restore_history_id = get_latest_restore_history_id(&mut client).await?;
@@ -194,9 +199,17 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
 
                 for table in snapshot_tables {
                     // TODO(sql_server3): filter columns to only select columns required for Source.
-                    let (snapshot_lsn, size, snapshot)= cdc_handle
+                    let (snapshot_metadata, snapshot)= cdc_handle
                         .snapshot(&table, config.worker_id, config.id)
                         .await?;
+                    let SqlServerSnapshotMetadata {
+                        lsn: snapshot_lsn,
+                        count: size,
+                        count_latency,
+                        lock_latency,
+                    } = snapshot_metadata;
+                    metrics.snapshot_metrics.record_table_lock_latency(Arc::clone(&table.name), lock_latency);
+                    metrics.snapshot_metrics.record_table_count_latency(Arc::clone(&table.name), count_latency);
 
                     tracing::info!(%config.id, %table.name, %table.schema_name, %snapshot_lsn, %size, "timely-{worker_id} snapshot start");
 
@@ -371,6 +384,8 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                     } => (capture_instance, lsn, changes),
                 };
 
+                metrics.lsn.set(commit_lsn.abbreviate());
+
                 let Some(partition_indexes) = capture_instances.get(&capture_instance) else {
                     let definite_error = DefiniteError::ProgrammingError(format!(
                         "capture instance didn't exist: '{capture_instance}'"
@@ -389,11 +404,21 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
 
 
                 for change in changes {
+                    metrics.total.inc();
                     let (sql_server_row, diff): (_, _) = match change {
-                        CdcOperation::Insert(sql_server_row)
-                        | CdcOperation::UpdateNew(sql_server_row) => (sql_server_row, Diff::ONE),
-                        CdcOperation::Delete(sql_server_row)
-                        | CdcOperation::UpdateOld(sql_server_row) => {
+                        CdcOperation::Insert(sql_server_row) => {
+                            metrics.inserts.inc();
+                            (sql_server_row, Diff::ONE)
+                        }
+                        CdcOperation::UpdateNew(sql_server_row) => {
+                            metrics.updates.inc();
+                            (sql_server_row, Diff::ONE)
+                        }
+                        CdcOperation::UpdateOld(sql_server_row) => {
+                            (sql_server_row, Diff::MINUS_ONE)
+                        }
+                        CdcOperation::Delete(sql_server_row) => {
+                            metrics.deletes.inc();
                             (sql_server_row, Diff::MINUS_ONE)
                         }
                     };

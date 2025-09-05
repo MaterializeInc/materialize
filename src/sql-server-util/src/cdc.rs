@@ -64,10 +64,11 @@
 use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use derivative::Derivative;
 use futures::{Stream, StreamExt};
+use mz_ore::metrics::MetricsFutureExt;
 use mz_repr::GlobalId;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -152,18 +153,18 @@ impl<'a> CdcStream<'a> {
         source_id: GlobalId,
     ) -> Result<
         (
-            Lsn,
-            usize,
+            SqlServerSnapshotMetadata,
             impl Stream<Item = Result<tiberius::Row, SqlServerError>>,
         ),
         SqlServerError,
     > {
         static SAVEPOINT_NAME: &str = "_mz_snap_";
-
         // The client that will be used for fencing does not need any special isolation level
         // as it will be just be locking the table(s).
         let mut fencing_client = self.client.new_connection().await?;
         let mut fence_txn = fencing_client.transaction().await?;
+        //TODO(ptravers): double check we don't actually want to be using tokio time.
+        let start_lock = Instant::now();
         fence_txn
             .lock_table_shared(&table.schema_name, &table.name)
             .await?;
@@ -204,15 +205,21 @@ impl<'a> CdcStream<'a> {
         // the table no longer needs to be locked. Any writes that happen to the upstream table
         // will have an LSN higher than our captured LSN, and will be read from CDC.
         fence_txn.rollback().await?;
+        let end_lock = Instant::now();
+        let lock_latency: Duration = end_lock - start_lock;
 
         let lsn = txn.get_lsn().await?;
 
         tracing::info!(%source_id, ?lsn, "timely-{worker_id} starting snapshot");
 
+        let mut count_latency: f64 = 0.0;
         tracing::trace!(%source_id, %table.capture_instance.name, %table.schema_name, %table.name, "timely-{worker_id} snapshot stats start");
-        let size =
-            crate::inspect::snapshot_size(txn.client, &table.schema_name, &table.name).await?;
-        tracing::trace!(%source_id, %table.capture_instance.name, %table.schema_name, %table.name, "timely-{worker_id} snapshot stats end");
+        let size = crate::inspect::snapshot_size(txn.client, &table.schema_name, &table.name)
+            .wall_time()
+            .set_at(&mut count_latency)
+            .await?;
+        tracing::trace!(%source_id, %table.capture_instance.name, %table.schema_name, %table.name, %count_latency, "timely-{worker_id} snapshot stats end");
+
         let schema_name = &*table.schema_name;
         let table_name = &*table.name;
         let rows = async_stream::try_stream! {
@@ -228,7 +235,10 @@ impl<'a> CdcStream<'a> {
             txn.rollback().await?
         };
 
-        Ok((lsn, size, rows))
+        let metadata =
+            SqlServerSnapshotMetadata::new(lsn, size, count_latency, lock_latency.as_secs_f64());
+
+        Ok((metadata, rows))
     }
 
     /// Consume `self` returning a [`Stream`] of [`CdcEvent`]s.
@@ -400,6 +410,24 @@ impl<'a> CdcStream<'a> {
         crate::inspect::get_max_lsn_retry(self.client, self.max_lsn_wait).await?;
 
         Ok(())
+    }
+}
+
+pub struct SqlServerSnapshotMetadata {
+    pub lsn: Lsn,
+    pub count: usize,
+    pub count_latency: f64,
+    pub lock_latency: f64,
+}
+
+impl SqlServerSnapshotMetadata {
+    pub fn new(lsn: Lsn, count: usize, count_latency: f64, lock_latency: f64) -> Self {
+        Self {
+            lsn,
+            count,
+            count_latency,
+            lock_latency,
+        }
     }
 }
 
