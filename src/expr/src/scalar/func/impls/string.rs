@@ -904,6 +904,31 @@ sqlfunc!(
     }
 );
 
+pub fn normalize_with_form<'a>(
+    text: Datum<'a>,
+    form_str: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    use unicode_normalization::UnicodeNormalization;
+
+    let text = text.unwrap_str();
+    let form_str = form_str.unwrap_str();
+
+    let normalized = match form_str.to_uppercase().as_str() {
+        "NFC" => text.nfc().collect(),
+        "NFD" => text.nfd().collect(),
+        "NFKC" => text.nfkc().collect(),
+        "NFKD" => text.nfkd().collect(),
+        _ => {
+            return Err(EvalError::InvalidParameterValue(
+                format!("invalid normalization form: {}", form_str).into(),
+            ));
+        }
+    };
+
+    Ok(Datum::String(temp_storage.push_string(normalized)))
+}
+
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct IsLikeMatch(pub like_pattern::Matcher);
 

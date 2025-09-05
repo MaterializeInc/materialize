@@ -583,6 +583,7 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 3945  int8range
 3946  int8range
 4053  array_agg
+4350  normalize
 5077  anycompatible
 5078  anycompatiblearray
 5079  anycompatiblenonarray

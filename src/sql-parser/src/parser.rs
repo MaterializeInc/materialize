@@ -595,6 +595,7 @@ impl<'a> Parser<'a> {
             Token::Keyword(POSITION) if self.peek_token() == Some(Token::LParen) => {
                 self.parse_position_expr()
             }
+            Token::Keyword(NORMALIZE) => self.parse_normalize_expr(),
             Token::Keyword(SUBSTRING) => self.parse_substring_expr(),
             Token::Keyword(kw) if kw.is_reserved() => {
                 return Err(self.error(
@@ -1048,6 +1049,35 @@ impl<'a> Parser<'a> {
         Ok(Expr::Function(Function {
             name: RawItemName::Name(UnresolvedItemName::unqualified(ident!("position"))),
             args: FunctionArgs::args(vec![needle, haystack]),
+            filter: None,
+            over: None,
+            distinct: false,
+        }))
+    }
+
+    /// Parse calls to normalize(), which can take the form:
+    /// - normalize('string')
+    /// - normalize('string', NFC)
+    /// - normalize('string', NFD)
+    /// - normalize('string', NFKC)
+    /// - normalize('string', NFKD)
+    fn parse_normalize_expr(&mut self) -> Result<Expr<Raw>, ParserError> {
+        self.expect_token(&Token::LParen)?;
+        let expr = self.parse_expr()?;
+
+        let args = if self.consume_token(&Token::Comma) {
+            let form = self
+                .expect_one_of_keywords(&[NFC, NFD, NFKC, NFKD])?
+                .as_str();
+            vec![expr, Expr::Value(Value::String(form.to_owned()))]
+        } else {
+            vec![expr, Expr::Value(Value::String("NFC".to_owned()))]
+        };
+
+        self.expect_token(&Token::RParen)?;
+        Ok(Expr::Function(Function {
+            name: RawItemName::Name(UnresolvedItemName::unqualified(ident!("normalize"))),
+            args: FunctionArgs::args(args),
             filter: None,
             over: None,
             distinct: false,

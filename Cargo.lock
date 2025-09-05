@@ -6474,6 +6474,7 @@ dependencies = [
  "timely",
  "tracing",
  "uncased",
+ "unicode-normalization",
  "uuid",
  "workspace-hack",
 ]

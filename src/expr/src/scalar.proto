@@ -675,6 +675,7 @@ message ProtoBinaryFunc {
     bool array_contains_array = 194;
     google.protobuf.Empty starts_with = 195;
     google.protobuf.Empty get_bit = 196;
+    google.protobuf.Empty normalize = 200;
   }
 }
 

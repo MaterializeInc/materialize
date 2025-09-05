@@ -1,0 +1,202 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Tests for Unicode normalize function
+
+mode cockroach
+
+# Test default normalization (NFC)
+query T
+SELECT normalize('é')
+----
+é
+
+# Test NFC explicitly
+query T
+SELECT normalize('é', NFC)
+----
+é
+
+# Test NFD (decomposed form)
+# The é becomes e + combining acute accent
+query T
+SELECT normalize('é', NFD) = E'e\u0301'
+----
+true
+
+# Test NFKC - compatibility transformations
+# Ligatures should be decomposed
+query T
+SELECT normalize('ﬁ', NFKC)
+----
+fi
+
+query T
+SELECT normalize('ﬀ', NFKC)
+----
+ff
+
+# Test NFKD - compatibility decomposition without recomposition
+query T
+SELECT normalize('ﬁ', NFKD)
+----
+fi
+
+# Demonstrate NFC vs NFKC difference
+# Superscript 2 (U+00B2) normalizes differently
+query T
+SELECT normalize('x²', NFC)
+----
+x²
+
+query T
+SELECT normalize('x²', NFKC)
+----
+x2
+
+# Full-width forms (common in Japanese text)
+query T
+SELECT normalize('Ａ', NFC)  -- Full-width A (U+FF21)
+----
+Ａ
+
+query T
+SELECT normalize('Ａ', NFKC)  -- Should become regular A
+----
+A
+
+# Roman numerals compatibility
+query T
+SELECT normalize('Ⅻ', NFC)  -- Roman numeral XII (U+216B)
+----
+Ⅻ
+
+query T
+SELECT normalize('Ⅻ', NFKC)
+----
+XII
+
+# Test case insensitivity of form parameter
+query T
+SELECT normalize('é', nfc)
+----
+é
+
+query T
+SELECT normalize('é', Nfd) = E'e\u0301'
+----
+true
+
+# Test with NULL input
+query T
+SELECT normalize(NULL)
+----
+NULL
+
+query T
+SELECT normalize(NULL, NFC)
+----
+NULL
+
+# Test invalid form parameter
+statement error db error: ERROR: Expected one of NFC or NFD or NFKC or NFKD, found string literal "INVALID"
+SELECT normalize('test', 'INVALID')
+
+statement error db error: ERROR: Expected one of NFC or NFD or NFKC or NFKD, found string literal ""
+SELECT normalize('test', '')
+
+# Test with various Unicode characters
+query T
+SELECT normalize('Å')
+----
+Å
+
+query T
+SELECT normalize('Å', NFD) = E'A\u030A'
+----
+true
+
+# Test Korean Hangul - composed syllable blocks
+# U+D55C (한) = U+1112 (ᄒ) + U+1161 (ᅡ) + U+11AB (ᆫ)
+# U+AE00 (글) = U+1100 (ᄀ) + U+1173 (ᅳ) + U+11AF (ᆯ)
+query T
+SELECT normalize('한글', NFC)
+----
+한글
+
+# Korean decomposed form should be different
+query T
+SELECT normalize('한글', NFC) = normalize('한글', NFD)
+----
+false
+
+# Test that NFD actually decomposes Korean
+query T
+SELECT length(normalize('한글', NFC))
+----
+2
+
+query T
+SELECT length(normalize('한글', NFD))
+----
+6
+
+# Test that already normalized text remains unchanged
+query T
+SELECT normalize('hello world')
+----
+hello world
+
+query T
+SELECT normalize('hello world', NFD)
+----
+hello world
+
+# Test empty string
+query T
+SELECT normalize('')
+----
+(empty)
+
+
+query T
+SELECT normalize('', NFKC)
+----
+(empty)
+
+
+# Test with table data
+statement ok
+CREATE TABLE test_normalize (id INT, text TEXT)
+
+statement ok
+INSERT INTO test_normalize VALUES
+  (1, 'café'),
+  (2, 'ﬁle'),
+  (3, NULL),
+  (4, 'Å')
+
+query IT
+SELECT id, normalize(text) FROM test_normalize ORDER BY id
+----
+1  café
+2  ﬁle
+3  NULL
+4  Å
+
+query IT
+SELECT id, normalize(text, NFKC) FROM test_normalize ORDER BY id
+----
+1  café
+2  file
+3  NULL
+4  Å
+
+statement ok
+DROP TABLE test_normalize
