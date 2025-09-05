@@ -299,13 +299,10 @@ impl<'a> DataflowBuilder<'a> {
     /// Determine the given source's monotonicity.
     fn monotonic_source(&self, source: &Source) -> bool {
         match &source.data_source {
-            DataSourceDesc::Ingestion { ingestion_desc, .. } => {
-                // Check if the primary export of this source is monotonic
-                ingestion_desc
-                    .desc
-                    .primary_export
-                    .monotonic(&ingestion_desc.desc.connection)
-            }
+            DataSourceDesc::Ingestion { .. } => false,
+            DataSourceDesc::OldSyntaxIngestion {
+                desc, data_config, ..
+            } => data_config.monotonic(&desc.connection),
             DataSourceDesc::Webhook { .. } => true,
             DataSourceDesc::IngestionExport {
                 ingestion_id,

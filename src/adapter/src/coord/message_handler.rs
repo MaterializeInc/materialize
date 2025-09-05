@@ -28,7 +28,6 @@ use mz_repr::{Datum, Diff, Row};
 use mz_sql::ast::Statement;
 use mz_sql::pure::PurifiedStatement;
 use mz_storage_client::controller::IntrospectionType;
-use mz_storage_types::controller::CollectionMetadata;
 use opentelemetry::trace::TraceContextExt;
 use rand::{Rng, SeedableRng, rngs};
 use serde_json::json;
@@ -218,24 +217,7 @@ impl Coordinator {
             .storage
             .active_collection_metadatas()
             .into_iter()
-            .flat_map(|(_id, collection_metadata)| {
-                let CollectionMetadata {
-                    data_shard,
-                    remap_shard,
-                    // No wildcards, to improve the odds that the addition of a
-                    // new shard type results in a compiler error here.
-                    //
-                    // ATTENTION: If you add a new type of shard that is
-                    // associated with a collection, almost surely you should
-                    // return it below, so that its usage is recorded in the
-                    // `mz_storage_usage_by_shard` table.
-                    persist_location: _,
-                    relation_desc: _,
-                    txns_shard: _,
-                } = collection_metadata;
-                [remap_shard, Some(data_shard)].into_iter()
-            })
-            .filter_map(|shard| shard)
+            .map(|(_id, m)| m.data_shard)
             .collect();
 
         let collection_metric = self

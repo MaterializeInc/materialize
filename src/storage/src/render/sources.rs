@@ -186,8 +186,6 @@ where
     let SourceDesc {
         connection: _,
         timestamp_interval: _,
-        primary_export: _,
-        primary_export_details: _,
     } = description.desc;
 
     let (decoded_stream, decode_health) = match encoding {

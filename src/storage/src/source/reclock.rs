@@ -265,8 +265,7 @@ mod tests {
                 blob_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
                 consensus_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
             },
-            remap_shard: Some(shard),
-            data_shard: ShardId::new(),
+            data_shard: shard,
             relation_desc: RelationDesc::empty(),
             txns_shard: None,
         };
