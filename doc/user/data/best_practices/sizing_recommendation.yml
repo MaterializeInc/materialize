@@ -79,3 +79,12 @@ rows:
     Recommendation: |
 
       Set to "0.00" for self-managed deployments.
+
+  - Field: "**selectors**"
+    Type: map
+    Description: |
+
+      This is a map of selector keys to values that will be used to schedule pods for this cluster on specific nodes.
+    Recommendation: |
+
+      It is generally not required to set this.
