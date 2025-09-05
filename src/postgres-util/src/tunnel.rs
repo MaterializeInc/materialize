@@ -14,14 +14,13 @@ use std::time::Duration;
 
 use mz_ore::future::{InTask, OreFutureExt};
 use mz_ore::option::OptionExt;
-use mz_ore::task;
+use mz_ore::task::{self, AbortOnDropHandle};
 use mz_proto::{RustType, TryFromProtoError};
 use mz_repr::CatalogItemId;
 use mz_ssh_util::tunnel::{SshTimeoutConfig, SshTunnelConfig};
 use mz_ssh_util::tunnel_manager::SshTunnelManager;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream as TokioTcpStream;
 use tokio_postgres::config::{Host, ReplicationMode};
 use tokio_postgres::tls::MakeTlsConnect;
@@ -70,26 +69,13 @@ pub const DEFAULT_SNAPSHOT_STATEMENT_TIMEOUT: Duration = Duration::ZERO;
 pub struct Client {
     inner: tokio_postgres::Client,
     server_version: Option<String>,
+    // Holds a handle to the task with the connection to ensure that when
+    // the client is dropped, the task can be aborted to close the connection.
+    // This is also useful for maintaining the lifetimes of dependent object (e.g. ssh tunnel).
+    _connection_handle: AbortOnDropHandle<()>,
 }
 
 impl Client {
-    fn new<S, T>(
-        client: tokio_postgres::Client,
-        connection: &tokio_postgres::Connection<S, T>,
-    ) -> Client
-    where
-        S: AsyncRead + AsyncWrite + Unpin,
-        T: AsyncRead + AsyncWrite + Unpin,
-    {
-        let server_version = connection
-            .parameter("server_version")
-            .map(|v| v.to_string());
-        Client {
-            inner: client,
-            server_version,
-        }
-    }
-
     /// Reports the value of the `server_version` parameter reported by the
     /// server.
     pub fn server_version(&self) -> Option<&str> {
@@ -287,8 +273,19 @@ impl Config {
                 let (client, connection) = async move { postgres_config.connect(tls).await }
                     .run_in_task_if(self.in_task, || "pg_connect".to_string())
                     .await?;
-                let client = Client::new(client, &connection);
-                task::spawn(|| task_name, connection);
+
+                let client = Client {
+                    inner: client,
+                    server_version: connection
+                        .parameter("server_version")
+                        .map(|v| v.to_string()),
+                    _connection_handle: task::spawn(|| task_name, async {
+                        if let Err(e) = connection.await {
+                            warn!("postgres direct connection failed: {e}");
+                        }
+                    })
+                    .abort_on_drop(),
+                };
                 Ok(client)
             }
             TunnelConfig::Ssh { config } => {
@@ -319,14 +316,20 @@ impl Config {
                     async move { postgres_config.connect_raw(tcp_stream, tls).await }
                         .run_in_task_if(self.in_task, || "pg_connect".to_string())
                         .await?;
-                let client = Client::new(client, &connection);
-                task::spawn(|| task_name, async {
-                    let _tunnel = tunnel; // Keep SSH tunnel alive for duration of connection.
 
-                    if let Err(e) = connection.await {
-                        warn!("postgres connection failed: {e}");
-                    }
-                });
+                let client = Client {
+                    inner: client,
+                    server_version: connection
+                        .parameter("server_version")
+                        .map(|v| v.to_string()),
+                    _connection_handle: task::spawn(|| task_name, async {
+                        let _tunnel = tunnel; // Keep SSH tunnel alive for duration of connection.
+                        if let Err(e) = connection.await {
+                            warn!("postgres via SSH tunnel connection failed: {e}");
+                        }
+                    })
+                    .abort_on_drop(),
+                };
                 Ok(client)
             }
             TunnelConfig::AwsPrivatelink { connection_id } => {
@@ -363,8 +366,19 @@ impl Config {
                 let (client, connection) = async move { postgres_config.connect(tls).await }
                     .run_in_task_if(self.in_task, || "pg_connect".to_string())
                     .await?;
-                let client = Client::new(client, &connection);
-                task::spawn(|| task_name, connection);
+
+                let client = Client {
+                    inner: client,
+                    server_version: connection
+                        .parameter("server_version")
+                        .map(|v| v.to_string()),
+                    _connection_handle: task::spawn(|| task_name, async {
+                        if let Err(e) = connection.await {
+                            warn!("postgres AWS link connection failed: {e}");
+                        }
+                    })
+                    .abort_on_drop(),
+                };
                 Ok(client)
             }
         }
