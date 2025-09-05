@@ -9,6 +9,7 @@
 
 use std::fmt::{self, Debug};
 
+use mz_ore::str::redact;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use proptest::arbitrary::Arbitrary;
 use proptest::strategy::Strategy;
@@ -131,13 +132,19 @@ where
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let l = serde_json::to_value(&self.lower).expect("valid json");
         let u = serde_json::to_value(&self.upper).expect("valid json");
-        Debug::fmt(&serde_json::json!({"lower": l, "upper": u}), f)
+        f.debug_struct("PrimitiveStats")
+            .field("lower", &redact(l))
+            .field("upper", &redact(u))
+            .finish()
     }
 }
 
 impl Debug for PrimitiveStats<Vec<u8>> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        Debug::fmt(&self.debug_json(), f)
+        f.debug_struct("PrimitiveStats")
+            .field("lower", &redact(hex::encode(&self.lower)))
+            .field("upper", &redact(hex::encode(&self.upper)))
+            .finish()
     }
 }
 

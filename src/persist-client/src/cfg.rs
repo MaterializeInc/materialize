@@ -354,6 +354,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::rpc::PUBSUB_STATE_CACHE_SHARD_REF_CHANNEL_SIZE)
         .add(&crate::rpc::PUBSUB_RECONNECT_BACKOFF)
         .add(&crate::stats::STATS_AUDIT_PERCENT)
+        .add(&crate::stats::STATS_AUDIT_PANIC)
         .add(&crate::stats::STATS_BUDGET_BYTES)
         .add(&crate::stats::STATS_COLLECTION_ENABLED)
         .add(&crate::stats::STATS_FILTER_ENABLED)

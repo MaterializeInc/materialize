@@ -27,6 +27,15 @@ pub(crate) const STATS_AUDIT_PERCENT: Config<usize> = Config::new(
     "Percent of filtered data to opt in to correctness auditing (Materialize).",
 );
 
+/// See description for usage.
+pub const STATS_AUDIT_PANIC: Config<bool> = Config::new(
+    "persist_stats_audit_panic",
+    true,
+    "If set (as it is by default), panic on any auditing failure. If not, report an error but \
+    pass along the data as normal. This should almost certainly be paired with an audit rate of 100%, \
+    so all parts are audited, for consistency.",
+);
+
 /// Computes and stores statistics about each batch part.
 ///
 /// These can be used at read time to entirely skip fetching a part based on its

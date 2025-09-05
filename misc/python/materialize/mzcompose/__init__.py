@@ -117,7 +117,6 @@ def get_minimal_system_parameters(
         "enable_worker_core_affinity": "true",
         "grpc_client_http2_keep_alive_timeout": "5s",
         "ore_overflowing_behavior": "panic",
-        "persist_stats_audit_percent": "100",
         "unsafe_enable_table_keys": "true",
         "with_0dt_deployment_max_wait": "1800s",
         # End of list (ordered by name)
@@ -227,6 +226,21 @@ def get_variable_system_parameters(
             "1s",
             ["100ms", "1s", "10s"],
         ),
+        VariableSystemParameter(
+            "persist_encoding_enable_dictionary", "true", ["true", "false"]
+        ),
+        VariableSystemParameter(
+            "persist_stats_audit_percent",
+            "100",
+            [
+                "0",
+                "1",
+                "2",
+                "10",
+                "100",
+            ],
+        ),
+        VariableSystemParameter("persist_stats_audit_panic", "true", ["true", "false"]),
         VariableSystemParameter(
             "persist_encoding_enable_dictionary", "true", ["true", "false"]
         ),
