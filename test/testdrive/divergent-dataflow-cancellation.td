@@ -88,13 +88,13 @@ contains: canceling statement due to statement timeout
 > SELECT count(*)
   FROM mz_introspection.mz_compute_exports_per_worker
   WHERE worker_id = 0
-31
+32
 
 # One frontier for each introspection arrangement.
 > SELECT count(*)
   FROM mz_introspection.mz_compute_frontiers_per_worker
   WHERE worker_id = 0
-31
+32
 
 > SELECT count(*) FROM mz_introspection.mz_compute_import_frontiers_per_worker
 0

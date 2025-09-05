@@ -457,6 +457,7 @@ The `mz_scheduling_parks_histogram` view describes a histogram of [dataflow] wor
 [query hints]: /sql/select/#query-hints
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_compute_hydration_times_per_worker -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_compute_operator_hydration_statuses_per_worker -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_dataflow_operator_reachability -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_dataflow_operator_reachability_per_worker -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_dataflow_operator_reachability_raw -->

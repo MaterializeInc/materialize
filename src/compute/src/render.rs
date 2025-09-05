@@ -156,7 +156,7 @@ use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
 use crate::extensions::temporal_bucket::TemporalBucketing;
 use crate::logging::compute::{
-    ComputeEvent, DataflowGlobal, LirMapping, LirMetadata, LogDataflowErrors,
+    ComputeEvent, DataflowGlobal, LirMapping, LirMetadata, LogDataflowErrors, OperatorHydration,
 };
 use crate::render::context::{ArrangementFlavor, Context, ShutdownProbe, shutdown_token};
 use crate::render::continual_task::ContinualTaskCtx;
@@ -1011,7 +1011,7 @@ where
 
         // Mappings to send along.
         // To save overhead, we'll only compute mappings when we need to,
-        // which means things get gated behind options. Unfortuantely, that means we
+        // which means things get gated behind options. Unfortunately, that means we
         // have several `Option<...>` types that are _all_ `Some` or `None` together,
         // but there's no convenient way to express the invariant.
         let should_compute_lir_metadata = self.compute_logger.is_some();
@@ -1359,9 +1359,11 @@ where
     where
         D: Clone + 'static,
     {
-        let Some(logger) = self.hydration_logger.clone() else {
+        let Some(logger) = self.compute_logger.clone() else {
             return stream.clone(); // hydration logging disabled
         };
+
+        let export_ids = self.export_ids.clone();
 
         // Convert the dataflow as-of into a frontier we can compare with input frontiers.
         //
@@ -1380,7 +1382,14 @@ where
         let name = format!("LogOperatorHydration ({lir_id})");
         stream.unary_frontier(Pipeline, &name, |_cap, _info| {
             let mut hydrated = false;
-            logger.log(lir_id, hydrated);
+
+            for &export_id in &export_ids {
+                logger.log(&ComputeEvent::OperatorHydration(OperatorHydration {
+                    export_id,
+                    lir_id,
+                    hydrated,
+                }));
+            }
 
             move |input, output| {
                 // Pass through inputs.
@@ -1395,7 +1404,14 @@ where
                 let frontier = input.frontier().frontier();
                 if PartialOrder::less_equal(&hydration_frontier.borrow(), &frontier) {
                     hydrated = true;
-                    logger.log(lir_id, hydrated);
+
+                    for &export_id in &export_ids {
+                        logger.log(&ComputeEvent::OperatorHydration(OperatorHydration {
+                            export_id,
+                            lir_id,
+                            hydrated,
+                        }));
+                    }
                 }
             }
         })

@@ -1953,6 +1953,15 @@ pub static MZ_COMPUTE_HYDRATION_TIMES_PER_WORKER: LazyLock<BuiltinLog> =
         access: vec![PUBLIC_SELECT],
     });
 
+pub static MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES_PER_WORKER: LazyLock<BuiltinLog> =
+    LazyLock::new(|| BuiltinLog {
+        name: "mz_compute_operator_hydration_statuses_per_worker",
+        schema: MZ_INTROSPECTION_SCHEMA,
+        oid: oid::LOG_MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES_PER_WORKER_OID,
+        variant: LogVariant::Compute(ComputeLog::OperatorHydrationStatus),
+        access: vec![PUBLIC_SELECT],
+    });
+
 pub static MZ_ACTIVE_PEEKS_PER_WORKER: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
     name: "mz_active_peeks_per_worker",
     schema: MZ_INTROSPECTION_SCHEMA,
@@ -2304,23 +2313,6 @@ pub static MZ_COMPUTE_DEPENDENCIES: LazyLock<BuiltinSource> = LazyLock::new(|| B
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
-pub static MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES_PER_WORKER: LazyLock<BuiltinSource> =
-    LazyLock::new(|| BuiltinSource {
-        name: "mz_compute_operator_hydration_statuses_per_worker",
-        schema: MZ_INTERNAL_SCHEMA,
-        oid: oid::SOURCE_MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES_PER_WORKER_OID,
-        data_source: IntrospectionType::ComputeOperatorHydrationStatus,
-        desc: RelationDesc::builder()
-            .with_column("object_id", ScalarType::String.nullable(false))
-            .with_column("physical_plan_node_id", ScalarType::UInt64.nullable(false))
-            .with_column("replica_id", ScalarType::String.nullable(false))
-            .with_column("worker_id", ScalarType::UInt64.nullable(false))
-            .with_column("hydrated", ScalarType::Bool.nullable(false))
-            .finish(),
-        column_comments: BTreeMap::new(),
-        is_retained_metrics_object: false,
-        access: vec![PUBLIC_SELECT],
-    });
 
 pub static MZ_DATABASES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_databases",
@@ -8320,19 +8312,21 @@ SELECT * FROM complete_cts",
     access: vec![PUBLIC_SELECT],
 });
 
-pub static MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| {
-    BuiltinView {
+pub static MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES: LazyLock<BuiltinSource> = LazyLock::new(|| {
+    BuiltinSource {
         name: "mz_compute_operator_hydration_statuses",
         schema: MZ_INTERNAL_SCHEMA,
-        oid: oid::VIEW_MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES_OID,
+        oid: oid::SOURCE_MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES_OID,
         desc: RelationDesc::builder()
+            .with_column("replica_id", ScalarType::String.nullable(false))
             .with_column("object_id", ScalarType::String.nullable(false))
             .with_column("physical_plan_node_id", ScalarType::UInt64.nullable(false))
-            .with_column("replica_id", ScalarType::String.nullable(false))
             .with_column("hydrated", ScalarType::Bool.nullable(false))
             .with_key(vec![0, 1, 2])
             .finish(),
+        data_source: IntrospectionType::ComputeOperatorHydrationStatus,
         column_comments: BTreeMap::from_iter([
+            ("replica_id", "The ID of a cluster replica."),
             (
                 "object_id",
                 "The ID of a compute object. Corresponds to `mz_catalog.mz_indexes.id` or `mz_catalog.mz_materialized_views.id`.",
@@ -8341,17 +8335,9 @@ pub static MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES: LazyLock<BuiltinView> = LazyL
                 "physical_plan_node_id",
                 "The ID of a node in the physical plan of the compute object. Corresponds to a `node_id` displayed in the output of `EXPLAIN PHYSICAL PLAN WITH (node identifiers)`.",
             ),
-            ("replica_id", "The ID of a cluster replica."),
             ("hydrated", "Whether the node is hydrated on the replica."),
         ]),
-        sql: "
-SELECT
-    object_id,
-    physical_plan_node_id,
-    replica_id,
-    bool_and(hydrated) AS hydrated
-FROM mz_internal.mz_compute_operator_hydration_statuses_per_worker
-GROUP BY object_id, physical_plan_node_id, replica_id",
+        is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
     }
 });
@@ -13646,6 +13632,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Log(&MZ_COMPUTE_IMPORT_FRONTIERS_PER_WORKER),
         Builtin::Log(&MZ_COMPUTE_ERROR_COUNTS_RAW),
         Builtin::Log(&MZ_COMPUTE_HYDRATION_TIMES_PER_WORKER),
+        Builtin::Log(&MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES_PER_WORKER),
         Builtin::Table(&MZ_KAFKA_SINKS),
         Builtin::Table(&MZ_KAFKA_CONNECTIONS),
         Builtin::Table(&MZ_KAFKA_SOURCES),
@@ -13902,7 +13889,6 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_WALLCLOCK_GLOBAL_LAG_HISTOGRAM),
         Builtin::Source(&MZ_MATERIALIZED_VIEW_REFRESHES),
         Builtin::Source(&MZ_COMPUTE_DEPENDENCIES),
-        Builtin::Source(&MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES_PER_WORKER),
         Builtin::View(&MZ_MATERIALIZATION_DEPENDENCIES),
         Builtin::View(&MZ_MATERIALIZATION_LAG),
         Builtin::View(&MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW),
@@ -13912,7 +13898,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Source(&MZ_COMPUTE_HYDRATION_TIMES),
         Builtin::Log(&MZ_COMPUTE_LIR_MAPPING_PER_WORKER),
         Builtin::View(&MZ_LIR_MAPPING),
-        Builtin::View(&MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES),
+        Builtin::Source(&MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES),
         Builtin::Source(&MZ_CLUSTER_REPLICA_FRONTIERS),
         Builtin::View(&MZ_COMPUTE_HYDRATION_STATUSES),
         Builtin::View(&MZ_HYDRATION_STATUSES),
