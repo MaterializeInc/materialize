@@ -68,27 +68,10 @@ pub const DEFAULT_SNAPSHOT_STATEMENT_TIMEOUT: Duration = Duration::ZERO;
 /// A wrapper for [`tokio_postgres::Client`] that can report the server version.
 pub struct Client {
     inner: tokio_postgres::Client,
-    server_version: Option<String>,
     // Holds a handle to the task with the connection to ensure that when
     // the client is dropped, the task can be aborted to close the connection.
     // This is also useful for maintaining the lifetimes of dependent object (e.g. ssh tunnel).
     _connection_handle: AbortOnDropHandle<()>,
-}
-
-impl Client {
-    /// Reports the value of the `server_version` parameter reported by the
-    /// server.
-    pub fn server_version(&self) -> Option<&str> {
-        self.server_version.as_deref()
-    }
-
-    /// Reports the postgres flavor as indicated by the server version.
-    pub fn server_flavor(&self) -> PostgresFlavor {
-        match self.server_version.as_ref() {
-            Some(v) if v.contains("-YB-") => PostgresFlavor::Yugabyte,
-            _ => PostgresFlavor::Vanilla,
-        }
-    }
 }
 
 impl Deref for Client {
@@ -276,9 +259,6 @@ impl Config {
 
                 let client = Client {
                     inner: client,
-                    server_version: connection
-                        .parameter("server_version")
-                        .map(|v| v.to_string()),
                     _connection_handle: task::spawn(|| task_name, async {
                         if let Err(e) = connection.await {
                             warn!("postgres direct connection failed: {e}");
@@ -319,9 +299,6 @@ impl Config {
 
                 let client = Client {
                     inner: client,
-                    server_version: connection
-                        .parameter("server_version")
-                        .map(|v| v.to_string()),
                     _connection_handle: task::spawn(|| task_name, async {
                         let _tunnel = tunnel; // Keep SSH tunnel alive for duration of connection.
                         if let Err(e) = connection.await {
@@ -369,9 +346,6 @@ impl Config {
 
                 let client = Client {
                     inner: client,
-                    server_version: connection
-                        .parameter("server_version")
-                        .map(|v| v.to_string()),
                     _connection_handle: task::spawn(|| task_name, async {
                         if let Err(e) = connection.await {
                             warn!("postgres AWS link connection failed: {e}");
