@@ -37,6 +37,8 @@ operator:
         credits_per_hour: "0.0"    # N/A for self-managed.
         disk_limit: <string>       # e.g., "93150MiB"
         memory_limit: <string>     # e.g., "46575MiB"
+        selectors: <map>           # k8s label selectors
+        # ex: kubernetes.io/arch: amd64
 ```
 
 {{< yaml-table data="best_practices/sizing_recommendation" >}}
