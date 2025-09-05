@@ -261,14 +261,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                     reader_table_info.len()
             );
 
-            // Nothing needs to be snapshot.
-            if all_outputs.is_empty() {
-                trace!(%id, "no exports to snapshot");
-                // Note we do not emit a `ProgressStatisticsUpdate::Snapshot` update here,
-                // as we do not want to attempt to override the current value with 0. We
-                // just leave it null.
-                return Ok(());
-            }
+
 
             let connection_config = connection
                 .connection
@@ -278,51 +271,57 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                     InTask::Yes,
                 )
                 .await?;
-            let task_name = format!("timely-{worker_id} PG snapshotter");
 
-            let client = if is_snapshot_leader {
+
+            // The snapshot operator is responsible for creating the replication slot(s).
+            // This first slot is the permanent slot that will be used for reading the replication
+            // stream.  A temporary slot is created further on to capture table snapshots.
+            let replication_client = if is_snapshot_leader {
                 let client = connection_config
                     .connect_replication(&config.config.connection_context.ssh_tunnel_manager)
                     .await?;
-
-                // Attempt to export the snapshot by creating the main replication slot. If that
-                // succeeds then there is no need for creating additional temporary slots.
                 let main_slot = &connection.publication_details.slot;
-                let snapshot_info = match export_snapshot(&client, main_slot, false).await {
-                    Ok(info) => info,
-                    Err(err @ TransientError::ReplicationSlotAlreadyExists) => {
-                        match connection.connection.flavor {
-                            // If we're connecting to a vanilla we have the option of exporting a
-                            // snapshot via a temporary slot
-                            PostgresFlavor::Vanilla => {
-                                let tmp_slot = format!(
-                                    "mzsnapshot_{}",
-                                    uuid::Uuid::new_v4()).replace('-', ""
-                                );
-                                export_snapshot(&client, &tmp_slot, true).await?
-                            }
-                            // No salvation for Yugabyte
-                            PostgresFlavor::Yugabyte => return Err(err),
-                        }
-                    }
-                    Err(err) => return Err(err),
-                };
-                trace!(
-                    %id,
-                    "timely-{worker_id} exporting snapshot info {snapshot_info:?}");
-                snapshot_handle.give(&snapshot_cap_set[0], snapshot_info);
 
-                client
+                tracing::info!(%id, "ensuring replication slot {main_slot} exists");
+                super::ensure_replication_slot(&client, main_slot).await?;
+                Some(client)
             } else {
-                // Only the snapshot leader needs a replication connection.
-                connection_config
-                    .connect(
-                        &task_name,
-                        &config.config.connection_context.ssh_tunnel_manager,
-                    )
-                    .await?
+                None
             };
             *slot_ready_cap_set = CapabilitySet::new();
+
+            // Nothing needs to be snapshot.
+            if all_outputs.is_empty() {
+                trace!(%id, "no exports to snapshot");
+                // Note we do not emit a `ProgressStatisticsUpdate::Snapshot` update here,
+                // as we do not want to attempt to override the current value with 0. We
+                // just leave it null.
+                return Ok(());
+            }
+
+            // replication client is only set if this worker is the snapshot leader
+            let client = match replication_client {
+                Some(client) => {
+                    let tmp_slot = format!("mzsnapshot_{}", uuid::Uuid::new_v4()).replace('-', "");
+                    let snapshot_info = export_snapshot(&client, &tmp_slot, true).await?;
+                    trace!(
+                        %id,
+                        "timely-{worker_id} exporting snapshot info {snapshot_info:?}");
+                    snapshot_handle.give(&snapshot_cap_set[0], snapshot_info);
+
+                    client
+                }
+                None => {
+                    // Only the snapshot leader needs a replication connection.
+                    let task_name = format!("timely-{worker_id} PG snapshotter");
+                    connection_config
+                        .connect(
+                            &task_name,
+                            &config.config.connection_context.ssh_tunnel_manager,
+                        )
+                        .await?
+                }
+            };
 
             // Configure statement_timeout based on param. We want to be able to
             // override the server value here in case it's set too low,
