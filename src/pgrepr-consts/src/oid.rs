@@ -90,6 +90,7 @@ pub const TYPE_TSRANGE_OID: u32 = 3908;
 pub const TYPE_TSRANGE_ARRAY_OID: u32 = 3909;
 pub const TYPE_TSTZRANGE_OID: u32 = 3910;
 pub const TYPE_TSTZRANGE_ARRAY_OID: u32 = 3911;
+pub const FUNC_NORMALIZE_OID: u32 = 4350;
 
 /// The first OID in PostgreSQL's system catalog that is not pinned during
 /// bootstrapping.
@@ -110,7 +111,6 @@ pub const FUNC_PG_DIGEST_STRING: u32 = 12001;
 pub const FUNC_PG_DIGEST_BYTES: u32 = 12002;
 pub const FUNC_PG_HMAC_STRING: u32 = 12003;
 pub const FUNC_PG_HMAC_BYTES: u32 = 12004;
-pub const FUNC_NORMALIZE_OID: u32 = 4350;
 
 // Materialize-specific builtin OIDs.
 pub const TYPE_LIST_OID: u32 = 16_384;

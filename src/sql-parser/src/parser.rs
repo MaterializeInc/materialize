@@ -1066,20 +1066,11 @@ impl<'a> Parser<'a> {
         let expr = self.parse_expr()?;
 
         let args = if self.consume_token(&Token::Comma) {
-            // Parse the normalization form (NFC, NFD, NFKC, or NFKD)
-            let form = match self.expect_one_of_keywords(&[NFC, NFD, NFKC, NFKD]) {
-                Ok(kw) => kw.as_str(),
-                Err(_) => {
-                    return self.expected(
-                        self.peek_pos(),
-                        "one of NFC, NFD, NFKC, NFKD",
-                        self.peek_token(),
-                    );
-                }
-            };
+            let form = self
+                .expect_one_of_keywords(&[NFC, NFD, NFKC, NFKD])?
+                .as_str();
             vec![expr, Expr::Value(Value::String(form.to_owned()))]
         } else {
-            // Default to NFC
             vec![expr, Expr::Value(Value::String("NFC".to_owned()))]
         };
 

@@ -596,7 +596,6 @@ message ProtoBinaryFunc {
     google.protobuf.Empty position = 114;
     google.protobuf.Empty right = 115;
     google.protobuf.Empty repeat_string = 116;
-    google.protobuf.Empty normalize = 300;
     google.protobuf.Empty trim = 117;
     google.protobuf.Empty trim_leading = 118;
     google.protobuf.Empty trim_trailing = 119;
@@ -676,6 +675,7 @@ message ProtoBinaryFunc {
     bool array_contains_array = 194;
     google.protobuf.Empty starts_with = 195;
     google.protobuf.Empty get_bit = 196;
+    google.protobuf.Empty normalize = 200;
   }
 }
 

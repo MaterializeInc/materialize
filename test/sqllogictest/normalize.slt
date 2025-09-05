@@ -105,10 +105,10 @@ SELECT normalize(NULL, NFC)
 NULL
 
 # Test invalid form parameter
-statement error db error: ERROR: Expected one of NFC, NFD, NFKC, NFKD, found string literal "INVALID"
+statement error db error: ERROR: Expected one of NFC or NFD or NFKC or NFKD, found string literal "INVALID"
 SELECT normalize('test', 'INVALID')
 
-statement error db error: ERROR: Expected one of NFC, NFD, NFKC, NFKD, found string literal ""
+statement error db error: ERROR: Expected one of NFC or NFD or NFKC or NFKD, found string literal ""
 SELECT normalize('test', '')
 
 # Test with various Unicode characters
