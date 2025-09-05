@@ -24,7 +24,8 @@ from typing import Any
 
 import yaml
 
-from materialize import MZ_ROOT, ci_util, git, spawn
+from materialize import MZ_ROOT, ci_util, git, spawn, ui
+from materialize.docker import mz_image_tag_exists
 from materialize.mzcompose.composition import (
     Composition,
     Service,
@@ -37,7 +38,15 @@ SERVICES = [Testdrive()]
 
 
 def get_tag(tag: str | None) -> str:
-    return tag or f"v{ci_util.get_mz_version()}--pr.g{git.rev_parse('HEAD')}"
+    tag = tag or f"v{ci_util.get_mz_version()}--pr.g{git.rev_parse('HEAD')}"
+    # We have to wait for the image to be tagged
+    if ui.env_is_truthy("CI"):
+        for i in range(60):
+            if mz_image_tag_exists(tag):
+                break
+            print(f"Image tag {tag} missing, retrying in 10s")
+            time.sleep(10)
+    return tag
 
 
 def get_orchestratord_data() -> dict[str, Any]:

@@ -1678,6 +1678,9 @@ class Composition:
 
     def verify_build_profile(self, container: str = "materialized") -> None:
         """Make sure the container is using the same build profile as we have set locally. This is mostly useful to ensure benchmarks compare using the same profile (release vs release, or optimized vs optimized)."""
+        if ui.env_is_truthy("CI_IGNORE_BUILD_PROFILE"):
+            return
+
         image = self.compose["services"][container]["image"]
         labels = json.loads(
             spawn.capture(
@@ -1689,4 +1692,4 @@ class Composition:
             expected_profile = self.repo.rd.profile.name
             assert (
                 build_profile == expected_profile
-            ), f"Expected {image} to be of profile {expected_profile}, but found {build_profile} instead. Consider passing `--release` or `--optimized` to `mzcompose` explicitly."
+            ), f"Expected {image} to be of profile {expected_profile}, but found {build_profile} instead. Consider passing `--release` or `--optimized` to `mzcompose` explicitly. Set CI_IGNORE_BUILD_PROFILE=1 if you don't care about comparability of benchmark results."

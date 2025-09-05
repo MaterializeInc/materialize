@@ -95,7 +95,10 @@ For additional details on mzcompose, consult doc/developer/mzbuild.md.""",
     parser.add_argument(
         "--sanity-restart-mz",
         action="store_true",
-        default=os.getenv("BUILDKITE_TAG", "") != "",
+        # Sanity restarts are rather slow and rarely find a bug, don't run on test pipeline in PRs
+        default=os.getenv("BUILDKITE_PIPELINE_SLUG") != "test"
+        or os.getenv("BUILDKITE_TAG", "") != ""
+        or os.getenv("BUILDKITE_BRANCH") == "main",
         help="Whether to restart Materialized at the end of test cases and tests, enabled by default on release branches",
     )
     parser.add_argument("--ignore-docker-version", action="store_true")

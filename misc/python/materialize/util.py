@@ -209,6 +209,7 @@ FILTERED_ARGS = [
     "confluent-api-secret=",
     "aws-access-key-id=",
     "aws-secret-access-key=",
+    "default-sql-server-password=",
     # Not a secret, but too spammy, filter too
     "CLUSTER_REPLICA_SIZES",
     "cluster-replica-sizes=",
