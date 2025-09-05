@@ -28,15 +28,30 @@ use differential_dataflow::{AsCollection, Collection, Hashable};
 use timely::container::{ContainerBuilder, PushInto};
 use timely::dataflow::channels::pact::{Exchange, ParallelizationContract, Pipeline};
 use timely::dataflow::channels::pushers::Tee;
+use timely::dataflow::channels::pushers::buffer::Session;
 use timely::dataflow::operators::Capability;
 use timely::dataflow::operators::generic::builder_rc::{
     OperatorBuilder as OperatorBuilderRc, OperatorBuilder,
 };
 use timely::dataflow::operators::generic::operator::{self, Operator};
 use timely::dataflow::operators::generic::{InputHandleCore, OperatorInfo, OutputHandleCore};
-use timely::dataflow::{Scope, Stream, StreamCore};
+use timely::dataflow::{Scope, ScopeParent, Stream, StreamCore};
 use timely::progress::{Antichain, Timestamp};
 use timely::{Container, Data, PartialOrder};
+
+/// A session with lifetime `'a` in a scope `G` with a container builder `CB`.
+///
+/// This is a shorthand primarily for the reason of readability.
+pub type SessionFor<'a, G, CB> = Session<
+    'a,
+    <G as ScopeParent>::Timestamp,
+    CB,
+    timely::dataflow::channels::pushers::Counter<
+        <G as ScopeParent>::Timestamp,
+        <CB as ContainerBuilder>::Container,
+        Tee<<G as ScopeParent>::Timestamp, <CB as ContainerBuilder>::Container>,
+    >,
+>;
 
 /// Extension methods for timely [`StreamCore`]s.
 pub trait StreamExt<G, C1>
