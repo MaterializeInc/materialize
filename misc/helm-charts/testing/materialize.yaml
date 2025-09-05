@@ -28,7 +28,7 @@ metadata:
   name: 12345678-1234-1234-1234-123456789012
   namespace: materialize-environment
 spec:
-  environmentdImageRef: materialize/environmentd:v0.156.0-dev.0
+  environmentdImageRef: materialize/environmentd:v0.156.0
   backendSecretName: materialize-backend
   authenticatorKind: None
   #balancerdExternalCertificateSpec:
