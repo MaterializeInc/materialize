@@ -202,7 +202,9 @@ class Action:
             )
         if exe.db.scenario in (Scenario.Kill, Scenario.ZeroDowntimeDeploy):
             # Expected, see database-issues#6156
-            result.extend(["unknown catalog item", "unknown schema", "unknown database"])
+            result.extend(
+                ["unknown catalog item", "unknown schema", "unknown database"]
+            )
         if exe.db.scenario == Scenario.Rename:
             result.extend(["unknown schema", "ambiguous reference to schema name"])
         if materialize.parallel_workload.database.NAUGHTY_IDENTIFIERS:
@@ -339,8 +341,7 @@ class SelectAction(Action):
             if self.rng.choice([True, False]):
                 query += f" WHERE {expression(Boolean, all_columns, self.rng)}"
 
-        if self.rng.choice([True, False]):
-            query += f" LIMIT {self.rng.randint(0, 1000)}"
+        query += f" LIMIT {self.rng.randint(0, 100)}"
 
         rtr = self.rng.choice([True, False])
         if rtr:
@@ -464,7 +465,7 @@ class CopyToS3Action(Action):
             )
         else:
             expressions = "*"
-        query = f"COPY (SELECT {expressions} FROM {obj_name} WHERE {expression(Boolean, obj.columns, self.rng)}) TO 's3://copytos3/{location}' WITH (AWS CONNECTION = aws_conn, FORMAT = '{format}')"
+        query = f"COPY (SELECT {expressions} FROM {obj_name} WHERE {expression(Boolean, obj.columns, self.rng)} LIMIT {self.rng.randint(0, 100)}) TO 's3://copytos3/{location}' WITH (AWS CONNECTION = aws_conn, FORMAT = '{format}')"
 
         exe.execute(query, explainable=False, http=Http.NO, fetch=False)
         return True
@@ -504,6 +505,40 @@ class InsertAction(Action):
         query = f"INSERT INTO {table} ({column_names}) VALUES {all_column_values}"
         exe.execute(query, http=Http.RANDOM)
         table.num_rows += len(column_values)
+        exe.insert_table = table.table_id
+        return True
+
+
+class CopyFromStdinAction(Action):
+    def run(self, exe: Executor) -> bool:
+        table = None
+        if exe.insert_table is not None:
+            for t in exe.db.tables:
+                if t.table_id == exe.insert_table:
+                    table = t
+                    if table.num_rows >= MAX_ROWS:
+                        (
+                            exe.commit()
+                            if self.rng.choice([True, False])
+                            else exe.rollback()
+                        )
+                        table = None
+                    break
+            else:
+                exe.commit() if self.rng.choice([True, False]) else exe.rollback()
+        if not table:
+            tables = [table for table in exe.db.tables if table.num_rows < MAX_ROWS]
+            if not tables:
+                return False
+            table = self.rng.choice(tables)
+
+        values = []
+        max_rows = min(100, MAX_ROWS - table.num_rows)
+        for i in range(self.rng.randrange(1, max_rows + 1)):
+            values.append([column.value(self.rng, False) for column in table.columns])
+        query = f"COPY INTO {table} FROM STDIN"
+        exe.copy(query, values)
+        table.num_rows += len(values)
         exe.insert_table = table.table_id
         return True
 
@@ -2527,7 +2562,8 @@ fetch_action_list = ActionList(
 
 write_action_list = ActionList(
     [
-        (InsertAction, 50),
+        (InsertAction, 30),
+        (CopyFromStdinAction, 20),
         (SelectOneAction, 1),  # can be mixed with writes
         # (SetClusterAction, 1),  # SET cluster cannot be called in an active transaction
         (HttpPostAction, 5),
