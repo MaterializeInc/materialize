@@ -623,18 +623,20 @@ class Timestamp(DataType):
         in_query: bool = False,
     ) -> Any:
         if rng.randrange(100) == 0:
-            return "TIMESTAMP '1-01-01'"
-        if rng.randrange(100) == 0:
-            return "TIMESTAMP '99999-12-31'"
-
-        return f"TIMESTAMP '{rng.randrange(1, 100000)}-{rng.randrange(1, 13)}-{rng.randrange(1, 29)}'"
+            result = "1-01-01"
+        elif rng.randrange(100) == 0:
+            result = "99999-12-31"
+        else:
+            result = f"{rng.randrange(1, 100000)}-{rng.randrange(1, 13)}-{rng.randrange(1, 29)}"
+        return f"TIMESTAMP '{result}'" if in_query else str(result)
 
     @staticmethod
     def numeric_value(num: int, in_query: bool = False) -> Any:
         day = num % 28
         month = num // 28 % 12
         year = num // 336
-        return f"TIMESTAMP '{year}-{month}-{day}'"
+        result = f"{year}-{month}-{day}"
+        return f"TIMESTAMP '{result}'" if in_query else str(result)
 
     @staticmethod
     def name(backend: Backend = Backend.MATERIALIZE) -> str:
@@ -656,18 +658,20 @@ class MzTimestamp(DataType):
         in_query: bool = False,
     ) -> Any:
         if rng.randrange(100) == 0:
-            return "MZ_TIMESTAMP '1970-01-01'"
-        if rng.randrange(100) == 0:
-            return "MZ_TIMESTAMP '99999-12-31'"
-
-        return f"MZ_TIMESTAMP '{rng.randrange(1970, 100000)}-{rng.randrange(1, 13)}-{rng.randrange(1, 29)}'"
+            result = "1970-01-01"
+        elif rng.randrange(100) == 0:
+            result = "99999-12-31"
+        else:
+            result = f"{rng.randrange(1970, 100000)}-{rng.randrange(1, 13)}-{rng.randrange(1, 29)}"
+        return f"MZ_TIMESTAMP '{result}'" if in_query else result
 
     @staticmethod
     def numeric_value(num: int, in_query: bool = False) -> Any:
         day = num % 28
         month = num // 28 % 12
         year = 1970 + (num // 336)
-        return f"MZ_TIMESTAMP '{year}-{month}-{day}'"
+        result = f"{year}-{month}-{day}"
+        return f"MZ_TIMESTAMP '{result}'" if in_query else result
 
     @staticmethod
     def name(backend: Backend = Backend.MATERIALIZE) -> str:
@@ -684,18 +688,20 @@ class Date(DataType):
         in_query: bool = False,
     ) -> Any:
         if rng.randrange(100) == 0:
-            return "DATE '1-01-01'"
-        if rng.randrange(100) == 0:
-            return "DATE '99999-12-31'"
-
-        return f"DATE '{rng.randrange(1, 100000)}-{rng.randrange(1, 13)}-{rng.randrange(1, 29)}'"
+            result = "1-01-01"
+        elif rng.randrange(100) == 0:
+            result = "99999-12-31"
+        else:
+            result = f"{rng.randrange(1, 100000)}-{rng.randrange(1, 13)}-{rng.randrange(1, 29)}"
+        return f"DATE '{result}'" if in_query else result
 
     @staticmethod
     def numeric_value(num: int, in_query: bool = False) -> Any:
         day = num % 28
         month = num // 28 % 12
         year = num // 336
-        return f"TIME '{year}-{month}-{day}'"
+        result = f"{year}-{month}-{day}"
+        return f"DATE '{result}'" if in_query else result
 
     @staticmethod
     def name(backend: Backend = Backend.MATERIALIZE) -> str:
@@ -715,18 +721,20 @@ class Time(DataType):
         in_query: bool = False,
     ) -> Any:
         if rng.randrange(100) == 0:
-            return "TIME '00:00:00'"
-        if rng.randrange(100) == 0:
-            return "TIME '23:59:59.999999'"
-
-        return f"TIME '{rng.randrange(0, 24)}:{rng.randrange(0, 60)}:{rng.randrange(0, 60)}.{rng.randrange(0, 1000000)}'"
+            result = "00:00:00"
+        elif rng.randrange(100) == 0:
+            result = "23:59:59.999999"
+        else:
+            result = f"{rng.randrange(0, 24)}:{rng.randrange(0, 60)}:{rng.randrange(0, 60)}.{rng.randrange(0, 1000000)}"
+        return f"TIME '{result}'" if in_query else result
 
     @staticmethod
     def numeric_value(num: int, in_query: bool = False) -> Any:
         seconds = num % 60
         minutes = num // 60 % 60
         hours = num // 3600
-        return f"TIME '{hours}:{minutes}:{seconds}'"
+        result = f"{hours}:{minutes}:{seconds}"
+        return f"TIME '{result}'" if in_query else result
 
     @staticmethod
     def name(backend: Backend = Backend.MATERIALIZE) -> str:
@@ -746,24 +754,26 @@ class Interval(DataType):
         in_query: bool = False,
     ) -> Any:
         if rng.randrange(100) == 0:
-            return "INTERVAL '-178956970 years -8 months -2147483648 days -2562047788:00:54.775808'"
-        if rng.randrange(100) == 0:
-            return "INTERVAL '178956970 years 7 months 2147483647 days 2562047788:00:54.775807'"
-
-        if record_size == RecordSize.TINY:
-            return f"INTERVAL '{rng.random():.0f}' MINUTE"
+            result = (
+                "-178956970 years -8 months -2147483648 days -2562047788:00:54.775808"
+            )
+        elif rng.randrange(100) == 0:
+            result = "178956970 years 7 months 2147483647 days 2562047788:00:54.775807"
+        elif record_size == RecordSize.TINY:
+            result = f"{rng.random():.0f} MINUTE"
         elif record_size == RecordSize.SMALL:
-            return f"INTERVAL '{rng.uniform(-100, 100):.0f} days {rng.uniform(-100, 100):.0f} seconds'"
+            result = f"{rng.uniform(-100, 100):.0f} days {rng.uniform(-100, 100):.0f} seconds"
         elif record_size == RecordSize.MEDIUM:
-            return f"INTERVAL '{rng.uniform(-100, 100):.0f} years {rng.uniform(-100, 100):.0f} days {rng.uniform(-100, 100):.0f} seconds'"
+            result = f"{rng.uniform(-100, 100):.0f} years {rng.uniform(-100, 100):.0f} days {rng.uniform(-100, 100):.0f} seconds"
         elif record_size == RecordSize.LARGE:
-            return f"INTERVAL '{rng.uniform(-178956970, 178956970):.0f} years {rng.uniform(-365, 365):.0f} days {rng.uniform(-1000000000, 1000000000):.0f} seconds'"
+            result = f"{rng.uniform(-178956970, 178956970):.0f} years {rng.uniform(-365, 365):.0f} days {rng.uniform(-1000000000, 1000000000):.0f} seconds"
         else:
             raise ValueError(f"Unexpected record size {record_size}")
+        return f"INTERVAL '{result}'" if in_query else result
 
     @staticmethod
     def numeric_value(num: int, in_query: bool = False) -> Any:
-        return f"INTERVAL '{num}' MINUTE"
+        return f"INTERVAL '{num}' MINUTE" if in_query else str(num)
 
     @staticmethod
     def name(backend: Backend = Backend.MATERIALIZE) -> str:
