@@ -306,33 +306,20 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
             capture_instance_to_snapshot.clear();
 
             // Resumption point is the minimum LSN that has been observed per capture instance.
-            let resume_lsns:BTreeMap<_, _> = outputs
-                .values()
-                .map(|src_info| {
+            let mut resume_lsns = BTreeMap::new();
+            for src_info in outputs.values() {
+                let resume_lsn = match src_info.resume_upper.as_option() {
+                    Some(lsn) if *lsn != Lsn::minimum() => *lsn,
                     // initial_lsn is the max lsn observed, but the resume lsn
                     // is the next lsn that should be read.  After a snapshot, initial_lsn
                     // has been read, so replication will start at the next available lsn.
-                    let start_lsn = src_info.initial_lsn.increment();
-                    let resume_lsn = src_info.resume_upper
-                        .elements()
-                        .iter()
-                        .map(move |lsn| {
-                            if *lsn == Lsn::minimum() {
-                                start_lsn
-                            } else {
-                                *lsn
-                            }
-                        })
-                        .min()
-                        .expect("resume_upper has at least one value");
-                    (Arc::clone(&src_info.capture_instance), resume_lsn)
-                })
-                .fold(BTreeMap::new(), |mut map, (capture_instance, resume_lsn)| {
-                    map.entry(Arc::clone(&capture_instance))
+                    Some(_) => src_info.initial_lsn.increment(),
+                    None => panic!("resume_upper has at least one value"),
+                };
+                resume_lsns.entry(Arc::clone(&src_info.capture_instance))
                     .and_modify(|existing| *existing = std::cmp::min(*existing, resume_lsn))
                     .or_insert(resume_lsn);
-                    map
-                });
+            }
 
             tracing::info!(%config.id, ?resume_lsns, "timely-{} replication starting", config.worker_id);
             for instance in capture_instances.keys() {
