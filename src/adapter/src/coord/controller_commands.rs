@@ -1698,17 +1698,11 @@ impl ObjectState {
                 }
             }
             _ => {
-                tracing::warn!(
-                    ?self,
-                    ?diff,
-                    "unexpected command type when absorbing cluster update"
-                );
-                return;
+                panic!("Unexpected command type for {:?}: Cluster {:?}", self, diff);
             }
         };
 
         if let Err(e) = state.transition(cluster.clone(), Some(cluster.name), diff) {
-            tracing::error!(error = %e, ?diff, "invalid state transition for cluster");
             panic!("invalid state transition for cluster: {}", e);
         }
     }
@@ -1730,18 +1724,15 @@ impl ObjectState {
                 }
             }
             _ => {
-                tracing::warn!(
-                    ?self,
-                    ?diff,
-                    "unexpected command type when absorbing cluster replica update"
+                panic!(
+                    "Unexpected command type for {:?}: ClusterReplica {:?}",
+                    self, diff
                 );
-                return;
             }
         };
 
         if let Err(e) = state.transition(cluster_replica.clone(), Some(cluster_replica.name), diff)
         {
-            tracing::error!(error = %e, ?diff, "invalid state transition for cluster replica");
             panic!("invalid state transition for cluster replica: {}", e);
         }
     }
