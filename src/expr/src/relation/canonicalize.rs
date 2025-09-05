@@ -86,7 +86,7 @@ pub fn canonicalize_equivalences<'a, I>(
                         expressions_rewritten = true;
                     }
                 });
-                popped_expr.reduce(&column_types);
+                popped_expr.reduce::<true>(&column_types);
                 new_equivalence.push((rank_complexity(&popped_expr), popped_expr));
             }
             new_equivalence.sort();
@@ -224,7 +224,9 @@ pub fn canonicalize_predicates(predicates: &mut Vec<MirScalarExpr>, column_types
     );
 
     // 1) Reduce each individual predicate.
-    predicates.iter_mut().for_each(|p| p.reduce(column_types));
+    predicates
+        .iter_mut()
+        .for_each(|p| p.reduce::<true>(column_types));
 
     // 2) Split "A and B" into two predicates: "A" and "B"
     // Relies on the `reduce` above having flattened nested ANDs.
@@ -432,7 +434,7 @@ fn replace_subexpr_and_reduce(
         },
     );
     if changed {
-        predicate.reduce(column_types);
+        predicate.reduce::<true>(column_types);
     }
     changed
 }

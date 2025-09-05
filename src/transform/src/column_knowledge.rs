@@ -805,7 +805,7 @@ fn optimize(
                 MirScalarExpr::CallUnary { func, expr: _ } => {
                     let knowledge = knowledge_stack.pop().unwrap();
                     if matches!(&knowledge, DatumKnowledge::Lit { .. }) {
-                        e.reduce(column_types);
+                        e.reduce::<true>(column_types);
                     } else if func == &UnaryFunc::IsNull(func::IsNull) && !knowledge.nullable() {
                         *e = MirScalarExpr::literal_false();
                     };
@@ -822,7 +822,7 @@ fn optimize(
                         matches!(knowledge1, DatumKnowledge::Lit { .. }),
                         matches!(knowledge2, DatumKnowledge::Lit { .. }),
                     ] {
-                        e.reduce(column_types);
+                        e.reduce::<true>(column_types);
                     }
                     DatumKnowledge::from(&*e)
                 }
@@ -833,7 +833,7 @@ fn optimize(
                         .drain(knowledge_stack.len() - exprs.len()..)
                         .any(|k| matches!(k, DatumKnowledge::Lit { .. }))
                     {
-                        e.reduce(column_types);
+                        e.reduce::<true>(column_types);
                     }
                     DatumKnowledge::from(&*e)
                 }
