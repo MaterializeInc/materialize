@@ -72,7 +72,7 @@ yamllint==1.37.1
 confluent-kafka==2.6.1
 fastavro==1.12.0
 websocket-client==1.8.0
-pyarrow-stubs==19.4
+pyarrow-stubs==20.0.0.20250825
 # macOS x86-64 agent doesn't support pyarrow 20.0 currently, only upgrade once fixed or we get rid of it
 pyarrow==19.0.1
 minio==7.2.15
