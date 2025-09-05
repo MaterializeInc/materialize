@@ -10,7 +10,7 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.98"
+anyhow = "1.0.99"
 array-concat = "0.5.5"
 aws-sdk-sts = { version = "1.41.0", default-features = false, features = [
     "rt-tokio",
