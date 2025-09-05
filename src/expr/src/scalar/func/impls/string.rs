@@ -910,7 +910,7 @@ pub fn normalize_with_form<'a>(
     temp_storage: &'a RowArena,
 ) -> Result<Datum<'a>, EvalError> {
     use unicode_normalization::UnicodeNormalization;
-    
+
     let text = text.unwrap_str();
     let form_str = form_str.unwrap_str();
 
