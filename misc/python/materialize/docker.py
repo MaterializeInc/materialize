@@ -34,14 +34,14 @@ def image_of_release_version_exists(version: MzVersion) -> bool:
     if version.is_dev_version():
         raise ValueError(f"Version {version} is a dev version, not a release version")
 
-    return _mz_image_tag_exists(release_version_to_image_tag(version))
+    return mz_image_tag_exists(release_version_to_image_tag(version))
 
 
 def image_of_commit_exists(commit_hash: str) -> bool:
-    return _mz_image_tag_exists(commit_to_image_tag(commit_hash))
+    return mz_image_tag_exists(commit_to_image_tag(commit_hash))
 
 
-def _mz_image_tag_exists(image_tag: str) -> bool:
+def mz_image_tag_exists(image_tag: str) -> bool:
     image_name = f"materialize/materialized:{image_tag}"
 
     if image_name in EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK:

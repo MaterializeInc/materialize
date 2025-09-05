@@ -27,7 +27,7 @@ SERVICES = [
     Minio(),
     PolarisBootstrap(),
     Polaris(),
-    Materialized(depends_on=["polaris", "minio"]),
+    Materialized(depends_on=["polaris", "minio"], sanity_restart=False),
     Testdrive(),
     Mc(),
 ]

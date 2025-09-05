@@ -113,6 +113,7 @@ class SourceErrors(Check):
                 # rewrite this test to look at mz_source_status_history
                 # instead, which contains the full history.
                 """
+                $ set-sql-timeout duration=120s
                 > SELECT
                         coalesce(bool_and(error ~* 'publication .+ does not exist'), true) as matches,
                         bool_and(status IN ('stalled', 'created', 'paused')) as is_stalled

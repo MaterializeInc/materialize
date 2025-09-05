@@ -303,11 +303,7 @@ class Materialized(Service):
                 limits["cpus"] = cpu
             config["deploy"] = {"resources": {"limits": limits}}
 
-        # Sanity restarts are rather slow and rarely find a bug, running them
-        # on main and releases is enough to prevent regressions.
-        if sanity_restart and (
-            os.getenv("BUILDKITE_BRANCH") == "main" or os.getenv("BUILDKITE_TAG")
-        ):
+        if sanity_restart:
             # Workaround for https://github.com/docker/compose/issues/11133
             config["labels"] = {"sanity_restart": True}
 
