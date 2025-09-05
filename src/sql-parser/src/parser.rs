@@ -1055,12 +1055,12 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    // Parse calls to normalize(), which can take the form:
-    // - normalize('string')
-    // - normalize('string', NFC)
-    // - normalize('string', NFD)
-    // - normalize('string', NFKC)
-    // - normalize('string', NFKD)
+    /// Parse calls to normalize(), which can take the form:
+    /// - normalize('string')
+    /// - normalize('string', NFC)
+    /// - normalize('string', NFD)
+    /// - normalize('string', NFKC)
+    /// - normalize('string', NFKD)
     fn parse_normalize_expr(&mut self) -> Result<Expr<Raw>, ParserError> {
         self.expect_token(&Token::LParen)?;
         let expr = self.parse_expr()?;
