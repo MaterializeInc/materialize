@@ -105,14 +105,35 @@ postgresql://{{ .Values.metadatadb.username }}:{{ .Values.metadatadb.password }}
 Helper template to process cluster sizes based on storage class configuration
 */}}
 {{- define "materialize.processClusterSizes" -}}
-{{- $result := dict }}
-{{- range $size, $config := .Values.operator.clusters.sizes }}
-{{- $newConfig := deepCopy $config }}
-{{- if not $.Values.storage.storageClass.name }}
-{{- $_ := set $newConfig "disk_limit" "0" }}
-{{- end }}
-{{- $_ := set $newConfig "is_cc" true }}
-{{- $_ := set $result $size $newConfig }}
-{{- end }}
-{{- $result | toYaml }}
+    {{- $result := dict }}
+
+    {{- range $size, $config := .Values.operator.clusters.sizes }}
+        {{- $newConfig := deepCopy $config }}
+
+        {{- if or (not $.Values.storage.storageClass.name) $.Values.operator.clusters.swap_enabled }}
+            {{- $_ := set $newConfig "disk_limit" "0" }}
+        {{- end }}
+
+        {{- if and ($.Values.operator.clusters.swap_enabled) (not (index $newConfig "swap_enabled")) }}
+            {{- $_ := set $newConfig "swap_enabled" true }}
+        {{- end }}
+
+        {{- if (not (index $newConfig "selectors")) }}
+            {{- $_ := set $newConfig "selectors" dict }}
+        {{- end }}
+        {{- if $newConfig.swap_enabled }}
+            {{- if $.Values.clusterd.swapNodeSelector }}
+                {{- $_ := merge $newConfig.selectors $.Values.clusterd.swapNodeSelector }}
+            {{- end }}
+        {{- else if $.Values.storage.storageClass.name }}
+            {{- if $.Values.clusterd.scratchfsNodeSelector }}
+                {{- $_ := merge $newConfig.selectors $.Values.clusterd.scratchfsNodeSelector }}
+            {{- end }}
+        {{- end }}
+
+        {{- $_ := set $newConfig "is_cc" true }}
+        {{- $_ := set $result $size $newConfig }}
+    {{- end }}
+
+    {{- $result | toYaml }}
 {{- end }}

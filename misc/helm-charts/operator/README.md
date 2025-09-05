@@ -112,7 +112,9 @@ The following table lists the configurable parameters of the Materialize operato
 | `balancerd.nodeSelector` | Node selector to use for balancerd pods spawned by the operator | ``nil`` |
 | `balancerd.tolerations` | Tolerations to use for balancerd pods spawned by the operator | ``nil`` |
 | `clusterd.affinity` | Affinity to use for clusterd pods spawned by the operator | ``nil`` |
-| `clusterd.nodeSelector` | Node selector to use for clusterd pods spawned by the operator | ``nil`` |
+| `clusterd.nodeSelector` | Node selector to use for all clusterd pods spawned by the operator | ``nil`` |
+| `clusterd.scratchfsNodeSelector` | Additional node selector to use for clusterd pods when using an LVM scratch disk. This will be merged with the values in `nodeSelector`. | ``{"materialize.cloud/disk":"true","materialize.cloud/scratch-fs":"true"}`` |
+| `clusterd.swapNodeSelector` | Additional node selector to use for clusterd pods when using swap. This will be merged with the values in `nodeSelector`. | ``{"materialize.cloud/disk":"true","materialize.cloud/swap":"true"}`` |
 | `clusterd.tolerations` | Tolerations to use for clusterd pods spawned by the operator | ``nil`` |
 | `console.affinity` | Affinity to use for console pods spawned by the operator | ``nil`` |
 | `console.enabled` | Flag to indicate whether to create console pods for the environments | ``true`` |
@@ -150,6 +152,7 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.clusters.defaultSizes.probe` |  | ``"mz_probe"`` |
 | `operator.clusters.defaultSizes.support` |  | ``"25cc"`` |
 | `operator.clusters.defaultSizes.system` |  | ``"25cc"`` |
+| `operator.clusters.swap_enabled` |  | ``true`` |
 | `operator.image.pullPolicy` | Policy for pulling the image: "IfNotPresent" avoids unnecessary re-pulling of images | ``"IfNotPresent"`` |
 | `operator.image.repository` | The Docker repository for the operator image | ``"materialize/orchestratord"`` |
 | `operator.image.tag` | The tag/version of the operator image to be used | ``"v0.156.0"`` |
