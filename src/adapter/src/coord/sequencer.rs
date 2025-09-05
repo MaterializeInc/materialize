@@ -66,7 +66,8 @@ use crate::util::ClientTransmitter;
 // - Methods that continue the execution of some plan that was being run asynchronously, such as
 // `sequence_peek_stage` and `sequence_create_connection_stage_finish`.
 
-mod inner;
+////////// todo: can we avoid pub?
+pub(crate) mod inner;
 
 impl Coordinator {
     /// BOXED FUTURE: As of Nov 2023 the returned Future from this function was 34KB. This would

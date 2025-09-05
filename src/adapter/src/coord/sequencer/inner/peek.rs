@@ -840,12 +840,10 @@ impl Coordinator {
 
         self.emit_optimizer_notices(&*session, &df_meta.optimizer_notices);
 
-        let target_cluster = self.catalog().get_cluster(cluster_id);
-
-        let features = OptimizerFeatures::from(self.catalog().system_config())
-            .override_from(&target_cluster.config.features());
-
         if let Some(trace) = plan_insights_optimizer_trace {
+            let target_cluster = self.catalog().get_cluster(cluster_id);
+            let features = OptimizerFeatures::from(self.catalog().system_config())
+                .override_from(&target_cluster.config.features());
             let insights = trace
                 .into_plan_insights(
                     &features,

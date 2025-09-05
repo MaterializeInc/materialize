@@ -79,7 +79,7 @@ use crate::protocol::command::{ComputeParameters, PeekTarget};
 use crate::protocol::response::{PeekResponse, SubscribeBatch};
 use crate::service::{ComputeClient, ComputeGrpcClient};
 
-mod instance;
+pub mod instance;
 mod introspection;
 mod replica;
 mod sequential_hydration;
@@ -177,7 +177,7 @@ impl PeekNotification {
 
 /// A controller for the compute layer.
 pub struct ComputeController<T: ComputeControllerTimestamp> {
-    instances: BTreeMap<ComputeInstanceId, InstanceState<T>>,
+    pub instances: BTreeMap<ComputeInstanceId, InstanceState<T>>,
     /// A map from an instance ID to an arbitrary string that describes the
     /// class of the workload that compute instance is running (e.g.,
     /// `production` or `staging`).
@@ -937,7 +937,7 @@ where
                 result_desc,
                 finishing,
                 map_filter_project,
-                read_hold,
+                Some(read_hold),
                 target_replica,
                 peek_response_tx,
             )
@@ -1081,8 +1081,8 @@ where
 }
 
 #[derive(Debug)]
-struct InstanceState<T: ComputeControllerTimestamp> {
-    client: instance::Client<T>,
+pub struct InstanceState<T: ComputeControllerTimestamp> {
+    pub client: instance::Client<T>,
     replicas: BTreeSet<ReplicaId>,
     collections: BTreeMap<GlobalId, Collection<T>>,
 }
@@ -1120,19 +1120,7 @@ impl<T: ComputeControllerTimestamp> InstanceState<T> {
         F: FnOnce(&mut Instance<T>) -> R + Send + 'static,
         R: Send + 'static,
     {
-        let (tx, rx) = oneshot::channel();
-        let otel_ctx = OpenTelemetryContext::obtain();
-        self.client
-            .send(Box::new(move |instance| {
-                let _span = debug_span!("instance::call_sync").entered();
-                otel_ctx.attach_as_parent();
-
-                let result = f(instance);
-                let _ = tx.send(result);
-            }))
-            .expect("instance not dropped");
-
-        rx.await.expect("instance not dropped")
+        self.client.call_sync(f).await
     }
 
     /// Acquires a [`ReadHold`] for the identified compute collection.
