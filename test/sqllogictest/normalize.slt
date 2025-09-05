@@ -19,77 +19,77 @@ SELECT normalize('é')
 
 # Test NFC explicitly
 query T
-SELECT normalize('é', 'NFC')
+SELECT normalize('é', NFC)
 ----
 é
 
 # Test NFD (decomposed form)
 # The é becomes e + combining acute accent
 query T
-SELECT normalize('é', 'NFD') = E'e\u0301'
+SELECT normalize('é', NFD) = E'e\u0301'
 ----
 true
 
 # Test NFKC - compatibility transformations
 # Ligatures should be decomposed
 query T
-SELECT normalize('ﬁ', 'NFKC')
+SELECT normalize('ﬁ', NFKC)
 ----
 fi
 
 query T
-SELECT normalize('ﬀ', 'NFKC')
+SELECT normalize('ﬀ', NFKC)
 ----
 ff
 
 # Test NFKD - compatibility decomposition without recomposition
 query T
-SELECT normalize('ﬁ', 'NFKD')
+SELECT normalize('ﬁ', NFKD)
 ----
 fi
 
 # Demonstrate NFC vs NFKC difference
 # Superscript 2 (U+00B2) normalizes differently
 query T
-SELECT normalize('x²', 'NFC')
+SELECT normalize('x²', NFC)
 ----
 x²
 
 query T
-SELECT normalize('x²', 'NFKC')
+SELECT normalize('x²', NFKC)
 ----
 x2
 
 # Full-width forms (common in Japanese text)
 query T
-SELECT normalize('Ａ', 'NFC')  -- Full-width A (U+FF21)
+SELECT normalize('Ａ', NFC)  -- Full-width A (U+FF21)
 ----
 Ａ
 
 query T
-SELECT normalize('Ａ', 'NFKC')  -- Should become regular A
+SELECT normalize('Ａ', NFKC)  -- Should become regular A
 ----
 A
 
 # Roman numerals compatibility
 query T
-SELECT normalize('Ⅻ', 'NFC')  -- Roman numeral XII (U+216B)
+SELECT normalize('Ⅻ', NFC)  -- Roman numeral XII (U+216B)
 ----
 Ⅻ
 
 query T
-SELECT normalize('Ⅻ', 'NFKC')
+SELECT normalize('Ⅻ', NFKC)
 ----
 XII
 
 # Test case insensitivity of form parameter
 query T
-SELECT normalize('é', 'nfc')
+SELECT normalize('é', nfc)
 ----
 é
 
 query T
-SELECT normalize('é', 'Nfd') = E'e\u0301'
+SELECT normalize('é', Nfd) = E'e\u0301'
 ----
 true
 
@@ -100,20 +100,15 @@ SELECT normalize(NULL)
 NULL
 
 query T
-SELECT normalize(NULL, 'NFC')
-----
-NULL
-
-query T
-SELECT normalize('test', NULL)
+SELECT normalize(NULL, NFC)
 ----
 NULL
 
 # Test invalid form parameter
-statement error expected one of: NFC, NFD, NFKC, NFKD
+statement error db error: ERROR: Expected one of NFC, NFD, NFKC, NFKD, found string literal "INVALID"
 SELECT normalize('test', 'INVALID')
 
-statement error expected one of: NFC, NFD, NFKC, NFKD
+statement error db error: ERROR: Expected one of NFC, NFD, NFKC, NFKD, found string literal ""
 SELECT normalize('test', '')
 
 # Test with various Unicode characters
@@ -123,7 +118,7 @@ SELECT normalize('Å')
 Å
 
 query T
-SELECT normalize('Å', 'NFD') = E'A\u030A'
+SELECT normalize('Å', NFD) = E'A\u030A'
 ----
 true
 
@@ -137,18 +132,18 @@ SELECT normalize('한글', NFC)
 
 # Korean decomposed form should be different
 query T
-SELECT normalize('한글', NFC) = normalize('한글', 'NFD')
+SELECT normalize('한글', NFC) = normalize('한글', NFD)
 ----
 false
 
 # Test that NFD actually decomposes Korean
 query T
-SELECT length(normalize('한글', 'NFC'))
+SELECT length(normalize('한글', NFC))
 ----
 2
 
 query T
-SELECT length(normalize('한글', 'NFD'))
+SELECT length(normalize('한글', NFD))
 ----
 6
 
@@ -159,7 +154,7 @@ SELECT normalize('hello world')
 hello world
 
 query T
-SELECT normalize('hello world', 'NFD')
+SELECT normalize('hello world', NFD)
 ----
 hello world
 
@@ -167,11 +162,13 @@ hello world
 query T
 SELECT normalize('')
 ----
+(empty)
 
 
 query T
-SELECT normalize('', 'NFKC')
+SELECT normalize('', NFKC)
 ----
+(empty)
 
 
 # Test with table data
@@ -194,7 +191,7 @@ SELECT id, normalize(text) FROM test_normalize ORDER BY id
 4  Å
 
 query IT
-SELECT id, normalize(text, 'NFKC') FROM test_normalize ORDER BY id
+SELECT id, normalize(text, NFKC) FROM test_normalize ORDER BY id
 ----
 1  café
 2  file
