@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import copy
 import datetime
 import json
 import random
@@ -72,7 +73,11 @@ from materialize.parallel_workload.database import (
 )
 from materialize.parallel_workload.executor import Executor, Http
 from materialize.parallel_workload.expression import ExprKind, expression
-from materialize.parallel_workload.settings import Complexity, Scenario
+from materialize.parallel_workload.settings import (
+    ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS,
+    Complexity,
+    Scenario,
+)
 from materialize.sqlsmith import known_errors
 
 if TYPE_CHECKING:
@@ -1937,11 +1942,7 @@ class KillAction(Action):
     ):
         super().__init__(rng, composition)
         self.system_param_fn = system_param_fn
-        self.system_parameters = {
-            "memory_limiter_interval": "0",
-            # TODO: Remove when https://github.com/MaterializeInc/database-issues/issues/9656 is fixed
-            "persist_stats_audit_percent": "0",
-        }
+        self.system_parameters = copy.deepcopy(ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS)
         self.azurite = azurite
         self.sanity_restart = sanity_restart
 
@@ -2011,11 +2012,7 @@ class ZeroDowntimeDeployAction(Action):
                 healthcheck=LEADER_STATUS_HEALTHCHECK,
                 metadata_store="cockroach",
                 default_replication_factor=1,
-                additional_system_parameter_defaults={
-                    "memory_limiter_interval": "0",
-                    # TODO: Remove when https://github.com/MaterializeInc/database-issues/issues/9656 is fixed
-                    "persist_stats_audit_percent": "0",
-                },
+                additional_system_parameter_defaults=ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS,
             ),
         ):
             self.composition.up(mz_service, detach=True)
