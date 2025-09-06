@@ -1834,7 +1834,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
-              args: [--runtime=1500, --threads=8]
+              args: [--runtime=1500, --threads=16]
 
       - id: parallel-workload-ddl-only
         label: "Parallel Workload (DDL Only)"
@@ -1908,7 +1908,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
-              args: [--runtime=1500, --scenario=kill, --threads=8]
+              args: [--runtime=1500, --scenario=kill, --threads=16]
 
       - id: parallel-workload-backup-restore
         label: "Parallel Workload (backup & restore)"
