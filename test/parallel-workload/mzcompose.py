@@ -40,7 +40,11 @@ from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
 from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.parallel_workload.parallel_workload import parse_common_args, run
-from materialize.parallel_workload.settings import Complexity, Scenario
+from materialize.parallel_workload.settings import (
+    ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS,
+    Complexity,
+    Scenario,
+)
 
 SERVICES = [
     Cockroach(setup_materialize=True, in_memory=True),
@@ -111,11 +115,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             ports=["6975:6875", "6976:6876", "6977:6877"],
             sanity_restart=sanity_restart,
             default_replication_factor=1,
-            additional_system_parameter_defaults={
-                "memory_limiter_interval": "0",
-                # TODO: Remove when https://github.com/MaterializeInc/database-issues/issues/9656 is fixed
-                "persist_stats_audit_percent": "0",
-            },
+            additional_system_parameter_defaults=ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS,
         ),
         Toxiproxy(seed=random.randrange(2**63)),
     ):
