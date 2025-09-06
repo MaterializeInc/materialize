@@ -349,7 +349,7 @@ Explained Query:
   →Return
     →Map/Filter/Project
       Project: #2
-      Map: abs((#0{"?column?"} - #1{"?column?"}))
+      Map: abs((#0 - #1))
         →Union
           →Unarranged Raw Stream
             →Arranged l0
@@ -396,7 +396,7 @@ Explained Query:
   Return
     Mfp
       project=(#2)
-      map=(abs((#0{"?column?"} - #1{"?column?"})))
+      map=(abs((#0 - #1)))
       Union
         ArrangeBy
           input_key=[]
@@ -432,7 +432,7 @@ SELECT abs(min(a) - max(a)) FROM t GROUP BY b
 Explained Query:
   →Map/Filter/Project
     Project: #3
-    Map: abs((#1{"?column?"} - #2{"?column?"}))
+    Map: abs((#1 - #2))
       →Consolidating Monotonic GroupAggregate
         Aggregations: min, max
         Key:

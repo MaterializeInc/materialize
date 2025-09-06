@@ -1186,7 +1186,11 @@ impl HumanizerMode for HumanizedExplain {
 
     /// Write `#c{ident}`.
     fn humanize_ident(col: usize, ident: Ident, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "#{col}{{{ident}}}")
+        if ident.as_str() == "?column?" {
+            write!(f, "#{col}")
+        } else {
+            write!(f, "#{col}{{{ident}}}")
+        }
     }
 }
 
@@ -1231,14 +1235,7 @@ where
                 M::humanize_ident(*self.expr.0, ident, f)
             }
             // We don't have name inferred for this column.
-            _ => {
-                // Don't show dummy column names.
-                if self.expr.1.as_ref() == "\"?column?\"" {
-                    write!(f, "#{}", self.expr.0)
-                } else {
-                    M::humanize_ident(*self.expr.0, Ident::new_unchecked(self.expr.1.as_ref()), f)
-                }
-            }
+            _ => M::humanize_ident(*self.expr.0, Ident::new_unchecked(self.expr.1.as_ref()), f),
         }
     }
 }

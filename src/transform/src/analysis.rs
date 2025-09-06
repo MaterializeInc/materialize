@@ -999,7 +999,7 @@ mod column_names {
                 Self::Global(..) | Self::Aggregate(..) | Self::Annotated(..) => self.clone(),
                 Self::Unknown => name
                     .as_ref()
-                    .filter(|name| name.as_ref() != "\"?column?\"")
+                    .filter(|name| name.as_ref() != "?column?")
                     .map_or_else(|| Self::Unknown, |name| Self::Annotated(Arc::clone(name))),
             }
         }

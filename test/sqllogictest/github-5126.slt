@@ -78,7 +78,7 @@ Return // { arity: 3 }
       Join on=(#1 = #3) // { arity: 7 }
         Get l0 // { arity: 3 }
         Project (#0, #3..=#5) // { arity: 4 }
-          Map ((#3{"?column?"} * 2)) // { arity: 6 }
+          Map ((#3 * 2)) // { arity: 6 }
             Project (#0..=#2, #7, #8) // { arity: 5 }
               Map ((#0{f2} * #1{f2}), #6) // { arity: 9 }
                 Join on=(#0 = #3 AND #1 = #4 AND #2 = #5) // { arity: 7 }
