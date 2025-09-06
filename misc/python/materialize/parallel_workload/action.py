@@ -515,6 +515,16 @@ class InsertAction(Action):
 
 
 class CopyFromStdinAction(Action):
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        result = super().errors_to_ignore(exe)
+        if exe.db.complexity == Complexity.DDL:
+            result.extend(
+                [
+                    "COPY FROM's target table was dropped",
+                ]
+            )
+        return result
+
     def run(self, exe: Executor) -> bool:
         table = None
         if exe.insert_table is not None:
