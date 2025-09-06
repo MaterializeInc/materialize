@@ -279,6 +279,7 @@ class SelectAction(Action):
                 "in the same timedomain",
                 'is not allowed from the "mz_catalog_server" cluster',
                 "timed out before ingesting the source's visible frontier when real-time-recency query issued",
+                "unexpected panic during query optimization: The fast_path_optimizer shouldn't make a fast path plan slow path",  # TODO: Remove when https://github.com/MaterializeInc/database-issues/issues/9645 is fixed
             ]
         )
         if exe.db.complexity == Complexity.DDL:
