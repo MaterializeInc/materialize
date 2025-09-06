@@ -269,8 +269,16 @@ trufflehog_jq_filter_common() {
       .Raw != "d3aa325086974cdfb3912f28e5a8c168" and
       .Raw != "jdbc:postgresql://postgres:5432/postgres" and
       .Raw != "RPSsql12345" and
+      .Raw != "RPSsql1234" and
+      .Raw != "RPSsql123" and
+      .Raw != "RPSsql12" and
+      .Raw != "RPSsql1" and
       .Raw != "RPSsql" and
-      .Raw != "RPSsq"
+      .Raw != "RPSsq" and
+      .Raw != "RPSs" and
+      .Raw != "RPS" and
+      .Raw != "RP" and
+      .Raw != "R"
     )'
 }
 
