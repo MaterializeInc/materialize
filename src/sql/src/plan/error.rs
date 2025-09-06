@@ -292,6 +292,7 @@ pub enum PlanError {
     InvalidOffset(String),
     /// The named cursor does not exist.
     UnknownCursor(String),
+    CopyFromTargetTableDropped,
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -821,6 +822,7 @@ impl fmt::Display for PlanError {
             Self::UnknownCursor(name) => {
                 write!(f, "cursor {} does not exist", name.quoted())
             }
+            Self::CopyFromTargetTableDropped => write!(f, "COPY FROM's target table was dropped"),
         }
     }
 }

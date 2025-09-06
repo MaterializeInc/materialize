@@ -246,6 +246,9 @@ statement ok
 CREATE TABLE t2(ts timestamp, x int);
 
 statement ok
+INSERT INTO t2 VALUES ('2024-01-03 00:00:00', 5), ('2024-01-04 00:00:00', 6);
+
+statement ok
 SELECT *
 FROM t2
 WHERE ts + INTERVAL '30' minutes >= mz_now();
@@ -255,6 +258,9 @@ CREATE MATERIALIZED VIEW mv1 AS
 SELECT *
 FROM t2
 WHERE ts + INTERVAL '30' minutes >= mz_now();
+
+statement ok
+SELECT * FROM mv1;
 
 query error db error: ERROR: WHERE clause error: operator does not exist: mz_timestamp \- interval
 SELECT *
@@ -313,14 +319,20 @@ WHERE
   ts + INTERVAL '30' minutes >= mz_now();
 
 statement ok
-SELECT * FROM v_one_off;
+SELECT * FROM v_maintained;
 
 statement ok
 CREATE DEFAULT INDEX ON v_maintained;
 
 statement ok
+SELECT * FROM v_maintained;
+
+statement ok
 CREATE MATERIALIZED VIEW mv2 AS
 SELECT * FROM v_maintained;
+
+statement ok
+SELECT * FROM mv2;
 
 simple
 DECLARE c CURSOR FOR SUBSCRIBE v_maintained;
@@ -337,6 +349,9 @@ FROM t2
 WHERE
   ts + INTERVAL '30' minutes >= mz_now()
   AND x != 7;
+
+statement ok
+SELECT * FROM mv3;
 
 # UNION ALL workaround for OR
 
@@ -363,3 +378,31 @@ UNION ALL
     ts + INTERVAL '30' minutes >= mz_now()
     AND x != 7
 );
+
+statement ok
+SELECT * FROM mv4;
+
+# Regression test for https://github.com/MaterializeInc/database-issues/issues/9643
+# Two different temporal filters on different reads of the same source.
+
+statement ok
+SELECT *
+FROM t2
+WHERE ts + INTERVAL '30' minutes >= mz_now()
+UNION ALL
+SELECT *
+FROM t2
+WHERE ts + INTERVAL '60' minutes >= mz_now();
+
+statement ok
+CREATE MATERIALIZED VIEW mv5 AS
+SELECT *
+FROM t2
+WHERE ts + INTERVAL '30' minutes >= mz_now()
+UNION ALL
+SELECT *
+FROM t2
+WHERE ts + INTERVAL '60' minutes >= mz_now();
+
+statement ok
+SELECT * FROM mv5;

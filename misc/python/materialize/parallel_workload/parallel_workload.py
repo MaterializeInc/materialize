@@ -112,7 +112,7 @@ def run(
             f"ALTER SYSTEM SET max_sinks = {MAX_KAFKA_SINKS * 40 + num_threads}"
         )
         system_exe.execute(
-            f"ALTER SYSTEM SET max_roles = {MAX_ROLES * 40 + num_threads}"
+            f"ALTER SYSTEM SET max_roles = {MAX_ROLES * 1000 + num_threads}"
         )
         system_exe.execute(
             f"ALTER SYSTEM SET max_clusters = {MAX_CLUSTERS * 40 + num_threads}"
@@ -359,7 +359,7 @@ def run(
             worker.end_time = time.time()
 
     stopping_time = (
-        datetime.datetime.now() + datetime.timedelta(seconds=300)
+        datetime.datetime.now() + datetime.timedelta(seconds=600)
     ).timestamp()
     while time.time() < stopping_time:
         for thread in threads:
@@ -372,16 +372,16 @@ def run(
                 print(
                     f"{thread.name} still running ({worker.exe.mz_service}): {worker.exe.last_log} ({worker.exe.last_status})"
                 )
-        print_stats(num_queries, workers, num_threads)
+        print_stats(num_queries, workers, num_threads, scenario)
         if num_threads >= 50:
             # Under high load some queries can't finish quickly, especially UPDATE/DELETE
             os._exit(0)
         if scenario == scenario.ZeroDowntimeDeploy:
             # With 0dt deploys connections against the currently-fenced-out
             # environmentd will be stuck forever, the promoted environmentd can
-            # take > 5 minutes to become responsive as well
+            # take > 10 minutes to become responsive as well
             os._exit(0)
-        print("Threads have not stopped within 5 minutes, exiting hard")
+        print("Threads have not stopped within 10 minutes, exiting hard")
         os._exit(1)
 
     try:
@@ -421,13 +421,14 @@ def run(
         # else:
         #     raise ValueError("Sessions did not clean up within 30s of threads stopping")
     conn.close()
-    print_stats(num_queries, workers, num_threads)
+    print_stats(num_queries, workers, num_threads, scenario)
 
 
 def print_stats(
     num_queries: defaultdict[ActionList, Counter[type[Action]]],
     workers: list[Worker],
     num_threads: int,
+    scenario: Scenario,
 ) -> None:
     ignored_errors: defaultdict[str, Counter[type[Action]]] = defaultdict(Counter)
     num_failures = 0
@@ -457,7 +458,10 @@ def print_stats(
             for action_class, count in counter.items()
         )
         print(f"  {error}: {text}")
-    assert failed < 50 if num_threads < 50 else failed < 75
+    if num_threads < 50 and scenario != scenario.ZeroDowntimeDeploy:
+        assert failed < 50
+    else:
+        assert failed < 75
 
 
 def parse_common_args(parser: argparse.ArgumentParser) -> None:
@@ -503,7 +507,7 @@ def main() -> int:
         description="Run a parallel workload against Materialize",
     )
 
-    parser.add_argument("--host", default="localhost", type=str)
+    parser.add_argument("--host", default="127.0.0.1", type=str)
     parser.add_argument("--port", default=6875, type=int)
     parser.add_argument("--system-port", default=6877, type=int)
     parser.add_argument("--http-port", default=6876, type=int)

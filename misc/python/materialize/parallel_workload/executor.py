@@ -11,7 +11,7 @@ import json
 import random
 import threading
 from enum import Enum
-from typing import TYPE_CHECKING, TextIO
+from typing import TYPE_CHECKING, Any, TextIO
 
 import psycopg
 import requests
@@ -113,6 +113,33 @@ class Executor:
         with lock:
             print(f"[{thread_name}][{self.mz_service}] {msg}", file=logging)
             logging.flush()
+
+    def copy(
+        self,
+        query: str,
+        rows: list[Any],
+        cluster_replica: str | None = None,
+    ) -> None:
+        query += ";"
+        self.log(f"{query} ({rows})")
+
+        try:
+            try:
+                if cluster_replica:
+                    self.cur.execute(
+                        f"SET cluster_replica = {cluster_replica}".encode()
+                    )
+                with self.cur.copy(query.encode()) as copy:
+                    for row in rows:
+                        copy.write_row(row)
+            except Exception as e:
+                raise QueryError(str(e), query)
+
+            self.action_run_since_last_commit_rollback = True
+        finally:
+            self.last_status = "finished"
+            if cluster_replica:
+                self.cur.execute("RESET cluster_replica")
 
     def execute(
         self,
