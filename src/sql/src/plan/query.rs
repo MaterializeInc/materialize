@@ -656,7 +656,8 @@ pub fn plan_copy_from_rows(
 
     // Always copy at the latest version of the table.
     let table = catalog
-        .get_item(&id)
+        .try_get_item(&id)
+        .ok_or_else(|| PlanError::CopyFromTargetTableDropped)?
         .at_version(RelationVersionSelector::Latest);
     let desc = table.desc(&catalog.resolve_full_name(table.name()))?;
 
