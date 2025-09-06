@@ -728,6 +728,27 @@ impl MirScalarExpr {
         )
     }
 
+    /// Checks whether the expression is a standard temporal filter, that is:
+    /// - mz_now() by itself on one side of an Eq | Gt | Gte | Lt | Lte comparison, and
+    /// - no mz_now() anywhere inside the other side of the comparison.
+    ///
+    /// If yes, then it returns the other side of the comparison.
+    pub fn is_temporal_filter(&mut self) -> Option<&mut MirScalarExpr> {
+        use BinaryFunc::*;
+        if let MirScalarExpr::CallBinary { func, expr1, expr2 } = self {
+            if matches!(func, Eq | Gt | Gte | Lt | Lte) {
+                let mz_now = MirScalarExpr::CallUnmaterializable(UnmaterializableFunc::MzNow);
+                if **expr1 == mz_now && !expr2.contains_temporal() {
+                    return Some(expr2);
+                }
+                if **expr2 == mz_now && !expr1.contains_temporal() {
+                    return Some(expr1);
+                }
+            }
+        }
+        None
+    }
+
     #[deprecated = "Use `might_error` instead"]
     pub fn contains_error_if_null(&self) -> bool {
         let mut worklist = vec![self];

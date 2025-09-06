@@ -1490,6 +1490,7 @@ pub fn memoize_expr(
             if let MirScalarExpr::If { cond, .. } = e {
                 return Some(vec![cond]);
             }
+
             // We should not eagerly memoize `COALESCE` expressions after the first,
             // as they are only meant to be evaluated if the preceding expressions
             // evaluate to NULL. We could memoize any preceding by expressions that
@@ -1501,6 +1502,15 @@ pub fn memoize_expr(
             {
                 return Some(exprs.iter_mut().take(1).collect());
             }
+
+            // We should not deconstruct temporal filters, because `MfpPlan::create_from` expects
+            // those to be in a specific form. However, we _should_ attend to the expression that is
+            // on the opposite side of mz_now(), because it might be a complex expression in itself,
+            // and is ok to deconstruct.
+            if let Some(other_side) = e.is_temporal_filter() {
+                return Some(vec![other_side]);
+            }
+
             None
         },
         &mut |e| {
@@ -1520,6 +1530,8 @@ pub fn memoize_expr(
                     }
                 }
                 _ => {
+                    // TODO: OOO (Optimizer Optimization Opportunity):
+                    // we are quadratic in expression size because of this .iter().position
                     if let Some(position) = memoized_parts.iter().position(|e2| e2 == e) {
                         // Any complex expression that already exists as a prior column can
                         // be replaced by a reference to that column.
@@ -1634,6 +1646,7 @@ pub mod util {
 pub mod plan {
     use std::iter;
 
+    use mz_ore::soft_assert_or_log;
     use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
     use mz_repr::{Datum, Diff, Row, RowArena};
     use proptest::prelude::*;
@@ -1842,7 +1855,8 @@ pub mod plan {
                 }
             });
 
-            for predicate in temporal.into_iter() {
+            for mut predicate in temporal.into_iter() {
+                let is_temporal_filter = predicate.is_temporal_filter().is_some(); // for the asserts
                 // Supported temporal predicates are exclusively binary operators.
                 if let MirScalarExpr::CallBinary {
                     mut func,
@@ -1863,6 +1877,10 @@ pub mod plan {
                             BinaryFunc::Gt => BinaryFunc::Lt,
                             BinaryFunc::Gte => BinaryFunc::Lte,
                             x => {
+                                soft_assert_or_log!(
+                                    !is_temporal_filter,
+                                    "MfpPlan::create_from and is_temporal_filter should agree"
+                                );
                                 return Err(format!(
                                     "Unsupported binary temporal operation: {:?}",
                                     x
@@ -1876,6 +1894,10 @@ pub mod plan {
                         || *expr1
                             != MirScalarExpr::CallUnmaterializable(UnmaterializableFunc::MzNow)
                     {
+                        soft_assert_or_log!(
+                            !is_temporal_filter,
+                            "MfpPlan::create_from and is_temporal_filter should agree"
+                        );
                         return Err(format!(
                             "Unsupported temporal predicate. Note: `mz_now()` must be directly compared to a mz_timestamp-castable expression. Expression found: {}",
                             MirScalarExpr::CallBinary { func, expr1, expr2 },
@@ -1913,7 +1935,15 @@ pub mod plan {
                             ));
                         }
                     }
+                    soft_assert_or_log!(
+                        is_temporal_filter, // successfully found a temporal filter
+                        "MfpPlan::create_from and is_temporal_filter should agree"
+                    );
                 } else {
+                    soft_assert_or_log!(
+                        !is_temporal_filter,
+                        "MfpPlan::create_from and is_temporal_filter should agree"
+                    );
                     return Err(format!(
                         "Unsupported temporal predicate. Note: `mz_now()` must be directly compared to a non-temporal expression of mz_timestamp-castable type. Expression found: {}",
                         predicate,
