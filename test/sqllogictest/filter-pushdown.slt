@@ -25,14 +25,17 @@ CREATE TABLE events (
     delete_ms numeric
 );
 
-query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, filter pushdown) AS VERBOSE TEXT FOR
+statement ok
+CREATE MATERIALIZED VIEW mv1 AS
 SELECT count(*)
 FROM events
 WHERE mz_now() >= insert_ms
   AND mz_now() < delete_ms;
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, filter pushdown) AS VERBOSE TEXT FOR MATERIALIZED VIEW mv1
 ----
-Explained Query:
+materialize.public.mv1:
   With
     cte l0 =
       Reduce aggregates=[count(*)]
@@ -58,17 +61,20 @@ Target cluster: quickstart
 
 EOF
 
-query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, filter pushdown) AS VERBOSE TEXT FOR
+statement ok
+CREATE MATERIALIZED VIEW mv2 AS
 SELECT content, insert_ms
 FROM events
 -- The event should appear in only one interval of duration `10000`.
 -- The interval begins here ...
 WHERE mz_now() >= 10000 * (insert_ms / 10000)
 -- ... and ends here.
-  AND mz_now() < 10000 * (1 + insert_ms / 10000)
+  AND mz_now() < 10000 * (1 + insert_ms / 10000);
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, filter pushdown) AS VERBOSE TEXT FOR MATERIALIZED VIEW mv2
 ----
-Explained Query:
+materialize.public.mv2:
   Project (#0{content}, #1{insert_ms})
     Filter (mz_now() >= numeric_to_mz_timestamp((10000 * #3))) AND (mz_now() < numeric_to_mz_timestamp((10000 * (1 + #3))))
       Map ((#1{insert_ms} / 10000))
@@ -83,17 +89,20 @@ Target cluster: quickstart
 
 EOF
 
-query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, filter pushdown) AS VERBOSE TEXT FOR
+statement ok
+CREATE MATERIALIZED VIEW mv3 AS
 SELECT content, insert_ms
 FROM events
 -- The event should appear in `6` intervals each of width `10000`.
 -- The interval begins here ...
 WHERE mz_now() >= 10000 * (insert_ms / 10000)
 -- ... and ends here.
-  AND mz_now() < 6 * (10000 + insert_ms / 10000)
+  AND mz_now() < 6 * (10000 + insert_ms / 10000);
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, filter pushdown) AS VERBOSE TEXT FOR MATERIALIZED VIEW mv3
 ----
-Explained Query:
+materialize.public.mv3:
   Project (#0{content}, #1{insert_ms})
     Filter (mz_now() >= numeric_to_mz_timestamp((10000 * #3))) AND (mz_now() < numeric_to_mz_timestamp((6 * (10000 + #3))))
       Map ((#1{insert_ms} / 10000))
@@ -108,8 +117,8 @@ Target cluster: quickstart
 
 EOF
 
-query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, filter pushdown) AS VERBOSE TEXT FOR
+statement ok
+CREATE MATERIALIZED VIEW mv4 AS
 SELECT content, insert_ms
 FROM events
 -- The event should appear inside the interval that begins at
@@ -117,9 +126,12 @@ FROM events
 -- The interval begins here ..
 WHERE mz_now() >= insert_ms
 -- ... and ends here.
-  AND mz_now() < insert_ms + 30000
+  AND mz_now() < insert_ms + 30000;
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, filter pushdown) AS VERBOSE TEXT FOR MATERIALIZED VIEW mv4
 ----
-Explained Query:
+materialize.public.mv4:
   Project (#0{content}, #1{insert_ms})
     Filter (mz_now() >= numeric_to_mz_timestamp(#1{insert_ms})) AND (mz_now() < numeric_to_mz_timestamp((#1{insert_ms} + 30000)))
       ReadStorage materialize.public.events
@@ -132,14 +144,17 @@ Target cluster: quickstart
 
 EOF
 
-query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, filter pushdown) AS VERBOSE TEXT FOR
+statement ok
+CREATE MATERIALIZED VIEW mv5 AS
 SELECT content, insert_ms, delete_ms
 FROM events
 WHERE mz_now() >= insert_ms + 60000
   AND mz_now() < delete_ms + 60000;
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, filter pushdown) AS VERBOSE TEXT FOR MATERIALIZED VIEW mv5
 ----
-Explained Query:
+materialize.public.mv5:
   Filter (mz_now() < numeric_to_mz_timestamp((#2{delete_ms} + 60000))) AND (mz_now() >= numeric_to_mz_timestamp((#1{insert_ms} + 60000)))
     ReadStorage materialize.public.events
 
@@ -156,13 +171,16 @@ EOF
 # can push down are also associative, so this is moot. Let's at least check that an associative
 # function _does_ report pushdown even when the argument list is long.
 
-query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, filter pushdown) AS VERBOSE TEXT FOR
+statement ok
+CREATE MATERIALIZED VIEW mv6 AS
 SELECT content, insert_ms, delete_ms
 FROM events
 WHERE COALESCE(delete_ms, insert_ms) < mz_now();
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, filter pushdown) AS VERBOSE TEXT FOR MATERIALIZED VIEW mv6
 ----
-Explained Query:
+materialize.public.mv6:
   Filter (mz_now() > numeric_to_mz_timestamp(coalesce(#2{delete_ms}, #1{insert_ms})))
     ReadStorage materialize.public.events
 
@@ -174,8 +192,8 @@ Target cluster: quickstart
 
 EOF
 
-query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, filter pushdown) AS VERBOSE TEXT FOR
+statement ok
+CREATE MATERIALIZED VIEW mv7 AS
 SELECT content, insert_ms, delete_ms
 FROM events
 WHERE mz_now() < delete_ms + 10000
@@ -187,8 +205,11 @@ WHERE mz_now() < delete_ms + 10000
   AND mz_now() < delete_ms + 70000
   AND mz_now() < delete_ms + 80000
   AND mz_now() < delete_ms + 90000;
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, filter pushdown) AS VERBOSE TEXT FOR MATERIALIZED VIEW mv7
 ----
-Explained Query:
+materialize.public.mv7:
   Filter (mz_now() < numeric_to_mz_timestamp((#2{delete_ms} + 10000))) AND (mz_now() < numeric_to_mz_timestamp((#2{delete_ms} + 20000))) AND (mz_now() < numeric_to_mz_timestamp((#2{delete_ms} + 30000))) AND (mz_now() < numeric_to_mz_timestamp((#2{delete_ms} + 40000))) AND (mz_now() < numeric_to_mz_timestamp((#2{delete_ms} + 50000))) AND (mz_now() < numeric_to_mz_timestamp((#2{delete_ms} + 60000))) AND (mz_now() < numeric_to_mz_timestamp((#2{delete_ms} + 70000))) AND (mz_now() < numeric_to_mz_timestamp((#2{delete_ms} + 80000))) AND (mz_now() < numeric_to_mz_timestamp((#2{delete_ms} + 90000)))
     ReadStorage materialize.public.events
 
@@ -229,13 +250,16 @@ EOF
 # Verify that try_parse_monotonic_iso8601_timestamp gets pushdown (the whole
 # point of that func)
 
-query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, filter pushdown) AS VERBOSE TEXT FOR
+statement ok
+CREATE MATERIALIZED VIEW mv8 AS
 SELECT content, inserted_at
 FROM events_timestamped
 WHERE mz_now() < try_parse_monotonic_iso8601_timestamp(content);
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, filter pushdown) AS VERBOSE TEXT FOR MATERIALIZED VIEW mv8
 ----
-Explained Query:
+materialize.public.mv8:
   Project (#0{content}, #1{inserted_at})
     Filter (mz_now() < timestamp_to_mz_timestamp(try_parse_monotonic_iso8601_timestamp(#0{content})))
       ReadStorage materialize.public.events_timestamped
@@ -308,15 +332,18 @@ Target cluster: quickstart
 
 EOF
 
-query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(filter pushdown, humanized expressions) AS VERBOSE TEXT FOR
+statement ok
+CREATE MATERIALIZED VIEW mv9 AS
 with cte as (
   select x, t, case when x=0 then t - INTERVAL '1' day else t - INTERVAL '2' day end as case_statement from t
 )
 select x, t from cte
 where case_statement < mz_now();
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(filter pushdown, humanized expressions) AS VERBOSE TEXT FOR MATERIALIZED VIEW mv9
 ----
-Explained Query:
+materialize.public.mv9:
   Filter (mz_now() > timestamp_to_mz_timestamp((#1{t} - case when (#0{x} = 0) then 1 day else 2 days end)))
     ReadStorage materialize.public.t
 
@@ -334,8 +361,8 @@ EOF
 statement ok
 CREATE TABLE items(id int, ship_time timestamp);
 
-query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(filter pushdown, humanized expressions) AS VERBOSE TEXT FOR
+statement ok
+CREATE MATERIALIZED VIEW mv10 AS
 SELECT * from items
 WHERE mz_now() <= date_trunc(
     'month',
@@ -345,9 +372,12 @@ WHERE mz_now() <= date_trunc(
         + CASE WHEN EXTRACT(MONTH FROM ship_time) >= 6 THEN EXTRACT(MONTH FROM ship_time) - 6 ELSE 0 END
     )
     * INTERVAL '1 months'
-)
+);
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(filter pushdown, humanized expressions) AS VERBOSE TEXT FOR MATERIALIZED VIEW mv10
 ----
-Explained Query:
+materialize.public.mv10:
   Project (#0{id}, #1{ship_time})
     Filter (mz_now() <= timestamp_to_mz_timestamp(date_trunc_month_ts((#1{ship_time} - (1 month * numeric_to_double((case when (#2 < 6) then (extract_month_ts(#1{ship_time}) + 6) else 0 end + case when (#2 >= 6) then (extract_month_ts(#1{ship_time}) - 6) else 0 end)))))))
       Map (extract_month_ts(#1{ship_time}))
@@ -361,12 +391,15 @@ Target cluster: quickstart
 
 EOF
 
-query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(filter pushdown, humanized expressions) AS VERBOSE TEXT FOR
+statement ok
+CREATE MATERIALIZED VIEW mv11 AS
 SELECT * from items
 WHERE CASE WHEN id = 10 THEN EXTRACT(MONTH FROM ship_time) ELSE 0 END < mz_now();
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(filter pushdown, humanized expressions) AS VERBOSE TEXT FOR MATERIALIZED VIEW mv11
 ----
-Explained Query:
+materialize.public.mv11:
   Filter (mz_now() > numeric_to_mz_timestamp(case when (#0{id} = 10) then extract_month_ts(#1{ship_time}) else 0 end))
     ReadStorage materialize.public.items
 
@@ -377,12 +410,15 @@ Target cluster: quickstart
 
 EOF
 
-query T multiline
-EXPLAIN OPTIMIZED PLAN WITH(filter pushdown, humanized expressions) AS VERBOSE TEXT FOR
+statement ok
+CREATE MATERIALIZED VIEW mv12 AS
 SELECT * from items
 WHERE CASE WHEN EXTRACT(MONTH FROM ship_time) >= 6 THEN 12 ELSE 0 END < mz_now();
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(filter pushdown, humanized expressions) AS VERBOSE TEXT FOR MATERIALIZED VIEW mv12
 ----
-Explained Query:
+materialize.public.mv12:
   Filter (mz_now() > integer_to_mz_timestamp(case when (extract_month_ts(#1{ship_time}) >= 6) then 12 else 0 end))
     ReadStorage materialize.public.items
 

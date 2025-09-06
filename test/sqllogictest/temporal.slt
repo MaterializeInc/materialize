@@ -406,3 +406,18 @@ WHERE ts + INTERVAL '60' minutes >= mz_now();
 
 statement ok
 SELECT * FROM mv5;
+
+# Regression test for https://github.com/MaterializeInc/database-issues/issues/9645
+statement ok
+CREATE TABLE t(export_id text, worker_id int, dataflow_id int);
+
+statement ok
+CREATE DEFAULT INDEX ON t;
+
+statement ok
+SELECT subq_2.c2 AS c5,
+       mz_catalog.mz_now() AS c7
+FROM (SELECT CAST('62143-12-31' AS date) + '200000 YEARS' AS c2
+      FROM (SELECT
+            FROM (SELECT FROM t) AS subq_0) AS subq_1
+      WHERE pg_catalog."current_timestamp"() = pg_catalog.pg_postmaster_start_time()) AS subq_2;

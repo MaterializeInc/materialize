@@ -295,6 +295,25 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
         // Set the `as_of` and `until` timestamps for the dataflow.
         df_desc.set_as_of(timestamp_ctx.antichain());
 
+        // Get the single timestamp representing the `as_of` time.
+        let as_of = df_desc
+            .as_of
+            .clone()
+            .expect("as_of antichain")
+            .into_option()
+            .expect("unique as_of element");
+
+        // Resolve all unmaterializable function calls including mz_now().
+        let style = ExprPrepStyle::OneShot {
+            logical_time: EvalTime::Time(as_of),
+            session,
+            catalog_state: self.catalog.state(),
+        };
+        df_desc.visit_children(
+            |r| prep_relation_expr(r, style),
+            |s| prep_scalar_expr(s, style),
+        )?;
+
         // Use the opportunity to name an `until` frontier that will prevent
         // work we needn't perform. By default, `until` will be
         // `Antichain::new()`, which prevents no updates and is safe.
@@ -350,25 +369,6 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
             // Collect the list of indexes used by the dataflow at this point.
             trace_plan!(at: "global", &df_meta.used_indexes(&df_desc));
         }
-
-        // Get the single timestamp representing the `as_of` time.
-        let as_of = df_desc
-            .as_of
-            .clone()
-            .expect("as_of antichain")
-            .into_option()
-            .expect("unique as_of element");
-
-        // Resolve all unmaterializable function calls including mz_now().
-        let style = ExprPrepStyle::OneShot {
-            logical_time: EvalTime::Time(as_of),
-            session,
-            catalog_state: self.catalog.state(),
-        };
-        df_desc.visit_children(
-            |r| prep_relation_expr(r, style),
-            |s| prep_scalar_expr(s, style),
-        )?;
 
         // TODO: use the following code once we can be sure that the
         // index_exports always exist.
