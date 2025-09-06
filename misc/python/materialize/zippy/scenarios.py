@@ -465,3 +465,22 @@ class MySqlCdcLarge(Scenario):
             ValidateView: 20,
             MySqlDML: 100,
         }
+
+
+class SqlServerCdcLarge(Scenario):
+    """A Zippy test using MS SQL Server CDC exclusively (SQL Server not killed)."""
+
+    def bootstrap(self) -> list[ActionOrFactory]:
+        return super().bootstrap() + [SqlServerStart]
+
+    def actions_with_weight(self) -> dict[ActionOrFactory, float]:
+        return {
+            CreateSqlServerTable: 10,
+            CreateSqlServerCdcTable: 10,
+            KillClusterd: 5,
+            StoragedKill: 5,
+            StoragedStart: 5,
+            CreateViewParameterized(): 10,
+            ValidateView: 20,
+            SqlServerDML: 100,
+        }
