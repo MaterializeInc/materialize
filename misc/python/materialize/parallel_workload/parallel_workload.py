@@ -507,7 +507,7 @@ def main() -> int:
         description="Run a parallel workload against Materialize",
     )
 
-    parser.add_argument("--host", default="localhost", type=str)
+    parser.add_argument("--host", default="127.0.0.1", type=str)
     parser.add_argument("--port", default=6875, type=int)
     parser.add_argument("--system-port", default=6877, type=int)
     parser.add_argument("--http-port", default=6876, type=int)
