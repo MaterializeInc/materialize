@@ -195,15 +195,15 @@ EOF
 # an arbitrary number of records to find one that matches.
 
 query T multiline
-EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT * from numbers WHERE value > mz_now() LIMIT 10;
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT * from numbers WHERE value > mz_now()::text::int8 / 100000000000000 LIMIT 10;
 ----
 Explained Query:
   Finish limit=10 output=[#0]
-    Filter (integer_to_mz_timestamp(#0{value}) > mz_now())
+    Filter (integer_to_bigint(#0{value}) > 0)
       ReadStorage materialize.public.numbers
 
 Source materialize.public.numbers
-  filter=((integer_to_mz_timestamp(#0{value}) > mz_now()))
+  filter=((integer_to_bigint(#0{value}) > 0))
 
 Target cluster: quickstart
 
