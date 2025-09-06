@@ -2533,7 +2533,7 @@ read_action_list = ActionList(
         (SelectAction, 100),
         (SelectOneAction, 1),
         # (SQLsmithAction, 30),  # Questionable use
-        (CopyToS3Action, 100),
+        # (CopyToS3Action, 100),  # TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/9661 is fixed
         # (SetClusterAction, 1),  # SET cluster cannot be called in an active transaction
         (CommitRollbackAction, 30),
         (ReconnectAction, 1),
