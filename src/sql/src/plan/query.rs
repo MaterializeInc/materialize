@@ -648,8 +648,8 @@ pub fn plan_copy_from(
 pub fn plan_copy_from_rows(
     pcx: &PlanContext,
     catalog: &dyn SessionCatalog,
-    id: CatalogItemId,
-    name: String,
+    target_id: CatalogItemId,
+    target_name: String,
     columns: Vec<ColumnIndex>,
     rows: Vec<mz_repr::Row>,
 ) -> Result<HirRelationExpr, PlanError> {
@@ -657,8 +657,8 @@ pub fn plan_copy_from_rows(
 
     // Always copy at the latest version of the table.
     let table = catalog
-        .try_get_item(&id)
-        .ok_or_else(|| PlanError::CopyFromTargetTableDropped { name })?
+        .try_get_item(&target_id)
+        .ok_or_else(|| PlanError::CopyFromTargetTableDropped { target_name })?
         .at_version(RelationVersionSelector::Latest);
     let desc = table.desc(&catalog.resolve_full_name(table.name()))?;
 

@@ -774,8 +774,8 @@ impl SessionClient {
     /// ones.
     pub async fn insert_rows(
         &mut self,
-        id: CatalogItemId,
-        name: String,
+        target_id: CatalogItemId,
+        target_name: String,
         columns: Vec<ColumnIndex>,
         rows: Vec<Row>,
         ctx_extra: ExecuteContextExtra,
@@ -800,14 +800,20 @@ impl SessionClient {
         let mut optimizer =
             optimize::view::Optimizer::new_with_prep_no_limit(optimizer_config.clone(), None, prep);
 
-        let result: Result<_, AdapterError> =
-            mz_sql::plan::plan_copy_from(&pcx, &conn_catalog, id, name, columns, rows)
-                .err_into()
-                .and_then(|values| optimizer.optimize(values).err_into())
-                .and_then(|values| {
-                    // Copied rows must always be constants.
-                    Coordinator::insert_constant(&catalog, self.session(), id, values.into_inner())
-                });
+        let result: Result<_, AdapterError> = mz_sql::plan::plan_copy_from(
+            &pcx,
+            &conn_catalog,
+            target_id,
+            target_name,
+            columns,
+            rows,
+        )
+        .err_into()
+        .and_then(|values| optimizer.optimize(values).err_into())
+        .and_then(|values| {
+            // Copied rows must always be constants.
+            Coordinator::insert_constant(&catalog, self.session(), target_id, values.into_inner())
+        });
         self.retire_execute(ctx_extra, (&result).into());
         result
     }

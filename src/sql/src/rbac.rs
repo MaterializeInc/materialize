@@ -846,8 +846,8 @@ fn generate_rbac_requirements(
             }
         }
         Plan::CopyFrom(plan::CopyFromPlan {
-            name: _,
-            id,
+            target_name: _,
+            target_id,
             source: _,
             columns: _,
             source_desc: _,
@@ -857,11 +857,17 @@ fn generate_rbac_requirements(
         }) => RbacRequirements {
             privileges: vec![
                 (
-                    SystemObjectId::Object(catalog.get_item(id).name().qualifiers.clone().into()),
+                    SystemObjectId::Object(
+                        catalog.get_item(target_id).name().qualifiers.clone().into(),
+                    ),
                     AclMode::USAGE,
                     role_id,
                 ),
-                (SystemObjectId::Object(id.into()), AclMode::INSERT, role_id),
+                (
+                    SystemObjectId::Object(target_id.into()),
+                    AclMode::INSERT,
+                    role_id,
+                ),
             ],
             ..Default::default()
         },

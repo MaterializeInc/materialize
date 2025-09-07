@@ -403,8 +403,8 @@ impl Coordinator {
                         let (tx, _, session, ctx_extra) = ctx.into_parts();
                         tx.send(
                             Ok(ExecuteResponse::CopyFrom {
-                                id: plan.id,
-                                name: plan.name,
+                                target_id: plan.target_id,
+                                target_name: plan.target_name,
                                 columns: plan.columns,
                                 params: plan.params,
                                 ctx_extra,
@@ -772,7 +772,7 @@ impl Coordinator {
         }
     }
 
-    /// Inserts the rows from `constants` into the table identified by `id`.
+    /// Inserts the rows from `constants` into the table identified by `target_id`.
     ///
     /// # Panics
     ///
@@ -780,11 +780,11 @@ impl Coordinator {
     pub(crate) fn insert_constant(
         catalog: &Catalog,
         session: &mut Session,
-        id: CatalogItemId,
+        target_id: CatalogItemId,
         constants: MirRelationExpr,
     ) -> Result<ExecuteResponse, AdapterError> {
         // Insert can be queued, so we need to re-verify the id exists.
-        let desc = match catalog.try_get_entry(&id) {
+        let desc = match catalog.try_get_entry(&target_id) {
             Some(table) => {
                 let full_name = catalog.resolve_full_name(table.name(), Some(session.conn_id()));
                 // Inserts always happen at the latest version of a table.
@@ -793,7 +793,7 @@ impl Coordinator {
             None => {
                 return Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
                     kind: mz_catalog::memory::error::ErrorKind::Sql(CatalogError::UnknownItem(
-                        id.to_string(),
+                        target_id.to_string(),
                     )),
                 }));
             }
@@ -808,7 +808,7 @@ impl Coordinator {
                     }
                 }
                 let diffs_plan = plan::SendDiffsPlan {
-                    id,
+                    id: target_id,
                     updates: rows,
                     kind: MutationKind::Insert,
                     returning: Vec::new(),

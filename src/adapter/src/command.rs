@@ -273,9 +273,9 @@ pub enum ExecuteResponse {
     },
     CopyFrom {
         /// Table we're copying into.
-        id: CatalogItemId,
+        target_id: CatalogItemId,
         /// Human-readable full name of the target table.
-        name: String,
+        target_name: String,
         columns: Vec<ColumnIndex>,
         params: CopyFormatParams<'static>,
         ctx_extra: ExecuteContextExtra,

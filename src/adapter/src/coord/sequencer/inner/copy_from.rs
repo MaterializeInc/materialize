@@ -36,8 +36,8 @@ impl Coordinator {
         target_cluster: TargetCluster,
     ) {
         let plan::CopyFromPlan {
-            name: _,
-            id,
+            target_name: _,
+            target_id,
             source,
             columns: _,
             source_desc,
@@ -69,8 +69,8 @@ impl Coordinator {
         };
 
         // We check in planning that we're copying into a Table, but be defensive.
-        let Some(dest_table) = self.catalog().get_entry(&id).table() else {
-            let typ = self.catalog().get_entry(&id).item().typ();
+        let Some(dest_table) = self.catalog().get_entry(&target_id).table() else {
+            let typ = self.catalog().get_entry(&target_id).item().typ();
             let msg = format!("programming error: expected a Table found {typ:?}");
             return ctx.retire(Err(AdapterError::Unstructured(anyhow::anyhow!(msg))));
         };
@@ -190,7 +190,7 @@ impl Coordinator {
         let closure = Box::new(move |batches| {
             let _ = command_tx.send(crate::coord::Message::StagedBatches {
                 conn_id,
-                table_id: id,
+                table_id: target_id,
                 batches,
             });
         });
@@ -201,7 +201,7 @@ impl Coordinator {
             ActiveCopyFrom {
                 ingestion_id,
                 cluster_id,
-                table_id: id,
+                table_id: target_id,
                 ctx,
             },
         );

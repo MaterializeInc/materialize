@@ -1562,8 +1562,8 @@ fn plan_copy_from(
     };
 
     Ok(Plan::CopyFrom(CopyFromPlan {
-        id,
-        name: table_name_string,
+        target_id: id,
+        target_name: table_name_string,
         source,
         columns,
         source_desc,

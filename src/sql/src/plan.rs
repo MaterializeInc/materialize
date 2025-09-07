@@ -942,9 +942,9 @@ pub struct ShowColumnsPlan {
 #[derive(Debug)]
 pub struct CopyFromPlan {
     /// Table we're copying into.
-    pub id: CatalogItemId,
+    pub target_id: CatalogItemId,
     /// Human-readable full name of the target table.
-    pub name: String,
+    pub target_name: String,
     /// Source we're copying data from.
     pub source: CopyFromSource,
     /// How input columns map to those on the destination table.
