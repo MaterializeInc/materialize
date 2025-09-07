@@ -404,6 +404,7 @@ impl Coordinator {
                         tx.send(
                             Ok(ExecuteResponse::CopyFrom {
                                 id: plan.id,
+                                name: plan.name,
                                 columns: plan.columns,
                                 params: plan.params,
                                 ctx_extra,

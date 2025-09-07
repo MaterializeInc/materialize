@@ -1835,13 +1835,14 @@ where
             }
             ExecuteResponse::CopyFrom {
                 id,
+                name,
                 columns,
                 params,
                 ctx_extra,
             } => {
                 let row_desc =
                     row_desc.expect("missing row description for ExecuteResponse::CopyFrom");
-                self.copy_from(id, columns, params, row_desc, ctx_extra)
+                self.copy_from(id, name, columns, params, row_desc, ctx_extra)
                     .await
             }
             ExecuteResponse::TransactionCommitted { params }
@@ -2280,13 +2281,14 @@ where
     async fn copy_from(
         &mut self,
         id: CatalogItemId,
+        name: String,
         columns: Vec<ColumnIndex>,
         params: CopyFormatParams<'_>,
         row_desc: RelationDesc,
         mut ctx_extra: ExecuteContextExtra,
     ) -> Result<State, io::Error> {
         let res = self
-            .copy_from_inner(id, columns, params, row_desc, &mut ctx_extra)
+            .copy_from_inner(id, name, columns, params, row_desc, &mut ctx_extra)
             .await;
         match &res {
             Ok(State::Done) => {
@@ -2316,6 +2318,7 @@ where
     async fn copy_from_inner(
         &mut self,
         id: CatalogItemId,
+        name: String,
         columns: Vec<ColumnIndex>,
         params: CopyFormatParams<'_>,
         row_desc: RelationDesc,
@@ -2415,7 +2418,7 @@ where
 
         if let Err(e) = self
             .adapter_client
-            .insert_rows(id, columns, rows, std::mem::take(ctx_extra))
+            .insert_rows(id, name, columns, rows, std::mem::take(ctx_extra))
             .await
         {
             self.adapter_client.retire_execute(

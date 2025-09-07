@@ -775,6 +775,7 @@ impl SessionClient {
     pub async fn insert_rows(
         &mut self,
         id: CatalogItemId,
+        name: String,
         columns: Vec<ColumnIndex>,
         rows: Vec<Row>,
         ctx_extra: ExecuteContextExtra,
@@ -800,7 +801,7 @@ impl SessionClient {
             optimize::view::Optimizer::new_with_prep_no_limit(optimizer_config.clone(), None, prep);
 
         let result: Result<_, AdapterError> =
-            mz_sql::plan::plan_copy_from(&pcx, &conn_catalog, id, columns, rows)
+            mz_sql::plan::plan_copy_from(&pcx, &conn_catalog, id, name, columns, rows)
                 .err_into()
                 .and_then(|values| optimizer.optimize(values).err_into())
                 .and_then(|values| {

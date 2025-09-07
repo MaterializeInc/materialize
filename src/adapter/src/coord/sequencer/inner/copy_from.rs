@@ -36,6 +36,7 @@ impl Coordinator {
         target_cluster: TargetCluster,
     ) {
         let plan::CopyFromPlan {
+            name: _,
             id,
             source,
             columns: _,

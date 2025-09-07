@@ -846,6 +846,7 @@ fn generate_rbac_requirements(
             }
         }
         Plan::CopyFrom(plan::CopyFromPlan {
+            name: _,
             id,
             source: _,
             columns: _,
