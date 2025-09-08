@@ -623,10 +623,50 @@ pub trait TimestampProvider {
         // First, we acquire read holds that will ensure the queried collections
         // stay queryable at the chosen timestamp.
         let read_holds = self.acquire_read_holds(id_bundle);
+
+        let upper = self.least_valid_write(id_bundle);
+
+        self.determine_timestamp_for_inner(
+            session,
+            id_bundle,
+            when,
+            compute_instance,
+            timeline_context,
+            oracle_read_ts,
+            real_time_recency_ts,
+            isolation_level,
+            constraint_based,
+            read_holds,
+            upper,
+        )
+    }
+
+    /// Differs from `determine_timestamp_for` in that the `read_holds` and the `upper` are passed
+    /// in.
+    fn determine_timestamp_for_inner(
+        &self,
+        session: &Session,
+        id_bundle: &CollectionIdBundle,
+        when: &QueryWhen,
+        compute_instance: ComputeInstanceId,
+        timeline_context: &TimelineContext,
+        oracle_read_ts: Option<Timestamp>,
+        real_time_recency_ts: Option<mz_repr::Timestamp>,
+        isolation_level: &IsolationLevel,
+        constraint_based: &ConstraintBasedTimestampSelection,
+        read_holds: ReadHolds<Timestamp>,
+        upper: Antichain<Timestamp>,
+    ) -> Result<
+        (
+            TimestampDetermination<mz_repr::Timestamp>,
+            ReadHolds<mz_repr::Timestamp>,
+        ),
+        AdapterError,
+    > {
+
         let timeline = Self::get_timeline(timeline_context);
 
         let since = read_holds.least_valid_read();
-        let upper = self.least_valid_write(id_bundle);
         let largest_not_in_advance_of_upper = Coordinator::largest_not_in_advance_of_upper(&upper);
 
         let raw_determination = match constraint_based {

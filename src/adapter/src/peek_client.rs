@@ -15,13 +15,13 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use differential_dataflow::consolidation::consolidate;
-use mz_compute_client::controller::error::InstanceMissing;
+use mz_compute_client::controller::error::{CollectionMissing, InstanceMissing};
 use mz_compute_client::protocol::command::PeekTarget;
 use mz_compute_client::protocol::response::PeekResponse;
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::row::RowCollection;
 use mz_ore::cast::CastFrom;
-use mz_repr::Timestamp;
+use mz_repr::{GlobalId, Timestamp};
 use mz_repr::global_id::TransientIdGen;
 use mz_repr::{RelationDesc, Row};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
@@ -30,7 +30,7 @@ use mz_timestamp_oracle::TimestampOracle;
 use timely::progress::Antichain;
 use tokio::sync::oneshot;
 use uuid::Uuid;
-
+use mz_storage_types::read_holds::ReadHold;
 use crate::coord::peek::FastPathPlan;
 use crate::optimize::dataflows::ComputeInstanceSnapshot;
 
@@ -78,6 +78,14 @@ impl PeekClient {
                 ))
             })
             .await
+    }
+
+    pub async fn acquire_read_holds_and_collection_write_frontiers(&self, ids: Vec<GlobalId>, compute_instance: ComputeInstanceId) -> Result<Vec<(ReadHold<Timestamp>, Antichain<Timestamp>)>, CollectionMissing> {
+        self
+            .compute_instances
+            .get(&compute_instance)
+            .expect("missing compute instance client")
+            .acquire_read_holds_and_collection_write_frontiers(ids).await
     }
 
     /// Acquire read holds on the required compute/storage collections.

@@ -44,6 +44,9 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use timely::progress::Antichain;
 use tracing::{Span, debug};
+use mz_compute_client::controller::error::CollectionMissing;
+use mz_ore::collections::CollectionExt;
+use mz_storage_types::read_holds::ReadHold;
 ////// todo: separate crate imports
 
 impl SessionClient {
@@ -203,6 +206,9 @@ impl SessionClient {
         // - whether it include indexes
         // - whether its transitive through views?
         let source_ids = select_plan.source.depends_on();
+        // todo: validate_timeline_context can be expensive in real scenarios (not in simple
+        // benchmarks), because it traverses transitive dependencies even of indexed views and
+        // materialized views (also traversing their MIR plans).
         let mut timeline_context = catalog.validate_timeline_context(source_ids.iter().copied())?;
         if matches!(timeline_context, TimelineContext::TimestampIndependent)
             && select_plan.source.contains_temporal()?
@@ -520,6 +526,35 @@ impl TimestampProvider for FrontendPeekTimestampProvider<'_> {
         println!("FrontendPeekTimestampProvider::least_valid_write done");
         r
     }
+
+    fn determine_timestamp_for(&self, session: &Session, id_bundle: &CollectionIdBundle, when: &QueryWhen, compute_instance: ComputeInstanceId, timeline_context: &TimelineContext, oracle_read_ts: Option<Timestamp>, real_time_recency_ts: Option<Timestamp>, isolation_level: &IsolationLevel, constraint_based: &ConstraintBasedTimestampSelection) -> Result<(TimestampDetermination<Timestamp>, ReadHolds<Timestamp>), AdapterError> {
+
+        // let read_holds = self.acquire_read_holds(id_bundle); /////////////////////////////
+        // let upper = self.least_valid_write(id_bundle);
+
+        //////////// todo: This only works for compute ids currently, and only a single one.
+        // This should be fine if we are shooting for only fast path peeks.
+        let collection_id = *id_bundle.compute_ids.get(&compute_instance).expect("missing compute instance").into_iter().expect_element(||{""});
+        let (read_hold, upper) = self.acquire_read_holds_and_collection_write_frontiers(collection_id, compute_instance).expect("missing collection");
+        let read_holds = ReadHolds {
+            storage_holds: Default::default(),
+            compute_holds: BTreeMap::from_iter(std::iter::once(((compute_instance, collection_id), read_hold))),
+        };
+
+        self.determine_timestamp_for_inner(
+            session,
+            id_bundle,
+            when,
+            compute_instance,
+            timeline_context,
+            oracle_read_ts,
+            real_time_recency_ts,
+            isolation_level,
+            constraint_based,
+            read_holds,
+            upper,
+        )
+    }
 }
 
 impl FrontendPeekTimestampProvider<'_> {
@@ -598,5 +633,22 @@ impl FrontendPeekTimestampProvider<'_> {
         // }
 
         Ok((det, read_holds))
+    }
+}
+
+impl FrontendPeekTimestampProvider<'_> {
+    pub fn acquire_read_holds_and_collection_write_frontiers(&self, ids: GlobalId, compute_instance: ComputeInstanceId) -> Result<(ReadHold<Timestamp>, Antichain<Timestamp>), CollectionMissing> {
+        // let r = tokio::task::block_in_place(|| {
+        //     let handle = tokio::runtime::Handle::current();
+        //     handle.block_on(async {
+        //         self.session_client
+        //             .peek_client()
+        //             .acquire_read_holds_and_collection_write_frontiers(ids, compute_instance)
+        //             .await
+        //     })
+        // });
+        // r
+
+        todo!()
     }
 }
