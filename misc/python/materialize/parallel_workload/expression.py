@@ -49,6 +49,7 @@ class ExprKind(Enum):
     ALL = 1
     WRITE = 2
     MATERIALIZABLE = 3
+    NONE = 4
 
 
 class FuncOp:
