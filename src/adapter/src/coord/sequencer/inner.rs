@@ -2946,7 +2946,7 @@ impl Coordinator {
             selection,
             mut assignments,
             finishing,
-            returning,
+            mut returning,
         } = plan;
 
         // Read then writes can be queued, so re-verify the id exists.
@@ -3125,11 +3125,11 @@ impl Coordinator {
             }
 
             let style = ExprPrepStyle::OneShot {
-                logical_time: EvalTime::NotAvailable,
+                logical_time: EvalTime::NotAvailable, // We already errored out on mz_now above.
                 session: ctx.session(),
                 catalog_state: catalog.state(),
             };
-            for expr in assignments.values_mut() {
+            for expr in assignments.values_mut().chain(returning.iter_mut()) {
                 return_if_err!(prep_scalar_expr(expr, style.clone()), ctx);
             }
 
