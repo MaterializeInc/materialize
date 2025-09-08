@@ -272,7 +272,10 @@ pub enum ExecuteResponse {
         resp: Box<ExecuteResponse>,
     },
     CopyFrom {
-        id: CatalogItemId,
+        /// Table we're copying into.
+        target_id: CatalogItemId,
+        /// Human-readable full name of the target table.
+        target_name: String,
         columns: Vec<ColumnIndex>,
         params: CopyFormatParams<'static>,
         ctx_extra: ExecuteContextExtra,

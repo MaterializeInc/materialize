@@ -1553,6 +1553,8 @@ fn plan_copy_from(
         bail_unsupported!("COPY FROM ... WITH (FILES ...) only supported from a URL")
     }
 
+    let table_name_string = table_name.full_name_str();
+
     let (id, source_desc, columns, maybe_mfp) = query::plan_copy_from(scx, table_name, columns)?;
 
     let Some(mfp) = maybe_mfp else {
@@ -1560,7 +1562,8 @@ fn plan_copy_from(
     };
 
     Ok(Plan::CopyFrom(CopyFromPlan {
-        id,
+        target_id: id,
+        target_name: table_name_string,
         source,
         columns,
         source_desc,
