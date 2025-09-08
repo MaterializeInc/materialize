@@ -728,6 +728,61 @@ impl MirScalarExpr {
         )
     }
 
+    /// If `self` expresses a temporal filter, normalize it to start with `mz_now()` and return
+    /// references.
+    ///
+    /// A temporal filter is an expression of the form `mz_now() <BINOP> <EXPR>`,
+    /// for a restricted set of `BINOP` and `EXPR` that do not themselves contain `mz_now()`.
+    /// Expressions may conform to this once their expressions are swapped.
+    ///
+    /// If the expression is not a temporal filter, it will be unchanged, and the reason for why
+    /// it's not a temporal filter is returned as a string.
+    pub fn as_mut_temporal_filter(&mut self) -> Result<(&BinaryFunc, &mut MirScalarExpr), String> {
+        if !self.contains_temporal() {
+            return Err("Does not involve mz_now()".to_string());
+        }
+        // Supported temporal predicates are exclusively binary operators.
+        if let MirScalarExpr::CallBinary { func, expr1, expr2 } = self {
+            // Attempt to put `LogicalTimestamp` in the first argument position.
+            if !expr1.contains_temporal()
+                && **expr2 == MirScalarExpr::CallUnmaterializable(UnmaterializableFunc::MzNow)
+            {
+                std::mem::swap(expr1, expr2);
+                *func = match func {
+                    BinaryFunc::Eq => BinaryFunc::Eq,
+                    BinaryFunc::Lt => BinaryFunc::Gt,
+                    BinaryFunc::Lte => BinaryFunc::Gte,
+                    BinaryFunc::Gt => BinaryFunc::Lt,
+                    BinaryFunc::Gte => BinaryFunc::Lte,
+                    x => {
+                        return Err(format!("Unsupported binary temporal operation: {:?}", x));
+                    }
+                };
+            }
+
+            // Error if MLT is referenced in an unsupported position.
+            if expr2.contains_temporal()
+                || **expr1 != MirScalarExpr::CallUnmaterializable(UnmaterializableFunc::MzNow)
+            {
+                return Err(format!(
+                    "Unsupported temporal predicate. Note: `mz_now()` must be directly compared to a mz_timestamp-castable expression. Expression found: {}",
+                    MirScalarExpr::CallBinary {
+                        func: func.clone(),
+                        expr1: expr1.clone(),
+                        expr2: expr2.clone()
+                    },
+                ));
+            }
+
+            Ok((&*func, expr2))
+        } else {
+            Err(format!(
+                "Unsupported temporal predicate. Note: `mz_now()` must be directly compared to a non-temporal expression of mz_timestamp-castable type. Expression found: {}",
+                self,
+            ))
+        }
+    }
+
     #[deprecated = "Use `might_error` instead"]
     pub fn contains_error_if_null(&self) -> bool {
         let mut worklist = vec![self];

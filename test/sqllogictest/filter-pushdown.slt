@@ -163,12 +163,12 @@ FROM events
 WHERE COALESCE(delete_ms, insert_ms) < mz_now();
 ----
 Explained Query:
-  Filter (numeric_to_mz_timestamp(coalesce(#2{delete_ms}, #1{insert_ms})) < mz_now())
+  Filter (mz_now() > numeric_to_mz_timestamp(coalesce(#2{delete_ms}, #1{insert_ms})))
     ReadStorage materialize.public.events
 
 Source materialize.public.events
-  filter=((numeric_to_mz_timestamp(coalesce(#2{delete_ms}, #1{insert_ms})) < mz_now()))
-  pushdown=((numeric_to_mz_timestamp(coalesce(#2{delete_ms}, #1{insert_ms})) < mz_now()))
+  filter=((mz_now() > numeric_to_mz_timestamp(coalesce(#2{delete_ms}, #1{insert_ms}))))
+  pushdown=((mz_now() > numeric_to_mz_timestamp(coalesce(#2{delete_ms}, #1{insert_ms}))))
 
 Target cluster: quickstart
 
@@ -317,12 +317,12 @@ select x, t from cte
 where case_statement < mz_now();
 ----
 Explained Query:
-  Filter (timestamp_to_mz_timestamp((#1{t} - case when (#0{x} = 0) then 1 day else 2 days end)) < mz_now())
+  Filter (mz_now() > timestamp_to_mz_timestamp((#1{t} - case when (#0{x} = 0) then 1 day else 2 days end)))
     ReadStorage materialize.public.t
 
 Source materialize.public.t
-  filter=((timestamp_to_mz_timestamp((#1{t} - case when (#0{x} = 0) then 1 day else 2 days end)) < mz_now()))
-  pushdown=((timestamp_to_mz_timestamp((#1{t} - case when (#0{x} = 0) then 1 day else 2 days end)) < mz_now()))
+  filter=((mz_now() > timestamp_to_mz_timestamp((#1{t} - case when (#0{x} = 0) then 1 day else 2 days end))))
+  pushdown=((mz_now() > timestamp_to_mz_timestamp((#1{t} - case when (#0{x} = 0) then 1 day else 2 days end))))
 
 Target cluster: quickstart
 
@@ -367,11 +367,11 @@ SELECT * from items
 WHERE CASE WHEN id = 10 THEN EXTRACT(MONTH FROM ship_time) ELSE 0 END < mz_now();
 ----
 Explained Query:
-  Filter (numeric_to_mz_timestamp(case when (#0{id} = 10) then extract_month_ts(#1{ship_time}) else 0 end) < mz_now())
+  Filter (mz_now() > numeric_to_mz_timestamp(case when (#0{id} = 10) then extract_month_ts(#1{ship_time}) else 0 end))
     ReadStorage materialize.public.items
 
 Source materialize.public.items
-  filter=((numeric_to_mz_timestamp(case when (#0{id} = 10) then extract_month_ts(#1{ship_time}) else 0 end) < mz_now()))
+  filter=((mz_now() > numeric_to_mz_timestamp(case when (#0{id} = 10) then extract_month_ts(#1{ship_time}) else 0 end)))
 
 Target cluster: quickstart
 
@@ -383,12 +383,12 @@ SELECT * from items
 WHERE CASE WHEN EXTRACT(MONTH FROM ship_time) >= 6 THEN 12 ELSE 0 END < mz_now();
 ----
 Explained Query:
-  Filter (integer_to_mz_timestamp(case when (extract_month_ts(#1{ship_time}) >= 6) then 12 else 0 end) < mz_now())
+  Filter (mz_now() > integer_to_mz_timestamp(case when (extract_month_ts(#1{ship_time}) >= 6) then 12 else 0 end))
     ReadStorage materialize.public.items
 
 Source materialize.public.items
-  filter=((integer_to_mz_timestamp(case when (extract_month_ts(#1{ship_time}) >= 6) then 12 else 0 end) < mz_now()))
-  pushdown=((integer_to_mz_timestamp(case when (extract_month_ts(#1{ship_time}) >= 6) then 12 else 0 end) < mz_now()))
+  filter=((mz_now() > integer_to_mz_timestamp(case when (extract_month_ts(#1{ship_time}) >= 6) then 12 else 0 end)))
+  pushdown=((mz_now() > integer_to_mz_timestamp(case when (extract_month_ts(#1{ship_time}) >= 6) then 12 else 0 end)))
 
 Target cluster: quickstart
 
