@@ -650,6 +650,19 @@ impl<A: Scheduler> DemuxState<A> {
             export_packer: PermutedRowPacker::new(ComputeLog::DataflowCurrent),
         }
     }
+
+    /// Pack an export update key-value for the given export ID and dataflow index.
+    fn pack_export_update(
+        &mut self,
+        export_id: GlobalId,
+        dataflow_index: usize,
+    ) -> (&RowRef, &RowRef) {
+        self.export_packer.pack_slice(&[
+            make_string_datum(export_id, &mut self.scratch_string),
+            Datum::UInt64(u64::cast_from(self.worker_id)),
+            Datum::UInt64(u64::cast_from(dataflow_index)),
+        ])
+    }
 }
 
 /// State tracked for each dataflow export.
@@ -813,19 +826,6 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
         }
     }
 
-    /// Pack an export update key-value for the given export ID and dataflow index.
-    fn pack_export_update(
-        &mut self,
-        export_id: GlobalId,
-        dataflow_index: usize,
-    ) -> (&RowRef, &RowRef) {
-        self.state.export_packer.pack_slice(&[
-            make_string_datum(export_id, &mut self.state.scratch_string),
-            Datum::UInt64(u64::cast_from(self.state.worker_id)),
-            Datum::UInt64(u64::cast_from(dataflow_index)),
-        ])
-    }
-
     fn handle_export(
         &mut self,
         ExportReference {
@@ -835,7 +835,7 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
     ) {
         let export_id = Columnar::into_owned(export_id);
         let ts = self.ts();
-        let datum = self.pack_export_update(export_id, dataflow_index);
+        let datum = self.state.pack_export_update(export_id, dataflow_index);
         self.output.export.give((datum, ts, Diff::ONE));
 
         let existing = self
@@ -873,7 +873,7 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
         let ts = self.ts();
         let dataflow_index = export.dataflow_index;
 
-        let datum = self.pack_export_update(export_id, dataflow_index);
+        let datum = self.state.pack_export_update(export_id, dataflow_index);
         self.output.export.give((datum, ts, Diff::MINUS_ONE));
 
         match self.state.dataflow_export_counts.get_mut(&dataflow_index) {
