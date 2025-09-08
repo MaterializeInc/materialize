@@ -80,7 +80,6 @@ Source type                                | Return type                        
 [`interval`](../../types/interval/)        | [`text`](../../types/text/)                   | Assignment
 [`interval`](../../types/interval/)        | [`time`](../../types/time/)                   | Assignment
 [`jsonb`](../../types/jsonb/)              | [`bigint`](../../types/integer/)              | Explicit
-[`jsonb`](../../types/jsonb/)              | [`bool`](../../types/boolean/)                | Explicit
 [`jsonb`](../../types/jsonb/)              | [`float`](../../types/float/)                 | Explicit
 [`jsonb`](../../types/jsonb/)              | [`int`](../../types/integer/)                 | Explicit
 [`jsonb`](../../types/jsonb/)              | [`real`](../../types/real/)                   | Explicit
