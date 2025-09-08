@@ -175,10 +175,14 @@ impl<T> Client<T>
 where
     T: ComputeControllerTimestamp,
 {
+    //////// todo: move these new fns down in the file
     /// Acquire a compute read hold by asking the instance task.
     pub async fn acquire_read_hold(&self, id: GlobalId) -> Result<ReadHold<T>, CollectionMissing> {
-        //////// todo: move this fn down in the file
         self.call_sync(move |i| i.acquire_read_hold(id)).await
+    }
+
+    pub async fn acquire_read_holds_and_collection_write_frontiers(&self, ids: Vec<GlobalId>) -> Result<Vec<(GlobalId, ReadHold<T>, Antichain<T>)>, CollectionMissing> {
+        self.call_sync(move |i| i.acquire_read_holds_and_collection_write_frontiers(ids)).await
     }
 
     /// Fetch the write frontier for the identified compute collection by asking the instance task.
@@ -1056,6 +1060,15 @@ impl<T> Instance<T>
 where
     T: ComputeControllerTimestamp,
 {
+    /////////// todo: IntoIter instead of Vec
+    pub fn acquire_read_holds_and_collection_write_frontiers(&self, ids: Vec<GlobalId>) -> Result<Vec<(GlobalId, ReadHold<T>, Antichain<T>)>, CollectionMissing> {
+        let mut result = Vec::new();
+        for id in ids.into_iter() {
+            result.push((id, self.acquire_read_hold(id)?, self.collection_write_frontier(id)?));
+        }
+        Ok(result)
+    }
+
     /// Acquires a `ReadHold` for the identified compute collection.
     ///
     /// This mirrors the logic used by the controller-side `InstanceState::acquire_read_hold`,
@@ -1744,7 +1757,7 @@ where
         result_desc: RelationDesc,
         finishing: RowSetFinishing,
         map_filter_project: mz_expr::SafeMfpPlan,
-        mut read_hold: Option<ReadHold<T>>,
+        read_hold: Option<ReadHold<T>>,
         target_replica: Option<ReplicaId>,
         peek_response_tx: oneshot::Sender<PeekResponse>,
     ) -> Result<(), PeekError> {

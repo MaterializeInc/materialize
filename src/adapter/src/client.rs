@@ -44,7 +44,7 @@ use mz_sql_parser::parser::{ParserStatementError, StatementParseResult};
 use prometheus::Histogram;
 use serde_json::json;
 use tokio::sync::{mpsc, oneshot};
-use tracing::{debug, error};
+use tracing::error;
 use uuid::Uuid;
 
 use crate::catalog::Catalog;

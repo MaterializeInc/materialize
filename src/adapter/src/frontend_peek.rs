@@ -8,28 +8,25 @@
 // by the Apache License, Version 2.0.
 
 use crate::catalog::CatalogState;
-use crate::coord::peek::{FastPathPlan, PeekPlan, PlannedPeek};
+use crate::coord::peek::{FastPathPlan, PeekPlan};
 use crate::coord::timestamp_selection::TimestampDetermination;
 use crate::coord::{
-    Coordinator, ExplainContext, PeekStage, PeekStageCopyTo, PeekStageExplainPlan,
-    PeekStageExplainPushdown, PeekStageFinish, TargetCluster, catalog_serving,
+    Coordinator, ExplainContext,
+    TargetCluster, catalog_serving,
 };
-use crate::explain::insights::PlanInsightsContext;
 use crate::optimize::Optimize;
 use crate::optimize::dataflows::DataflowBuilder;
 use crate::session::{Session, TransactionOps, TransactionStatus};
 use crate::{
-    AdapterError, AdapterNotice, CollectionIdBundle, ExecuteResponse, ReadHolds, SessionClient,
+    AdapterError, CollectionIdBundle, ExecuteResponse, ReadHolds, SessionClient,
     TimelineContext, TimestampContext, TimestampProvider, optimize,
 };
-use itertools::Either;
 use mz_adapter_types::dyncfgs::{
-    CONSTRAINT_BASED_TIMESTAMP_SELECTION, PLAN_INSIGHTS_NOTICE_FAST_PATH_CLUSTERS_OPTIMIZE_DURATION,
+    CONSTRAINT_BASED_TIMESTAMP_SELECTION,
 };
 use mz_adapter_types::timestamp_selection::ConstraintBasedTimestampSelection;
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::CollectionPlan;
-use mz_ore::soft_assert_or_log;
 use mz_repr::optimize::OverrideFrom;
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::catalog::CatalogCluster;
@@ -37,13 +34,13 @@ use mz_sql::plan::{Plan, QueryWhen};
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::vars::IsolationLevel;
-use mz_sql_parser::ast::Statement;
-use mz_storage_types::sources::Timeline;
 use mz_transform::EmptyStatisticsOracle;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use timely::progress::Antichain;
-use tracing::{Span, debug};
+use tracing::Span;
+use mz_compute_client::controller::error::CollectionMissing;
+use mz_ore::collections::CollectionExt;
 ////// todo: separate crate imports
 
 impl SessionClient {
@@ -203,6 +200,9 @@ impl SessionClient {
         // - whether it include indexes
         // - whether its transitive through views?
         let source_ids = select_plan.source.depends_on();
+        // todo: validate_timeline_context can be expensive in real scenarios (not in simple
+        // benchmarks), because it traverses transitive dependencies even of indexed views and
+        // materialized views (also traversing their MIR plans).
         let mut timeline_context = catalog.validate_timeline_context(source_ids.iter().copied())?;
         if matches!(timeline_context, TimelineContext::TimestampIndependent)
             && select_plan.source.contains_temporal()?
@@ -231,7 +231,6 @@ impl SessionClient {
 
         let oracle_read_ts = match timeline {
             Some(timeline) if needs_linearized_read_ts => {
-                ////// todo: Does session.get_timestamp_oracle give us the
                 let oracle = self
                     .peek_client()
                     .oracles
@@ -491,6 +490,7 @@ impl TimestampProvider for FrontendPeekTimestampProvider<'_> {
         self.catalog_state
     }
 
+    /////////// todo: unused if we are using acquire_read_holds_and_collection_write_frontiers
     fn acquire_read_holds(&self, id_bundle: &CollectionIdBundle) -> ReadHolds<Timestamp> {
         println!("FrontendPeekTimestampProvider::acquire_read_holds");
         let r = tokio::task::block_in_place(|| {
@@ -506,6 +506,7 @@ impl TimestampProvider for FrontendPeekTimestampProvider<'_> {
         r
     }
 
+    /////////// todo: unused if we are using acquire_read_holds_and_collection_write_frontiers
     fn least_valid_write(&self, id_bundle: &CollectionIdBundle) -> Antichain<Timestamp> {
         println!("FrontendPeekTimestampProvider::least_valid_write");
         let r = tokio::task::block_in_place(|| {
@@ -519,6 +520,28 @@ impl TimestampProvider for FrontendPeekTimestampProvider<'_> {
         });
         println!("FrontendPeekTimestampProvider::least_valid_write done");
         r
+    }
+
+    fn determine_timestamp_for(&self, session: &Session, id_bundle: &CollectionIdBundle, when: &QueryWhen, compute_instance: ComputeInstanceId, timeline_context: &TimelineContext, oracle_read_ts: Option<Timestamp>, real_time_recency_ts: Option<Timestamp>, isolation_level: &IsolationLevel, constraint_based: &ConstraintBasedTimestampSelection) -> Result<(TimestampDetermination<Timestamp>, ReadHolds<Timestamp>), AdapterError> {
+
+        // let read_holds = self.acquire_read_holds(id_bundle);
+        // let upper = self.least_valid_write(id_bundle);
+
+        let (read_holds, upper) = self.acquire_read_hold_and_collection_write_frontier(id_bundle).expect("missing collection");
+
+        <Coordinator as TimestampProvider>::determine_timestamp_for_inner(
+            session,
+            id_bundle,
+            when,
+            compute_instance,
+            timeline_context,
+            oracle_read_ts,
+            real_time_recency_ts,
+            isolation_level,
+            constraint_based,
+            read_holds,
+            upper,
+        )
     }
 }
 
@@ -598,5 +621,21 @@ impl FrontendPeekTimestampProvider<'_> {
         // }
 
         Ok((det, read_holds))
+    }
+}
+
+impl FrontendPeekTimestampProvider<'_> {
+    /////////// todo: make this able to handle multiple collections _and_ not just compute collections, but also storage
+    pub fn acquire_read_hold_and_collection_write_frontier(&self, id_bundle: &CollectionIdBundle) -> Result<(ReadHolds<Timestamp>, Antichain<Timestamp>), CollectionMissing> {
+        // ///////////// todo: do away with the block_in_place
+        tokio::task::block_in_place(|| {
+            let handle = tokio::runtime::Handle::current();
+            handle.block_on(async {
+                self.session_client
+                    .peek_client()
+                    .acquire_read_holds_and_collection_write_frontiers(id_bundle)
+                    .await
+            })
+        })
     }
 }

@@ -15,13 +15,13 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use differential_dataflow::consolidation::consolidate;
-use mz_compute_client::controller::error::InstanceMissing;
+use mz_compute_client::controller::error::{CollectionMissing, InstanceMissing};
 use mz_compute_client::protocol::command::PeekTarget;
 use mz_compute_client::protocol::response::PeekResponse;
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::row::RowCollection;
 use mz_ore::cast::CastFrom;
-use mz_repr::Timestamp;
+use mz_repr::{GlobalId, Timestamp};
 use mz_repr::global_id::TransientIdGen;
 use mz_repr::{RelationDesc, Row};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
@@ -30,7 +30,8 @@ use mz_timestamp_oracle::TimestampOracle;
 use timely::progress::Antichain;
 use tokio::sync::oneshot;
 use uuid::Uuid;
-
+use mz_storage_types::read_holds::ReadHold;
+use crate::{CollectionIdBundle, ReadHolds};
 use crate::coord::peek::FastPathPlan;
 use crate::optimize::dataflows::ComputeInstanceSnapshot;
 
@@ -84,10 +85,8 @@ impl PeekClient {
     /// Similar to Coordinator::acquire_read_holds.
     pub async fn acquire_read_holds(
         &self,
-        id_bundle: &crate::CollectionIdBundle,
+        id_bundle: &CollectionIdBundle,
     ) -> crate::ReadHolds<Timestamp> {
-        use tracing::debug;
-
         let mut read_holds = crate::ReadHolds::new();
 
         // Acquire storage read holds via StorageCollections.
@@ -120,7 +119,6 @@ impl PeekClient {
             }
         }
 
-        debug!(?read_holds, "acquire_read_holds (fast path)");
         read_holds
     }
 
@@ -132,8 +130,8 @@ impl PeekClient {
     /// `StorageCollections::collections_frontiers` is sufficient. //////// todo: verify
     pub async fn least_valid_write(
         &self,
-        id_bundle: &crate::CollectionIdBundle,
-    ) -> timely::progress::Antichain<Timestamp> {
+        id_bundle: &CollectionIdBundle,
+    ) -> Antichain<Timestamp> {
         let mut upper = Antichain::new();
         if !id_bundle.storage_ids.is_empty() {
             let storage_ids: Vec<_> = id_bundle.storage_ids.iter().copied().collect();
@@ -158,6 +156,51 @@ impl PeekClient {
         upper
     }
 
+    pub async fn acquire_read_holds_and_collection_write_frontiers(&self, id_bundle: &CollectionIdBundle) -> Result<(ReadHolds<Timestamp>, Antichain<Timestamp>), CollectionMissing> {
+        let mut read_holds = ReadHolds::new();
+        let mut upper = Antichain::new();
+
+        if !id_bundle.storage_ids.is_empty() {
+            let desired_storage: Vec<_> = id_bundle.storage_ids.iter().copied().collect();
+            let storage_read_holds = self
+                .storage_collections
+                .acquire_read_holds(desired_storage)
+                .expect("missing storage collections");
+            read_holds.storage_holds = storage_read_holds
+                .into_iter()
+                .map(|hold| (hold.id(), hold))
+                .collect();
+
+            let storage_ids: Vec<_> = id_bundle.storage_ids.iter().copied().collect();
+            for f in self
+                .storage_collections
+                .collections_frontiers(storage_ids)
+                .expect("missing collections")
+            {
+                upper.extend(f.write_frontier);
+            }
+        }
+
+        for (&instance_id, collection_ids) in &id_bundle.compute_ids {
+            let client = self
+                .compute_instances
+                .get(&instance_id)
+                .expect("missing compute instance client");
+
+            for (id, read_hold, write_frontier) in client.acquire_read_holds_and_collection_write_frontiers(collection_ids.iter().copied().collect()).await? {
+                let prev = read_holds.compute_holds.insert((instance_id, id), read_hold);
+                assert!(
+                    prev.is_none(),
+                    "duplicate compute ID in id_bundle {id_bundle:?}"
+                );
+
+                upper.extend(write_frontier);
+            }
+        }
+
+        Ok((read_holds, upper))
+    }
+
     /// Implement a fast-path peek plan.
     ///
     /// Supported variants:
@@ -173,7 +216,7 @@ impl PeekClient {
         finishing: mz_expr::RowSetFinishing,
         compute_instance: ComputeInstanceId,
         target_replica: Option<mz_cluster_client::ReplicaId>,
-        intermediate_result_type: mz_repr::RelationType,
+        intermediate_result_type: mz_repr::SqlRelationType,
         max_result_size: u64,
         max_returned_query_size: Option<u64>,
     ) -> Result<crate::ExecuteResponse, crate::AdapterError> {
