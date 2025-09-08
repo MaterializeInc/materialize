@@ -12,6 +12,7 @@ from enum import Enum
 
 from materialize.data_ingest.data_type import (
     DATA_TYPES,
+    UUID,
     Boolean,
     Bytea,
     DataType,
@@ -67,6 +68,10 @@ for dt in DATA_TYPES:
         FuncOp("{} IS NOT NULL", [dt]),
     ]
 
+    FUNC_OPS[Jsonb] += [
+        FuncOp("to_jsonb{}", [dt]),
+    ]
+
     if dt != Bytea:
         FUNC_OPS[Text] += [FuncOp("cast({} as text)", [dt])]
 
@@ -96,17 +101,73 @@ for dt in INT_TYPES + UINT_TYPES + FLOAT_TYPES:
         FuncOp("{} - {}", [dt, dt]),
         FuncOp("{} * {}", [dt, dt]),
         FuncOp("{} / {}", [dt, dt]),
-        FuncOp("abs{}", [dt]),
+        FuncOp("mod({}, {})", [dt, dt]),
+        # FuncOp("abs{}", [dt]),
+    ]
+    FUNC_OPS[Double] += [
+        FuncOp("exp{}", [dt]),
+        FuncOp("ceil{}", [dt]),
+        FuncOp("floor{}", [dt]),
+        FuncOp("trunc{}", [dt]),
+        FuncOp("round{}", [dt]),
     ]
 
-FUNC_OPS[Long] += [FuncOp(f"cast({{}} as {Long.name()})", [Int])]
+for dt in INT_TYPES + UINT_TYPES:
+    FUNC_OPS[dt] += [
+        FuncOp("{} % {}", [dt, dt]),
+        FuncOp("{} & {}", [dt, dt]),
+        FuncOp("{} | {}", [dt, dt]),
+        FuncOp("{} # {}", [dt, dt]),
+        FuncOp("~{}", [dt]),
+        # FuncOp("{} << {}", [dt, dt]),
+        # FuncOp("{} >> {}", [dt, dt]),
+    ]
+
+FUNC_OPS[Long] += [
+    FuncOp(f"cast({{}} as {Long.name()})", [Int]),
+    FuncOp("bit_count{}", [Bytea]),
+]
+# FUNC_OPS[Bytea] += [FuncOp(f"cast({{}} as {Bytea.name()})", [Text])]
+
+FUNC_OPS[Double] += [
+    FuncOp("cbrt{}", [Double]),
+    FuncOp("cos{}", [Double]),
+    # FuncOp("acos{}", [Double]),
+    FuncOp("cosh{}", [Double]),
+    # FuncOp("acosh{}", [Double]),
+    # FuncOp("cot{}", [Double]),
+    FuncOp("sin{}", [Double]),
+    # FuncOp("asin{}", [Double]),
+    FuncOp("sinh{}", [Double]),
+    # FuncOp("asinh{}", [Double]),
+    FuncOp("tan{}", [Double]),
+    # FuncOp("atan{}", [Double]),
+    FuncOp("tanh{}", [Double]),
+    # FuncOp("atanh{}", [Double]),
+    FuncOp("radians{}", [Double]),
+    FuncOp("degrees{}", [Double]),
+]
+
+FUNC_OPS[Numeric] += [
+    # FuncOp("log({}, {})", [Numeric, Numeric]),
+    FuncOp("round({}, {})", [Numeric, Int]),
+]
+
+# for dt in [Numeric, Double]:
+#     FUNC_OPS[dt] += [
+#         FuncOp("ln{}", [dt]),
+#         FuncOp("log{}", [dt]),
+#         FuncOp("log10{}", [dt]),
+#         FuncOp("pow({}, {})", [dt, dt]),
+#         FuncOp("sqrt{}", [dt]),
+#     ]
 
 for i, dt in enumerate(UINT_TYPES):
     for dt2 in UINT_TYPES[i + 1 :]:
         FUNC_OPS[dt2] += [FuncOp(f"cast({{}} as {dt2.name()})", [dt])]
 
 for dt in FLOAT_TYPES:
-    for dt2 in FLOAT_TYPES:
+    for dt2 in [Float, Double]:
         if dt2 == dt:
             continue
         FUNC_OPS[dt2] += [FuncOp(f"cast({{}} as {dt2.name()})", [dt])]
@@ -119,6 +180,7 @@ FUNC_OPS[Boolean] += [
     FuncOp("{} <@ {}", [IntList, IntList]),
     FuncOp("{} @> {}", [TextTextMap, TextTextMap]),
     FuncOp("{} <@ {}", [TextTextMap, TextTextMap]),
+    FuncOp("mz_is_superuser()", [], unsupported=ExprKind.MATERIALIZABLE),
 ]
 
 FUNC_OPS[Text] += [
@@ -127,6 +189,7 @@ FUNC_OPS[Text] += [
     FuncOp("md5{}", [Text]),
     FuncOp("{} || {}", [Text, Text]),
     FuncOp("reverse{}", [Text]),
+    # FuncOp("chr{}", [Int]),
     FuncOp("{} -> {}", [TextTextMap, Text]),
     FuncOp("mz_environment_id()", [], unsupported=ExprKind.MATERIALIZABLE),
     FuncOp("mz_version()", [], unsupported=ExprKind.MATERIALIZABLE),
@@ -136,16 +199,23 @@ FUNC_OPS[Text] += [
     FuncOp("current_role()", [], unsupported=ExprKind.MATERIALIZABLE),
     FuncOp("session_user()", [], unsupported=ExprKind.MATERIALIZABLE),
     FuncOp("current_schema()", [], unsupported=ExprKind.MATERIALIZABLE),
+    FuncOp("concat({}, {})", [Text, Text]),
+    FuncOp("jsonb_pretty{}", [Jsonb]),
+    FuncOp("btrim{}", [Text]),
+    FuncOp("btrim({}, {})", [Text, Text]),
 ]
 
 FUNC_OPS[Int] += [
-    FuncOp("bit_count{}", [Bytea]),
     FuncOp("bit_length{}", [Bytea]),
     FuncOp("bit_length{}", [Text]),
     FuncOp("ascii{}", [Text]),
     FuncOp("position({} in {})", [Text, Text]),
     FuncOp("length{}", [Text]),
+    FuncOp("char_length{}", [Text]),
+    FuncOp("map_length{}", [TextTextMap]),
+    FuncOp("list_length{}", [IntList]),
     FuncOp("mz_version_num()", [], unsupported=ExprKind.MATERIALIZABLE),
+    FuncOp("pg_backend_pid()", [], unsupported=ExprKind.MATERIALIZABLE),
     FuncOp("{} - {}", [Date, Date]),
 ]
 
@@ -157,7 +227,12 @@ FUNC_OPS[Timestamp] += [
     FuncOp("{} - {}", [Timestamp, Interval]),
     FuncOp("now()", [], unsupported=ExprKind.MATERIALIZABLE),
     FuncOp("current_timestamp()", [], unsupported=ExprKind.MATERIALIZABLE),
-    FuncOp("cast({} as Timestamp)", [MzTimestamp]),
+    FuncOp("cast({} as timestamp)", [MzTimestamp]),
+]
+
+FUNC_OPS[Date] += [
+    # FuncOp("cast({} as date)", [Text]),
+    FuncOp("cast({} as date)", [Timestamp]),
 ]
 
 FUNC_OPS[MzTimestamp] += [
@@ -167,14 +242,28 @@ FUNC_OPS[MzTimestamp] += [
 FUNC_OPS[Interval] += [
     FuncOp("{} - {}", [Timestamp, Timestamp]),
     FuncOp("{} - {}", [Time, Time]),
+    # FuncOp("cast({} as interval)", [Text]),
+    FuncOp("cast({} as interval)", [Time]),
 ]
 
 FUNC_OPS[Time] += [
     FuncOp("{} + {}", [Time, Interval]),
     FuncOp("{} - {}", [Time, Interval]),
+    # FuncOp("cast({} as time)", [Text]),
+    FuncOp("cast({} as time)", [Interval]),
 ]
 
-FUNC_OPS[IntList] += [FuncOp("{} || {}", [IntList, IntList])]
+FUNC_OPS[IntList] += [
+    FuncOp("{} || {}", [IntList, IntList]),
+    FuncOp("list_append({}, {})", [IntList, Int]),
+    FuncOp("list_prepend({}, {})", [Int, IntList]),
+    FuncOp("list_cat({}, {})", [IntList, IntList]),
+]
+
+FUNC_OPS[UUID] += [
+    FuncOp("uuid_generate_v5({}, {})", [UUID, Text]),
+    # FuncOp("cast({} as uuid)", [Text]),
+]
 
 
 def expression(
@@ -204,7 +293,7 @@ def expression(
                 return fnop.text.format(*exprs)
 
         if rng.random() < 0.9:
-            for col in random.sample(columns, len(columns)):
+            for col in rng.sample(columns, len(columns)):
                 if col.data_type == data_type:
                     return str(col)
 

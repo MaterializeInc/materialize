@@ -79,7 +79,7 @@ class Executor:
                 else "materialized"
             )
         self.mz_conn = psycopg.connect(
-            host="localhost",
+            host="127.0.0.1",
             port=self.ports[mz_service],
             user="materialize",
             dbname=self.database,
@@ -202,7 +202,7 @@ class KafkaExecutor(Executor):
             ],
         }
 
-        kafka_conf = {"bootstrap.servers": f"localhost:{self.ports['kafka']}"}
+        kafka_conf = {"bootstrap.servers": f"127.0.0.1:{self.ports['kafka']}"}
 
         a = AdminClient(kafka_conf)
         fs = a.create_topics(
@@ -220,7 +220,7 @@ class KafkaExecutor(Executor):
         topic = list(fs.keys())[0]
 
         schema_registry_conf = {
-            "url": f"http://localhost:{self.ports['schema-registry']}"
+            "url": f"http://127.0.0.1:{self.ports['schema-registry']}"
         }
         registry = SchemaRegistryClient(schema_registry_conf)
 
@@ -485,7 +485,7 @@ class MySqlExecutor(Executor):
     def create(self, logging_exe: Any | None = None) -> None:
         self.logging_exe = logging_exe
         self.mysql_conn = pymysql.connect(
-            host="localhost",
+            host="127.0.0.1",
             user="root",
             password=MySql.DEFAULT_ROOT_PASSWORD,
             database="mysql",
@@ -616,7 +616,7 @@ class PgExecutor(Executor):
     def create(self, logging_exe: Any | None = None) -> None:
         self.logging_exe = logging_exe
         self.pg_conn = psycopg.connect(
-            host="localhost",
+            host="127.0.0.1",
             user="postgres",
             password="postgres",
             port=self.ports["postgres"],
