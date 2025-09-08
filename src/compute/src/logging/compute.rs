@@ -19,7 +19,6 @@ use columnar::{Columnar, Ref};
 use differential_dataflow::Collection;
 use differential_dataflow::collection::AsCollection;
 use differential_dataflow::trace::{BatchReader, Cursor};
-use mz_compute_client::logging::ComputeLog::DataflowCurrent;
 use mz_compute_types::plan::LirId;
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowRef, Timestamp};
@@ -648,7 +647,7 @@ impl<A: Scheduler> DemuxState<A> {
             arrangement_size: Default::default(),
             lir_mapping: Default::default(),
             dataflow_global_ids: Default::default(),
-            export_packer: PermutedRowPacker::new(DataflowCurrent),
+            export_packer: PermutedRowPacker::new(ComputeLog::DataflowCurrent),
         }
     }
 }
