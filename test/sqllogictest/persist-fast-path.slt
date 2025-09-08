@@ -199,11 +199,11 @@ EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT *
 ----
 Explained Query:
   Finish limit=10 output=[#0]
-    Filter (integer_to_mz_timestamp(#0{value}) > mz_now())
+    Filter (mz_now() < integer_to_mz_timestamp(#0{value}))
       ReadStorage materialize.public.numbers
 
 Source materialize.public.numbers
-  filter=((integer_to_mz_timestamp(#0{value}) > mz_now()))
+  filter=((mz_now() < integer_to_mz_timestamp(#0{value})))
 
 Target cluster: quickstart
 

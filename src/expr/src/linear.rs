@@ -1507,7 +1507,7 @@ pub fn memoize_expr(
             // those to be in a specific form. However, we _should_ attend to the expression that is
             // on the opposite side of mz_now(), because it might be a complex expression in itself,
             // and is ok to deconstruct.
-            if let Some(other_side) = e.is_temporal_filter() {
+            if let Some((_func, other_side)) = e.as_mut_temporal_filter().ok() {
                 return Some(vec![other_side]);
             }
 
@@ -1646,7 +1646,6 @@ pub mod util {
 pub mod plan {
     use std::iter;
 
-    use mz_ore::soft_assert_or_log;
     use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
     use mz_repr::{Datum, Diff, Row, RowArena};
     use proptest::prelude::*;
@@ -1655,7 +1654,7 @@ pub mod plan {
 
     use crate::{
         BinaryFunc, EvalError, MapFilterProject, MirScalarExpr, ProtoMfpPlan, ProtoSafeMfpPlan,
-        UnaryFunc, UnmaterializableFunc, func,
+        UnaryFunc, func,
     };
 
     /// A wrapper type which indicates it is safe to simply evaluate all expressions.
@@ -1856,98 +1855,36 @@ pub mod plan {
             });
 
             for mut predicate in temporal.into_iter() {
-                let is_temporal_filter = predicate.is_temporal_filter().is_some(); // for the asserts
-                // Supported temporal predicates are exclusively binary operators.
-                if let MirScalarExpr::CallBinary {
-                    mut func,
-                    mut expr1,
-                    mut expr2,
-                } = predicate
-                {
-                    // Attempt to put `LogicalTimestamp` in the first argument position.
-                    if !expr1.contains_temporal()
-                        && *expr2
-                            == MirScalarExpr::CallUnmaterializable(UnmaterializableFunc::MzNow)
-                    {
-                        std::mem::swap(&mut expr1, &mut expr2);
-                        func = match func {
-                            BinaryFunc::Eq => BinaryFunc::Eq,
-                            BinaryFunc::Lt => BinaryFunc::Gt,
-                            BinaryFunc::Lte => BinaryFunc::Gte,
-                            BinaryFunc::Gt => BinaryFunc::Lt,
-                            BinaryFunc::Gte => BinaryFunc::Lte,
-                            x => {
-                                soft_assert_or_log!(
-                                    !is_temporal_filter,
-                                    "MfpPlan::create_from and is_temporal_filter should agree"
-                                );
-                                return Err(format!(
-                                    "Unsupported binary temporal operation: {:?}",
-                                    x
-                                ));
-                            }
-                        };
-                    }
+                let (func, expr2) = predicate.as_mut_temporal_filter()?;
+                let expr2 = expr2.clone();
 
-                    // Error if MLT is referenced in an unsupported position.
-                    if expr2.contains_temporal()
-                        || *expr1
-                            != MirScalarExpr::CallUnmaterializable(UnmaterializableFunc::MzNow)
-                    {
-                        soft_assert_or_log!(
-                            !is_temporal_filter,
-                            "MfpPlan::create_from and is_temporal_filter should agree"
+                // LogicalTimestamp <OP> <EXPR2> for several supported operators.
+                match func {
+                    BinaryFunc::Eq => {
+                        lower_bounds.push(expr2.clone());
+                        upper_bounds.push(
+                            expr2.call_unary(UnaryFunc::StepMzTimestamp(func::StepMzTimestamp)),
                         );
-                        return Err(format!(
-                            "Unsupported temporal predicate. Note: `mz_now()` must be directly compared to a mz_timestamp-castable expression. Expression found: {}",
-                            MirScalarExpr::CallBinary { func, expr1, expr2 },
-                        ));
                     }
-
-                    // LogicalTimestamp <OP> <EXPR2> for several supported operators.
-                    match func {
-                        BinaryFunc::Eq => {
-                            lower_bounds.push(*expr2.clone());
-                            upper_bounds.push(
-                                expr2.call_unary(UnaryFunc::StepMzTimestamp(func::StepMzTimestamp)),
-                            );
-                        }
-                        BinaryFunc::Lt => {
-                            upper_bounds.push(*expr2.clone());
-                        }
-                        BinaryFunc::Lte => {
-                            upper_bounds.push(
-                                expr2.call_unary(UnaryFunc::StepMzTimestamp(func::StepMzTimestamp)),
-                            );
-                        }
-                        BinaryFunc::Gt => {
-                            lower_bounds.push(
-                                expr2.call_unary(UnaryFunc::StepMzTimestamp(func::StepMzTimestamp)),
-                            );
-                        }
-                        BinaryFunc::Gte => {
-                            lower_bounds.push(*expr2.clone());
-                        }
-                        _ => {
-                            return Err(format!(
-                                "Unsupported binary temporal operation: {:?}",
-                                func
-                            ));
-                        }
+                    BinaryFunc::Lt => {
+                        upper_bounds.push(expr2.clone());
                     }
-                    soft_assert_or_log!(
-                        is_temporal_filter, // successfully found a temporal filter
-                        "MfpPlan::create_from and is_temporal_filter should agree"
-                    );
-                } else {
-                    soft_assert_or_log!(
-                        !is_temporal_filter,
-                        "MfpPlan::create_from and is_temporal_filter should agree"
-                    );
-                    return Err(format!(
-                        "Unsupported temporal predicate. Note: `mz_now()` must be directly compared to a non-temporal expression of mz_timestamp-castable type. Expression found: {}",
-                        predicate,
-                    ));
+                    BinaryFunc::Lte => {
+                        upper_bounds.push(
+                            expr2.call_unary(UnaryFunc::StepMzTimestamp(func::StepMzTimestamp)),
+                        );
+                    }
+                    BinaryFunc::Gt => {
+                        lower_bounds.push(
+                            expr2.call_unary(UnaryFunc::StepMzTimestamp(func::StepMzTimestamp)),
+                        );
+                    }
+                    BinaryFunc::Gte => {
+                        lower_bounds.push(expr2.clone());
+                    }
+                    _ => {
+                        return Err(format!("Unsupported binary temporal operation: {:?}", func));
+                    }
                 }
             }
 
