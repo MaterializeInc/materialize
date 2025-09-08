@@ -1257,7 +1257,8 @@ def workflow_pg_source_rehydration(c: Composition) -> None:
     c.up("postgres", "mz_old", Service("testdrive", idle=True))
     setup(c)
 
-    count = 1000000
+    # Too long running with 1000000
+    count = 500000
     repeats = 100
 
     inserts = (

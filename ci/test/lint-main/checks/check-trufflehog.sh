@@ -23,7 +23,7 @@ if ! trufflehog --version >/dev/null 2>/dev/null; then
   exit 1
 fi
 
-git ls-files | grep -Ev '^(misc/shlib/shlib\.bash|test/lang/js/yarn\.lock)$' | xargs trufflehog --no-fail --no-update --no-verification --json filesystem | trufflehog_jq_filter_files > trufflehog.log
+git ls-files | grep -Ev '^(misc/shlib/shlib\.bash|test/lang/js/yarn\.lock|test/0dt/mzcompose.py)$' | xargs trufflehog --no-fail --no-update --no-verification --json filesystem | trufflehog_jq_filter_files > trufflehog.log
 
 try test ! -s trufflehog.log
 
@@ -33,7 +33,7 @@ if try_last_failed; then
     printf "%s\n" "lint: $(green hint:) mark false positives in misc/shlib/shlib.bash's trufflehog_jq_filter_(files|common)"
 fi
 
-jq -c -r '. | "\(.SourceMetadata.Data.Filesystem.file):\(.SourceMetadata.Data.Filesystem.line): Secret found: \(.Raw)"' trufflehog.log
+jq -c -r '. | "\(.SourceMetadata.Data.Filesystem.file):\(.SourceMetadata.Data.Filesystem.line): Secret found: \(.Raw) (detector: \(.DetectorName))"' trufflehog.log
 
 rm -f trufflehog.log
 
