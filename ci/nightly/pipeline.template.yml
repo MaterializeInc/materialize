@@ -1986,7 +1986,6 @@ steps:
 
       - id: legacy-upgrade-docs
         label: "Legacy upgrade tests (last version from docs)"
-        parallelism: 2
         depends_on: build-aarch64
         timeout_in_minutes: 60
         plugins:
