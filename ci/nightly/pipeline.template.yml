@@ -2114,7 +2114,7 @@ steps:
     label: Zero downtime
     depends_on: build-x86_64
     timeout_in_minutes: 300
-    parallelism: 3
+    parallelism: 2
     plugins:
       - ./ci/plugins/mzcompose:
           composition: 0dt
