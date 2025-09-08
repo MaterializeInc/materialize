@@ -22,7 +22,7 @@ use differential_dataflow::trace::{BatchReader, Cursor};
 use mz_compute_client::logging::ComputeLog::DataflowCurrent;
 use mz_compute_types::plan::LirId;
 use mz_ore::cast::CastFrom;
-use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
+use mz_repr::{Datum, Diff, GlobalId, Row, RowRef, Timestamp};
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::{Col2ValBatcher, Column, columnar_exchange};
 use mz_timely_util::containers::ProvidedBuilder;
@@ -814,6 +814,19 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
         }
     }
 
+    /// Pack an export update key-value for the given export ID and dataflow index.
+    fn pack_export_update(
+        &mut self,
+        export_id: GlobalId,
+        dataflow_index: usize,
+    ) -> (&RowRef, &RowRef) {
+        self.state.export_packer.pack_slice(&[
+            make_string_datum(export_id, &mut self.state.scratch_string),
+            Datum::UInt64(u64::cast_from(self.state.worker_id)),
+            Datum::UInt64(u64::cast_from(dataflow_index)),
+        ])
+    }
+
     fn handle_export(
         &mut self,
         ExportReference {
@@ -823,11 +836,7 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
     ) {
         let export_id = Columnar::into_owned(export_id);
         let ts = self.ts();
-        let datum = self.state.export_packer.pack_slice(&[
-            make_string_datum(export_id, &mut self.state.scratch_string),
-            Datum::UInt64(u64::cast_from(self.state.worker_id)),
-            Datum::UInt64(u64::cast_from(dataflow_index)),
-        ]);
+        let datum = self.pack_export_update(export_id, dataflow_index);
         self.output.export.give((datum, ts, Diff::ONE));
 
         let existing = self
@@ -865,11 +874,7 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
         let ts = self.ts();
         let dataflow_index = export.dataflow_index;
 
-        let datum = self.state.export_packer.pack_slice(&[
-            make_string_datum(export_id, &mut self.state.scratch_string),
-            Datum::UInt64(u64::cast_from(self.state.worker_id)),
-            Datum::UInt64(u64::cast_from(dataflow_index)),
-        ]);
+        let datum = self.pack_export_update(export_id, dataflow_index);
         self.output.export.give((datum, ts, Diff::MINUS_ONE));
 
         match self.state.dataflow_export_counts.get_mut(&dataflow_index) {
