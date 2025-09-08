@@ -325,7 +325,7 @@ def execute_workload(
 
     # Reconnect as Mz disruptions may have destroyed the previous connection
     conn = psycopg.connect(
-        host="localhost",
+        host="127.0.0.1",
         port=ports[workload.mz_service],
         user="materialize",
         dbname="materialize",

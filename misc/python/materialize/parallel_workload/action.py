@@ -25,7 +25,14 @@ from psycopg import Connection
 from psycopg.errors import OperationalError
 
 import materialize.parallel_workload.database
-from materialize.data_ingest.data_type import NUMBER_TYPES, Boolean, Text, TextTextMap
+from materialize.data_ingest.data_type import (
+    NUMBER_TYPES,
+    Boolean,
+    IntArray,
+    IntList,
+    Text,
+    TextTextMap,
+)
 from materialize.data_ingest.query_error import QueryError
 from materialize.data_ingest.row import Operation
 from materialize.mzcompose import get_default_system_parameters
@@ -148,9 +155,12 @@ class Action:
             "numeric field overflow",
             "division by zero",
             "out of range",
-            "cannot evaluate unmaterializable function",  # TODO: Remove when https://github.com/MaterializeInc/database-issues/issues/9657 is fixed
+            "is only defined for finite arguments",
             "Window function performance issue",  # TODO: Remove when https://github.com/MaterializeInc/database-issues/issues/9644 is fixed
             "Invalid data in source, saw retractions",  # TODO: Remove when https://github.com/MaterializeInc/database-issues/issues/9656 is fixed
+            "Negative multiplicities in TopK",  # TODO: Remove when https://github.com/MaterializeInc/database-issues/issues/9668 is fixed
+            "Non-positive multiplicity in DistinctBy",  # TODO: Remove when https://github.com/MaterializeInc/database-issues/issues/9668 is fixed
+            "Invalid data in source errors, saw retractions",  # TODO: Remove when https://github.com/MaterializeInc/database-issues/issues/9670 is fixed
         ]
         if exe.db.complexity in (Complexity.DDL, Complexity.DDLOnly):
             result.extend(
@@ -253,11 +263,33 @@ class Action:
                 column1 = self.rng.choice(all_columns)
                 column2 = self.rng.choice(all_columns)
                 column3 = self.rng.choice(all_columns)
-                fns = ["COUNT"]
+                fns = [
+                    "COUNT({})",
+                    "LIST_AGG({})",
+                    "JSONB_AGG({})",
+                ]
+                if column1.data_type == Text:
+                    fns.extend(["STRING_AGG({}, ',')"])
+                if column1.data_type not in [TextTextMap, IntArray, IntList]:
+                    fns.extend(["ARRAY_AGG({})"])
                 if column1.data_type in NUMBER_TYPES:
-                    fns.extend(["SUM", "AVG", "MAX", "MIN"])
+                    fns.extend(
+                        [
+                            "SUM({})",
+                            "AVG({})",
+                            "MAX({})",
+                            "MIN({})",
+                            "STDDEV({})",
+                            "STDDEV_POP({})",
+                            "STDDEV_SAMP({})",
+                            "VAR_SAMP({})",
+                            "VAR_POP({})",
+                        ]
+                    )
+                elif column1.data_type == Boolean:
+                    fns.extend(["BOOL_AND({})", "BOOL_OR({})"])
                 window_fn = self.rng.choice(fns)
-                expressions += f", {window_fn}({column1}) OVER (PARTITION BY {column2} ORDER BY {column3})"
+                expressions += f", {window_fn.format(column1)} OVER (PARTITION BY {column2} ORDER BY {column3})"
         else:
             expressions = "*"
 
@@ -319,6 +351,7 @@ class FetchAction(Action):
                 [
                     "does not exist",
                     "subscribe has been terminated because underlying relation",
+                    "subscribe has been terminated because underlying cluster",
                 ]
             )
         return result
@@ -380,7 +413,6 @@ class SelectAction(Action):
                 "in the same timedomain",
                 'is not allowed from the "mz_catalog_server" cluster',
                 "timed out before ingesting the source's visible frontier when real-time-recency query issued",
-                "unexpected panic during query optimization: The fast_path_optimizer shouldn't make a fast path plan slow path",  # TODO: Remove when https://github.com/MaterializeInc/database-issues/issues/9645 is fixed
             ]
         )
         if exe.db.complexity == Complexity.DDL:
@@ -716,9 +748,20 @@ class SourceInsertAction(Action):
 
 class UpdateAction(Action):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
-        return [
-            "canceling statement due to statement timeout",
-        ] + super().errors_to_ignore(exe)
+        result = super().errors_to_ignore(exe)
+        result.extend(
+            [
+                "canceling statement due to statement timeout",
+            ]
+        )
+
+        if exe.db.complexity == Complexity.DDL:
+            result.extend(
+                [
+                    "does not exist",
+                ]
+            )
+        return result
 
     def run(self, exe: Executor) -> bool:
         table = None
@@ -2626,7 +2669,7 @@ read_action_list = ActionList(
         (SelectAction, 100),
         (SelectOneAction, 1),
         # (SQLsmithAction, 30),  # Questionable use
-        # (CopyToS3Action, 100),  # TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/9661 is fixed
+        (CopyToS3Action, 100),  # TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/9661 is fixed
         (SetClusterAction, 1),
         (CommitRollbackAction, 30),
         (ReconnectAction, 1),
