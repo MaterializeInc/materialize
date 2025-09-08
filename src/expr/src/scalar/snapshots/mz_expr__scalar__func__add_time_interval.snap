@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    is_monotone = (true, true),\n    output_type = \"CheckedTimestamp<chrono::DateTime<Utc>>\",\n    is_infix_op = true,\n    sqlname = \"+\",\n    propagates_nulls = true\n)]\nfn add_time_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {\n    let time = a.unwrap_time();\n    let interval = b.unwrap_interval();\n    let (t, _) = time.overflowing_add_signed(interval.duration_as_chrono());\n    Datum::Time(t)\n}\n"
+expression: "#[sqlfunc(\n    is_monotone = \"(false, false)\",\n    output_type = \"CheckedTimestamp<chrono::DateTime<Utc>>\",\n    is_infix_op = true,\n    sqlname = \"+\",\n    propagates_nulls = true\n)]\nfn add_time_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {\n    let time = a.unwrap_time();\n    let interval = b.unwrap_interval();\n    let (t, _) = time.overflowing_add_signed(interval.duration_as_chrono());\n    Datum::Time(t)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -55,7 +55,7 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for AddTimeInterval {
         true
     }
     fn is_monotone(&self) -> (bool, bool) {
-        (true, true)
+        (false, false)
     }
     fn propagates_nulls(&self) -> bool {
         true

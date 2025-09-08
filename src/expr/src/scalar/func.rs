@@ -494,7 +494,7 @@ fn add_date_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalEr
 }
 
 #[sqlfunc(
-    is_monotone = "(true, true)",
+    is_monotone = "(false, false)",
     output_type = "CheckedTimestamp<chrono::DateTime<Utc>>",
     is_infix_op = true,
     sqlname = "+",
@@ -1493,7 +1493,7 @@ fn mul_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
 }
 
 #[sqlfunc(
-    is_monotone = "(true, true)",
+    is_monotone = "(false, false)",
     output_type = "Interval",
     is_infix_op = true,
     sqlname = "*",
@@ -1689,7 +1689,7 @@ fn div_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
 }
 
 #[sqlfunc(
-    is_monotone = "(true, false)",
+    is_monotone = "(false, false)",
     output_type = "Interval",
     is_infix_op = true,
     sqlname = "/",
@@ -4562,8 +4562,9 @@ impl BinaryFunc {
             | BinaryFunc::AddTimestampTzInterval
             | BinaryFunc::AddDateInterval
             | BinaryFunc::AddDateTime
-            | BinaryFunc::AddTimeInterval
             | BinaryFunc::AddNumeric => (true, true),
+            // <time> + <interval> wraps!
+            BinaryFunc::AddTimeInterval => (false, false),
             BinaryFunc::BitAndInt16
             | BinaryFunc::BitAndInt32
             | BinaryFunc::BitAndInt64
@@ -4621,8 +4622,8 @@ impl BinaryFunc {
             | BinaryFunc::MulUInt64
             | BinaryFunc::MulFloat32
             | BinaryFunc::MulFloat64
-            | BinaryFunc::MulNumeric
-            | BinaryFunc::MulInterval => (true, true),
+            | BinaryFunc::MulNumeric => (true, true),
+            BinaryFunc::MulInterval => (false, false),
             BinaryFunc::DivInt16
             | BinaryFunc::DivInt32
             | BinaryFunc::DivInt64
@@ -4631,8 +4632,8 @@ impl BinaryFunc {
             | BinaryFunc::DivUInt64
             | BinaryFunc::DivFloat32
             | BinaryFunc::DivFloat64
-            | BinaryFunc::DivNumeric
-            | BinaryFunc::DivInterval => (true, false),
+            | BinaryFunc::DivNumeric => (true, false),
+            BinaryFunc::DivInterval => (false, false),
             BinaryFunc::ModInt16
             | BinaryFunc::ModInt32
             | BinaryFunc::ModInt64
