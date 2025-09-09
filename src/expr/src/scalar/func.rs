@@ -63,9 +63,7 @@ use sha2::{Sha224, Sha256, Sha384, Sha512};
 use subtle::ConstantTimeEq;
 
 use crate::scalar::func::format::DateTimeFormat;
-use crate::scalar::{
-    ProtoBinaryFunc, ProtoUnaryFunc, ProtoVariadicFunc,
-};
+use crate::scalar::{ProtoBinaryFunc, ProtoUnaryFunc, ProtoVariadicFunc};
 use crate::{EvalError, MirScalarExpr, like_pattern};
 
 #[macro_use]
@@ -9756,14 +9754,6 @@ mod test {
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(4096))]
-
-        #[mz_ore::test]
-        #[cfg_attr(miri, ignore)] // too slow
-        fn unmaterializable_func_protobuf_roundtrip(expect in any::<UnmaterializableFunc>()) {
-            let actual = protobuf_roundtrip::<_, ProtoUnmaterializableFunc>(&expect);
-            assert_ok!(actual);
-            assert_eq!(actual.unwrap(), expect);
-        }
 
         #[mz_ore::test]
         #[cfg_attr(miri, ignore)] // too slow

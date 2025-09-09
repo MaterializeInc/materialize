@@ -193,3 +193,24 @@ impl RustType<ProtoUnmaterializableFunc> for UnmaterializableFunc {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use mz_ore::assert_ok;
+    use mz_proto::protobuf_roundtrip;
+    use proptest::prelude::*;
+
+    use super::*;
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(4096))]
+
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // too slow
+        fn unmaterializable_func_protobuf_roundtrip(expect in any::<UnmaterializableFunc>()) {
+            let actual = protobuf_roundtrip::<_, ProtoUnmaterializableFunc>(&expect);
+            assert_ok!(actual);
+            assert_eq!(actual.unwrap(), expect);
+        }
+    }
+}
