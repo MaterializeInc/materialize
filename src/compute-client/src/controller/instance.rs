@@ -67,7 +67,7 @@ use crate::protocol::command::{
 use crate::protocol::history::ComputeCommandHistory;
 use crate::protocol::response::{
     ComputeResponse, CopyToResponse, FrontiersResponse, PeekResponse, StatusResponse,
-    SubscribeBatch, SubscribeResponse,
+    SubscribeBatch, SubscribeBatchContents, SubscribeResponse,
 };
 
 #[derive(Error, Debug)]
@@ -1223,7 +1223,7 @@ where
                 SubscribeBatch {
                     lower: subscribe.frontier.clone(),
                     upper: subscribe.frontier,
-                    updates: Err(ERROR_TARGET_REPLICA_FAILED.into()),
+                    updates: SubscribeBatchContents::Error(ERROR_TARGET_REPLICA_FAILED.into()),
                 },
             );
             self.deliver_response(response);
@@ -2138,7 +2138,7 @@ where
                         self.subscribes.insert(subscribe_id, subscribe);
                     }
 
-                    if let Ok(updates) = updates.as_mut() {
+                    if let SubscribeBatchContents::Updates(updates) = &mut updates {
                         updates.retain(|(time, _data, _diff)| lower.less_equal(time));
                     }
                     self.deliver_response(ComputeControllerResponse::SubscribeResponse(

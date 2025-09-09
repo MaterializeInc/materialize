@@ -15,7 +15,7 @@ use mz_repr::{CatalogItemId, GlobalId, RelationDesc, Timestamp};
 use mz_storage_types::connections::aws::AwsConnection;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::sinks::S3UploadInfo;
-use proptest::prelude::{Arbitrary, BoxedStrategy, Strategy, any};
+use proptest::prelude::{Arbitrary, BoxedStrategy, Just, Strategy, any, prop_oneof};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
@@ -191,7 +191,9 @@ impl RustType<ProtoComputeSinkConnection> for ComputeSinkConnection<CollectionMe
         use proto_compute_sink_connection::Kind;
         ProtoComputeSinkConnection {
             kind: Some(match self {
-                ComputeSinkConnection::Subscribe(_) => Kind::Subscribe(()),
+                ComputeSinkConnection::Subscribe(subscribe) => {
+                    Kind::Subscribe(subscribe.into_proto())
+                }
                 ComputeSinkConnection::MaterializedView(materialized_view) => {
                     Kind::MaterializedView(materialized_view.into_proto())
                 }
@@ -211,7 +213,7 @@ impl RustType<ProtoComputeSinkConnection> for ComputeSinkConnection<CollectionMe
             .kind
             .ok_or_else(|| TryFromProtoError::missing_field("ProtoComputeSinkConnection::kind"))?;
         Ok(match kind {
-            Kind::Subscribe(_) => ComputeSinkConnection::Subscribe(SubscribeSinkConnection {}),
+            Kind::Subscribe(subscribe) => ComputeSinkConnection::Subscribe(subscribe.into_rust()?),
             Kind::MaterializedView(materialized_view) => {
                 ComputeSinkConnection::MaterializedView(materialized_view.into_rust()?)
             }
@@ -223,9 +225,123 @@ impl RustType<ProtoComputeSinkConnection> for ComputeSinkConnection<CollectionMe
     }
 }
 
+/// Describes how to present the output of a subscribe.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SubscribeOutput {
+    /// Emit diffs for inserts, updates, and deletes.
+    Diffs,
+    /// Emit records within a timestamp in a specified order, but do not emit diffs.
+    WithinTimestampOrderBy {
+        /// We pretend that mz_diff is prepended to the normal columns, making it index 0
+        order_by: Vec<mz_expr::ColumnOrder>,
+    },
+    /// Emit the envelope upsert format.
+    EnvelopeUpsert {
+        /// Order by with just keys
+        order_by_keys: Vec<mz_expr::ColumnOrder>,
+    },
+    /// Emit the envelope debezium format.
+    EnvelopeDebezium {
+        /// Order by with just keys
+        order_by_keys: Vec<mz_expr::ColumnOrder>,
+    },
+}
+
+impl Arbitrary for SubscribeOutput {
+    type Parameters = ();
+    type Strategy = BoxedStrategy<Self>;
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        prop_oneof![
+            Just(SubscribeOutput::Diffs),
+            any::<Vec<mz_expr::ColumnOrder>>()
+                .prop_map(|order_by| SubscribeOutput::WithinTimestampOrderBy { order_by }),
+            any::<Vec<mz_expr::ColumnOrder>>()
+                .prop_map(|order_by_keys| SubscribeOutput::EnvelopeUpsert { order_by_keys }),
+            any::<Vec<mz_expr::ColumnOrder>>()
+                .prop_map(|order_by_keys| SubscribeOutput::EnvelopeDebezium { order_by_keys }),
+        ]
+        .boxed()
+    }
+}
+
 /// TODO(database-issues#7533): Add documentation.
-#[derive(Arbitrary, Default, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct SubscribeSinkConnection {}
+#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+pub struct SubscribeSinkConnection {
+    /// The output format for the subscribe.
+    pub output: SubscribeOutput,
+}
+
+impl Default for SubscribeSinkConnection {
+    fn default() -> Self {
+        Self {
+            output: SubscribeOutput::Diffs,
+        }
+    }
+}
+
+impl RustType<ProtoSubscribeSinkConnection> for SubscribeSinkConnection {
+    fn into_proto(&self) -> ProtoSubscribeSinkConnection {
+        ProtoSubscribeSinkConnection {
+            output: Some(self.output.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: ProtoSubscribeSinkConnection) -> Result<Self, TryFromProtoError> {
+        Ok(SubscribeSinkConnection {
+            output: proto
+                .output
+                .into_rust_if_some("ProtoSubscribeSinkConnection::output")?,
+        })
+    }
+}
+
+impl RustType<ProtoSubscribeOutput> for SubscribeOutput {
+    fn into_proto(&self) -> ProtoSubscribeOutput {
+        use proto_subscribe_output::Kind;
+        ProtoSubscribeOutput {
+            kind: Some(match self {
+                SubscribeOutput::Diffs => Kind::Diffs(()),
+                SubscribeOutput::WithinTimestampOrderBy { order_by } => {
+                    Kind::WithinTimestampOrderBy(ProtoWithinTimestampOrderBy {
+                        order_by: order_by.into_proto(),
+                    })
+                }
+                SubscribeOutput::EnvelopeUpsert { order_by_keys } => {
+                    Kind::EnvelopeUpsert(ProtoEnvelopeUpsert {
+                        order_by_keys: order_by_keys.into_proto(),
+                    })
+                }
+                SubscribeOutput::EnvelopeDebezium { order_by_keys } => {
+                    Kind::EnvelopeDebezium(ProtoEnvelopeDebezium {
+                        order_by_keys: order_by_keys.into_proto(),
+                    })
+                }
+            }),
+        }
+    }
+
+    fn from_proto(proto: ProtoSubscribeOutput) -> Result<Self, TryFromProtoError> {
+        use proto_subscribe_output::Kind;
+        match proto.kind {
+            Some(Kind::Diffs(())) => Ok(SubscribeOutput::Diffs),
+            Some(Kind::WithinTimestampOrderBy(order)) => {
+                Ok(SubscribeOutput::WithinTimestampOrderBy {
+                    order_by: order.order_by.into_rust()?,
+                })
+            }
+            Some(Kind::EnvelopeUpsert(upsert)) => Ok(SubscribeOutput::EnvelopeUpsert {
+                order_by_keys: upsert.order_by_keys.into_rust()?,
+            }),
+            Some(Kind::EnvelopeDebezium(debezium)) => Ok(SubscribeOutput::EnvelopeDebezium {
+                order_by_keys: debezium.order_by_keys.into_rust()?,
+            }),
+            None => Err(TryFromProtoError::missing_field(
+                "ProtoSubscribeOutput::kind",
+            )),
+        }
+    }
+}
 
 /// Connection attributes required to do a oneshot copy to s3.
 #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]

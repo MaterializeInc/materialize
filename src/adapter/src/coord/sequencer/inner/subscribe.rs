@@ -214,6 +214,7 @@ impl Coordinator {
             debug_name,
             optimizer_config,
             self.optimizer_metrics(),
+            plan.output.clone(),
         );
         let catalog = self.owned_catalog();
 
@@ -341,6 +342,20 @@ impl Coordinator {
         let sink_id = global_lir_plan.sink_id();
 
         let (tx, rx) = mpsc::unbounded_channel();
+
+        let output = match output {
+            mz_sql::plan::SubscribeOutput::Diffs => mz_compute_types::sinks::SubscribeOutput::Diffs,
+            mz_sql::plan::SubscribeOutput::WithinTimestampOrderBy { order_by } => {
+                mz_compute_types::sinks::SubscribeOutput::WithinTimestampOrderBy { order_by }
+            }
+            mz_sql::plan::SubscribeOutput::EnvelopeUpsert { order_by_keys } => {
+                mz_compute_types::sinks::SubscribeOutput::EnvelopeUpsert { order_by_keys }
+            }
+            mz_sql::plan::SubscribeOutput::EnvelopeDebezium { order_by_keys } => {
+                mz_compute_types::sinks::SubscribeOutput::EnvelopeDebezium { order_by_keys }
+            }
+        };
+
         let active_subscribe = ActiveSubscribe {
             conn_id: ctx.session().conn_id().clone(),
             session_uuid: ctx.session().uuid(),

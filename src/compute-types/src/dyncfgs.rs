@@ -377,6 +377,23 @@ pub const PEEK_STASH_BATCH_SIZE: Config<usize> = Config::new(
     "The size, as number of rows, of each batch pumped from the peek result iterator (in one iteration through the worker loop) when stashing peek responses.",
 );
 
+/// Whether to enable the subscribe response stash, for sending back large subscribe
+/// responses. The response stash will only be used for results that exceed
+/// `compute_subscribe_response_stash_threshold_bytes`.
+pub const ENABLE_SUBSCRIBE_RESPONSE_STASH: Config<bool> = Config::new(
+    "enable_compute_subscribe_response_stash",
+    false,
+    "Whether to enable the subscribe response stash, for sending back large subscribe responses. Will only be used for results that exceed compute_subscribe_response_stash_threshold_bytes.",
+);
+
+/// The threshold for subscribe response size above which we should use the subscribe
+/// response stash. Only used if the subscribe response stash is enabled.
+pub const SUBSCRIBE_RESPONSE_STASH_THRESHOLD_BYTES: Config<usize> = Config::new(
+    "compute_subscribe_response_stash_threshold_bytes",
+    1024 * 1024 * 300, /* 300mb */
+    "The threshold above which to use the subscribe response stash, for sending back large subscribe responses.",
+);
+
 /// Adds the full set of all compute `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -426,4 +443,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&PEEK_RESPONSE_STASH_READ_MEMORY_BUDGET_BYTES)
         .add(&PEEK_STASH_NUM_BATCHES)
         .add(&PEEK_STASH_BATCH_SIZE)
+        .add(&ENABLE_SUBSCRIBE_RESPONSE_STASH)
+        .add(&SUBSCRIBE_RESPONSE_STASH_THRESHOLD_BYTES)
 }

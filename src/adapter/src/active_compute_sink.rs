@@ -12,19 +12,23 @@
 use std::cmp::Ordering;
 use std::collections::BTreeSet;
 use std::iter;
+use std::sync::Arc;
 
 use anyhow::anyhow;
 use itertools::Itertools;
 use mz_adapter_types::connection::ConnectionId;
-use mz_compute_client::protocol::response::SubscribeBatch;
+use mz_compute_client::protocol::response::{SubscribeBatch, SubscribeBatchContents};
+use mz_compute_types::sinks::SubscribeOutput;
 use mz_controller_types::ClusterId;
 use mz_expr::compare_columns;
 use mz_ore::cast::CastFrom;
 use mz_ore::now::EpochMillis;
+use mz_persist_client::{PersistClient, Schemas};
+use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::adt::numeric;
 use mz_repr::{CatalogItemId, Datum, Diff, GlobalId, IntoRowIterator, Row, Timestamp};
-use mz_sql::plan::SubscribeOutput;
 use mz_storage_types::instances::StorageInstanceId;
+use mz_storage_types::sources::SourceData;
 use timely::progress::Antichain;
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
@@ -160,12 +164,73 @@ impl ActiveSubscribe {
     /// Processes a subscribe response from the controller.
     ///
     /// Returns `true` if the subscribe is finished.
-    pub fn process_response(&self, batch: SubscribeBatch) -> bool {
+    pub async fn process_response(
+        &self,
+        batch: SubscribeBatch,
+        mut persist_client: PersistClient,
+    ) -> bool {
         let mut rows = match batch.updates {
-            Ok(rows) => rows,
-            Err(s) => {
+            SubscribeBatchContents::Updates(rows) => rows,
+            SubscribeBatchContents::Error(s) => {
                 self.send(PeekResponseUnary::Error(s));
                 return true;
+            }
+            SubscribeBatchContents::Stashed(stashed) => {
+                // Read the stashed batches from persist and consolidate them
+                let mut all_updates = Vec::new();
+
+                // First add any inline updates
+                all_updates.extend(stashed.inline_updates.clone());
+
+                // Read the stashed batches
+                if !stashed.batches.is_empty() {
+                    let mut batches = Vec::new();
+                    for proto_batch in stashed.batches.iter() {
+                        let batch = persist_client
+                            .batch_from_transmittable_batch(&stashed.shard_id, proto_batch.clone());
+                        batches.push(batch);
+                    }
+
+                    // We want all the updates in the batch, so read from the
+                    // beginning.
+                    let as_of = Antichain::from_elem(Timestamp::MIN);
+
+                    let read_schemas: Schemas<SourceData, ()> = Schemas {
+                        id: None,
+                        key: Arc::new(stashed.relation_desc.clone()),
+                        val: Arc::new(UnitSchema),
+                    };
+
+                    let mut cursor = persist_client
+                        .read_batches_consolidated::<_, _, _, i64>(
+                            stashed.shard_id,
+                            as_of.clone(),
+                            read_schemas,
+                            batches,
+                            |_stats| true,
+                            usize::MAX, // Memory budget - use max for now
+                        )
+                        .await
+                        .expect("invalid usage");
+
+                    while let Some(rows) = cursor.next().await {
+                        for ((key, _val), ts, diff) in rows {
+                            if let Ok(source_data) = key {
+                                if let Ok(row) = source_data.0 {
+                                    all_updates.push((ts.clone(), row, Diff::from(diff)));
+                                }
+                            }
+                        }
+                    }
+
+                    // Clean up the batches
+                    let batches = cursor.into_lease();
+                    for batch in batches {
+                        batch.delete().await;
+                    }
+                }
+
+                all_updates
             }
         };
 

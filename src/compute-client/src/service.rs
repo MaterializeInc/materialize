@@ -24,7 +24,7 @@ use mz_expr::row::RowCollection;
 use mz_ore::cast::CastInto;
 use mz_ore::soft_panic_or_log;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_repr::{Diff, GlobalId, Row};
+use mz_repr::GlobalId;
 use mz_service::client::{GenericClient, Partitionable, PartitionedState};
 use timely::PartialOrder;
 use timely::progress::frontier::{Antichain, MutableAntichain};
@@ -34,7 +34,7 @@ use crate::controller::ComputeControllerTimestamp;
 use crate::protocol::command::ComputeCommand;
 use crate::protocol::response::{
     ComputeResponse, CopyToResponse, FrontiersResponse, PeekResponse, StashedPeekResponse,
-    SubscribeBatch, SubscribeResponse,
+    StashedSubscribeBatch, SubscribeBatch, SubscribeBatchContents, SubscribeResponse,
 };
 
 include!(concat!(env!("OUT_DIR"), "/mz_compute_client.service.rs"));
@@ -317,11 +317,15 @@ where
                 // we have already announced that the subscribe has been dropped, in which case we
                 // must keep quiet.
                 if old_frontier != new_frontier && !tracked.dropped {
-                    let updates = match &mut tracked.stashed_updates {
-                        Ok(stashed_updates) => {
+                    let stashed = std::mem::replace(
+                        &mut tracked.stashed_updates,
+                        SubscribeBatchContents::Updates(Vec::new()),
+                    );
+                    let updates = match stashed {
+                        SubscribeBatchContents::Updates(mut stashed_updates) => {
                             // The compute protocol requires us to only send out consolidated
                             // batches.
-                            consolidate_updates(stashed_updates);
+                            consolidate_updates(&mut stashed_updates);
 
                             let mut ship = Vec::new();
                             let mut keep = Vec::new();
@@ -332,10 +336,16 @@ where
                                     ship.push((time, data, diff));
                                 }
                             }
-                            tracked.stashed_updates = Ok(keep);
-                            Ok(ship)
+                            tracked.stashed_updates = SubscribeBatchContents::Updates(keep);
+                            SubscribeBatchContents::Updates(ship)
                         }
-                        Err(text) => Err(text.clone()),
+                        SubscribeBatchContents::Stashed(stashed) => {
+                            tracing::info!(?stashed.num_rows_batches, "yielding stashed batches");
+                            SubscribeBatchContents::Stashed(stashed)
+                        }
+                        SubscribeBatchContents::Error(text) => {
+                            SubscribeBatchContents::Error(text.clone())
+                        }
                     };
                     Some(ComputeResponse::SubscribeResponse(
                         subscribe_id,
@@ -532,7 +542,7 @@ struct PendingSubscribe<T> {
     /// The subscribe frontiers of the partitioned shards.
     frontiers: MutableAntichain<T>,
     /// The updates we are holding back until their timestamps are complete.
-    stashed_updates: Result<Vec<(T, Row, Diff)>, String>,
+    stashed_updates: SubscribeBatchContents<T>,
     /// The row size of stashed updates, for `max_result_size` checking.
     stashed_result_size: usize,
     /// Whether we have already emitted a `DroppedAt` response for this subscribe.
@@ -550,7 +560,7 @@ impl<T: ComputeControllerTimestamp> PendingSubscribe<T> {
 
         Self {
             frontiers,
-            stashed_updates: Ok(Vec::new()),
+            stashed_updates: SubscribeBatchContents::Updates(Vec::new()),
             stashed_result_size: 0,
             dropped: false,
         }
@@ -560,27 +570,42 @@ impl<T: ComputeControllerTimestamp> PendingSubscribe<T> {
     ///
     /// This also implements the short-circuit behavior of error responses, and performs
     /// `max_result_size` checking.
-    fn stash(&mut self, new_updates: Result<Vec<(T, Row, Diff)>, String>, max_result_size: u64) {
-        match (&mut self.stashed_updates, new_updates) {
-            (Err(_), _) => {
+    fn stash(&mut self, new_updates: SubscribeBatchContents<T>, max_result_size: u64) {
+        match (&mut self.stashed_updates, &new_updates) {
+            (SubscribeBatchContents::Error(_), _) => {
                 // Subscribe is borked; nothing to do.
                 // TODO: Consider refreshing error?
             }
-            (_, Err(text)) => {
-                self.stashed_updates = Err(text);
+            (_, SubscribeBatchContents::Error(text)) => {
+                self.stashed_updates = SubscribeBatchContents::Error(text.clone());
             }
-            (Ok(stashed), Ok(new)) => {
+            (SubscribeBatchContents::Updates(stashed), SubscribeBatchContents::Updates(new)) => {
                 let new_size: usize = new.iter().map(|(_, row, _)| row.byte_len()).sum();
                 self.stashed_result_size += new_size;
 
                 if self.stashed_result_size > max_result_size.cast_into() {
-                    self.stashed_updates = Err(format!(
+                    self.stashed_updates = SubscribeBatchContents::Error(format!(
                         "total result exceeds max size of {}",
                         ByteSize::b(max_result_size)
                     ));
                 } else {
-                    stashed.extend(new);
+                    stashed.extend(new.iter().cloned());
                 }
+            }
+            (SubscribeBatchContents::Updates(_), SubscribeBatchContents::Stashed(_))
+            | (SubscribeBatchContents::Stashed(_), SubscribeBatchContents::Updates(_))
+            | (SubscribeBatchContents::Stashed(_), SubscribeBatchContents::Stashed(_)) => {
+                // The merge function expects concrete mz_repr::Timestamp types
+                // Since T is ComputeControllerTimestamp, we can safely cast
+                let old_updates = mem::replace(
+                    &mut self.stashed_updates,
+                    SubscribeBatchContents::Updates(Vec::new()),
+                );
+                let old_concrete = cast_subscribe_batch_contents_to_concrete(old_updates);
+                let new_concrete = cast_subscribe_batch_contents_to_concrete(new_updates);
+                let merged_concrete =
+                    merge_subscribe_batch_contents(old_concrete, new_concrete, max_result_size);
+                self.stashed_updates = cast_subscribe_batch_contents_from_concrete(merged_concrete);
             }
         }
     }
@@ -666,6 +691,134 @@ fn merge_peek_responses(
                 shard_id: shard_id1,
                 batches: batches1,
                 inline_rows: inline_rows1,
+            }))
+        }
+        _ => unreachable!("handled above"),
+    }
+}
+
+/// Cast SubscribeBatchContents from generic T to concrete Timestamp.
+/// In practice T is always mz_repr::Timestamp for ComputeControllerTimestamp.
+fn cast_subscribe_batch_contents_to_concrete<T>(
+    contents: SubscribeBatchContents<T>,
+) -> SubscribeBatchContents<mz_repr::Timestamp>
+where
+    T: ComputeControllerTimestamp,
+{
+    // Safety: T is always mz_repr::Timestamp in practice for ComputeControllerTimestamp
+    unsafe { std::mem::transmute(contents) }
+}
+
+/// Cast SubscribeBatchContents from concrete Timestamp to generic T.
+/// In practice T is always mz_repr::Timestamp for ComputeControllerTimestamp.
+fn cast_subscribe_batch_contents_from_concrete<T>(
+    contents: SubscribeBatchContents<mz_repr::Timestamp>,
+) -> SubscribeBatchContents<T>
+where
+    T: ComputeControllerTimestamp,
+{
+    // Safety: T is always mz_repr::Timestamp in practice for ComputeControllerTimestamp
+    unsafe { std::mem::transmute(contents) }
+}
+
+/// Merge two [`SubscribeBatchContents`] with concrete Timestamp.
+fn merge_subscribe_batch_contents(
+    contents1: SubscribeBatchContents<mz_repr::Timestamp>,
+    contents2: SubscribeBatchContents<mz_repr::Timestamp>,
+    max_result_size: u64,
+) -> SubscribeBatchContents<mz_repr::Timestamp> {
+    use SubscribeBatchContents::*;
+
+    // Errors short-circuit.
+    let (contents1, contents2) = match (contents1, contents2) {
+        (Error(e), _) | (_, Error(e)) => return Error(e),
+        (contents1, contents2) => (contents1, contents2),
+    };
+
+    // Calculate total size and check against max_result_size
+    let total_size = match (&contents1, &contents2) {
+        (Updates(updates1), Updates(updates2)) => {
+            updates1
+                .iter()
+                .map(|(_, row, _)| row.byte_len())
+                .sum::<usize>()
+                + updates2
+                    .iter()
+                    .map(|(_, row, _)| row.byte_len())
+                    .sum::<usize>()
+        }
+        (Updates(updates), Stashed(stashed)) | (Stashed(stashed), Updates(updates)) => {
+            updates
+                .iter()
+                .map(|(_, row, _)| row.byte_len())
+                .sum::<usize>()
+                + stashed.size_bytes()
+        }
+        (Stashed(stashed1), Stashed(stashed2)) => stashed1.size_bytes() + stashed2.size_bytes(),
+        (Error(_), _) | (_, Error(_)) => 0, // Errors don't contribute to size
+    };
+
+    if total_size > max_result_size.cast_into() {
+        return Error(format!(
+            "result exceeds max size of {}",
+            ByteSize::b(max_result_size)
+        ));
+    }
+
+    match (contents1, contents2) {
+        (Updates(mut updates1), Updates(updates2)) => {
+            updates1.extend(updates2);
+            Updates(updates1)
+        }
+        (Updates(updates), Stashed(mut stashed)) | (Stashed(mut stashed), Updates(updates)) => {
+            stashed.inline_updates.extend(updates);
+            Stashed(stashed)
+        }
+        (Stashed(stashed1), Stashed(stashed2)) => {
+            // Deconstruct so we don't miss adding new fields. We need to be careful about
+            // merging everything!
+            let StashedSubscribeBatch {
+                num_rows_batches: num_rows_batches1,
+                encoded_size_bytes: encoded_size_bytes1,
+                relation_desc: relation_desc1,
+                shard_id: shard_id1,
+                batches: mut batches1,
+                inline_updates: mut inline_updates1,
+            } = *stashed1;
+            let StashedSubscribeBatch {
+                num_rows_batches: num_rows_batches2,
+                encoded_size_bytes: encoded_size_bytes2,
+                relation_desc: relation_desc2,
+                shard_id: shard_id2,
+                batches: mut batches2,
+                inline_updates: inline_updates2,
+            } = *stashed2;
+
+            if shard_id1 != shard_id2 {
+                soft_panic_or_log!(
+                    "shard IDs of stashed subscribe responses do not match: \
+                     {shard_id1} != {shard_id2}"
+                );
+                return Error("internal error".into());
+            }
+            if relation_desc1 != relation_desc2 {
+                soft_panic_or_log!(
+                    "relation descs of stashed subscribe responses do not match: \
+                     {relation_desc1:?} != {relation_desc2:?}"
+                );
+                return Error("internal error".into());
+            }
+
+            batches1.append(&mut batches2);
+            inline_updates1.extend(inline_updates2);
+
+            Stashed(Box::new(StashedSubscribeBatch {
+                num_rows_batches: num_rows_batches1 + num_rows_batches2,
+                encoded_size_bytes: encoded_size_bytes1 + encoded_size_bytes2,
+                relation_desc: relation_desc1,
+                shard_id: shard_id1,
+                batches: batches1,
+                inline_updates: inline_updates1,
             }))
         }
         _ => unreachable!("handled above"),

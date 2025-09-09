@@ -871,7 +871,7 @@ impl SelectPlan {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SubscribeOutput {
     Diffs,
     WithinTimestampOrderBy {

@@ -68,6 +68,15 @@ message ProtoStashedPeekResponse {
   mz_expr.row.collection.ProtoRowCollection inline_rows = 6;
 }
 
+message ProtoStashedSubscribeBatch {
+  mz_repr.relation_and_scalar.ProtoRelationDesc relation_desc = 1;
+  string shard_id = 2;
+  repeated mz_persist_client.batch.ProtoBatch batches = 3;
+  uint64 num_rows = 4;
+  uint64 encoded_size_bytes = 5;
+  repeated ProtoSubscribeBatch.ProtoUpdate inline_updates = 6;
+}
+
 message ProtoPeekResponse {
   oneof kind {
     mz_expr.row.collection.ProtoRowCollection rows = 1;
@@ -103,6 +112,7 @@ message ProtoSubscribeBatch {
     oneof kind {
       ProtoSubscribeUpdates updates = 1;
       string error = 2;
+      ProtoStashedSubscribeBatch stashed = 3;
     }
   }
 
