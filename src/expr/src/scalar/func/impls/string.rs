@@ -35,6 +35,7 @@ use crate::func::regexp_match_static;
 use crate::scalar::func::{
     EagerUnaryFunc, LazyUnaryFunc, array_create_scalar, regexp_split_to_array_re,
 };
+use crate::scalar::{InvalidIdentifier, StringValueTooLong};
 use crate::{EvalError, MirScalarExpr, UnaryFunc, like_pattern};
 
 sqlfunc!(
@@ -559,10 +560,10 @@ impl<'a> EagerUnaryFunc<'a> for CastStringToChar {
     fn call(&self, a: &'a str) -> Result<Char<String>, EvalError> {
         let s = format_str_trim(a, self.length, self.fail_on_len).map_err(|_| {
             assert!(self.fail_on_len);
-            EvalError::StringValueTooLong {
+            EvalError::StringValueTooLong(StringValueTooLong {
                 target_type: "character".into(),
                 length: usize::cast_from(self.length.unwrap().into_u32()),
-            }
+            })
         })?;
 
         Ok(Char(s))
@@ -693,10 +694,10 @@ impl<'a> EagerUnaryFunc<'a> for CastStringToVarChar {
         let s =
             mz_repr::adt::varchar::format_str(a, self.length, self.fail_on_len).map_err(|_| {
                 assert!(self.fail_on_len);
-                EvalError::StringValueTooLong {
+                EvalError::StringValueTooLong(StringValueTooLong {
                     target_type: "character varying".into(),
                     length: usize::cast_from(self.length.unwrap().into_u32()),
-                }
+                })
             })?;
 
         Ok(VarChar(s))
@@ -1123,9 +1124,11 @@ impl LazyUnaryFunc for QuoteIdent {
             return Ok(Datum::Null);
         }
         let v = d.unwrap_str();
-        let i = mz_sql_parser::ast::Ident::new(v).map_err(|err| EvalError::InvalidIdentifier {
-            ident: v.into(),
-            detail: Some(err.to_string().into()),
+        let i = mz_sql_parser::ast::Ident::new(v).map_err(|err| {
+            EvalError::InvalidIdentifier(InvalidIdentifier {
+                ident: v.into(),
+                detail: Some(err.to_string().into()),
+            })
         })?;
         let r = temp_storage.push_string(i.to_string());
 

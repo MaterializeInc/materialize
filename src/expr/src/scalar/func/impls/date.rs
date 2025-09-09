@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::EvalError;
 use crate::func::most_significant_unit;
+use crate::scalar::Unsupported;
 use crate::scalar::func::EagerUnaryFunc;
 
 sqlfunc!(
@@ -140,10 +141,10 @@ pub fn extract_date_inner(units: DateTimeUnits, date: NaiveDate) -> Result<Numer
         DateTimeUnits::Timezone
         | DateTimeUnits::TimezoneHour
         | DateTimeUnits::TimezoneMinute
-        | DateTimeUnits::IsoDayOfYear => Err(EvalError::Unsupported {
+        | DateTimeUnits::IsoDayOfYear => Err(EvalError::Unsupported(Unsupported {
             feature: format!("'{}' timestamp units", units).into(),
             discussion_no: None,
-        }),
+        })),
     }
 }
 
