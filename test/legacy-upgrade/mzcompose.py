@@ -162,7 +162,7 @@ def test_upgrade_from_version(
     force_source_table_syntax: bool,
     self_managed_upgrade: bool = False,
 ) -> None:
-    print(f"+++ Testing 0dt upgrade from Materialize {from_version} to current_source.")
+    print(f"+++ Testing upgrade from Materialize {from_version} to current_source.")
 
     deploy_generation = 0
 
@@ -266,7 +266,7 @@ def test_upgrade_from_version(
                 version=version,
             )
 
-            print(f"''0dt-Upgrading to in-between version {version}")
+            print(f"''Upgrading to in-between version {version}")
             with c.override(
                 Materialized(
                     name=mz_service,
@@ -296,7 +296,7 @@ def test_upgrade_from_version(
                 )
                 deploy_generation += 1
 
-    print("0dt-Upgrading to final version")
+    print("Upgrading to final version")
     system_parameter_defaults = get_default_system_parameters(
         # We can only force the syntax on the final version so that the migration to convert
         # sources to the new model can be applied without preventing sources from being
