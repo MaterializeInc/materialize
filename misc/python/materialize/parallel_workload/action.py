@@ -157,9 +157,6 @@ class Action:
             "out of range",
             "is only defined for finite arguments",
             "Window function performance issue",  # TODO: Remove when https://github.com/MaterializeInc/database-issues/issues/9644 is fixed
-            "Negative multiplicities in TopK",  # TODO: Remove when https://github.com/MaterializeInc/database-issues/issues/9668 is fixed
-            "Non-positive multiplicity in DistinctBy",  # TODO: Remove when https://github.com/MaterializeInc/database-issues/issues/9668 is fixed
-            "Invalid data in source errors, saw retractions",  # TODO: Remove when https://github.com/MaterializeInc/database-issues/issues/9670 is fixed
         ]
         if exe.db.complexity in (Complexity.DDL, Complexity.DDLOnly):
             result.extend(
