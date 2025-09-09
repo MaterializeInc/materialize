@@ -17,7 +17,10 @@ use differential_dataflow::lattice::Lattice;
 use mz_adapter_types::connection::ConnectionId;
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::plan::Plan;
-use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, SubscribeSinkConnection};
+use mz_compute_types::sinks::{
+    ComputeSinkConnection, ComputeSinkDesc, SubscribeOutput as ComputeSubscribeOutput,
+    SubscribeSinkConnection,
+};
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert_or_log;
 use mz_repr::{GlobalId, RelationDesc, Timestamp};
@@ -65,6 +68,8 @@ pub struct Optimizer {
     metrics: OptimizerMetrics,
     /// The time spent performing optimization so far.
     duration: Duration,
+    /// How to present the subscribe's output.
+    output_envelope: mz_compute_types::sinks::SubscribeOutput,
 }
 
 // A bogey `Debug` implementation that hides fields. This is needed to make the
@@ -92,7 +97,20 @@ impl Optimizer {
         debug_name: String,
         config: OptimizerConfig,
         metrics: OptimizerMetrics,
+        output_envelope: mz_sql::plan::SubscribeOutput,
     ) -> Self {
+        let output = match output_envelope {
+            mz_sql::plan::SubscribeOutput::Diffs => ComputeSubscribeOutput::Diffs,
+            mz_sql::plan::SubscribeOutput::WithinTimestampOrderBy { order_by } => {
+                ComputeSubscribeOutput::WithinTimestampOrderBy { order_by }
+            }
+            mz_sql::plan::SubscribeOutput::EnvelopeUpsert { order_by_keys } => {
+                ComputeSubscribeOutput::EnvelopeUpsert { order_by_keys }
+            }
+            mz_sql::plan::SubscribeOutput::EnvelopeDebezium { order_by_keys } => {
+                ComputeSubscribeOutput::EnvelopeDebezium { order_by_keys }
+            }
+        };
         Self {
             typecheck_ctx: empty_context(),
             catalog,
@@ -106,6 +124,7 @@ impl Optimizer {
             config,
             metrics,
             duration: Default::default(),
+            output_envelope: output,
         }
     }
 
@@ -208,7 +227,9 @@ impl Optimize<SubscribeFrom> for Optimizer {
                 let sink_description = ComputeSinkDesc {
                     from: from_id,
                     from_desc,
-                    connection: ComputeSinkConnection::Subscribe(SubscribeSinkConnection::default()),
+                    connection: ComputeSinkConnection::Subscribe(SubscribeSinkConnection {
+                        output: self.output_envelope.clone(),
+                    }),
                     with_snapshot: self.with_snapshot,
                     up_to: self.up_to.map(Antichain::from_elem).unwrap_or_default(),
                     // No `FORCE NOT NULL` for subscribes
@@ -247,7 +268,9 @@ impl Optimize<SubscribeFrom> for Optimizer {
                 let sink_description = ComputeSinkDesc {
                     from: self.view_id,
                     from_desc: RelationDesc::new(expr.typ(), desc.iter_names()),
-                    connection: ComputeSinkConnection::Subscribe(SubscribeSinkConnection::default()),
+                    connection: ComputeSinkConnection::Subscribe(SubscribeSinkConnection {
+                        output: self.output_envelope.clone(),
+                    }),
                     with_snapshot: self.with_snapshot,
                     up_to: self.up_to.map(Antichain::from_elem).unwrap_or_default(),
                     // No `FORCE NOT NULL` for subscribes

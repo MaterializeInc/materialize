@@ -386,7 +386,7 @@ pub struct InstanceConfig {
     pub logging: LoggingConfig,
     /// The offset relative to the replica startup at which it should expire. None disables feature.
     pub expiration_offset: Option<Duration>,
-    /// The persist location where we can stash large peek results.
+    /// The persist location where we can stash large peek and subscribe results.
     pub peek_stash_persist_location: PersistLocation,
 }
 
