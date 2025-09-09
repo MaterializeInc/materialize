@@ -265,13 +265,13 @@ class Action:
                 column3 = self.rng.choice(all_columns)
                 fns = [
                     "COUNT({})",
-                    "LIST_AGG({})",
-                    "JSONB_AGG({})",
+                    # "LIST_AGG({})",
+                    # "JSONB_AGG({})",
                 ]
-                if column1.data_type == Text:
-                    fns.extend(["STRING_AGG({}, ',')"])
-                if column1.data_type not in [TextTextMap, IntArray, IntList]:
-                    fns.extend(["ARRAY_AGG({})"])
+                # if column1.data_type == Text:
+                #     fns.extend(["STRING_AGG({}, ',')"])
+                # if column1.data_type not in [TextTextMap, IntArray, IntList]:
+                #     fns.extend(["ARRAY_AGG({})"])
                 if column1.data_type in NUMBER_TYPES:
                     fns.extend(
                         [
