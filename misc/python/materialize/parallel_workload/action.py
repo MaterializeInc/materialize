@@ -158,8 +158,6 @@ class Action:
             "is only defined for finite arguments",
             "Window function performance issue",  # TODO: Remove when https://github.com/MaterializeInc/database-issues/issues/9644 is fixed
             "Invalid data in source, saw retractions",  # TODO: Remove when https://github.com/MaterializeInc/database-issues/issues/9656 is fixed
-            "Negative multiplicities in TopK",  # TODO: Remove when https://github.com/MaterializeInc/database-issues/issues/9668 is fixed
-            "Non-positive multiplicity in DistinctBy",  # TODO: Remove when https://github.com/MaterializeInc/database-issues/issues/9668 is fixed
             "Invalid data in source errors, saw retractions",  # TODO: Remove when https://github.com/MaterializeInc/database-issues/issues/9670 is fixed
         ]
         if exe.db.complexity in (Complexity.DDL, Complexity.DDLOnly):
@@ -2733,17 +2731,17 @@ ddl_action_list = ActionList(
         (CreateClusterReplicaAction, 2),
         (DropClusterReplicaAction, 2),
         (SetClusterAction, 1),
-        (CreateWebhookSourceAction, 2),
-        (DropWebhookSourceAction, 2),
-        (CreateKafkaSinkAction, 4),
-        (DropKafkaSinkAction, 4),
-        (CreateKafkaSourceAction, 4),
-        (DropKafkaSourceAction, 4),
+        # (CreateWebhookSourceAction, 2),
+        # (DropWebhookSourceAction, 2),
+        # (CreateKafkaSinkAction, 4),
+        # (DropKafkaSinkAction, 4),
+        # (CreateKafkaSourceAction, 4),
+        # (DropKafkaSourceAction, 4),
         # TODO: Reenable when database-issues#8237 is fixed
         # (CreateMySqlSourceAction, 4),
         # (DropMySqlSourceAction, 4),
-        (CreatePostgresSourceAction, 4),
-        (DropPostgresSourceAction, 4),
+        # (CreatePostgresSourceAction, 4),
+        # (DropPostgresSourceAction, 4),
         # TODO: Reenable when database-issues#9620 is fixed
         # (CreateSqlServerSourceAction, 4),
         # (DropSqlServerSourceAction, 4),

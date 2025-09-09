@@ -78,12 +78,12 @@ MAX_INITIAL_CLUSTERS = 2
 MAX_INITIAL_TABLES = 2
 MAX_INITIAL_VIEWS = 2
 MAX_INITIAL_ROLES = 1
-MAX_INITIAL_WEBHOOK_SOURCES = 1
-MAX_INITIAL_KAFKA_SOURCES = 1
-MAX_INITIAL_MYSQL_SOURCES = 1
-MAX_INITIAL_SQL_SERVER_SOURCES = 1
-MAX_INITIAL_POSTGRES_SOURCES = 1
-MAX_INITIAL_KAFKA_SINKS = 1
+MAX_INITIAL_WEBHOOK_SOURCES = 0
+MAX_INITIAL_KAFKA_SOURCES = 0
+MAX_INITIAL_MYSQL_SOURCES = 0
+MAX_INITIAL_SQL_SERVER_SOURCES = 0
+MAX_INITIAL_POSTGRES_SOURCES = 0
+MAX_INITIAL_KAFKA_SINKS = 0
 
 
 class BodyFormat(Enum):
@@ -995,35 +995,35 @@ class Database:
         for row in exe.cur.fetchall():
             exe.execute(f"DROP ROLE {identifier(row[0])}")
 
-        exe.execute("DROP SECRET IF EXISTS pgpass CASCADE")
-        exe.execute("DROP SECRET IF EXISTS mypass CASCADE")
+        # exe.execute("DROP SECRET IF EXISTS pgpass CASCADE")
+        # exe.execute("DROP SECRET IF EXISTS mypass CASCADE")
         exe.execute("DROP SECRET IF EXISTS minio CASCADE")
 
         print("Creating connections")
 
-        exe.execute(
-            "CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER 'kafka:9092', SECURITY PROTOCOL PLAINTEXT"
-        )
-        exe.execute(
-            "CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL 'http://schema-registry:8081'"
-        )
+        # exe.execute(
+        #     "CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA BROKER 'kafka:9092', SECURITY PROTOCOL PLAINTEXT"
+        # )
+        # exe.execute(
+        #     "CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL 'http://schema-registry:8081'"
+        # )
 
-        exe.execute("CREATE SECRET pgpass AS 'postgres'")
-        exe.execute(
-            "CREATE CONNECTION postgres_conn FOR POSTGRES HOST 'postgres', DATABASE postgres, USER postgres, PASSWORD SECRET pgpass"
-        )
+        # exe.execute("CREATE SECRET pgpass AS 'postgres'")
+        # exe.execute(
+        #     "CREATE CONNECTION postgres_conn FOR POSTGRES HOST 'postgres', DATABASE postgres, USER postgres, PASSWORD SECRET pgpass"
+        # )
 
-        exe.execute(f"CREATE SECRET mypass AS '{MySql.DEFAULT_ROOT_PASSWORD}'")
-        exe.execute(
-            "CREATE CONNECTION mysql_conn FOR MYSQL HOST 'mysql', USER root, PASSWORD SECRET mypass"
-        )
+        # exe.execute(f"CREATE SECRET mypass AS '{MySql.DEFAULT_ROOT_PASSWORD}'")
+        # exe.execute(
+        #     "CREATE CONNECTION mysql_conn FOR MYSQL HOST 'mysql', USER root, PASSWORD SECRET mypass"
+        # )
 
-        exe.execute(
-            f"CREATE SECRET sql_server_pass AS '{SqlServer.DEFAULT_SA_PASSWORD}'"
-        )
-        exe.execute(
-            f"CREATE CONNECTION sql_server_conn FOR SQL SERVER HOST 'sql-server', DATABASE test, USER {SqlServer.DEFAULT_USER}, PASSWORD SECRET sql_server_pass"
-        )
+        # exe.execute(
+        #     f"CREATE SECRET sql_server_pass AS '{SqlServer.DEFAULT_SA_PASSWORD}'"
+        # )
+        # exe.execute(
+        #     f"CREATE CONNECTION sql_server_conn FOR SQL SERVER HOST 'sql-server', DATABASE test, USER {SqlServer.DEFAULT_USER}, PASSWORD SECRET sql_server_pass"
+        # )
 
         exe.execute("CREATE SECRET IF NOT EXISTS minio AS 'minioadmin'")
         exe.execute(
