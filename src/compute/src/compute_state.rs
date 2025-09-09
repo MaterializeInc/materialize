@@ -1149,11 +1149,14 @@ impl PendingPeek {
     pub fn as_log_event(&self, installed: bool) -> ComputeEvent {
         let peek = self.peek();
         let (id, peek_type) = match &peek.target {
-            PeekTarget::Index { id } => (id, logging::compute::PeekType::Index),
-            PeekTarget::Persist { id, .. } => (id, logging::compute::PeekType::Persist),
+            PeekTarget::Index { id } => (*id, logging::compute::PeekType::Index),
+            PeekTarget::Persist { id, .. } => (*id, logging::compute::PeekType::Persist),
         };
+        let uuid = peek.uuid.into_bytes();
         ComputeEvent::Peek(PeekEvent {
-            peek: logging::compute::Peek::new(*id, peek.timestamp, peek.uuid),
+            id,
+            time: peek.timestamp,
+            uuid,
             peek_type,
             installed,
         })

@@ -64,11 +64,15 @@ pub struct ExportDropped {
     pub export_id: GlobalId,
 }
 
-/// A peek event with a [`Peek`], a [`PeekType`], and an installation status.
+/// A peek event with a [`PeekType`], and an installation status.
 #[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
 pub struct PeekEvent {
-    /// The data for the peek itself.
-    pub peek: Peek,
+    /// The identifier of the view the peek targets.
+    pub id: GlobalId,
+    /// The logical timestamp requested.
+    pub time: Timestamp,
+    /// The ID of the peek.
+    pub uuid: uuid::Bytes,
     /// The relevant _type_ of peek: index or persist.
     // Note that this is not stored on the Peek event for data-packing reasons only.
     pub peek_type: PeekType,
@@ -237,25 +241,6 @@ impl PeekType {
     }
 }
 
-/// A logged peek event.
-#[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
-pub struct Peek {
-    /// The identifier of the view the peek targets.
-    id: GlobalId,
-    /// The logical timestamp requested.
-    time: Timestamp,
-    /// The ID of the peek.
-    uuid: uuid::Bytes,
-}
-
-impl Peek {
-    /// Create a new peek from its arguments.
-    pub fn new(id: GlobalId, time: Timestamp, uuid: Uuid) -> Self {
-        let uuid = uuid.into_bytes();
-        Self { id, time, uuid }
-    }
-}
-
 /// Metadata for LIR operators.
 #[derive(Clone, Debug, PartialEq, PartialOrd, Columnar)]
 pub struct LirMetadata {
@@ -368,7 +353,7 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
                         export: export.session_with_builder(&cap),
                         frontier: frontier.session(&cap),
                         import_frontier: import_frontier.session(&cap),
-                        peek: peek.session(&cap),
+                        peek: peek.session_with_builder(&cap),
                         peek_duration: peek_duration.session(&cap),
                         shutdown_duration: shutdown_duration.session(&cap),
                         arrangement_heap_size: arrangement_heap_size.session(&cap),
@@ -423,19 +408,7 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
                 ])
             }
         });
-        let mut packer = PermutedRowPacker::new(ComputeLog::PeekCurrent);
-        let peek_current = peek.as_collection().map({
-            let mut scratch = String::new();
-            move |PeekDatum { peek, peek_type }| {
-                packer.pack_slice_owned(&[
-                    Datum::Uuid(Uuid::from_bytes(peek.uuid)),
-                    Datum::UInt64(u64::cast_from(worker_id)),
-                    make_string_datum(peek.id, &mut scratch),
-                    Datum::String(peek_type.name()),
-                    Datum::MzTimestamp(peek.time),
-                ])
-            }
-        });
+        let peek_current = peek.as_collection();
         let mut packer = PermutedRowPacker::new(ComputeLog::PeekDuration);
         let peek_duration =
             peek_duration
@@ -537,11 +510,13 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
         });
 
         use ComputeLog::*;
-        let columnar_logs = [(DataflowCurrent, dataflow_current)];
+        let columnar_logs = [
+            (DataflowCurrent, dataflow_current),
+            (PeekCurrent, peek_current),
+        ];
         let logs = [
             (FrontierCurrent, frontier_current),
             (ImportFrontierCurrent, import_frontier_current),
-            (PeekCurrent, peek_current),
             (PeekDuration, peek_duration),
             (ShutdownDuration, shutdown_duration),
             (ArrangementHeapSize, arrangement_heap_size),
@@ -631,6 +606,8 @@ struct DemuxState<A> {
     dataflow_global_ids: BTreeMap<usize, BTreeSet<GlobalId>>,
     /// A row packer for the exports output.
     export_packer: PermutedRowPacker,
+    /// A row packer for the peek output.
+    peek_packer: PermutedRowPacker,
 }
 
 impl<A: Scheduler> DemuxState<A> {
@@ -648,6 +625,7 @@ impl<A: Scheduler> DemuxState<A> {
             lir_mapping: Default::default(),
             dataflow_global_ids: Default::default(),
             export_packer: PermutedRowPacker::new(ComputeLog::DataflowCurrent),
+            peek_packer: PermutedRowPacker::new(ComputeLog::PeekCurrent),
         }
     }
 
@@ -661,6 +639,23 @@ impl<A: Scheduler> DemuxState<A> {
             make_string_datum(export_id, &mut self.scratch_string),
             Datum::UInt64(u64::cast_from(self.worker_id)),
             Datum::UInt64(u64::cast_from(dataflow_index)),
+        ])
+    }
+
+    /// Pack a peek update key-value for the given peek and peek type.
+    fn pack_peek_update(
+        &mut self,
+        id: GlobalId,
+        time: Timestamp,
+        uuid: Uuid,
+        peek_type: PeekType,
+    ) -> (&RowRef, &RowRef) {
+        self.peek_packer.pack_slice(&[
+            Datum::Uuid(uuid),
+            Datum::UInt64(u64::cast_from(self.worker_id)),
+            make_string_datum(id, &mut self.scratch_string),
+            Datum::String(peek_type.name()),
+            Datum::MzTimestamp(time),
         ])
     }
 }
@@ -704,7 +699,7 @@ struct DemuxOutput<'a> {
     export: OutputSessionColumnar<'a, Update<(Row, Row)>>,
     frontier: OutputSessionVec<'a, Update<FrontierDatum>>,
     import_frontier: OutputSessionVec<'a, Update<ImportFrontierDatum>>,
-    peek: OutputSessionVec<'a, Update<PeekDatum>>,
+    peek: OutputSessionColumnar<'a, Update<(Row, Row)>>,
     peek_duration: OutputSessionVec<'a, Update<PeekDurationDatum>>,
     shutdown_duration: OutputSessionVec<'a, Update<u128>>,
     arrangement_heap_size: OutputSessionVec<'a, Update<ArrangementHeapDatum>>,
@@ -727,12 +722,6 @@ struct ImportFrontierDatum {
     export_id: GlobalId,
     import_id: GlobalId,
     time: Timestamp,
-}
-
-#[derive(Clone)]
-struct PeekDatum {
-    peek: Peek,
-    peek_type: PeekType,
 }
 
 #[derive(Clone)]
@@ -1054,17 +1043,18 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
     fn handle_peek_install(
         &mut self,
         PeekEventReference {
-            peek,
+            id,
+            time,
+            uuid,
             peek_type,
             installed: _,
         }: Ref<'_, PeekEvent>,
     ) {
-        let peek = Peek::into_owned(peek);
-        let uuid = Uuid::from_bytes(peek.uuid);
+        let id = Columnar::into_owned(id);
+        let uuid = Uuid::from_bytes(uuid::Bytes::into_owned(uuid));
         let ts = self.ts();
-        self.output
-            .peek
-            .give((PeekDatum { peek, peek_type }, ts, Diff::ONE));
+        let datum = self.state.pack_peek_update(id, time, uuid, peek_type);
+        self.output.peek.give((datum, ts, Diff::ONE));
 
         let existing = self.state.peek_stash.insert(uuid, self.time);
         if existing.is_some() {
@@ -1075,17 +1065,18 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
     fn handle_peek_retire(
         &mut self,
         PeekEventReference {
-            peek,
+            id,
+            time,
+            uuid,
             peek_type,
             installed: _,
         }: Ref<'_, PeekEvent>,
     ) {
-        let peek = Peek::into_owned(peek);
-        let uuid = Uuid::from_bytes(peek.uuid);
+        let id = Columnar::into_owned(id);
+        let uuid = Uuid::from_bytes(uuid::Bytes::into_owned(uuid));
         let ts = self.ts();
-        self.output
-            .peek
-            .give((PeekDatum { peek, peek_type }, ts, Diff::MINUS_ONE));
+        let datum = self.state.pack_peek_update(id, time, uuid, peek_type);
+        self.output.peek.give((datum, ts, Diff::MINUS_ONE));
 
         if let Some(start) = self.state.peek_stash.remove(&uuid) {
             let elapsed_ns = self.time.saturating_sub(start).as_nanos();
