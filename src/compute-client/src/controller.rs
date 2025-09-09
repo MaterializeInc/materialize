@@ -32,8 +32,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use futures::stream::FuturesUnordered;
-use futures::{FutureExt, StreamExt};
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_cluster_client::metrics::ControllerMetrics;
@@ -387,37 +385,6 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
         let ids = collections
             .filter_map(move |(cid, c)| c.compute_dependencies.contains(&id).then_some(*cid));
         Ok(ids)
-    }
-
-    /// Returns `true` if all non-transient, non-excluded collections on all clusters have been
-    /// hydrated.
-    ///
-    /// For this check, zero-replica clusters are always considered hydrated.
-    /// Their collections would never normally be considered hydrated but it's
-    /// clearly intentional that they have no replicas.
-    pub async fn clusters_hydrated(&self, exclude_collections: &BTreeSet<GlobalId>) -> bool {
-        let instances = self.instances.iter();
-        let mut pending: FuturesUnordered<_> = instances
-            .map(|(id, instance)| {
-                let exclude_collections = exclude_collections.clone();
-                instance
-                    .call_sync(move |i| i.collections_hydrated(&exclude_collections))
-                    .map(move |x| (id, x))
-            })
-            .collect();
-
-        let mut result = true;
-        while let Some((id, hydrated)) = pending.next().await {
-            if !hydrated {
-                result = false;
-
-                // We continue with our loop instead of breaking out early, so
-                // that we log all non-hydrated clusters.
-                tracing::info!("cluster {id} is not hydrated");
-            }
-        }
-
-        result
     }
 
     /// Returns `true` iff the given collection has been hydrated.

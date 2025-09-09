@@ -32,7 +32,6 @@ from materialize.version_list import (
     VersionsFromDocs,
     get_all_published_mz_versions,
     get_published_minor_mz_versions,
-    get_self_managed_versions,
 )
 
 mz_options: dict[MzVersion, str] = {}
@@ -122,25 +121,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     f"{version}",
                     priors,
                     filter=args.filter,
-                    zero_downtime=True,
                     force_source_table_syntax=False,
-                )
-            if parallelism_count == 1 or parallelism_index == 1:
-                test_upgrade_from_version(
-                    c,
-                    f"{version}",
-                    priors,
-                    filter=args.filter,
-                    zero_downtime=False,
-                    force_source_table_syntax=False,
-                )
-                test_upgrade_from_version(
-                    c,
-                    f"{version}",
-                    priors,
-                    filter=args.filter,
-                    zero_downtime=False,
-                    force_source_table_syntax=True,
                 )
 
     if parallelism_count == 1 or parallelism_index == 0:
@@ -149,52 +130,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             "current_source",
             priors=[],
             filter=args.filter,
-            zero_downtime=True,
             force_source_table_syntax=False,
         )
-        if args.self_managed_upgrade:
-            # Direct upgrade from latest Self-Managed version without any inbetween versions
-            version = get_self_managed_versions()[-1]
-            priors = [v for v in all_versions if v <= version]
-            test_upgrade_from_version(
-                c,
-                f"{version}",
-                priors,
-                filter=args.filter,
-                zero_downtime=False,
-                force_source_table_syntax=True,
-                self_managed_upgrade=True,
-            )
-    if parallelism_count == 1 or parallelism_index == 1:
-        test_upgrade_from_version(
-            c,
-            "current_source",
-            priors=[],
-            filter=args.filter,
-            zero_downtime=False,
-            force_source_table_syntax=False,
-        )
-        test_upgrade_from_version(
-            c,
-            "current_source",
-            priors=[],
-            filter=args.filter,
-            zero_downtime=False,
-            force_source_table_syntax=True,
-        )
-        if args.self_managed_upgrade:
-            # Direct upgrade from latest Self-Managed version without any inbetween versions
-            version = get_self_managed_versions()[-1]
-            priors = [v for v in all_versions if v <= version]
-            test_upgrade_from_version(
-                c,
-                f"{version}",
-                priors,
-                filter=args.filter,
-                zero_downtime=False,
-                force_source_table_syntax=False,
-                self_managed_upgrade=True,
-            )
 
 
 def get_all_and_latest_two_minor_mz_versions(
@@ -222,13 +159,10 @@ def test_upgrade_from_version(
     from_version: str,
     priors: list[MzVersion],
     filter: str,
-    zero_downtime: bool,
     force_source_table_syntax: bool,
     self_managed_upgrade: bool = False,
 ) -> None:
-    print(
-        f"+++ Testing {'0dt upgrade' if zero_downtime else 'regular upgrade'} from Materialize {from_version} to current_source."
-    )
+    print(f"+++ Testing upgrade from Materialize {from_version} to current_source.")
 
     deploy_generation = 0
 
@@ -261,7 +195,6 @@ def test_upgrade_from_version(
         version = MzVersion.parse_mz(from_version)
         system_parameter_defaults = get_default_system_parameters(
             version=version,
-            zero_downtime=zero_downtime,
         )
         mz_from = Materialized(
             name=mz_service,
@@ -284,7 +217,6 @@ def test_upgrade_from_version(
     else:
         system_parameter_defaults = get_default_system_parameters(
             version=MzVersion.parse_cargo(),
-            zero_downtime=zero_downtime,
         )
         mz_from = Materialized(
             name=mz_service,
@@ -312,13 +244,10 @@ def test_upgrade_from_version(
         f"create-in-{version_glob}-{filter}.td",
         mz_service=mz_service,
     )
-    if zero_downtime:
-        mz_service = "materialized2"
-        deploy_generation += 1
-        c.rm("testdrive")
-    else:
-        c.kill(mz_service)
-        c.rm(mz_service, "testdrive")
+
+    mz_service = "materialized2"
+    deploy_generation += 1
+    c.rm("testdrive")
 
     if from_version != "current_source" and not self_managed_upgrade:
         current_version = MzVersion.parse_cargo()
@@ -335,12 +264,9 @@ def test_upgrade_from_version(
 
             system_parameter_defaults = get_default_system_parameters(
                 version=version,
-                zero_downtime=zero_downtime,
             )
 
-            print(
-                f"'{'0dt-' if zero_downtime else ''}Upgrading to in-between version {version}"
-            )
+            print(f"''Upgrading to in-between version {version}")
             with c.override(
                 Materialized(
                     name=mz_service,
@@ -360,25 +286,18 @@ def test_upgrade_from_version(
                 )
             ):
                 c.up(mz_service)
-                if zero_downtime:
-                    c.await_mz_deployment_status(
-                        DeploymentStatus.READY_TO_PROMOTE, mz_service
-                    )
-                    c.promote_mz(mz_service)
-                    c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, mz_service)
-                    mz_service = (
-                        "materialized2"
-                        if mz_service == "materialized"
-                        else "materialized"
-                    )
-                    deploy_generation += 1
-                else:
-                    c.kill(mz_service)
-                    c.rm(mz_service)
+                c.await_mz_deployment_status(
+                    DeploymentStatus.READY_TO_PROMOTE, mz_service
+                )
+                c.promote_mz(mz_service)
+                c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, mz_service)
+                mz_service = (
+                    "materialized2" if mz_service == "materialized" else "materialized"
+                )
+                deploy_generation += 1
 
-    print(f"{'0dt-' if zero_downtime else ''}Upgrading to final version")
+    print("Upgrading to final version")
     system_parameter_defaults = get_default_system_parameters(
-        zero_downtime=zero_downtime,
         # We can only force the syntax on the final version so that the migration to convert
         # sources to the new model can be applied without preventing sources from being
         # created in the old syntax on the older version.
@@ -397,15 +316,9 @@ def test_upgrade_from_version(
     )
     with c.override(mz_to):
         c.up(mz_service)
-        if zero_downtime:
-            c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, mz_service)
-            c.promote_mz(mz_service)
-            c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, mz_service)
-        else:
-            # Restart once more, just in case
-            c.kill(mz_service)
-            c.rm(mz_service)
-            c.up(mz_service)
+        c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, mz_service)
+        c.promote_mz(mz_service)
+        c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, mz_service)
 
     with c.override(
         Testdrive(

@@ -45,7 +45,7 @@ from materialize.ui import CommandFailureCausedUIError
 
 DEFAULT_TIMEOUT = "300s"
 
-SYSTEM_PARAMETER_DEFAULTS = get_default_system_parameters(zero_downtime=True)
+SYSTEM_PARAMETER_DEFAULTS = get_default_system_parameters()
 
 SERVICES = [
     MySql(),
