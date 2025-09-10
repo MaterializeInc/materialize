@@ -19,7 +19,7 @@
 use std::fmt;
 
 use mz_lowertest::MzReflect;
-use mz_repr::{ColumnType, ScalarType};
+use mz_repr::{SqlColumnType, SqlScalarType};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -50,48 +50,48 @@ pub enum UnmaterializableFunc {
 }
 
 impl UnmaterializableFunc {
-    pub fn output_type(&self) -> ColumnType {
+    pub fn output_type(&self) -> SqlColumnType {
         match self {
-            UnmaterializableFunc::CurrentDatabase => ScalarType::String.nullable(false),
+            UnmaterializableFunc::CurrentDatabase => SqlScalarType::String.nullable(false),
             // TODO: The `CurrentSchema` function should return `name`. This is
             // tricky in Materialize because `name` truncates to 63 characters
             // but Materialize does not have a limit on identifier length.
-            UnmaterializableFunc::CurrentSchema => ScalarType::String.nullable(true),
+            UnmaterializableFunc::CurrentSchema => SqlScalarType::String.nullable(true),
             // TODO: The `CurrentSchemas` function should return `name[]`. This
             // is tricky in Materialize because `name` truncates to 63
             // characters but Materialize does not have a limit on identifier
             // length.
             UnmaterializableFunc::CurrentSchemasWithSystem => {
-                ScalarType::Array(Box::new(ScalarType::String)).nullable(false)
+                SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(false)
             }
             UnmaterializableFunc::CurrentSchemasWithoutSystem => {
-                ScalarType::Array(Box::new(ScalarType::String)).nullable(false)
+                SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(false)
             }
             UnmaterializableFunc::CurrentTimestamp => {
-                ScalarType::TimestampTz { precision: None }.nullable(false)
+                SqlScalarType::TimestampTz { precision: None }.nullable(false)
             }
-            UnmaterializableFunc::CurrentUser => ScalarType::String.nullable(false),
-            UnmaterializableFunc::IsRbacEnabled => ScalarType::Bool.nullable(false),
-            UnmaterializableFunc::MzEnvironmentId => ScalarType::String.nullable(false),
-            UnmaterializableFunc::MzIsSuperuser => ScalarType::Bool.nullable(false),
-            UnmaterializableFunc::MzNow => ScalarType::MzTimestamp.nullable(false),
-            UnmaterializableFunc::MzRoleOidMemberships => ScalarType::Map {
-                value_type: Box::new(ScalarType::Array(Box::new(ScalarType::String))),
+            UnmaterializableFunc::CurrentUser => SqlScalarType::String.nullable(false),
+            UnmaterializableFunc::IsRbacEnabled => SqlScalarType::Bool.nullable(false),
+            UnmaterializableFunc::MzEnvironmentId => SqlScalarType::String.nullable(false),
+            UnmaterializableFunc::MzIsSuperuser => SqlScalarType::Bool.nullable(false),
+            UnmaterializableFunc::MzNow => SqlScalarType::MzTimestamp.nullable(false),
+            UnmaterializableFunc::MzRoleOidMemberships => SqlScalarType::Map {
+                value_type: Box::new(SqlScalarType::Array(Box::new(SqlScalarType::String))),
                 custom_id: None,
             }
             .nullable(false),
-            UnmaterializableFunc::MzSessionId => ScalarType::Uuid.nullable(false),
-            UnmaterializableFunc::MzUptime => ScalarType::Interval.nullable(true),
-            UnmaterializableFunc::MzVersion => ScalarType::String.nullable(false),
-            UnmaterializableFunc::MzVersionNum => ScalarType::Int32.nullable(false),
-            UnmaterializableFunc::PgBackendPid => ScalarType::Int32.nullable(false),
+            UnmaterializableFunc::MzSessionId => SqlScalarType::Uuid.nullable(false),
+            UnmaterializableFunc::MzUptime => SqlScalarType::Interval.nullable(true),
+            UnmaterializableFunc::MzVersion => SqlScalarType::String.nullable(false),
+            UnmaterializableFunc::MzVersionNum => SqlScalarType::Int32.nullable(false),
+            UnmaterializableFunc::PgBackendPid => SqlScalarType::Int32.nullable(false),
             UnmaterializableFunc::PgPostmasterStartTime => {
-                ScalarType::TimestampTz { precision: None }.nullable(false)
+                SqlScalarType::TimestampTz { precision: None }.nullable(false)
             }
-            UnmaterializableFunc::SessionUser => ScalarType::String.nullable(false),
-            UnmaterializableFunc::Version => ScalarType::String.nullable(false),
-            UnmaterializableFunc::ViewableVariables => ScalarType::Map {
-                value_type: Box::new(ScalarType::String),
+            UnmaterializableFunc::SessionUser => SqlScalarType::String.nullable(false),
+            UnmaterializableFunc::Version => SqlScalarType::String.nullable(false),
+            UnmaterializableFunc::ViewableVariables => SqlScalarType::Map {
+                value_type: Box::new(SqlScalarType::String),
                 custom_id: None,
             }
             .nullable(false),

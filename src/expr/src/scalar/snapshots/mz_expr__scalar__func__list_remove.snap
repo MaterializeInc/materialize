@@ -30,9 +30,9 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ListRemove {
     }
     fn output_type(
         &self,
-        input_type_a: mz_repr::ColumnType,
-        input_type_b: mz_repr::ColumnType,
-    ) -> mz_repr::ColumnType {
+        input_type_a: mz_repr::SqlColumnType,
+        input_type_b: mz_repr::SqlColumnType,
+    ) -> mz_repr::SqlColumnType {
         use mz_repr::AsColumnType;
         let output = input_type_a.scalar_type.without_modifiers().nullable(true);
         let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(

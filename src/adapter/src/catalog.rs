@@ -59,7 +59,7 @@ use mz_repr::explain::ExprHumanizer;
 use mz_repr::namespaces::MZ_TEMP_SCHEMA;
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, Diff, GlobalId, RelationVersionSelector, ScalarType};
+use mz_repr::{CatalogItemId, Diff, GlobalId, RelationVersionSelector, SqlScalarType};
 use mz_secrets::InMemorySecretsController;
 use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError as SqlCatalogError,
@@ -1650,8 +1650,8 @@ impl ExprHumanizer for ConnCatalog<'_> {
         Some(self.resolve_full_name(entry.name()).into_parts())
     }
 
-    fn humanize_scalar_type(&self, typ: &ScalarType, postgres_compat: bool) -> String {
-        use ScalarType::*;
+    fn humanize_scalar_type(&self, typ: &SqlScalarType, postgres_compat: bool) -> String {
+        use SqlScalarType::*;
 
         match typ {
             Array(t) => format!("{}[]", self.humanize_scalar_type(t, postgres_compat)),
@@ -1674,7 +1674,7 @@ impl ExprHumanizer for ConnCatalog<'_> {
             }
             Map { value_type, .. } => format!(
                 "map[{}=>{}]",
-                self.humanize_scalar_type(&ScalarType::String, postgres_compat),
+                self.humanize_scalar_type(&SqlScalarType::String, postgres_compat),
                 self.humanize_scalar_type(value_type, postgres_compat)
             ),
             Record {
@@ -2337,8 +2337,8 @@ mod tests {
     use mz_repr::namespaces::{INFORMATION_SCHEMA, PG_CATALOG_SCHEMA};
     use mz_repr::role_id::RoleId;
     use mz_repr::{
-        CatalogItemId, Datum, GlobalId, RelationType, RelationVersionSelector, RowArena,
-        ScalarType, Timestamp,
+        CatalogItemId, Datum, GlobalId, RelationVersionSelector, RowArena, SqlRelationType,
+        SqlScalarType, Timestamp,
     };
     use mz_sql::catalog::{BuiltinsConfig, CatalogSchema, CatalogType, SessionCatalog};
     use mz_sql::func::{Func, FuncImpl, OP_IMPLS, Operation};
@@ -3279,7 +3279,7 @@ mod tests {
                         let Ok(pgtyp) = mz_pgrepr::Type::from_oid(oid) else {
                             continue 'outer;
                         };
-                        styps.push(ScalarType::try_from(&pgtyp).expect("must exist"));
+                        styps.push(SqlScalarType::try_from(&pgtyp).expect("must exist"));
                     }
                     let datums = styps
                         .iter()
@@ -3300,7 +3300,7 @@ mod tests {
                         .expect("must exist");
                     let return_styp = mz_pgrepr::Type::from_oid(return_oid)
                         .ok()
-                        .map(|typ| ScalarType::try_from(&typ).expect("must exist"));
+                        .map(|typ| SqlScalarType::try_from(&typ).expect("must exist"));
 
                     let mut idxs = vec![0; datums.len()];
                     while idxs[0] < datums[0].len() {
@@ -3382,7 +3382,7 @@ mod tests {
         args: Vec<Datum<'_>>,
         catalog: Arc<Catalog>,
         scalars: Vec<CoercibleScalarExpr>,
-        return_styp: Option<ScalarType>,
+        return_styp: Option<SqlScalarType>,
     ) {
         let conn_catalog = catalog.for_system_session();
         let pcx = PlanContext::zero();
@@ -3392,7 +3392,7 @@ mod tests {
             qcx: &qcx,
             name: "smoketest",
             scope: &Scope::empty(),
-            relation_type: &RelationType::empty(),
+            relation_type: &SqlRelationType::empty(),
             allow_aggregates: false,
             allow_subqueries: false,
             allow_parameters: false,
@@ -3571,44 +3571,44 @@ mod tests {
                     .iter_types()
                 {
                     match &col_type.scalar_type {
-                        typ @ ScalarType::UInt16
-                        | typ @ ScalarType::UInt32
-                        | typ @ ScalarType::UInt64
-                        | typ @ ScalarType::MzTimestamp
-                        | typ @ ScalarType::List { .. }
-                        | typ @ ScalarType::Map { .. }
-                        | typ @ ScalarType::MzAclItem => {
+                        typ @ SqlScalarType::UInt16
+                        | typ @ SqlScalarType::UInt32
+                        | typ @ SqlScalarType::UInt64
+                        | typ @ SqlScalarType::MzTimestamp
+                        | typ @ SqlScalarType::List { .. }
+                        | typ @ SqlScalarType::Map { .. }
+                        | typ @ SqlScalarType::MzAclItem => {
                             panic!("{typ:?} type found in {full_name}");
                         }
-                        ScalarType::AclItem
-                        | ScalarType::Bool
-                        | ScalarType::Int16
-                        | ScalarType::Int32
-                        | ScalarType::Int64
-                        | ScalarType::Float32
-                        | ScalarType::Float64
-                        | ScalarType::Numeric { .. }
-                        | ScalarType::Date
-                        | ScalarType::Time
-                        | ScalarType::Timestamp { .. }
-                        | ScalarType::TimestampTz { .. }
-                        | ScalarType::Interval
-                        | ScalarType::PgLegacyChar
-                        | ScalarType::Bytes
-                        | ScalarType::String
-                        | ScalarType::Char { .. }
-                        | ScalarType::VarChar { .. }
-                        | ScalarType::Jsonb
-                        | ScalarType::Uuid
-                        | ScalarType::Array(_)
-                        | ScalarType::Record { .. }
-                        | ScalarType::Oid
-                        | ScalarType::RegProc
-                        | ScalarType::RegType
-                        | ScalarType::RegClass
-                        | ScalarType::Int2Vector
-                        | ScalarType::Range { .. }
-                        | ScalarType::PgLegacyName => {}
+                        SqlScalarType::AclItem
+                        | SqlScalarType::Bool
+                        | SqlScalarType::Int16
+                        | SqlScalarType::Int32
+                        | SqlScalarType::Int64
+                        | SqlScalarType::Float32
+                        | SqlScalarType::Float64
+                        | SqlScalarType::Numeric { .. }
+                        | SqlScalarType::Date
+                        | SqlScalarType::Time
+                        | SqlScalarType::Timestamp { .. }
+                        | SqlScalarType::TimestampTz { .. }
+                        | SqlScalarType::Interval
+                        | SqlScalarType::PgLegacyChar
+                        | SqlScalarType::Bytes
+                        | SqlScalarType::String
+                        | SqlScalarType::Char { .. }
+                        | SqlScalarType::VarChar { .. }
+                        | SqlScalarType::Jsonb
+                        | SqlScalarType::Uuid
+                        | SqlScalarType::Array(_)
+                        | SqlScalarType::Record { .. }
+                        | SqlScalarType::Oid
+                        | SqlScalarType::RegProc
+                        | SqlScalarType::RegType
+                        | SqlScalarType::RegClass
+                        | SqlScalarType::Int2Vector
+                        | SqlScalarType::Range { .. }
+                        | SqlScalarType::PgLegacyName => {}
                     }
                 }
             }

@@ -12,7 +12,7 @@
 use mz_expr::MirScalarExpr;
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_proto::{RustType, TryFromProtoError};
-use mz_repr::{CatalogItemId, GlobalId, RelationDesc, ScalarType};
+use mz_repr::{CatalogItemId, GlobalId, RelationDesc, SqlScalarType};
 use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
 
@@ -61,7 +61,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<PostgresSourceConnection, R>
 
 pub static PG_PROGRESS_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
     RelationDesc::builder()
-        .with_column("lsn", ScalarType::UInt64.nullable(true))
+        .with_column("lsn", SqlScalarType::UInt64.nullable(true))
         .finish()
 });
 

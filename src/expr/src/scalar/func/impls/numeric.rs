@@ -12,7 +12,7 @@ use std::fmt;
 use dec::{OrderedDecimal, Rounding};
 use mz_lowertest::MzReflect;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
-use mz_repr::{ColumnType, ScalarType, strconv};
+use mz_repr::{SqlColumnType, SqlScalarType, strconv};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -346,8 +346,8 @@ impl<'a> EagerUnaryFunc<'a> for AdjustNumericScale {
         Ok(d)
     }
 
-    fn output_type(&self, input: ColumnType) -> ColumnType {
-        ScalarType::Numeric {
+    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+        SqlScalarType::Numeric {
             max_scale: Some(self.0),
         }
         .nullable(input.nullable)

@@ -60,7 +60,7 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::refresh_schedule::RefreshEvery;
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, Datum, Diff, GlobalId, Row, RowPacker, ScalarType, Timestamp};
+use mz_repr::{CatalogItemId, Datum, Diff, GlobalId, Row, RowPacker, SqlScalarType, Timestamp};
 use mz_sql::ast::{ContinualTaskStmt, CreateIndexStatement, Statement, UnresolvedItemName};
 use mz_sql::catalog::{
     CatalogCluster, CatalogDatabase, CatalogSchema, CatalogType, DefaultPrivilegeObject,
@@ -775,15 +775,15 @@ impl CatalogState {
                     .unwrap_or(Datum::Null);
                 let pgtype = mz_pgrepr::Type::from(&column_type.scalar_type);
                 let (type_name, type_oid) = match &column_type.scalar_type {
-                    ScalarType::List {
+                    SqlScalarType::List {
                         custom_id: Some(custom_id),
                         ..
                     }
-                    | ScalarType::Map {
+                    | SqlScalarType::Map {
                         custom_id: Some(custom_id),
                         ..
                     }
-                    | ScalarType::Record {
+                    | SqlScalarType::Record {
                         custom_id: Some(custom_id),
                         ..
                     } => {

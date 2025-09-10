@@ -11,7 +11,7 @@ use std::fmt;
 
 use mz_lowertest::MzReflect;
 use mz_repr::adt::char::{Char, CharLength, format_str_pad};
-use mz_repr::{ColumnType, ScalarType};
+use mz_repr::{SqlColumnType, SqlScalarType};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -35,8 +35,8 @@ impl<'a> EagerUnaryFunc<'a> for PadChar {
         Char(format_str_pad(a, self.length))
     }
 
-    fn output_type(&self, input: ColumnType) -> ColumnType {
-        ScalarType::Char {
+    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+        SqlScalarType::Char {
             length: self.length,
         }
         .nullable(input.nullable)

@@ -31,7 +31,7 @@ use mz_repr::adt::range::InvalidRangeError;
 use mz_repr::adt::regex::Regex;
 use mz_repr::adt::timestamp::TimestampError;
 use mz_repr::strconv::{ParseError, ParseHexError};
-use mz_repr::{ColumnType, Datum, Row, RowArena, ScalarType, arb_datum};
+use mz_repr::{Datum, Row, RowArena, SqlColumnType, SqlScalarType, arb_datum};
 use proptest::prelude::*;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -55,7 +55,7 @@ pub enum MirScalarExpr {
     Column(usize, TreatAsEqual<Option<Arc<str>>>),
     /// A literal value.
     /// (Stored as a row, because we can't own a Datum)
-    Literal(Result<Row, EvalError>, ColumnType),
+    Literal(Result<Row, EvalError>, SqlColumnType),
     /// A call to an unmaterializable function.
     ///
     /// These functions cannot be evaluated by `MirScalarExpr::eval`. They must
@@ -126,10 +126,10 @@ impl Arbitrary for MirScalarExpr {
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         let leaf = prop::strategy::Union::new(vec![
             (0..10_usize).prop_map(MirScalarExpr::column).boxed(),
-            (arb_datum(), any::<ScalarType>())
+            (arb_datum(), any::<SqlScalarType>())
                 .prop_map(|(datum, typ)| MirScalarExpr::literal(Ok((&datum).into()), typ))
                 .boxed(),
-            (any::<EvalError>(), any::<ScalarType>())
+            (any::<EvalError>(), any::<SqlScalarType>())
                 .prop_map(|(err, typ)| MirScalarExpr::literal(Err(err), typ))
                 .boxed(),
             any::<UnmaterializableFunc>()
@@ -183,26 +183,26 @@ impl MirScalarExpr {
         MirScalarExpr::Column(column, TreatAsEqual(Some(name)))
     }
 
-    pub fn literal(res: Result<Datum, EvalError>, typ: ScalarType) -> Self {
+    pub fn literal(res: Result<Datum, EvalError>, typ: SqlScalarType) -> Self {
         let typ = typ.nullable(matches!(res, Ok(Datum::Null)));
         let row = res.map(|datum| Row::pack_slice(&[datum]));
         MirScalarExpr::Literal(row, typ)
     }
 
-    pub fn literal_ok(datum: Datum, typ: ScalarType) -> Self {
+    pub fn literal_ok(datum: Datum, typ: SqlScalarType) -> Self {
         MirScalarExpr::literal(Ok(datum), typ)
     }
 
-    pub fn literal_null(typ: ScalarType) -> Self {
+    pub fn literal_null(typ: SqlScalarType) -> Self {
         MirScalarExpr::literal_ok(Datum::Null, typ)
     }
 
     pub fn literal_false() -> Self {
-        MirScalarExpr::literal_ok(Datum::False, ScalarType::Bool)
+        MirScalarExpr::literal_ok(Datum::False, SqlScalarType::Bool)
     }
 
     pub fn literal_true() -> Self {
-        MirScalarExpr::literal_ok(Datum::True, ScalarType::Bool)
+        MirScalarExpr::literal_ok(Datum::True, SqlScalarType::Bool)
     }
 
     pub fn call_unary(self, func: UnaryFunc) -> Self {
@@ -533,7 +533,7 @@ impl MirScalarExpr {
     }
 
     pub fn take(&mut self) -> Self {
-        mem::replace(self, MirScalarExpr::literal_null(ScalarType::String))
+        mem::replace(self, MirScalarExpr::literal_null(SqlScalarType::String))
     }
 
     /// If the expression is a literal, this returns the literal's Datum or the literal's EvalError.
@@ -734,7 +734,7 @@ impl MirScalarExpr {
     ///
     /// ```rust
     /// use mz_expr::MirScalarExpr;
-    /// use mz_repr::{ColumnType, Datum, ScalarType};
+    /// use mz_repr::{SqlColumnType, Datum, SqlScalarType};
     ///
     /// let expr_0 = MirScalarExpr::column(0);
     /// let expr_t = MirScalarExpr::literal_true();
@@ -746,11 +746,11 @@ impl MirScalarExpr {
     ///     .and(expr_f.clone())
     ///     .if_then_else(expr_0, expr_t.clone());
     ///
-    /// let input_type = vec![ScalarType::Int32.nullable(false)];
+    /// let input_type = vec![SqlScalarType::Int32.nullable(false)];
     /// test.reduce(&input_type);
     /// assert_eq!(test, expr_t);
     /// ```
-    pub fn reduce(&mut self, column_types: &[ColumnType]) {
+    pub fn reduce(&mut self, column_types: &[SqlColumnType]) {
         let temp_storage = &RowArena::new();
         let eval = |e: &MirScalarExpr| {
             MirScalarExpr::literal(e.eval(&[], temp_storage), e.typ(column_types).scalar_type)
@@ -1073,9 +1073,9 @@ impl MirScalarExpr {
                             BinaryFunc::Eq,
                             MirScalarExpr::Literal(
                                 Ok(lit_row),
-                                ColumnType {
+                                SqlColumnType {
                                     scalar_type:
-                                        ScalarType::Record {
+                                        SqlScalarType::Record {
                                             fields: field_types,
                                             ..
                                         },
@@ -1328,8 +1328,8 @@ impl MirScalarExpr {
                             *e = then.take();
                         } else if then.is_literal_ok()
                             && els.is_literal_ok()
-                            && then.typ(column_types).scalar_type == ScalarType::Bool
-                            && els.typ(column_types).scalar_type == ScalarType::Bool
+                            && then.typ(column_types).scalar_type == SqlScalarType::Bool
+                            && els.typ(column_types).scalar_type == SqlScalarType::Bool
                         {
                             match (then.as_literal(), els.as_literal()) {
                                 // Note: NULLs from the condition should not be propagated to the result
@@ -1457,7 +1457,7 @@ impl MirScalarExpr {
 
         /* #region `reduce_list_create_list_index_literal` and helper functions */
 
-        fn list_create_type(list_create: &MirScalarExpr) -> ScalarType {
+        fn list_create_type(list_create: &MirScalarExpr) -> SqlScalarType {
             if let MirScalarExpr::CallVariadic {
                 func: VariadicFunc::ListCreate { elem_type: typ },
                 ..
@@ -1509,7 +1509,7 @@ impl MirScalarExpr {
             // seen in ListCreate calls, because when we process a literal index, we need to remove
             // one layer of list type from all these earlier ListCreate `element_type`s.
             let mut list_create_mut_refs = vec![&mut list_create_to_reduce];
-            let mut earlier_list_create_types: Vec<&mut ScalarType> = vec![];
+            let mut earlier_list_create_types: Vec<&mut SqlScalarType> = vec![];
             let mut i = 0;
             while i < index_exprs.len()
                 && list_create_mut_refs
@@ -1545,7 +1545,7 @@ impl MirScalarExpr {
                     }
                     // Peel one layer off of each of the earlier element types.
                     for t in earlier_list_create_types.iter_mut() {
-                        if let ScalarType::List {
+                        if let SqlScalarType::List {
                             element_type,
                             custom_id: _,
                         } = t
@@ -1554,7 +1554,7 @@ impl MirScalarExpr {
                             // These are not the same types anymore, so remove custom_ids all the
                             // way down.
                             let mut u = &mut **t;
-                            while let ScalarType::List {
+                            while let SqlScalarType::List {
                                 element_type,
                                 custom_id,
                             } = u
@@ -1977,7 +1977,7 @@ impl MirScalarExpr {
         }
     }
 
-    pub fn typ(&self, column_types: &[ColumnType]) -> ColumnType {
+    pub fn typ(&self, column_types: &[SqlColumnType]) -> SqlColumnType {
         match self {
             MirScalarExpr::Column(i, _name) => column_types[*i].clone(),
             MirScalarExpr::Literal(_, typ) => typ.clone(),
@@ -3280,14 +3280,14 @@ mod tests {
     #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     fn test_reduce() {
         let relation_type = vec![
-            ScalarType::Int64.nullable(true),
-            ScalarType::Int64.nullable(true),
-            ScalarType::Int64.nullable(false),
+            SqlScalarType::Int64.nullable(true),
+            SqlScalarType::Int64.nullable(true),
+            SqlScalarType::Int64.nullable(false),
         ];
         let col = MirScalarExpr::column;
-        let err = |e| MirScalarExpr::literal(Err(e), ScalarType::Int64);
-        let lit = |i| MirScalarExpr::literal_ok(Datum::Int64(i), ScalarType::Int64);
-        let null = || MirScalarExpr::literal_null(ScalarType::Int64);
+        let err = |e| MirScalarExpr::literal(Err(e), SqlScalarType::Int64);
+        let lit = |i| MirScalarExpr::literal_ok(Datum::Int64(i), SqlScalarType::Int64);
+        let null = || MirScalarExpr::literal_null(SqlScalarType::Int64);
 
         struct TestCase {
             input: MirScalarExpr,

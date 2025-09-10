@@ -37,9 +37,9 @@ use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::refresh_schedule::{RefreshEvery, RefreshSchedule};
 use mz_repr::role_id::RoleId;
 use mz_repr::{
-    CatalogItemId, ColumnName, ColumnType, RelationDesc, RelationType, RelationVersion,
-    RelationVersionSelector, ScalarType, Timestamp, VersionedRelationDesc, preserves_order,
-    strconv,
+    CatalogItemId, ColumnName, RelationDesc, RelationVersion, RelationVersionSelector,
+    SqlColumnType, SqlRelationType, SqlScalarType, Timestamp, VersionedRelationDesc,
+    preserves_order, strconv,
 };
 use mz_sql_parser::ast::{
     self, AlterClusterAction, AlterClusterStatement, AlterConnectionAction, AlterConnectionOption,
@@ -426,7 +426,7 @@ pub fn plan_create_table(
         scx.require_feature_flag(&vars::UNSAFE_ENABLE_TABLE_KEYS)?
     }
 
-    let typ = RelationType::new(column_types).with_keys(keys);
+    let typ = SqlRelationType::new(column_types).with_keys(keys);
 
     let temporary = *temporary;
     let name = if temporary {
@@ -613,8 +613,8 @@ pub fn plan_create_webhook_source(
 
     let mut column_ty = vec![
         // Always include the body of the request as the first column.
-        ColumnType {
-            scalar_type: ScalarType::from(body_format),
+        SqlColumnType {
+            scalar_type: SqlScalarType::from(body_format),
             nullable: false,
         },
     ];
@@ -624,9 +624,9 @@ pub fn plan_create_webhook_source(
 
     // Include a `headers` column, possibly filtered.
     if let Some(filters) = include_headers.column {
-        column_ty.push(ColumnType {
-            scalar_type: ScalarType::Map {
-                value_type: Box::new(ScalarType::String),
+        column_ty.push(SqlColumnType {
+            scalar_type: SqlScalarType::Map {
+                value_type: Box::new(SqlScalarType::String),
                 custom_id: None,
             },
             nullable: false,
@@ -648,9 +648,9 @@ pub fn plan_create_webhook_source(
     for header in include_headers.mappings {
         let scalar_type = header
             .use_bytes
-            .then_some(ScalarType::Bytes)
-            .unwrap_or(ScalarType::String);
-        column_ty.push(ColumnType {
+            .then_some(SqlScalarType::Bytes)
+            .unwrap_or(SqlScalarType::String);
+        column_ty.push(SqlColumnType {
             scalar_type,
             nullable: true,
         });
@@ -682,7 +682,7 @@ pub fn plan_create_webhook_source(
         });
     }
 
-    let typ = RelationType::new(column_ty);
+    let typ = SqlRelationType::new(column_ty);
     let desc = RelationDesc::new(typ, column_names);
 
     // Check for an object in the catalog with this same name
@@ -1256,7 +1256,7 @@ fn apply_source_envelope_encoding(
     key_desc: Option<RelationDesc>,
     value_desc: RelationDesc,
     include_metadata: &[SourceIncludeMetadata],
-    metadata_columns_desc: Vec<(&str, ColumnType)>,
+    metadata_columns_desc: Vec<(&str, SqlColumnType)>,
     source_connection: &GenericSourceConnection<ReferencedConnection>,
 ) -> Result<
     (
@@ -1277,7 +1277,7 @@ fn apply_source_envelope_encoding(
             // single column of type bytes.
             match value_desc.typ().columns() {
                 [typ] => match typ.scalar_type {
-                    ScalarType::Bytes => {}
+                    SqlScalarType::Bytes => {}
                     _ => sql_bail!(
                         "The schema produced by the source is incompatible with format decoding"
                     ),
@@ -1531,7 +1531,7 @@ fn plan_source_export_desc(
         }
     }
 
-    let typ = RelationType::new(column_types).with_keys(keys);
+    let typ = SqlRelationType::new(column_types).with_keys(keys);
     let desc = RelationDesc::new(typ, names);
     Ok(desc)
 }
@@ -2173,7 +2173,7 @@ fn typecheck_debezium(value_desc: &RelationDesc) -> Result<(Option<usize>, usize
         .get_by_name(&"after".into())
         .ok_or_else(|| sql_err!("'after' column missing from debezium input"))?;
     let before_idx = if let Some((before_idx, before_ty)) = before {
-        if !matches!(before_ty.scalar_type, ScalarType::Record { .. }) {
+        if !matches!(before_ty.scalar_type, SqlScalarType::Record { .. }) {
             sql_bail!("'before' column must be of type record");
         }
         if before_ty != after_ty {
@@ -2755,7 +2755,7 @@ pub fn plan_create_materialized_view(
                         qcx: &QueryContext::root(scx, QueryLifetime::OneShot),
                         name: "REFRESH AT",
                         scope: &Scope::empty(),
-                        relation_type: &RelationType::empty(),
+                        relation_type: &SqlRelationType::empty(),
                         allow_aggregates: false,
                         allow_subqueries: false,
                         allow_parameters: false,
@@ -2764,7 +2764,7 @@ pub fn plan_create_materialized_view(
                     let hir = plan_expr(ecx, &time)?.cast_to(
                         ecx,
                         CastContext::Assignment,
-                        &ScalarType::MzTimestamp,
+                        &SqlScalarType::MzTimestamp,
                     )?;
                     // (mz_now was purified away to a literal earlier)
                     let timestamp = hir
@@ -2811,7 +2811,7 @@ pub fn plan_create_materialized_view(
                         qcx: &QueryContext::root(scx, QueryLifetime::OneShot),
                         name: "REFRESH EVERY ... ALIGNED TO",
                         scope: &Scope::empty(),
-                        relation_type: &RelationType::empty(),
+                        relation_type: &SqlRelationType::empty(),
                         allow_aggregates: false,
                         allow_subqueries: false,
                         allow_parameters: false,
@@ -2820,7 +2820,7 @@ pub fn plan_create_materialized_view(
                     let aligned_to_hir = plan_expr(ecx, &aligned_to)?.cast_to(
                         ecx,
                         CastContext::Assignment,
-                        &ScalarType::MzTimestamp,
+                        &SqlScalarType::MzTimestamp,
                     )?;
                     // (mz_now was purified away to a literal earlier)
                     let aligned_to_const = aligned_to_hir
@@ -3012,7 +3012,7 @@ pub fn plan_create_continual_task(
             for col in columns.iter() {
                 desc_columns.push((
                     normalize::column_name(col.name.clone()),
-                    ColumnType {
+                    SqlColumnType {
                         scalar_type: scalar_type_from_sql(scx, &col.data_type)?,
                         nullable: false,
                     },
@@ -3432,8 +3432,8 @@ fn plan_sink(
             }
 
             match &ty.scalar_type {
-                ScalarType::Map { value_type, .. }
-                    if matches!(&**value_type, ScalarType::String | ScalarType::Bytes) => {}
+                SqlScalarType::Map { value_type, .. }
+                    if matches!(&**value_type, SqlScalarType::String | SqlScalarType::Bytes) => {}
                 _ => sql_bail!(
                     "HEADERS column must have type map[text => text] or map[text => bytea]"
                 ),
@@ -3454,7 +3454,7 @@ fn plan_sink(
             .collect::<Vec<_>>();
         let (names, types): (Vec<_>, Vec<_>) =
             key_indices.iter().map(|&idx| cols[idx].clone()).unzip();
-        let typ = RelationType::new(types);
+        let typ = SqlRelationType::new(types);
         (RelationDesc::new(typ, names), key_indices)
     });
 
@@ -3871,7 +3871,7 @@ fn kafka_sink_builder(
             let expr = plan_expr(ecx, partition_by)?.cast_to(
                 ecx,
                 CastContext::Assignment,
-                &ScalarType::UInt64,
+                &SqlScalarType::UInt64,
             )?;
             let expr = expr.lower_uncorrelated()?;
 

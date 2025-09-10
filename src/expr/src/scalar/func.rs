@@ -45,7 +45,7 @@ use mz_repr::adt::numeric::{self, DecimalLike, Numeric};
 use mz_repr::adt::range::{Range, RangeOps};
 use mz_repr::adt::regex::Regex;
 use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampLike};
-use mz_repr::{ColumnType, Datum, DatumType, Row, RowArena, ScalarType, strconv};
+use mz_repr::{Datum, DatumType, Row, RowArena, SqlColumnType, SqlScalarType, strconv};
 use mz_sql_parser::ast::display::FormatMode;
 use mz_sql_pretty::{PrettyConfig, pretty_str};
 use num::traits::CheckedNeg;
@@ -2339,7 +2339,7 @@ fn jsonb_contains_jsonb<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
 }
 
 #[sqlfunc(
-    output_type_expr = "ScalarType::Jsonb.nullable(true)",
+    output_type_expr = "SqlScalarType::Jsonb.nullable(true)",
     is_infix_op = true,
     sqlname = "||",
     propagates_nulls = true,
@@ -2371,7 +2371,7 @@ fn jsonb_concat<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> D
 }
 
 #[sqlfunc(
-    output_type_expr = "ScalarType::Jsonb.nullable(true)",
+    output_type_expr = "SqlScalarType::Jsonb.nullable(true)",
     is_infix_op = true,
     sqlname = "-",
     propagates_nulls = true,
@@ -2400,7 +2400,7 @@ fn jsonb_delete_int64<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena
 }
 
 #[sqlfunc(
-    output_type_expr = "ScalarType::Jsonb.nullable(true)",
+    output_type_expr = "SqlScalarType::Jsonb.nullable(true)",
     is_infix_op = true,
     sqlname = "-",
     propagates_nulls = true,
@@ -2775,11 +2775,11 @@ fn timezone_interval_timestamptz(a: Datum<'_>, b: Datum<'_>) -> Result<Datum<'st
 }
 
 #[sqlfunc(
-    output_type_expr = r#"ScalarType::Record {
+    output_type_expr = r#"SqlScalarType::Record {
                 fields: [
-                    ("abbrev".into(), ScalarType::String.nullable(false)),
-                    ("base_utc_offset".into(), ScalarType::Interval.nullable(false)),
-                    ("dst_offset".into(), ScalarType::Interval.nullable(false)),
+                    ("abbrev".into(), SqlScalarType::String.nullable(false)),
+                    ("base_utc_offset".into(), SqlScalarType::Interval.nullable(false)),
+                    ("dst_offset".into(), SqlScalarType::Interval.nullable(false)),
                 ].into(),
                 custom_id: None,
             }.nullable(true)"#,
@@ -3149,7 +3149,7 @@ pub enum BinaryFunc {
     GetByte,
     ConstantTimeEqBytes,
     ConstantTimeEqString,
-    RangeContainsElem { elem_type: ScalarType, rev: bool },
+    RangeContainsElem { elem_type: SqlScalarType, rev: bool },
     RangeContainsRange { rev: bool },
     RangeOverlaps,
     RangeAfter,
@@ -3405,14 +3405,16 @@ impl BinaryFunc {
             BinaryFunc::ConstantTimeEqBytes => constant_time_eq_bytes(a, b),
             BinaryFunc::ConstantTimeEqString => constant_time_eq_string(a, b),
             BinaryFunc::RangeContainsElem { elem_type, rev: _ } => Ok(match elem_type {
-                ScalarType::Int32 => contains_range_elem::<i32>(a, b),
-                ScalarType::Int64 => contains_range_elem::<i64>(a, b),
-                ScalarType::Date => contains_range_elem::<Date>(a, b),
-                ScalarType::Numeric { .. } => contains_range_elem::<OrderedDecimal<Numeric>>(a, b),
-                ScalarType::Timestamp { .. } => {
+                SqlScalarType::Int32 => contains_range_elem::<i32>(a, b),
+                SqlScalarType::Int64 => contains_range_elem::<i64>(a, b),
+                SqlScalarType::Date => contains_range_elem::<Date>(a, b),
+                SqlScalarType::Numeric { .. } => {
+                    contains_range_elem::<OrderedDecimal<Numeric>>(a, b)
+                }
+                SqlScalarType::Timestamp { .. } => {
                     contains_range_elem::<CheckedTimestamp<NaiveDateTime>>(a, b)
                 }
-                ScalarType::TimestampTz { .. } => {
+                SqlScalarType::TimestampTz { .. } => {
                     contains_range_elem::<CheckedTimestamp<DateTime<Utc>>>(a, b)
                 }
                 _ => unreachable!(),
@@ -3439,7 +3441,11 @@ impl BinaryFunc {
         }
     }
 
-    pub fn output_type(&self, input1_type: ColumnType, input2_type: ColumnType) -> ColumnType {
+    pub fn output_type(
+        &self,
+        input1_type: SqlColumnType,
+        input2_type: SqlColumnType,
+    ) -> SqlColumnType {
         use BinaryFunc::*;
         let in_nullable = input1_type.nullable || input2_type.nullable;
         match self {
@@ -3453,14 +3459,14 @@ impl BinaryFunc {
             | ArrayContainsArray { .. }
             // like and regexp produce errors on invalid like-strings or regexes
             | IsLikeMatch { .. }
-            | IsRegexpMatch { .. } => ScalarType::Bool.nullable(in_nullable),
+            | IsRegexpMatch { .. } => SqlScalarType::Bool.nullable(in_nullable),
 
             ToCharTimestamp | ToCharTimestampTz | ConvertFrom | Left | Right | Trim
-            | TrimLeading | TrimTrailing | LikeEscape => ScalarType::String.nullable(in_nullable),
+            | TrimLeading | TrimTrailing | LikeEscape => SqlScalarType::String.nullable(in_nullable),
 
             AddInt16 | SubInt16 | MulInt16 | DivInt16 | ModInt16 | BitAndInt16 | BitOrInt16
             | BitXorInt16 | BitShiftLeftInt16 | BitShiftRightInt16 => {
-                ScalarType::Int16.nullable(in_nullable)
+                SqlScalarType::Int16.nullable(in_nullable)
             }
 
             AddInt32
@@ -3474,40 +3480,40 @@ impl BinaryFunc {
             | BitShiftLeftInt32
             | BitShiftRightInt32
             | EncodedBytesCharLength
-            | SubDate => ScalarType::Int32.nullable(in_nullable),
+            | SubDate => SqlScalarType::Int32.nullable(in_nullable),
 
             AddInt64 | SubInt64 | MulInt64 | DivInt64 | ModInt64 | BitAndInt64 | BitOrInt64
             | BitXorInt64 | BitShiftLeftInt64 | BitShiftRightInt64 => {
-                ScalarType::Int64.nullable(in_nullable)
+                SqlScalarType::Int64.nullable(in_nullable)
             }
 
             AddUInt16 | SubUInt16 | MulUInt16 | DivUInt16 | ModUInt16 | BitAndUInt16
             | BitOrUInt16 | BitXorUInt16 | BitShiftLeftUInt16 | BitShiftRightUInt16 => {
-                ScalarType::UInt16.nullable(in_nullable)
+                SqlScalarType::UInt16.nullable(in_nullable)
             }
 
             AddUInt32 | SubUInt32 | MulUInt32 | DivUInt32 | ModUInt32 | BitAndUInt32
             | BitOrUInt32 | BitXorUInt32 | BitShiftLeftUInt32 | BitShiftRightUInt32 => {
-                ScalarType::UInt32.nullable(in_nullable)
+                SqlScalarType::UInt32.nullable(in_nullable)
             }
 
             AddUInt64 | SubUInt64 | MulUInt64 | DivUInt64 | ModUInt64 | BitAndUInt64
             | BitOrUInt64 | BitXorUInt64 | BitShiftLeftUInt64 | BitShiftRightUInt64 => {
-                ScalarType::UInt64.nullable(in_nullable)
+                SqlScalarType::UInt64.nullable(in_nullable)
             }
 
             AddFloat32 | SubFloat32 | MulFloat32 | DivFloat32 | ModFloat32 => {
-                ScalarType::Float32.nullable(in_nullable)
+                SqlScalarType::Float32.nullable(in_nullable)
             }
 
             AddFloat64 | SubFloat64 | MulFloat64 | DivFloat64 | ModFloat64 => {
-                ScalarType::Float64.nullable(in_nullable)
+                SqlScalarType::Float64.nullable(in_nullable)
             }
 
             AddInterval | SubInterval | SubTimestamp | SubTimestampTz | MulInterval
-            | DivInterval => ScalarType::Interval.nullable(in_nullable),
+            | DivInterval => SqlScalarType::Interval.nullable(in_nullable),
 
-            AgeTimestamp | AgeTimestampTz => ScalarType::Interval.nullable(in_nullable),
+            AgeTimestamp | AgeTimestampTz => SqlScalarType::Interval.nullable(in_nullable),
 
             AddTimestampInterval
             | SubTimestampInterval
@@ -3517,56 +3523,56 @@ impl BinaryFunc {
             | SubTimeInterval => input1_type.nullable(in_nullable),
 
             AddDateInterval | SubDateInterval | AddDateTime | DateBinTimestamp
-            | DateTruncTimestamp => ScalarType::Timestamp { precision: None }.nullable(in_nullable),
+            | DateTruncTimestamp => SqlScalarType::Timestamp { precision: None }.nullable(in_nullable),
 
-            DateTruncInterval => ScalarType::Interval.nullable(in_nullable),
+            DateTruncInterval => SqlScalarType::Interval.nullable(in_nullable),
 
             TimezoneTimestampTz | TimezoneIntervalTimestampTz => {
-                ScalarType::Timestamp { precision: None }.nullable(in_nullable)
+                SqlScalarType::Timestamp { precision: None }.nullable(in_nullable)
             }
 
             ExtractInterval | ExtractTime | ExtractTimestamp | ExtractTimestampTz | ExtractDate => {
-                ScalarType::Numeric { max_scale: None }.nullable(in_nullable)
+                SqlScalarType::Numeric { max_scale: None }.nullable(in_nullable)
             }
 
             DatePartInterval | DatePartTime | DatePartTimestamp | DatePartTimestampTz => {
-                ScalarType::Float64.nullable(in_nullable)
+                SqlScalarType::Float64.nullable(in_nullable)
             }
 
-            DateBinTimestampTz | DateTruncTimestampTz => ScalarType::TimestampTz { precision: None }.nullable(in_nullable),
+            DateBinTimestampTz | DateTruncTimestampTz => SqlScalarType::TimestampTz { precision: None }.nullable(in_nullable),
 
             TimezoneTimestamp | TimezoneIntervalTimestamp => {
-                ScalarType::TimestampTz { precision: None }.nullable(in_nullable)
+                SqlScalarType::TimestampTz { precision: None }.nullable(in_nullable)
             }
 
-            TimezoneIntervalTime => ScalarType::Time.nullable(in_nullable),
+            TimezoneIntervalTime => SqlScalarType::Time.nullable(in_nullable),
 
-            TimezoneOffset => ScalarType::Record {
+            TimezoneOffset => SqlScalarType::Record {
                 fields: [
-                    ("abbrev".into(), ScalarType::String.nullable(false)),
-                    ("base_utc_offset".into(), ScalarType::Interval.nullable(false)),
-                    ("dst_offset".into(), ScalarType::Interval.nullable(false)),
+                    ("abbrev".into(), SqlScalarType::String.nullable(false)),
+                    ("base_utc_offset".into(), SqlScalarType::Interval.nullable(false)),
+                    ("dst_offset".into(), SqlScalarType::Interval.nullable(false)),
                 ].into(),
                 custom_id: None,
             }.nullable(true),
 
-            SubTime => ScalarType::Interval.nullable(in_nullable),
+            SubTime => SqlScalarType::Interval.nullable(in_nullable),
 
-            MzRenderTypmod | TextConcat => ScalarType::String.nullable(in_nullable),
+            MzRenderTypmod | TextConcat => SqlScalarType::String.nullable(in_nullable),
 
             JsonbGetInt64Stringify
             | JsonbGetStringStringify
-            | JsonbGetPathStringify => ScalarType::String.nullable(true),
+            | JsonbGetPathStringify => SqlScalarType::String.nullable(true),
 
             JsonbGetInt64
             | JsonbGetString
             | JsonbGetPath
             | JsonbConcat
             | JsonbDeleteInt64
-            | JsonbDeleteString => ScalarType::Jsonb.nullable(true),
+            | JsonbDeleteString => SqlScalarType::Jsonb.nullable(true),
 
             JsonbContainsString | JsonbContainsJsonb | MapContainsKey | MapContainsAllKeys
-            | MapContainsAnyKeys | MapContainsMap => ScalarType::Bool.nullable(in_nullable),
+            | MapContainsAnyKeys | MapContainsMap => SqlScalarType::Bool.nullable(in_nullable),
 
             MapGetValue => input1_type
                 .scalar_type
@@ -3574,9 +3580,9 @@ impl BinaryFunc {
                 .clone()
                 .nullable(true),
 
-            ArrayLength | ArrayLower | ArrayUpper => ScalarType::Int32.nullable(true),
+            ArrayLength | ArrayLower | ArrayUpper => SqlScalarType::Int32.nullable(true),
 
-            ListLengthMax { .. } => ScalarType::Int32.nullable(true),
+            ListLengthMax { .. } => SqlScalarType::Int32.nullable(true),
 
             ArrayArrayConcat | ArrayRemove | ListListConcat | ListElementConcat | ListRemove => {
                 input1_type.scalar_type.without_modifiers().nullable(true)
@@ -3584,28 +3590,28 @@ impl BinaryFunc {
 
             ElementListConcat => input2_type.scalar_type.without_modifiers().nullable(true),
 
-            ListContainsList { .. } =>  ScalarType::Bool.nullable(in_nullable),
+            ListContainsList { .. } =>  SqlScalarType::Bool.nullable(in_nullable),
 
-            DigestString | DigestBytes => ScalarType::Bytes.nullable(in_nullable),
-            Position => ScalarType::Int32.nullable(in_nullable),
-            Encode => ScalarType::String.nullable(in_nullable),
-            Decode => ScalarType::Bytes.nullable(in_nullable),
-            Power => ScalarType::Float64.nullable(in_nullable),
+            DigestString | DigestBytes => SqlScalarType::Bytes.nullable(in_nullable),
+            Position => SqlScalarType::Int32.nullable(in_nullable),
+            Encode => SqlScalarType::String.nullable(in_nullable),
+            Decode => SqlScalarType::Bytes.nullable(in_nullable),
+            Power => SqlScalarType::Float64.nullable(in_nullable),
             RepeatString | Normalize => input1_type.scalar_type.nullable(in_nullable),
 
             AddNumeric | DivNumeric | LogNumeric | ModNumeric | MulNumeric | PowerNumeric
             | RoundNumeric | SubNumeric => {
-                ScalarType::Numeric { max_scale: None }.nullable(in_nullable)
+                SqlScalarType::Numeric { max_scale: None }.nullable(in_nullable)
             }
 
-            GetBit => ScalarType::Int32.nullable(in_nullable),
-            GetByte => ScalarType::Int32.nullable(in_nullable),
+            GetBit => SqlScalarType::Int32.nullable(in_nullable),
+            GetByte => SqlScalarType::Int32.nullable(in_nullable),
 
             ConstantTimeEqBytes | ConstantTimeEqString => {
-                ScalarType::Bool.nullable(in_nullable)
+                SqlScalarType::Bool.nullable(in_nullable)
             },
 
-            UuidGenerateV5 => ScalarType::Uuid.nullable(in_nullable),
+            UuidGenerateV5 => SqlScalarType::Uuid.nullable(in_nullable),
 
             RangeContainsElem { .. }
             | RangeContainsRange { .. }
@@ -3614,7 +3620,7 @@ impl BinaryFunc {
             | RangeBefore
             | RangeOverleft
             | RangeOverright
-            | RangeAdjacent => ScalarType::Bool.nullable(in_nullable),
+            | RangeAdjacent => SqlScalarType::Bool.nullable(in_nullable),
 
             RangeUnion | RangeIntersection | RangeDifference => {
                 soft_assert_eq_or_log!(
@@ -3624,13 +3630,13 @@ impl BinaryFunc {
                 input1_type.scalar_type.without_modifiers().nullable(true)
             }
 
-            MzAclItemContainsPrivilege => ScalarType::Bool.nullable(in_nullable),
+            MzAclItemContainsPrivilege => SqlScalarType::Bool.nullable(in_nullable),
 
-            ParseIdent => ScalarType::Array(Box::new(ScalarType::String)).nullable(in_nullable),
-            PrettySql => ScalarType::String.nullable(in_nullable),
-            RegexpReplace { .. } => ScalarType::String.nullable(in_nullable),
+            ParseIdent => SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(in_nullable),
+            PrettySql => SqlScalarType::String.nullable(in_nullable),
+            RegexpReplace { .. } => SqlScalarType::String.nullable(in_nullable),
 
-            StartsWith => ScalarType::Bool.nullable(in_nullable),
+            StartsWith => SqlScalarType::Bool.nullable(in_nullable),
         }
     }
 
@@ -4985,12 +4991,12 @@ fn array_create_scalar<'a>(
 fn stringify_datum<'a, B>(
     buf: &mut B,
     d: Datum<'a>,
-    ty: &ScalarType,
+    ty: &SqlScalarType,
 ) -> Result<strconv::Nestable, EvalError>
 where
     B: FormatBuffer,
 {
-    use ScalarType::*;
+    use SqlScalarType::*;
     match &ty {
         AclItem => Ok(strconv::format_acl_item(buf, d.unwrap_acl_item())),
         Bool => Ok(strconv::format_bool(buf, d.unwrap_bool())),
@@ -5060,7 +5066,7 @@ where
             }
         }),
         Int2Vector => strconv::format_legacy_vector(buf, &d.unwrap_array().elements(), |buf, d| {
-            stringify_datum(buf.nonnull_buffer(), d, &ScalarType::Int16)
+            stringify_datum(buf.nonnull_buffer(), d, &SqlScalarType::Int16)
         }),
         MzTimestamp { .. } => Ok(strconv::format_mz_timestamp(buf, d.unwrap_mz_timestamp())),
         Range { element_type } => strconv::format_range(buf, &d.unwrap_range(), |buf, d| match d {
@@ -5759,7 +5765,7 @@ mod test {
             });
         }
 
-        let interesting_strs: Vec<_> = ScalarType::String.interesting_datums().collect();
+        let interesting_strs: Vec<_> = SqlScalarType::String.interesting_datums().collect();
         let str_datums = proptest::strategy::Union::new([
             proptest::string::string_regex("[A-Z]{0,10}")
                 .expect("valid regex")
@@ -5776,7 +5782,7 @@ mod test {
         ]);
 
         let interesting_i32s: Vec<Datum<'static>> =
-            ScalarType::Int32.interesting_datums().collect();
+            SqlScalarType::Int32.interesting_datums().collect();
         let i32_datums = proptest::strategy::Union::new([
             any::<i32>().prop_map(PropDatum::Int32).boxed(),
             (0..interesting_i32s.len())
