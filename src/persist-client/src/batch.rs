@@ -70,7 +70,6 @@ include!(concat!(env!("OUT_DIR"), "/mz_persist_client.batch.rs"));
 ///
 /// A [Batch] needs to be marked as consumed or it needs to be deleted via [Self::delete].
 /// Otherwise, a dangling batch will leak and backing blobs will remain in blob storage.
-#[derive(Debug)]
 pub struct Batch<K, V, T, D> {
     pub(crate) batch_delete_enabled: bool,
     pub(crate) metrics: Arc<Metrics>,
@@ -88,6 +87,14 @@ pub struct Batch<K, V, T, D> {
     // These provide a bit more safety against appending a batch with the wrong
     // type to a shard.
     pub(crate) _phantom: PhantomData<fn() -> (K, V, T, D)>,
+}
+
+impl<K, V, T: Debug, D> std::fmt::Debug for Batch<K, V, T, D> {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.debug_struct("Batch")
+            .field("batch", &self.batch)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<K, V, T, D> Drop for Batch<K, V, T, D> {
