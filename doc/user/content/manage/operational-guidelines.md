@@ -11,6 +11,11 @@ menu:
 
 The following provides some general guidelines for production.
 
+## Manage infrastructure as code
+
+Use infrastructure-as-code (e.g., Terraform, dbt, etc) and store in version
+control (e.g., GitHub).
+
 ## Clusters
 
 ### Production clusters for production workloads only
@@ -72,3 +77,14 @@ See also [Cluster architecture](#three-tier-architecture).
 ## Role-based access control (RBAC)
 
 {{% yaml-sections data="rbac/recommendations" heading-field="recommendation" heading-level=3 %}}
+
+## Monitoring and alerts
+
+[Monitor and set up alerts](/manage/monitor/) for:
+
+- pending pods
+- unhealthy nodes
+
+## See also
+
+- [Production checklist](/manage/production-checklist/).
