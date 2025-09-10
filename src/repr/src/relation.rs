@@ -376,6 +376,9 @@ impl proptest::arbitrary::Arbitrary for ColumnName {
     }
 }
 
+/// Default name of a column (when no other information is known).
+pub const UNKNOWN_COLUMN_NAME: &str = "?column?";
+
 /// Stable index of a column in a [`RelationDesc`].
 #[derive(
     Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord, Serialize, Deserialize, Hash, MzReflect,

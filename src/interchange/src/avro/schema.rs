@@ -50,7 +50,7 @@ use mz_ore::future::OreFutureExt;
 use mz_ore::retry::Retry;
 use mz_repr::adt::numeric::{NUMERIC_DATUM_MAX_PRECISION, NumericMaxScale};
 use mz_repr::adt::timestamp::TimestampPrecision;
-use mz_repr::{ColumnName, ColumnType, RelationDesc, ScalarType};
+use mz_repr::{ColumnName, ColumnType, RelationDesc, ScalarType, UNKNOWN_COLUMN_NAME};
 use tracing::warn;
 
 use crate::avro::is_null;
@@ -136,7 +136,7 @@ fn get_union_columns<'a>(
                             .1
                             .map(|full_name| full_name.base_name().to_owned())
                     })
-                    .unwrap_or_else(|| "?column?".into())
+                    .unwrap_or_else(|| UNKNOWN_COLUMN_NAME.into())
             } else {
                 // There are multiple non-null variants in the
                 // union, so we need to invent field names for
@@ -148,7 +148,7 @@ fn get_union_columns<'a>(
                             .1
                             .map(|full_name| full_name.base_name().to_owned())
                     })
-                    .unwrap_or_else(|| "?column?".into())
+                    .unwrap_or_else(|| UNKNOWN_COLUMN_NAME.into())
             };
 
             // If there is more than one variant in the union,
@@ -176,7 +176,7 @@ fn get_named_columns<'a>(
         Ok(vec![(
             // TODO(benesch): we should do better than this when there's no base
             // name, e.g., invent a name based on the type.
-            base_name.unwrap_or("?column?").into(),
+            base_name.unwrap_or(UNKNOWN_COLUMN_NAME).into(),
             scalar_type.nullable(false),
         )])
     }

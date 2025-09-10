@@ -64,7 +64,7 @@ use mz_repr::adt::timestamp::TimestampPrecision;
 use mz_repr::adt::varchar::VarCharMaxLength;
 use mz_repr::{
     CatalogItemId, ColumnIndex, ColumnName, ColumnType, Datum, RelationDesc, RelationType,
-    RelationVersionSelector, Row, RowArena, ScalarType, strconv,
+    RelationVersionSelector, Row, RowArena, ScalarType, UNKNOWN_COLUMN_NAME, strconv,
 };
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit::Visit;
@@ -3695,7 +3695,7 @@ fn expand_select_item<'a>(
                 .clone()
                 .map(normalize::column_name)
                 .or_else(|| invent_column_name(ecx, expr, table_func_names))
-                .unwrap_or_else(|| "?column?".into());
+                .unwrap_or_else(|| UNKNOWN_COLUMN_NAME.into());
             Ok(vec![(ExpandedSelectItem::Expr(Cow::Borrowed(expr)), name)])
         }
     }
