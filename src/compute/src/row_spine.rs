@@ -507,6 +507,7 @@ mod bytes_container {
                 false
             }
         }
+        #[inline]
         fn index(&self, index: usize) -> &[u8] {
             let lower = self.offsets.index(index);
             let upper = self.offsets.index(index + 1);
