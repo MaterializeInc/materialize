@@ -523,7 +523,7 @@ impl Typecheck {
                         if datums
                             .iter()
                             .zip_eq(typ.column_types.iter())
-                            .any(|(d, ty)| d != &mz_repr::Datum::Dummy && !d.is_instance_of(ty))
+                            .any(|(d, ty)| d != &mz_repr::Datum::Dummy && !d.is_instance_of_sql(ty))
                         {
                             return Err(TypeError::BadConstantRow {
                                 source: expr,
@@ -789,7 +789,7 @@ impl Typecheck {
                             if datums
                                 .iter()
                                 .zip_eq(typ.iter())
-                                .any(|(d, ty)| d != &mz_repr::Datum::Dummy && !d.is_instance_of(ty))
+                                .any(|(d, ty)| d != &mz_repr::Datum::Dummy && !d.is_instance_of_sql(ty))
                             {
                                 return Err(TypeError::BadConstantRow {
                                     source: expr,
@@ -1117,7 +1117,8 @@ impl Typecheck {
                     let datums = row.unpack();
 
                     if datums.len() != 1
-                        || (datums[0] != mz_repr::Datum::Dummy && !datums[0].is_instance_of(typ))
+                        || (datums[0] != mz_repr::Datum::Dummy
+                            && !datums[0].is_instance_of_sql(typ))
                     {
                         return Err(TypeError::BadConstantRow {
                             source,

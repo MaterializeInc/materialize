@@ -1918,7 +1918,7 @@ impl Codec for Row {
     fn validate(row: &Self, desc: &Self::Schema) -> Result<(), String> {
         for x in Itertools::zip_longest(desc.iter_types(), row.iter()) {
             match x {
-                EitherOrBoth::Both(typ, datum) if datum.is_instance_of(typ) => continue,
+                EitherOrBoth::Both(typ, datum) if datum.is_instance_of_sql(typ) => continue,
                 _ => return Err(format!("row {:?} did not match desc {:?}", row, desc)),
             };
         }

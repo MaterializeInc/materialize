@@ -1268,7 +1268,7 @@ impl MirRelationExpr {
         for (row, _diff) in &rows {
             for (datum, column_typ) in row.iter().zip_eq(typ.column_types.iter()) {
                 assert!(
-                    datum.is_instance_of(column_typ),
+                    datum.is_instance_of_sql(column_typ),
                     "Expected datum of type {:?}, got value {:?}",
                     column_typ,
                     datum

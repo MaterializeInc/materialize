@@ -29,7 +29,7 @@ pub use crate::relation_and_scalar::{
     ProtoColumnMetadata, ProtoColumnName, ProtoColumnType, ProtoRelationDesc, ProtoRelationType,
     ProtoRelationVersion,
 };
-use crate::{Datum, Row, SqlScalarType, arb_datum_for_column};
+use crate::{Datum, ReprScalarType, Row, SqlScalarType, arb_datum_for_column};
 
 /// The type of a [`Datum`].
 ///
@@ -256,6 +256,24 @@ impl RustType<ProtoKey> for Vec<usize> {
 
     fn from_proto(proto: ProtoKey) -> Result<Self, TryFromProtoError> {
         proto.keys.into_rust()
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect)]
+pub struct ReprColumnType {
+    /// The underlying representation scalar type (e.g., Int32 or String) of this column.
+    pub scalar_type: ReprScalarType,
+    /// Whether this datum can be null.
+    #[serde(default = "return_true")]
+    pub nullable: bool,
+}
+
+impl From<SqlColumnType> for ReprColumnType {
+    fn from(sql_column_type: SqlColumnType) -> Self {
+        ReprColumnType {
+            scalar_type: sql_column_type.scalar_type.into(),
+            nullable: sql_column_type.nullable,
+        }
     }
 }
 
