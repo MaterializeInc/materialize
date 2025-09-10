@@ -1770,7 +1770,7 @@ mod tests {
             func: BinaryFunc::Gte,
             expr1: Box::new(MirScalarExpr::column(0)),
             expr2: Box::new(MirScalarExpr::CallBinary {
-                func: BinaryFunc::AddInt64,
+                func: BinaryFunc::AddInt64(AddInt64),
                 expr1: Box::new(MirScalarExpr::column(1)),
                 expr2: Box::new(MirScalarExpr::CallUnary {
                     func: UnaryFunc::NegInt64(NegInt64),

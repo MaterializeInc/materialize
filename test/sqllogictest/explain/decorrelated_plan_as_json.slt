@@ -490,7 +490,9 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                                 "func": "Gt",
                                 "expr1": {
                                   "CallBinary": {
-                                    "func": "AddInt32",
+                                    "func": {
+                                      "AddInt32": null
+                                    },
                                     "expr1": {
                                       "Column": [
                                         0,
@@ -570,7 +572,9 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
               },
               {
                 "CallBinary": {
-                  "func": "AddInt32",
+                  "func": {
+                    "AddInt32": null
+                  },
                   "expr1": {
                     "Column": [
                       0,
@@ -6584,7 +6588,9 @@ WITH x AS (SELECT t.a * t.b as v from t) SELECT a.v + b.v FROM x as a, x as b
                     "scalars": [
                       {
                         "CallBinary": {
-                          "func": "AddInt32",
+                          "func": {
+                            "AddInt32": null
+                          },
                           "expr1": {
                             "Column": [
                               0,

@@ -56,6 +56,7 @@ use sha1::Sha1;
 use sha2::{Sha224, Sha256, Sha384, Sha512};
 use subtle::ConstantTimeEq;
 
+use crate::func::binary::LazyBinaryFunc;
 use crate::scalar::func::format::DateTimeFormat;
 use crate::{EvalError, MirScalarExpr, like_pattern};
 
@@ -97,9 +98,8 @@ pub fn jsonb_stringify<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a
     sqlname = "+",
     propagates_nulls = true
 )]
-fn add_int16<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    a.unwrap_int16()
-        .checked_add(b.unwrap_int16())
+fn add_int16<'a>(a: i16, b: i16) -> Result<Datum<'a>, EvalError> {
+    a.checked_add(b)
         .ok_or(EvalError::NumericFieldOverflow)
         .map(Datum::from)
 }
@@ -111,9 +111,8 @@ fn add_int16<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     sqlname = "+",
     propagates_nulls = true
 )]
-fn add_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    a.unwrap_int32()
-        .checked_add(b.unwrap_int32())
+fn add_int32<'a>(a: i32, b: i32) -> Result<Datum<'a>, EvalError> {
+    a.checked_add(b)
         .ok_or(EvalError::NumericFieldOverflow)
         .map(Datum::from)
 }
@@ -125,9 +124,8 @@ fn add_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     sqlname = "+",
     propagates_nulls = true
 )]
-fn add_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    a.unwrap_int64()
-        .checked_add(b.unwrap_int64())
+fn add_int64<'a>(a: i64, b: i64) -> Result<Datum<'a>, EvalError> {
+    a.checked_add(b)
         .ok_or(EvalError::NumericFieldOverflow)
         .map(Datum::from)
 }
@@ -139,9 +137,8 @@ fn add_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     sqlname = "+",
     propagates_nulls = true
 )]
-fn add_uint16<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    a.unwrap_uint16()
-        .checked_add(b.unwrap_uint16())
+fn add_uint16<'a>(a: u16, b: u16) -> Result<Datum<'a>, EvalError> {
+    a.checked_add(b)
         .ok_or_else(|| EvalError::UInt16OutOfRange(format!("{a} + {b}").into()))
         .map(Datum::from)
 }
@@ -153,9 +150,8 @@ fn add_uint16<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     sqlname = "+",
     propagates_nulls = true
 )]
-fn add_uint32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    a.unwrap_uint32()
-        .checked_add(b.unwrap_uint32())
+fn add_uint32<'a>(a: u32, b: u32) -> Result<Datum<'a>, EvalError> {
+    a.checked_add(b)
         .ok_or_else(|| EvalError::UInt32OutOfRange(format!("{a} + {b}").into()))
         .map(Datum::from)
 }
@@ -181,9 +177,7 @@ fn add_uint64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     sqlname = "+",
     propagates_nulls = true
 )]
-fn add_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let a = a.unwrap_float32();
-    let b = b.unwrap_float32();
+fn add_float32<'a>(a: f32, b: f32) -> Result<Datum<'a>, EvalError> {
     let sum = a + b;
     if sum.is_infinite() && !a.is_infinite() && !b.is_infinite() {
         Err(EvalError::FloatOverflow)
@@ -199,9 +193,7 @@ fn add_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     sqlname = "+",
     propagates_nulls = true
 )]
-fn add_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let a = a.unwrap_float64();
-    let b = b.unwrap_float64();
+fn add_float64<'a>(a: f64, b: f64) -> Result<Datum<'a>, EvalError> {
     let sum = a + b;
     if sum.is_infinite() && !a.is_infinite() && !b.is_infinite() {
         Err(EvalError::FloatOverflow)
@@ -1985,7 +1977,8 @@ fn range_difference<'a>(
     output_type = "bool",
     is_infix_op = true,
     sqlname = "=",
-    propagates_nulls = true
+    propagates_nulls = true,
+    negate = "Some(BinaryFunc::NotEq)"
 )]
 fn eq<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     // SQL equality demands that if either input is null, then the result should be null. However,
@@ -1998,7 +1991,8 @@ fn eq<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     output_type = "bool",
     is_infix_op = true,
     sqlname = "!=",
-    propagates_nulls = true
+    propagates_nulls = true,
+    negate = "Some(BinaryFunc::Eq)"
 )]
 fn not_eq<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a != b)
@@ -2009,7 +2003,8 @@ fn not_eq<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     output_type = "bool",
     is_infix_op = true,
     sqlname = "<",
-    propagates_nulls = true
+    propagates_nulls = true,
+    negate = "Some(BinaryFunc::Gte)"
 )]
 fn lt<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a < b)
@@ -2020,7 +2015,8 @@ fn lt<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     output_type = "bool",
     is_infix_op = true,
     sqlname = "<=",
-    propagates_nulls = true
+    propagates_nulls = true,
+    negate = "Some(BinaryFunc::Gt)"
 )]
 fn lte<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a <= b)
@@ -2031,7 +2027,8 @@ fn lte<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     output_type = "bool",
     is_infix_op = true,
     sqlname = ">",
-    propagates_nulls = true
+    propagates_nulls = true,
+    negate = "Some(BinaryFunc::Lte)"
 )]
 fn gt<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a > b)
@@ -2042,7 +2039,8 @@ fn gt<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     output_type = "bool",
     is_infix_op = true,
     sqlname = ">=",
-    propagates_nulls = true
+    propagates_nulls = true,
+    negate = "Some(BinaryFunc::Lt)"
 )]
 fn gte<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a >= b)
@@ -2971,14 +2969,14 @@ fn starts_with<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub enum BinaryFunc {
-    AddInt16,
-    AddInt32,
-    AddInt64,
-    AddUInt16,
-    AddUInt32,
-    AddUInt64,
-    AddFloat32,
-    AddFloat64,
+    AddInt16(AddInt16),
+    AddInt32(AddInt32),
+    AddInt64(AddInt64),
+    AddUInt16(AddUint16),
+    AddUInt32(AddUint32),
+    AddUInt64(AddUint64),
+    AddFloat32(AddFloat32),
+    AddFloat64(AddFloat64),
     AddInterval,
     AddTimestampInterval,
     AddTimestampTzInterval,
@@ -3176,20 +3174,32 @@ impl BinaryFunc {
         a_expr: &'a MirScalarExpr,
         b_expr: &'a MirScalarExpr,
     ) -> Result<Datum<'a>, EvalError> {
+        match self {
+            BinaryFunc::AddInt16(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
+            BinaryFunc::AddInt32(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
+            BinaryFunc::AddInt64(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
+            BinaryFunc::AddUInt16(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
+            BinaryFunc::AddUInt32(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
+            BinaryFunc::AddUInt64(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
+            BinaryFunc::AddFloat32(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
+            BinaryFunc::AddFloat64(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
+            _ => { /* fall through */ }
+        }
+
         let a = a_expr.eval(datums, temp_storage)?;
         let b = b_expr.eval(datums, temp_storage)?;
         if self.propagates_nulls() && (a.is_null() || b.is_null()) {
             return Ok(Datum::Null);
         }
         match self {
-            BinaryFunc::AddInt16 => add_int16(a, b),
-            BinaryFunc::AddInt32 => add_int32(a, b),
-            BinaryFunc::AddInt64 => add_int64(a, b),
-            BinaryFunc::AddUInt16 => add_uint16(a, b),
-            BinaryFunc::AddUInt32 => add_uint32(a, b),
-            BinaryFunc::AddUInt64 => add_uint64(a, b),
-            BinaryFunc::AddFloat32 => add_float32(a, b),
-            BinaryFunc::AddFloat64 => add_float64(a, b),
+            BinaryFunc::AddInt16(_)
+            | BinaryFunc::AddInt32(_)
+            | BinaryFunc::AddInt64(_)
+            | BinaryFunc::AddUInt16(_)
+            | BinaryFunc::AddUInt32(_)
+            | BinaryFunc::AddUInt64(_)
+            | BinaryFunc::AddFloat32(_)
+            | BinaryFunc::AddFloat64(_) => unreachable!(),
             BinaryFunc::AddTimestampInterval => {
                 add_timestamplike_interval(a.unwrap_timestamp(), b.unwrap_interval())
             }
@@ -3449,6 +3459,15 @@ impl BinaryFunc {
         use BinaryFunc::*;
         let in_nullable = input1_type.nullable || input2_type.nullable;
         match self {
+            AddInt16(s) => s.output_type(input1_type, input2_type),
+            AddInt32(s) => s.output_type(input1_type, input2_type),
+            AddInt64(s) => s.output_type(input1_type, input2_type),
+            AddUInt16(s) => s.output_type(input1_type, input2_type),
+            AddUInt32(s) => s.output_type(input1_type, input2_type),
+            AddUInt64(s) => s.output_type(input1_type, input2_type),
+            AddFloat32(s) => s.output_type(input1_type, input2_type),
+            AddFloat64(s) => s.output_type(input1_type, input2_type),
+
             Eq
             | NotEq
             | Lt
@@ -3464,13 +3483,12 @@ impl BinaryFunc {
             ToCharTimestamp | ToCharTimestampTz | ConvertFrom | Left | Right | Trim
             | TrimLeading | TrimTrailing | LikeEscape => SqlScalarType::String.nullable(in_nullable),
 
-            AddInt16 | SubInt16 | MulInt16 | DivInt16 | ModInt16 | BitAndInt16 | BitOrInt16
+             SubInt16 | MulInt16 | DivInt16 | ModInt16 | BitAndInt16 | BitOrInt16
             | BitXorInt16 | BitShiftLeftInt16 | BitShiftRightInt16 => {
                 SqlScalarType::Int16.nullable(in_nullable)
             }
 
-            AddInt32
-            | SubInt32
+            SubInt32
             | MulInt32
             | DivInt32
             | ModInt32
@@ -3482,31 +3500,31 @@ impl BinaryFunc {
             | EncodedBytesCharLength
             | SubDate => SqlScalarType::Int32.nullable(in_nullable),
 
-            AddInt64 | SubInt64 | MulInt64 | DivInt64 | ModInt64 | BitAndInt64 | BitOrInt64
+            SubInt64 | MulInt64 | DivInt64 | ModInt64 | BitAndInt64 | BitOrInt64
             | BitXorInt64 | BitShiftLeftInt64 | BitShiftRightInt64 => {
                 SqlScalarType::Int64.nullable(in_nullable)
             }
 
-            AddUInt16 | SubUInt16 | MulUInt16 | DivUInt16 | ModUInt16 | BitAndUInt16
+            SubUInt16 | MulUInt16 | DivUInt16 | ModUInt16 | BitAndUInt16
             | BitOrUInt16 | BitXorUInt16 | BitShiftLeftUInt16 | BitShiftRightUInt16 => {
                 SqlScalarType::UInt16.nullable(in_nullable)
             }
 
-            AddUInt32 | SubUInt32 | MulUInt32 | DivUInt32 | ModUInt32 | BitAndUInt32
+            SubUInt32 | MulUInt32 | DivUInt32 | ModUInt32 | BitAndUInt32
             | BitOrUInt32 | BitXorUInt32 | BitShiftLeftUInt32 | BitShiftRightUInt32 => {
                 SqlScalarType::UInt32.nullable(in_nullable)
             }
 
-            AddUInt64 | SubUInt64 | MulUInt64 | DivUInt64 | ModUInt64 | BitAndUInt64
+             SubUInt64 | MulUInt64 | DivUInt64 | ModUInt64 | BitAndUInt64
             | BitOrUInt64 | BitXorUInt64 | BitShiftLeftUInt64 | BitShiftRightUInt64 => {
                 SqlScalarType::UInt64.nullable(in_nullable)
             }
 
-            AddFloat32 | SubFloat32 | MulFloat32 | DivFloat32 | ModFloat32 => {
+             SubFloat32 | MulFloat32 | DivFloat32 | ModFloat32 => {
                 SqlScalarType::Float32.nullable(in_nullable)
             }
 
-            AddFloat64 | SubFloat64 | MulFloat64 | DivFloat64 | ModFloat64 => {
+             SubFloat64 | MulFloat64 | DivFloat64 | ModFloat64 => {
                 SqlScalarType::Float64.nullable(in_nullable)
             }
 
@@ -3642,6 +3660,17 @@ impl BinaryFunc {
 
     /// Whether the function output is NULL if any of its inputs are NULL.
     pub fn propagates_nulls(&self) -> bool {
+        match self {
+            BinaryFunc::AddInt16(s) => return s.propagates_nulls(),
+            BinaryFunc::AddInt32(s) => return s.propagates_nulls(),
+            BinaryFunc::AddInt64(s) => return s.propagates_nulls(),
+            BinaryFunc::AddUInt16(s) => return s.propagates_nulls(),
+            BinaryFunc::AddUInt32(s) => return s.propagates_nulls(),
+            BinaryFunc::AddUInt64(s) => return s.propagates_nulls(),
+            BinaryFunc::AddFloat32(s) => return s.propagates_nulls(),
+            BinaryFunc::AddFloat64(s) => return s.propagates_nulls(),
+            _ => { /* fall through */ }
+        }
         // NOTE: The following is a list of the binary functions
         // that **DO NOT** propagate nulls.
         !matches!(
@@ -3663,15 +3692,15 @@ impl BinaryFunc {
     pub fn introduces_nulls(&self) -> bool {
         use BinaryFunc::*;
         match self {
-            AddInt16
-            | AddInt32
-            | AddInt64
-            | AddUInt16
-            | AddUInt32
-            | AddUInt64
-            | AddFloat32
-            | AddFloat64
-            | AddInterval
+            AddInt16(s) => s.introduces_nulls(),
+            AddInt32(s) => s.introduces_nulls(),
+            AddInt64(s) => s.introduces_nulls(),
+            AddUInt16(s) => s.introduces_nulls(),
+            AddUInt32(s) => s.introduces_nulls(),
+            AddUInt64(s) => s.introduces_nulls(),
+            AddFloat32(s) => s.introduces_nulls(),
+            AddFloat64(s) => s.introduces_nulls(),
+            AddInterval
             | AddTimestampInterval
             | AddTimestampTzInterval
             | AddDateInterval
@@ -3865,15 +3894,15 @@ impl BinaryFunc {
     pub fn is_infix_op(&self) -> bool {
         use BinaryFunc::*;
         match self {
-            AddInt16
-            | AddInt32
-            | AddInt64
-            | AddUInt16
-            | AddUInt32
-            | AddUInt64
-            | AddFloat32
-            | AddFloat64
-            | AddTimestampInterval
+            AddInt16(s) => s.is_infix_op(),
+            AddInt32(s) => s.is_infix_op(),
+            AddInt64(s) => s.is_infix_op(),
+            AddUInt16(s) => s.is_infix_op(),
+            AddUInt32(s) => s.is_infix_op(),
+            AddUInt64(s) => s.is_infix_op(),
+            AddFloat32(s) => s.is_infix_op(),
+            AddFloat64(s) => s.is_infix_op(),
+            AddTimestampInterval
             | AddTimestampTzInterval
             | AddDateTime
             | AddDateInterval
@@ -4066,6 +4095,14 @@ impl BinaryFunc {
     /// Returns the negation of the given binary function, if it exists.
     pub fn negate(&self) -> Option<Self> {
         match self {
+            BinaryFunc::AddInt16(s) => s.negate(),
+            BinaryFunc::AddInt32(s) => s.negate(),
+            BinaryFunc::AddInt64(s) => s.negate(),
+            BinaryFunc::AddUInt16(s) => s.negate(),
+            BinaryFunc::AddUInt32(s) => s.negate(),
+            BinaryFunc::AddUInt64(s) => s.negate(),
+            BinaryFunc::AddFloat32(s) => s.negate(),
+            BinaryFunc::AddFloat64(s) => s.negate(),
             BinaryFunc::Eq => Some(BinaryFunc::NotEq),
             BinaryFunc::NotEq => Some(BinaryFunc::Eq),
             BinaryFunc::Lt => Some(BinaryFunc::Gte),
@@ -4079,6 +4116,14 @@ impl BinaryFunc {
     /// Returns true if the function could introduce an error on non-error inputs.
     pub fn could_error(&self) -> bool {
         match self {
+            BinaryFunc::AddInt16(s) => s.could_error(),
+            BinaryFunc::AddInt32(s) => s.could_error(),
+            BinaryFunc::AddInt64(s) => s.could_error(),
+            BinaryFunc::AddUInt16(s) => s.could_error(),
+            BinaryFunc::AddUInt32(s) => s.could_error(),
+            BinaryFunc::AddUInt64(s) => s.could_error(),
+            BinaryFunc::AddFloat32(s) => s.could_error(),
+            BinaryFunc::AddFloat64(s) => s.could_error(),
             BinaryFunc::Eq
             | BinaryFunc::NotEq
             | BinaryFunc::Lt
@@ -4180,15 +4225,15 @@ impl BinaryFunc {
     /// ie. the arguments and the result are non-error datums.
     pub fn is_monotone(&self) -> (bool, bool) {
         match self {
-            BinaryFunc::AddInt16
-            | BinaryFunc::AddInt32
-            | BinaryFunc::AddInt64
-            | BinaryFunc::AddUInt16
-            | BinaryFunc::AddUInt32
-            | BinaryFunc::AddUInt64
-            | BinaryFunc::AddFloat32
-            | BinaryFunc::AddFloat64
-            | BinaryFunc::AddInterval
+            BinaryFunc::AddInt16(s) => s.is_monotone(),
+            BinaryFunc::AddInt32(s) => s.is_monotone(),
+            BinaryFunc::AddInt64(s) => s.is_monotone(),
+            BinaryFunc::AddUInt16(s) => s.is_monotone(),
+            BinaryFunc::AddUInt32(s) => s.is_monotone(),
+            BinaryFunc::AddUInt64(s) => s.is_monotone(),
+            BinaryFunc::AddFloat32(s) => s.is_monotone(),
+            BinaryFunc::AddFloat64(s) => s.is_monotone(),
+            BinaryFunc::AddInterval
             | BinaryFunc::AddTimestampInterval
             | BinaryFunc::AddTimestampTzInterval
             | BinaryFunc::AddDateInterval
@@ -4386,14 +4431,14 @@ impl BinaryFunc {
 impl fmt::Display for BinaryFunc {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            BinaryFunc::AddInt16 => f.write_str("+"),
-            BinaryFunc::AddInt32 => f.write_str("+"),
-            BinaryFunc::AddInt64 => f.write_str("+"),
-            BinaryFunc::AddUInt16 => f.write_str("+"),
-            BinaryFunc::AddUInt32 => f.write_str("+"),
-            BinaryFunc::AddUInt64 => f.write_str("+"),
-            BinaryFunc::AddFloat32 => f.write_str("+"),
-            BinaryFunc::AddFloat64 => f.write_str("+"),
+            BinaryFunc::AddInt16(s) => s.fmt(f),
+            BinaryFunc::AddInt32(s) => s.fmt(f),
+            BinaryFunc::AddInt64(s) => s.fmt(f),
+            BinaryFunc::AddUInt16(s) => s.fmt(f),
+            BinaryFunc::AddUInt32(s) => s.fmt(f),
+            BinaryFunc::AddUInt64(s) => s.fmt(f),
+            BinaryFunc::AddFloat32(s) => s.fmt(f),
+            BinaryFunc::AddFloat64(s) => s.fmt(f),
             BinaryFunc::AddNumeric => f.write_str("+"),
             BinaryFunc::AddInterval => f.write_str("+"),
             BinaryFunc::AddTimestampInterval => f.write_str("+"),
@@ -4615,14 +4660,14 @@ impl Arbitrary for BinaryFunc {
 
     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
         Union::new(vec![
-            Just(BinaryFunc::AddInt16).boxed(),
-            Just(BinaryFunc::AddInt32).boxed(),
-            Just(BinaryFunc::AddInt64).boxed(),
-            Just(BinaryFunc::AddUInt16).boxed(),
-            Just(BinaryFunc::AddUInt32).boxed(),
-            Just(BinaryFunc::AddUInt64).boxed(),
-            Just(BinaryFunc::AddFloat32).boxed(),
-            Just(BinaryFunc::AddFloat64).boxed(),
+            Just(BinaryFunc::AddInt16(AddInt16)).boxed(),
+            Just(BinaryFunc::AddInt32(AddInt32)).boxed(),
+            Just(BinaryFunc::AddInt64(AddInt64)).boxed(),
+            Just(BinaryFunc::AddUInt16(AddUint16)).boxed(),
+            Just(BinaryFunc::AddUInt32(AddUint32)).boxed(),
+            Just(BinaryFunc::AddUInt64(AddUint64)).boxed(),
+            Just(BinaryFunc::AddFloat32(AddFloat32)).boxed(),
+            Just(BinaryFunc::AddFloat64(AddFloat64)).boxed(),
             Just(BinaryFunc::AddInterval).boxed(),
             Just(BinaryFunc::AddTimestampInterval).boxed(),
             Just(BinaryFunc::AddTimestampTzInterval).boxed(),
@@ -5801,7 +5846,12 @@ mod test {
         // It would be interesting to test all funcs here, but we currently need to hardcode
         // the generators for the argument types, which makes this tedious. Choose an interesting
         // subset for now.
-        proptest_binary(BinaryFunc::AddInt32, &arena, &i32_datums, &i32_datums);
+        proptest_binary(
+            BinaryFunc::AddInt32(AddInt32),
+            &arena,
+            &i32_datums,
+            &i32_datums,
+        );
         proptest_binary(BinaryFunc::SubInt32, &arena, &i32_datums, &i32_datums);
         proptest_binary(BinaryFunc::MulInt32, &arena, &i32_datums, &i32_datums);
         proptest_binary(BinaryFunc::DivInt32, &arena, &i32_datums, &i32_datums);

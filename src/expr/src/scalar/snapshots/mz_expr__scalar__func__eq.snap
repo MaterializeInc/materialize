@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    output_type = \"bool\",\n    is_infix_op = true,\n    sqlname = \"=\",\n    propagates_nulls = true\n)]\nfn eq<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {\n    Datum::from(a == b)\n}\n"
+expression: "#[sqlfunc(\n    output_type = \"bool\",\n    is_infix_op = true,\n    sqlname = \"=\",\n    propagates_nulls = true,\n    negate = \"Some(BinaryFunc::NotEq)\"\n)]\nfn eq<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {\n    Datum::from(a == b)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -51,6 +51,9 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for Eq {
     }
     fn is_infix_op(&self) -> bool {
         true
+    }
+    fn negate(&self) -> Option<crate::BinaryFunc> {
+        Some(BinaryFunc::NotEq)
     }
     fn propagates_nulls(&self) -> bool {
         true

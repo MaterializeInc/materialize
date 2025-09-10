@@ -101,7 +101,9 @@ SELECT a + 1, b, 4 FROM mv WHERE a > 0
         "scalars": [
           {
             "CallBinary": {
-              "func": "AddInt32",
+              "func": {
+                "AddInt32": null
+              },
               "expr1": {
                 "Column": [
                   {

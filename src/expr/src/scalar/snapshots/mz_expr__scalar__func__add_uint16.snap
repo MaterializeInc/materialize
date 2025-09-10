@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    is_monotone = \"(true, true)\",\n    output_type = \"u16\",\n    is_infix_op = true,\n    sqlname = \"+\",\n    propagates_nulls = true\n)]\nfn add_uint16<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {\n    a.unwrap_uint16()\n        .checked_add(b.unwrap_uint16())\n        .ok_or_else(|| EvalError::UInt16OutOfRange(format!(\"{a} + {b}\").into()))\n        .map(Datum::from)\n}\n"
+expression: "#[sqlfunc(\n    is_monotone = \"(true, true)\",\n    output_type = \"u16\",\n    is_infix_op = true,\n    sqlname = \"+\",\n    propagates_nulls = true\n)]\nfn add_uint16<'a>(a: u16, b: u16) -> Result<Datum<'a>, EvalError> {\n    a.checked_add(b)\n        .ok_or_else(|| EvalError::UInt16OutOfRange(format!(\"{a} + {b}\").into()))\n        .map(Datum::from)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -17,8 +17,8 @@ expression: "#[sqlfunc(\n    is_monotone = \"(true, true)\",\n    output_type = 
 )]
 pub struct AddUint16;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for AddUint16 {
-    type Input1 = Datum<'a>;
-    type Input2 = Datum<'a>;
+    type Input1 = u16;
+    type Input2 = u16;
     type Output = Result<Datum<'a>, EvalError>;
     fn call(
         &self,
@@ -64,9 +64,8 @@ impl std::fmt::Display for AddUint16 {
         f.write_str("+")
     }
 }
-fn add_uint16<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    a.unwrap_uint16()
-        .checked_add(b.unwrap_uint16())
+fn add_uint16<'a>(a: u16, b: u16) -> Result<Datum<'a>, EvalError> {
+    a.checked_add(b)
         .ok_or_else(|| EvalError::UInt16OutOfRange(format!("{a} + {b}").into()))
         .map(Datum::from)
 }

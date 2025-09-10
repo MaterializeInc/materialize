@@ -321,7 +321,9 @@ SELECT a + b, 1 FROM t
                   "expressions": [
                     {
                       "CallBinary": {
-                        "func": "AddInt32",
+                        "func": {
+                          "AddInt32": null
+                        },
                         "expr1": {
                           "Column": [
                             0,
@@ -418,7 +420,9 @@ SELECT c + d, 1 FROM u
         "expressions": [
           {
             "CallBinary": {
-              "func": "AddInt32",
+              "func": {
+                "AddInt32": null
+              },
               "expr1": {
                 "Column": [
                   0,
@@ -1107,7 +1111,9 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                                 "expressions": [
                                   {
                                     "CallBinary": {
-                                      "func": "AddInt32",
+                                      "func": {
+                                        "AddInt32": null
+                                      },
                                       "expr1": {
                                         "Column": [
                                           0,
@@ -10162,7 +10168,9 @@ WHERE a = c AND d = e AND b + d > 42
                               "expressions": [
                                 {
                                   "CallBinary": {
-                                    "func": "AddInt32",
+                                    "func": {
+                                      "AddInt32": null
+                                    },
                                     "expr1": {
                                       "Column": [
                                         1,
@@ -10179,7 +10187,9 @@ WHERE a = c AND d = e AND b + d > 42
                                 },
                                 {
                                   "CallBinary": {
-                                    "func": "AddInt32",
+                                    "func": {
+                                      "AddInt32": null
+                                    },
                                     "expr1": {
                                       "Column": [
                                         0,
@@ -10344,7 +10354,9 @@ WHERE a = c AND d = e AND b + d > 42
                               "expressions": [
                                 {
                                   "CallBinary": {
-                                    "func": "AddInt32",
+                                    "func": {
+                                      "AddInt32": null
+                                    },
                                     "expr1": {
                                       "Column": [
                                         2,
@@ -10361,7 +10373,9 @@ WHERE a = c AND d = e AND b + d > 42
                                 },
                                 {
                                   "CallBinary": {
-                                    "func": "AddInt32",
+                                    "func": {
+                                      "AddInt32": null
+                                    },
                                     "expr1": {
                                       "Column": [
                                         0,
@@ -10559,7 +10573,9 @@ WHERE a = c AND d = e AND b + d > 42
                               "expressions": [
                                 {
                                   "CallBinary": {
-                                    "func": "AddInt32",
+                                    "func": {
+                                      "AddInt32": null
+                                    },
                                     "expr1": {
                                       "Column": [
                                         2,
@@ -10576,7 +10592,9 @@ WHERE a = c AND d = e AND b + d > 42
                                 },
                                 {
                                   "CallBinary": {
-                                    "func": "AddInt32",
+                                    "func": {
+                                      "AddInt32": null
+                                    },
                                     "expr1": {
                                       "Column": [
                                         0,

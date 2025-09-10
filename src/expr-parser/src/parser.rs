@@ -719,7 +719,7 @@ mod relation {
 /// Support for parsing [mz_expr::MirScalarExpr].
 mod scalar {
     use mz_expr::{
-        BinaryFunc, ColumnOrder, MirScalarExpr, UnaryFunc, UnmaterializableFunc, VariadicFunc,
+        BinaryFunc, ColumnOrder, MirScalarExpr, UnaryFunc, UnmaterializableFunc, VariadicFunc, func,
     };
     use mz_repr::{AsColumnType, Datum, Row, RowArena, SqlScalarType};
 
@@ -781,7 +781,7 @@ mod scalar {
                     Op::Unr(mz_expr::UnaryFunc::IsFalse(_)) => Some(13),
                     Op::Neg(mz_expr::UnaryFunc::IsFalse(_)) => Some(13),
                     // 14: addition, subtraction
-                    Op::Bin(mz_expr::BinaryFunc::AddInt64) => Some(14),
+                    Op::Bin(mz_expr::BinaryFunc::AddInt64(_)) => Some(14),
                     // 14: multiplication, division, modulo
                     Op::Bin(mz_expr::BinaryFunc::MulInt64) => Some(15),
                     Op::Bin(mz_expr::BinaryFunc::DivInt64) => Some(15),
@@ -832,7 +832,7 @@ mod scalar {
                     Op::Bin(mz_expr::BinaryFunc::Lt)
                 } else if input.eat(syn::Token![+]) {
                     exp_opd = true;
-                    Op::Bin(mz_expr::BinaryFunc::AddInt64) // TODO: fix placeholder
+                    Op::Bin(mz_expr::BinaryFunc::AddInt64(func::AddInt64)) // TODO: fix placeholder
                 } else if input.eat(syn::Token![*]) {
                     exp_opd = true;
                     Op::Bin(mz_expr::BinaryFunc::MulInt64) // TODO: fix placeholder
