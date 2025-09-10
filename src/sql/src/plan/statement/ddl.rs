@@ -115,7 +115,7 @@ use mz_storage_types::sources::sql_server::{
 use mz_storage_types::sources::{
     GenericSourceConnection, MySqlSourceExportDetails, PostgresSourceExportDetails,
     ProtoSourceExportStatementDetails, SourceConnection, SourceDesc, SourceExportDataConfig,
-    SourceExportDetails, SourceExportStatementDetails, SqlServerSource, SqlServerSourceExtras,
+    SourceExportDetails, SourceExportStatementDetails, SqlServerSourceConnection, SqlServerSourceExtras,
     Timeline,
 };
 use prost::Message;
@@ -985,7 +985,7 @@ pub fn plan_create_source(
                 })?;
 
             let connection =
-                GenericSourceConnection::<ReferencedConnection>::from(SqlServerSource {
+                GenericSourceConnection::<ReferencedConnection>::from(SqlServerSourceConnection {
                     catalog_id: connection_item.id(),
                     connection: connection_item.id(),
                     extras,

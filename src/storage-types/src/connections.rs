@@ -1908,9 +1908,9 @@ impl<C: ConnectionAccess> AlterCompatible for MySqlConnection<C> {
 /// Details how to connect to an instance of Microsoft SQL Server.
 ///
 /// For specifics of connecting to SQL Server for purposes of creating a
-/// Materialize Source, see [`SqlServerSource`] which wraps this type.
+/// Materialize Source, see [`SqlServerSourceConnection`] which wraps this type.
 ///
-/// [`SqlServerSource`]: crate::sources::SqlServerSource
+/// [`SqlServerSourceConnection`]: crate::sources::SqlServerSourceConnection
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct SqlServerConnectionDetails<C: ConnectionAccess = InlinedConnection> {
     /// The hostname of the server.

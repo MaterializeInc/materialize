@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Code to render the ingestion dataflow of a [`SqlServerSource`].
+//! Code to render the ingestion dataflow of a [`SqlServerSourceConnection`].
 
 use std::collections::BTreeMap;
 use std::convert::Infallible;
@@ -25,7 +25,7 @@ use mz_sql_server_util::cdc::Lsn;
 use mz_sql_server_util::desc::{SqlServerRowDecoder, SqlServerTableDesc};
 use mz_storage_types::errors::{DataflowError, SourceError, SourceErrorDetails};
 use mz_storage_types::sources::{
-    SourceExport, SourceExportDetails, SourceTimestamp, SqlServerSource,
+    SourceExport, SourceExportDetails, SourceTimestamp, SqlServerSourceConnection,
 };
 use mz_timely_util::builder_async::PressOnDropButton;
 use timely::container::CapacityContainerBuilder;
@@ -97,7 +97,7 @@ impl From<DefiniteError> for DataflowError {
     }
 }
 
-impl SourceRender for SqlServerSource {
+impl SourceRender for SqlServerSourceConnection {
     type Time = Lsn;
 
     const STATUS_NAMESPACE: StatusNamespace = StatusNamespace::SqlServer;
