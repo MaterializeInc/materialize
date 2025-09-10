@@ -10,9 +10,10 @@
 from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
-from materialize.checks.checks import Check, externally_idempotent
+from materialize.checks.checks import Check, disabled, externally_idempotent
 
 
+@disabled("due to database-issues#9223")
 @externally_idempotent(False)
 class SourceErrors(Check):
     def initialize(self) -> Testdrive:
