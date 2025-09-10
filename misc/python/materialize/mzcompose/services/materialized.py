@@ -115,7 +115,9 @@ class Materialized(Service):
 
         environment = [
             "MZ_NO_TELEMETRY=1",
+            # Not used in most tests
             "MZ_NO_BUILTIN_CONSOLE=1",
+            # Test runs are discarded on system crash anyway
             "MZ_EAT_MY_DATA=1",
             "MZ_TEST_ONLY_DUMMY_SEGMENT_CLIENT=true",
             f"MZ_SOFT_ASSERTIONS={int(soft_assertions)}",

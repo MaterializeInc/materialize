@@ -39,16 +39,23 @@ hosted offering we run these services scaled across many machines.
 ********************************* WARNING ********************************
 EOF
 
-if [ -z "${MZ_EAT_MY_DATA:-}" ]; then
-    unset LD_PRELOAD
-else
+is_truthy() {
+    if [[ "$1" == "0" || "$1" == "" || "$1" == "no" || "$1" == "false" ]]; then
+        return 1
+    fi
+    return 0
+}
+
+if is_truthy "${MZ_EAT_MY_DATA:-0}"; then
     export LD_PRELOAD="libeatmydata.so"
+else
+    unset LD_PRELOAD
 fi
 
 export PGUSER=root
 
 # Start PostgreSQL, unless suppressed.
-if [ -z "${MZ_NO_BUILTIN_POSTGRES:-}" ]; then
+if ! is_truthy "${MZ_NO_BUILTIN_POSTGRES:-0}"; then
   PGDATA=/mzdata/postgres
   export PGPORT=26257
   export PGDATABASE=root
@@ -67,11 +74,11 @@ if [ -z "${MZ_NO_BUILTIN_POSTGRES:-}" ]; then
 
   trap 'kill -INT $PGPID; wait $PGPID' SIGTERM SIGINT EXIT
 
-  until /usr/lib/postgresql/16/bin/pg_isready; do
+  until /usr/lib/postgresql/16/bin/pg_isready > /dev/null 2>&1; do
     sleep 0.01
   done
 
-  psql -d template1 -c "CREATE DATABASE $PGUSER OWNER $PGUSER;" || true
+  psql -d template1 -c "CREATE DATABASE $PGUSER OWNER $PGUSER;" > /dev/null 2>&1 || true
   psql -c "ALTER USER $PGUSER WITH PASSWORD 'root'; \
            CREATE SCHEMA IF NOT EXISTS consensus; \
            CREATE SCHEMA IF NOT EXISTS storage; \
@@ -80,7 +87,7 @@ if [ -z "${MZ_NO_BUILTIN_POSTGRES:-}" ]; then
 fi
 
 # Start nginx to serve the console.
-if [ -z "${MZ_NO_BUILTIN_CONSOLE:-}" ]; then
+if ! is_truthy "${MZ_NO_BUILTIN_CONSOLE:-0}"; then
   nginx &
 fi
 
@@ -99,10 +106,10 @@ export MZ_INTERNAL_SQL_LISTEN_ADDR=${MZ_INTERNAL_SQL_LISTEN_ADDR:-0.0.0.0:6877}
 export MZ_INTERNAL_HTTP_LISTEN_ADDR=${MZ_INTERNAL_HTTP_LISTEN_ADDR:-0.0.0.0:6878}
 export MZ_BALANCER_SQL_LISTEN_ADDR=${MZ_BALANCER_SQL_LISTEN_ADDR:-0.0.0.0:6880}
 export MZ_BALANCER_HTTP_LISTEN_ADDR=${MZ_BALANCER_HTTP_LISTEN_ADDR:-0.0.0.0:6881}
-if [ -z "${MZ_NO_EXTERNAL_CLUSTERD:-}" ]; then
-  export MZ_PERSIST_CONSENSUS_URL=${MZ_PERSIST_CONSENSUS_URL:-postgresql://$PGUSER@$(hostname):26257/?options=--search_path=consensus}
-else
+if is_truthy "${MZ_NO_EXTERNAL_CLUSTERD:-0}"; then
   export MZ_PERSIST_CONSENSUS_URL=${MZ_PERSIST_CONSENSUS_URL:-postgresql://$PGUSER@%2Fvar%2Frun%2Fpostgresql:26257/?options=--search_path=consensus}
+else
+  export MZ_PERSIST_CONSENSUS_URL=${MZ_PERSIST_CONSENSUS_URL:-postgresql://$PGUSER@$(hostname):26257/?options=--search_path=consensus}
 fi
 export MZ_PERSIST_BLOB_URL=${MZ_PERSIST_BLOB_URL:-file:///mzdata/persist/blob}
 export MZ_ADAPTER_STASH_URL=${MZ_ADAPTER_STASH_URL:-postgresql://$PGUSER@%2Fvar%2Frun%2Fpostgresql:26257/?options=--search_path=adapter}
@@ -240,12 +247,12 @@ export MZ_BOOTSTRAP_BUILTIN_PROBE_CLUSTER_REPLICATION_FACTOR="${MZ_BOOTSTRAP_BUI
 export MZ_SYSTEM_PARAMETER_DEFAULT="${MZ_SYSTEM_PARAMETER_DEFAULT:-allowed_cluster_replica_sizes=\"25cc\",\"50cc\",\"100cc\",\"200cc\",\"300cc\",\"400cc\",\"600cc\",\"800cc\",\"1200cc\",\"1600cc\",\"3200cc\";enable_rbac_checks=false;enable_statement_lifecycle_logging=false;statement_logging_default_sample_rate=0;statement_logging_max_sample_rate=0}"
 
 
-if [ -z "${MZ_NO_TELEMETRY:-}" ]; then
+if ! is_truthy "${MZ_NO_TELEMETRY:-0}"; then
     export MZ_SEGMENT_API_KEY=${MZ_SEGMENT_API_KEY:-hMWi3sZ17KFMjn2sPWo9UJGpOQqiba4A}
     export MZ_SEGMENT_CLIENT_SIDE=${MZ_SEGMENT_CLIENT_SIDE:-true}
 fi
 
-if [ -n "${MZ_RESTART_ON_FAILURE:-}" ]; then
+if is_truthy "${MZ_RESTART_ON_FAILURE:-0}"; then
     for ((i = 0; i < ${MZ_RESTART_LIMIT:-9999999999}; i++)); do
         # Run `environmentd` inside of an `if` to avoid tripping `set -e`
         # behavior.
