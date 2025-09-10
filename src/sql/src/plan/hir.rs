@@ -3091,7 +3091,7 @@ impl HirScalarExpr {
 
     pub fn literal(datum: Datum, scalar_type: SqlScalarType) -> HirScalarExpr {
         let col_type = scalar_type.nullable(datum.is_null());
-        soft_assert_or_log!(datum.is_instance_of(&col_type), "type is correct");
+        soft_assert_or_log!(datum.is_instance_of_sql(&col_type), "type is correct");
         let row = Row::pack([datum]);
         HirScalarExpr::Literal(row, col_type, TreatAsEqual(None))
     }

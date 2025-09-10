@@ -3426,7 +3426,7 @@ mod tests {
                         // The following will check not just that the scalar type
                         // is ok, but also catches if the function returned a null
                         // but the MIR type inference said "non-nullable".
-                        if !eval_result_datum.is_instance_of(&mir_typ) {
+                        if !eval_result_datum.is_instance_of_sql(&mir_typ) {
                             panic!(
                                 "{call_name}: expected return type of {return_styp:?}, got {eval_result_datum}"
                             );

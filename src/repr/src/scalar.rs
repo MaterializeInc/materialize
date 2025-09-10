@@ -43,6 +43,7 @@ use crate::adt::timestamp::{
     CheckedTimestamp, HIGH_DATE, LOW_DATE, TimestampError, TimestampPrecision,
 };
 use crate::adt::varchar::{VarChar, VarCharMaxLength};
+use crate::relation::ReprColumnType;
 pub use crate::relation_and_scalar::ProtoScalarType;
 pub use crate::relation_and_scalar::proto_scalar_type::ProtoRecordField;
 use crate::role_id::RoleId;
@@ -991,13 +992,13 @@ impl<'a> Datum<'a> {
         }
     }
 
-    /// Reports whether this datum is an instance of the specified column type.
-    pub fn is_instance_of(self, column_type: &SqlColumnType) -> bool {
-        fn is_instance_of_scalar(datum: Datum, scalar_type: &SqlScalarType) -> bool {
-            if let SqlScalarType::Jsonb = scalar_type {
+    /// Reports whether this datum is an instance of the specified (SQL) column type.
+    pub fn is_instance_of(self, column_type: &ReprColumnType) -> bool {
+        fn is_instance_of_scalar(datum: Datum, scalar_type: &ReprScalarType) -> bool {
+            if let ReprScalarType::Jsonb = scalar_type {
                 // json type checking
                 match datum {
-                    Datum::Dummy => panic!("Datum::Dummy observed"),
+                    Datum::Dummy => false,
                     Datum::JsonNull
                     | Datum::False
                     | Datum::True
@@ -1014,7 +1015,136 @@ impl<'a> Datum<'a> {
             } else {
                 // sql type checking
                 match (datum, scalar_type) {
-                    (Datum::Dummy, _) => panic!("Datum::Dummy observed"),
+                    (Datum::Dummy, _) => false,
+                    (Datum::Null, _) => false,
+                    (Datum::False, ReprScalarType::Bool) => true,
+                    (Datum::False, _) => false,
+                    (Datum::True, ReprScalarType::Bool) => true,
+                    (Datum::True, _) => false,
+                    (Datum::Int16(_), ReprScalarType::Int16) => true,
+                    (Datum::Int16(_), _) => false,
+                    (Datum::Int32(_), ReprScalarType::Int32) => true,
+                    (Datum::Int32(_), _) => false,
+                    (Datum::Int64(_), ReprScalarType::Int64) => true,
+                    (Datum::Int64(_), _) => false,
+                    (Datum::UInt8(_), ReprScalarType::UInt8) => true,
+                    (Datum::UInt8(_), _) => false,
+                    (Datum::UInt16(_), ReprScalarType::UInt16) => true,
+                    (Datum::UInt16(_), _) => false,
+                    (Datum::UInt32(_), ReprScalarType::UInt32) => true,
+                    (Datum::UInt32(_), _) => false,
+                    (Datum::UInt64(_), ReprScalarType::UInt64) => true,
+                    (Datum::UInt64(_), _) => false,
+                    (Datum::Float32(_), ReprScalarType::Float32) => true,
+                    (Datum::Float32(_), _) => false,
+                    (Datum::Float64(_), ReprScalarType::Float64) => true,
+                    (Datum::Float64(_), _) => false,
+                    (Datum::Date(_), ReprScalarType::Date) => true,
+                    (Datum::Date(_), _) => false,
+                    (Datum::Time(_), ReprScalarType::Time) => true,
+                    (Datum::Time(_), _) => false,
+                    (Datum::Timestamp(_), ReprScalarType::Timestamp { .. }) => true,
+                    (Datum::Timestamp(_), _) => false,
+                    (Datum::TimestampTz(_), ReprScalarType::TimestampTz { .. }) => true,
+                    (Datum::TimestampTz(_), _) => false,
+                    (Datum::Interval(_), ReprScalarType::Interval) => true,
+                    (Datum::Interval(_), _) => false,
+                    (Datum::Bytes(_), ReprScalarType::Bytes) => true,
+                    (Datum::Bytes(_), _) => false,
+                    (Datum::String(_), ReprScalarType::String) => true,
+                    (Datum::String(_), _) => false,
+                    (Datum::Uuid(_), ReprScalarType::Uuid) => true,
+                    (Datum::Uuid(_), _) => false,
+                    (Datum::Array(array), ReprScalarType::Array(t)) => {
+                        array.elements.iter().all(|e| match e {
+                            Datum::Null => true,
+                            _ => is_instance_of_scalar(e, t),
+                        })
+                    }
+                    (Datum::Array(array), ReprScalarType::Int2Vector) => {
+                        array.dims().len() == 1
+                            && array
+                                .elements
+                                .iter()
+                                .all(|e| is_instance_of_scalar(e, &ReprScalarType::Int16))
+                    }
+                    (Datum::Array(_), _) => false,
+                    (Datum::List(list), ReprScalarType::List { element_type, .. }) => list
+                        .iter()
+                        .all(|e| e.is_null() || is_instance_of_scalar(e, element_type)),
+                    (Datum::List(list), ReprScalarType::Record { fields, .. }) => {
+                        if list.iter().count() != fields.len() {
+                            return false;
+                        }
+
+                        list.iter().zip_eq(fields).all(|(e, t)| {
+                            (e.is_null() && t.nullable) || is_instance_of_scalar(e, &t.scalar_type)
+                        })
+                    }
+                    (Datum::List(_), _) => false,
+                    (Datum::Map(map), ReprScalarType::Map { value_type, .. }) => map
+                        .iter()
+                        .all(|(_k, v)| v.is_null() || is_instance_of_scalar(v, value_type)),
+                    (Datum::Map(_), _) => false,
+                    (Datum::JsonNull, _) => false,
+                    (Datum::Numeric(_), ReprScalarType::Numeric) => true,
+                    (Datum::Numeric(_), _) => false,
+                    (Datum::MzTimestamp(_), ReprScalarType::MzTimestamp) => true,
+                    (Datum::MzTimestamp(_), _) => false,
+                    (Datum::Range(Range { inner }), ReprScalarType::Range { element_type }) => {
+                        match inner {
+                            None => true,
+                            Some(inner) => {
+                                true && match inner.lower.bound {
+                                    None => true,
+                                    Some(b) => is_instance_of_scalar(b.datum(), element_type),
+                                } && match inner.upper.bound {
+                                    None => true,
+                                    Some(b) => is_instance_of_scalar(b.datum(), element_type),
+                                }
+                            }
+                        }
+                    }
+                    (Datum::Range(_), _) => false,
+                    (Datum::MzAclItem(_), ReprScalarType::MzAclItem) => true,
+                    (Datum::MzAclItem(_), _) => false,
+                    (Datum::AclItem(_), ReprScalarType::AclItem) => true,
+                    (Datum::AclItem(_), _) => false,
+                }
+            }
+        }
+        if column_type.nullable {
+            if let Datum::Null = self {
+                return true;
+            }
+        }
+        is_instance_of_scalar(self, &column_type.scalar_type)
+    }
+
+    /// Reports whether this datum is an instance of the specified (SQL) column type.
+    pub fn is_instance_of_sql(self, column_type: &SqlColumnType) -> bool {
+        fn is_instance_of_scalar(datum: Datum, scalar_type: &SqlScalarType) -> bool {
+            if let SqlScalarType::Jsonb = scalar_type {
+                // json type checking
+                match datum {
+                    Datum::Dummy => false,
+                    Datum::JsonNull
+                    | Datum::False
+                    | Datum::True
+                    | Datum::Numeric(_)
+                    | Datum::String(_) => true,
+                    Datum::List(list) => list
+                        .iter()
+                        .all(|elem| is_instance_of_scalar(elem, scalar_type)),
+                    Datum::Map(dict) => dict
+                        .iter()
+                        .all(|(_key, val)| is_instance_of_scalar(val, scalar_type)),
+                    _ => false,
+                }
+            } else {
+                // sql type checking
+                match (datum, scalar_type) {
+                    (Datum::Dummy, _) => false,
                     (Datum::Null, _) => false,
                     (Datum::False, SqlScalarType::Bool) => true,
                     (Datum::False, _) => false,
@@ -1079,6 +1209,10 @@ impl<'a> Datum<'a> {
                         .iter()
                         .all(|e| e.is_null() || is_instance_of_scalar(e, element_type)),
                     (Datum::List(list), SqlScalarType::Record { fields, .. }) => {
+                        if list.iter().count() != fields.len() {
+                            return false;
+                        }
+
                         list.iter().zip_eq(fields).all(|(e, (_, t))| {
                             (e.is_null() && t.nullable) || is_instance_of_scalar(e, &t.scalar_type)
                         })
@@ -1445,6 +1579,11 @@ impl fmt::Display for Datum<'_> {
 ///
 /// There is a direct correspondence between `Datum` variants and `SqlScalarType`
 /// variants.
+///
+/// Each variant maps to a variant of [`ReprScalarType`], with some overlap.
+///
+/// There is an indirect correspondence between `Datum` variants and `SqlScalarType`
+/// variants: every `Datum` variant belongs to one or more `SqlScalarType` variants.
 #[derive(
     Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Ord, PartialOrd, Hash, EnumKind, MzReflect,
 )]
@@ -3784,6 +3923,120 @@ impl Arbitrary for SqlScalarType {
     }
 }
 
+/// The type of a [`Datum`] as it is represented.
+///
+/// Each variant here corresponds to one or more variants of [`SqlScalarType`].
+///
+/// There is a direct correspondence between `Datum` variants and `ReprScalarType`
+/// variants: every `Datum` variant corresponds to exactly one `ReprScalarType` variant
+/// (with an exception for `Datum::Array`, which could be both an `Int2Vector` and an `Array`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Ord, PartialOrd, Hash, MzReflect)]
+pub enum ReprScalarType {
+    Bool,
+    Int16,
+    Int32,
+    Int64,
+    UInt8, // also includes SqlScalarType::PgLegacyChar
+    UInt16,
+    UInt32, // also includes SqlScalarType::{Oid,RegClass,RegProc,RegType}
+    UInt64,
+    Float32,
+    Float64,
+    Numeric,
+    Date,
+    Time,
+    Timestamp {
+        precision: Option<TimestampPrecision>,
+    },
+    TimestampTz {
+        precision: Option<TimestampPrecision>,
+    },
+    MzTimestamp,
+    Interval,
+    Bytes,
+    Jsonb,
+    String, // also includes SqlScalarType::{VarChar,Char,PgLegacyName}
+    Uuid,
+    Array(Box<ReprScalarType>),
+    Int2Vector, // differs from Array enough to stick around
+    List {
+        element_type: Box<ReprScalarType>,
+    },
+    Record {
+        fields: Box<[ReprColumnType]>,
+    },
+    Map {
+        value_type: Box<ReprScalarType>,
+    },
+    Range {
+        element_type: Box<ReprScalarType>,
+    },
+    MzAclItem,
+    AclItem,
+}
+
+impl From<SqlScalarType> for ReprScalarType {
+    fn from(typ: SqlScalarType) -> Self {
+        match typ {
+            SqlScalarType::Bool => ReprScalarType::Bool,
+            SqlScalarType::Int16 => ReprScalarType::Int16,
+            SqlScalarType::Int32 => ReprScalarType::Int32,
+            SqlScalarType::Int64 => ReprScalarType::Int64,
+            SqlScalarType::UInt16 => ReprScalarType::UInt16,
+            SqlScalarType::UInt32 => ReprScalarType::UInt32,
+            SqlScalarType::UInt64 => ReprScalarType::UInt64,
+            SqlScalarType::Float32 => ReprScalarType::Float32,
+            SqlScalarType::Float64 => ReprScalarType::Float64,
+            SqlScalarType::Numeric { max_scale: _ } => ReprScalarType::Numeric,
+            SqlScalarType::Date => ReprScalarType::Date,
+            SqlScalarType::Time => ReprScalarType::Time,
+            SqlScalarType::Timestamp { precision } => ReprScalarType::Timestamp { precision },
+            SqlScalarType::TimestampTz { precision } => ReprScalarType::TimestampTz { precision },
+            SqlScalarType::Interval => ReprScalarType::Interval,
+            SqlScalarType::PgLegacyChar => ReprScalarType::UInt8,
+            SqlScalarType::PgLegacyName => ReprScalarType::String,
+            SqlScalarType::Bytes => ReprScalarType::Bytes,
+            SqlScalarType::String => ReprScalarType::String,
+            SqlScalarType::Char { length: _ } => ReprScalarType::String,
+            SqlScalarType::VarChar { max_length: _ } => ReprScalarType::String,
+            SqlScalarType::Jsonb => ReprScalarType::Jsonb,
+            SqlScalarType::Uuid => ReprScalarType::Uuid,
+            SqlScalarType::Array(element_type) => {
+                ReprScalarType::Array(Box::new((*element_type).into()))
+            }
+            SqlScalarType::List {
+                element_type,
+                custom_id: _,
+            } => ReprScalarType::List {
+                element_type: Box::new((*element_type).into()),
+            },
+            SqlScalarType::Record {
+                fields,
+                custom_id: _,
+            } => ReprScalarType::Record {
+                fields: fields.into_iter().map(|(_, typ)| typ.into()).collect(),
+            },
+            SqlScalarType::Oid => ReprScalarType::UInt32,
+            SqlScalarType::Map {
+                value_type,
+                custom_id: _,
+            } => ReprScalarType::Map {
+                value_type: Box::new((*value_type).into()),
+            },
+            SqlScalarType::RegProc => ReprScalarType::UInt32,
+            SqlScalarType::RegType => ReprScalarType::UInt32,
+            SqlScalarType::RegClass => ReprScalarType::UInt32,
+            SqlScalarType::Int2Vector => ReprScalarType::Int2Vector,
+            SqlScalarType::MzTimestamp => ReprScalarType::MzTimestamp,
+            SqlScalarType::Range { element_type } => ReprScalarType::Range {
+                element_type: Box::new((*element_type).into()),
+            },
+            SqlScalarType::MzAclItem => ReprScalarType::MzAclItem,
+            SqlScalarType::AclItem => ReprScalarType::AclItem,
+        }
+    }
+}
+
 static EMPTY_ARRAY_ROW: LazyLock<Row> = LazyLock::new(|| {
     let mut row = Row::default();
     row.packer()
@@ -3876,7 +4129,7 @@ impl Ord for PropDatum {
 /// Generate an arbitrary [`PropDatum`].
 pub fn arb_datum() -> BoxedStrategy<PropDatum> {
     let leaf = Union::new(vec![
-        Just(PropDatum::Null).boxed(),
+        Just(PropDatum::Dummy).boxed(),
         any::<bool>().prop_map(PropDatum::Bool).boxed(),
         any::<i16>().prop_map(PropDatum::Int16).boxed(),
         any::<i32>().prop_map(PropDatum::Int32).boxed(),
@@ -3911,6 +4164,7 @@ pub fn arb_datum() -> BoxedStrategy<PropDatum> {
             .boxed(),
         Just(PropDatum::Dummy).boxed(),
     ]);
+
     leaf.prop_recursive(3, 8, 16, |inner| {
         Union::new(vec![
             arb_array(inner.clone()).prop_map(PropDatum::Array).boxed(),
@@ -4484,6 +4738,33 @@ mod tests {
             let actual = protobuf_roundtrip::<_, ProtoScalarType>(&expect);
             assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
+        }
+    }
+
+    proptest! {
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)]
+        fn sql_repr_types_agree_on_valid_data((src, datum) in any::<SqlColumnType>().prop_flat_map(|src| {
+            let datum = arb_datum_for_column(src.clone());
+            (Just(src.clone()), datum) }
+        )) {
+            let tgt: ReprColumnType = src.clone().into();
+            let datum = Datum::from(&datum);
+            assert_eq!(datum.is_instance_of_sql(&src), datum.is_instance_of(&tgt), "translated to repr type {tgt:#?}");
+        }
+    }
+
+    proptest! {
+        // We run many cases because the data are _random_, and we want to be sure
+        // that we have covered sufficient cases.
+        #![proptest_config(ProptestConfig::with_cases(10000))]
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)]
+        fn sql_repr_types_agree_on_random_data(src in any::<SqlColumnType>(), datum in arb_datum()) {
+            let tgt: ReprColumnType = src.clone().into();
+            let datum = Datum::from(&datum);
+
+            assert_eq!(datum.is_instance_of_sql(&src), datum.is_instance_of(&tgt), "translated to repr type {tgt:#?}");
         }
     }
 
