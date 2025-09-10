@@ -942,8 +942,8 @@ mod column_names {
 
     use super::Analysis;
     use mz_expr::{AggregateFunc, Id, MirRelationExpr, MirScalarExpr, TableFunc};
-    use mz_repr::GlobalId;
     use mz_repr::explain::ExprHumanizer;
+    use mz_repr::{GlobalId, UNKNOWN_COLUMN_NAME};
     use mz_sql::ORDINALITY_COL_NAME;
 
     /// An abstract type denoting an inferred column name.
@@ -971,7 +971,7 @@ mod column_names {
         }
 
         /// Humanize the column to a [`String`], returns an empty [`String`] for
-        /// unknown columns (or columns named `"?column?"`).
+        /// unknown columns (or columns named `UNKNOWN_COLUMN_NAME`).
         pub fn humanize(&self, humanizer: &dyn ExprHumanizer) -> String {
             match self {
                 Self::Global(id, c) => humanizer.humanize_column(*id, *c).unwrap_or_default(),
@@ -996,7 +996,7 @@ mod column_names {
                 Self::Global(..) | Self::Aggregate(..) | Self::Annotated(..) => self.clone(),
                 Self::Unknown => name
                     .as_ref()
-                    .filter(|name| name.as_ref() != "?column?")
+                    .filter(|name| name.as_ref() != UNKNOWN_COLUMN_NAME)
                     .map_or_else(|| Self::Unknown, |name| Self::Annotated(Arc::clone(name))),
             }
         }

@@ -45,6 +45,7 @@ use mz_ore::retry::Retry;
 use mz_ore::{assert_contains, task::RuntimeExt};
 use mz_ore::{assert_err, assert_none, assert_ok, task};
 use mz_pgrepr::UInt8;
+use mz_repr::UNKNOWN_COLUMN_NAME;
 use mz_sql::session::user::{ANALYTICS_USER, HTTP_DEFAULT_USER, SYSTEM_USER};
 use mz_sql_parser::ast::display::AstDisplay;
 use openssl::ssl::{SslConnectorBuilder, SslVerifyMode};
@@ -2150,7 +2151,9 @@ fn test_max_connections_on_all_interfaces() {
             );
             assert_eq!(
                 ws.read().unwrap(),
-                Message::Text("{\"type\":\"Rows\",\"payload\":{\"columns\":[{\"name\":\"?column?\",\"type_oid\":23,\"type_len\":4,\"type_mod\":-1}]}}".to_string())
+                Message::Text(format!(
+                    r#"{{"type":"Rows","payload":{{"columns":[{{"name":"{UNKNOWN_COLUMN_NAME}","type_oid":23,"type_len":4,"type_mod":-1}}]}}}}"#
+                ))
             );
             assert_eq!(
                 ws.read().unwrap(),
@@ -3057,19 +3060,19 @@ fn test_github_20262() {
     ws.send(Message::Text(select)).unwrap();
 
     let mut expect = VecDeque::from([
-        r#"{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":true}}"#,
-        r#"{"type":"Rows","payload":{"columns":[{"name":"mz_timestamp","type_oid":1700,"type_len":-1,"type_mod":2555908},{"name":"mz_diff","type_oid":20,"type_len":8,"type_mod":-1},{"name":"i","type_oid":23,"type_len":4,"type_mod":-1}]}}"#,
-        r#"{"type":"Error","payload":{"message":"canceling statement due to user request","code":"57014"}}"#,
-        r#"{"type":"ReadyForQuery","payload":"I"}"#,
-        r#"{"type":"Notice","payload":{"message":"there is no transaction in progress","code":"25P01","severity":"warning"}}"#,
-        r#"{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}"#,
-        r#"{"type":"CommandComplete","payload":"COMMIT"}"#,
-        r#"{"type":"ReadyForQuery","payload":"I"}"#,
-        r#"{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}"#,
-        r#"{"type":"Rows","payload":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]}}"#,
-        r#"{"type":"Row","payload":["1"]}"#,
-        r#"{"type":"CommandComplete","payload":"SELECT 1"}"#,
-        r#"{"type":"ReadyForQuery","payload":"I"}"#,
+        r#"{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":true}}"#.to_string(),
+        r#"{"type":"Rows","payload":{"columns":[{"name":"mz_timestamp","type_oid":1700,"type_len":-1,"type_mod":2555908},{"name":"mz_diff","type_oid":20,"type_len":8,"type_mod":-1},{"name":"i","type_oid":23,"type_len":4,"type_mod":-1}]}}"#.to_string(),
+        r#"{"type":"Error","payload":{"message":"canceling statement due to user request","code":"57014"}}"#.to_string(),
+        r#"{"type":"ReadyForQuery","payload":"I"}"#.to_string(),
+        r#"{"type":"Notice","payload":{"message":"there is no transaction in progress","code":"25P01","severity":"warning"}}"#.to_string(),
+        r#"{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}"#.to_string(),
+        r#"{"type":"CommandComplete","payload":"COMMIT"}"#.to_string(),
+        r#"{"type":"ReadyForQuery","payload":"I"}"#.to_string(),
+        r#"{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}"#.to_string(),
+        format!(r#"{{"type":"Rows","payload":{{"columns":[{{"name":"{UNKNOWN_COLUMN_NAME}","type_oid":23,"type_len":4,"type_mod":-1}}]}}}}"#),
+        r#"{"type":"Row","payload":["1"]}"#.to_string(),
+        r#"{"type":"CommandComplete","payload":"SELECT 1"}"#.to_string(),
+        r#"{"type":"ReadyForQuery","payload":"I"}"#.to_string(),
     ]);
     while !expect.is_empty() {
         if let Message::Text(text) = ws.read().unwrap() {

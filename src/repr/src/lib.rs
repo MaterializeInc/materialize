@@ -56,8 +56,9 @@ pub use crate::global_id::GlobalId;
 pub use crate::relation::{
     ColumnIndex, ColumnName, ColumnType, NotNullViolation, PropRelationDescDiff, ProtoColumnName,
     ProtoColumnType, ProtoRelationDesc, ProtoRelationType, RelationDesc, RelationDescBuilder,
-    RelationType, RelationVersion, RelationVersionSelector, VersionedRelationDesc,
-    arb_relation_desc_diff, arb_relation_desc_projection, arb_row_for_relation,
+    RelationType, RelationVersion, RelationVersionSelector, UNKNOWN_COLUMN_NAME,
+    VersionedRelationDesc, arb_relation_desc_diff, arb_relation_desc_projection,
+    arb_row_for_relation,
 };
 pub use crate::row::encode::{RowColumnarDecoder, RowColumnarEncoder, preserves_order};
 pub use crate::row::iter::{IntoRowIterator, RowIterator};
