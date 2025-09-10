@@ -188,6 +188,8 @@ case "$cmd" in
         docker_command=()
 
         detach_container=false
+        interactive=false
+        tty=false
         container_name_param=""
 
         while [[ $# -gt 0 ]]; do
@@ -200,6 +202,14 @@ case "$cmd" in
                     container_name_param="$2"
                     shift # past argument
                     shift # past value
+                    ;;
+                --interactive)
+                    interactive=true
+                    shift # past argument
+                    ;;
+                --tty)
+                    tty=true
+                    shift # past argument
                     ;;
                 *)
                     docker_command+=("$1")
@@ -275,6 +285,14 @@ case "$cmd" in
 
         if [[ $detach_container == "true" ]]; then
             args+=("--detach")
+        fi
+
+        if [[ $interactive == "true" ]]; then
+            args+=("--interactive")
+        fi
+
+        if [[ $tty == "true" ]]; then
+            args+=("--tty")
         fi
 
         if [[ -n "$container_name_param" ]]; then

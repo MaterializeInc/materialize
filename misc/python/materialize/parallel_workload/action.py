@@ -28,8 +28,6 @@ import materialize.parallel_workload.database
 from materialize.data_ingest.data_type import (
     NUMBER_TYPES,
     Boolean,
-    IntArray,
-    IntList,
     Text,
     TextTextMap,
 )
@@ -2671,7 +2669,10 @@ read_action_list = ActionList(
         (SelectAction, 100),
         (SelectOneAction, 1),
         # (SQLsmithAction, 30),  # Questionable use
-        (CopyToS3Action, 100),  # TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/9661 is fixed
+        (
+            CopyToS3Action,
+            100,
+        ),  # TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/9661 is fixed
         (SetClusterAction, 1),
         (CommitRollbackAction, 30),
         (ReconnectAction, 1),
