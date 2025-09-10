@@ -515,6 +515,168 @@ class ObservabilityPrometheusScrapeAnnotationsEnabled(Modification):
             ), f"Expected no {expected} in environmentd args, but found it: {args}"
 
 
+def validate_cluster_replica_size(
+    size: dict[str, Any], swap_enabled: bool, storage_class_name_set: bool
+):
+    assert isinstance(size["is_cc"], bool)
+    assert size["is_cc"]
+
+    if swap_enabled:
+        assert size["disk_limit"] == "0"
+        assert isinstance(size["swap_enabled"], bool)
+        assert size["swap_enabled"]
+    elif storage_class_name_set:
+        assert size["disk_limit"] != "0"
+        assert "swap_enabled" not in size
+    else:
+        assert size["disk_limit"] == "0"
+
+    validate_node_selector(size["selectors"], swap_enabled, storage_class_name_set)
+
+
+def validate_node_selector(
+    selector: dict[str, str], swap_enabled: bool, storage_class_name_set: bool
+):
+    if swap_enabled:
+        assert selector["materialize.cloud/swap"] == "true"
+        assert "materialize.cloud/scratch-fs" not in selector
+    elif storage_class_name_set:
+        assert selector["materialize.cloud/scratch-fs"] == "true"
+        assert "materialize.cloud/swap" not in selector
+    else:
+        assert "materialize.cloud/swap" not in selector
+        assert "materialize.cloud/scratch-fs" not in selector
+
+
+def validate_container_resources(
+    resources: dict[str, dict[str, str]],
+    swap_enabled: bool,
+    storage_class_name_set: bool,
+):
+    if swap_enabled:
+        assert resources["requests"]["memory"] != resources["limits"]["memory"]
+    elif storage_class_name_set:
+        assert resources["requests"]["memory"] == resources["limits"]["memory"]
+    else:
+        assert resources["requests"]["memory"] == resources["limits"]["memory"]
+
+
+def get_pod_data(labels: dict[str, str]) -> dict[str, Any]:
+    return json.loads(
+        spawn.capture(
+            [
+                "kubectl",
+                "get",
+                "pod",
+                "-l",
+                ",".join(f"{key}={value}" for key, value in labels.items()),
+                "-n",
+                "materialize-environment",
+                "-o",
+                "json",
+            ]
+        )
+    )
+
+
+class SwapEnabledGlobal(Modification):
+    @classmethod
+    def values(cls) -> list[Any]:
+        return [True, False]
+
+    @classmethod
+    def default(cls) -> Any:
+        return True
+
+    def modify(self, definition: dict[str, Any]) -> None:
+        definition["operator"]["operator"]["clusters"]["swap_enabled"] = self.value
+
+    def validate(self, mods: dict[type[Modification], Any]) -> None:
+        orchestratord = get_orchestratord_data()
+        args = orchestratord["items"][0]["spec"]["containers"][0]["args"]
+        cluster_replica_sizes = json.loads(
+            next(
+                arg
+                for arg in args
+                if arg.startswith("--environmentd-cluster-replica-sizes=")
+            ).split("=", 1)[1]
+        )
+        for size in cluster_replica_sizes.values():
+            validate_cluster_replica_size(size, self.value, mods[StorageClass])
+
+        labels = {
+            "cluster.environmentd.materialize.cloud/type": "cluster",
+            "cluster.environmentd.materialize.cloud/cluster-id": "s2",
+            "cluster.environmentd.materialize.cloud/replica-id": "s1",
+            "materialize.cloud/organization-name": "12345678-1234-1234-1234-123456789012",
+        }
+
+        def check_pods() -> None:
+            clusterd = get_pod_data(labels)["items"][0]
+
+            resources = clusterd["spec"]["containers"][0]["resources"]
+            validate_container_resources(resources, self.value, mods[StorageClass])
+
+            node_selector = clusterd["spec"]["nodeSelector"]
+            # pulling this one out, since it isn't in the cluster size's selector
+            assert node_selector["workload"] == "materialize-instance"
+            validate_node_selector(node_selector, self.value, mods[StorageClass])
+
+        # Clusterd can take a while to start up
+        retry(check_pods, 5)
+
+        # TODO check that pods can actually use swap
+
+
+class StorageClass(Modification):
+    @classmethod
+    def values(cls) -> list[Any]:
+        return [True, False]
+
+    @classmethod
+    def default(cls) -> Any:
+        return False
+
+    def modify(self, definition: dict[str, Any]) -> None:
+        if self.value:
+            definition["operator"]["storage"]["storageClass"][
+                "name"
+            ] = "openebs-lvm-instance-store-ext4"
+
+    def validate(self, mods: dict[type[Modification], Any]) -> None:
+        orchestratord = get_orchestratord_data()
+        args = orchestratord["items"][0]["spec"]["containers"][0]["args"]
+        cluster_replica_sizes = json.loads(
+            next(
+                arg
+                for arg in args
+                if arg.startswith("--environmentd-cluster-replica-sizes=")
+            ).split("=", 1)[1]
+        )
+        for size in cluster_replica_sizes.values():
+            validate_cluster_replica_size(size, mods[SwapEnabledGlobal], self.value)
+        labels = {
+            "cluster.environmentd.materialize.cloud/type": "cluster",
+            "cluster.environmentd.materialize.cloud/cluster-id": "s2",
+            "cluster.environmentd.materialize.cloud/replica-id": "s1",
+            "materialize.cloud/organization-name": "12345678-1234-1234-1234-123456789012",
+        }
+
+        def check_pods() -> None:
+            clusterd = get_pod_data(labels)["items"][0]
+
+            resources = clusterd["spec"]["containers"][0]["resources"]
+            validate_container_resources(resources, mods[SwapEnabledGlobal], self.value)
+
+            node_selector = clusterd["spec"]["nodeSelector"]
+            # checking this one separately, since it isn't in the cluster size's selector
+            assert node_selector["workload"] == "materialize-instance"
+            validate_node_selector(node_selector, mods[SwapEnabledGlobal], self.value)
+
+        # Clusterd can take a while to start up
+        retry(check_pods, 5)
+
+
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "--recreate-cluster",
@@ -555,6 +717,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     definition["operator"]["operator"]["tag"] = get_tag(args.tag)
     # TODO: Remove when fixed: error: unexpected argument '--disable-license-key-checks' found
     definition["operator"]["operator"]["args"]["enableLicenseKeyChecks"] = True
+    definition["operator"]["clusterd"]["nodeSelector"][
+        "workload"
+    ] = "materialize-instance"
+    definition["operator"]["environmentd"]["nodeSelector"][
+        "workload"
+    ] = "materialize-instance"
     definition["secret"]["stringData"]["license_key"] = os.environ["MZ_CI_LICENSE_KEY"]
     definition["materialize"]["spec"][
         "environmentdImageRef"
@@ -603,7 +771,17 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
 def setup(cluster: str):
     spawn.runv(["kind", "delete", "cluster", "--name", cluster])
-    spawn.runv(["kind", "create", "cluster", "--name", cluster])
+    spawn.runv(
+        [
+            "kind",
+            "create",
+            "cluster",
+            "--name",
+            cluster,
+            "--config",
+            MZ_ROOT / "test" / "orchestratord" / "cluster.yaml",
+        ]
+    )
     spawn.runv(
         [
             "helm",
@@ -643,6 +821,14 @@ def setup(cluster: str):
             "apply",
             "-f",
             MZ_ROOT / "misc" / "helm-charts" / "testing" / "minio.yaml",
+        ]
+    )
+    spawn.runv(
+        [
+            "kubectl",
+            "apply",
+            "-f",
+            MZ_ROOT / "test" / "orchestratord" / "storageclass.yaml",
         ]
     )
 

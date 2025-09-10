@@ -207,7 +207,7 @@ operator:
 
 environmentd:
   # -- Node selector to use for environmentd pods spawned by the operator
-  nodeSelector:
+  nodeSelector: {}
   # -- Affinity to use for environmentd pods spawned by the operator
   affinity:
   # -- Tolerations to use for environmentd pods spawned by the operator
@@ -215,7 +215,7 @@ environmentd:
 
 clusterd:
   # -- Node selector to use for all clusterd pods spawned by the operator
-  nodeSelector:
+  nodeSelector: {}
   # -- Additional node selector to use for clusterd pods when using an LVM scratch disk.
   # This will be merged with the values in `nodeSelector`.
   scratchfsNodeSelector:
