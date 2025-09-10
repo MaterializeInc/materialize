@@ -352,7 +352,7 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
                     let mut output_sessions = DemuxOutput {
                         export: export.session_with_builder(&cap),
                         frontier: frontier.session_with_builder(&cap),
-                        import_frontier: import_frontier.session(&cap),
+                        import_frontier: import_frontier.session_with_builder(&cap),
                         peek: peek.session_with_builder(&cap),
                         peek_duration: peek_duration.session(&cap),
                         shutdown_duration: shutdown_duration.session(&cap),
@@ -385,19 +385,7 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
         // Encode the contents of each logging stream into its expected `Row` format.
         let dataflow_current: Collection<_, (Row, Row), Diff, _> = export.as_collection();
         let frontier_current = frontier.as_collection();
-        let mut packer = PermutedRowPacker::new(ComputeLog::ImportFrontierCurrent);
-        let import_frontier_current = import_frontier.as_collection().map({
-            let mut scratch1 = String::new();
-            let mut scratch2 = String::new();
-            move |datum| {
-                packer.pack_slice_owned(&[
-                    make_string_datum(datum.export_id, &mut scratch1),
-                    make_string_datum(datum.import_id, &mut scratch2),
-                    Datum::UInt64(u64::cast_from(worker_id)),
-                    Datum::MzTimestamp(datum.time),
-                ])
-            }
-        });
+        let import_frontier_current = import_frontier.as_collection();
         let peek_current = peek.as_collection();
         let mut packer = PermutedRowPacker::new(ComputeLog::PeekDuration);
         let peek_duration =
@@ -503,10 +491,10 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
         let columnar_logs = [
             (DataflowCurrent, dataflow_current),
             (FrontierCurrent, frontier_current),
+            (ImportFrontierCurrent, import_frontier_current),
             (PeekCurrent, peek_current),
         ];
         let logs = [
-            (ImportFrontierCurrent, import_frontier_current),
             (PeekDuration, peek_duration),
             (ShutdownDuration, shutdown_duration),
             (ArrangementHeapSize, arrangement_heap_size),
@@ -577,7 +565,9 @@ struct DemuxState<A> {
     /// The index of this worker.
     worker_id: usize,
     /// A reusable scratch string for formatting IDs.
-    scratch_string: String,
+    scratch_string_a: String,
+    /// A reusable scratch string for formatting IDs.
+    scratch_string_b: String,
     /// State tracked per dataflow export.
     exports: BTreeMap<GlobalId, ExportState>,
     /// Maps live dataflows to counts of their exports.
@@ -596,6 +586,8 @@ struct DemuxState<A> {
     dataflow_global_ids: BTreeMap<usize, BTreeSet<GlobalId>>,
     /// A row packer for the exports output.
     export_packer: PermutedRowPacker,
+    /// A row packer for the exports output.
+    import_frontier_packer: PermutedRowPacker,
     /// A row packer for the peek output.
     peek_packer: PermutedRowPacker,
     /// A row packer for the frontier output.
@@ -607,7 +599,8 @@ impl<A: Scheduler> DemuxState<A> {
         Self {
             scheduler,
             worker_id,
-            scratch_string: String::new(),
+            scratch_string_a: String::new(),
+            scratch_string_b: String::new(),
             exports: Default::default(),
             dataflow_export_counts: Default::default(),
             dataflow_drop_times: Default::default(),
@@ -617,6 +610,7 @@ impl<A: Scheduler> DemuxState<A> {
             lir_mapping: Default::default(),
             dataflow_global_ids: Default::default(),
             export_packer: PermutedRowPacker::new(ComputeLog::DataflowCurrent),
+            import_frontier_packer: PermutedRowPacker::new(ComputeLog::ImportFrontierCurrent),
             peek_packer: PermutedRowPacker::new(ComputeLog::PeekCurrent),
             frontier_packer: PermutedRowPacker::new(ComputeLog::FrontierCurrent),
         }
@@ -629,9 +623,24 @@ impl<A: Scheduler> DemuxState<A> {
         dataflow_index: usize,
     ) -> (&RowRef, &RowRef) {
         self.export_packer.pack_slice(&[
-            make_string_datum(export_id, &mut self.scratch_string),
+            make_string_datum(export_id, &mut self.scratch_string_a),
             Datum::UInt64(u64::cast_from(self.worker_id)),
             Datum::UInt64(u64::cast_from(dataflow_index)),
+        ])
+    }
+
+    /// Pack an import frontier update key-value for the given export ID and dataflow index.
+    fn pack_import_frontier_update(
+        &mut self,
+        export_id: GlobalId,
+        import_id: GlobalId,
+        time: Timestamp,
+    ) -> (&RowRef, &RowRef) {
+        self.import_frontier_packer.pack_slice(&[
+            make_string_datum(export_id, &mut self.scratch_string_a),
+            make_string_datum(import_id, &mut self.scratch_string_b),
+            Datum::UInt64(u64::cast_from(self.worker_id)),
+            Datum::MzTimestamp(time),
         ])
     }
 
@@ -646,7 +655,7 @@ impl<A: Scheduler> DemuxState<A> {
         self.peek_packer.pack_slice(&[
             Datum::Uuid(uuid),
             Datum::UInt64(u64::cast_from(self.worker_id)),
-            make_string_datum(id, &mut self.scratch_string),
+            make_string_datum(id, &mut self.scratch_string_a),
             Datum::String(peek_type.name()),
             Datum::MzTimestamp(time),
         ])
@@ -655,7 +664,7 @@ impl<A: Scheduler> DemuxState<A> {
     /// Pack a frontier update key-value for the given export ID and time.
     fn pack_frontier_update(&mut self, export_id: GlobalId, time: Timestamp) -> (&RowRef, &RowRef) {
         self.frontier_packer.pack_slice(&[
-            make_string_datum(export_id, &mut self.scratch_string),
+            make_string_datum(export_id, &mut self.scratch_string_a),
             Datum::UInt64(u64::cast_from(self.worker_id)),
             Datum::MzTimestamp(time),
         ])
@@ -700,7 +709,7 @@ struct ArrangementSizeState {
 struct DemuxOutput<'a> {
     export: OutputSessionColumnar<'a, Update<(Row, Row)>>,
     frontier: OutputSessionColumnar<'a, Update<(Row, Row)>>,
-    import_frontier: OutputSessionVec<'a, Update<ImportFrontierDatum>>,
+    import_frontier: OutputSessionColumnar<'a, Update<(Row, Row)>>,
     peek: OutputSessionColumnar<'a, Update<(Row, Row)>>,
     peek_duration: OutputSessionVec<'a, Update<PeekDurationDatum>>,
     shutdown_duration: OutputSessionVec<'a, Update<u128>>,
@@ -711,13 +720,6 @@ struct DemuxOutput<'a> {
     error_count: OutputSessionVec<'a, Update<ErrorCountDatum>>,
     lir_mapping: OutputSessionColumnar<'a, Update<LirMappingDatum>>,
     dataflow_global_ids: OutputSessionVec<'a, Update<DataflowGlobalDatum>>,
-}
-
-#[derive(Clone)]
-struct ImportFrontierDatum {
-    export_id: GlobalId,
-    import_id: GlobalId,
-    time: Timestamp,
 }
 
 #[derive(Clone)]
@@ -1114,16 +1116,13 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
     ) {
         let import_id = Columnar::into_owned(import_id);
         let export_id = Columnar::into_owned(export_id);
+        let diff = Diff::from(*diff);
         let ts = self.ts();
         let time = Columnar::into_owned(time);
-        let datum = ImportFrontierDatum {
-            export_id,
-            import_id,
-            time,
-        };
-        self.output
-            .import_frontier
-            .give((datum, ts, (*diff).into()));
+        let datum = self
+            .state
+            .pack_import_frontier_update(export_id, import_id, time);
+        self.output.import_frontier.give((datum, ts, diff));
     }
 
     /// Update the allocation size for an arrangement.

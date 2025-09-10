@@ -147,6 +147,7 @@ Arrange␠Timely(Parks)  ArrangementSize  alloc::vec::Vec<alloc::rc::Rc<differen
 Arrange␠Timely(Reachability)  ArrangementSize  alloc::vec::Vec<alloc::rc::Rc<differential_dataflow::trace::implementations::ord_neu::val_batch::OrdValBatch<mz_compute::row_spine::spines::RowRowLayout<((mz_repr::row::Row,␠mz_repr::row::Row),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>>>>
 Compute␠Logging␠Demux  Arrange␠Compute(DataflowCurrent)  mz_timely_util::columnar::Column<((mz_repr::row::Row,␠mz_repr::row::Row),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 Compute␠Logging␠Demux  Arrange␠Compute(FrontierCurrent)  mz_timely_util::columnar::Column<((mz_repr::row::Row,␠mz_repr::row::Row),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
+Compute␠Logging␠Demux  Arrange␠Compute(ImportFrontierCurrent)  mz_timely_util::columnar::Column<((mz_repr::row::Row,␠mz_repr::row::Row),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 Compute␠Logging␠Demux  Arrange␠Compute(PeekCurrent)  mz_timely_util::columnar::Column<((mz_repr::row::Row,␠mz_repr::row::Row),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 Compute␠Logging␠Demux  FlatMap  alloc::vec::Vec<(mz_compute::logging::compute::ArrangementHeapDatum,␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 Compute␠Logging␠Demux  FlatMap  alloc::vec::Vec<(mz_compute::logging::compute::ArrangementHeapDatum,␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
@@ -154,7 +155,6 @@ Compute␠Logging␠Demux  FlatMap  alloc::vec::Vec<(mz_compute::logging::comput
 Compute␠Logging␠Demux  FlatMap  alloc::vec::Vec<(mz_compute::logging::compute::DataflowGlobalDatum,␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 Compute␠Logging␠Demux  FlatMap  alloc::vec::Vec<(mz_compute::logging::compute::ErrorCountDatum,␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 Compute␠Logging␠Demux  FlatMap  alloc::vec::Vec<(mz_compute::logging::compute::HydrationTimeDatum,␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
-Compute␠Logging␠Demux  FlatMap  alloc::vec::Vec<(mz_compute::logging::compute::ImportFrontierDatum,␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 Compute␠Logging␠Demux  FlatMap  alloc::vec::Vec<(mz_compute::logging::compute::PeekDurationDatum,␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 Compute␠Logging␠Demux  FlatMap  alloc::vec::Vec<(u128,␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 Compute␠Logging␠Demux  FlatMap  mz_timely_util::columnar::Column<(mz_compute::logging::compute::LirMappingDatum,␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
@@ -188,7 +188,6 @@ FlatMap  Arrange␠Compute(ArrangementHeapSize)  alloc::vec::Vec<((mz_repr::row:
 FlatMap  Arrange␠Compute(DataflowGlobal)  alloc::vec::Vec<((mz_repr::row::Row,␠mz_repr::row::Row),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 FlatMap  Arrange␠Compute(ErrorCount)  alloc::vec::Vec<((mz_repr::row::Row,␠mz_repr::row::Row),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 FlatMap  Arrange␠Compute(HydrationTime)  alloc::vec::Vec<((mz_repr::row::Row,␠mz_repr::row::Row),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
-FlatMap  Arrange␠Compute(ImportFrontierCurrent)  alloc::vec::Vec<((mz_repr::row::Row,␠mz_repr::row::Row),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 FlatMap  Arrange␠Compute(LirMapping)  alloc::vec::Vec<((mz_repr::row::Row,␠mz_repr::row::Row),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 FlatMap  Arrange␠Compute(PeekDuration)  alloc::vec::Vec<((mz_repr::row::Row,␠mz_repr::row::Row),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 FlatMap  Arrange␠Compute(ShutdownDuration)  alloc::vec::Vec<((mz_repr::row::Row,␠mz_repr::row::Row),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
@@ -243,7 +242,6 @@ GROUP BY type;
 1  alloc::vec::Vec<(mz_compute::logging::compute::DataflowGlobalDatum,␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 1  alloc::vec::Vec<(mz_compute::logging::compute::ErrorCountDatum,␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 1  alloc::vec::Vec<(mz_compute::logging::compute::HydrationTimeDatum,␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
-1  alloc::vec::Vec<(mz_compute::logging::compute::ImportFrontierDatum,␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 1  alloc::vec::Vec<(mz_compute::logging::compute::PeekDurationDatum,␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 1  alloc::vec::Vec<(u128,␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 1  alloc::vec::Vec<alloc::vec::Vec<differential_dataflow::containers::TimelyStack<(((bool,␠usize,␠usize,␠usize,␠mz_repr::timestamp::Timestamp),␠()),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>>>
@@ -255,11 +253,11 @@ GROUP BY type;
 1  mz_timely_util::columnar::Column<((mz_compute::logging::timely::ChannelDatum,␠()),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 1  mz_timely_util::columnar::Column<(core::time::Duration,␠mz_compute::logging::compute::ComputeEvent)>
 1  mz_timely_util::columnar::Column<(mz_compute::logging::compute::LirMappingDatum,␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
-10  alloc::vec::Vec<((mz_repr::row::Row,␠mz_repr::row::Row),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
-21  mz_timely_util::columnar::Column<((mz_repr::row::Row,␠mz_repr::row::Row),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
+22  mz_timely_util::columnar::Column<((mz_repr::row::Row,␠mz_repr::row::Row),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 3  alloc::vec::Vec<(mz_compute::logging::compute::ArrangementHeapDatum,␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 31  alloc::vec::Vec<alloc::rc::Rc<differential_dataflow::trace::implementations::ord_neu::val_batch::OrdValBatch<mz_compute::row_spine::spines::RowRowLayout<((mz_repr::row::Row,␠mz_repr::row::Row),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>>>>
 4  alloc::vec::Vec<((mz_compute::logging::timely::MessageDatum,␠()),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 4  alloc::vec::Vec<alloc::vec::Vec<differential_dataflow::containers::TimelyStack<((mz_compute::logging::timely::MessageDatum,␠()),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>>>
 8  alloc::vec::Vec<((usize,␠()),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 8  alloc::vec::Vec<alloc::vec::Vec<differential_dataflow::containers::TimelyStack<((usize,␠()),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>>>
+9  alloc::vec::Vec<((mz_repr::row::Row,␠mz_repr::row::Row),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
