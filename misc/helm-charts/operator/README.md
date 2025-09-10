@@ -112,7 +112,7 @@ The following table lists the configurable parameters of the Materialize operato
 | `balancerd.nodeSelector` | Node selector to use for balancerd pods spawned by the operator | ``nil`` |
 | `balancerd.tolerations` | Tolerations to use for balancerd pods spawned by the operator | ``nil`` |
 | `clusterd.affinity` | Affinity to use for clusterd pods spawned by the operator | ``nil`` |
-| `clusterd.nodeSelector` | Node selector to use for all clusterd pods spawned by the operator | ``nil`` |
+| `clusterd.nodeSelector` | Node selector to use for all clusterd pods spawned by the operator | ``{}`` |
 | `clusterd.scratchfsNodeSelector` | Additional node selector to use for clusterd pods when using an LVM scratch disk. This will be merged with the values in `nodeSelector`. | ``{"materialize.cloud/scratch-fs":"true"}`` |
 | `clusterd.swapNodeSelector` | Additional node selector to use for clusterd pods when using swap. This will be merged with the values in `nodeSelector`. | ``{"materialize.cloud/swap":"true"}`` |
 | `clusterd.tolerations` | Tolerations to use for clusterd pods spawned by the operator | ``nil`` |
@@ -122,7 +122,7 @@ The following table lists the configurable parameters of the Materialize operato
 | `console.nodeSelector` | Node selector to use for console pods spawned by the operator | ``nil`` |
 | `console.tolerations` | Tolerations to use for console pods spawned by the operator | ``nil`` |
 | `environmentd.affinity` | Affinity to use for environmentd pods spawned by the operator | ``nil`` |
-| `environmentd.nodeSelector` | Node selector to use for environmentd pods spawned by the operator | ``nil`` |
+| `environmentd.nodeSelector` | Node selector to use for environmentd pods spawned by the operator | ``{}`` |
 | `environmentd.tolerations` | Tolerations to use for environmentd pods spawned by the operator | ``nil`` |
 | `networkPolicies.egress` | egress from Materialize pods to sources and sinks | ``{"cidrs":["0.0.0.0/0"],"enabled":false}`` |
 | `networkPolicies.enabled` | Whether to enable network policies for securing communication between pods | ``false`` |
