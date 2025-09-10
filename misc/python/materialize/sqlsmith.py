@@ -84,7 +84,6 @@ known_errors = [
     "Unsupported temporal operation: NotEq",
     "Unsupported binary temporal operation: NotEq",
     "OneShot plan has temporal constraints",  # Expected, see https://github.com/MaterializeInc/database-issues/issues/5288
-    "internal error: cannot evaluate unmaterializable function",  # Currently expected, see https://github.com/MaterializeInc/database-issues/issues/4083
     "string is not a valid identifier:",  # Expected in parse_ident & quote_ident
     "invalid datepart",
     "pg_cancel_backend in this position not yet supported",
