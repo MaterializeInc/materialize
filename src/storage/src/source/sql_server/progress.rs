@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! A "non-critical" operator that tracks the progress of a [`SqlServerSource`].
+//! A "non-critical" operator that tracks the progress of a [`SqlServerSourceConnection`].
 //!
 //! The operator does the following:
 //!
@@ -23,7 +23,7 @@
 //!     2. Emit a [`ProgressStatisticsUpdate`] to notify listeners of a new
 //!        "committed LSN".
 //!
-//! [`SqlServerSource`]: mz_storage_types::sources::SqlServerSource
+//! [`SqlServerSourceConnection`]: mz_storage_types::sources::SqlServerSourceConnection
 
 use std::collections::{BTreeMap, BTreeSet};
 

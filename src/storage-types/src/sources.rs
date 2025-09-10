@@ -72,7 +72,7 @@ pub use crate::sources::kafka::KafkaSourceConnection;
 pub use crate::sources::load_generator::LoadGeneratorSourceConnection;
 pub use crate::sources::mysql::{MySqlSourceConnection, MySqlSourceExportDetails};
 pub use crate::sources::postgres::{PostgresSourceConnection, PostgresSourceExportDetails};
-pub use crate::sources::sql_server::{SqlServerSource, SqlServerSourceExtras};
+pub use crate::sources::sql_server::{SqlServerSourceConnection, SqlServerSourceExtras};
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage_types.sources.rs"));
 
@@ -868,7 +868,7 @@ pub enum GenericSourceConnection<C: ConnectionAccess = InlinedConnection> {
     Kafka(KafkaSourceConnection<C>),
     Postgres(PostgresSourceConnection<C>),
     MySql(MySqlSourceConnection<C>),
-    SqlServer(SqlServerSource<C>),
+    SqlServer(SqlServerSourceConnection<C>),
     LoadGenerator(LoadGeneratorSourceConnection),
 }
 
@@ -890,8 +890,8 @@ impl<C: ConnectionAccess> From<MySqlSourceConnection<C>> for GenericSourceConnec
     }
 }
 
-impl<C: ConnectionAccess> From<SqlServerSource<C>> for GenericSourceConnection<C> {
-    fn from(conn: SqlServerSource<C>) -> Self {
+impl<C: ConnectionAccess> From<SqlServerSourceConnection<C>> for GenericSourceConnection<C> {
+    fn from(conn: SqlServerSourceConnection<C>) -> Self {
         Self::SqlServer(conn)
     }
 }

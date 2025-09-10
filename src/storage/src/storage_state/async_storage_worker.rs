@@ -31,7 +31,7 @@ use mz_storage_types::sinks::StorageSinkDesc;
 use mz_storage_types::sources::{
     GenericSourceConnection, IngestionDescription, KafkaSourceConnection,
     LoadGeneratorSourceConnection, MySqlSourceConnection, PostgresSourceConnection,
-    SourceConnection, SourceData, SourceEnvelope, SourceTimestamp, SqlServerSource,
+    SourceConnection, SourceData, SourceEnvelope, SourceTimestamp, SqlServerSourceConnection,
 };
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::frontier::MutableAntichain;
@@ -370,7 +370,7 @@ impl<T: Timestamp + TimestampManipulation + Lattice + Codec64 + Display + Sync>
                                 to_vec_row(uppers)
                             }
                             GenericSourceConnection::SqlServer(_) => {
-                                let uppers = reclock_resume_uppers::<SqlServerSource, _>(
+                                let uppers = reclock_resume_uppers::<SqlServerSourceConnection, _>(
                                     &id,
                                     &persist_clients,
                                     &ingestion_description,
