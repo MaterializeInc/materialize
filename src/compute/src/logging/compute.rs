@@ -351,7 +351,7 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
                 input.for_each(|cap, data| {
                     let mut output_sessions = DemuxOutput {
                         export: export.session_with_builder(&cap),
-                        frontier: frontier.session(&cap),
+                        frontier: frontier.session_with_builder(&cap),
                         import_frontier: import_frontier.session(&cap),
                         peek: peek.session_with_builder(&cap),
                         peek_duration: peek_duration.session(&cap),
@@ -384,17 +384,7 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
 
         // Encode the contents of each logging stream into its expected `Row` format.
         let dataflow_current: Collection<_, (Row, Row), Diff, _> = export.as_collection();
-        let mut packer = PermutedRowPacker::new(ComputeLog::FrontierCurrent);
-        let frontier_current = frontier.as_collection().map({
-            let mut scratch = String::new();
-            move |datum| {
-                packer.pack_slice_owned(&[
-                    make_string_datum(datum.export_id, &mut scratch),
-                    Datum::UInt64(u64::cast_from(worker_id)),
-                    Datum::MzTimestamp(datum.time),
-                ])
-            }
-        });
+        let frontier_current = frontier.as_collection();
         let mut packer = PermutedRowPacker::new(ComputeLog::ImportFrontierCurrent);
         let import_frontier_current = import_frontier.as_collection().map({
             let mut scratch1 = String::new();
@@ -512,10 +502,10 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
         use ComputeLog::*;
         let columnar_logs = [
             (DataflowCurrent, dataflow_current),
+            (FrontierCurrent, frontier_current),
             (PeekCurrent, peek_current),
         ];
         let logs = [
-            (FrontierCurrent, frontier_current),
             (ImportFrontierCurrent, import_frontier_current),
             (PeekDuration, peek_duration),
             (ShutdownDuration, shutdown_duration),
@@ -608,6 +598,8 @@ struct DemuxState<A> {
     export_packer: PermutedRowPacker,
     /// A row packer for the peek output.
     peek_packer: PermutedRowPacker,
+    /// A row packer for the frontier output.
+    frontier_packer: PermutedRowPacker,
 }
 
 impl<A: Scheduler> DemuxState<A> {
@@ -626,6 +618,7 @@ impl<A: Scheduler> DemuxState<A> {
             dataflow_global_ids: Default::default(),
             export_packer: PermutedRowPacker::new(ComputeLog::DataflowCurrent),
             peek_packer: PermutedRowPacker::new(ComputeLog::PeekCurrent),
+            frontier_packer: PermutedRowPacker::new(ComputeLog::FrontierCurrent),
         }
     }
 
@@ -655,6 +648,15 @@ impl<A: Scheduler> DemuxState<A> {
             Datum::UInt64(u64::cast_from(self.worker_id)),
             make_string_datum(id, &mut self.scratch_string),
             Datum::String(peek_type.name()),
+            Datum::MzTimestamp(time),
+        ])
+    }
+
+    /// Pack a frontier update key-value for the given export ID and time.
+    fn pack_frontier_update(&mut self, export_id: GlobalId, time: Timestamp) -> (&RowRef, &RowRef) {
+        self.frontier_packer.pack_slice(&[
+            make_string_datum(export_id, &mut self.scratch_string),
+            Datum::UInt64(u64::cast_from(self.worker_id)),
             Datum::MzTimestamp(time),
         ])
     }
@@ -697,7 +699,7 @@ struct ArrangementSizeState {
 /// Bundled output sessions used by the demux operator.
 struct DemuxOutput<'a> {
     export: OutputSessionColumnar<'a, Update<(Row, Row)>>,
-    frontier: OutputSessionVec<'a, Update<FrontierDatum>>,
+    frontier: OutputSessionColumnar<'a, Update<(Row, Row)>>,
     import_frontier: OutputSessionVec<'a, Update<ImportFrontierDatum>>,
     peek: OutputSessionColumnar<'a, Update<(Row, Row)>>,
     peek_duration: OutputSessionVec<'a, Update<PeekDurationDatum>>,
@@ -709,12 +711,6 @@ struct DemuxOutput<'a> {
     error_count: OutputSessionVec<'a, Update<ErrorCountDatum>>,
     lir_mapping: OutputSessionColumnar<'a, Update<LirMappingDatum>>,
     dataflow_global_ids: OutputSessionVec<'a, Update<DataflowGlobalDatum>>,
-}
-
-#[derive(Clone)]
-struct FrontierDatum {
-    export_id: GlobalId,
-    time: Timestamp,
 }
 
 #[derive(Clone)]
@@ -1103,7 +1099,7 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
         let diff = Diff::from(*diff);
         let ts = self.ts();
         let time = Columnar::into_owned(time);
-        let datum = FrontierDatum { export_id, time };
+        let datum = self.state.pack_frontier_update(export_id, time);
         self.output.frontier.give((datum, ts, diff));
     }
 
