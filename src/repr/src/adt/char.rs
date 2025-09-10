@@ -24,17 +24,17 @@ include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.char.rs"));
 const MAX_LENGTH: u32 = 10_485_760;
 
 /// A marker type indicating that a Rust string should be interpreted as a
-/// [`ScalarType::Char`].
+/// [`SqlScalarType::Char`].
 ///
-/// [`ScalarType::Char`]: crate::ScalarType::Char
+/// [`SqlScalarType::Char`]: crate::SqlScalarType::Char
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct Char<S: AsRef<str>>(pub S);
 
-/// The `length` of a [`ScalarType::Char`].
+/// The `length` of a [`SqlScalarType::Char`].
 ///
 /// This newtype wrapper ensures that the length is within the valid range.
 ///
-/// [`ScalarType::Char`]: crate::ScalarType::Char
+/// [`SqlScalarType::Char`]: crate::SqlScalarType::Char
 #[derive(
     Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, MzReflect,
 )]

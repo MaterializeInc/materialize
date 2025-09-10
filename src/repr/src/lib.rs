@@ -54,9 +54,9 @@ pub use crate::datum_vec::{DatumVec, DatumVecBorrow};
 pub use crate::diff::Diff;
 pub use crate::global_id::GlobalId;
 pub use crate::relation::{
-    ColumnIndex, ColumnName, ColumnType, NotNullViolation, PropRelationDescDiff, ProtoColumnName,
+    ColumnIndex, ColumnName, NotNullViolation, PropRelationDescDiff, ProtoColumnName,
     ProtoColumnType, ProtoRelationDesc, ProtoRelationType, RelationDesc, RelationDescBuilder,
-    RelationType, RelationVersion, RelationVersionSelector, UNKNOWN_COLUMN_NAME,
+    RelationVersion, RelationVersionSelector, SqlColumnType, SqlRelationType, UNKNOWN_COLUMN_NAME,
     VersionedRelationDesc, arb_relation_desc_diff, arb_relation_desc_projection,
     arb_row_for_relation,
 };
@@ -68,7 +68,7 @@ pub use crate::row::{
 };
 pub use crate::scalar::{
     ArrayRustType, AsColumnType, Datum, DatumType, PropArray, PropDatum, PropDict, PropList,
-    ProtoScalarType, ScalarBaseType, ScalarType, arb_datum, arb_datum_for_column,
+    ProtoScalarType, ScalarBaseType, SqlScalarType, arb_datum, arb_datum_for_column,
     arb_datum_for_scalar, arb_range_type,
 };
 pub use crate::timestamp::{Timestamp, TimestampManipulation};

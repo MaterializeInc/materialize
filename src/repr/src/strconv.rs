@@ -11,7 +11,7 @@
 //! representation.
 //!
 //! The functions in this module are tightly related to the variants of
-//! [`ScalarType`](crate::ScalarType). Each variant has a pair of functions in
+//! [`SqlScalarType`](crate::SqlScalarType). Each variant has a pair of functions in
 //! this module named `parse_VARIANT` and `format_VARIANT`. The type returned
 //! by `parse` functions, and the type accepted by `format` functions, will
 //! be a type that is easily converted into the [`Datum`](crate::Datum) variant

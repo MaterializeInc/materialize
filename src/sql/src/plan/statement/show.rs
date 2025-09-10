@@ -18,7 +18,7 @@ use std::fmt::Write;
 
 use mz_ore::assert_none;
 use mz_ore::collections::CollectionExt;
-use mz_repr::{CatalogItemId, Datum, RelationDesc, Row, ScalarType};
+use mz_repr::{CatalogItemId, Datum, RelationDesc, Row, SqlScalarType};
 use mz_sql_parser::ast::display::{AstDisplay, FormatMode};
 use mz_sql_parser::ast::{
     CreateSubsourceOptionName, ExternalReferenceExport, ExternalReferences, ObjectType,
@@ -54,8 +54,8 @@ pub fn describe_show_create_view(
 ) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(Some(
         RelationDesc::builder()
-            .with_column("name", ScalarType::String.nullable(false))
-            .with_column("create_sql", ScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("create_sql", SqlScalarType::String.nullable(false))
             .finish(),
     )))
 }
@@ -76,8 +76,8 @@ pub fn describe_show_create_materialized_view(
 ) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(Some(
         RelationDesc::builder()
-            .with_column("name", ScalarType::String.nullable(false))
-            .with_column("create_sql", ScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("create_sql", SqlScalarType::String.nullable(false))
             .finish(),
     )))
 }
@@ -103,8 +103,8 @@ pub fn describe_show_create_table(
 ) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(Some(
         RelationDesc::builder()
-            .with_column("name", ScalarType::String.nullable(false))
-            .with_column("create_sql", ScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("create_sql", SqlScalarType::String.nullable(false))
             .finish(),
     )))
 }
@@ -156,8 +156,8 @@ pub fn describe_show_create_source(
 ) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(Some(
         RelationDesc::builder()
-            .with_column("name", ScalarType::String.nullable(false))
-            .with_column("create_sql", ScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("create_sql", SqlScalarType::String.nullable(false))
             .finish(),
     )))
 }
@@ -178,8 +178,8 @@ pub fn describe_show_create_sink(
 ) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(Some(
         RelationDesc::builder()
-            .with_column("name", ScalarType::String.nullable(false))
-            .with_column("create_sql", ScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("create_sql", SqlScalarType::String.nullable(false))
             .finish(),
     )))
 }
@@ -200,8 +200,8 @@ pub fn describe_show_create_index(
 ) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(Some(
         RelationDesc::builder()
-            .with_column("name", ScalarType::String.nullable(false))
-            .with_column("create_sql", ScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("create_sql", SqlScalarType::String.nullable(false))
             .finish(),
     )))
 }
@@ -222,8 +222,8 @@ pub fn describe_show_create_connection(
 ) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(Some(
         RelationDesc::builder()
-            .with_column("name", ScalarType::String.nullable(false))
-            .with_column("create_sql", ScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("create_sql", SqlScalarType::String.nullable(false))
             .finish(),
     )))
 }
@@ -249,8 +249,8 @@ pub fn describe_show_create_cluster(
 ) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(Some(
         RelationDesc::builder()
-            .with_column("name", ScalarType::String.nullable(false))
-            .with_column("create_sql", ScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("create_sql", SqlScalarType::String.nullable(false))
             .finish(),
     )))
 }
