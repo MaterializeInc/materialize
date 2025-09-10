@@ -41,20 +41,42 @@ EOF
 
 if [ -z "${MZ_EAT_MY_DATA:-}" ]; then
     unset LD_PRELOAD
-    echo > /etc/postgresql/16/main/environment
 else
     export LD_PRELOAD="libeatmydata.so"
-    echo "LD_PRELOAD=libeatmydata.so" > /etc/postgresql/16/main/environment
 fi
+
+export PGUSER=root
 
 # Start PostgreSQL, unless suppressed.
 if [ -z "${MZ_NO_BUILTIN_POSTGRES:-}" ]; then
-  (trap 'pg_ctlcluster 16 main stop --mode=fast --force' SIGTERM SIGINT
-  rm -f /var/run/postgresql/.s.PGSQL.26257.lock
-  pg_ctlcluster 16 main start
-  psql -U postgres -c "CREATE ROLE root WITH LOGIN PASSWORD 'root'" || true
-  psql -U postgres -c "CREATE DATABASE root OWNER root" || true
-  psql -U root -c "CREATE SCHEMA IF NOT EXISTS consensus; CREATE SCHEMA IF NOT EXISTS storage; CREATE SCHEMA IF NOT EXISTS adapter; CREATE SCHEMA IF NOT EXISTS tsoracle") &
+  PGDATA=/mzdata/postgres
+  export PGPORT=26257
+  export PGDATABASE=root
+
+  # Should exist already, but /mzdata might be overwritten with a fresh volume
+  if [ ! -f $PGDATA/PG_VERSION ]; then
+    mkdir -p $PGDATA
+    /usr/lib/postgresql/16/bin/initdb -D $PGDATA -U $PGUSER --auth-local=trust
+  fi
+
+  /usr/lib/postgresql/16/bin/postgres -D $PGDATA \
+      -c listen_addresses='*' \
+      -c unix_socket_directories=/var/run/postgresql \
+      -c config_file=/etc/postgresql/postgresql.conf &
+  PGPID=$!
+
+  trap 'kill -INT $PGPID; wait $PGPID' SIGTERM SIGINT EXIT
+
+  until /usr/lib/postgresql/16/bin/pg_isready; do
+    sleep 0.01
+  done
+
+  psql -d template1 -c "CREATE DATABASE $PGUSER OWNER $PGUSER;" || true
+  psql -c "ALTER USER $PGUSER WITH PASSWORD 'root'; \
+           CREATE SCHEMA IF NOT EXISTS consensus; \
+           CREATE SCHEMA IF NOT EXISTS storage; \
+           CREATE SCHEMA IF NOT EXISTS adapter; \
+           CREATE SCHEMA IF NOT EXISTS tsoracle;"
 fi
 
 # Start nginx to serve the console.
@@ -78,13 +100,13 @@ export MZ_INTERNAL_HTTP_LISTEN_ADDR=${MZ_INTERNAL_HTTP_LISTEN_ADDR:-0.0.0.0:6878
 export MZ_BALANCER_SQL_LISTEN_ADDR=${MZ_BALANCER_SQL_LISTEN_ADDR:-0.0.0.0:6880}
 export MZ_BALANCER_HTTP_LISTEN_ADDR=${MZ_BALANCER_HTTP_LISTEN_ADDR:-0.0.0.0:6881}
 if [ -z "${MZ_NO_EXTERNAL_CLUSTERD:-}" ]; then
-  export MZ_PERSIST_CONSENSUS_URL=${MZ_PERSIST_CONSENSUS_URL:-postgresql://root@$(hostname):26257/?options=--search_path=consensus}
+  export MZ_PERSIST_CONSENSUS_URL=${MZ_PERSIST_CONSENSUS_URL:-postgresql://$PGUSER@$(hostname):26257/?options=--search_path=consensus}
 else
-  export MZ_PERSIST_CONSENSUS_URL=${MZ_PERSIST_CONSENSUS_URL:-postgresql://root@%2Fvar%2Frun%2Fpostgresql:26257/?options=--search_path=consensus}
+  export MZ_PERSIST_CONSENSUS_URL=${MZ_PERSIST_CONSENSUS_URL:-postgresql://$PGUSER@%2Fvar%2Frun%2Fpostgresql:26257/?options=--search_path=consensus}
 fi
 export MZ_PERSIST_BLOB_URL=${MZ_PERSIST_BLOB_URL:-file:///mzdata/persist/blob}
-export MZ_ADAPTER_STASH_URL=${MZ_ADAPTER_STASH_URL:-postgresql://root@%2Fvar%2Frun%2Fpostgresql:26257/?options=--search_path=adapter}
-export MZ_TIMESTAMP_ORACLE_URL=${MZ_TIMESTAMP_ORACLE_URL:-postgresql://root@%2Fvar%2Frun%2Fpostgresql:26257/?options=--search_path=tsoracle}
+export MZ_ADAPTER_STASH_URL=${MZ_ADAPTER_STASH_URL:-postgresql://$PGUSER@%2Fvar%2Frun%2Fpostgresql:26257/?options=--search_path=adapter}
+export MZ_TIMESTAMP_ORACLE_URL=${MZ_TIMESTAMP_ORACLE_URL:-postgresql://$PGUSER@%2Fvar%2Frun%2Fpostgresql:26257/?options=--search_path=tsoracle}
 export MZ_ORCHESTRATOR=${MZ_ORCHESTRATOR:-process}
 export MZ_ORCHESTRATOR_PROCESS_SECRETS_DIRECTORY=${MZ_ORCHESTRATOR_PROCESS_SECRETS_DIRECTORY:-/mzdata/secrets}
 export MZ_ORCHESTRATOR_PROCESS_SCRATCH_DIRECTORY=${MZ_ORCHESTRATOR_PROCESS_SCRATCH_DIRECTORY:-/scratch}
