@@ -577,7 +577,8 @@ steps:
         depends_on: build-x86_64
         timeout_in_minutes: 120
         agents:
-          queue: hetzner-x86-64-8cpu-16gb
+          # Flaky timeouts with smaller agent, SQL Server seems to use a lot of CPU
+          queue: hetzner-x86-64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: zippy

@@ -141,5 +141,6 @@ known_errors = [
     "The fast_path_optimizer shouldn't make a fast path plan slow path.",  # TODO: Remove when database-issues#9645 is fixed
     "Window function performance issue: `reduce_unnest_list_fusion` failed",  # TODO: Remove when database-issues#9644 is fixed
     "WITH ORDINALITY or ROWS FROM with pg_catalog.regexp_split_to_table not yet supported",
+    "WITH ORDINALITY or ROWS FROM with information_schema._pg_expandarray not yet supported",
     "invalid normalization form",  # Expected with https://github.com/MaterializeInc/materialize/pull/33507
 ]
