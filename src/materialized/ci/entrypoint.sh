@@ -66,13 +66,15 @@ if ! is_truthy "${MZ_NO_BUILTIN_POSTGRES:-0}"; then
     /usr/lib/postgresql/16/bin/initdb -D $PGDATA -U $PGUSER --auth-local=trust
   fi
 
+  # Might have been killed hard
+  rm -f $PGDATA/postmaster.pid
   /usr/lib/postgresql/16/bin/postgres -D $PGDATA \
       -c listen_addresses='*' \
       -c unix_socket_directories=/var/run/postgresql \
       -c config_file=/etc/postgresql/postgresql.conf &
   PGPID=$!
 
-  trap 'kill -INT $PGPID; wait $PGPID' SIGTERM SIGINT EXIT
+  trap 'kill -INT $PGPID; wait $PGPID' SIGTERM SIGINT
 
   until /usr/lib/postgresql/16/bin/pg_isready > /dev/null 2>&1; do
     sleep 0.01
