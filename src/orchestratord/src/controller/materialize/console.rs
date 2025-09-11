@@ -178,7 +178,7 @@ fn create_network_policies(
                     }]),
                     ..Default::default()
                 }]),
-                pod_selector: console_label_selector,
+                pod_selector: Some(console_label_selector),
                 policy_types: Some(vec!["Ingress".to_owned()]),
                 ..Default::default()
             }),

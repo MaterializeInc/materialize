@@ -17,9 +17,9 @@ chrono = { version = "0.4.39", default-features = false }
 clap = { version = "4.5.23", features = ["derive"] }
 futures = "0.3.31"
 http = "1.2.0"
-k8s-controller = "0.5.0"
-k8s-openapi = { version = "0.25.0", features = ["v1_31"] }
-kube = { version = "1.1.0", default-features = false, features = ["client", "runtime", "ws"] }
+k8s-controller = "0.6.0"
+k8s-openapi = { version = "0.26.0", features = ["v1_31"] }
+kube = { version = "2.0.0", default-features = false, features = ["client", "runtime", "ws"] }
 maplit = "1.0.2"
 mz-alloc = { path = "../alloc", default-features = false }
 mz-alloc-default = { path = "../alloc-default", optional = true, default-features = false }
