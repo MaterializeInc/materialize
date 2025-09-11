@@ -108,7 +108,7 @@ pub const ENABLE_EXPRESSION_CACHE: Config<bool> = Config::new(
 /// Whether we allow sources in multi-replica clusters.
 pub const ENABLE_MULTI_REPLICA_SOURCES: Config<bool> = Config::new(
     "enable_multi_replica_sources",
-    false,
+    true,
     "Enable multi-replica sources.",
 );
 
