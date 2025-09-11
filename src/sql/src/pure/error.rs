@@ -13,6 +13,9 @@ use mz_ccsr::ListError;
 use mz_repr::adt::system::Oid;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{ExternalReferences, UnresolvedItemName};
+use mz_storage_types::connections::{
+    MySqlConnectionValidationError, PostgresConnectionValidationError,
+};
 use mz_storage_types::errors::{ContextCreationError, CsrConnectError};
 
 use crate::names::{FullItemName, PartialItemName};
@@ -34,9 +37,9 @@ pub enum PgSourcePurificationError {
     #[error("missing TABLES specification")]
     RequiresExternalReferences,
     #[error("insufficient privileges")]
-    UserLacksUsageOnSchemas { user: String, schemas: Vec<String> },
+    UserLacksUsageOnSchemas { schemas: Vec<String> },
     #[error("insufficient privileges")]
-    UserLacksSelectOnTables { user: String, tables: Vec<String> },
+    UserLacksSelectOnTables { tables: Vec<String> },
     #[error("referenced items not tables with REPLICA IDENTITY FULL")]
     NotTablesWReplicaIdentityFull { items: Vec<String> },
     #[error("TEXT COLUMNS refers to table not currently being added")]
@@ -47,14 +50,8 @@ pub enum PgSourcePurificationError {
     NotPgConnection(FullItemName),
     #[error("CONNECTION must specify PUBLICATION")]
     ConnectionMissingPublication,
-    #[error("PostgreSQL server has insufficient number of replication slots available")]
-    InsufficientReplicationSlotsAvailable { count: usize },
-    #[error("server must have wal_level >= logical, but has {wal_level}")]
-    InsufficientWalLevel {
-        wal_level: mz_postgres_util::replication::WalLevel,
-    },
-    #[error("replication disabled on server")]
-    ReplicationDisabled,
+    #[error("CONNECTION must specify PUBLICATION")]
+    InvalidConnection(PostgresConnectionValidationError),
 }
 
 impl PgSourcePurificationError {
@@ -71,14 +68,12 @@ impl PgSourcePurificationError {
                 "missing schemas: {}",
                 itertools::join(schemas.iter(), ", ")
             )),
-            Self::UserLacksUsageOnSchemas { user, schemas } => Some(format!(
-                "user {} lacks USAGE privileges for schemas {}",
-                user,
+            Self::UserLacksUsageOnSchemas { schemas } => Some(format!(
+                "user lacks USAGE privileges for schemas {}",
                 schemas.join(", ")
             )),
-            Self::UserLacksSelectOnTables { user, tables } => Some(format!(
-                "user {} lacks SELECT privileges for tables {}",
-                user,
+            Self::UserLacksSelectOnTables { tables } => Some(format!(
+                "user lacks SELECT privileges for tables {}",
                 tables.join(", ")
             )),
             Self::NotTablesWReplicaIdentityFull { items } => {
@@ -92,11 +87,7 @@ impl PgSourcePurificationError {
                     "\n"
                 )
             )),
-            Self::InsufficientReplicationSlotsAvailable { count } => Some(format!(
-                "executing this statement requires {} replication slot{}",
-                count,
-                if *count == 1 { "" } else { "s" }
-            )),
+            Self::InvalidConnection(e) => e.detail(),
             _ => None,
         }
     }
@@ -117,14 +108,11 @@ impl PgSourcePurificationError {
                 as text."
                     .into(),
             ),
-            Self::InsufficientReplicationSlotsAvailable { .. } => Some(
-                "you might be able to wait for other sources to finish snapshotting and try again".into()
-            ),
-            Self::ReplicationDisabled => Some("set max_wal_senders to a value > 0".into()),
             Self::UnnecessaryOptionsWithoutReferences(option) => Some(format!(
                 "Remove the {} option, as no tables are being added.",
                 option
             )),
+            Self::InvalidConnection(e) => e.hint(),
             _ => None,
         }
     }
@@ -241,7 +229,7 @@ impl CsrPurificationError {
 }
 
 /// Logical errors detectable during purification for a MySQL SOURCE.
-#[derive(Debug, Clone, thiserror::Error)]
+#[derive(Debug, thiserror::Error)]
 pub enum MySqlSourcePurificationError {
     #[error("User lacks required MySQL privileges")]
     UserLacksPrivileges(Vec<(String, String)>),
@@ -251,8 +239,6 @@ pub enum MySqlSourcePurificationError {
     UnnecessaryOptionsWithoutReferences(String),
     #[error("{0} is not a MYSQL CONNECTION")]
     NotMySqlConnection(FullItemName),
-    #[error("Invalid MySQL system replication settings")]
-    ReplicationSettingsError(Vec<(String, String, String)>),
     #[error("referenced tables use unsupported types")]
     UnrecognizedTypes { cols: Vec<(String, String, String)> },
     #[error("duplicated column name references in table {0}: {1:?}")]
@@ -270,6 +256,8 @@ pub enum MySqlSourcePurificationError {
     RequiresExternalReferences,
     #[error("No tables found in referenced schemas")]
     NoTablesFoundForSchemas(Vec<String>),
+    #[error(transparent)]
+    InvalidConnection(#[from] MySqlConnectionValidationError),
 }
 
 impl MySqlSourcePurificationError {
@@ -291,16 +279,6 @@ impl MySqlSourcePurificationError {
                 "the following columns are referenced but not added: {}",
                 itertools::join(items, ", ")
             )),
-            Self::ReplicationSettingsError(settings) => Some(format!(
-                "Invalid MySQL system replication settings: {}",
-                itertools::join(
-                    settings.iter().map(|(setting, expected, actual)| format!(
-                        "{}: expected {}, got {}",
-                        setting, expected, actual
-                    )),
-                    "; "
-                )
-            )),
             Self::UnrecognizedTypes { cols } => Some(format!(
                 "the following columns contain unsupported types:\n{}",
                 itertools::join(
@@ -315,6 +293,7 @@ impl MySqlSourcePurificationError {
                 "missing schemas: {}",
                 itertools::join(schemas.iter(), ", ")
             )),
+            Self::InvalidConnection(e) => e.detail(),
             _ => None,
         }
     }
@@ -325,9 +304,6 @@ impl MySqlSourcePurificationError {
                 "If trying to use the output of SHOW CREATE SOURCE, remove the DETAILS option."
                     .into(),
             ),
-            Self::ReplicationSettingsError(_) => {
-                Some("Set the necessary MySQL database system settings.".into())
-            }
             Self::RequiresExternalReferences => {
                 Some("provide a FOR TABLES (..), FOR SCHEMAS (..), or FOR ALL TABLES clause".into())
             }
@@ -348,6 +324,7 @@ impl MySqlSourcePurificationError {
                 "Remove the {} option, as no tables are being added.",
                 option
             )),
+            Self::InvalidConnection(e) => e.hint(),
             _ => None,
         }
     }
@@ -362,8 +339,6 @@ pub enum SqlServerSourcePurificationError {
     UserSpecifiedDetails,
     #[error("{0} option is unnecessary when no tables are added")]
     UnnecessaryOptionsWithoutReferences(String),
-    #[error("Invalid SQL Server system replication settings")]
-    ReplicationSettingsError(Vec<(String, String, String)>),
     #[error("missing TABLES specification")]
     RequiresExternalReferences,
     #[error("{option_name} refers to table not currently being added")]
@@ -393,16 +368,6 @@ pub enum SqlServerSourcePurificationError {
 impl SqlServerSourcePurificationError {
     pub fn detail(&self) -> Option<String> {
         match self {
-            Self::ReplicationSettingsError(settings) => Some(format!(
-                "Invalid SQL Server system replication settings: {}",
-                itertools::join(
-                    settings.iter().map(|(setting, expected, actual)| format!(
-                        "{}: expected {}, got {}",
-                        setting, expected, actual
-                    )),
-                    "; "
-                )
-            )),
             Self::DanglingColumns {
                 option_name: _,
                 items,

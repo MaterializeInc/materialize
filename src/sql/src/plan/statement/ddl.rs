@@ -1135,7 +1135,7 @@ fn plan_sqlserver_source_connection(
         .and_then(|raw| ProtoSqlServerSourceExtras::decode(&*raw).map_err(|e| sql_err!("{e}")))
         .and_then(|proto| SqlServerSourceExtras::from_proto(proto).map_err(|e| sql_err!("{e}")))?;
     Ok(SqlServerSourceConnection {
-        catalog_id: connection_item.id(),
+        connection_id: connection_item.id(),
         connection: connection_item.id(),
         extras,
     })

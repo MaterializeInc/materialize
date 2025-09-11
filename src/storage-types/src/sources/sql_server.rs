@@ -88,8 +88,8 @@ pub static SQL_SERVER_PROGRESS_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
 /// Details about how to create a Materialize Source that reads from Microsoft SQL Server.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
 pub struct SqlServerSourceConnection<C: ConnectionAccess = InlinedConnection> {
-    /// ID of this SQL `SOURCE` object in the Catalog.
-    pub catalog_id: CatalogItemId,
+    /// The ID of the Connection object this source is using.
+    pub connection_id: CatalogItemId,
     /// Configuration for connecting to SQL Server.
     pub connection: C::SqlServer,
     /// SQL Server specific information that is relevant to creating a source.
@@ -121,13 +121,13 @@ impl<R: ConnectionResolver> IntoInlineConnection<SqlServerSourceConnection, R>
 {
     fn into_inline_connection(self, r: R) -> SqlServerSourceConnection {
         let SqlServerSourceConnection {
-            catalog_id,
+            connection_id: catalog_id,
             connection,
             extras,
         } = self;
 
         SqlServerSourceConnection {
-            catalog_id,
+            connection_id: catalog_id,
             connection: r.resolve_connection(connection).unwrap_sql_server(),
             extras,
         }
@@ -158,7 +158,7 @@ impl<C: ConnectionAccess> SourceConnection for SqlServerSourceConnection<C> {
     }
 
     fn connection_id(&self) -> Option<CatalogItemId> {
-        Some(self.catalog_id)
+        Some(self.connection_id)
     }
 
     fn supports_read_only(&self) -> bool {
@@ -177,13 +177,13 @@ impl<C: ConnectionAccess> AlterCompatible for SqlServerSourceConnection<C> {
         }
 
         let SqlServerSourceConnection {
-            catalog_id,
+            connection_id: catalog_id,
             connection,
             extras,
         } = self;
 
         let compatibility_checks = [
-            (catalog_id == &other.catalog_id, "catalog_id"),
+            (catalog_id == &other.connection_id, "catalog_id"),
             (
                 connection.alter_compatible(id, &other.connection).is_ok(),
                 "connection",
@@ -210,7 +210,7 @@ impl<C: ConnectionAccess> AlterCompatible for SqlServerSourceConnection<C> {
 impl RustType<ProtoSqlServerSource> for SqlServerSourceConnection {
     fn into_proto(&self) -> ProtoSqlServerSource {
         ProtoSqlServerSource {
-            catalog_id: Some(self.catalog_id.into_proto()),
+            catalog_id: Some(self.connection_id.into_proto()),
             connection: Some(self.connection.into_proto()),
             extras: Some(self.extras.into_proto()),
         }
@@ -218,7 +218,7 @@ impl RustType<ProtoSqlServerSource> for SqlServerSourceConnection {
 
     fn from_proto(proto: ProtoSqlServerSource) -> Result<Self, mz_proto::TryFromProtoError> {
         Ok(SqlServerSourceConnection {
-            catalog_id: proto
+            connection_id: proto
                 .catalog_id
                 .into_rust_if_some("ProtoSqlServerSource::catalog_id")?,
             connection: proto

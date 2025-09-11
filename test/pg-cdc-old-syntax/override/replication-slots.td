@@ -38,4 +38,4 @@ INSERT INTO pk_table VALUES (2, 'two');
 ! CREATE SOURCE pg_source_2
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR TABLES ("pk_table" AS "pk");
-contains:POSTGRES source validation: PostgreSQL server has insufficient number of replication slots available
+contains:PostgreSQL server has insufficient number of replication slots available

@@ -48,7 +48,7 @@ use crate::pure::error::{
 };
 use crate::session::vars::VarError;
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub enum PlanError {
     /// This feature is not yet supported, but may be supported at some point in the future.
     Unsupported {
