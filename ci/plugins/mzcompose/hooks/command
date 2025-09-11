@@ -169,6 +169,7 @@ cleanup() {
       mapfile -t artifacts < <(printf "kubectl-get-logs.log\nkubectl-get-logs-previous.log\nkubectl-get-events.log\nkubectl-get-all.log\nkubectl-describe-all.log\nkubectl-pods-with-nodes.log\nkubectl-get-events-kube-system.log\nkubectl-get-all-kube-system.log\nkubectl-describe-all-kube-system.log\nkail-output.log\n")
       artifacts_str=$(IFS=";"; echo "${artifacts[*]}")
       buildkite-agent artifact upload "$artifacts_str"
+      unset artifacts
   fi
 
   mv "$cores" . || true
