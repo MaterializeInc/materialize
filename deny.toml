@@ -22,8 +22,6 @@ skip = [
     # allowing these duplicate dependencies until the rest of the ecosystem catches
     # up.
     { name = "socket2", version = "0.4.9" },
-    # held back by regex 1.7.0 depended on by arrow-string and bindgen
-    { name = "regex-syntax", version = "0.6.28" },
     # held back by thrift 0.17.0 depended on by parquet 51.0.0
     { name = "ordered-float", version = "2.10.1" },
     { name = "ordered-float", version = "4.6.0" },
@@ -55,9 +53,6 @@ skip = [
     # our crates use `bitflags 1.3.2`
     # TODO: fork `tower-http` and swap to use older bitflags
     { name = "bitflags", version = "1.3.2" },
-
-    # TODO(parkmycar): In a followup/stacked PR, get rid of these duplicates.
-    { name = "regex-automata", version = "0.1.9" },
 
     # TODO: Required for Rust nightly upgrade
     { name = "http", version = "0.2.9" },
