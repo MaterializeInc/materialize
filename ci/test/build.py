@@ -76,6 +76,9 @@ def set_build_status(status: str) -> None:
 
 
 def annotate_buildkite_with_tags(arch: Arch, deps: mzbuild.DependencySet) -> None:
+    if not ui.env_is_truthy("CI"):
+        return
+
     tags = "\n".join([f"* `{dep.spec()}`" for dep in deps])
     markdown = f"""<details><summary>{arch} Docker tags produced in this build</summary>
 

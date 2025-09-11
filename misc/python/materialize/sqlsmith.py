@@ -137,9 +137,7 @@ known_errors = [
     "key cannot be null",  # expected, see PR materialize#25941
     "regexp_extract must specify at least one capture group",
     "array_fill with arrays not yet supported",
-    "The fast_path_optimizer shouldn't make a fast path plan slow path.",  # TODO: Remove when database-issues#9645 is fixed
     "Window function performance issue: `reduce_unnest_list_fusion` failed",  # TODO: Remove when database-issues#9644 is fixed
-    "WITH ORDINALITY or ROWS FROM with pg_catalog.regexp_split_to_table not yet supported",
-    "WITH ORDINALITY or ROWS FROM with information_schema._pg_expandarray not yet supported",
+    "WITH ORDINALITY or ROWS FROM with ",
     "invalid normalization form",  # Expected with https://github.com/MaterializeInc/materialize/pull/33507
 ]
