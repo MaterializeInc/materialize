@@ -416,7 +416,6 @@ def get_default_system_parameters(
 # apply.
 UNINTERESTING_SYSTEM_PARAMETERS = [
     "enable_mz_join_core",
-    "enable_compute_mv_append_smearing",
     "linear_join_yielding",
     "enable_lgalloc_eager_reclamation",
     "lgalloc_background_interval",
@@ -510,7 +509,6 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "persist_enable_arrow_lgalloc_cc_sizes",
     "controller_past_generation_replica_cleanup_retry_interval",
     "wallclock_lag_recording_interval",
-    "enable_wallclock_lag_histogram_collection",
     "wallclock_lag_histogram_period_interval",
     "enable_timely_zero_copy",
     "enable_timely_zero_copy_lgalloc",
