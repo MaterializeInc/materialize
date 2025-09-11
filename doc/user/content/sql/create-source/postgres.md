@@ -140,21 +140,13 @@ specified publication using **a single** replication slot. This allows you to
 minimize the performance impact on the upstream database, as well as reuse the
 same source across multiple materializations.
 
-{{< warning >}}
-Make sure to delete any replication slots if you stop using Materialize, or if
-either the Materialize or PostgreSQL instances crash. To look up the name of
-the replication slot created for each source, use `mz_internal.mz_postgres_sources`.
-{{< /warning >}}
+{{< tip >}}
 
-If you delete all objects that depend on a source without also dropping the
-source, the upstream replication slot will linger and continue to accumulate
-data so that the source can resume in the future. To avoid unbounded disk space
-usage, make sure to use [`DROP SOURCE`](/sql/drop-source/) or manually delete
-the replication slot.
+- {{< include-md file="shared-content/postgres-wal.md" >}}
 
-For PostgreSQL 13+, it is recommended that you set a reasonable value for
-[`max_slot_wal_keep_size`](https://www.postgresql.org/docs/13/runtime-config-replication.html#GUC-MAX-SLOT-WAL-KEEP-SIZE)
-to limit the amount of storage used by replication slots.
+{{< include-md file="shared-content/postgres-remove-unused-replication-slots.md" >}}
+
+{{</ tip >}}
 
 ##### PostgreSQL schemas
 
@@ -196,7 +188,7 @@ ingestion progress and debugging related issues, see [Troubleshooting](/ops/trou
 
 ## Known limitations
 
-{{% include-md file="shared-content/postgres-considerations.md" %}}
+{{% include-md file="shared-content/postgres-known-limitations.md" %}}
 
 ## Examples
 
