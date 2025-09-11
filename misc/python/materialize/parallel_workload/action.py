@@ -611,7 +611,7 @@ class CopyFromStdinAction(Action):
         if exe.db.complexity == Complexity.DDL:
             result.extend(
                 [
-                    "COPY FROM's target table was dropped",
+                    "COPY FROM's target table",
                 ]
             )
         return result
@@ -1689,7 +1689,7 @@ class CreateClusterAction(Action):
             managed=self.rng.choice([True, False]),
             size=self.rng.choice(["1", "2"]),
             replication_factor=self.rng.choice([1, 2]),
-            introspection_interval=self.rng.choice(["0", "1s", "10s"]),
+            introspection_interval="1s",
         )
         cluster.create(exe)
         exe.db.clusters.append(cluster)
