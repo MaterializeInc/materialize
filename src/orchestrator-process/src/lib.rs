@@ -345,6 +345,7 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
             cpu_limit: config.cpu_limit,
             scale: config.scale,
             labels: config.labels,
+            clusterd_malloc_conf: config.clusterd_malloc_conf,
             disk,
         };
 
@@ -461,6 +462,8 @@ struct EnsureServiceConfig {
     pub labels: BTreeMap<String, String>,
     /// Whether scratch disk space should be allocated for the service.
     pub disk: bool,
+    /// Optional jemalloc configuration.
+    pub clusterd_malloc_conf: Option<String>,
 }
 
 /// A task executing blocking work for a [`NamespacedProcessOrchestrator`] in the background.
@@ -572,6 +575,7 @@ impl OrchestratorWorker {
             scale,
             labels,
             disk,
+            clusterd_malloc_conf,
         }: EnsureServiceConfig,
     ) -> Result<(), anyhow::Error> {
         let full_id = self.config.full_id(&id);
@@ -686,6 +690,7 @@ impl OrchestratorWorker {
                         memory_limit,
                         cpu_limit,
                         launch_spec: self.config.launch_spec,
+                        clusterd_malloc_conf: clusterd_malloc_conf.clone(),
                     }),
                 );
 
@@ -791,6 +796,7 @@ impl OrchestratorWorker {
             memory_limit,
             cpu_limit,
             launch_spec,
+            clusterd_malloc_conf,
         }: ServiceProcessConfig,
     ) -> impl Future<Output = ()> + use<> {
         let suppress_output = self.config.suppress_output;
@@ -838,6 +844,9 @@ impl OrchestratorWorker {
                     memory_limit.as_ref(),
                     cpu_limit.as_ref(),
                 );
+                if let Some(malloc_conf) = &clusterd_malloc_conf {
+                    cmd.env("MALLOC_CONF", malloc_conf);
+                }
                 info!(
                     "launching {full_id}-{i} via {} {}...",
                     cmd.as_std().get_program().to_string_lossy(),
@@ -933,6 +942,7 @@ struct ServiceProcessConfig {
     memory_limit: Option<MemoryLimit>,
     cpu_limit: Option<CpuLimit>,
     launch_spec: LaunchSpec,
+    clusterd_malloc_conf: Option<String>,
 }
 
 struct ServiceProcessPort {
