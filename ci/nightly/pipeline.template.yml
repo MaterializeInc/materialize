@@ -1812,10 +1812,11 @@ steps:
         timeout_in_minutes: 90
         agents:
           queue: hetzner-x86-64-16cpu-32gb
+        parallelism: 10
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
-              args: [--runtime=1500, --complexity=read, --threads=16]
+              args: [--runtime=1500, --complexity=read, --threads=8]
 
       - id: parallel-workload-dml
         label: "Parallel Workload (DML)"
@@ -1824,10 +1825,11 @@ steps:
         timeout_in_minutes: 90
         agents:
           queue: hetzner-x86-64-16cpu-32gb
+        parallelism: 10
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
-              args: [--runtime=1500, --complexity=dml, --threads=16]
+              args: [--runtime=1500, --complexity=dml, --threads=8]
 
       - id: parallel-workload-ddl
         label: "Parallel Workload (DDL)"
@@ -1836,10 +1838,11 @@ steps:
         timeout_in_minutes: 90
         agents:
           queue: hetzner-x86-64-16cpu-32gb
+        parallelism: 10
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
-              args: [--runtime=1500, --threads=16]
+              args: [--runtime=1500, --threads=8]
 
       - id: parallel-workload-ddl-only
         label: "Parallel Workload (DDL Only)"
@@ -1848,10 +1851,11 @@ steps:
         timeout_in_minutes: 90
         agents:
           queue: hetzner-x86-64-16cpu-32gb
+        parallelism: 10
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
-              args: [--runtime=1500, --complexity=ddl-only, --threads=16]
+              args: [--runtime=1500, --complexity=ddl-only, --threads=8]
 
       - id: parallel-workload-many-threads
         label: "Parallel Workload (many threads)"
@@ -1861,10 +1865,11 @@ steps:
         agents:
           # Sporadic OoM otherwise
           queue: hetzner-x86-64-16cpu-32gb
+        parallelism: 10
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
-              args: [--runtime=1500, --threads=16]
+              args: [--runtime=1500, --threads=8]
         skip: "Too unstable at the moment"
 
       - id: parallel-workload-rename-naughty
@@ -1874,10 +1879,11 @@ steps:
         timeout_in_minutes: 90
         agents:
           queue: hetzner-x86-64-16cpu-32gb
+        parallelism: 10
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
-              args: [--runtime=1500, --scenario=rename, --naughty-identifiers, --threads=16]
+              args: [--runtime=1500, --scenario=rename, --naughty-identifiers, --threads=8]
 
       - id: parallel-workload-rename
         label: "Parallel Workload (rename)"
@@ -1886,10 +1892,11 @@ steps:
         timeout_in_minutes: 90
         agents:
           queue: hetzner-x86-64-16cpu-32gb
+        parallelism: 10
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
-              args: [--runtime=1500, --scenario=rename, --threads=16]
+              args: [--runtime=1500, --scenario=rename, --threads=8]
 
       - id: parallel-workload-cancel
         label: "Parallel Workload (cancel)"
@@ -1898,10 +1905,11 @@ steps:
         timeout_in_minutes: 90
         agents:
           queue: hetzner-x86-64-16cpu-32gb
+        parallelism: 10
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
-              args: [--runtime=1500, --scenario=cancel, --threads=16]
+              args: [--runtime=1500, --scenario=cancel, --threads=8]
 
       - id: parallel-workload-kill
         label: "Parallel Workload (kill)"
@@ -1910,10 +1918,11 @@ steps:
         timeout_in_minutes: 90
         agents:
           queue: hetzner-x86-64-16cpu-32gb
+        parallelism: 10
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
-              args: [--runtime=1500, --scenario=kill, --threads=16]
+              args: [--runtime=1500, --scenario=kill, --threads=8]
 
       - id: parallel-workload-backup-restore
         label: "Parallel Workload (backup & restore)"
@@ -1923,10 +1932,11 @@ steps:
         skip: "TODO(def-): Properly stop all db actions during backup & restore"
         agents:
           queue: hetzner-x86-64-16cpu-32gb
+        parallelism: 10
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
-              args: [--runtime=1500, --scenario=backup-restore, --naughty-identifiers, --threads=16]
+              args: [--runtime=1500, --scenario=backup-restore, --naughty-identifiers, --threads=8]
 
       - id: parallel-workload-0dt
         label: "Parallel Workload (0dt deploy)"
@@ -1935,10 +1945,11 @@ steps:
         timeout_in_minutes: 90
         agents:
           queue: hetzner-x86-64-dedi-16cpu-64gb
+        parallelism: 10
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
-              args: [--runtime=1500, --scenario=0dt-deploy, --threads=16]
+              args: [--runtime=1500, --scenario=0dt-deploy, --threads=8]
 
   - group: Slow cluster tests
     key: slow-cluster
