@@ -127,6 +127,7 @@ Field               | Type      | Meaning
 `availability_zone` | [`text`]  | The availability zone in which the cluster is running.
 `owner_id`          | [`text`]  | The role ID of the owner of the cluster replica. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
 `disk`              | [`boolean`] | If the replica has a local disk.
+`swap_enabled`      | [`boolean`] | If the replica is configured to use swap.
 
 ### `mz_clusters`
 

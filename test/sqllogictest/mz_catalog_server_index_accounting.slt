@@ -260,6 +260,7 @@ mz_cluster_replicas  id
 mz_cluster_replicas  name
 mz_cluster_replicas  owner_id
 mz_cluster_replicas  size
+mz_cluster_replicas  swap_enabled
 mz_clusters  availability_zones
 mz_clusters  disk
 mz_clusters  id
