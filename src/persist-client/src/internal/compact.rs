@@ -657,7 +657,7 @@ where
                 .saturating_sub(in_progress_part_reserved_memory_bytes);
 
             let ordered_runs =
-                Self::flatten_runs(&req, cfg.batch.preferred_order, &*blob, &*metrics).await?;
+                Self::flatten_runs(&req, &*blob, &*metrics).await?;
 
             let chunked_runs = Self::chunk_runs(
                 &ordered_runs,
@@ -942,7 +942,6 @@ where
     /// Flattens the runs in the input batches into a single ordered list of runs.
     async fn flatten_runs<'a>(
         req: &'a CompactReq<T>,
-        target_order: RunOrder,
         blob: &'a dyn Blob,
         metrics: &'a Metrics,
     ) -> anyhow::Result<
@@ -969,7 +968,7 @@ where
         for (spine_id, desc, runs) in batch_runs {
             for (meta, run) in runs {
                 let run_id = RunLocation(spine_id, meta.id);
-                let same_order = meta.order.unwrap_or(RunOrder::Codec) == target_order;
+                let same_order = meta.order.unwrap_or(RunOrder::Codec) == RunOrder::Structured;
                 if same_order {
                     ordered_runs.push((run_id, desc, meta, Cow::Borrowed(run)));
                 } else {
@@ -1035,7 +1034,7 @@ where
 
         let parts = BatchParts::new_ordered::<D>(
             batch_cfg,
-            cfg.batch.preferred_order,
+            RunOrder::Structured,
             Arc::clone(&metrics),
             Arc::clone(&shard_metrics),
             *shard_id,
