@@ -542,12 +542,9 @@ def validate_node_selector(
 def validate_container_resources(
     resources: dict[str, dict[str, str]],
     swap_enabled: bool,
-    storage_class_name_set: bool,
 ):
     if swap_enabled:
         assert resources["requests"]["memory"] != resources["limits"]["memory"]
-    elif storage_class_name_set:
-        assert resources["requests"]["memory"] == resources["limits"]["memory"]
     else:
         assert resources["requests"]["memory"] == resources["limits"]["memory"]
 
@@ -606,7 +603,7 @@ class SwapEnabledGlobal(Modification):
             clusterd = get_pod_data(labels)["items"][0]
 
             resources = clusterd["spec"]["containers"][0]["resources"]
-            validate_container_resources(resources, self.value, mods[StorageClass])
+            validate_container_resources(resources, self.value)
 
             node_selector = clusterd["spec"]["nodeSelector"]
             # pulling this one out, since it isn't in the cluster size's selector
@@ -657,7 +654,7 @@ class StorageClass(Modification):
             clusterd = get_pod_data(labels)["items"][0]
 
             resources = clusterd["spec"]["containers"][0]["resources"]
-            validate_container_resources(resources, mods[SwapEnabledGlobal], self.value)
+            validate_container_resources(resources, mods[SwapEnabledGlobal])
 
             node_selector = clusterd["spec"]["nodeSelector"]
             # checking this one separately, since it isn't in the cluster size's selector
