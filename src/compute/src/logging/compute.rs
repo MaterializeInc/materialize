@@ -354,7 +354,7 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
                         frontier: frontier.session_with_builder(&cap),
                         import_frontier: import_frontier.session_with_builder(&cap),
                         peek: peek.session_with_builder(&cap),
-                        peek_duration: peek_duration.session(&cap),
+                        peek_duration: peek_duration.session_with_builder(&cap),
                         shutdown_duration: shutdown_duration.session(&cap),
                         arrangement_heap_size: arrangement_heap_size.session(&cap),
                         arrangement_heap_capacity: arrangement_heap_capacity.session(&cap),
@@ -387,17 +387,9 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
         let frontier_current = frontier.as_collection();
         let import_frontier_current = import_frontier.as_collection();
         let peek_current = peek.as_collection();
-        let mut packer = PermutedRowPacker::new(ComputeLog::PeekDuration);
         let peek_duration =
             peek_duration
-                .as_collection()
-                .map(move |PeekDurationDatum { peek_type, bucket }| {
-                    packer.pack_slice_owned(&[
-                        Datum::UInt64(u64::cast_from(worker_id)),
-                        Datum::String(peek_type.name()),
-                        Datum::UInt64(bucket.try_into().expect("bucket too big")),
-                    ])
-                });
+                .as_collection();
         let mut packer = PermutedRowPacker::new(ComputeLog::ShutdownDuration);
         let shutdown_duration = shutdown_duration.as_collection().map(move |bucket| {
             packer.pack_slice_owned(&[
@@ -493,9 +485,9 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
             (FrontierCurrent, frontier_current),
             (ImportFrontierCurrent, import_frontier_current),
             (PeekCurrent, peek_current),
+            (PeekDuration, peek_duration),
         ];
         let logs = [
-            (PeekDuration, peek_duration),
             (ShutdownDuration, shutdown_duration),
             (ArrangementHeapSize, arrangement_heap_size),
             (ArrangementHeapCapacity, arrangement_heap_capacity),
@@ -586,12 +578,14 @@ struct DemuxState<A> {
     dataflow_global_ids: BTreeMap<usize, BTreeSet<GlobalId>>,
     /// A row packer for the exports output.
     export_packer: PermutedRowPacker,
-    /// A row packer for the exports output.
-    import_frontier_packer: PermutedRowPacker,
-    /// A row packer for the peek output.
-    peek_packer: PermutedRowPacker,
     /// A row packer for the frontier output.
     frontier_packer: PermutedRowPacker,
+    /// A row packer for the exports output.
+    import_frontier_packer: PermutedRowPacker,
+    /// A row packer for the peek durations output.
+    peek_duration_packer: PermutedRowPacker,
+    /// A row packer for the peek output.
+    peek_packer: PermutedRowPacker,
 }
 
 impl<A: Scheduler> DemuxState<A> {
@@ -610,9 +604,10 @@ impl<A: Scheduler> DemuxState<A> {
             lir_mapping: Default::default(),
             dataflow_global_ids: Default::default(),
             export_packer: PermutedRowPacker::new(ComputeLog::DataflowCurrent),
-            import_frontier_packer: PermutedRowPacker::new(ComputeLog::ImportFrontierCurrent),
-            peek_packer: PermutedRowPacker::new(ComputeLog::PeekCurrent),
             frontier_packer: PermutedRowPacker::new(ComputeLog::FrontierCurrent),
+            import_frontier_packer: PermutedRowPacker::new(ComputeLog::ImportFrontierCurrent),
+            peek_duration_packer: PermutedRowPacker::new(ComputeLog::PeekDuration),
+            peek_packer: PermutedRowPacker::new(ComputeLog::PeekCurrent),
         }
     }
 
@@ -641,6 +636,19 @@ impl<A: Scheduler> DemuxState<A> {
             make_string_datum(import_id, &mut self.scratch_string_b),
             Datum::UInt64(u64::cast_from(self.worker_id)),
             Datum::MzTimestamp(time),
+        ])
+    }
+
+    /// Pack a peek duration update key-value for the given peek and peek type.
+    fn pack_peek_duration_update(
+        &mut self,
+        peek_type: PeekType,
+        bucket: u128,
+    ) -> (&RowRef, &RowRef) {
+        self.peek_duration_packer.pack_slice(&[
+            Datum::UInt64(u64::cast_from(self.worker_id)),
+            Datum::String(peek_type.name()),
+            Datum::UInt64(bucket.try_into().expect("bucket too big")),
         ])
     }
 
@@ -711,7 +719,7 @@ struct DemuxOutput<'a> {
     frontier: OutputSessionColumnar<'a, Update<(Row, Row)>>,
     import_frontier: OutputSessionColumnar<'a, Update<(Row, Row)>>,
     peek: OutputSessionColumnar<'a, Update<(Row, Row)>>,
-    peek_duration: OutputSessionVec<'a, Update<PeekDurationDatum>>,
+    peek_duration: OutputSessionColumnar<'a, Update<(Row, Row)>>,
     shutdown_duration: OutputSessionVec<'a, Update<u128>>,
     arrangement_heap_size: OutputSessionVec<'a, Update<ArrangementHeapDatum>>,
     arrangement_heap_capacity: OutputSessionVec<'a, Update<ArrangementHeapDatum>>,
@@ -720,12 +728,6 @@ struct DemuxOutput<'a> {
     error_count: OutputSessionVec<'a, Update<ErrorCountDatum>>,
     lir_mapping: OutputSessionColumnar<'a, Update<LirMappingDatum>>,
     dataflow_global_ids: OutputSessionVec<'a, Update<DataflowGlobalDatum>>,
-}
-
-#[derive(Clone)]
-struct PeekDurationDatum {
-    peek_type: PeekType,
-    bucket: u128,
 }
 
 #[derive(Clone, Copy)]
@@ -1079,11 +1081,8 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
         if let Some(start) = self.state.peek_stash.remove(&uuid) {
             let elapsed_ns = self.time.saturating_sub(start).as_nanos();
             let bucket = elapsed_ns.next_power_of_two();
-            self.output.peek_duration.give((
-                PeekDurationDatum { peek_type, bucket },
-                ts,
-                Diff::ONE,
-            ));
+            let datum = self.state.pack_peek_duration_update(peek_type, bucket);
+            self.output.peek_duration.give((datum, ts, Diff::ONE));
         } else {
             error!(%uuid, "peek not yet registered");
         }
