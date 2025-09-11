@@ -9,7 +9,7 @@
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
-use std::fmt::Debug;
+use std::fmt::{Debug, Formatter};
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 use std::str::FromStr;
@@ -1601,9 +1601,17 @@ impl RustType<proto_hollow_batch_part::Format> for BatchColumnarFormat {
 ///
 /// These are "lazy" in the sense that we don't decode them (or even validate
 /// the encoded version) until they're used.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct LazyPartStats {
     key: LazyProto<ProtoStructStats>,
+}
+
+impl Debug for LazyPartStats {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("LazyPartStats")
+            .field(&self.decode())
+            .finish()
+    }
 }
 
 impl LazyPartStats {

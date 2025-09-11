@@ -7,8 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::fmt::Debug;
+use std::fmt::{Debug, Formatter};
 
+use mz_ore::str::redact;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use proptest::strategy::{Just, Strategy, Union};
 use serde::Serialize;
@@ -22,12 +23,21 @@ use crate::stats::{
 };
 
 /// `PrimitiveStats<Vec<u8>>` that cannot safely be trimmed.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AtomicBytesStats {
     /// See [PrimitiveStats::lower]
     pub lower: Vec<u8>,
     /// See [PrimitiveStats::upper]
     pub upper: Vec<u8>,
+}
+
+impl Debug for AtomicBytesStats {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AtomicBytesStats")
+            .field("lower", &redact(&hex::encode(&self.lower)))
+            .field("upper", &redact(&hex::encode(&self.upper)))
+            .finish()
+    }
 }
 
 impl AtomicBytesStats {
@@ -59,7 +69,7 @@ impl RustType<ProtoAtomicBytesStats> for AtomicBytesStats {
 /// cannot safely be trimmed.
 ///
 /// [`FixedSizeCodec`]: crate::columnar::FixedSizeCodec
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct FixedSizeBytesStats {
     /// See [PrimitiveStats::lower]
     pub lower: Vec<u8>,
@@ -67,6 +77,16 @@ pub struct FixedSizeBytesStats {
     pub upper: Vec<u8>,
     /// The kind of data these stats represent.
     pub kind: FixedSizeBytesStatsKind,
+}
+
+impl Debug for FixedSizeBytesStats {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FixedSizeBytesStats")
+            .field("lower", &redact(&hex::encode(&self.lower)))
+            .field("upper", &redact(&hex::encode(&self.upper)))
+            .field("kind", &self.kind)
+            .finish()
+    }
 }
 
 impl FixedSizeBytesStats {
@@ -160,7 +180,12 @@ pub enum BytesStats {
 
 impl Debug for BytesStats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        Debug::fmt(&self.debug_json(), f)
+        match self {
+            BytesStats::Primitive(stats) => stats.fmt(f),
+            BytesStats::Json(stats) => stats.fmt(f),
+            BytesStats::Atomic(stats) => stats.fmt(f),
+            BytesStats::FixedSize(stats) => stats.fmt(f),
+        }
     }
 }
 
