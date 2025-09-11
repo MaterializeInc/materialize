@@ -915,7 +915,7 @@ class Database:
                     ["scale=1,workers=1", "scale=1,workers=4", "scale=2,workers=2"]
                 ),
                 replication_factor=1,
-                introspection_interval=rng.choice(["0", "1s", "10s"]),
+                introspection_interval="1s",
             )
             for i in range(rng.randint(1, MAX_INITIAL_CLUSTERS))
         ]

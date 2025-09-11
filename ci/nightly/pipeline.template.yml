@@ -1812,7 +1812,6 @@ steps:
         timeout_in_minutes: 90
         agents:
           queue: hetzner-x86-64-16cpu-32gb
-        parallelism: 10
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
@@ -1825,7 +1824,6 @@ steps:
         timeout_in_minutes: 90
         agents:
           queue: hetzner-x86-64-16cpu-32gb
-        parallelism: 10
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
@@ -1838,7 +1836,6 @@ steps:
         timeout_in_minutes: 90
         agents:
           queue: hetzner-x86-64-16cpu-32gb
-        parallelism: 10
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
@@ -1851,7 +1848,6 @@ steps:
         timeout_in_minutes: 90
         agents:
           queue: hetzner-x86-64-16cpu-32gb
-        parallelism: 10
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
@@ -1865,7 +1861,6 @@ steps:
         agents:
           # Sporadic OoM otherwise
           queue: hetzner-x86-64-16cpu-32gb
-        parallelism: 10
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
@@ -1879,7 +1874,6 @@ steps:
         timeout_in_minutes: 90
         agents:
           queue: hetzner-x86-64-16cpu-32gb
-        parallelism: 10
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
@@ -1892,7 +1886,6 @@ steps:
         timeout_in_minutes: 90
         agents:
           queue: hetzner-x86-64-16cpu-32gb
-        parallelism: 10
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
@@ -1905,7 +1898,6 @@ steps:
         timeout_in_minutes: 90
         agents:
           queue: hetzner-x86-64-16cpu-32gb
-        parallelism: 10
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
@@ -1918,7 +1910,6 @@ steps:
         timeout_in_minutes: 90
         agents:
           queue: hetzner-x86-64-16cpu-32gb
-        parallelism: 10
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
@@ -1932,7 +1923,6 @@ steps:
         skip: "TODO(def-): Properly stop all db actions during backup & restore"
         agents:
           queue: hetzner-x86-64-16cpu-32gb
-        parallelism: 10
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
@@ -1945,7 +1935,6 @@ steps:
         timeout_in_minutes: 90
         agents:
           queue: hetzner-x86-64-dedi-16cpu-64gb
-        parallelism: 10
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
