@@ -54,7 +54,7 @@ ITERATIONS = 128
 BOUNDED_MEMORY_FRAMEWORK_VERSION = "1.0.0"
 
 SERVICES = [
-    Materialized(),  # overridden below
+    Materialized(support_external_clusterd=True),  # overridden below
     Testdrive(
         no_reset=True,
         seed=1,
