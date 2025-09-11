@@ -1404,7 +1404,7 @@ mod tests {
             leader.collections.rollups.insert(
                 seqno,
                 HollowRollup {
-                    key: PartialRollupKey::new(seqno, &RollupId::new()),
+                    key: PartialRollupKey::new(seqno, &RollupId::zero()),
                     encoded_size_bytes: None,
                 },
             );
