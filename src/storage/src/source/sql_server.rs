@@ -158,11 +158,14 @@ impl SourceRender for SqlServerSource {
             source_outputs.insert(*id, output_info);
         }
 
+        let metrics = config.metrics.get_sql_server_source_metrics(config.id);
+
         let (repl_updates, uppers, repl_errs, snapshot_stats, repl_token) = replication::render(
             scope.clone(),
             config.clone(),
             source_outputs.clone(),
             self.clone(),
+            metrics,
         );
 
         let (progress_stats, progress_errs, progress_probes, progress_token) = progress::render(
