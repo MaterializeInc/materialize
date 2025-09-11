@@ -36,7 +36,6 @@ use mz_compute_client::controller::{
     ComputeController, ComputeControllerResponse, ComputeControllerTimestamp, PeekNotification,
 };
 use mz_compute_client::protocol::response::SubscribeBatch;
-use mz_compute_client::service::{ComputeClient, ComputeGrpcClient};
 use mz_controller_types::WatchSetId;
 use mz_dyncfg::{ConfigSet, ConfigUpdates};
 use mz_orchestrator::{NamespacedOrchestrator, Orchestrator, ServiceProcessMetrics};
@@ -300,7 +299,6 @@ impl<T: ComputeControllerTimestamp> Controller<T> {
 impl<T> Controller<T>
 where
     T: ComputeControllerTimestamp,
-    ComputeGrpcClient: ComputeClient<T>,
 {
     pub fn update_orchestrator_scheduling_config(
         &self,
@@ -638,7 +636,6 @@ where
         + Into<mz_repr::Timestamp>,
     StorageCommand<T>: RustType<ProtoStorageCommand>,
     StorageResponse<T>: RustType<ProtoStorageResponse>,
-    ComputeGrpcClient: ComputeClient<T>,
     // Bounds needed by `ComputeController`:
     T: ComputeControllerTimestamp,
 {
