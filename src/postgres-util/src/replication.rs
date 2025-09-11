@@ -140,9 +140,11 @@ pub async fn drop_replication_slots(
     Ok(())
 }
 
-pub async fn get_timeline_id(replication_client: &Client) -> Result<u64, PostgresError> {
-    if let Some(r) = simple_query_opt(replication_client, "IDENTIFY_SYSTEM").await? {
-        r.get("timeline")
+pub async fn get_timeline_id(client: &Client) -> Result<u64, PostgresError> {
+    if let Some(r) =
+        simple_query_opt(client, "SELECT timeline_id FROM pg_control_checkpoint()").await?
+    {
+        r.get("timeline_id")
             .expect("Returns a row with a timeline ID")
             .parse::<u64>()
             .map_err(|err| {

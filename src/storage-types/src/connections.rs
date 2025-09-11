@@ -26,6 +26,7 @@ use mz_dyncfg::ConfigSet;
 use mz_kafka_util::client::{
     BrokerAddr, BrokerRewrite, MzClientContext, MzKafkaError, TunnelConfig, TunnelingClientContext,
 };
+use mz_mysql_util::{MySqlConn, MySqlError};
 use mz_ore::assert_none;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::{InTask, OreFutureExt};
@@ -253,12 +254,18 @@ impl Connection<InlinedConnection> {
         match self {
             Connection::Kafka(conn) => conn.validate(id, storage_configuration).await?,
             Connection::Csr(conn) => conn.validate(id, storage_configuration).await?,
-            Connection::Postgres(conn) => conn.validate(id, storage_configuration).await?,
+            Connection::Postgres(conn) => {
+                conn.validate(id, storage_configuration).await?;
+            }
             Connection::Ssh(conn) => conn.validate(id, storage_configuration).await?,
             Connection::Aws(conn) => conn.validate(id, storage_configuration).await?,
             Connection::AwsPrivatelink(conn) => conn.validate(id, storage_configuration).await?,
-            Connection::MySql(conn) => conn.validate(id, storage_configuration).await?,
-            Connection::SqlServer(conn) => conn.validate(id, storage_configuration).await?,
+            Connection::MySql(conn) => {
+                conn.validate(id, storage_configuration).await?;
+            }
+            Connection::SqlServer(conn) => {
+                conn.validate(id, storage_configuration).await?;
+            }
             Connection::IcebergCatalog(conn) => conn.validate(id, storage_configuration).await?,
         }
         Ok(())
@@ -318,6 +325,12 @@ impl Connection<InlinedConnection> {
 #[derive(thiserror::Error, Debug)]
 pub enum ConnectionValidationError {
     #[error(transparent)]
+    Postgres(#[from] PostgresConnectionValidationError),
+    #[error(transparent)]
+    MySql(#[from] MySqlConnectionValidationError),
+    #[error(transparent)]
+    SqlServer(#[from] SqlServerConnectionValidationError),
+    #[error(transparent)]
     Aws(#[from] AwsConnectionValidationError),
     #[error("{}", .0.display_with_causes())]
     Other(#[from] anyhow::Error),
@@ -327,6 +340,9 @@ impl ConnectionValidationError {
     /// Reports additional details about the error, if any are available.
     pub fn detail(&self) -> Option<String> {
         match self {
+            ConnectionValidationError::Postgres(e) => e.detail(),
+            ConnectionValidationError::MySql(e) => e.detail(),
+            ConnectionValidationError::SqlServer(e) => e.detail(),
             ConnectionValidationError::Aws(e) => e.detail(),
             ConnectionValidationError::Other(_) => None,
         }
@@ -335,6 +351,9 @@ impl ConnectionValidationError {
     /// Reports a hint for the user about how the error could be fixed.
     pub fn hint(&self) -> Option<String> {
         match self {
+            ConnectionValidationError::Postgres(e) => e.hint(),
+            ConnectionValidationError::MySql(e) => e.hint(),
+            ConnectionValidationError::SqlServer(e) => e.hint(),
             ConnectionValidationError::Aws(e) => e.hint(),
             ConnectionValidationError::Other(_) => None,
         }
@@ -1540,11 +1559,11 @@ impl PostgresConnection<InlinedConnection> {
         )?)
     }
 
-    async fn validate(
+    pub async fn validate(
         &self,
         _id: CatalogItemId,
         storage_configuration: &StorageConfiguration,
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<mz_postgres_util::Client, anyhow::Error> {
         let config = self
             .config(
                 &storage_configuration.connection_context.secrets_reader,
@@ -1553,13 +1572,74 @@ impl PostgresConnection<InlinedConnection> {
                 InTask::No,
             )
             .await?;
-        config
+        let client = config
             .connect(
                 "connection validation",
                 &storage_configuration.connection_context.ssh_tunnel_manager,
             )
             .await?;
-        Ok(())
+
+        let wal_level = mz_postgres_util::get_wal_level(&client).await?;
+
+        if wal_level < mz_postgres_util::replication::WalLevel::Logical {
+            Err(PostgresConnectionValidationError::InsufficientWalLevel { wal_level })?;
+        }
+
+        let max_wal_senders = mz_postgres_util::get_max_wal_senders(&client).await?;
+
+        if max_wal_senders < 1 {
+            Err(PostgresConnectionValidationError::ReplicationDisabled)?;
+        }
+
+        let available_replication_slots =
+            mz_postgres_util::available_replication_slots(&client).await?;
+
+        // We need 1 replication slot for the snapshots and 1 for the continuing replication
+        if available_replication_slots < 2 {
+            Err(
+                PostgresConnectionValidationError::InsufficientReplicationSlotsAvailable {
+                    count: 2,
+                },
+            )?;
+        }
+
+        Ok(client)
+    }
+}
+
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum PostgresConnectionValidationError {
+    #[error("PostgreSQL server has insufficient number of replication slots available")]
+    InsufficientReplicationSlotsAvailable { count: usize },
+    #[error("server must have wal_level >= logical, but has {wal_level}")]
+    InsufficientWalLevel {
+        wal_level: mz_postgres_util::replication::WalLevel,
+    },
+    #[error("replication disabled on server")]
+    ReplicationDisabled,
+}
+
+impl PostgresConnectionValidationError {
+    pub fn detail(&self) -> Option<String> {
+        match self {
+            Self::InsufficientReplicationSlotsAvailable { count } => Some(format!(
+                "executing this statement requires {} replication slot{}",
+                count,
+                if *count == 1 { "" } else { "s" }
+            )),
+            _ => None,
+        }
+    }
+
+    pub fn hint(&self) -> Option<String> {
+        match self {
+            Self::InsufficientReplicationSlotsAvailable { .. } => Some(
+                "you might be able to wait for other sources to finish snapshotting and try again"
+                    .into(),
+            ),
+            Self::ReplicationDisabled => Some("set max_wal_senders to a value > 0".into()),
+            _ => None,
+        }
     }
 }
 
@@ -1849,11 +1929,11 @@ impl MySqlConnection<InlinedConnection> {
         )?)
     }
 
-    async fn validate(
+    pub async fn validate(
         &self,
         _id: CatalogItemId,
         storage_configuration: &StorageConfiguration,
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<MySqlConn, MySqlConnectionValidationError> {
         let config = self
             .config(
                 &storage_configuration.connection_context.secrets_reader,
@@ -1862,14 +1942,75 @@ impl MySqlConnection<InlinedConnection> {
                 InTask::No,
             )
             .await?;
-        let conn = config
+        let mut conn = config
             .connect(
                 "connection validation",
                 &storage_configuration.connection_context.ssh_tunnel_manager,
             )
             .await?;
-        conn.disconnect().await?;
-        Ok(())
+
+        // Check if the MySQL database is configured to allow row-based consistent GTID replication
+        let mut setting_errors = vec![];
+        let gtid_res = mz_mysql_util::ensure_gtid_consistency(&mut conn).await;
+        let binlog_res = mz_mysql_util::ensure_full_row_binlog_format(&mut conn).await;
+        let order_res = mz_mysql_util::ensure_replication_commit_order(&mut conn).await;
+        for res in [gtid_res, binlog_res, order_res] {
+            match res {
+                Err(MySqlError::InvalidSystemSetting {
+                    setting,
+                    expected,
+                    actual,
+                }) => {
+                    setting_errors.push((setting, expected, actual));
+                }
+                Err(err) => Err(err)?,
+                Ok(()) => {}
+            }
+        }
+        if !setting_errors.is_empty() {
+            Err(MySqlConnectionValidationError::ReplicationSettingsError(
+                setting_errors,
+            ))?;
+        }
+
+        Ok(conn)
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum MySqlConnectionValidationError {
+    #[error("Invalid MySQL system replication settings")]
+    ReplicationSettingsError(Vec<(String, String, String)>),
+    #[error(transparent)]
+    Client(#[from] MySqlError),
+    #[error("{}", .0.display_with_causes())]
+    Other(#[from] anyhow::Error),
+}
+
+impl MySqlConnectionValidationError {
+    pub fn detail(&self) -> Option<String> {
+        match self {
+            Self::ReplicationSettingsError(settings) => Some(format!(
+                "Invalid MySQL system replication settings: {}",
+                itertools::join(
+                    settings.iter().map(|(setting, expected, actual)| format!(
+                        "{}: expected {}, got {}",
+                        setting, expected, actual
+                    )),
+                    "; "
+                )
+            )),
+            _ => None,
+        }
+    }
+
+    pub fn hint(&self) -> Option<String> {
+        match self {
+            Self::ReplicationSettingsError(_) => {
+                Some("Set the necessary MySQL database system settings.".into())
+            }
+            _ => None,
+        }
     }
 }
 
@@ -1941,11 +2082,11 @@ impl<C: ConnectionAccess> SqlServerConnectionDetails<C> {
 
 impl SqlServerConnectionDetails<InlinedConnection> {
     /// Attempts to open a connection to the upstream SQL Server instance.
-    async fn validate(
+    pub async fn validate(
         &self,
         _id: CatalogItemId,
         storage_configuration: &StorageConfiguration,
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<mz_sql_server_util::Client, anyhow::Error> {
         let config = self
             .resolve_config(
                 &storage_configuration.connection_context.secrets_reader,
@@ -1955,10 +2096,32 @@ impl SqlServerConnectionDetails<InlinedConnection> {
             .await?;
         tracing::debug!(?config, "Validating SQL Server connection");
 
-        // Just connecting is enough to validate, no need to send any queries.
-        let _client = mz_sql_server_util::Client::connect(config).await?;
+        let mut client = mz_sql_server_util::Client::connect(config).await?;
 
-        Ok(())
+        // Ensure the upstream SQL Server instance is configured to allow CDC.
+        //
+        // Run all of the checks necessary and collect the errors to provide the best
+        // guidance as to which system settings need to be enabled.
+        let mut replication_errors = vec![];
+        for error in [
+            mz_sql_server_util::inspect::ensure_database_cdc_enabled(&mut client).await,
+            mz_sql_server_util::inspect::ensure_snapshot_isolation_enabled(&mut client).await,
+        ] {
+            match error {
+                Err(mz_sql_server_util::SqlServerError::InvalidSystemSetting {
+                    name,
+                    expected,
+                    actual,
+                }) => replication_errors.push((name, expected, actual)),
+                Err(other) => Err(other)?,
+                Ok(()) => (),
+            }
+        }
+        if !replication_errors.is_empty() {
+            Err(SqlServerConnectionValidationError::ReplicationSettingsError(replication_errors))?;
+        }
+
+        Ok(client)
     }
 
     /// Resolve all of the connection details (e.g. read from the [`SecretsReader`])
@@ -2069,6 +2232,35 @@ impl SqlServerConnectionDetails<InlinedConnection> {
             tunnel,
             in_task,
         ))
+    }
+}
+
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum SqlServerConnectionValidationError {
+    #[error("Invalid SQL Server system replication settings")]
+    ReplicationSettingsError(Vec<(String, String, String)>),
+}
+
+impl SqlServerConnectionValidationError {
+    pub fn detail(&self) -> Option<String> {
+        match self {
+            Self::ReplicationSettingsError(settings) => Some(format!(
+                "Invalid SQL Server system replication settings: {}",
+                itertools::join(
+                    settings.iter().map(|(setting, expected, actual)| format!(
+                        "{}: expected {}, got {}",
+                        setting, expected, actual
+                    )),
+                    "; "
+                )
+            )),
+        }
+    }
+
+    pub fn hint(&self) -> Option<String> {
+        match self {
+            _ => None,
+        }
     }
 }
 

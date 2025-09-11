@@ -30,7 +30,6 @@ use mz_ore::iter::IteratorExt;
 use mz_ore::str::StrExt;
 use mz_ore::{assert_none, soft_panic_or_log};
 use mz_postgres_util::desc::PostgresTableDesc;
-use mz_postgres_util::replication::WalLevel;
 use mz_proto::RustType;
 use mz_repr::{CatalogItemId, RelationDesc, RelationVersionSelector, Timestamp, strconv};
 use mz_sql_parser::ast::display::AstDisplay;
@@ -792,16 +791,14 @@ async fn purify_create_source(
             connection,
             options,
         } => {
-            let connection = {
-                let item = scx.get_item_by_resolved_name(connection)?;
-                match item.connection().map_err(PlanError::from)? {
-                    Connection::Postgres(connection) => {
-                        connection.clone().into_inline_connection(&catalog)
-                    }
-                    _ => Err(PgSourcePurificationError::NotPgConnection(
-                        scx.catalog.resolve_full_name(item.name()),
-                    ))?,
+            let connection_item = scx.get_item_by_resolved_name(connection)?;
+            let connection = match connection_item.connection().map_err(PlanError::from)? {
+                Connection::Postgres(connection) => {
+                    connection.clone().into_inline_connection(&catalog)
                 }
+                _ => Err(PgSourcePurificationError::NotPgConnection(
+                    scx.catalog.resolve_full_name(connection_item.name()),
+                ))?,
             };
             let crate::plan::statement::PgConfigOptionExtracted {
                 publication,
@@ -816,41 +813,9 @@ async fn purify_create_source(
                 Err(PgSourcePurificationError::UserSpecifiedDetails)?;
             }
 
-            // verify that we can connect upstream and snapshot publication metadata
-            let config = connection
-                .config(
-                    &storage_configuration.connection_context.secrets_reader,
-                    storage_configuration,
-                    InTask::No,
-                )
+            let client = connection
+                .validate(connection_item.id(), storage_configuration)
                 .await?;
-
-            let client = config
-                .connect(
-                    "postgres_purification",
-                    &storage_configuration.connection_context.ssh_tunnel_manager,
-                )
-                .await?;
-
-            let wal_level = mz_postgres_util::get_wal_level(&client).await?;
-
-            if wal_level < WalLevel::Logical {
-                Err(PgSourcePurificationError::InsufficientWalLevel { wal_level })?;
-            }
-
-            let max_wal_senders = mz_postgres_util::get_max_wal_senders(&client).await?;
-
-            if max_wal_senders < 1 {
-                Err(PgSourcePurificationError::ReplicationDisabled)?;
-            }
-
-            let available_replication_slots =
-                mz_postgres_util::available_replication_slots(&client).await?;
-
-            // We need 1 replication slot for the snapshots and 1 for the continuing replication
-            if available_replication_slots < 2 {
-                Err(PgSourcePurificationError::InsufficientReplicationSlotsAvailable { count: 2 })?;
-            }
 
             let reference_client = SourceReferenceClient::Postgres {
                 client: &client,
@@ -864,7 +829,6 @@ async fn purify_create_source(
                 normalized_text_columns,
             } = postgres::purify_source_exports(
                 &client,
-                &config,
                 &retrieved_source_references,
                 external_references,
                 text_columns,
@@ -884,10 +848,7 @@ async fn purify_create_source(
 
             // Record the active replication timeline_id to allow detection of a future upstream
             // point-in-time-recovery that will put the source into an error state.
-            let replication_client = config
-                .connect_replication(&storage_configuration.connection_context.ssh_tunnel_manager)
-                .await?;
-            let timeline_id = mz_postgres_util::get_timeline_id(&replication_client).await?;
+            let timeline_id = mz_postgres_util::get_timeline_id(&client).await?;
 
             // Remove any old detail references
             options.retain(|PgConfigOption { name, .. }| name != &PgConfigOptionName::Details);
@@ -934,42 +895,10 @@ async fn purify_create_source(
                 Err(SqlServerSourcePurificationError::UserSpecifiedDetails)?;
             }
 
-            let config = connection
-                .resolve_config(
-                    &storage_configuration.connection_context.secrets_reader,
-                    storage_configuration,
-                    InTask::No,
-                )
+            let mut client = connection
+                .validate(connection_item.id(), storage_configuration)
                 .await?;
-            let mut client = mz_sql_server_util::Client::connect(config).await?;
 
-            // Ensure the upstream SQL Server instance is configured to allow CDC.
-            //
-            // Run all of the checks necessary and collect the errors to provide the best
-            // guidance as to which system settings need to be enabled.
-            let mut replication_errors = vec![];
-            for error in [
-                mz_sql_server_util::inspect::ensure_database_cdc_enabled(&mut client).await,
-                mz_sql_server_util::inspect::ensure_snapshot_isolation_enabled(&mut client).await,
-            ] {
-                match error {
-                    Err(mz_sql_server_util::SqlServerError::InvalidSystemSetting {
-                        name,
-                        expected,
-                        actual,
-                    }) => replication_errors.push((name, expected, actual)),
-                    Err(other) => Err(other)?,
-                    Ok(()) => (),
-                }
-            }
-            if !replication_errors.is_empty() {
-                Err(SqlServerSourcePurificationError::ReplicationSettingsError(
-                    replication_errors,
-                ))?;
-            }
-
-            // We've validated that CDC is configured for the system, now let's
-            // purify the individual exports (i.e. subsources).
             let database: Arc<str> = connection.database.into();
             let reference_client = SourceReferenceClient::SqlServer {
                 client: &mut client,
@@ -1058,51 +987,10 @@ async fn purify_create_source(
                 Err(MySqlSourcePurificationError::UserSpecifiedDetails)?;
             }
 
-            let config = connection
-                .config(
-                    &storage_configuration.connection_context.secrets_reader,
-                    storage_configuration,
-                    InTask::No,
-                )
-                .await?;
-
-            let mut conn = config
-                .connect(
-                    "mysql purification",
-                    &storage_configuration.connection_context.ssh_tunnel_manager,
-                )
-                .await?;
-
-            // Check if the MySQL database is configured to allow row-based consistent GTID replication
-            let mut replication_errors = vec![];
-            for error in [
-                mz_mysql_util::ensure_gtid_consistency(&mut conn)
-                    .await
-                    .err(),
-                mz_mysql_util::ensure_full_row_binlog_format(&mut conn)
-                    .await
-                    .err(),
-                mz_mysql_util::ensure_replication_commit_order(&mut conn)
-                    .await
-                    .err(),
-            ] {
-                match error {
-                    Some(mz_mysql_util::MySqlError::InvalidSystemSetting {
-                        setting,
-                        expected,
-                        actual,
-                    }) => {
-                        replication_errors.push((setting, expected, actual));
-                    }
-                    Some(err) => Err(err)?,
-                    None => (),
-                }
-            }
-            if !replication_errors.is_empty() {
-                Err(MySqlSourcePurificationError::ReplicationSettingsError(
-                    replication_errors,
-                ))?;
-            }
+            let mut conn = connection
+                .validate(connection_item.id(), storage_configuration)
+                .await
+                .map_err(MySqlSourcePurificationError::InvalidConnection)?;
 
             // Retrieve the current @gtid_executed value of the server to mark as the effective
             // initial snapshot point such that we can ensure consistency if the initial source
@@ -1430,10 +1318,10 @@ async fn purify_alter_source_add_subsources(
     storage_configuration: &StorageConfiguration,
 ) -> Result<PurifiedStatement, PlanError> {
     // Validate this is a source that can have subsources added.
-    match desc.connection {
-        GenericSourceConnection::Postgres(_) => {}
-        GenericSourceConnection::MySql(_) => {}
-        GenericSourceConnection::SqlServer(_) => {}
+    let connection_id = match &desc.connection {
+        GenericSourceConnection::Postgres(c) => c.connection_id,
+        GenericSourceConnection::MySql(c) => c.connection_id,
+        GenericSourceConnection::SqlServer(c) => c.connection_id,
         _ => sql_bail!(
             "source {} does not support ALTER SOURCE.",
             partial_source_name
@@ -1457,28 +1345,9 @@ async fn purify_alter_source_add_subsources(
             // Get PostgresConnection for generating subsources.
             let pg_connection = &pg_source_connection.connection;
 
-            let config = pg_connection
-                .config(
-                    &storage_configuration.connection_context.secrets_reader,
-                    storage_configuration,
-                    InTask::No,
-                )
+            let client = pg_connection
+                .validate(connection_id, storage_configuration)
                 .await?;
-
-            let client = config
-                .connect(
-                    "postgres_purification",
-                    &storage_configuration.connection_context.ssh_tunnel_manager,
-                )
-                .await?;
-
-            let available_replication_slots =
-                mz_postgres_util::available_replication_slots(&client).await?;
-
-            // We need 1 additional replication slot for the snapshots
-            if available_replication_slots < 1 {
-                Err(PgSourcePurificationError::InsufficientReplicationSlotsAvailable { count: 1 })?;
-            }
 
             if !exclude_columns.is_empty() {
                 sql_bail!(
@@ -1500,7 +1369,6 @@ async fn purify_alter_source_add_subsources(
                 normalized_text_columns,
             } = postgres::purify_source_exports(
                 &client,
-                &config,
                 &retrieved_source_references,
                 &Some(ExternalReferences::SubsetTables(external_references)),
                 text_columns,
@@ -1845,28 +1713,9 @@ async fn purify_create_table_from_source(
             // Get PostgresConnection for generating subsources.
             let pg_connection = &pg_source_connection.connection;
 
-            let config = pg_connection
-                .config(
-                    &storage_configuration.connection_context.secrets_reader,
-                    storage_configuration,
-                    InTask::No,
-                )
+            let client = pg_connection
+                .validate(pg_source_connection.connection_id, storage_configuration)
                 .await?;
-
-            let client = config
-                .connect(
-                    "postgres_purification",
-                    &storage_configuration.connection_context.ssh_tunnel_manager,
-                )
-                .await?;
-
-            let available_replication_slots =
-                mz_postgres_util::available_replication_slots(&client).await?;
-
-            // We need 1 additional replication slot for the snapshots
-            if available_replication_slots < 1 {
-                Err(PgSourcePurificationError::InsufficientReplicationSlotsAvailable { count: 1 })?;
-            }
 
             // TODO(roshan): Add support for PG sources to allow this
             if !exclude_columns.is_empty() {
@@ -1892,7 +1741,6 @@ async fn purify_create_table_from_source(
                 normalized_text_columns: _,
             } = postgres::purify_source_exports(
                 &client,
-                &config,
                 &retrieved_source_references,
                 &requested_references,
                 qualified_text_columns,
