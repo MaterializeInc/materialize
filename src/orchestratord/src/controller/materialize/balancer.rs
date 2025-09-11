@@ -32,7 +32,8 @@ use crate::{
     k8s::{apply_resource, delete_resource, get_resource},
 };
 use mz_cloud_resources::crd::{
-    generated::cert_manager::certificates::Certificate, materialize::v1alpha1::Materialize,
+    generated::cert_manager::certificates::{Certificate, CertificatePrivateKeyAlgorithm},
+    materialize::v1alpha1::Materialize,
 };
 use mz_ore::instrument;
 
@@ -131,6 +132,8 @@ fn create_balancerd_external_certificate(
         mz.balancerd_external_certificate_name(),
         mz.balancerd_external_certificate_secret_name(),
         None,
+        CertificatePrivateKeyAlgorithm::Rsa,
+        Some(4096),
     )
 }
 
