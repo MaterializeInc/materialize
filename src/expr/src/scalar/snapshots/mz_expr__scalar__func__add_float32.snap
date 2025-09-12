@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    is_monotone = (true, true),\n    output_type = f32,\n    is_infix_op = true,\n    sqlname = \"+\",\n    propagates_nulls = true\n)]\nfn add_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {\n    let a = a.unwrap_float32();\n    let b = b.unwrap_float32();\n    let sum = a + b;\n    if sum.is_infinite() && !a.is_infinite() && !b.is_infinite() {\n        Err(EvalError::FloatOverflow)\n    } else {\n        Ok(Datum::from(sum))\n    }\n}\n"
+expression: "#[sqlfunc(\n    is_monotone = \"(true, true)\",\n    output_type = \"f32\",\n    is_infix_op = true,\n    sqlname = \"+\",\n    propagates_nulls = true\n)]\nfn add_float32<'a>(a: f32, b: f32) -> Result<Datum<'a>, EvalError> {\n    let sum = a + b;\n    if sum.is_infinite() && !a.is_infinite() && !b.is_infinite() {\n        Err(EvalError::FloatOverflow)\n    } else {\n        Ok(Datum::from(sum))\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -17,8 +17,8 @@ expression: "#[sqlfunc(\n    is_monotone = (true, true),\n    output_type = f32,
 )]
 pub struct AddFloat32;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for AddFloat32 {
-    type Input1 = Datum<'a>;
-    type Input2 = Datum<'a>;
+    type Input1 = f32;
+    type Input2 = f32;
     type Output = Result<Datum<'a>, EvalError>;
     fn call(
         &self,
@@ -64,9 +64,7 @@ impl std::fmt::Display for AddFloat32 {
         f.write_str("+")
     }
 }
-fn add_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let a = a.unwrap_float32();
-    let b = b.unwrap_float32();
+fn add_float32<'a>(a: f32, b: f32) -> Result<Datum<'a>, EvalError> {
     let sum = a + b;
     if sum.is_infinite() && !a.is_infinite() && !b.is_infinite() {
         Err(EvalError::FloatOverflow)
