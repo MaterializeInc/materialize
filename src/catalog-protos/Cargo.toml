@@ -31,7 +31,7 @@ proptest = { version = "1.7.0", default-features = false, features = ["std"] }
 similar-asserts = "1.7"
 
 [build-dependencies]
-anyhow = "1.0.98"
+anyhow = "1.0.99"
 md-5 = "0.10.6"
 mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
 prost-build = "0.13.5"
