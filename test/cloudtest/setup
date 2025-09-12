@@ -22,7 +22,11 @@ if ! kind get clusters | grep -q "$K8S_CLUSTER_NAME"; then
 
     run kind create cluster --name="$K8S_CLUSTER_NAME" --config="${CLUSTER_YAML}" --wait=60s
 
+    run kind get kubeconfig --name="$K8S_CLUSTER_NAME" > "$KUBECONFIG"
+
     run kubectl --context="$K8S_CONTEXT" taint nodes --selector=environmentd=true "environmentd=true:NoSchedule"
+else
+    run kind get kubeconfig --name="$K8S_CLUSTER_NAME" > "$KUBECONFIG"
 fi
 
 for f in misc/kind/configmaps/*; do

@@ -10,7 +10,7 @@
 # Stage 1: Build a minimum CI Builder image that we can use for the initial
 # steps like `mkpipeline` and `Build`, as well as any tests that are self
 # contained and use other Docker images.
-FROM ubuntu:noble-20250805 AS ci-builder-min
+FROM ubuntu:plucky-20250730 AS ci-builder-min
 
 WORKDIR /workdir
 
@@ -47,7 +47,7 @@ RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-ge
     libxml2 \
     pigz \
     python3 \
-    python3.12-venv \
+    python3.13-venv \
     zstd \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* \
