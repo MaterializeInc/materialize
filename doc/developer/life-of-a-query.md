@@ -204,26 +204,88 @@ maybe also give a description of which steps are CPU heavy and which are not.
 
 ## Details
 
-The above description of query processing has mentioned some names and concepts
-that are involved in query processing that we didn't explain further. We now
-explain those.
+The above description of query processing has mentioned some components and
+concepts that are involved in query processing that we didn't explain further.
+We now explain those.
 
 ## Compute & Storage Controllers
 
-Should maybe explain the compute and storage protocol, to really describe how
-the commands flow to the cluster and how the responses come back.
+The adapter interacts with clusters and storage collections through two main
+controllers: the
+[ComputeController](https://github.com/MaterializeInc/materialize/blob/main/src/compute-client/src/controller.rs)
+and the
+[StorageController](https://github.com/MaterializeInc/materialize/blob/main/src/storage-controller/src/lib.rs).
+These controllers act as intermediaries that translate adapter commands into
+cluster-specific operations and manage the lifecycle of compute and storage
+resources.
+
+The
+[ComputeController](https://github.com/MaterializeInc/materialize/blob/main/src/compute-client/src/controller.rs)
+manages compute instances (clusters) and the dataflows running on them. It
+handles the creation and maintenance of indexes, materialized views, and
+dataflows, talking to cluster replicas via the compute protocol.
+
+The
+[StorageController](https://github.com/MaterializeInc/materialize/blob/main/src/storage-controller/src/lib.rs)
+manages storage collections including sources, tables, and sinks. For ingestion
+from external systems, it needs to install computation on a cluster. Similarly
+to the compute controller, communication with the storage parts on a cluster
+replica happens via the storage protocol.
+
+Both controllers maintain read and write capabilities for their respective
+resources, coordinate compaction policies, and ensure that data remains
+accessible as long as needed while allowing garbage collection when possible.
+
+TODO: Talk about the protocols to explain how query execution flows through the
+commands and responses.
 
 ## Arrangements
 
-TODO: Write up something about arrangements, how it's the basis for sharing and ultimately the thing that can be queries from a cluster.
+Arrangements are multiversioned indexes that serve as the foundation for data
+sharing and efficient querying in Materialize. As described in the
+[arrangements documentation](/doc/developer/arrangements.md), an arrangement is
+an indexed representation of a stream of update triples `(data, time, diff)`,
+organized by key for efficient lookups.
+
+Arrangements are required by many differential dataflow operators. The `join`
+operator needs both of its inputs to be arrangements indexed by the join keys,
+while the `reduce` operator requires both input and output arrangements. This
+means that a single SQL query can create multiple arrangements as it gets
+compiled into a dataflow graph.
+
+The key benefit of arrangements is sharing: multiple operators can reuse the
+same arrangement if they need data indexed by the same key. This sharing is
+especially common with indexes, materialized sources, and materialized views,
+which publish their arrangements for reuse across dataflows.
+
+Arrangements only store distinct `(key, value, time)` combinations and undergo
+both logical compaction (forgetting historical detail that no reader needs) and
+physical compaction (consolidating space). This makes their memory usage
+proportional to the current accumulated state rather than the total volume of
+updates processed.
 
 ## Storage
 
-TODO: Both storage and persist are mentioned above, so we should at least give
-an overview.
+TODO: Buff out this section.
 
 ## Persist
 
-TODO: Both storage and persist are mentioned above, so we should at least give
-an overview.
+Persist is Materialize's durable storage implementation that provides definite
+Time-Varying Collections as described in the [persist design
+document](/doc/developer/design/20220330_persist.md). It serves as the
+foundation for the storage layer.
+
+The core abstraction is a "shard" - a durable
+[TVC](/doc/developer/platform/formalism.md#in-a-nutshell) that can be written
+to and read from concurrently. Persist uses a rich client model where readers
+and writers interact directly with the underlying blob storage (typically S3)
+while coordinating through a consensus system for metadata operations.
+
+Persist is built on two key primitives: `Blob` (a durable key-value store) and
+`Consensus` (a linearizable log). The blob storage holds the actual data in
+immutable batches, while consensus maintains a state machine that tracks
+metadata like shard frontiers, active readers/writers, and batch locations.
+
+Key features include automatic compaction to bound storage costs and horizontal
+read scalability.
 
