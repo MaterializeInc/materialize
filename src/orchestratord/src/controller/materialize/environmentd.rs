@@ -1232,6 +1232,28 @@ fn create_environmentd_statefulset_object(
     // The `materialize` user used by clusterd always has gid 999.
     args.push("--orchestrator-kubernetes-service-fs-group=999".to_string());
 
+    // Add system_param configmap
+    if let Some(ref name) = mz.spec.system_parameter_configmap_name {
+        volumes.push(Volume {
+            name: "system-params".to_string(),
+            config_map: Some(ConfigMapVolumeSource {
+                default_mode: Some(0o400),
+                name: name.to_owned(),
+                items: None,
+                optional: Some(true),
+            }),
+            ..Default::default()
+        });
+        volume_mounts.push(VolumeMount {
+            name: "system-params".to_string(),
+            // The user must write to the `config.json` entry in the config map
+            mount_path: "/etc/materialize/system-params".to_owned(),
+            read_only: Some(true),
+            ..Default::default()
+        });
+        args.push("--config-sync-file-path=/etc/materialize/system-params/config.json".to_string());
+    }
+
     // Add Sentry arguments.
     if let Some(sentry_dsn) = &tracing.sentry_dsn {
         args.push(format!("--sentry-dsn={}", sentry_dsn));
