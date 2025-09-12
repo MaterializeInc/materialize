@@ -882,13 +882,11 @@ mod test {
     use mz_ore::metrics::MetricsRegistry;
     use mz_persist_types::ShardId;
     use mz_repr::{Datum, Timestamp as MzTimestamp};
-    use mz_rocksdb::{RocksDBConfig, ValueIterator};
     use mz_storage_operators::persist_source::Subtime;
     use mz_storage_types::sources::SourceEnvelope;
     use mz_storage_types::sources::envelope::{KeyEnvelope, UpsertEnvelope, UpsertStyle};
-    use rocksdb::Env;
     use timely::dataflow::operators::capture::Extract;
-    use timely::dataflow::operators::{Capture, Input, Probe};
+    use timely::dataflow::operators::{Capture, Input};
     use timely::progress::Timestamp;
 
     use crate::metrics::StorageMetrics;
@@ -896,7 +894,6 @@ mod test {
     use crate::source::SourceExportCreationConfig;
     use crate::statistics::{SourceStatistics, SourceStatisticsMetricDefs};
     use crate::upsert::memory::InMemoryHashMap;
-    use crate::upsert::types::{BincodeOpts, consolidating_merge_function, upsert_bincode_opts};
 
     use super::*;
 
