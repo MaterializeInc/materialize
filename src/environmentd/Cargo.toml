@@ -12,9 +12,9 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.98"
+anyhow = "1.0.99"
 askama = { version = "0.12.1", default-features = false, features = ["config", "serde-json"] }
-async-trait = "0.1.88"
+async-trait = "0.1.89"
 axum = { version = "0.7.5", features = ["ws"] }
 axum-extra = { version = "0.9.3", features = ["typed-header"] }
 base64 = "0.22.1"
@@ -36,7 +36,7 @@ include_dir = "0.7.4"
 ipnet = "2.11.0"
 itertools = "0.14.0"
 jsonwebtoken = "9.3.1"
-libc = "0.2.174"
+libc = "0.2.175"
 maplit = "1.0.2"
 mime = "0.3.16"
 mz-alloc = { path = "../alloc" }
@@ -163,8 +163,8 @@ timely = "0.23.0"
 tokio-postgres = { version = "0.7.8", features = ["with-chrono-0_4"] }
 
 [build-dependencies]
-anyhow = "1.0.98"
-cc = "1.2.30"
+anyhow = "1.0.99"
+cc = "1.2.36"
 mz-npm = { path = "../npm" }
 
 [features]
