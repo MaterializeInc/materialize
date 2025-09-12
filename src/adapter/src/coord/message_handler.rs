@@ -374,7 +374,9 @@ impl Coordinator {
                 if let Some(ActiveComputeSink::Subscribe(active_subscribe)) =
                     self.active_compute_sinks.get_mut(&sink_id)
                 {
-                    let finished = active_subscribe.process_response(response);
+                    let finished = active_subscribe
+                        .process_response(response, self.persist_client.clone())
+                        .await;
                     if finished {
                         self.retire_compute_sinks(btreemap! {
                             sink_id => ActiveComputeSinkRetireReason::Finished,

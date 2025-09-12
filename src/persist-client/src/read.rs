@@ -1050,8 +1050,9 @@ where
         memory_budget_bytes: usize,
     ) -> Result<Cursor<K, V, T, D, L>, Since<T>> {
         let context = format!("{}[as_of={:?}]", shard_id, as_of.elements());
-        let filter = FetchBatchFilter::Snapshot {
+        let filter = FetchBatchFilter::Listen {
             as_of: as_of.clone(),
+            lower: as_of.clone(),
         };
 
         let mut consolidator = Consolidator::new(
