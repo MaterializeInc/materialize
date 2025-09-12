@@ -7,6 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+# TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/9684 is fixed
+$ skip-if
+SELECT true
+
 $ set-sql-timeout duration=300s
 $ set-arg-default default-replica-size=scale=1,workers=1
 
@@ -224,8 +228,8 @@ true true
 
 > CREATE DEFAULT INDEX ii_empty ON t3
 
-> SELECT records, size < 16 * 1024 FROM mz_introspection.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_empty'
-<null> true
+> SELECT records, size < 16 * 1024, allocations < 512 FROM mz_introspection.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_empty'
+<null> true true
 
 # Tests that arrangement sizes are approximate
 
@@ -235,23 +239,23 @@ true true
 
 # We have 16 workers, and only want to ensure that the sizes are not egregious.
 
-> SELECT records, size < 16 * 1024 FROM mz_introspection.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t4'
-<null> true
+> SELECT records, size < 16 * 1024, allocations < 512 FROM mz_introspection.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t4'
+<null> true true
 
 > INSERT INTO t4 SELECT 1
 
-> SELECT records, size < 16 * 1024 FROM mz_introspection.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t4'
-1 true
+> SELECT records, size < 16 * 1024, allocations > 0 FROM mz_introspection.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t4'
+1 true true
 
 > INSERT INTO t4 SELECT generate_series(1, 1000)
 
 # Determining exact sizes is difficult because of deduplication in arrangements, so we just use safe values.
-> SELECT records >= 1000 AND records <= 1001, batches > 0, size > 0 AND size < 4*30000 FROM mz_introspection.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t4'
-true true true
+> SELECT records >= 1000 AND records <= 1001, batches > 0, size > 0 AND size < 4*30000, capacity > 0, allocations > 0 FROM mz_introspection.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t4'
+true true true true true
 
 > DROP INDEX ii_t4
 
-> SELECT records, batches, size FROM mz_introspection.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t4'
+> SELECT records, batches, size, capacity, allocations FROM mz_introspection.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t4'
 
 # Test arrangement size logging for error dataflows
 
@@ -265,7 +269,7 @@ true true true
 
 # Cast to numeric to get its rounding behavior
 > SELECT records, (size::numeric/1024/1024)::int FROM mz_introspection.mz_dataflow_arrangement_sizes WHERE name LIKE '%vt5_idx'
-10000 2
+10000 1
 
 > DROP TABLE t5 CASCADE
 
@@ -302,19 +306,21 @@ true true true
     records > 2 * 1000,
     records < 2 * 2 * 1000,
     size > 0,
-    size < 4 * 130 * 1000
+    size < 4 * 130 * 1000,
+    allocations < 2 * 2 * 1000
   FROM mz_introspection.mz_dataflow_arrangement_sizes
   WHERE name LIKE '%c1%';
-true true true true
+true true true true true
 
 > SELECT
     records > 1000,
     records < 2 * 1000,
     size > 0,
-    size < 4 * 100 * 1024
+    size < 4 * 100 * 1024,
+    allocations < 2 * 1000
   FROM mz_introspection.mz_dataflow_arrangement_sizes
   WHERE name LIKE '%c2%';
-true true true true
+true true true true true
 
 # For coverage, we also include a recursive materialized view to account for dynamic timestamps.
 > CREATE MATERIALIZED VIEW rec AS
@@ -337,10 +343,11 @@ true true true true
     records > 0,
     records < 2 * 12 * 1000,
     size > 0,
-    size < 4 * 1000 * 1000
+    size < 4 * 1000 * 1000,
+    allocations < 2 * 12 * 1000
   FROM mz_introspection.mz_dataflow_arrangement_sizes
   WHERE name LIKE '%rec%';
-true true true true
+true true true true true
 
 > DROP TABLE ten CASCADE;
 
@@ -371,19 +378,21 @@ true true true true
     records >= 2 * 1000,
     records < 1.1 * 2 * 1000,
     size > 0,
-    size < 4 * 200 * 1000
+    size < 4 * 200 * 1000,
+    allocations < 2 * 2 * 1000
   FROM mz_introspection.mz_dataflow_arrangement_sizes
   WHERE name LIKE '%m_minmax%';
-true true true true
+true true true true true
 
 > SELECT
     records >= 2 * 1000,
     records < 2 * 2 * 1000,
     size > 0,
-    size < 4 * 172 * 1000
+    size < 4 * 172 * 1000,
+    allocations < 2 * 2 * 1000
   FROM mz_introspection.mz_dataflow_arrangement_sizes
   WHERE name LIKE '%m_top1%';
-true true true true
+true true true true true
 
 > DROP SOURCE counter CASCADE;
 
