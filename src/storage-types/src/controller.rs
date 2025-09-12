@@ -39,8 +39,6 @@ include!(concat!(env!("OUT_DIR"), "/mz_storage_types.controller.rs"));
 pub struct CollectionMetadata {
     /// The persist location where the shards are located.
     pub persist_location: PersistLocation,
-    /// The persist shard id of the remap collection used to reclock this collection.
-    pub remap_shard: Option<ShardId>,
     /// The persist shard containing the contents of this storage collection.
     pub data_shard: ShardId,
     /// The `RelationDesc` that describes the contents of the `data_shard`.
@@ -61,14 +59,12 @@ impl crate::AlterCompatible for CollectionMetadata {
             // we allow this because if this changes unexpectedly, we will
             // notice in other ways.
             persist_location: _,
-            remap_shard,
             data_shard,
             relation_desc,
             txns_shard,
         } = self;
 
         let compatibility_checks = [
-            (remap_shard == &other.remap_shard, "remap_shard"),
             (data_shard == &other.data_shard, "data_shard"),
             (relation_desc == &other.relation_desc, "relation_desc"),
             (txns_shard == &other.txns_shard, "txns_shard"),
@@ -96,7 +92,6 @@ impl RustType<ProtoCollectionMetadata> for CollectionMetadata {
             blob_uri: self.persist_location.blob_uri.to_string_unredacted(),
             consensus_uri: self.persist_location.consensus_uri.to_string_unredacted(),
             data_shard: self.data_shard.to_string(),
-            remap_shard: self.remap_shard.map(|s| s.to_string()),
             relation_desc: Some(self.relation_desc.into_proto()),
             txns_shard: self.txns_shard.map(|x| x.to_string()),
         }
@@ -108,10 +103,6 @@ impl RustType<ProtoCollectionMetadata> for CollectionMetadata {
                 blob_uri: SensitiveUrl::from_str(&value.blob_uri)?,
                 consensus_uri: SensitiveUrl::from_str(&value.consensus_uri)?,
             },
-            remap_shard: value
-                .remap_shard
-                .map(|s| s.parse().map_err(TryFromProtoError::InvalidShardId))
-                .transpose()?,
             data_shard: value
                 .data_shard
                 .parse()
