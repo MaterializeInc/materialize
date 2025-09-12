@@ -1,7 +1,7 @@
 [package]
 name = "mz-materialized"
 description = "Materialize's unified binary."
-version = "0.147.10"
+version = "0.147.11"
 edition.workspace = true
 rust-version.workspace = true
 publish = false

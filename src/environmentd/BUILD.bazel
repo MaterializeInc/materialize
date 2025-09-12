@@ -44,7 +44,7 @@ rust_library(
     proc_macro_deps = [] + all_crate_deps(proc_macro = True),
     rustc_env = {},
     rustc_flags = [],
-    version = "0.147.10",
+    version = "0.147.11",
     deps = [
         ":mz_environmentd_build_script",
         "//src/adapter:mz_adapter",
@@ -120,7 +120,7 @@ rust_test(
     ),
     rustc_env = {},
     rustc_flags = [],
-    version = "0.147.10",
+    version = "0.147.11",
     deps = [
         "//src/adapter:mz_adapter",
         "//src/adapter-types:mz_adapter_types",
@@ -254,7 +254,7 @@ rust_test(
     ),
     rustc_env = {},
     rustc_flags = [],
-    version = "0.147.10",
+    version = "0.147.11",
     deps = [
         "//src/adapter:mz_adapter",
         "//src/adapter-types:mz_adapter_types",
@@ -325,7 +325,7 @@ rust_test(
     ),
     rustc_env = {},
     rustc_flags = [],
-    version = "0.147.10",
+    version = "0.147.11",
     deps = [
         "//src/adapter:mz_adapter",
         "//src/adapter-types:mz_adapter_types",
@@ -396,7 +396,7 @@ rust_test(
     ),
     rustc_env = {},
     rustc_flags = [],
-    version = "0.147.10",
+    version = "0.147.11",
     deps = [
         "//src/adapter:mz_adapter",
         "//src/adapter-types:mz_adapter_types",
@@ -467,7 +467,7 @@ rust_test(
     ),
     rustc_env = {},
     rustc_flags = [],
-    version = "0.147.10",
+    version = "0.147.11",
     deps = [
         "//src/adapter:mz_adapter",
         "//src/adapter-types:mz_adapter_types",
@@ -538,7 +538,7 @@ rust_test(
     ),
     rustc_env = {},
     rustc_flags = [],
-    version = "0.147.10",
+    version = "0.147.11",
     deps = [
         "//src/adapter:mz_adapter",
         "//src/adapter-types:mz_adapter_types",
@@ -609,7 +609,7 @@ rust_test(
     ),
     rustc_env = {},
     rustc_flags = [],
-    version = "0.147.10",
+    version = "0.147.11",
     deps = [
         "//src/adapter:mz_adapter",
         "//src/adapter-types:mz_adapter_types",
@@ -680,7 +680,7 @@ rust_test(
     ),
     rustc_env = {},
     rustc_flags = [],
-    version = "0.147.10",
+    version = "0.147.11",
     deps = [
         "//src/adapter:mz_adapter",
         "//src/adapter-types:mz_adapter_types",
@@ -751,7 +751,7 @@ rust_test(
     ),
     rustc_env = {},
     rustc_flags = [],
-    version = "0.147.10",
+    version = "0.147.11",
     deps = [
         "//src/adapter:mz_adapter",
         "//src/adapter-types:mz_adapter_types",
@@ -819,7 +819,7 @@ rust_binary(
         "@//misc/bazel/platforms:xlang_lto_enabled": ["-Clinker-plugin-lto"],
         "//conditions:default": [],
     }),
-    version = "0.147.10",
+    version = "0.147.11",
     deps = [
         ":mz_environmentd",
         "//src/adapter:mz_adapter",
