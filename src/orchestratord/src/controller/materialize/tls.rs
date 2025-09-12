@@ -52,10 +52,10 @@ pub fn create_certificate(
             duration: mz_cert_spec.duration.or(default_spec.duration),
             issuer_ref,
             private_key: Some(CertificatePrivateKey {
-                algorithm: Some(CertificatePrivateKeyAlgorithm::Rsa),
+                algorithm: Some(CertificatePrivateKeyAlgorithm::Ed25519),
                 encoding: Some(CertificatePrivateKeyEncoding::Pkcs8),
                 rotation_policy: Some(CertificatePrivateKeyRotationPolicy::Always),
-                size: Some(4096),
+                size: None, // ed25519 has fixed size
             }),
             renew_before: mz_cert_spec.renew_before.or(default_spec.renew_before),
             secret_name,
