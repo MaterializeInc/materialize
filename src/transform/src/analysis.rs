@@ -21,7 +21,7 @@ pub use common::{Derived, DerivedBuilder, DerivedView};
 pub use explain::annotate_plan;
 pub use non_negative::NonNegative;
 pub use subtree::SubtreeSize;
-pub use types::RelationType;
+pub use types::SqlRelationType;
 pub use unique_keys::UniqueKeys;
 
 /// An analysis that can be applied bottom-up to a `MirRelationExpr`.
@@ -554,7 +554,7 @@ mod types {
     use super::{Analysis, Derived, Lattice};
     use itertools::Itertools;
     use mz_expr::MirRelationExpr;
-    use mz_repr::ColumnType;
+    use mz_repr::SqlColumnType;
 
     /// Analysis that determines the type of relation expressions.
     ///
@@ -567,10 +567,10 @@ mod types {
     /// The analysis will panic if an expression is not well typed (i.e. if `try_col_with_input_cols`
     /// returns an error).
     #[derive(Debug)]
-    pub struct RelationType;
+    pub struct SqlRelationType;
 
-    impl Analysis for RelationType {
-        type Value = Option<Vec<ColumnType>>;
+    impl Analysis for SqlRelationType {
+        type Value = Option<Vec<SqlColumnType>>;
 
         fn derive(
             &self,
@@ -623,7 +623,7 @@ mod types {
                     // Every expression with inputs should have non-`None` inputs at this point.
                     let input_cols = offsets.into_iter().rev().map(|o| {
                         o.as_ref()
-                            .expect("RelationType analysis discovered type-less expression")
+                            .expect("SqlRelationType analysis discovered type-less expression")
                     });
                     Some(expr.try_col_with_input_cols(input_cols).unwrap())
                 }
@@ -637,11 +637,15 @@ mod types {
 
     struct RTLattice;
 
-    impl Lattice<Option<Vec<ColumnType>>> for RTLattice {
-        fn top(&self) -> Option<Vec<ColumnType>> {
+    impl Lattice<Option<Vec<SqlColumnType>>> for RTLattice {
+        fn top(&self) -> Option<Vec<SqlColumnType>> {
             None
         }
-        fn meet_assign(&self, a: &mut Option<Vec<ColumnType>>, b: Option<Vec<ColumnType>>) -> bool {
+        fn meet_assign(
+            &self,
+            a: &mut Option<Vec<SqlColumnType>>,
+            b: Option<Vec<SqlColumnType>>,
+        ) -> bool {
             match (a, b) {
                 (_, None) => false,
                 (Some(a), Some(b)) => {
@@ -1255,7 +1259,7 @@ mod explain {
                 builder.require(super::NonNegative);
             }
             if context.config.types {
-                builder.require(super::RelationType);
+                builder.require(super::SqlRelationType);
             }
             if context.config.arity {
                 builder.require(super::Arity);
@@ -1330,7 +1334,7 @@ mod explain {
             if config.types {
                 for (expr, types) in std::iter::zip(
                     subtree_refs.iter(),
-                    derived.results::<super::RelationType>().into_iter(),
+                    derived.results::<super::SqlRelationType>().into_iter(),
                 ) {
                     let analyses = annotations.entry(expr).or_default();
                     analyses.types = Some(types.clone());

@@ -11,7 +11,7 @@ use std::collections::BTreeSet;
 
 use anyhow::bail;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
-use mz_repr::ColumnType;
+use mz_repr::SqlColumnType;
 use proptest::prelude::any;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -208,7 +208,7 @@ pub struct MySqlColumnDesc {
     pub name: String,
     /// The intended data type of this column within Materialize
     /// If this is None, the column is intended to be skipped within Materialize
-    pub column_type: Option<ColumnType>,
+    pub column_type: Option<SqlColumnType>,
     /// Optional metadata about the column that may be necessary for decoding
     pub meta: Option<MySqlColumnMeta>,
 }

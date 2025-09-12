@@ -25,7 +25,7 @@ use mz_repr::adt::pg_legacy_name::NAME_MAX_BYTES;
 use mz_repr::adt::range::{Range, RangeInner};
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::strconv::{self, Nestable};
-use mz_repr::{Datum, RelationType, RowArena, RowPacker, RowRef, ScalarType};
+use mz_repr::{Datum, RowArena, RowPacker, RowRef, SqlRelationType, SqlScalarType};
 use postgres_types::{FromSql, IsNull, ToSql, Type as PgType};
 use uuid::Uuid;
 
@@ -124,47 +124,47 @@ impl Value {
     ///
     /// The conversion happens in the obvious manner, except that `Datum::Null`
     /// is converted to `None` to align with how PostgreSQL handles NULL.
-    pub fn from_datum(datum: Datum, typ: &ScalarType) -> Option<Value> {
+    pub fn from_datum(datum: Datum, typ: &SqlScalarType) -> Option<Value> {
         match (datum, typ) {
             (Datum::Null, _) => None,
-            (Datum::True, ScalarType::Bool) => Some(Value::Bool(true)),
-            (Datum::False, ScalarType::Bool) => Some(Value::Bool(false)),
-            (Datum::Int16(i), ScalarType::Int16) => Some(Value::Int2(i)),
-            (Datum::Int32(i), ScalarType::Int32) => Some(Value::Int4(i)),
-            (Datum::Int64(i), ScalarType::Int64) => Some(Value::Int8(i)),
-            (Datum::UInt8(c), ScalarType::PgLegacyChar) => Some(Value::Char(c)),
-            (Datum::UInt16(u), ScalarType::UInt16) => Some(Value::UInt2(UInt2(u))),
-            (Datum::UInt32(oid), ScalarType::Oid) => Some(Value::Oid(oid)),
-            (Datum::UInt32(oid), ScalarType::RegClass) => Some(Value::Oid(oid)),
-            (Datum::UInt32(oid), ScalarType::RegProc) => Some(Value::Oid(oid)),
-            (Datum::UInt32(oid), ScalarType::RegType) => Some(Value::Oid(oid)),
-            (Datum::UInt32(u), ScalarType::UInt32) => Some(Value::UInt4(UInt4(u))),
-            (Datum::UInt64(u), ScalarType::UInt64) => Some(Value::UInt8(UInt8(u))),
-            (Datum::Float32(f), ScalarType::Float32) => Some(Value::Float4(*f)),
-            (Datum::Float64(f), ScalarType::Float64) => Some(Value::Float8(*f)),
-            (Datum::Numeric(d), ScalarType::Numeric { .. }) => Some(Value::Numeric(Numeric(d))),
-            (Datum::MzTimestamp(t), ScalarType::MzTimestamp) => Some(Value::MzTimestamp(t)),
-            (Datum::MzAclItem(mai), ScalarType::MzAclItem) => Some(Value::MzAclItem(mai)),
-            (Datum::AclItem(ai), ScalarType::AclItem) => Some(Value::AclItem(ai)),
-            (Datum::Date(d), ScalarType::Date) => Some(Value::Date(d)),
-            (Datum::Time(t), ScalarType::Time) => Some(Value::Time(t)),
-            (Datum::Timestamp(ts), ScalarType::Timestamp { .. }) => Some(Value::Timestamp(ts)),
-            (Datum::TimestampTz(ts), ScalarType::TimestampTz { .. }) => {
+            (Datum::True, SqlScalarType::Bool) => Some(Value::Bool(true)),
+            (Datum::False, SqlScalarType::Bool) => Some(Value::Bool(false)),
+            (Datum::Int16(i), SqlScalarType::Int16) => Some(Value::Int2(i)),
+            (Datum::Int32(i), SqlScalarType::Int32) => Some(Value::Int4(i)),
+            (Datum::Int64(i), SqlScalarType::Int64) => Some(Value::Int8(i)),
+            (Datum::UInt8(c), SqlScalarType::PgLegacyChar) => Some(Value::Char(c)),
+            (Datum::UInt16(u), SqlScalarType::UInt16) => Some(Value::UInt2(UInt2(u))),
+            (Datum::UInt32(oid), SqlScalarType::Oid) => Some(Value::Oid(oid)),
+            (Datum::UInt32(oid), SqlScalarType::RegClass) => Some(Value::Oid(oid)),
+            (Datum::UInt32(oid), SqlScalarType::RegProc) => Some(Value::Oid(oid)),
+            (Datum::UInt32(oid), SqlScalarType::RegType) => Some(Value::Oid(oid)),
+            (Datum::UInt32(u), SqlScalarType::UInt32) => Some(Value::UInt4(UInt4(u))),
+            (Datum::UInt64(u), SqlScalarType::UInt64) => Some(Value::UInt8(UInt8(u))),
+            (Datum::Float32(f), SqlScalarType::Float32) => Some(Value::Float4(*f)),
+            (Datum::Float64(f), SqlScalarType::Float64) => Some(Value::Float8(*f)),
+            (Datum::Numeric(d), SqlScalarType::Numeric { .. }) => Some(Value::Numeric(Numeric(d))),
+            (Datum::MzTimestamp(t), SqlScalarType::MzTimestamp) => Some(Value::MzTimestamp(t)),
+            (Datum::MzAclItem(mai), SqlScalarType::MzAclItem) => Some(Value::MzAclItem(mai)),
+            (Datum::AclItem(ai), SqlScalarType::AclItem) => Some(Value::AclItem(ai)),
+            (Datum::Date(d), SqlScalarType::Date) => Some(Value::Date(d)),
+            (Datum::Time(t), SqlScalarType::Time) => Some(Value::Time(t)),
+            (Datum::Timestamp(ts), SqlScalarType::Timestamp { .. }) => Some(Value::Timestamp(ts)),
+            (Datum::TimestampTz(ts), SqlScalarType::TimestampTz { .. }) => {
                 Some(Value::TimestampTz(ts))
             }
-            (Datum::Interval(iv), ScalarType::Interval) => Some(Value::Interval(Interval(iv))),
-            (Datum::Bytes(b), ScalarType::Bytes) => Some(Value::Bytea(b.to_vec())),
-            (Datum::String(s), ScalarType::String) => Some(Value::Text(s.to_owned())),
-            (Datum::String(s), ScalarType::VarChar { .. }) => Some(Value::VarChar(s.to_owned())),
-            (Datum::String(s), ScalarType::Char { length }) => {
+            (Datum::Interval(iv), SqlScalarType::Interval) => Some(Value::Interval(Interval(iv))),
+            (Datum::Bytes(b), SqlScalarType::Bytes) => Some(Value::Bytea(b.to_vec())),
+            (Datum::String(s), SqlScalarType::String) => Some(Value::Text(s.to_owned())),
+            (Datum::String(s), SqlScalarType::VarChar { .. }) => Some(Value::VarChar(s.to_owned())),
+            (Datum::String(s), SqlScalarType::Char { length }) => {
                 Some(Value::BpChar(char::format_str_pad(s, *length)))
             }
-            (Datum::String(s), ScalarType::PgLegacyName) => Some(Value::Name(s.into())),
-            (_, ScalarType::Jsonb) => {
+            (Datum::String(s), SqlScalarType::PgLegacyName) => Some(Value::Name(s.into())),
+            (_, SqlScalarType::Jsonb) => {
                 Some(Value::Jsonb(Jsonb(JsonbRef::from_datum(datum).to_owned())))
             }
-            (Datum::Uuid(u), ScalarType::Uuid) => Some(Value::Uuid(u)),
-            (Datum::Array(array), ScalarType::Array(elem_type)) => {
+            (Datum::Uuid(u), SqlScalarType::Uuid) => Some(Value::Uuid(u)),
+            (Datum::Array(array), SqlScalarType::Array(elem_type)) => {
                 let dims = array.dims().into_iter().collect();
                 let elements = array
                     .elements()
@@ -173,24 +173,24 @@ impl Value {
                     .collect();
                 Some(Value::Array { dims, elements })
             }
-            (Datum::Array(array), ScalarType::Int2Vector) => {
+            (Datum::Array(array), SqlScalarType::Int2Vector) => {
                 let dims = array.dims().into_iter();
                 assert!(dims.count() == 1, "int2vector must be 1 dimensional");
                 let elements = array
                     .elements()
                     .iter()
-                    .map(|elem| Value::from_datum(elem, &ScalarType::Int16))
+                    .map(|elem| Value::from_datum(elem, &SqlScalarType::Int16))
                     .collect();
                 Some(Value::Int2Vector { elements })
             }
-            (Datum::List(list), ScalarType::List { element_type, .. }) => {
+            (Datum::List(list), SqlScalarType::List { element_type, .. }) => {
                 let elements = list
                     .iter()
                     .map(|elem| Value::from_datum(elem, element_type))
                     .collect();
                 Some(Value::List(elements))
             }
-            (Datum::List(record), ScalarType::Record { fields, .. }) => {
+            (Datum::List(record), SqlScalarType::Record { fields, .. }) => {
                 let fields = record
                     .iter()
                     .zip_eq(fields)
@@ -198,14 +198,14 @@ impl Value {
                     .collect();
                 Some(Value::Record(fields))
             }
-            (Datum::Map(dict), ScalarType::Map { value_type, .. }) => {
+            (Datum::Map(dict), SqlScalarType::Map { value_type, .. }) => {
                 let entries = dict
                     .iter()
                     .map(|(k, v)| (k.to_owned(), Value::from_datum(v, value_type)))
                     .collect();
                 Some(Value::Map(entries))
             }
-            (Datum::Range(range), ScalarType::Range { element_type }) => {
+            (Datum::Range(range), SqlScalarType::Range { element_type }) => {
                 let value_range = range.into_bounds(|b| {
                     Box::new(
                         Value::from_datum(b.datum(), element_type)
@@ -547,48 +547,48 @@ impl Value {
     }
 
     /// Static helper method to pre-validate that a given Datum corresponding to
-    /// the provided `ScalarType` can be converted into a `Value` and then encoded
+    /// the provided `SqlScalarType` can be converted into a `Value` and then encoded
     /// as binary using `encode_binary` without an error.
-    pub fn can_encode_binary(typ: &ScalarType) -> bool {
+    pub fn can_encode_binary(typ: &SqlScalarType) -> bool {
         match typ {
-            ScalarType::Bool => true,
-            ScalarType::Int16 => true,
-            ScalarType::Int32 => true,
-            ScalarType::Int64 => true,
-            ScalarType::PgLegacyChar => true,
-            ScalarType::UInt16 => true,
-            ScalarType::Oid => true,
-            ScalarType::RegClass => true,
-            ScalarType::RegProc => true,
-            ScalarType::RegType => true,
-            ScalarType::UInt32 => true,
-            ScalarType::UInt64 => true,
-            ScalarType::Float32 => true,
-            ScalarType::Float64 => true,
-            ScalarType::Numeric { .. } => true,
-            ScalarType::MzTimestamp => true,
-            ScalarType::MzAclItem => true,
-            ScalarType::AclItem => false, // "aclitem has no binary encoding"
-            ScalarType::Date => true,
-            ScalarType::Time => true,
-            ScalarType::Timestamp { .. } => true,
-            ScalarType::TimestampTz { .. } => true,
-            ScalarType::Interval => true,
-            ScalarType::Bytes => true,
-            ScalarType::String => true,
-            ScalarType::VarChar { .. } => true,
-            ScalarType::Char { .. } => true,
-            ScalarType::PgLegacyName => true,
-            ScalarType::Jsonb => true,
-            ScalarType::Uuid => true,
-            ScalarType::Array(elem_type) => Self::can_encode_binary(elem_type),
-            ScalarType::Int2Vector => false, // "binary encoding of int2vector is not implemented"
-            ScalarType::List { .. } => false, // "binary encoding of list types is not implemented"
-            ScalarType::Map { .. } => false, // "binary encoding of map types is not implemented"
-            ScalarType::Record { fields, .. } => fields
+            SqlScalarType::Bool => true,
+            SqlScalarType::Int16 => true,
+            SqlScalarType::Int32 => true,
+            SqlScalarType::Int64 => true,
+            SqlScalarType::PgLegacyChar => true,
+            SqlScalarType::UInt16 => true,
+            SqlScalarType::Oid => true,
+            SqlScalarType::RegClass => true,
+            SqlScalarType::RegProc => true,
+            SqlScalarType::RegType => true,
+            SqlScalarType::UInt32 => true,
+            SqlScalarType::UInt64 => true,
+            SqlScalarType::Float32 => true,
+            SqlScalarType::Float64 => true,
+            SqlScalarType::Numeric { .. } => true,
+            SqlScalarType::MzTimestamp => true,
+            SqlScalarType::MzAclItem => true,
+            SqlScalarType::AclItem => false, // "aclitem has no binary encoding"
+            SqlScalarType::Date => true,
+            SqlScalarType::Time => true,
+            SqlScalarType::Timestamp { .. } => true,
+            SqlScalarType::TimestampTz { .. } => true,
+            SqlScalarType::Interval => true,
+            SqlScalarType::Bytes => true,
+            SqlScalarType::String => true,
+            SqlScalarType::VarChar { .. } => true,
+            SqlScalarType::Char { .. } => true,
+            SqlScalarType::PgLegacyName => true,
+            SqlScalarType::Jsonb => true,
+            SqlScalarType::Uuid => true,
+            SqlScalarType::Array(elem_type) => Self::can_encode_binary(elem_type),
+            SqlScalarType::Int2Vector => false, // "binary encoding of int2vector is not implemented"
+            SqlScalarType::List { .. } => false, // "binary encoding of list types is not implemented"
+            SqlScalarType::Map { .. } => false, // "binary encoding of map types is not implemented"
+            SqlScalarType::Record { fields, .. } => fields
                 .iter()
                 .all(|(_, ty)| Self::can_encode_binary(&ty.scalar_type)),
-            ScalarType::Range { element_type } => Self::can_encode_binary(element_type),
+            SqlScalarType::Range { element_type } => Self::can_encode_binary(element_type),
         }
     }
 
@@ -891,7 +891,7 @@ fn pg_len(what: &str, len: usize) -> Result<i32, io::Error> {
 ///
 /// Calling this function is equivalent to mapping [`Value::from_datum`] over
 /// every datum in `row`.
-pub fn values_from_row(row: &RowRef, typ: &RelationType) -> Vec<Option<Value>> {
+pub fn values_from_row(row: &RowRef, typ: &SqlRelationType) -> Vec<Option<Value>> {
     row.iter()
         .zip_eq(typ.column_types.iter())
         .map(|(col, typ)| Value::from_datum(col, &typ.scalar_type))

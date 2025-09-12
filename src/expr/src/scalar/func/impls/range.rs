@@ -11,7 +11,7 @@ use std::fmt;
 
 use mz_lowertest::MzReflect;
 use mz_repr::adt::range::Range;
-use mz_repr::{ColumnType, Datum, RowArena, ScalarType};
+use mz_repr::{Datum, RowArena, SqlColumnType, SqlScalarType};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -22,7 +22,7 @@ use crate::{EvalError, MirScalarExpr};
     Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
 )]
 pub struct CastRangeToString {
-    pub ty: ScalarType,
+    pub ty: SqlScalarType,
 }
 
 impl LazyUnaryFunc for CastRangeToString {
@@ -41,8 +41,8 @@ impl LazyUnaryFunc for CastRangeToString {
         Ok(Datum::String(temp_storage.push_string(buf)))
     }
 
-    fn output_type(&self, input_type: ColumnType) -> ColumnType {
-        ScalarType::String.nullable(input_type.nullable)
+    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
+        SqlScalarType::String.nullable(input_type.nullable)
     }
 
     fn propagates_nulls(&self) -> bool {
@@ -95,7 +95,7 @@ impl LazyUnaryFunc for RangeLower {
         ))
     }
 
-    fn output_type(&self, input_type: ColumnType) -> ColumnType {
+    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
         input_type
             .scalar_type
             .unwrap_range_element_type()
@@ -152,7 +152,7 @@ impl LazyUnaryFunc for RangeUpper {
         ))
     }
 
-    fn output_type(&self, input_type: ColumnType) -> ColumnType {
+    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
         input_type
             .scalar_type
             .unwrap_range_element_type()

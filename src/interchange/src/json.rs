@@ -15,7 +15,7 @@ use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::char;
 use mz_repr::adt::jsonb::JsonbRef;
 use mz_repr::adt::numeric::{NUMERIC_AGG_MAX_PRECISION, NUMERIC_DATUM_MAX_PRECISION};
-use mz_repr::{CatalogItemId, ColumnName, ColumnType, Datum, RelationDesc, ScalarType};
+use mz_repr::{CatalogItemId, ColumnName, Datum, RelationDesc, SqlColumnType, SqlScalarType};
 use serde_json::{Map, json};
 
 use crate::avro::DocTarget;
@@ -27,7 +27,7 @@ const MICROS_PER_MILLIS: u32 = 1_000;
 
 // Manages encoding of JSON-encoded bytes
 pub struct JsonEncoder {
-    columns: Vec<(ColumnName, ColumnType)>,
+    columns: Vec<(ColumnName, SqlColumnType)>,
 }
 
 impl JsonEncoder {
@@ -70,7 +70,7 @@ impl fmt::Debug for JsonEncoder {
 /// Encodes a sequence of `Datum` as JSON, using supplied column names and types.
 pub fn encode_datums_as_json<'a, I>(
     datums: I,
-    names_types: &[(ColumnName, ColumnType)],
+    names_types: &[(ColumnName, SqlColumnType)],
 ) -> serde_json::Value
 where
     I: IntoIterator<Item = Datum<'a>>,
@@ -110,64 +110,64 @@ impl ToJson for TypedDatum<'_> {
             return serde_json::Value::Null;
         }
         let value = match &typ.scalar_type {
-            ScalarType::AclItem => json!(datum.unwrap_acl_item().to_string()),
-            ScalarType::Bool => json!(datum.unwrap_bool()),
-            ScalarType::PgLegacyChar => json!(datum.unwrap_uint8()),
-            ScalarType::Int16 => json!(datum.unwrap_int16()),
-            ScalarType::Int32 => json!(datum.unwrap_int32()),
-            ScalarType::Int64 => json!(datum.unwrap_int64()),
-            ScalarType::UInt16 => json!(datum.unwrap_uint16()),
-            ScalarType::UInt32
-            | ScalarType::Oid
-            | ScalarType::RegClass
-            | ScalarType::RegProc
-            | ScalarType::RegType => {
+            SqlScalarType::AclItem => json!(datum.unwrap_acl_item().to_string()),
+            SqlScalarType::Bool => json!(datum.unwrap_bool()),
+            SqlScalarType::PgLegacyChar => json!(datum.unwrap_uint8()),
+            SqlScalarType::Int16 => json!(datum.unwrap_int16()),
+            SqlScalarType::Int32 => json!(datum.unwrap_int32()),
+            SqlScalarType::Int64 => json!(datum.unwrap_int64()),
+            SqlScalarType::UInt16 => json!(datum.unwrap_uint16()),
+            SqlScalarType::UInt32
+            | SqlScalarType::Oid
+            | SqlScalarType::RegClass
+            | SqlScalarType::RegProc
+            | SqlScalarType::RegType => {
                 json!(datum.unwrap_uint32())
             }
-            ScalarType::UInt64 => json!(datum.unwrap_uint64()),
-            ScalarType::Float32 => json!(datum.unwrap_float32()),
-            ScalarType::Float64 => json!(datum.unwrap_float64()),
-            ScalarType::Numeric { .. } => {
+            SqlScalarType::UInt64 => json!(datum.unwrap_uint64()),
+            SqlScalarType::Float32 => json!(datum.unwrap_float32()),
+            SqlScalarType::Float64 => json!(datum.unwrap_float64()),
+            SqlScalarType::Numeric { .. } => {
                 json!(datum.unwrap_numeric().0.to_standard_notation_string())
             }
             // https://stackoverflow.com/questions/10286204/what-is-the-right-json-date-format
-            ScalarType::Date => serde_json::Value::String(format!("{}", datum.unwrap_date())),
-            ScalarType::Time => serde_json::Value::String(format!("{:?}", datum.unwrap_time())),
-            ScalarType::Timestamp { .. } => {
+            SqlScalarType::Date => serde_json::Value::String(format!("{}", datum.unwrap_date())),
+            SqlScalarType::Time => serde_json::Value::String(format!("{:?}", datum.unwrap_time())),
+            SqlScalarType::Timestamp { .. } => {
                 let dt = datum.unwrap_timestamp().to_naive().and_utc();
                 let millis = dt.timestamp_millis();
                 let micros = dt.timestamp_subsec_micros()
                     - (dt.timestamp_subsec_millis() * MICROS_PER_MILLIS);
                 serde_json::Value::String(format!("{millis}.{micros:0>3}"))
             }
-            ScalarType::TimestampTz { .. } => {
+            SqlScalarType::TimestampTz { .. } => {
                 let dt = datum.unwrap_timestamptz().to_utc();
                 let millis = dt.timestamp_millis();
                 let micros = dt.timestamp_subsec_micros()
                     - (dt.timestamp_subsec_millis() * MICROS_PER_MILLIS);
                 serde_json::Value::String(format!("{millis}.{micros:0>3}"))
             }
-            ScalarType::Interval => {
+            SqlScalarType::Interval => {
                 serde_json::Value::String(format!("{}", datum.unwrap_interval()))
             }
-            ScalarType::Bytes => json!(datum.unwrap_bytes()),
-            ScalarType::String | ScalarType::VarChar { .. } | ScalarType::PgLegacyName => {
+            SqlScalarType::Bytes => json!(datum.unwrap_bytes()),
+            SqlScalarType::String | SqlScalarType::VarChar { .. } | SqlScalarType::PgLegacyName => {
                 json!(datum.unwrap_str())
             }
-            ScalarType::Char { length } => {
+            SqlScalarType::Char { length } => {
                 let s = char::format_str_pad(datum.unwrap_str(), *length);
                 serde_json::Value::String(s)
             }
-            ScalarType::Jsonb => JsonbRef::from_datum(datum).to_serde_json(),
-            ScalarType::Uuid => json!(datum.unwrap_uuid()),
-            ty @ (ScalarType::Array(..) | ScalarType::Int2Vector) => {
+            SqlScalarType::Jsonb => JsonbRef::from_datum(datum).to_serde_json(),
+            SqlScalarType::Uuid => json!(datum.unwrap_uuid()),
+            ty @ (SqlScalarType::Array(..) | SqlScalarType::Int2Vector) => {
                 let array = datum.unwrap_array();
                 let dims = array.dims().into_iter().collect::<Vec<_>>();
                 let mut datums = array.elements().iter();
                 encode_array(&mut datums, &dims, &mut |datum| {
                     TypedDatum::new(
                         datum,
-                        &ColumnType {
+                        &SqlColumnType {
                             nullable: true,
                             scalar_type: ty.unwrap_collection_element_type().clone(),
                         },
@@ -175,14 +175,14 @@ impl ToJson for TypedDatum<'_> {
                     .json(number_policy)
                 })
             }
-            ScalarType::List { element_type, .. } => {
+            SqlScalarType::List { element_type, .. } => {
                 let values = datum
                     .unwrap_list()
                     .into_iter()
                     .map(|datum| {
                         TypedDatum::new(
                             datum,
-                            &ColumnType {
+                            &SqlColumnType {
                                 nullable: true,
                                 scalar_type: (**element_type).clone(),
                             },
@@ -192,7 +192,7 @@ impl ToJson for TypedDatum<'_> {
                     .collect();
                 serde_json::Value::Array(values)
             }
-            ScalarType::Record { fields, .. } => {
+            SqlScalarType::Record { fields, .. } => {
                 let list = datum.unwrap_list();
                 let fields: Map<String, serde_json::Value> = fields
                     .iter()
@@ -206,14 +206,14 @@ impl ToJson for TypedDatum<'_> {
                     .collect();
                 fields.into()
             }
-            ScalarType::Map { value_type, .. } => {
+            SqlScalarType::Map { value_type, .. } => {
                 let map = datum.unwrap_map();
                 let elements = map
                     .into_iter()
                     .map(|(key, datum)| {
                         let value = TypedDatum::new(
                             datum,
-                            &ColumnType {
+                            &SqlColumnType {
                                 nullable: true,
                                 scalar_type: (**value_type).clone(),
                             },
@@ -224,14 +224,14 @@ impl ToJson for TypedDatum<'_> {
                     .collect();
                 serde_json::Value::Object(elements)
             }
-            ScalarType::MzTimestamp => json!(datum.unwrap_mz_timestamp().to_string()),
-            ScalarType::Range { .. } => {
+            SqlScalarType::MzTimestamp => json!(datum.unwrap_mz_timestamp().to_string()),
+            SqlScalarType::Range { .. } => {
                 // Ranges' interiors are not expected to be types whose
                 // string representations are misleading/wrong, e.g.
                 // records.
                 json!(datum.unwrap_range().to_string())
             }
-            ScalarType::MzAclItem => json!(datum.unwrap_mz_acl_item().to_string()),
+            SqlScalarType::MzAclItem => json!(datum.unwrap_mz_acl_item().to_string()),
         };
         // We don't need to recurse into map or object here because those already recursively call
         // .json() with the number policy to generate the member Values.
@@ -262,66 +262,69 @@ fn encode_array<'a>(
 fn build_row_schema_field_type(
     type_namer: &mut Namer,
     custom_names: &BTreeMap<CatalogItemId, String>,
-    typ: &ColumnType,
+    typ: &SqlColumnType,
     item_id: Option<CatalogItemId>,
     options: &SchemaOptions,
 ) -> serde_json::Value {
     let mut field_type = match &typ.scalar_type {
-        ScalarType::AclItem => json!("string"),
-        ScalarType::Bool => json!("boolean"),
-        ScalarType::PgLegacyChar => json!({
+        SqlScalarType::AclItem => json!("string"),
+        SqlScalarType::Bool => json!("boolean"),
+        SqlScalarType::PgLegacyChar => json!({
             "type": "fixed",
             "size": 1,
         }),
-        ScalarType::Int16 | ScalarType::Int32 => {
+        SqlScalarType::Int16 | SqlScalarType::Int32 => {
             json!("int")
         }
-        ScalarType::Int64 => json!("long"),
-        ScalarType::UInt16 => type_namer.unsigned_type(2),
-        ScalarType::UInt32
-        | ScalarType::Oid
-        | ScalarType::RegClass
-        | ScalarType::RegProc
-        | ScalarType::RegType => type_namer.unsigned_type(4),
-        ScalarType::UInt64 => type_namer.unsigned_type(8),
-        ScalarType::Float32 => json!("float"),
-        ScalarType::Float64 => json!("double"),
-        ScalarType::Date => json!({
+        SqlScalarType::Int64 => json!("long"),
+        SqlScalarType::UInt16 => type_namer.unsigned_type(2),
+        SqlScalarType::UInt32
+        | SqlScalarType::Oid
+        | SqlScalarType::RegClass
+        | SqlScalarType::RegProc
+        | SqlScalarType::RegType => type_namer.unsigned_type(4),
+        SqlScalarType::UInt64 => type_namer.unsigned_type(8),
+        SqlScalarType::Float32 => json!("float"),
+        SqlScalarType::Float64 => json!("double"),
+        SqlScalarType::Date => json!({
             "type": "int",
             "logicalType": "date",
         }),
-        ScalarType::Time => json!({
+        SqlScalarType::Time => json!({
             "type": "long",
             "logicalType": "time-micros",
         }),
-        ScalarType::Timestamp { precision } | ScalarType::TimestampTz { precision } => json!({
-            "type": "long",
-            "logicalType": match precision {
-                Some(precision) if precision.into_u8() <= 3 => "timestamp-millis",
-                _ => "timestamp-micros",
-            },
-        }),
-        ScalarType::Interval => type_namer.interval_type(),
-        ScalarType::Bytes => json!("bytes"),
-        ScalarType::String
-        | ScalarType::Char { .. }
-        | ScalarType::VarChar { .. }
-        | ScalarType::PgLegacyName => {
+        SqlScalarType::Timestamp { precision } | SqlScalarType::TimestampTz { precision } => {
+            json!({
+                "type": "long",
+                "logicalType": match precision {
+                    Some(precision) if precision.into_u8() <= 3 => "timestamp-millis",
+                    _ => "timestamp-micros",
+                },
+            })
+        }
+        SqlScalarType::Interval => type_namer.interval_type(),
+        SqlScalarType::Bytes => json!("bytes"),
+        SqlScalarType::String
+        | SqlScalarType::Char { .. }
+        | SqlScalarType::VarChar { .. }
+        | SqlScalarType::PgLegacyName => {
             json!("string")
         }
-        ScalarType::Jsonb => json!({
+        SqlScalarType::Jsonb => json!({
             "type": "string",
             "connect.name": "io.debezium.data.Json",
         }),
-        ScalarType::Uuid => json!({
+        SqlScalarType::Uuid => json!({
             "type": "string",
             "logicalType": "uuid",
         }),
-        ty @ (ScalarType::Array(..) | ScalarType::Int2Vector | ScalarType::List { .. }) => {
+        ty
+        @ (SqlScalarType::Array(..) | SqlScalarType::Int2Vector | SqlScalarType::List { .. }) => {
             let inner = build_row_schema_field_type(
                 type_namer,
                 custom_names,
-                &ColumnType {
+                &SqlColumnType {
                     nullable: true,
                     scalar_type: ty.unwrap_collection_element_type().clone(),
                 },
@@ -333,11 +336,11 @@ fn build_row_schema_field_type(
                 "items": inner
             })
         }
-        ScalarType::Map { value_type, .. } => {
+        SqlScalarType::Map { value_type, .. } => {
             let inner = build_row_schema_field_type(
                 type_namer,
                 custom_names,
-                &ColumnType {
+                &SqlColumnType {
                     nullable: true,
                     scalar_type: (**value_type).clone(),
                 },
@@ -349,7 +352,7 @@ fn build_row_schema_field_type(
                 "values": inner
             })
         }
-        ScalarType::Record {
+        SqlScalarType::Record {
             fields, custom_id, ..
         } => {
             let (name, name_seen) = match custom_id.as_ref().and_then(|id| custom_names.get(id)) {
@@ -380,7 +383,7 @@ fn build_row_schema_field_type(
                 }
             }
         }
-        ScalarType::Numeric { max_scale } => {
+        SqlScalarType::Numeric { max_scale } => {
             let (p, s) = match max_scale {
                 Some(max_scale) => (NUMERIC_DATUM_MAX_PRECISION, max_scale.into_u8()),
                 None => (NUMERIC_AGG_MAX_PRECISION, NUMERIC_DATUM_MAX_PRECISION),
@@ -392,10 +395,10 @@ fn build_row_schema_field_type(
                 "scale": s,
             })
         }
-        ScalarType::MzTimestamp => json!("string"),
+        SqlScalarType::MzTimestamp => json!("string"),
         // https://debezium.io/documentation/reference/stable/connectors/postgresql.html
-        ScalarType::Range { .. } => json!("string"),
-        ScalarType::MzAclItem => json!("string"),
+        SqlScalarType::Range { .. } => json!("string"),
+        SqlScalarType::MzAclItem => json!("string"),
     };
     if typ.nullable {
         // Should be revisited if we ever support a different kind of union scheme.
@@ -407,7 +410,7 @@ fn build_row_schema_field_type(
 }
 
 fn build_row_schema_fields(
-    columns: &[(ColumnName, ColumnType)],
+    columns: &[(ColumnName, SqlColumnType)],
     type_namer: &mut Namer,
     custom_names: &BTreeMap<CatalogItemId, String>,
     item_id: Option<CatalogItemId>,
@@ -466,7 +469,7 @@ pub struct SchemaOptions {
 
 /// Builds the JSON for the row schema, which can be independently useful.
 pub fn build_row_schema_json(
-    columns: &[(ColumnName, ColumnType)],
+    columns: &[(ColumnName, SqlColumnType)],
     name: &str,
     custom_names: &BTreeMap<CatalogItemId, String>,
     item_id: Option<CatalogItemId>,

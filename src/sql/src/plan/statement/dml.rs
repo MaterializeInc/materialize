@@ -28,7 +28,7 @@ use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::bytes::ByteSize;
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::optimize::OptimizerFeatureOverrides;
-use mz_repr::{CatalogItemId, Datum, RelationDesc, RelationType, Row, ScalarType};
+use mz_repr::{CatalogItemId, Datum, RelationDesc, Row, SqlRelationType, SqlScalarType};
 use mz_sql_parser::ast::{
     CteBlock, ExplainAnalyzeComputationProperty, ExplainAnalyzeProperty, ExplainAnalyzeStatement,
     ExplainPlanOption, ExplainPlanOptionName, ExplainPushdownStatement, ExplainSinkSchemaFor,
@@ -230,7 +230,7 @@ fn plan_select_inner(
     expr.try_visit_mut_pre(&mut |expr| {
         if let HirRelationExpr::TopK { offset, .. } = expr {
             let offset_value = offset_into_value(offset.take())?;
-            *offset = HirScalarExpr::literal(Datum::Int64(offset_value), ScalarType::Int64);
+            *offset = HirScalarExpr::literal(Datum::Int64(offset_value), SqlScalarType::Int64);
         }
         Ok::<(), PlanError>(())
     })?;
@@ -298,33 +298,33 @@ pub fn describe_explain_plan(
     match explain.stage() {
         ExplainStage::RawPlan => {
             let name = "Raw Plan";
-            relation_desc = relation_desc.with_column(name, ScalarType::String.nullable(false));
+            relation_desc = relation_desc.with_column(name, SqlScalarType::String.nullable(false));
         }
         ExplainStage::DecorrelatedPlan => {
             let name = "Decorrelated Plan";
-            relation_desc = relation_desc.with_column(name, ScalarType::String.nullable(false));
+            relation_desc = relation_desc.with_column(name, SqlScalarType::String.nullable(false));
         }
         ExplainStage::LocalPlan => {
             let name = "Locally Optimized Plan";
-            relation_desc = relation_desc.with_column(name, ScalarType::String.nullable(false));
+            relation_desc = relation_desc.with_column(name, SqlScalarType::String.nullable(false));
         }
         ExplainStage::GlobalPlan => {
             let name = "Optimized Plan";
-            relation_desc = relation_desc.with_column(name, ScalarType::String.nullable(false));
+            relation_desc = relation_desc.with_column(name, SqlScalarType::String.nullable(false));
         }
         ExplainStage::PhysicalPlan => {
             let name = "Physical Plan";
-            relation_desc = relation_desc.with_column(name, ScalarType::String.nullable(false));
+            relation_desc = relation_desc.with_column(name, SqlScalarType::String.nullable(false));
         }
         ExplainStage::Trace => {
             relation_desc = relation_desc
-                .with_column("Time", ScalarType::UInt64.nullable(false))
-                .with_column("Path", ScalarType::String.nullable(false))
-                .with_column("Plan", ScalarType::String.nullable(false));
+                .with_column("Time", SqlScalarType::UInt64.nullable(false))
+                .with_column("Path", SqlScalarType::String.nullable(false))
+                .with_column("Plan", SqlScalarType::String.nullable(false));
         }
         ExplainStage::PlanInsights => {
             let name = "Plan Insights";
-            relation_desc = relation_desc.with_column(name, ScalarType::String.nullable(false));
+            relation_desc = relation_desc.with_column(name, SqlScalarType::String.nullable(false));
         }
     };
     let relation_desc = relation_desc.finish();
@@ -342,11 +342,11 @@ pub fn describe_explain_pushdown(
     statement: ExplainPushdownStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
     let relation_desc = RelationDesc::builder()
-        .with_column("Source", ScalarType::String.nullable(false))
-        .with_column("Total Bytes", ScalarType::UInt64.nullable(false))
-        .with_column("Selected Bytes", ScalarType::UInt64.nullable(false))
-        .with_column("Total Parts", ScalarType::UInt64.nullable(false))
-        .with_column("Selected Parts", ScalarType::UInt64.nullable(false))
+        .with_column("Source", SqlScalarType::String.nullable(false))
+        .with_column("Total Bytes", SqlScalarType::UInt64.nullable(false))
+        .with_column("Selected Bytes", SqlScalarType::UInt64.nullable(false))
+        .with_column("Total Parts", SqlScalarType::UInt64.nullable(false))
+        .with_column("Selected Parts", SqlScalarType::UInt64.nullable(false))
         .finish();
 
     Ok(
@@ -363,19 +363,19 @@ pub fn describe_explain_analyze(
 ) -> Result<StatementDesc, PlanError> {
     if statement.as_sql {
         let relation_desc = RelationDesc::builder()
-            .with_column("SQL", ScalarType::String.nullable(false))
+            .with_column("SQL", SqlScalarType::String.nullable(false))
             .finish();
         return Ok(StatementDesc::new(Some(relation_desc)));
     }
 
     match statement.properties {
         ExplainAnalyzeProperty::Computation { properties, skew } => {
-            let mut relation_desc =
-                RelationDesc::builder().with_column("operator", ScalarType::String.nullable(false));
+            let mut relation_desc = RelationDesc::builder()
+                .with_column("operator", SqlScalarType::String.nullable(false));
 
             if skew {
                 relation_desc =
-                    relation_desc.with_column("worker_id", ScalarType::UInt64.nullable(true));
+                    relation_desc.with_column("worker_id", SqlScalarType::UInt64.nullable(true));
             }
 
             let mut seen_properties = BTreeSet::new();
@@ -387,12 +387,12 @@ pub fn describe_explain_analyze(
 
                 match property {
                     ExplainAnalyzeComputationProperty::Memory if skew => {
-                        let numeric = ScalarType::Numeric { max_scale: None }.nullable(true);
+                        let numeric = SqlScalarType::Numeric { max_scale: None }.nullable(true);
                         relation_desc = relation_desc
                             .with_column("memory_ratio", numeric.clone())
-                            .with_column("worker_memory", ScalarType::String.nullable(true))
-                            .with_column("avg_memory", ScalarType::String.nullable(true))
-                            .with_column("total_memory", ScalarType::String.nullable(true))
+                            .with_column("worker_memory", SqlScalarType::String.nullable(true))
+                            .with_column("avg_memory", SqlScalarType::String.nullable(true))
+                            .with_column("total_memory", SqlScalarType::String.nullable(true))
                             .with_column("records_ratio", numeric.clone())
                             .with_column("worker_records", numeric.clone())
                             .with_column("avg_records", numeric.clone())
@@ -400,10 +400,10 @@ pub fn describe_explain_analyze(
                     }
                     ExplainAnalyzeComputationProperty::Memory => {
                         relation_desc = relation_desc
-                            .with_column("total_memory", ScalarType::String.nullable(true))
+                            .with_column("total_memory", SqlScalarType::String.nullable(true))
                             .with_column(
                                 "total_records",
-                                ScalarType::Numeric { max_scale: None }.nullable(true),
+                                SqlScalarType::Numeric { max_scale: None }.nullable(true),
                             );
                     }
                     ExplainAnalyzeComputationProperty::Cpu => {
@@ -411,13 +411,16 @@ pub fn describe_explain_analyze(
                             relation_desc = relation_desc
                                 .with_column(
                                     "cpu_ratio",
-                                    ScalarType::Numeric { max_scale: None }.nullable(true),
+                                    SqlScalarType::Numeric { max_scale: None }.nullable(true),
                                 )
-                                .with_column("worker_elapsed", ScalarType::Interval.nullable(true))
-                                .with_column("avg_elapsed", ScalarType::Interval.nullable(true));
+                                .with_column(
+                                    "worker_elapsed",
+                                    SqlScalarType::Interval.nullable(true),
+                                )
+                                .with_column("avg_elapsed", SqlScalarType::Interval.nullable(true));
                         }
                         relation_desc = relation_desc
-                            .with_column("total_elapsed", ScalarType::Interval.nullable(true));
+                            .with_column("total_elapsed", SqlScalarType::Interval.nullable(true));
                     }
                 }
             }
@@ -427,11 +430,11 @@ pub fn describe_explain_analyze(
         }
         ExplainAnalyzeProperty::Hints => {
             let relation_desc = RelationDesc::builder()
-                .with_column("operator", ScalarType::String.nullable(true))
-                .with_column("levels", ScalarType::Int64.nullable(true))
-                .with_column("to_cut", ScalarType::Int64.nullable(true))
-                .with_column("hint", ScalarType::Float64.nullable(true))
-                .with_column("savings", ScalarType::String.nullable(true))
+                .with_column("operator", SqlScalarType::String.nullable(true))
+                .with_column("levels", SqlScalarType::Int64.nullable(true))
+                .with_column("to_cut", SqlScalarType::Int64.nullable(true))
+                .with_column("hint", SqlScalarType::Float64.nullable(true))
+                .with_column("savings", SqlScalarType::String.nullable(true))
                 .finish();
             Ok(StatementDesc::new(Some(relation_desc)))
         }
@@ -443,7 +446,7 @@ pub fn describe_explain_timestamp(
     ExplainTimestampStatement { select, .. }: ExplainTimestampStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
     let relation_desc = RelationDesc::builder()
-        .with_column("Timestamp", ScalarType::String.nullable(false))
+        .with_column("Timestamp", SqlScalarType::String.nullable(false))
         .finish();
 
     Ok(StatementDesc::new(Some(relation_desc))
@@ -455,7 +458,7 @@ pub fn describe_explain_schema(
     ExplainSinkSchemaStatement { .. }: ExplainSinkSchemaStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
     let relation_desc = RelationDesc::builder()
-        .with_column("Schema", ScalarType::String.nullable(false))
+        .with_column("Schema", SqlScalarType::String.nullable(false))
         .finish();
     Ok(StatementDesc::new(Some(relation_desc)))
 }
@@ -994,7 +997,7 @@ ORDER BY {order_by}"#
                 PlanError::Unstructured(format!("internal error parsing our own SQL: {e}"))
             })?,
         )])];
-        let typ = RelationType::new(vec![ScalarType::String.nullable(false)]);
+        let typ = SqlRelationType::new(vec![SqlScalarType::String.nullable(false)]);
 
         Ok(Plan::Select(SelectPlan::immediate(rows, typ)))
     } else {
@@ -1086,19 +1089,19 @@ pub fn describe_subscribe(
     let progress = progress.unwrap_or(false);
     let mut desc = RelationDesc::builder().with_column(
         "mz_timestamp",
-        ScalarType::Numeric {
+        SqlScalarType::Numeric {
             max_scale: Some(NumericMaxScale::ZERO),
         }
         .nullable(false),
     );
     if progress {
-        desc = desc.with_column("mz_progressed", ScalarType::Bool.nullable(false));
+        desc = desc.with_column("mz_progressed", SqlScalarType::Bool.nullable(false));
     }
 
     let debezium = matches!(stmt.output, SubscribeOutput::EnvelopeDebezium { .. });
     match stmt.output {
         SubscribeOutput::Diffs | SubscribeOutput::WithinTimestampOrderBy { .. } => {
-            desc = desc.with_column("mz_diff", ScalarType::Int64.nullable(true));
+            desc = desc.with_column("mz_diff", SqlScalarType::Int64.nullable(true));
             for (name, mut ty) in relation_desc.into_iter() {
                 if progress {
                     ty.nullable = true;
@@ -1108,7 +1111,7 @@ pub fn describe_subscribe(
         }
         SubscribeOutput::EnvelopeUpsert { key_columns }
         | SubscribeOutput::EnvelopeDebezium { key_columns } => {
-            desc = desc.with_column("mz_state", ScalarType::String.nullable(true));
+            desc = desc.with_column("mz_state", SqlScalarType::String.nullable(true));
             let key_columns = key_columns
                 .into_iter()
                 .map(normalize::column_name)
@@ -1426,7 +1429,7 @@ fn plan_copy_to_expr(
         allow_windows: false,
     };
 
-    let to = plan_expr(ecx, &to_expr)?.type_as(ecx, &ScalarType::String)?;
+    let to = plan_expr(ecx, &to_expr)?.type_as(ecx, &SqlScalarType::String)?;
 
     if options.max_file_size.as_bytes() < MIN_S3_SINK_FILE_SIZE.as_bytes() {
         sql_bail!(
@@ -1486,7 +1489,7 @@ fn plan_copy_from(
                 allow_parameters: false,
                 allow_windows: false,
             };
-            let from = plan_expr(ecx, &from_expr)?.type_as(ecx, &ScalarType::String)?;
+            let from = plan_expr(ecx, &from_expr)?.type_as(ecx, &SqlScalarType::String)?;
 
             match options.aws_connection {
                 Some(conn_id) => {

@@ -15,7 +15,8 @@ use csv::{ByteRecord, ReaderBuilder};
 use itertools::Itertools;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::{
-    ColumnType, Datum, RelationDesc, RelationType, Row, RowArena, RowRef, ScalarType, SharedRow,
+    Datum, RelationDesc, Row, RowArena, RowRef, SharedRow, SqlColumnType, SqlRelationType,
+    SqlScalarType,
 };
 use proptest::prelude::{Arbitrary, Just, any};
 use proptest::strategy::{BoxedStrategy, Strategy, Union};
@@ -28,7 +29,7 @@ include!(concat!(env!("OUT_DIR"), "/mz_pgcopy.copy.rs"));
 
 fn encode_copy_row_binary(
     row: &RowRef,
-    typ: &RelationType,
+    typ: &SqlRelationType,
     out: &mut Vec<u8>,
 ) -> Result<(), io::Error> {
     const NULL_BYTES: [u8; 4] = (-1i32).to_be_bytes();
@@ -73,7 +74,7 @@ fn encode_copy_row_binary(
 fn encode_copy_row_text(
     CopyTextFormatParams { null, delimiter }: &CopyTextFormatParams,
     row: &RowRef,
-    typ: &RelationType,
+    typ: &SqlRelationType,
     out: &mut Vec<u8>,
 ) -> Result<(), io::Error> {
     let null = null.as_bytes();
@@ -112,7 +113,7 @@ fn encode_copy_row_csv(
         null,
     }: &CopyCsvFormatParams,
     row: &RowRef,
-    typ: &RelationType,
+    typ: &SqlRelationType,
     out: &mut Vec<u8>,
 ) -> Result<(), io::Error> {
     let null = null.as_bytes();
@@ -523,7 +524,7 @@ pub fn decode_copy_format<'a>(
 pub fn encode_copy_format<'a>(
     params: &CopyFormatParams<'a>,
     row: &RowRef,
-    typ: &RelationType,
+    typ: &SqlRelationType,
     out: &mut Vec<u8>,
 ) -> Result<(), io::Error> {
     match params {
@@ -550,9 +551,9 @@ pub fn encode_copy_format_header<'a>(
             header_row
                 .packer()
                 .extend(desc.iter_names().map(|s| Datum::from(s.as_str())));
-            let typ = RelationType::new(vec![
-                ColumnType {
-                    scalar_type: ScalarType::String,
+            let typ = SqlRelationType::new(vec![
+                SqlColumnType {
+                    scalar_type: SqlScalarType::String,
                     nullable: false,
                 };
                 desc.arity()
@@ -851,7 +852,7 @@ pub fn decode_copy_format_csv(
 #[cfg(test)]
 mod tests {
     use mz_ore::collections::CollectionExt;
-    use mz_repr::{ColumnType, ScalarType};
+    use mz_repr::{SqlColumnType, SqlScalarType};
     use proptest::prelude::*;
 
     use super::*;
@@ -1072,25 +1073,25 @@ mod tests {
         packer.push(Datum::from("qe")); // overridden quote and escape character in test below
         packer.push(Datum::from(""));
 
-        let typ: RelationType = RelationType::new(vec![
-            ColumnType {
-                scalar_type: mz_repr::ScalarType::String,
+        let typ: SqlRelationType = SqlRelationType::new(vec![
+            SqlColumnType {
+                scalar_type: mz_repr::SqlScalarType::String,
                 nullable: false,
             },
-            ColumnType {
-                scalar_type: mz_repr::ScalarType::String,
+            SqlColumnType {
+                scalar_type: mz_repr::SqlScalarType::String,
                 nullable: true,
             },
-            ColumnType {
-                scalar_type: mz_repr::ScalarType::UInt64,
+            SqlColumnType {
+                scalar_type: mz_repr::SqlScalarType::UInt64,
                 nullable: false,
             },
-            ColumnType {
-                scalar_type: mz_repr::ScalarType::String,
+            SqlColumnType {
+                scalar_type: mz_repr::SqlScalarType::String,
                 nullable: false,
             },
-            ColumnType {
-                scalar_type: mz_repr::ScalarType::String,
+            SqlColumnType {
+                scalar_type: mz_repr::SqlScalarType::String,
                 nullable: false,
             },
         ]);
@@ -1133,11 +1134,11 @@ mod tests {
         #[mz_ore::test]
         #[cfg_attr(miri, ignore)]
         fn proptest_csv_roundtrips(copy_csv_params: CopyCsvFormatParams)  {
-            // Given a ScalarType and Datum roundtrips it through the CSV COPY format.
-            let try_roundtrip_datum = |scalar_type: &ScalarType, datum| {
+            // Given a SqlScalarType and Datum roundtrips it through the CSV COPY format.
+            let try_roundtrip_datum = |scalar_type: &SqlScalarType, datum| {
                 let row = Row::pack_slice(&[datum]);
-                let typ = RelationType::new(vec![
-                    ColumnType {
+                let typ = SqlRelationType::new(vec![
+                    SqlColumnType {
                         scalar_type: scalar_type.clone(),
                         nullable: true,
                     }
@@ -1185,7 +1186,7 @@ mod tests {
             };
 
             // Try roundtripping all of our interesting Datums.
-            for scalar_type in ScalarType::enumerate() {
+            for scalar_type in SqlScalarType::enumerate() {
                 for datum in scalar_type.interesting_datums() {
                     // TODO: The decoder cannot differentiate between empty string and null.
                     if let Some(value) = mz_pgrepr::Value::from_datum(datum, scalar_type) {
