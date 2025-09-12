@@ -144,7 +144,6 @@ use differential_dataflow::AsCollection;
 use futures::{StreamExt as _, TryStreamExt};
 use mz_ore::cast::CastFrom;
 use mz_ore::future::InTask;
-use mz_postgres_util::tunnel::PostgresFlavor;
 use mz_postgres_util::{Client, PostgresError, simple_query_opt};
 use mz_repr::{Datum, DatumVec, Diff, Row};
 use mz_sql_parser::ast::{Ident, display::AstDisplay};
