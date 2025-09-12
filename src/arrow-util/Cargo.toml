@@ -22,7 +22,7 @@ num-traits = "0.2"
 ordered-float = { version = "5.0.0" }
 serde = { version = "1.0.219" }
 serde_json = "1.0.127"
-uuid = "1.17.0"
+uuid = "1.18.1"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [package.metadata.cargo-udeps.ignore]

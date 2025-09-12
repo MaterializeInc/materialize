@@ -46,12 +46,12 @@ semver = "1.0.26"
 tokio = { version = "1.44.1", default-features = false }
 tokio-openssl = "0.6.5"
 tokio-postgres = { version = "0.7.8" }
-tokio-util = { version = "0.7.15", features = ["codec"] }
-tokio-metrics = "0.4.2"
+tokio-util = { version = "0.7.16", features = ["codec"] }
+tokio-metrics = "0.4.5"
 tower = "0.5.2"
 tracing = "0.1.37"
 tracing-subscriber = "0.3.19"
-uuid = "1.17.0"
+uuid = "1.18.1"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]

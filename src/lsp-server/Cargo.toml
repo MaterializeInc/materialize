@@ -19,7 +19,7 @@ mz-build-info = { path = "../build-info" }
 mz-sql-parser = { path = "../sql-parser", default-features = false  }
 mz-sql-lexer = { path = "../sql-lexer", default-features = false }
 mz-ore = { path = "../ore", default-features = false, features = ["async", "test"] }
-regex = "1.11.1"
+regex = "1.11.2"
 mz-sql-pretty = { path = "../sql-pretty" }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 

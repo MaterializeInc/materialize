@@ -36,8 +36,8 @@ time = "0.3.17"
 tokio = { version = "1.44.1", features = ["full"] }
 toml = "0.8.22"
 toml_edit = { version = "0.22.26", features = ["serde"] }
-thiserror = "2.0.12"
-uuid = "1.17.0"
+thiserror = "2.0.16"
+uuid = "1.18.1"
 url = "2.3.1"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
