@@ -1477,7 +1477,16 @@ pub struct Source {
 #[derive(Debug, Clone)]
 pub enum DataSourceDesc {
     /// Receives data from an external system.
-    Ingestion(Ingestion),
+    Ingestion(SourceDesc<ReferencedConnection>),
+    /// Receives data from an external system.
+    OldSyntaxIngestion {
+        desc: SourceDesc<ReferencedConnection>,
+        // If we're dealing with an old syntax ingestion the progress id will be some other collection
+        // and the ingestion itself will have the data from a default external reference
+        progress_subsource: CatalogItemId,
+        data_config: SourceExportDataConfig<ReferencedConnection>,
+        details: SourceExportDetails,
+    },
     /// This source receives its data from the identified ingestion,
     /// specifically the output identified by `external_reference`.
     IngestionExport {
@@ -1496,12 +1505,6 @@ pub enum DataSourceDesc {
         /// Only `Some` when created via `CREATE TABLE ... FROM WEBHOOK`.
         cluster_id: Option<StorageInstanceId>,
     },
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Ingestion {
-    pub desc: SourceDesc<ReferencedConnection>,
-    pub progress_subsource: CatalogItemId,
 }
 
 #[derive(Clone, Debug, Serialize)]
