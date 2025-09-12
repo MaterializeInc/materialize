@@ -409,6 +409,54 @@ impl TestHarness {
         self
     }
 
+    pub fn with_sasl_scram_auth(mut self, mz_system_password: Password) -> Self {
+        self.external_login_password_mz_system = Some(mz_system_password);
+        let enable_tls = self.tls.is_some();
+        self.listeners_config = ListenersConfig {
+            sql: btreemap! {
+                "external".to_owned() => SqlListenerConfig {
+                    addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                    authenticator_kind: AuthenticatorKind::Sasl,
+                    allowed_roles: AllowedRoles::NormalAndInternal,
+                    enable_tls,
+                },
+            },
+            http: btreemap! {
+                "external".to_owned() => HttpListenerConfig {
+                    base: BaseListenerConfig {
+                        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                        authenticator_kind: AuthenticatorKind::Password,
+                        allowed_roles: AllowedRoles::NormalAndInternal,
+                        enable_tls,
+                    },
+                    routes: HttpRoutesEnabled{
+                        base: true,
+                        webhook: true,
+                        internal: true,
+                        metrics: false,
+                        profiling: true,
+                    },
+                },
+                "metrics".to_owned() => HttpListenerConfig {
+                    base: BaseListenerConfig {
+                        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                        authenticator_kind: AuthenticatorKind::None,
+                        allowed_roles: AllowedRoles::NormalAndInternal,
+                        enable_tls: false,
+                    },
+                    routes: HttpRoutesEnabled{
+                        base: false,
+                        webhook: false,
+                        internal: false,
+                        metrics: true,
+                        profiling: false,
+                    },
+                },
+            },
+        };
+        self
+    }
+
     pub fn with_now(mut self, now: NowFn) -> Self {
         self.now = now;
         self

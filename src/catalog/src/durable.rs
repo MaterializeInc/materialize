@@ -72,6 +72,7 @@ pub const OID_ALLOC_KEY: &str = "oid";
 pub(crate) const CATALOG_CONTENT_VERSION_KEY: &str = "catalog_content_version";
 pub const BUILTIN_MIGRATION_SHARD_KEY: &str = "builtin_migration_shard";
 pub const EXPRESSION_CACHE_SHARD_KEY: &str = "expression_cache_shard";
+pub const MOCK_AUTHENTICATION_NONCE_KEY: &str = "mock_authentication_nonce";
 
 #[derive(Clone, Debug)]
 pub struct BootstrapArgs {

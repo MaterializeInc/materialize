@@ -276,6 +276,7 @@ impl Listener<SqlListenerConfig> {
                 frontegg.expect("Frontegg args are required with AuthenticatorKind::Frontegg"),
             ),
             AuthenticatorKind::Password => Authenticator::Password(adapter_client.clone()),
+            AuthenticatorKind::Sasl => Authenticator::Sasl(adapter_client.clone()),
             AuthenticatorKind::None => Authenticator::None,
         };
 
@@ -401,6 +402,7 @@ impl Listeners {
             let authenticator_rx = match authenticator_kind {
                 AuthenticatorKind::Frontegg => authenticator_frontegg_rx.clone(),
                 AuthenticatorKind::Password => authenticator_password_rx.clone(),
+                AuthenticatorKind::Sasl => authenticator_password_rx.clone(),
                 AuthenticatorKind::None => authenticator_none_rx.clone(),
             };
             let source: &'static str = Box::leak(name.clone().into_boxed_str());

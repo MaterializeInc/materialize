@@ -13,6 +13,7 @@ use std::str::FromStr;
 use std::sync::LazyLock;
 use std::time::Duration;
 
+use base64::prelude::*;
 use ipnet::IpNet;
 use itertools::max;
 use mz_audit_log::{CreateOrDropClusterReplicaReasonV1, EventV1, VersionedEvent};
@@ -47,10 +48,10 @@ use crate::durable::{
     AUDIT_LOG_ID_ALLOC_KEY, BUILTIN_MIGRATION_SHARD_KEY, BootstrapArgs,
     CATALOG_CONTENT_VERSION_KEY, CatalogError, ClusterConfig, ClusterVariant,
     ClusterVariantManaged, DATABASE_ID_ALLOC_KEY, DefaultPrivilege, EXPRESSION_CACHE_SHARD_KEY,
-    OID_ALLOC_KEY, ReplicaConfig, ReplicaLocation, Role, SCHEMA_ID_ALLOC_KEY,
-    STORAGE_USAGE_ID_ALLOC_KEY, SYSTEM_CLUSTER_ID_ALLOC_KEY, SYSTEM_REPLICA_ID_ALLOC_KEY, Schema,
-    Transaction, USER_CLUSTER_ID_ALLOC_KEY, USER_NETWORK_POLICY_ID_ALLOC_KEY,
-    USER_REPLICA_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
+    MOCK_AUTHENTICATION_NONCE_KEY, OID_ALLOC_KEY, ReplicaConfig, ReplicaLocation, Role,
+    SCHEMA_ID_ALLOC_KEY, STORAGE_USAGE_ID_ALLOC_KEY, SYSTEM_CLUSTER_ID_ALLOC_KEY,
+    SYSTEM_REPLICA_ID_ALLOC_KEY, Schema, Transaction, USER_CLUSTER_ID_ALLOC_KEY,
+    USER_NETWORK_POLICY_ID_ALLOC_KEY, USER_REPLICA_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
 };
 
 /// The key within the "config" Collection that stores the version of the catalog.
@@ -756,6 +757,18 @@ pub(crate) async fn initialize(
         ),
     ] {
         tx.set_setting(name, Some(value))?;
+    }
+
+    if tx
+        .get_setting(MOCK_AUTHENTICATION_NONCE_KEY.to_string())
+        .is_none()
+    {
+        let mut nonce = [0u8; 24];
+        openssl::rand::rand_bytes(&mut nonce).expect("random number generation failed");
+        tx.set_setting(
+            MOCK_AUTHENTICATION_NONCE_KEY.to_string(),
+            Some(BASE64_STANDARD.encode(nonce)),
+        )?;
     }
 
     Ok(())

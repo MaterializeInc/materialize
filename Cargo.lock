@@ -5407,6 +5407,7 @@ dependencies = [
  "arrow",
  "async-stream",
  "async-trait",
+ "base64 0.22.1",
  "bytes",
  "bytesize",
  "chrono",
@@ -5772,6 +5773,7 @@ dependencies = [
  "mz-storage-client",
  "mz-storage-types",
  "mz-transform",
+ "openssl",
  "paste",
  "prometheus",
  "proptest",
@@ -7356,6 +7358,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "base64 0.22.1",
  "byteorder",
  "bytes",
  "bytesize",
