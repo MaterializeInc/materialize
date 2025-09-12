@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use anyhow::{Context, anyhow, bail};
+use anyhow::{Context, anyhow};
 use itertools::Itertools;
 use mz_ccsr::tls::{Certificate, Identity};
 use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceReader, vpc_endpoint_host};
