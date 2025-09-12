@@ -150,16 +150,16 @@
   - signature: 'cbrt(x: double precision) -> double precision'
     description: The cube root of `x`.
 
-  - signature: 'ceil(x: N) -> N'
+  - signature: 'ceil(x: N) -> double precision'
     description: The smallest integer >= `x`.
 
-  - signature: 'ceiling(x: N) -> N'
+  - signature: 'ceiling(x: N) -> double precision'
     description: "Alias of `ceil`."
 
-  - signature: 'exp(x: N) -> N'
+  - signature: 'exp(x: N) -> double precision'
     description: Exponential of `x` (e raised to the given power)
 
-  - signature: 'floor(x: N) -> N'
+  - signature: 'floor(x: N) -> double precision'
     description: The largest integer <= `x`.
 
   - signature: 'ln(x: double precision) -> double precision'
@@ -198,7 +198,7 @@
   - signature: 'power(x: numeric, y: numeric) -> numeric'
     description: "`x` raised to the power of `y`."
 
-  - signature: 'round(x: N) -> N'
+  - signature: 'round(x: N) -> double precision'
     description: |
       `x` rounded to the nearest whole number.
       If `N` is `real` or `double precision`, rounds ties to the nearest even number.
@@ -214,7 +214,7 @@
   - signature: 'sqrt(x: double precision) -> double precision'
     description: The square root of `x`.
 
-  - signature: 'trunc(x: N) -> N'
+  - signature: 'trunc(x: N) -> double precision'
     description: "`x` truncated toward zero to a whole number."
 
 - type: Trigonometric
@@ -276,7 +276,7 @@
   - signature: 'btrim(s: str, c: str) -> str'
     description: Trim any character in `c` from both sides of `s`.
 
-  - signature: 'bit_count(b: bytea) -> int'
+  - signature: 'bit_count(b: bytea) -> bigint'
     description: Returns the number of bits set in the bit string (aka _popcount_).
 
   - signature: 'bit_length(s: str) -> int'
@@ -1122,3 +1122,4 @@
         the `current_role` is assumed.
     - signature: 'mz_is_superuser() -> bool'
       description: Reports whether the `current_role` is a superuser.
+      unmaterializable: true

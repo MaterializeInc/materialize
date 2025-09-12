@@ -35,3 +35,13 @@ class Scenario(Enum):
     def _missing_(cls, value):
         if value == "random":
             return cls(random.choice([elem.value for elem in cls]))
+
+
+ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS = {
+    # Uses a lot of memory, hard to predict how much
+    "memory_limiter_interval": "0",
+    # TODO: Remove when https://github.com/MaterializeInc/database-issues/issues/9660 is fixed
+    "log_filter": "warn",
+    # TODO: Remove when https://github.com/MaterializeInc/database-issues/issues/9656 is fixed
+    "persist_stats_filter_enabled": "false",
+}

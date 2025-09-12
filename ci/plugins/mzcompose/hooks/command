@@ -15,16 +15,16 @@ set -euo pipefail
 
 builder=${BUILDKITE_PLUGIN_MZCOMPOSE_CI_BUILDER:-min}
 
+if is_truthy "${CI_HEAP_PROFILES:-}"; then
+  builder=stable
+fi
+
 mzcompose() {
     stdbuf --output=L --error=L bin/ci-builder run "$builder" bin/mzcompose --find "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" "$@"
 }
 
 kubectl() {
     bin/ci-builder run stable kubectl --context="$K8S_CONTEXT" "$@"
-}
-
-faketty() {
-    script -qfc "$(printf "%q " "$@")" /dev/null
 }
 
 service=${BUILDKITE_PLUGIN_MZCOMPOSE_RUN:-default}
@@ -67,13 +67,13 @@ if [ -n "${CI_COVERAGE_ENABLED:-}" ]; then
     chmod 777 coverage/
 fi
 
+STOP_RUNNING=false
+
 if is_truthy "${CI_HEAP_PROFILES:-}"; then
-    (while true; do
-        sleep 5
-        # faketty because otherwise docker will complain about not being inside
-        # of a TTY when run in a background job
-        faketty bin/ci-builder run stable bin/ci-upload-heap-profiles "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION"
-    done
+    (while [ "$STOP_RUNNING" != "true" ]; do
+         sleep 30
+         bin/ci-builder run stable --detach bin/ci-upload-heap-profiles "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION"
+     done
     ) &
 fi
 
@@ -220,10 +220,14 @@ cleanup() {
   mapfile -t artifacts < <(printf "run.log\nservices.log\njournalctl-merge.log\nnetstat-ant.log\nnetstat-panelot.log\nps-aux.log\ndocker-inspect.log\n"; find . -name 'junit_*.xml' -printf '%P\n'; find . -maxdepth 1 -name 'mz_debug_*.log' -printf '%P\n'; find . -maxdepth 1 -name 'slt*.diff' -printf '%P\n')
   artifacts_str=$(IFS=";"; echo "${artifacts[*]}")
 
-  ci_unimportant_heading "Running trufflehog to scan artifacts for secrets & uploading artifacts"
-  {
-    bin/ci-builder run "$builder" trufflehog --no-update --no-verification --json --exclude-detectors=coda,dockerhub,box,npmtoken,github,snykkey,eightxeight,sumologickey,miro,fmfw,logzio,qase,cannyio,uplead,tatumio filesystem "${artifacts[@]}" | trufflehog_jq_filter_logs > trufflehog.log
-  } &
+  if is_truthy "${CI_HEAP_PROFILES:-}"; then
+      STOP_RUNNING=true
+  else
+      ci_unimportant_heading "Running trufflehog to scan artifacts for secrets & uploading artifacts"
+      {
+        bin/ci-builder run "$builder" trufflehog --no-update --no-verification --json --exclude-detectors=coda,dockerhub,box,npmtoken,github,snykkey,eightxeight,sumologickey,miro,fmfw,logzio,qase,cannyio,uplead,tatumio filesystem "${artifacts[@]}" | trufflehog_jq_filter_logs > trufflehog.log
+      } &
+  fi
 
   unset CI_EXTRA_ARGS # We don't want extra args for the annotation
   # Continue even if ci-annotate-errors fails
