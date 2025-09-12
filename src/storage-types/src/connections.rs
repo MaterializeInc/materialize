@@ -1534,18 +1534,12 @@ impl PostgresConnection<InlinedConnection> {
                 InTask::No,
             )
             .await?;
-        let client = config
+        config
             .connect(
                 "connection validation",
                 &storage_configuration.connection_context.ssh_tunnel_manager,
             )
             .await?;
-        use PostgresFlavor::*;
-        match (client.server_flavor(), &self.flavor) {
-            (Vanilla, Yugabyte) => bail!("Expected to find PostgreSQL server, found Yugabyte."),
-            (Yugabyte, Vanilla) => bail!("Expected to find Yugabyte server, found PostgreSQL."),
-            (Vanilla, Vanilla) | (Yugabyte, Yugabyte) => {}
-        }
         Ok(())
     }
 }
