@@ -99,7 +99,7 @@ all set.
 
 If you are just testing Materialize locally and don't care about data loss you can run environmentd with `eatmydata environmentd`, which will disable fsync calls.
 
-Similarly postgres as the metadata store can be instructed to eat your data using `echo LD_PRELOAD=libeatmydata.so > /etc/postgresql/16/main/environment`, and then restarting it.
+Similarly postgres as the metadata store can be instructed to eat your data using `echo LD_PRELOAD=libeatmydata.so > /etc/postgresql/17/main/environment`, and then restarting it.
 
 On my Linux system without `eatmydata` for both Materialize and Postgres, running with `bin/environmentd --reset --optimized --no-default-features --postgres=postgres://deen@%2Fvar%2Frun%2Fpostgresql`:
 ```
