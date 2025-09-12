@@ -250,7 +250,7 @@ impl HirRelationExpr {
                 }
                 // We only print the offset if it is not trivial, i.e., not 0.
                 let offset_literal = offset.clone().try_into_literal_int64();
-                if !offset_literal.clone().is_ok_and(|offset| offset == 0) {
+                if !offset_literal.as_ref().is_ok_and(|&offset| offset == 0) {
                     let offset = if offset.contains_parameters() {
                         // If we are still before parameter binding, then we can't reduce it to a
                         // literal, so just print the expression.

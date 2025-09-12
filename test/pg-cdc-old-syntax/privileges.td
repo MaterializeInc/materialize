@@ -61,7 +61,7 @@ REVOKE USAGE ON SCHEMA other FROM priv;
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR SCHEMAS(public, other);
 contains:insufficient privileges
-detail:user priv lacks USAGE privileges for schemas other
+detail:user lacks USAGE privileges for schemas other
 
 #
 # SELECT errors
@@ -75,7 +75,7 @@ REVOKE SELECT ON TABLE other.s FROM priv;
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR SCHEMAS(public, other);
 contains:insufficient privileges
-detail:user priv lacks SELECT privileges for tables other.s
+detail:user lacks SELECT privileges for tables other.s
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE "select" (a INT);
@@ -87,7 +87,7 @@ REVOKE SELECT ON public."""select""" FROM priv;
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
   FOR SCHEMAS(public);
 contains:insufficient privileges
-detail:user priv lacks SELECT privileges for tables public."""select""", public."select"
+detail:user lacks SELECT privileges for tables public."""select""", public."select"
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 DROP SCHEMA IF EXISTS other CASCADE;
