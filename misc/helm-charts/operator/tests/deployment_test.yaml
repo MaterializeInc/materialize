@@ -70,9 +70,10 @@ tests:
       path: spec.template.spec.containers[0].args[13]
       pattern: is_cc":true
 
-- it: should have a cluster with disk limit to 1552MiB when storage class is configured
+- it: should have a cluster with disk limit to 1552MiB when storage class is configured and swap disabled
   set:
     storage.storageClass.name: "my-storage-class"
+    operator.clusters.swap_enabled: false
   asserts:
   - matchRegex:
       path: spec.template.spec.containers[0].args[13]
@@ -80,6 +81,21 @@ tests:
   - matchRegex:
       path: spec.template.spec.containers[0].args[13]
       pattern: is_cc":true
+  - matchRegex:
+      path: spec.template.spec.containers[0].args[13]
+      pattern: materialize.cloud/scratch-fs":"true"
+
+- it: should have a cluster with swap_enabled
+  asserts:
+  - matchRegex:
+      path: spec.template.spec.containers[0].args[13]
+      pattern: is_cc":true
+  - matchRegex:
+      path: spec.template.spec.containers[0].args[13]
+      pattern: swap_enabled":true
+  - matchRegex:
+      path: spec.template.spec.containers[0].args[13]
+      pattern: materialize.cloud/swap":"true"
 
 - it: should configure for AWS provider correctly
   set:
