@@ -44,7 +44,7 @@ mz-sql-parser = { path = "../sql-parser" }
 mz-storage-types = { path = "../storage-types" }
 mz-tracing = { path = "../tracing" }
 postgres-protocol = { version = "0.6.5" }
-regex = "1.11.1"
+regex = "1.11.2"
 reqwest = { version = "0.11.13", features = ["json"] }
 shell-words = "1.1.0"
 serde_json = "1.0.127"
@@ -59,7 +59,7 @@ tokio-postgres = { version = "0.7.8", features = [
 ] }
 tokio-stream = { version = "0.1.17", features = ["net"] }
 tower-http = { version = "0.6.6", features = ["cors"] }
-uuid = "1.17.0"
+uuid = "1.18.1"
 walkdir = "2.5.0"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
