@@ -201,6 +201,17 @@ pub mod v1alpha1 {
         #[serde(default)]
         pub environment_id: Uuid,
 
+        // The name of a configmap containing system_parameters in json format
+        // NOTE: The configmap must contain a `config.json` key whose value
+        // is a valid json containing valid system parameters.
+        // ex:
+        // data:
+        //   config.json: |
+        //     {
+        //       "max_connections": 10
+        //     }
+        pub system_parameter_configmap_name: Option<String>,
+
         /// The configuration for generating an x509 certificate using cert-manager for balancerd
         /// to present to incoming connections.
         /// The `dnsNames` and `issuerRef` fields are required.
@@ -342,6 +353,10 @@ pub mod v1alpha1 {
 
         pub fn resource_id(&self) -> &str {
             &self.status.as_ref().unwrap().resource_id
+        }
+
+        pub fn system_parameter_configmap_name(&self) -> Option<String> {
+            self.spec.system_parameter_configmap_name.clone()
         }
 
         pub fn environmentd_scratch_volume_storage_requirement(&self) -> Quantity {
