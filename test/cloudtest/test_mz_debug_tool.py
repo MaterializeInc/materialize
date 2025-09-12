@@ -49,6 +49,8 @@ def test_successful_zip_creation(mz: MaterializeApplication) -> None:
             DEFAULT_K8S_CONTEXT_NAME,
             "--k8s-namespace",
             DEFAULT_K8S_NAMESPACE,
+            "--mz-instance-name",
+            "12345678-1234-1234-1234-123456789012",
             "--mz-connection-url",
             "postgresql://mz_system@localhost:6877/materialize",
         ],
