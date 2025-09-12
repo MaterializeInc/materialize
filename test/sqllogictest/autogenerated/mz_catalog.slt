@@ -84,6 +84,7 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object 
 5  availability_zone  text
 6  owner_id  text
 7  disk  boolean
+8  swap_enabled  boolean
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_clusters' ORDER BY position

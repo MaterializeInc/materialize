@@ -15,6 +15,7 @@ use std::time::Duration;
 use bytesize::ByteSize;
 use ipnet::IpNet;
 use mz_adapter_types::compaction::CompactionWindow;
+use mz_adapter_types::dyncfgs::FORCE_SWAP_FOR_CC_SIZES;
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::{
@@ -375,13 +376,13 @@ impl CatalogState {
         let id = cluster.replica_id(name).expect("Must exist");
         let replica = cluster.replica(id).expect("Must exist");
 
-        let (size, disk, az, internal, pending) = match &replica.config.location {
+        let (size, disk, az, internal, pending, mut swap, is_cc) = match &replica.config.location {
             // TODO(guswynn): The column should be `availability_zones`, not
             // `availability_zone`.
             ReplicaLocation::Managed(ManagedReplicaLocation {
                 size,
                 availability_zones: ManagedReplicaAvailabilityZones::FromReplica(Some(az)),
-                allocation: _,
+                allocation,
                 billed_as: _,
                 internal,
                 pending,
@@ -391,11 +392,13 @@ impl CatalogState {
                 Some(az.as_str()),
                 *internal,
                 *pending,
+                allocation.swap_enabled,
+                allocation.is_cc,
             ),
             ReplicaLocation::Managed(ManagedReplicaLocation {
                 size,
+                allocation,
                 availability_zones: _,
-                allocation: _,
                 billed_as: _,
                 internal,
                 pending,
@@ -405,9 +408,16 @@ impl CatalogState {
                 None,
                 *internal,
                 *pending,
+                allocation.swap_enabled,
+                allocation.is_cc,
             ),
-            _ => (None, None, None, false, false),
+            _ => (None, None, None, false, false, false, false),
         };
+
+        let dyncfg = self.system_config().dyncfgs();
+        if FORCE_SWAP_FOR_CC_SIZES.get(dyncfg) && is_cc {
+            swap = true;
+        }
 
         let cluster_replica_update = BuiltinTableUpdate::row(
             &*MZ_CLUSTER_REPLICAS,
@@ -419,6 +429,7 @@ impl CatalogState {
                 Datum::from(az),
                 Datum::String(&replica.owner_id.to_string()),
                 Datum::from(disk),
+                Datum::from(swap),
             ]),
             diff,
         );

@@ -3513,6 +3513,7 @@ pub static MZ_CLUSTER_REPLICAS: LazyLock<BuiltinTable> = LazyLock::new(|| Builti
         .with_column("availability_zone", ScalarType::String.nullable(true))
         .with_column("owner_id", ScalarType::String.nullable(false))
         .with_column("disk", ScalarType::Bool.nullable(true))
+        .with_column("swap_enabled", ScalarType::Bool.nullable(true))
         .finish(),
     column_comments: BTreeMap::from_iter([
         ("id", "Materialize's unique ID for the cluster replica."),
@@ -3534,6 +3535,7 @@ pub static MZ_CLUSTER_REPLICAS: LazyLock<BuiltinTable> = LazyLock::new(|| Builti
             "The role ID of the owner of the cluster replica. Corresponds to `mz_roles.id`.",
         ),
         ("disk", "If the replica has a local disk."),
+        ("swap_enabled", "If the replica is configured to use swap."),
     ]),
     is_retained_metrics_object: true,
     access: vec![PUBLIC_SELECT],

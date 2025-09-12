@@ -189,6 +189,41 @@ impl Catalog {
         assert!(!updates.is_empty(), "initial catalog snapshot is missing");
         let mut txn = storage.transaction().await?;
 
+        // Force cc sizes to use swap, if requested.
+        if FORCE_SWAP_FOR_CC_SIZES.get(state.system_configuration.dyncfgs()) {
+            info!("force-enabling swap for cc replica sizes");
+
+            for size in state.cluster_replica_sizes.0.values_mut() {
+                if size.is_cc {
+                    size.swap_enabled = true;
+                    size.cpu_exclusive = false;
+                    size.selectors.remove("materialize.cloud/scratch-fs");
+                    size.selectors
+                        .insert("materialize.cloud/swap".into(), "true".into());
+                }
+            }
+
+            // The size definitions were copied into the in-memory replica configs during
+            // `CatalogState` initialization above. We can't move this code before that because we
+            // need to wait for the `system_configuration` to be fully initialized. Instead we also
+            // patch the replica configs here.
+            for cluster in state.clusters_by_id.values_mut() {
+                for replica in cluster.replicas_by_id_.values_mut() {
+                    if let ReplicaLocation::Managed(loc) = &mut replica.config.location {
+                        let alloc = &mut loc.allocation;
+                        if alloc.is_cc {
+                            alloc.swap_enabled = true;
+                            alloc.cpu_exclusive = false;
+                            alloc.selectors.remove("materialize.cloud/scratch-fs");
+                            alloc
+                                .selectors
+                                .insert("materialize.cloud/swap".into(), "true".into());
+                        }
+                    }
+                }
+            }
+        }
+
         // Migrate/update durable data before we start loading the in-memory catalog.
         let (migrated_builtins, new_builtin_collections) = {
             migrate::durable_migrate(
@@ -484,41 +519,6 @@ impl Catalog {
         txn.commit(config.boot_ts).await?;
 
         cleanup_action.await;
-
-        // Force cc sizes to use swap, if requested.
-        if FORCE_SWAP_FOR_CC_SIZES.get(state.system_configuration.dyncfgs()) {
-            info!("force-enabling swap for cc replica sizes");
-
-            for size in state.cluster_replica_sizes.0.values_mut() {
-                if size.is_cc {
-                    size.swap_enabled = true;
-                    size.cpu_exclusive = false;
-                    size.selectors.remove("materialize.cloud/scratch-fs");
-                    size.selectors
-                        .insert("materialize.cloud/swap".into(), "true".into());
-                }
-            }
-
-            // The size definitions were copied into the in-memory replica configs during
-            // `CatalogState` initialization above. We can't move this code before that because we
-            // need to wait for the `system_configuration` to be fully initialized. Instead we also
-            // patch the replica configs here.
-            for cluster in state.clusters_by_id.values_mut() {
-                for replica in cluster.replicas_by_id_.values_mut() {
-                    if let ReplicaLocation::Managed(loc) = &mut replica.config.location {
-                        let alloc = &mut loc.allocation;
-                        if alloc.is_cc {
-                            alloc.swap_enabled = true;
-                            alloc.cpu_exclusive = false;
-                            alloc.selectors.remove("materialize.cloud/scratch-fs");
-                            alloc
-                                .selectors
-                                .insert("materialize.cloud/swap".into(), "true".into());
-                        }
-                    }
-                }
-            }
-        }
 
         Ok(InitializeStateResult {
             state,
