@@ -215,7 +215,9 @@ case "$cmd" in
             --init
             --volume "$(pwd)/target-xcompile:/mnt/build"
             --volume "$(pwd):$(pwd)"
+            --volume "$HOME/.inspector-sbomgen:/home/materialize/.inspector-sbomgen"
             --workdir "$(pwd)"
+            --env XDG_CACHE_HOME=/mnt/build/cache
             --env AWS_ACCESS_KEY_ID
             --env AWS_DEFAULT_REGION
             --env AWS_SECRET_ACCESS_KEY
