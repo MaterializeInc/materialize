@@ -39,7 +39,7 @@ use mz_sql::catalog::{EnvironmentId, SessionCatalog};
 use mz_sql::session::hint::ApplicationNameHint;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::SUPPORT_USER;
-use mz_sql::session::vars::{CLUSTER, OwnedVarInput, SystemVars, Var};
+use mz_sql::session::vars::{CLUSTER, OwnedVarInput, SystemVars, Var, ENABLE_FRONTEND_PEEK_SEQUENCING};
 use mz_sql_parser::parser::{ParserStatementError, StatementParseResult};
 use prometheus::Histogram;
 use serde_json::json;
@@ -271,6 +271,7 @@ impl Client {
             transient_id_gen,
             optimizer_metrics,
             oracles,
+            enable_frontend_peek_sequencing: false, // initialized below
         };
 
         let mut client = SessionClient {
@@ -411,6 +412,8 @@ Issue a SQL query to get started. Need help?
                 session.add_notice(notice);
             }
         }
+
+        client.peek_client.enable_frontend_peek_sequencing = ENABLE_FRONTEND_PEEK_SEQUENCING.require(catalog.system_vars()).is_ok();
 
         Ok(client)
     }
@@ -699,10 +702,10 @@ impl SessionClient {
         // If unsupported, fall back to the Coordinator path.
         ///////// todo: wire up cancel_future?
         if let Some(resp) = self.try_frontend_peek(&portal_name).await? {
-            println!("++++++ try_frontend_peek succeeded");
+            //println!("++++++ try_frontend_peek succeeded");
             return Ok((resp, execute_started));
         } else {
-            println!("------ try_frontend_peek failed");
+            //println!("------ try_frontend_peek failed");
         }
 
         let response = self
@@ -1091,15 +1094,19 @@ impl SessionClient {
         &mut self,
         portal_name: &str,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
-        // We need to snatch the session out of self here, because if we just had a reference to it,
-        // then we couldn't do other things with self.
-        let mut session = self.session.take().expect("SessionClient invariant");
-        let r = self
-            .try_frontend_peek_inner(portal_name, &mut session)
-            .await;
-        // Always put it back, even if we got an error.
-        self.session = Some(session);
-        r
+        if self.peek_client().enable_frontend_peek_sequencing {
+            // We need to snatch the session out of self here, because if we just had a reference to it,
+            // then we couldn't do other things with self.
+            let mut session = self.session.take().expect("SessionClient invariant");
+            let r = self
+                .try_frontend_peek_inner(portal_name, &mut session)
+                .await;
+            // Always put it back, even if we got an error.
+            self.session = Some(session);
+            r
+        } else {
+            Ok(None)
+        }
     }
 }
 

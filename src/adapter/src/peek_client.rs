@@ -58,6 +58,10 @@ pub struct PeekClient {
     pub optimizer_metrics: OptimizerMetrics,
     ///// todo: generic timestamp?
     pub oracles: BTreeMap<Timeline, Arc<dyn TimestampOracle<Timestamp> + Send + Sync>>,
+    ////////// todo: This is initialized only at session startup. We'll be able to properly check
+    // the actual feature flag value (without a Coordinator call) once we'll always have a catalog
+    // snapshot at hand.
+    pub enable_frontend_peek_sequencing: bool,
 }
 
 impl PeekClient {
