@@ -17,27 +17,31 @@ cd "$(dirname "$0")/.."
 
 . misc/shlib/shlib.bash
 
-if [[ $# -ne 1 && $# -ne 2 ]]; then
+if [[ $# -lt 1 ]]; then
     die "usage: $0 VERSION [--no-commit] [--sbom]"
 fi
 
 commit=true
 sbom=false
-if [[ $# -eq 2 ]]; then
-    if [[ "$2" == "--no-commit" ]]; then
+
+version=${1#v}
+shift
+
+while [[ $# -gt 0 ]]; do
+    if [[ "$1" == "--no-commit" ]]; then
         commit=false
-    elif [[ "$2" == "--sbom" ]]; then
+        shift
+    elif [[ "$1" == "--sbom" ]]; then
         sbom=true
+        shift
     else
         die "invalid flag: $2, only --no-commit and --sbom are supported"
     fi
-fi
+done
 
 if ! run git diff HEAD --compact-summary --exit-code; then
     die "cannot begin bump with uncommitted content"
 fi
-
-version=${1#v}
 
 sed -i.bak \
     "s/^version = .*/version = \"$version\"/" \
@@ -98,6 +102,7 @@ if $sbom; then
     rm -rf sbom
     mkdir sbom
     find . -type f -name "Dockerfile" -exec sed -i 's/MZFROM/FROM/g' {} +
+    mkdir -p ~/.inspector-sbomgen
     inspector-sbomgen directory --path . --skip-files test --outfile "sbom/materialize.$version.cdx.json" --disable-progress-bar
     git ls-files | grep 'Dockerfile$' | xargs git checkout --
     git add sbom
