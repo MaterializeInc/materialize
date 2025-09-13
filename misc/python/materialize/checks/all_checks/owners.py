@@ -199,20 +199,20 @@ class Owners(Check):
             + dedent(
                 """
                 $ psql-execute command="\\l owner_db*"
-                \\                                                   List of databases
-                    Name    |     Owner     | Encoding | Locale Provider | Collate | Ctype | ICU Locale | ICU Rules | Access privileges
-                ------------+---------------+----------+-----------------+---------+-------+------------+-----------+-------------------
-                 owner_db1  | owner_role_01 | UTF8     | libc            | C       | C     |            |           |
-                 owner_db10 | owner_role_02 | UTF8     | libc            | C       | C     |            |           |
-                 owner_db11 | owner_role_03 | UTF8     | libc            | C       | C     |            |           |
-                 owner_db2  | other_owner   | UTF8     | libc            | C       | C     |            |           |
-                 owner_db3  | owner_role_01 | UTF8     | libc            | C       | C     |            |           |
-                 owner_db4  | other_owner   | UTF8     | libc            | C       | C     |            |           |
-                 owner_db5  | owner_role_01 | UTF8     | libc            | C       | C     |            |           |
-                 owner_db6  | other_owner   | UTF8     | libc            | C       | C     |            |           |
-                 owner_db7  | owner_role_02 | UTF8     | libc            | C       | C     |            |           |
-                 owner_db8  | other_owner   | UTF8     | libc            | C       | C     |            |           |
-                 owner_db9  | owner_role_01 | UTF8     | libc            | C       | C     |            |           |
+                \\                                                 List of databases
+                    Name    |     Owner     | Encoding | Locale Provider | Collate | Ctype | Locale | ICU Rules | Access privileges
+                ------------+---------------+----------+-----------------+---------+-------+--------+-----------+-------------------
+                 owner_db1  | owner_role_01 | UTF8     | libc            | C       | C     |        |           |
+                 owner_db10 | owner_role_02 | UTF8     | libc            | C       | C     |        |           |
+                 owner_db11 | owner_role_03 | UTF8     | libc            | C       | C     |        |           |
+                 owner_db2  | other_owner   | UTF8     | libc            | C       | C     |        |           |
+                 owner_db3  | owner_role_01 | UTF8     | libc            | C       | C     |        |           |
+                 owner_db4  | other_owner   | UTF8     | libc            | C       | C     |        |           |
+                 owner_db5  | owner_role_01 | UTF8     | libc            | C       | C     |        |           |
+                 owner_db6  | other_owner   | UTF8     | libc            | C       | C     |        |           |
+                 owner_db7  | owner_role_02 | UTF8     | libc            | C       | C     |        |           |
+                 owner_db8  | other_owner   | UTF8     | libc            | C       | C     |        |           |
+                 owner_db9  | owner_role_01 | UTF8     | libc            | C       | C     |        |           |
 
 
                 $ psql-execute command="\\dn owner_schema*"
