@@ -320,6 +320,13 @@ impl Connection<InlinedConnection> {
             o => unreachable!("{o:?} is not a Kafka connection"),
         }
     }
+
+    pub fn unwrap_iceberg_catalog(self) -> <InlinedConnection as ConnectionAccess>::IcebergCatalog {
+        match self {
+            Self::IcebergCatalog(conn) => conn,
+            o => unreachable!("{o:?} is not an Iceberg catalog connection"),
+        }
+    }
 }
 
 /// An error returned by [`Connection::validate`].
@@ -474,7 +481,7 @@ impl<C: ConnectionAccess> IcebergCatalogConnection<C> {
 }
 
 impl IcebergCatalogConnection<InlinedConnection> {
-    async fn connect(
+    pub async fn connect(
         &self,
         storage_configuration: &StorageConfiguration,
         in_task: InTask,
@@ -579,6 +586,97 @@ impl IcebergCatalogConnection<InlinedConnection> {
         })?;
 
         Ok(())
+    }
+}
+
+impl RustType<ProtoRestIcebergCatalog> for RestIcebergCatalog {
+    fn into_proto(&self) -> ProtoRestIcebergCatalog {
+        ProtoRestIcebergCatalog {
+            credential: Some(self.credential.into_proto()),
+            scope: self.scope.into_proto(),
+            warehouse: self.warehouse.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoRestIcebergCatalog) -> Result<Self, TryFromProtoError> {
+        Ok(RestIcebergCatalog {
+            credential: proto
+                .credential
+                .into_rust_if_some("ProtoRestIcebergCatalog::credential")?,
+            scope: proto.scope.into_rust()?,
+            warehouse: proto.warehouse.into_rust()?,
+        })
+    }
+}
+
+impl RustType<ProtoS3TablesRestIcebergCatalog> for S3TablesRestIcebergCatalog<InlinedConnection> {
+    fn into_proto(&self) -> ProtoS3TablesRestIcebergCatalog {
+        ProtoS3TablesRestIcebergCatalog {
+            aws_connection: Some(self.aws_connection.into_proto()),
+            warehouse: self.warehouse.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: ProtoS3TablesRestIcebergCatalog) -> Result<Self, TryFromProtoError> {
+        Ok(S3TablesRestIcebergCatalog {
+            aws_connection: proto
+                .aws_connection
+                .into_rust_if_some("ProtoS3TablesRestIcebergCatalog::aws_connection")?,
+            warehouse: proto.warehouse,
+        })
+    }
+}
+
+impl RustType<ProtoIcebergCatalogImpl> for IcebergCatalogImpl<InlinedConnection> {
+    fn into_proto(&self) -> ProtoIcebergCatalogImpl {
+        use proto_iceberg_catalog_impl::Kind as ProtoIcebergCatalogImplKind;
+        ProtoIcebergCatalogImpl {
+            kind: Some(match self {
+                IcebergCatalogImpl::Rest(rest) => {
+                    ProtoIcebergCatalogImplKind::Rest(rest.into_proto())
+                }
+                IcebergCatalogImpl::S3TablesRest(s3) => {
+                    ProtoIcebergCatalogImplKind::S3TablesRest(s3.into_proto())
+                }
+            }),
+        }
+    }
+
+    fn from_proto(proto: ProtoIcebergCatalogImpl) -> Result<Self, TryFromProtoError> {
+        use proto_iceberg_catalog_impl::Kind as ProtoIcebergCatalogImplKind;
+        Ok(
+            match proto
+                .kind
+                .ok_or_else(|| TryFromProtoError::missing_field("ProtoIcebergCatalogImpl::kind"))?
+            {
+                ProtoIcebergCatalogImplKind::Rest(rest) => {
+                    IcebergCatalogImpl::Rest(rest.into_rust()?)
+                }
+                ProtoIcebergCatalogImplKind::S3TablesRest(s3) => {
+                    IcebergCatalogImpl::S3TablesRest(s3.into_rust()?)
+                }
+            },
+        )
+    }
+}
+
+impl RustType<ProtoIcebergCatalogConnection> for IcebergCatalogConnection<InlinedConnection> {
+    fn into_proto(&self) -> ProtoIcebergCatalogConnection {
+        ProtoIcebergCatalogConnection {
+            catalog: Some(self.catalog.into_proto()),
+            uri: Some(self.uri.clone().into_proto()),
+        }
+    }
+
+    fn from_proto(proto: ProtoIcebergCatalogConnection) -> Result<Self, TryFromProtoError> {
+        Ok(IcebergCatalogConnection {
+            catalog: proto
+                .catalog
+                .into_rust_if_some("ProtoIcebergCatalogConnection::catalog")?,
+            uri: proto
+                .uri
+                .into_rust_if_some("ProtoIcebergCatalogConnection::uri")?,
+        })
     }
 }
 
