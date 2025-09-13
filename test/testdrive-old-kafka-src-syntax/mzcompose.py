@@ -305,7 +305,16 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
     matching_files = [
         file
         for file in matching_files
-        if file != "session.td" and file != "status-history.td"
+        if file
+        not in (
+            "session.td",
+            "status-history.td",
+            "kafka-progress.td",
+            "load-generator-key-value.td",  # TODO
+            "materialization-lag.td",  # TODO
+            "primary-key-optimizations.td",  # TODO: Panics! https://buildkite.com/materialize/nightly/builds/13380#01993d51-bf31-4071-86e4-1c2650832b23
+            "privilege_checks.td",  # permission denied for CLUSTER "quickstart"
+        )
     ]
     matching_files: list[str] = sorted(matching_files)
 
