@@ -300,7 +300,7 @@ impl SessionClient {
                     &timeline_context,
                     oracle_read_ts,
                     real_time_recency_ts,
-                )?;
+                ).await?;
                 // We only need read holds if the read depends on a timestamp.
                 let read_holds = match determination.timestamp_context.timestamp() {
                     Some(_ts) => Some(read_holds),
@@ -524,30 +524,32 @@ impl TimestampProvider for FrontendPeekTimestampProvider<'_> {
 
     fn determine_timestamp_for(&self, session: &Session, id_bundle: &CollectionIdBundle, when: &QueryWhen, compute_instance: ComputeInstanceId, timeline_context: &TimelineContext, oracle_read_ts: Option<Timestamp>, real_time_recency_ts: Option<Timestamp>, isolation_level: &IsolationLevel, constraint_based: &ConstraintBasedTimestampSelection) -> Result<(TimestampDetermination<Timestamp>, ReadHolds<Timestamp>), AdapterError> {
 
-        // let read_holds = self.acquire_read_holds(id_bundle);
-        // let upper = self.least_valid_write(id_bundle);
+        // // let read_holds = self.acquire_read_holds(id_bundle);
+        // // let upper = self.least_valid_write(id_bundle);
+        //
+        // let (read_holds, upper) = self.acquire_read_hold_and_collection_write_frontier(id_bundle).expect("missing collection");
+        //
+        // self.determine_timestamp_for_inner(
+        //     session,
+        //     id_bundle,
+        //     when,
+        //     compute_instance,
+        //     timeline_context,
+        //     oracle_read_ts,
+        //     real_time_recency_ts,
+        //     isolation_level,
+        //     constraint_based,
+        //     read_holds,
+        //     upper,
+        // )
 
-        let (read_holds, upper) = self.acquire_read_hold_and_collection_write_frontier(id_bundle).expect("missing collection");
-
-        <Coordinator as TimestampProvider>::determine_timestamp_for_inner(
-            session,
-            id_bundle,
-            when,
-            compute_instance,
-            timeline_context,
-            oracle_read_ts,
-            real_time_recency_ts,
-            isolation_level,
-            constraint_based,
-            read_holds,
-            upper,
-        )
+        panic!("use frontend_determine_timestamp_for instead");
     }
 }
 
 impl FrontendPeekTimestampProvider<'_> {
     /////////// todo: this is copy-pasted from Coordinator
-    pub(crate) fn determine_timestamp(
+    pub(crate) async fn determine_timestamp(
         &self,
         session: &Session,
         id_bundle: &CollectionIdBundle,
@@ -563,7 +565,7 @@ impl FrontendPeekTimestampProvider<'_> {
         );
 
         let isolation_level = session.vars().transaction_isolation();
-        let (det, read_holds) = self.determine_timestamp_for(
+        let (det, read_holds) = self.frontend_determine_timestamp_for(
             session,
             id_bundle,
             when,
@@ -573,7 +575,7 @@ impl FrontendPeekTimestampProvider<'_> {
             real_time_recency_ts,
             isolation_level,
             &constraint_based,
-        )?;
+        ).await?;
 
         /////////// todo: pass metrics into FrontendPeekTimestampProvider
         // self.metrics
@@ -622,20 +624,47 @@ impl FrontendPeekTimestampProvider<'_> {
 
         Ok((det, read_holds))
     }
+
+    async fn frontend_determine_timestamp_for(&self, session: &Session, id_bundle: &CollectionIdBundle, when: &QueryWhen, compute_instance: ComputeInstanceId, timeline_context: &TimelineContext, oracle_read_ts: Option<Timestamp>, real_time_recency_ts: Option<Timestamp>, isolation_level: &IsolationLevel, constraint_based: &ConstraintBasedTimestampSelection) -> Result<(TimestampDetermination<Timestamp>, ReadHolds<Timestamp>), AdapterError> {
+
+        // let read_holds = self.acquire_read_holds(id_bundle);
+        // let upper = self.least_valid_write(id_bundle);
+
+        let (read_holds, upper) = self.acquire_read_hold_and_collection_write_frontier(id_bundle).await.expect("missing collection");
+
+        <Coordinator as TimestampProvider>::determine_timestamp_for_inner(
+            session,
+            id_bundle,
+            when,
+            compute_instance,
+            timeline_context,
+            oracle_read_ts,
+            real_time_recency_ts,
+            isolation_level,
+            constraint_based,
+            read_holds,
+            upper,
+        )
+    }
 }
 
 impl FrontendPeekTimestampProvider<'_> {
     /////////// todo: make this able to handle multiple collections _and_ not just compute collections, but also storage
-    pub fn acquire_read_hold_and_collection_write_frontier(&self, id_bundle: &CollectionIdBundle) -> Result<(ReadHolds<Timestamp>, Antichain<Timestamp>), CollectionMissing> {
-        // ///////////// todo: do away with the block_in_place
-        tokio::task::block_in_place(|| {
-            let handle = tokio::runtime::Handle::current();
-            handle.block_on(async {
-                self.session_client
-                    .peek_client()
-                    .acquire_read_holds_and_collection_write_frontiers(id_bundle)
-                    .await
-            })
-        })
+    pub async fn acquire_read_hold_and_collection_write_frontier(&self, id_bundle: &CollectionIdBundle) -> Result<(ReadHolds<Timestamp>, Antichain<Timestamp>), CollectionMissing> {
+        // // ///////////// todo: do away with the block_in_place
+        // tokio::task::block_in_place(|| {
+        //     let handle = tokio::runtime::Handle::current();
+        //     handle.block_on(async {
+        //         self.session_client
+        //             .peek_client()
+        //             .acquire_read_holds_and_collection_write_frontiers(id_bundle)
+        //             .await
+        //     })
+        // })
+
+        self.session_client
+            .peek_client()
+            .acquire_read_holds_and_collection_write_frontiers(id_bundle)
+            .await
     }
 }
