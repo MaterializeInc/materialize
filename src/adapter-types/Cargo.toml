@@ -14,7 +14,7 @@ mz-dyncfg = { path = "../dyncfg" }
 mz-ore = { path = "../ore" }
 mz-repr = { path = "../repr" }
 mz-storage-types = { path = "../storage-types" }
-serde = "1.0.219"
+serde = "1.0.223"
 timely = "0.23.0"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 tracing = "0.1.37"

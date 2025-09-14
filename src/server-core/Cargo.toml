@@ -16,7 +16,7 @@ clap = { version = "4.5.23", features = ["derive", "env"] }
 openssl = { version = "0.10.73", features = ["vendored"] }
 schemars = { version = "1.0.4" }
 scopeguard = "1.2.0"
-serde = { version = "1.0.219", features = ["derive"] }
+serde = { version = "1.0.223", features = ["derive"] }
 socket2 = "0.5.10"
 tokio-stream = "0.1.17"
 proxy-header = "0.1.2"
@@ -25,9 +25,9 @@ futures = "0.3.31"
 mz-dyncfg = { path = "../dyncfg", default-features = false }
 mz-ore = { path = "../ore", default-features = false, features = ["async", "network", "test"] }
 tokio = "1.44.1"
-tokio-metrics = "0.4.2"
+tokio-metrics = "0.4.5"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
-uuid = { version = "1.17.0", features = ["v4"] }
+uuid = { version = "1.18.1", features = ["v4"] }
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

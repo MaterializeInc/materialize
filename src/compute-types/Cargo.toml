@@ -23,7 +23,7 @@ mz-storage-types = { path = "../storage-types" }
 proptest = { version = "1.7.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.5.1", features = ["boxed_union"] }
 prost = { version = "0.13.5", features = ["no-recursion-limit"] }
-serde = { version = "1.0.219", features = ["derive"] }
+serde = { version = "1.0.223", features = ["derive"] }
 timely = "0.23.0"
 tracing = "0.1.37"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
