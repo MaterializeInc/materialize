@@ -22,10 +22,10 @@ aho-corasick = { version = "1.1.3" }
 arrayvec = { version = "0.7.6" }
 async-compression = { git = "https://github.com/MaterializeInc/async-compression.git", rev = "fe7411eb6104a02a89e2c3a76ab326dd6594214d", default-features = false, features = ["brotli", "bzip2-sys", "gzip", "tokio", "xz", "zlib", "zstd"] }
 aws-config = { version = "1.2.1", default-features = false, features = ["sso"] }
-aws-credential-types = { version = "1.2.5", default-features = false, features = ["hardcoded-credentials", "test-util"] }
-aws-runtime = { version = "1.5.9", default-features = false, features = ["event-stream", "http-02x"] }
+aws-credential-types = { version = "1.2.6", default-features = false, features = ["hardcoded-credentials", "test-util"] }
+aws-runtime = { version = "1.5.10", default-features = false, features = ["event-stream", "http-02x"] }
 aws-sdk-sts = { version = "1.41.0", default-features = false, features = ["rt-tokio"] }
-aws-sigv4 = { version = "1.3.3", features = ["http0-compat", "sign-eventstream"] }
+aws-sigv4 = { version = "1.3.4", features = ["http0-compat", "sign-eventstream"] }
 aws-smithy-async = { version = "1.2.5", default-features = false, features = ["rt-tokio"] }
 aws-smithy-http = { version = "0.60.12", default-features = false, features = ["event-stream"] }
 aws-smithy-runtime = { version = "1.8.4", default-features = false, features = ["client", "connector-hyper-0-14-x"] }
@@ -39,7 +39,7 @@ bit-vec = { version = "0.8.0" }
 bitflags = { version = "2.9.0", default-features = false, features = ["std"] }
 brotli = { version = "8.0.2" }
 bstr = { version = "1.12.0" }
-bytemuck = { version = "1.23.1", default-features = false, features = ["latest_stable_rust"] }
+bytemuck = { version = "1.23.2", default-features = false, features = ["latest_stable_rust"] }
 bytes = { version = "1.10.1", features = ["serde"] }
 chrono = { version = "0.4.41", features = ["serde"] }
 clap = { version = "4.5.23", features = ["derive", "env", "string", "wrap_help"] }
@@ -57,11 +57,11 @@ dec = { version = "0.4.11", default-features = false, features = ["num-traits", 
 deranged = { version = "0.3.11", default-features = false, features = ["powerfmt", "quickcheck", "serde", "std"] }
 digest = { version = "0.10.7", features = ["mac", "oid", "std"] }
 either = { version = "1.15.0", features = ["use_std"] }
-event-listener = { version = "5.4.0" }
+event-listener = { version = "5.4.1" }
 event-listener-strategy = { version = "0.5.4" }
 fastrand = { version = "2.3.0" }
 flate2 = { version = "1.1.2", features = ["zlib", "zlib-rs"] }
-form_urlencoded = { version = "1.2.1" }
+form_urlencoded = { version = "1.2.2" }
 futures-channel = { version = "0.3.31", features = ["sink"] }
 futures-core = { version = "0.3.31" }
 futures-executor = { version = "0.3.31" }
@@ -76,18 +76,18 @@ hashbrown-3575ec1268b04181 = { package = "hashbrown", version = "0.15.3" }
 hashbrown-582f2526e08bb6a0 = { package = "hashbrown", version = "0.14.5", default-features = false, features = ["allocator-api2", "inline-more", "raw"] }
 hyper = { version = "0.14.27", features = ["client", "http1", "http2", "stream", "tcp"] }
 hyper-util = { version = "0.1.16", features = ["client-legacy", "server-auto", "service", "tracing"] }
-insta = { version = "1.43.1", features = ["json"] }
-libc = { version = "0.2.174", features = ["extra_traits", "use_std"] }
+insta = { version = "1.43.2", features = ["json"] }
+libc = { version = "0.2.175", features = ["extra_traits", "use_std"] }
 libz-sys = { version = "1.1.22", features = ["static"] }
 lock_api = { version = "0.4.13", features = ["serde"] }
-log = { version = "0.4.27", default-features = false, features = ["std"] }
+log = { version = "0.4.28", default-features = false, features = ["std"] }
 lru = { version = "0.12.5" }
 memchr = { version = "2.7.5" }
 mime_guess = { version = "2.0.5" }
 minimal-lexical = { version = "0.2.1", default-features = false, features = ["std"] }
 moka = { version = "0.12.10", features = ["future", "sync"] }
 mysql_async = { version = "0.36.1", default-features = false, features = ["binlog", "minimal", "native-tls-tls", "tracing"] }
-mysql_common = { version = "0.35.4", default-features = false, features = ["binlog", "chrono"] }
+mysql_common = { version = "0.35.5", default-features = false, features = ["binlog", "chrono"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["alpn"] }
 nix = { version = "0.30.1", features = ["fs", "signal"] }
 nom = { version = "7.1.3" }
@@ -164,10 +164,10 @@ aho-corasick = { version = "1.1.3" }
 arrayvec = { version = "0.7.6" }
 async-compression = { git = "https://github.com/MaterializeInc/async-compression.git", rev = "fe7411eb6104a02a89e2c3a76ab326dd6594214d", default-features = false, features = ["brotli", "bzip2-sys", "gzip", "tokio", "xz", "zlib", "zstd"] }
 aws-config = { version = "1.2.1", default-features = false, features = ["sso"] }
-aws-credential-types = { version = "1.2.5", default-features = false, features = ["hardcoded-credentials", "test-util"] }
-aws-runtime = { version = "1.5.9", default-features = false, features = ["event-stream", "http-02x"] }
+aws-credential-types = { version = "1.2.6", default-features = false, features = ["hardcoded-credentials", "test-util"] }
+aws-runtime = { version = "1.5.10", default-features = false, features = ["event-stream", "http-02x"] }
 aws-sdk-sts = { version = "1.41.0", default-features = false, features = ["rt-tokio"] }
-aws-sigv4 = { version = "1.3.3", features = ["http0-compat", "sign-eventstream"] }
+aws-sigv4 = { version = "1.3.4", features = ["http0-compat", "sign-eventstream"] }
 aws-smithy-async = { version = "1.2.5", default-features = false, features = ["rt-tokio"] }
 aws-smithy-http = { version = "0.60.12", default-features = false, features = ["event-stream"] }
 aws-smithy-runtime = { version = "1.8.4", default-features = false, features = ["client", "connector-hyper-0-14-x"] }
@@ -181,9 +181,9 @@ bit-vec = { version = "0.8.0" }
 bitflags = { version = "2.9.0", default-features = false, features = ["std"] }
 brotli = { version = "8.0.2" }
 bstr = { version = "1.12.0" }
-bytemuck = { version = "1.23.1", default-features = false, features = ["latest_stable_rust"] }
+bytemuck = { version = "1.23.2", default-features = false, features = ["latest_stable_rust"] }
 bytes = { version = "1.10.1", features = ["serde"] }
-cc = { version = "1.2.30", default-features = false, features = ["parallel"] }
+cc = { version = "1.2.37", default-features = false, features = ["parallel"] }
 chrono = { version = "0.4.41", features = ["serde"] }
 clap = { version = "4.5.23", features = ["derive", "env", "string", "wrap_help"] }
 clap_builder = { version = "4.5.23", default-features = false, features = ["color", "env", "std", "string", "suggestions", "usage", "wrap_help"] }
@@ -200,11 +200,11 @@ dec = { version = "0.4.11", default-features = false, features = ["num-traits", 
 deranged = { version = "0.3.11", default-features = false, features = ["powerfmt", "quickcheck", "serde", "std"] }
 digest = { version = "0.10.7", features = ["mac", "oid", "std"] }
 either = { version = "1.15.0", features = ["use_std"] }
-event-listener = { version = "5.4.0" }
+event-listener = { version = "5.4.1" }
 event-listener-strategy = { version = "0.5.4" }
 fastrand = { version = "2.3.0" }
 flate2 = { version = "1.1.2", features = ["zlib", "zlib-rs"] }
-form_urlencoded = { version = "1.2.1" }
+form_urlencoded = { version = "1.2.2" }
 futures-channel = { version = "0.3.31", features = ["sink"] }
 futures-core = { version = "0.3.31" }
 futures-executor = { version = "0.3.31" }
@@ -219,18 +219,18 @@ hashbrown-3575ec1268b04181 = { package = "hashbrown", version = "0.15.3" }
 hashbrown-582f2526e08bb6a0 = { package = "hashbrown", version = "0.14.5", default-features = false, features = ["allocator-api2", "inline-more", "raw"] }
 hyper = { version = "0.14.27", features = ["client", "http1", "http2", "stream", "tcp"] }
 hyper-util = { version = "0.1.16", features = ["client-legacy", "server-auto", "service", "tracing"] }
-insta = { version = "1.43.1", features = ["json"] }
-libc = { version = "0.2.174", features = ["extra_traits", "use_std"] }
+insta = { version = "1.43.2", features = ["json"] }
+libc = { version = "0.2.175", features = ["extra_traits", "use_std"] }
 libz-sys = { version = "1.1.22", features = ["static"] }
 lock_api = { version = "0.4.13", features = ["serde"] }
-log = { version = "0.4.27", default-features = false, features = ["std"] }
+log = { version = "0.4.28", default-features = false, features = ["std"] }
 lru = { version = "0.12.5" }
 memchr = { version = "2.7.5" }
 mime_guess = { version = "2.0.5" }
 minimal-lexical = { version = "0.2.1", default-features = false, features = ["std"] }
 moka = { version = "0.12.10", features = ["future", "sync"] }
 mysql_async = { version = "0.36.1", default-features = false, features = ["binlog", "minimal", "native-tls-tls", "tracing"] }
-mysql_common = { version = "0.35.4", default-features = false, features = ["binlog", "chrono"] }
+mysql_common = { version = "0.35.5", default-features = false, features = ["binlog", "chrono"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["alpn"] }
 nix = { version = "0.30.1", features = ["fs", "signal"] }
 nom = { version = "7.1.3" }
@@ -304,7 +304,7 @@ zstd-safe = { version = "7.2.1", default-features = false, features = ["arrays",
 zstd-sys = { version = "2.0.13", features = ["std"] }
 
 [target.x86_64-unknown-linux-gnu.dependencies]
-camino = { version = "1.1.10", default-features = false, features = ["serde1"] }
+camino = { version = "1.1.12", default-features = false, features = ["serde1"] }
 hyper = { version = "0.14.27", default-features = false, features = ["runtime"] }
 hyper-util = { version = "0.1.16", default-features = false, features = ["client-proxy", "client-proxy-system"] }
 idna = { version = "1.0.3" }
@@ -321,7 +321,7 @@ rustix-dff4ba8e3ae991db = { package = "rustix", version = "1.0.5", features = ["
 tower-http = { version = "0.6.6", default-features = false, features = ["follow-redirect"] }
 
 [target.x86_64-unknown-linux-gnu.build-dependencies]
-camino = { version = "1.1.10", default-features = false, features = ["serde1"] }
+camino = { version = "1.1.12", default-features = false, features = ["serde1"] }
 hyper = { version = "0.14.27", default-features = false, features = ["runtime"] }
 hyper-util = { version = "0.1.16", default-features = false, features = ["client-proxy", "client-proxy-system"] }
 idna = { version = "1.0.3" }
@@ -338,7 +338,7 @@ rustix-dff4ba8e3ae991db = { package = "rustix", version = "1.0.5", features = ["
 tower-http = { version = "0.6.6", default-features = false, features = ["follow-redirect"] }
 
 [target.x86_64-apple-darwin.dependencies]
-camino = { version = "1.1.10", default-features = false, features = ["serde1"] }
+camino = { version = "1.1.12", default-features = false, features = ["serde1"] }
 hyper = { version = "0.14.27", default-features = false, features = ["runtime"] }
 hyper-util = { version = "0.1.16", default-features = false, features = ["client-proxy", "client-proxy-system"] }
 idna = { version = "1.0.3" }
@@ -352,7 +352,7 @@ security-framework = { version = "2.10.0", features = ["alpn"] }
 tower-http = { version = "0.6.6", default-features = false, features = ["follow-redirect"] }
 
 [target.x86_64-apple-darwin.build-dependencies]
-camino = { version = "1.1.10", default-features = false, features = ["serde1"] }
+camino = { version = "1.1.12", default-features = false, features = ["serde1"] }
 hyper = { version = "0.14.27", default-features = false, features = ["runtime"] }
 hyper-util = { version = "0.1.16", default-features = false, features = ["client-proxy", "client-proxy-system"] }
 idna = { version = "1.0.3" }
