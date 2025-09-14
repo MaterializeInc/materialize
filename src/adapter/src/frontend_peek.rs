@@ -15,7 +15,7 @@ use crate::coord::{
     TargetCluster, catalog_serving,
 };
 use crate::optimize::Optimize;
-use crate::optimize::dataflows::DataflowBuilder;
+use crate::optimize::dataflows::{ComputeInstanceSnapshot, DataflowBuilder};
 use crate::session::{Session, TransactionOps, TransactionStatus};
 use crate::{
     AdapterError, CollectionIdBundle, ExecuteResponse, ReadHolds, SessionClient,
@@ -157,8 +157,8 @@ impl SessionClient {
 
         let cluster = catalog.resolve_target_cluster(target_cluster, session)?;
 
-        //////////////////////////////////////// todo: eliminate this for better performance !!!
-        let compute_instance_snapshot = self.peek_client().snapshot(cluster.id()).await.unwrap();
+        //let compute_instance_snapshot = self.peek_client().snapshot(cluster.id()).await.unwrap();
+        let compute_instance_snapshot = ComputeInstanceSnapshot::new_without_collections(cluster.id());
 
         let (_, view_id) = self.peek_client().transient_id_gen.allocate_id();
         let (_, index_id) = self.peek_client().transient_id_gen.allocate_id();
