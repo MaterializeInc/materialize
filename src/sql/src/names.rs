@@ -102,7 +102,7 @@ impl From<FullItemName> for UnresolvedItemName {
 
 /// A fully-qualified non-human readable name of an item in the catalog using IDs for the database
 /// and schema.
-#[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct QualifiedItemName {
     pub qualifiers: ItemQualifiers,
     pub item: String,
