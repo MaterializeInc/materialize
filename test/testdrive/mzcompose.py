@@ -217,8 +217,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             if not args.slow and file in (
                 "explain-pushdown.td",
                 "fivetran-destination.td",
-                # Slow but often fails, still run on test pipeline
-                # "introspection-sources.td",
+                "introspection-sources.td",
                 "kafka-upsert-sources.td",
                 "materialized-view-refresh-options.td",
                 "upsert-source-race.td",
