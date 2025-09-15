@@ -1143,4 +1143,5 @@ mod tests {
         assert!(check_role_allowed("PUBLIC", AllowedRoles::NormalAndInternal).is_err());
         assert!(check_role_allowed("PUBLIC", AllowedRoles::Normal).is_err());
     }
+
 }
