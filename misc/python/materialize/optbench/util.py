@@ -10,8 +10,12 @@
 from collections.abc import Callable
 from pathlib import Path
 from re import match
+from typing import TYPE_CHECKING, cast
 
 import numpy as np
+
+if TYPE_CHECKING:
+    pass
 
 from . import Scenario
 
@@ -33,7 +37,7 @@ def duration_to_timedelta(duration: str) -> np.timedelta64 | None:
         return None
     else:
         unit = "us" if m.group("unit") == "µs" else m.group("unit")
-        time = np.timedelta64(m.group("time"), unit)
+        time = np.timedelta64(m.group("time"), cast("np._TimeUnitSpec", unit))
         frac = np.timedelta64(frac_to_ns[unit](m.group("frac") or "0"), "ns")
         return time + frac
 

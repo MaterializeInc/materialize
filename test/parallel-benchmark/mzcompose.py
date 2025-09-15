@@ -341,7 +341,7 @@ def report(
         if num_plots > 1:
             title += f"\n(part {i+1}/{num_plots})"
         plt.title(title)
-        plt.legend(loc="best")
+        plt.legend(loc="best")  # type: ignore
         plt.grid(True)
         plt.ylim(bottom=0)
         plot_path = f"plots/{scenario_name}_{suffix}_{i}_timeline.png"
@@ -365,7 +365,7 @@ def report(
             (uniqu_durations, counts) = numpy.unique(durations, return_counts=True)
             counts = numpy.cumsum(counts)
             plt.plot(uniqu_durations, 1 - counts / counts.max(), label=key)
-        plt.legend(loc="best")
+        plt.legend(loc="best")  # type: ignore
 
         plot_path = f"plots/{scenario_name}_{suffix}_ccdf.png"
         plt.savefig(MZ_ROOT / plot_path, dpi=300)
