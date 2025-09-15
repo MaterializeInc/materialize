@@ -115,9 +115,9 @@ impl SessionClient {
                 &plan,
             ),
         };
-        let (target_cluster_id, target_cluster_name) = {
+        let (cluster, target_cluster_id, target_cluster_name) = {
             let cluster = catalog.resolve_target_cluster(target_cluster, &session)?;
-            (cluster.id.clone(), cluster.name.clone()) /////// todo: or just refs instead of clones?
+            (cluster, cluster.id.clone(), cluster.name.clone()) /////// todo: or just refs instead of clones?
         };
 
         ////// todo: statement logging: set_statement_execution_cluster
@@ -154,8 +154,6 @@ impl SessionClient {
         }
 
         // # From peek_validate
-
-        let cluster = catalog.resolve_target_cluster(target_cluster, session)?;
 
         //let compute_instance_snapshot = self.peek_client().snapshot(cluster.id()).await.unwrap();
         let compute_instance_snapshot = ComputeInstanceSnapshot::new_without_collections(cluster.id());
@@ -492,34 +490,38 @@ impl TimestampProvider for FrontendPeekTimestampProvider<'_> {
 
     /////////// todo: unused if we are using acquire_read_holds_and_collection_write_frontiers
     fn acquire_read_holds(&self, id_bundle: &CollectionIdBundle) -> ReadHolds<Timestamp> {
-        println!("FrontendPeekTimestampProvider::acquire_read_holds");
-        let r = tokio::task::block_in_place(|| {
-            let handle = tokio::runtime::Handle::current();
-            handle.block_on(async {
-                self.session_client
-                    .peek_client()
-                    .acquire_read_holds(id_bundle)
-                    .await
-            })
-        });
-        println!("FrontendPeekTimestampProvider::acquire_read_holds done");
-        r
+        // println!("FrontendPeekTimestampProvider::acquire_read_holds");
+        // let r = tokio::task::block_in_place(|| {
+        //     let handle = tokio::runtime::Handle::current();
+        //     handle.block_on(async {
+        //         self.session_client
+        //             .peek_client()
+        //             .acquire_read_holds(id_bundle)
+        //             .await
+        //     })
+        // });
+        // println!("FrontendPeekTimestampProvider::acquire_read_holds done");
+        // r
+        
+        panic!("Use acquire_read_holds_and_collection_write_frontiers instead");
     }
 
     /////////// todo: unused if we are using acquire_read_holds_and_collection_write_frontiers
     fn least_valid_write(&self, id_bundle: &CollectionIdBundle) -> Antichain<Timestamp> {
-        println!("FrontendPeekTimestampProvider::least_valid_write");
-        let r = tokio::task::block_in_place(|| {
-            let handle = tokio::runtime::Handle::current();
-            handle.block_on(async {
-                self.session_client
-                    .peek_client()
-                    .least_valid_write(id_bundle)
-                    .await
-            })
-        });
-        println!("FrontendPeekTimestampProvider::least_valid_write done");
-        r
+        // println!("FrontendPeekTimestampProvider::least_valid_write");
+        // let r = tokio::task::block_in_place(|| {
+        //     let handle = tokio::runtime::Handle::current();
+        //     handle.block_on(async {
+        //         self.session_client
+        //             .peek_client()
+        //             .least_valid_write(id_bundle)
+        //             .await
+        //     })
+        // });
+        // println!("FrontendPeekTimestampProvider::least_valid_write done");
+        // r
+
+        panic!("Use acquire_read_holds_and_collection_write_frontiers instead");
     }
 
     fn determine_timestamp_for(&self, session: &Session, id_bundle: &CollectionIdBundle, when: &QueryWhen, compute_instance: ComputeInstanceId, timeline_context: &TimelineContext, oracle_read_ts: Option<Timestamp>, real_time_recency_ts: Option<Timestamp>, isolation_level: &IsolationLevel, constraint_based: &ConstraintBasedTimestampSelection) -> Result<(TimestampDetermination<Timestamp>, ReadHolds<Timestamp>), AdapterError> {
@@ -630,7 +632,7 @@ impl FrontendPeekTimestampProvider<'_> {
         // let read_holds = self.acquire_read_holds(id_bundle);
         // let upper = self.least_valid_write(id_bundle);
 
-        let (read_holds, upper) = self.acquire_read_hold_and_collection_write_frontier(id_bundle).await.expect("missing collection");
+        let (read_holds, upper) = self.acquire_read_holds_and_collection_write_frontiers(id_bundle).await.expect("missing collection");
 
         <Coordinator as TimestampProvider>::determine_timestamp_for_inner(
             session,
@@ -650,7 +652,7 @@ impl FrontendPeekTimestampProvider<'_> {
 
 impl FrontendPeekTimestampProvider<'_> {
     /////////// todo: make this able to handle multiple collections _and_ not just compute collections, but also storage
-    pub async fn acquire_read_hold_and_collection_write_frontier(&self, id_bundle: &CollectionIdBundle) -> Result<(ReadHolds<Timestamp>, Antichain<Timestamp>), CollectionMissing> {
+    pub async fn acquire_read_holds_and_collection_write_frontiers(&self, id_bundle: &CollectionIdBundle) -> Result<(ReadHolds<Timestamp>, Antichain<Timestamp>), CollectionMissing> {
         // // ///////////// todo: do away with the block_in_place
         // tokio::task::block_in_place(|| {
         //     let handle = tokio::runtime::Handle::current();
