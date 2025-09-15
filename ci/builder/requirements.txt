@@ -33,8 +33,7 @@ pandas-stubs==2.2.3.250308
 parameterized==0.9.0
 paramiko==4.0.0
 pdoc==15.0.4
-# We can revert back to standard pg8000 versions once https://github.com/tlocke/pg8000/pull/161 is released
-pg8000@git+https://github.com/tlocke/pg8000@46c00021ade1d19466b07ed30392386c5f0a6b8e
+pg8000==1.31.5
 prettytable==3.16.0
 psutil==7.0.0
 # psycopg 3.2.8 causes Scalability test failures
