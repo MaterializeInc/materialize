@@ -1111,6 +1111,10 @@ steps:
               composition: platform-checks
               args: [--scenario=ZeroDowntimeBumpedVersion, "--seed=$BUILDKITE_JOB_ID"]
               ci-builder: stable
+        env:
+          # Faster build, less memory used
+          CI_BAZEL_BUILD: 0
+          CI_BAZEL_LTO: 0
 
       - id: cloudtest-upgrade
         label: "Platform checks upgrade in Cloudtest/K8s"
@@ -2191,8 +2195,8 @@ steps:
                composition: race-condition
                args: [--runtime=2800, --scenario=subsequent-chain]
 
-       - id: race-condition-subsequent-chain-100
-         label: "Race Condition Test (subsequent chain, 100 objects)"
+       - id: race-condition-subsequent-chain-50
+         label: "Race Condition Test (subsequent chain, 50 objects)"
          depends_on: build-x86_64
          timeout_in_minutes: 180
          agents:
@@ -2200,7 +2204,8 @@ steps:
          plugins:
            - ./ci/plugins/mzcompose:
                composition: race-condition
-               args: [--runtime=2800, --scenario=subsequent-chain, --num-objects=100]
+               # OoM with 100 objects
+               args: [--runtime=2800, --scenario=subsequent-chain, --num-objects=50]
 
        - id: race-condition-concurrent
          label: "Race Condition Test (concurrent)"

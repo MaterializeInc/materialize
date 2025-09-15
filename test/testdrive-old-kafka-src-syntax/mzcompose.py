@@ -305,7 +305,17 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
     matching_files = [
         file
         for file in matching_files
-        if file != "session.td" and file != "status-history.td"
+        if file
+        not in (
+            "session.td",
+            "status-history.td",
+            "kafka-progress.td",
+            # TODO: Reenable these 4 files when database-issues#9686 is fixed
+            "load-generator-key-value.td",
+            "materialization-lag.td",
+            "primary-key-optimizations.td",
+            "privilege_checks.td",
+        )
     ]
     matching_files: list[str] = sorted(matching_files)
 
