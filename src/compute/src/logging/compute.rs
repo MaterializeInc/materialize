@@ -356,9 +356,9 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
                         peek: peek.session_with_builder(&cap),
                         peek_duration: peek_duration.session_with_builder(&cap),
                         shutdown_duration: shutdown_duration.session(&cap),
-                        arrangement_heap_allocations: arrangement_heap_allocations.session_with_builder(&cap),
-                        arrangement_heap_capacity: arrangement_heap_capacity.session_with_builder(&cap),
-                        arrangement_heap_size: arrangement_heap_size.session_with_builder(&cap),
+                        arrangement_heap_size: arrangement_heap_size.session(&cap),
+                        arrangement_heap_capacity: arrangement_heap_capacity.session(&cap),
+                        arrangement_heap_allocations: arrangement_heap_allocations.session(&cap),
                         error_count: error_count.session(&cap),
                         hydration_time: hydration_time.session(&cap),
                         lir_mapping: lir_mapping.session_with_builder(&cap),
@@ -383,6 +383,13 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
         let worker_id = scope.index();
 
         // Encode the contents of each logging stream into its expected `Row` format.
+        let dataflow_current: Collection<_, (Row, Row), Diff, _> = export.as_collection();
+        let frontier_current = frontier.as_collection();
+        let import_frontier_current = import_frontier.as_collection();
+        let peek_current = peek.as_collection();
+        let peek_duration =
+            peek_duration
+                .as_collection();
         let mut packer = PermutedRowPacker::new(ComputeLog::ShutdownDuration);
         let shutdown_duration = shutdown_duration.as_collection().map(move |bucket| {
             packer.pack_slice_owned(&[
@@ -390,6 +397,29 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
                 Datum::UInt64(bucket.try_into().expect("bucket too big")),
             ])
         });
+
+        let arrangement_heap_datum_to_row =
+            move |packer: &mut PermutedRowPacker, ArrangementHeapDatum { operator_id }| {
+                packer.pack_slice_owned(&[
+                    Datum::UInt64(operator_id.try_into().expect("operator_id too big")),
+                    Datum::UInt64(u64::cast_from(worker_id)),
+                ])
+            };
+
+        let mut packer = PermutedRowPacker::new(ComputeLog::ArrangementHeapSize);
+        let arrangement_heap_size = arrangement_heap_size
+            .as_collection()
+            .map(move |d| arrangement_heap_datum_to_row(&mut packer, d));
+
+        let mut packer = PermutedRowPacker::new(ComputeLog::ArrangementHeapCapacity);
+        let arrangement_heap_capacity = arrangement_heap_capacity
+            .as_collection()
+            .map(move |d| arrangement_heap_datum_to_row(&mut packer, d));
+
+        let mut packer = PermutedRowPacker::new(ComputeLog::ArrangementHeapSize);
+        let arrangement_heap_allocations = arrangement_heap_allocations
+            .as_collection()
+            .map(move |d| arrangement_heap_datum_to_row(&mut packer, d));
 
         let mut packer = PermutedRowPacker::new(ComputeLog::ErrorCount);
         let error_count = error_count.as_collection().map({
@@ -451,17 +481,17 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
 
         use ComputeLog::*;
         let columnar_logs = [
-            (ArrangementHeapAllocations, arrangement_heap_allocations),
-            (ArrangementHeapCapacity, arrangement_heap_capacity),
-            (ArrangementHeapSize, arrangement_heap_size),
-            (DataflowCurrent, export),
-            (FrontierCurrent, frontier),
-            (ImportFrontierCurrent, import_frontier),
-            (PeekCurrent, peek),
+            (DataflowCurrent, dataflow_current),
+            (FrontierCurrent, frontier_current),
+            (ImportFrontierCurrent, import_frontier_current),
+            (PeekCurrent, peek_current),
             (PeekDuration, peek_duration),
         ];
         let logs = [
             (ShutdownDuration, shutdown_duration),
+            (ArrangementHeapSize, arrangement_heap_size),
+            (ArrangementHeapCapacity, arrangement_heap_capacity),
+            (ArrangementHeapAllocations, arrangement_heap_allocations),
             (ErrorCount, error_count),
             (HydrationTime, hydration_time),
             (LirMapping, lir_mapping),
@@ -470,10 +500,10 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
 
         // Build the output arrangements.
         let mut collections = BTreeMap::new();
-        for (variant, stream) in columnar_logs {
+        for (variant, collection) in columnar_logs {
             let variant = LogVariant::Compute(variant);
             if config.index_logs.contains_key(&variant) {
-                let trace = stream
+                let trace = collection
                     .mz_arrange_core::<_, Col2ValBatcher<_, _, _, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
                         ExchangeCore::<ColumnBuilder<_>, _>::new_core(columnar_exchange::<Row, Row, Timestamp, Diff>),
                         &format!("Arrange {variant:?}"),
@@ -546,12 +576,6 @@ struct DemuxState<A> {
     lir_mapping: BTreeMap<GlobalId, BTreeMap<LirId, LirMetadata>>,
     /// Dataflow -> `GlobalId` mapping (many-to-one).
     dataflow_global_ids: BTreeMap<usize, BTreeSet<GlobalId>>,
-    /// A row packer for the arrangement heap allocations output.
-    arrangement_heap_allocations_packer: PermutedRowPacker,
-    /// A row packer for the arrangement heap capacity output.
-    arrangement_heap_capacity_packer: PermutedRowPacker,
-    /// A row packer for the arrangement heap size output.
-    arrangement_heap_size_packer: PermutedRowPacker,
     /// A row packer for the exports output.
     export_packer: PermutedRowPacker,
     /// A row packer for the frontier output.
@@ -579,46 +603,12 @@ impl<A: Scheduler> DemuxState<A> {
             arrangement_size: Default::default(),
             lir_mapping: Default::default(),
             dataflow_global_ids: Default::default(),
-            arrangement_heap_allocations_packer: PermutedRowPacker::new(
-                ComputeLog::ArrangementHeapAllocations,
-            ),
-            arrangement_heap_capacity_packer: PermutedRowPacker::new(
-                ComputeLog::ArrangementHeapCapacity,
-            ),
-            arrangement_heap_size_packer: PermutedRowPacker::new(ComputeLog::ArrangementHeapSize),
             export_packer: PermutedRowPacker::new(ComputeLog::DataflowCurrent),
             frontier_packer: PermutedRowPacker::new(ComputeLog::FrontierCurrent),
             import_frontier_packer: PermutedRowPacker::new(ComputeLog::ImportFrontierCurrent),
             peek_duration_packer: PermutedRowPacker::new(ComputeLog::PeekDuration),
             peek_packer: PermutedRowPacker::new(ComputeLog::PeekCurrent),
         }
-    }
-
-    /// Pack an arrangement heap allocations update key-value for the given operator.
-    fn pack_arrangement_heap_allocations_update(
-        &mut self,
-        operator_id: usize,
-    ) -> (&RowRef, &RowRef) {
-        self.arrangement_heap_allocations_packer.pack_slice(&[
-            Datum::UInt64(operator_id.try_into().expect("operator_id too big")),
-            Datum::UInt64(u64::cast_from(self.worker_id)),
-        ])
-    }
-
-    /// Pack an arrangement heap capacity update key-value for the given operator.
-    fn pack_arrangement_heap_capacity_update(&mut self, operator_id: usize) -> (&RowRef, &RowRef) {
-        self.arrangement_heap_capacity_packer.pack_slice(&[
-            Datum::UInt64(operator_id.try_into().expect("operator_id too big")),
-            Datum::UInt64(u64::cast_from(self.worker_id)),
-        ])
-    }
-
-    /// Pack an arrangement heap size update key-value for the given operator.
-    fn pack_arrangement_heap_size_update(&mut self, operator_id: usize) -> (&RowRef, &RowRef) {
-        self.arrangement_heap_size_packer.pack_slice(&[
-            Datum::UInt64(operator_id.try_into().expect("operator_id too big")),
-            Datum::UInt64(u64::cast_from(self.worker_id)),
-        ])
     }
 
     /// Pack an export update key-value for the given export ID and dataflow index.
@@ -731,13 +721,18 @@ struct DemuxOutput<'a> {
     peek: OutputSessionColumnar<'a, Update<(Row, Row)>>,
     peek_duration: OutputSessionColumnar<'a, Update<(Row, Row)>>,
     shutdown_duration: OutputSessionVec<'a, Update<u128>>,
-    arrangement_heap_allocations: OutputSessionColumnar<'a, Update<(Row, Row)>>,
-    arrangement_heap_capacity: OutputSessionColumnar<'a, Update<(Row, Row)>>,
-    arrangement_heap_size: OutputSessionColumnar<'a, Update<(Row, Row)>>,
+    arrangement_heap_size: OutputSessionVec<'a, Update<ArrangementHeapDatum>>,
+    arrangement_heap_capacity: OutputSessionVec<'a, Update<ArrangementHeapDatum>>,
+    arrangement_heap_allocations: OutputSessionVec<'a, Update<ArrangementHeapDatum>>,
     hydration_time: OutputSessionVec<'a, Update<HydrationTimeDatum>>,
     error_count: OutputSessionVec<'a, Update<ErrorCountDatum>>,
     lir_mapping: OutputSessionColumnar<'a, Update<LirMappingDatum>>,
     dataflow_global_ids: OutputSessionVec<'a, Update<DataflowGlobalDatum>>,
+}
+
+#[derive(Clone, Copy)]
+struct ArrangementHeapDatum {
+    operator_id: usize,
 }
 
 #[derive(Clone)]
@@ -1142,11 +1137,12 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
             return;
         };
 
-        state.size += delta_size;
+        let datum = ArrangementHeapDatum { operator_id };
+        self.output
+            .arrangement_heap_size
+            .give((datum, ts, Diff::cast_from(delta_size)));
 
-        let datum = self.state.pack_arrangement_heap_size_update(operator_id);
-        let diff = Diff::cast_from(delta_size);
-        self.output.arrangement_heap_size.give((datum, ts, diff));
+        state.size += delta_size;
     }
 
     /// Update the allocation capacity for an arrangement.
@@ -1162,13 +1158,12 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
             return;
         };
 
-        state.capacity += delta_capacity;
+        let datum = ArrangementHeapDatum { operator_id };
+        self.output
+            .arrangement_heap_capacity
+            .give((datum, ts, Diff::cast_from(delta_capacity)));
 
-        let datum = self
-            .state
-            .pack_arrangement_heap_capacity_update(operator_id);
-        let diff = Diff::cast_from(delta_capacity);
-        self.output.arrangement_heap_size.give((datum, ts, diff));
+        state.capacity += delta_capacity;
     }
 
     /// Update the allocation count for an arrangement.
@@ -1184,13 +1179,13 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
             return;
         };
 
-        state.count += delta_allocations;
-
-        let datum = self
-            .state
-            .pack_arrangement_heap_allocations_update(operator_id);
+        let datum = ArrangementHeapDatum { operator_id };
         let diff = Diff::cast_from(delta_allocations);
-        self.output.arrangement_heap_size.give((datum, ts, diff));
+        self.output
+            .arrangement_heap_allocations
+            .give((datum, ts, diff));
+
+        state.count += delta_allocations;
     }
 
     /// Indicate that a new arrangement exists, start maintaining the heap size state.
@@ -1229,25 +1224,20 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
         let operator_id = event.operator_id;
         if let Some(state) = self.state.arrangement_size.remove(&operator_id) {
             let ts = self.ts();
-            let allocations = self
-                .state
-                .pack_arrangement_heap_allocations_update(operator_id);
-            let diff = -Diff::cast_from(state.count);
-            self.output
-                .arrangement_heap_allocations
-                .give((allocations, ts, diff));
+            let datum = ArrangementHeapDatum { operator_id };
 
-            let capacity = self
-                .state
-                .pack_arrangement_heap_capacity_update(operator_id);
+            let diff = -Diff::cast_from(state.size);
+            self.output.arrangement_heap_size.give((datum, ts, diff));
+
             let diff = -Diff::cast_from(state.capacity);
             self.output
                 .arrangement_heap_capacity
-                .give((capacity, ts, diff));
+                .give((datum, ts, diff));
 
-            let size = self.state.pack_arrangement_heap_size_update(operator_id);
-            let diff = -Diff::cast_from(state.size);
-            self.output.arrangement_heap_size.give((size, ts, diff));
+            let diff = -Diff::cast_from(state.count);
+            self.output
+                .arrangement_heap_allocations
+                .give((datum, ts, diff));
         }
         self.shared_state
             .arrangement_size_activators
