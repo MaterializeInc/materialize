@@ -16,6 +16,7 @@ use std::iter;
 use std::str::FromStr;
 use std::sync::Arc;
 
+use differential_dataflow::consolidation::consolidate_updates;
 use futures::future;
 use itertools::{Either, Itertools};
 use mz_adapter_types::connection::ConnectionId;
@@ -161,6 +162,15 @@ impl CatalogState {
     > {
         let mut builtin_table_updates = Vec::with_capacity(updates.len());
         let mut controller_state_updates = Vec::with_capacity(updates.len());
+
+        // First, consolidate updates. The code that applies parsed state
+        // updates _requires_ that the given updates are consolidated. There
+        // must be at most one addition and/or one retraction for a given item,
+        // as identified by that items ID type.
+        let updates = Self::consolidate_updates(updates);
+
+        // Then bring it into the pseudo-topological order that we need for
+        // updating our in-memory state and generating builtin table updates.
         let updates = sort_updates(updates);
 
         for (_, updates) in &updates.into_iter().chunk_by(|update| update.ts) {
@@ -175,6 +185,34 @@ impl CatalogState {
         }
 
         Ok((builtin_table_updates, controller_state_updates))
+    }
+
+    /// It can happen that the sequencing logic creates "fluctuating" updates
+    /// for a given catalog ID. For example, when doing a `DROP OWNED BY ...`,
+    /// for a table, there will be a retraction of the original table state,
+    /// then an addition for the same table but stripped of some of the roles
+    /// and access things, and then a retraction for that intermediate table
+    /// state. By consolidating, the intermediate state addition/retraction will
+    /// cancel out and we'll only see the retraction for the original state.
+    fn consolidate_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
+        let mut updates: Vec<(StateUpdateKind, Timestamp, mz_repr::Diff)> = updates
+            .into_iter()
+            .map(|update| (update.kind, update.ts, update.diff.into()))
+            .collect_vec();
+
+        consolidate_updates(&mut updates);
+
+        updates
+            .into_iter()
+            .filter(|(_kind, _ts, diff)| *diff != 0.into())
+            .map(|(kind, ts, diff)| StateUpdate {
+                kind,
+                ts,
+                diff: diff
+                    .try_into()
+                    .expect("catalog state cannot have diff other than -1 or 1"),
+            })
+            .collect_vec()
     }
 
     #[instrument(level = "debug")]
