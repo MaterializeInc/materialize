@@ -30,7 +30,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use differential_dataflow::consolidation::consolidate_updates;
 use fail::fail_point;
 use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
@@ -79,8 +78,6 @@ impl Coordinator {
         let mut cluster_commands: BTreeMap<ClusterId, ControllerCommand> = BTreeMap::new();
         let mut cluster_replica_commands: BTreeMap<(ClusterId, ReplicaId), ControllerCommand> =
             BTreeMap::new();
-
-        let catalog_updates = Self::consolidate_updates(catalog_updates);
 
         for update in catalog_updates {
             tracing::trace!(?update, "got parsed state update");
@@ -140,34 +137,6 @@ impl Coordinator {
         .await?;
 
         Ok(())
-    }
-
-    /// It can happen that the sequencing logic creates "fluctuating" updates
-    /// for a given catalog ID. For example, when doing a `DROP OWNED BY ...`,
-    /// for a table, there will be a retraction of the original table state,
-    /// then an addition for the same table but stripped of some of the roles
-    /// and access things, and then a retraction for that intermediate table
-    /// state. By consolidating, the intermediate state addition/retraction will
-    /// cancel out and we'll only see the retraction for the original state.
-    fn consolidate_updates(catalog_updates: Vec<ParsedStateUpdate>) -> Vec<ParsedStateUpdate> {
-        let mut updates: Vec<(ParsedStateUpdateKind, Timestamp, mz_repr::Diff)> = catalog_updates
-            .into_iter()
-            .map(|update| (update.kind, update.ts, update.diff.into()))
-            .collect_vec();
-
-        consolidate_updates(&mut updates);
-
-        updates
-            .into_iter()
-            .filter(|(_kind, _ts, diff)| *diff != 0.into())
-            .map(|(kind, ts, diff)| ParsedStateUpdate {
-                kind,
-                ts,
-                diff: diff
-                    .try_into()
-                    .expect("catalog state cannot have diff other than -1 or 1"),
-            })
-            .collect_vec()
     }
 
     #[instrument(level = "debug")]
