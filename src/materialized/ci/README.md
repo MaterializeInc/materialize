@@ -6,13 +6,13 @@ The Materialize Emulator is an all-in-one Docker image available on Docker Hub, 
 | **Production deployments** | ❌ Not suitable due to performance and license limitations.                 | ✔️
 | **Performance**            | ❌ Limited. Services are bundled in a single container.                     | ✔️ High. Services are scaled across many machines.                           |
 | **Dedicated Support**      | ❌                                                                          | ✔️                                                                           |
-| **Sample data**            | ✔️ Quickstart data source                                                   | ✔️ Quickstart data source                                                    |
-| **Data sources**           | ✔️ Connect using SQL configuration                                          | ✔️ Connect using a streamlined GUI                                           |
-| **Version upgrades**       | ✔️ Manual, with no data persistence                                         | ✔️ Automated, with data persistence                                          |
+| **Sample data**            | ✔️ Quickstart data source                                                    | ✔️ Quickstart data source                                                    |
+| **Data sources**           | ✔️ Connect using a streamlined GUI                                           | ✔️ Connect using a streamlined GUI                                           |
+| **Version upgrades**       | ✔️ Manual, with no data persistence                                          | ✔️ Automated, with data persistence                                          |
 | **Use case isolation**     | ❌                                                                          | ✔️                                                                           |
 | **Fault tolerance**        | ❌                                                                          | ✔️                                                                           |
 | **Horizontal scalability** | ❌                                                                          | ✔️                                                                           |
-| **GUI**                    | ❌                                                                          | ✔️ Materialize Console                                                       |
+| **GUI**                    | ✔️ Materialize Console (http://localhost:6874)                               | ✔️ Materialize Console                                                       |
 
 ## Usage
 
@@ -20,7 +20,7 @@ To launch the Docker container:
 
 ```
 docker pull materialize/materialized:latest
-docker run -d -p 127.0.0.1:6875:6875 -p 127.0.0.1:6876:6876 materialize/materialized:latest
+docker run -d -p 127.0.0.1:6874:6874 -p 127.0.0.1:6875:6875 -p 127.0.0.1:6876:6876 materialize/materialized:latest
 ```
 
 After running this command...
@@ -34,11 +34,7 @@ To connect to the SQL interface using `psql`:
 psql postgres://materialize@localhost:6875/materialize
 ```
 
-To view logs for the embedded CockroachDB server:
-
-```
-docker exec <CONTAINER-ID> cat /mzdata/cockroach/logs/cockroach.log
-```
+Connect to the Materialize Console at `http://localhost:6874/`
 
 ## Technical Support
 For questions, discussions, or general technical support, join the [Materialize Community on Slack](https://materialize.com/s/chat).

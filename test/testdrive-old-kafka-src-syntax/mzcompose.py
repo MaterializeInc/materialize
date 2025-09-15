@@ -15,7 +15,7 @@ retried until it produces the desired result.
 import glob
 import os
 
-from materialize import MZ_ROOT, ci_util, spawn
+from materialize import MZ_ROOT, ci_util
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.azurite import Azurite
 from materialize.mzcompose.services.fivetran_destination import FivetranDestination
@@ -47,7 +47,7 @@ SERVICES = [
     Minio(setup_materialize=True, additional_directories=["copytos3"]),
     Azurite(),
     Mz(app_password=""),
-    Materialized(external_blob_store=True),
+    Materialized(external_blob_store=True, sanity_restart=False),
     CockroachOrPostgresMetadata(),
     FivetranDestination(volumes_extra=["tmp:/share/tmp"]),
     Testdrive(external_blob_store=True),
@@ -141,6 +141,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         blob_store_is_azure=args.azurite,
         additional_system_parameter_defaults=additional_system_parameter_defaults,
         default_replication_factor=1,
+        sanity_restart=False,
     )
 
     testdrive = Testdrive(
@@ -341,6 +342,7 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
         external_blob_store=True,
         blob_store_is_azure=args.azurite,
         additional_system_parameter_defaults=dict(additional_system_parameter_defaults),
+        sanity_restart=False,
     )
 
     testdrive = Testdrive(
@@ -366,11 +368,12 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
         external_blob_store=True,
         blob_store_is_azure=args.azurite,
         additional_system_parameter_defaults=additional_system_parameter_defaults,
+        sanity_restart=False,
     )
 
     for file in matching_files:
         with c.override(testdrive, mz_old):
-            c.rm("testdrive")
+            c.down(destroy_volumes=True)
             c.up(*dependencies)
 
             c.sql(
@@ -451,14 +454,3 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
 
                 for dep in kafka_deps:
                     c.rm(dep)
-
-                c.rm("materialized")
-                c.rm(METADATA_STORE)
-                c.rm("postgres")
-                c.rm("mysql")
-                # remove the testdrive container which uses the mzdata volume
-                testdrive_container_id = spawn.capture(
-                    ["docker", "ps", "-a", "--filter", f"volume={c.name}_mzdata", "-q"]
-                ).strip()
-                spawn.runv(["docker", "rm", testdrive_container_id])
-                c.rm_volumes("mzdata", force=True)

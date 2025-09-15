@@ -186,7 +186,7 @@ With
         Get materialize.public.t
 Return
   Project (#2)
-    Map (abs((#0{"?column?"} - #1{"?column?"})))
+    Map (abs((#0 - #1)))
       Union
         Get l0
         CrossJoin
@@ -214,7 +214,7 @@ EXPLAIN DECORRELATED PLAN AS TEXT FOR
 SELECT abs(min(a) - max(a)) FROM t GROUP BY b
 ----
 Project (#3)
-  Map (abs((#1{"?column?"} - #2{"?column?"})))
+  Map (abs((#1 - #2)))
     Reduce group_by=[#2] aggregates=[min(#0{a}), max(#0{a})]
       Project (#0..=#2)
         Map (#1{b})

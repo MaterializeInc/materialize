@@ -10,6 +10,7 @@
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 
+use mz_ore::str::redact;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use proptest::prelude::*;
 use proptest::strategy::{Strategy, Union};
@@ -69,7 +70,22 @@ impl Default for JsonStats {
 
 impl Debug for JsonStats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        Debug::fmt(&self.debug_json(), f)
+        match self {
+            JsonStats::None => f.write_str("None"),
+            JsonStats::Mixed => f.write_str("Mixed"),
+            JsonStats::JsonNulls => f.write_str("JsonNulls"),
+            JsonStats::Bools(stats) => f.debug_tuple("Bools").field(stats).finish(),
+            JsonStats::Strings(stats) => f.debug_tuple("Strings").field(stats).finish(),
+            JsonStats::Numerics(stats) => f.debug_tuple("Numerics").field(stats).finish(),
+            JsonStats::Lists => f.write_str("Lists"),
+            JsonStats::Maps(stats) => {
+                let mut f = f.debug_tuple("Maps");
+                for (k, v) in stats.iter() {
+                    f.field(&(redact(k), v.len, &v.stats));
+                }
+                f.finish()
+            }
+        }
     }
 }
 

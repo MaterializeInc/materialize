@@ -115,7 +115,7 @@ UPDATE t SET a = 0 RETURNING b
 statement error Expected end of statement, found RETURNING
 DELETE FROM t AS t RETURNING *
 
-statement error cannot evaluate unmaterializable function
+statement ok
 INSERT INTO t VALUES (7, 8) RETURNING now()
 
 statement error db error: ERROR: calls to mz_now in write statements are not supported
@@ -130,6 +130,7 @@ SELECT * FROM t ORDER BY a, b
 3  4
 5  6
 7  8
+7  8
 9  10
 10  0
 10  11
@@ -137,3 +138,8 @@ SELECT * FROM t ORDER BY a, b
 100  11
 NULL  10
 NULL  11
+
+# Regression test for https://github.com/MaterializeInc/database-issues/issues/9657, i.e., that we call
+# `prep_scalar_expr` on RETURNING.
+statement ok
+INSERT INTO t VALUES (1, 1) RETURNING mz_version();

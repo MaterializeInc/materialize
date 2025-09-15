@@ -239,8 +239,9 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             while let Some(_) = slot_ready_input.next().await {
                 // Wait for the slot to be created
             }
-            tracing::info!(%id, "ensuring replication slot {slot} exists");
-            super::ensure_replication_slot(&replication_client, slot).await?;
+
+            // The slot is always created by the snapshot operator. If the slot doesn't exist,
+            // when this check runs, this operator will return an error.
             let slot_metadata = super::fetch_slot_metadata(
                 &*metadata_client,
                 slot,
@@ -776,6 +777,9 @@ async fn raw_stream<'a>(
     let stream = async_stream::try_stream!({
         // Ensure we don't pre-drop the task
         let _max_lsn_task_handle = max_lsn_task_handle;
+
+        // ensure we don't drop the replication client!
+        let _replication_client = replication_client;
 
         let mut uppers = pin!(uppers);
         let mut last_committed_upper = resume_lsn;

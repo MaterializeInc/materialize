@@ -46,7 +46,7 @@ use std::iter;
 use std::sync::Arc;
 
 use mz_ore::iter::IteratorExt;
-use mz_repr::ColumnName;
+use mz_repr::{ColumnName, UNKNOWN_COLUMN_NAME};
 
 use crate::ast::Expr;
 use crate::names::{Aug, PartialItemName};
@@ -147,7 +147,7 @@ impl ScopeItem {
     pub fn empty() -> ScopeItem {
         ScopeItem {
             table_name: None,
-            column_name: "?column?".into(),
+            column_name: UNKNOWN_COLUMN_NAME.into(),
             exprs: BTreeSet::new(),
             from_single_column_function: false,
             allow_unqualified_references: true,

@@ -39,26 +39,57 @@ hosted offering we run these services scaled across many machines.
 ********************************* WARNING ********************************
 EOF
 
-if [ -z "${MZ_EAT_MY_DATA:-}" ]; then
-    unset LD_PRELOAD
-    echo > /etc/postgresql/16/main/environment
-else
+is_truthy() {
+    if [[ "$1" == "0" || "$1" == "" || "$1" == "no" || "$1" == "false" ]]; then
+        return 1
+    fi
+    return 0
+}
+
+if is_truthy "${MZ_EAT_MY_DATA:-0}"; then
     export LD_PRELOAD="libeatmydata.so"
-    echo "LD_PRELOAD=libeatmydata.so" > /etc/postgresql/16/main/environment
+else
+    unset LD_PRELOAD
 fi
 
+export PGUSER=root
+
 # Start PostgreSQL, unless suppressed.
-if [ -z "${MZ_NO_BUILTIN_POSTGRES:-}" ]; then
-  (trap 'pg_ctlcluster 16 main stop --mode=fast --force' SIGTERM SIGINT
-  rm -f /var/run/postgresql/.s.PGSQL.26257.lock
-  pg_ctlcluster 16 main start
-  psql -U postgres -c "CREATE ROLE root WITH LOGIN PASSWORD 'root'" || true
-  psql -U postgres -c "CREATE DATABASE root OWNER root" || true
-  psql -U root -c "CREATE SCHEMA IF NOT EXISTS consensus; CREATE SCHEMA IF NOT EXISTS storage; CREATE SCHEMA IF NOT EXISTS adapter; CREATE SCHEMA IF NOT EXISTS tsoracle") &
+if ! is_truthy "${MZ_NO_BUILTIN_POSTGRES:-0}"; then
+  PGDATA=/mzdata/postgres
+  export PGPORT=26257
+  export PGDATABASE=root
+
+  # Should exist already, but /mzdata might be overwritten with a fresh volume
+  if [ ! -f $PGDATA/PG_VERSION ]; then
+    mkdir -p $PGDATA
+    /usr/lib/postgresql/16/bin/initdb -D $PGDATA -U $PGUSER --auth-local=trust
+  fi
+
+  # Might have been killed hard
+  rm -f $PGDATA/postmaster.pid
+  /usr/lib/postgresql/16/bin/postgres -D $PGDATA \
+      -c listen_addresses='*' \
+      -c unix_socket_directories=/var/run/postgresql \
+      -c config_file=/etc/postgresql/postgresql.conf &
+  PGPID=$!
+
+  trap 'kill -INT $PGPID; wait $PGPID' SIGTERM SIGINT
+
+  until /usr/lib/postgresql/16/bin/pg_isready > /dev/null 2>&1; do
+    sleep 0.01
+  done
+
+  psql -d template1 -c "CREATE DATABASE $PGUSER OWNER $PGUSER;" > /dev/null 2>&1 || true
+  psql -c "ALTER USER $PGUSER WITH PASSWORD 'root'; \
+           CREATE SCHEMA IF NOT EXISTS consensus; \
+           CREATE SCHEMA IF NOT EXISTS storage; \
+           CREATE SCHEMA IF NOT EXISTS adapter; \
+           CREATE SCHEMA IF NOT EXISTS tsoracle;"
 fi
 
 # Start nginx to serve the console.
-if [ -z "${MZ_NO_BUILTIN_CONSOLE:-}" ]; then
+if ! is_truthy "${MZ_NO_BUILTIN_CONSOLE:-0}"; then
   nginx &
 fi
 
@@ -77,14 +108,14 @@ export MZ_INTERNAL_SQL_LISTEN_ADDR=${MZ_INTERNAL_SQL_LISTEN_ADDR:-0.0.0.0:6877}
 export MZ_INTERNAL_HTTP_LISTEN_ADDR=${MZ_INTERNAL_HTTP_LISTEN_ADDR:-0.0.0.0:6878}
 export MZ_BALANCER_SQL_LISTEN_ADDR=${MZ_BALANCER_SQL_LISTEN_ADDR:-0.0.0.0:6880}
 export MZ_BALANCER_HTTP_LISTEN_ADDR=${MZ_BALANCER_HTTP_LISTEN_ADDR:-0.0.0.0:6881}
-if [ -z "${MZ_NO_EXTERNAL_CLUSTERD:-}" ]; then
-  export MZ_PERSIST_CONSENSUS_URL=${MZ_PERSIST_CONSENSUS_URL:-postgresql://root@$(hostname):26257/?options=--search_path=consensus}
+if is_truthy "${MZ_NO_EXTERNAL_CLUSTERD:-0}"; then
+  export MZ_PERSIST_CONSENSUS_URL=${MZ_PERSIST_CONSENSUS_URL:-postgresql://$PGUSER@%2Fvar%2Frun%2Fpostgresql:26257/?options=--search_path=consensus}
 else
-  export MZ_PERSIST_CONSENSUS_URL=${MZ_PERSIST_CONSENSUS_URL:-postgresql://root@%2Fvar%2Frun%2Fpostgresql:26257/?options=--search_path=consensus}
+  export MZ_PERSIST_CONSENSUS_URL=${MZ_PERSIST_CONSENSUS_URL:-postgresql://$PGUSER@$(hostname):26257/?options=--search_path=consensus}
 fi
 export MZ_PERSIST_BLOB_URL=${MZ_PERSIST_BLOB_URL:-file:///mzdata/persist/blob}
-export MZ_ADAPTER_STASH_URL=${MZ_ADAPTER_STASH_URL:-postgresql://root@%2Fvar%2Frun%2Fpostgresql:26257/?options=--search_path=adapter}
-export MZ_TIMESTAMP_ORACLE_URL=${MZ_TIMESTAMP_ORACLE_URL:-postgresql://root@%2Fvar%2Frun%2Fpostgresql:26257/?options=--search_path=tsoracle}
+export MZ_ADAPTER_STASH_URL=${MZ_ADAPTER_STASH_URL:-postgresql://$PGUSER@%2Fvar%2Frun%2Fpostgresql:26257/?options=--search_path=adapter}
+export MZ_TIMESTAMP_ORACLE_URL=${MZ_TIMESTAMP_ORACLE_URL:-postgresql://$PGUSER@%2Fvar%2Frun%2Fpostgresql:26257/?options=--search_path=tsoracle}
 export MZ_ORCHESTRATOR=${MZ_ORCHESTRATOR:-process}
 export MZ_ORCHESTRATOR_PROCESS_SECRETS_DIRECTORY=${MZ_ORCHESTRATOR_PROCESS_SECRETS_DIRECTORY:-/mzdata/secrets}
 export MZ_ORCHESTRATOR_PROCESS_SCRATCH_DIRECTORY=${MZ_ORCHESTRATOR_PROCESS_SCRATCH_DIRECTORY:-/scratch}
@@ -205,25 +236,50 @@ if [ -z "${MZ_LISTENERS_CONFIG_PATH:-}" ]; then
     fi
 fi
 
-export MZ_BOOTSTRAP_DEFAULT_CLUSTER_REPLICA_SIZE="${MZ_BOOTSTRAP_DEFAULT_CLUSTER_REPLICA_SIZE:-25cc}"
-export MZ_BOOTSTRAP_BUILTIN_SYSTEM_CLUSTER_REPLICA_SIZE="${MZ_BOOTSTRAP_BUILTIN_SYSTEM_CLUSTER_REPLICA_SIZE:-${MZ_BOOTSTRAP_DEFAULT_CLUSTER_REPLICA_SIZE}}"
-export MZ_BOOTSTRAP_BUILTIN_PROBE_CLUSTER_REPLICA_SIZE="${MZ_BOOTSTRAP_BUILTIN_PROBE_CLUSTER_REPLICA_SIZE:-${MZ_BOOTSTRAP_DEFAULT_CLUSTER_REPLICA_SIZE}}"
-export MZ_BOOTSTRAP_BUILTIN_SUPPORT_CLUSTER_REPLICA_SIZE="${MZ_BOOTSTRAP_BUILTIN_SUPPORT_CLUSTER_REPLICA_SIZE:-${MZ_BOOTSTRAP_DEFAULT_CLUSTER_REPLICA_SIZE}}"
-export MZ_BOOTSTRAP_BUILTIN_CATALOG_SERVER_CLUSTER_REPLICA_SIZE="${MZ_BOOTSTRAP_BUILTIN_CATALOG_SERVER_CLUSTER_REPLICA_SIZE:-${MZ_BOOTSTRAP_DEFAULT_CLUSTER_REPLICA_SIZE}}"
-export MZ_BOOTSTRAP_BUILTIN_ANALYTICS_CLUSTER_REPLICA_SIZE="${MZ_BOOTSTRAP_BUILTIN_ANALYTICS_CLUSTER_REPLICA_SIZE:-${MZ_BOOTSTRAP_DEFAULT_CLUSTER_REPLICA_SIZE}}"
+CPUS=$(nproc)
+
+if (( CPUS >= 64 )); then
+    DEFAULT_CLUSTER_REPLICA_SIZE="3200cc"
+elif (( CPUS >= 32 )); then
+    DEFAULT_CLUSTER_REPLICA_SIZE="1600cc"
+elif (( CPUS >= 24 )); then
+    DEFAULT_CLUSTER_REPLICA_SIZE="1200cc"
+elif (( CPUS >= 16 )); then
+    DEFAULT_CLUSTER_REPLICA_SIZE="800cc"
+elif (( CPUS >= 12 )); then
+    DEFAULT_CLUSTER_REPLICA_SIZE="600cc"
+elif (( CPUS >= 8 )); then
+    DEFAULT_CLUSTER_REPLICA_SIZE="400cc"
+elif (( CPUS >= 6 )); then
+    DEFAULT_CLUSTER_REPLICA_SIZE="300cc"
+elif (( CPUS >= 4 )); then
+    DEFAULT_CLUSTER_REPLICA_SIZE="200cc"
+elif (( CPUS >= 2 )); then
+    DEFAULT_CLUSTER_REPLICA_SIZE="100cc"
+else
+    DEFAULT_CLUSTER_REPLICA_SIZE="50cc"
+fi
+
+export MZ_BOOTSTRAP_DEFAULT_CLUSTER_REPLICA_SIZE="${MZ_BOOTSTRAP_DEFAULT_CLUSTER_REPLICA_SIZE:-$DEFAULT_CLUSTER_REPLICA_SIZE}"
+DEFAULT_OTHER_CLUSTER_REPLICA_SIZE="25cc"
+export MZ_BOOTSTRAP_BUILTIN_SYSTEM_CLUSTER_REPLICA_SIZE="${MZ_BOOTSTRAP_BUILTIN_SYSTEM_CLUSTER_REPLICA_SIZE:-${DEFAULT_OTHER_CLUSTER_REPLICA_SIZE}}"
+export MZ_BOOTSTRAP_BUILTIN_PROBE_CLUSTER_REPLICA_SIZE="${MZ_BOOTSTRAP_BUILTIN_PROBE_CLUSTER_REPLICA_SIZE:-${DEFAULT_OTHER_CLUSTER_REPLICA_SIZE}}"
+export MZ_BOOTSTRAP_BUILTIN_SUPPORT_CLUSTER_REPLICA_SIZE="${MZ_BOOTSTRAP_BUILTIN_SUPPORT_CLUSTER_REPLICA_SIZE:-${DEFAULT_OTHER_CLUSTER_REPLICA_SIZE}}"
+export MZ_BOOTSTRAP_BUILTIN_CATALOG_SERVER_CLUSTER_REPLICA_SIZE="${MZ_BOOTSTRAP_BUILTIN_CATALOG_SERVER_CLUSTER_REPLICA_SIZE:-${DEFAULT_OTHER_CLUSTER_REPLICA_SIZE}}"
+export MZ_BOOTSTRAP_BUILTIN_ANALYTICS_CLUSTER_REPLICA_SIZE="${MZ_BOOTSTRAP_BUILTIN_ANALYTICS_CLUSTER_REPLICA_SIZE:-${DEFAULT_OTHER_CLUSTER_REPLICA_SIZE}}"
 # Note(SangJunBak): We remove the mz_system cluster and mz_probe cluster for materialized to decrease the amount of memory needed for the Materialize emulator
 export MZ_BOOTSTRAP_BUILTIN_SYSTEM_CLUSTER_REPLICATION_FACTOR="${MZ_BOOTSTRAP_BUILTIN_SYSTEM_CLUSTER_REPLICATION_FACTOR:-0}"
 export MZ_BOOTSTRAP_BUILTIN_PROBE_CLUSTER_REPLICATION_FACTOR="${MZ_BOOTSTRAP_BUILTIN_PROBE_CLUSTER_REPLICATION_FACTOR:-0}"
 
-export MZ_SYSTEM_PARAMETER_DEFAULT="${MZ_SYSTEM_PARAMETER_DEFAULT:-allowed_cluster_replica_sizes=\"25cc\",\"50cc\",\"100cc\",\"200cc\",\"300cc\",\"400cc\",\"600cc\",\"800cc\",\"1200cc\",\"1600cc\",\"3200cc\";enable_rbac_checks=false;enable_statement_lifecycle_logging=false;statement_logging_default_sample_rate=0;statement_logging_max_sample_rate=0}"
+export MZ_SYSTEM_PARAMETER_DEFAULT="${MZ_SYSTEM_PARAMETER_DEFAULT:-allowed_cluster_replica_sizes=\"25cc\",\"50cc\",\"100cc\",\"200cc\",\"300cc\",\"400cc\",\"600cc\",\"800cc\",\"1200cc\",\"1600cc\",\"3200cc\";enable_rbac_checks=false;enable_statement_lifecycle_logging=false;statement_logging_default_sample_rate=0;statement_logging_max_sample_rate=0;memory_limiter_interval=0;lgalloc_limiter_interval=0}"
 
 
-if [ -z "${MZ_NO_TELEMETRY:-}" ]; then
+if ! is_truthy "${MZ_NO_TELEMETRY:-0}"; then
     export MZ_SEGMENT_API_KEY=${MZ_SEGMENT_API_KEY:-hMWi3sZ17KFMjn2sPWo9UJGpOQqiba4A}
     export MZ_SEGMENT_CLIENT_SIDE=${MZ_SEGMENT_CLIENT_SIDE:-true}
 fi
 
-if [ -n "${MZ_RESTART_ON_FAILURE:-}" ]; then
+if is_truthy "${MZ_RESTART_ON_FAILURE:-0}"; then
     for ((i = 0; i < ${MZ_RESTART_LIMIT:-9999999999}; i++)); do
         # Run `environmentd` inside of an `if` to avoid tripping `set -e`
         # behavior.

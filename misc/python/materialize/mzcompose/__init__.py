@@ -65,7 +65,6 @@ ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS = {
 
 def get_minimal_system_parameters(
     version: MzVersion,
-    zero_downtime: bool = False,
 ) -> dict[str, str]:
     """Settings we need in order to have tests run at all, but otherwise stay
     with the defaults: not changing performance or increasing coverage."""
@@ -79,7 +78,6 @@ def get_minimal_system_parameters(
         "allow_real_time_recency": "true",
         "constraint_based_timestamp_selection": "verify",
         "enable_compute_peek_response_stash": "true",
-        "enable_0dt_deployment": "true" if zero_downtime else "false",
         "enable_0dt_deployment_panic_after_timeout": "true",
         "enable_0dt_deployment_sources": (
             "true" if version >= MzVersion.parse_mz("v0.132.0-dev") else "false"
@@ -133,7 +131,6 @@ class VariableSystemParameter:
 # TODO: The linter should check this too
 def get_variable_system_parameters(
     version: MzVersion,
-    zero_downtime: bool,
     force_source_table_syntax: bool,
 ) -> list[VariableSystemParameter]:
     return [
@@ -323,13 +320,13 @@ def get_variable_system_parameters(
         ),
         VariableSystemParameter(
             "persist_use_critical_since_snapshot",
-            "false" if zero_downtime else "true",
-            ["false"] if zero_downtime else ["true", "false"],
+            "false",  # always false, because we always have zero-downtime enabled
+            ["false"],
         ),
         VariableSystemParameter(
             "persist_use_critical_since_source",
-            "false" if zero_downtime else "true",
-            ["false"] if zero_downtime else ["true", "false"],
+            "false",  # always false, because we always have zero-downtime enabled
+            ["false"],
         ),
         VariableSystemParameter(
             "persist_part_decode_format", "arrow", ["arrow", "row_with_validate"]
@@ -376,7 +373,6 @@ def get_variable_system_parameters(
 
 def get_default_system_parameters(
     version: MzVersion | None = None,
-    zero_downtime: bool = False,
     force_source_table_syntax: bool = False,
 ) -> dict[str, str]:
     """For upgrade tests we only want parameters set when all environmentd /
@@ -386,12 +382,10 @@ def get_default_system_parameters(
     if not version:
         version = MzVersion.parse_cargo()
 
-    params = get_minimal_system_parameters(version, zero_downtime)
+    params = get_minimal_system_parameters(version)
 
     system_param_setting = os.getenv("CI_SYSTEM_PARAMETERS", "")
-    variable_params = get_variable_system_parameters(
-        version, zero_downtime, force_source_table_syntax
-    )
+    variable_params = get_variable_system_parameters(version, force_source_table_syntax)
 
     if system_param_setting == "":
         for param in variable_params:

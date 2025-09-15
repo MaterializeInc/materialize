@@ -21,12 +21,6 @@ pub const ALLOW_USER_SESSIONS: Config<bool> = Config::new(
     "Whether to allow user roles to create new sessions. When false, only system roles will be permitted to create new sessions.",
 );
 
-pub const ENABLE_0DT_DEPLOYMENT: Config<bool> = Config::new(
-    "enable_0dt_deployment",
-    true,
-    "Whether to enable zero-downtime deployments (experimental).",
-);
-
 // Slightly awkward with the WITH prefix, but we can't start with a 0.
 pub const WITH_0DT_DEPLOYMENT_MAX_WAIT: Config<Duration> = Config::new(
     "with_0dt_deployment_max_wait",
@@ -51,12 +45,6 @@ pub const WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL: Config<Duration> = Confi
     "0dt_deployment_hydration_check_interval",
     Duration::from_secs(10),
     "Interval at which to check whether clusters are caught up, when doing zero-downtime deployment.",
-);
-
-pub const ENABLE_0DT_CAUGHT_UP_CHECK: Config<bool> = Config::new(
-    "enable_0dt_caught_up_check",
-    true,
-    "Whether to determine rehydration using a more complicated method that compares collection write frontiers against an allowed lag behind wall-clock time.",
 );
 
 pub const WITH_0DT_CAUGHT_UP_CHECK_ALLOWED_LAG: Config<Duration> = Config::new(
@@ -120,7 +108,7 @@ pub const ENABLE_EXPRESSION_CACHE: Config<bool> = Config::new(
 /// Whether we allow sources in multi-replica clusters.
 pub const ENABLE_MULTI_REPLICA_SOURCES: Config<bool> = Config::new(
     "enable_multi_replica_sources",
-    false,
+    true,
     "Enable multi-replica sources.",
 );
 
@@ -156,12 +144,10 @@ pub const FORCE_SWAP_FOR_CC_SIZES: Config<bool> = Config::new(
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
         .add(&ALLOW_USER_SESSIONS)
-        .add(&ENABLE_0DT_DEPLOYMENT)
         .add(&WITH_0DT_DEPLOYMENT_MAX_WAIT)
         .add(&WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL)
         .add(&ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT)
         .add(&WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL)
-        .add(&ENABLE_0DT_CAUGHT_UP_CHECK)
         .add(&WITH_0DT_CAUGHT_UP_CHECK_ALLOWED_LAG)
         .add(&WITH_0DT_CAUGHT_UP_CHECK_CUTOFF)
         .add(&ENABLE_0DT_CAUGHT_UP_REPLICA_STATUS_CHECK)

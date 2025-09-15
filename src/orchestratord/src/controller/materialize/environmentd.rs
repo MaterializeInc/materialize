@@ -526,7 +526,7 @@ fn create_environmentd_network_policies(
                         }]),
                         ..Default::default()
                     }]),
-                    pod_selector: all_pods_label_selector.clone(),
+                    pod_selector: Some(all_pods_label_selector.clone()),
                     policy_types: Some(vec!["Ingress".to_owned(), "Egress".to_owned()]),
                     ..Default::default()
                 }),
@@ -564,7 +564,7 @@ fn create_environmentd_network_policies(
                         ]),
                         ..Default::default()
                     }]),
-                    pod_selector: environmentd_label_selector,
+                    pod_selector: Some(environmentd_label_selector),
                     policy_types: Some(vec!["Ingress".to_owned()]),
                     ..Default::default()
                 }),
@@ -606,10 +606,10 @@ fn create_environmentd_network_policies(
                     ]),
                     ..Default::default()
                 }]),
-                pod_selector: LabelSelector {
+                pod_selector: Some(LabelSelector {
                     match_expressions: None,
                     match_labels: Some(ingress_label_selector),
-                },
+                }),
                 policy_types: Some(vec!["Ingress".to_owned()]),
                 ..Default::default()
             }),
@@ -636,10 +636,10 @@ fn create_environmentd_network_policies(
                     ),
                     ..Default::default()
                 }]),
-                pod_selector: LabelSelector {
+                pod_selector: Some(LabelSelector {
                     match_expressions: None,
                     match_labels: Some(mz.default_labels()),
-                },
+                }),
                 policy_types: Some(vec!["Egress".to_owned()]),
                 ..Default::default()
             }),

@@ -1747,15 +1747,21 @@ impl<T: Timestamp + Lattice> Spine<T> {
         self.introduce_batch(batch, usize::cast_from(index.trailing_zeros()), log);
     }
 
-    /// True iff there is at most one HollowBatch in `self.merging`.
+    /// Returns true when the trace is considered *structurally reduced*.
     ///
-    /// When true, there is no maintenance work to perform in the trace, other
-    /// than compaction. We do not yet have logic in place to determine if
-    /// compaction would improve a trace, so for now we are ignoring that.
+    /// Reduced == the total number of runs (across every
+    /// `SpineBatch` and all of their inner hollow batches) is < 2. In other
+    /// words, there are either zero runs (fully empty) or exactly one logical
+    /// run of data remaining.
     fn reduced(&self) -> bool {
         self.spine_batches()
-            .flat_map(|b| b.parts.as_slice())
-            .count()
+            .map(|b| {
+                b.parts
+                    .iter()
+                    .map(|p| p.batch.run_meta.len())
+                    .sum::<usize>()
+            })
+            .sum::<usize>()
             < 2
     }
 

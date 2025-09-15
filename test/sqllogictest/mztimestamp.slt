@@ -23,10 +23,9 @@ true
 query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR SELECT 1::mz_timestamp = mz_now()
 ----
-Explained Query:
-  Map ((1 = mz_now())) // { arity: 1 }
-    Constant // { arity: 0 }
-      - ()
+Explained Query (fast path):
+  Constant
+    - (false)
 
 Target cluster: quickstart
 

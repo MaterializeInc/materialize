@@ -21,12 +21,12 @@ use differential_dataflow::collection::AsCollection;
 use differential_dataflow::trace::{BatchReader, Cursor};
 use mz_compute_types::plan::LirId;
 use mz_ore::cast::CastFrom;
-use mz_repr::{Datum, Diff, GlobalId, Timestamp};
-use mz_timely_util::columnar::Column;
+use mz_repr::{Datum, Diff, GlobalId, Row, RowRef, Timestamp};
 use mz_timely_util::columnar::builder::ColumnBuilder;
+use mz_timely_util::columnar::{Col2ValBatcher, Column, columnar_exchange};
 use mz_timely_util::containers::ProvidedBuilder;
 use mz_timely_util::replay::MzReplay;
-use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::operators::Operator;
 use timely::dataflow::operators::core::Map;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
@@ -36,7 +36,7 @@ use timely::{Container, Data};
 use tracing::error;
 use uuid::Uuid;
 
-use crate::extensions::arrange::MzArrange;
+use crate::extensions::arrange::{MzArrange, MzArrangeCore};
 use crate::logging::{
     ComputeLog, EventQueue, LogCollection, LogVariant, OutputSessionColumnar, OutputSessionVec,
     PermutedRowPacker, SharedLoggingState, Update,
@@ -64,11 +64,15 @@ pub struct ExportDropped {
     pub export_id: GlobalId,
 }
 
-/// A peek event with a [`Peek`], a [`PeekType`], and an installation status.
+/// A peek event with a [`PeekType`], and an installation status.
 #[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
 pub struct PeekEvent {
-    /// The data for the peek itself.
-    pub peek: Peek,
+    /// The identifier of the view the peek targets.
+    pub id: GlobalId,
+    /// The logical timestamp requested.
+    pub time: Timestamp,
+    /// The ID of the peek.
+    pub uuid: uuid::Bytes,
     /// The relevant _type_ of peek: index or persist.
     // Note that this is not stored on the Peek event for data-packing reasons only.
     pub peek_type: PeekType,
@@ -237,25 +241,6 @@ impl PeekType {
     }
 }
 
-/// A logged peek event.
-#[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
-pub struct Peek {
-    /// The identifier of the view the peek targets.
-    id: GlobalId,
-    /// The logical timestamp requested.
-    time: Timestamp,
-    /// The ID of the peek.
-    uuid: uuid::Bytes,
-}
-
-impl Peek {
-    /// Create a new peek from its arguments.
-    pub fn new(id: GlobalId, time: Timestamp, uuid: Uuid) -> Self {
-        let uuid = uuid.into_bytes();
-        Self { id, time, uuid }
-    }
-}
-
 /// Metadata for LIR operators.
 #[derive(Clone, Debug, PartialEq, PartialOrd, Columnar)]
 pub struct LirMetadata {
@@ -346,7 +331,7 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
         let (mut lir_mapping_out, lir_mapping) = demux.new_output();
         let (mut dataflow_global_ids_out, dataflow_global_ids) = demux.new_output();
 
-        let mut demux_state = DemuxState::new(scheduler);
+        let mut demux_state = DemuxState::new(scheduler, scope.index());
         demux.build(move |_capability| {
             move |_frontiers| {
                 let mut export = export_out.activate();
@@ -365,15 +350,15 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
 
                 input.for_each(|cap, data| {
                     let mut output_sessions = DemuxOutput {
-                        export: export.session(&cap),
-                        frontier: frontier.session(&cap),
-                        import_frontier: import_frontier.session(&cap),
-                        peek: peek.session(&cap),
-                        peek_duration: peek_duration.session(&cap),
+                        export: export.session_with_builder(&cap),
+                        frontier: frontier.session_with_builder(&cap),
+                        import_frontier: import_frontier.session_with_builder(&cap),
+                        peek: peek.session_with_builder(&cap),
+                        peek_duration: peek_duration.session_with_builder(&cap),
                         shutdown_duration: shutdown_duration.session(&cap),
-                        arrangement_heap_size: arrangement_heap_size.session(&cap),
-                        arrangement_heap_capacity: arrangement_heap_capacity.session(&cap),
-                        arrangement_heap_allocations: arrangement_heap_allocations.session(&cap),
+                        arrangement_heap_allocations: arrangement_heap_allocations.session_with_builder(&cap),
+                        arrangement_heap_capacity: arrangement_heap_capacity.session_with_builder(&cap),
+                        arrangement_heap_size: arrangement_heap_size.session_with_builder(&cap),
                         error_count: error_count.session(&cap),
                         hydration_time: hydration_time.session(&cap),
                         lir_mapping: lir_mapping.session_with_builder(&cap),
@@ -398,65 +383,6 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
         let worker_id = scope.index();
 
         // Encode the contents of each logging stream into its expected `Row` format.
-        let mut packer = PermutedRowPacker::new(ComputeLog::DataflowCurrent);
-        let dataflow_current = export.as_collection().map({
-            let mut scratch = String::new();
-            move |datum| {
-                packer.pack_slice_owned(&[
-                    make_string_datum(datum.export_id, &mut scratch),
-                    Datum::UInt64(u64::cast_from(worker_id)),
-                    Datum::UInt64(u64::cast_from(datum.dataflow_index)),
-                ])
-            }
-        });
-        let mut packer = PermutedRowPacker::new(ComputeLog::FrontierCurrent);
-        let frontier_current = frontier.as_collection().map({
-            let mut scratch = String::new();
-            move |datum| {
-                packer.pack_slice_owned(&[
-                    make_string_datum(datum.export_id, &mut scratch),
-                    Datum::UInt64(u64::cast_from(worker_id)),
-                    Datum::MzTimestamp(datum.time),
-                ])
-            }
-        });
-        let mut packer = PermutedRowPacker::new(ComputeLog::ImportFrontierCurrent);
-        let import_frontier_current = import_frontier.as_collection().map({
-            let mut scratch1 = String::new();
-            let mut scratch2 = String::new();
-            move |datum| {
-                packer.pack_slice_owned(&[
-                    make_string_datum(datum.export_id, &mut scratch1),
-                    make_string_datum(datum.import_id, &mut scratch2),
-                    Datum::UInt64(u64::cast_from(worker_id)),
-                    Datum::MzTimestamp(datum.time),
-                ])
-            }
-        });
-        let mut packer = PermutedRowPacker::new(ComputeLog::PeekCurrent);
-        let peek_current = peek.as_collection().map({
-            let mut scratch = String::new();
-            move |PeekDatum { peek, peek_type }| {
-                packer.pack_slice_owned(&[
-                    Datum::Uuid(Uuid::from_bytes(peek.uuid)),
-                    Datum::UInt64(u64::cast_from(worker_id)),
-                    make_string_datum(peek.id, &mut scratch),
-                    Datum::String(peek_type.name()),
-                    Datum::MzTimestamp(peek.time),
-                ])
-            }
-        });
-        let mut packer = PermutedRowPacker::new(ComputeLog::PeekDuration);
-        let peek_duration =
-            peek_duration
-                .as_collection()
-                .map(move |PeekDurationDatum { peek_type, bucket }| {
-                    packer.pack_slice_owned(&[
-                        Datum::UInt64(u64::cast_from(worker_id)),
-                        Datum::String(peek_type.name()),
-                        Datum::UInt64(bucket.try_into().expect("bucket too big")),
-                    ])
-                });
         let mut packer = PermutedRowPacker::new(ComputeLog::ShutdownDuration);
         let shutdown_duration = shutdown_duration.as_collection().map(move |bucket| {
             packer.pack_slice_owned(&[
@@ -464,29 +390,6 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
                 Datum::UInt64(bucket.try_into().expect("bucket too big")),
             ])
         });
-
-        let arrangement_heap_datum_to_row =
-            move |packer: &mut PermutedRowPacker, ArrangementHeapDatum { operator_id }| {
-                packer.pack_slice_owned(&[
-                    Datum::UInt64(operator_id.try_into().expect("operator_id too big")),
-                    Datum::UInt64(u64::cast_from(worker_id)),
-                ])
-            };
-
-        let mut packer = PermutedRowPacker::new(ComputeLog::ArrangementHeapSize);
-        let arrangement_heap_size = arrangement_heap_size
-            .as_collection()
-            .map(move |d| arrangement_heap_datum_to_row(&mut packer, d));
-
-        let mut packer = PermutedRowPacker::new(ComputeLog::ArrangementHeapCapacity);
-        let arrangement_heap_capacity = arrangement_heap_capacity
-            .as_collection()
-            .map(move |d| arrangement_heap_datum_to_row(&mut packer, d));
-
-        let mut packer = PermutedRowPacker::new(ComputeLog::ArrangementHeapSize);
-        let arrangement_heap_allocations = arrangement_heap_allocations
-            .as_collection()
-            .map(move |d| arrangement_heap_datum_to_row(&mut packer, d));
 
         let mut packer = PermutedRowPacker::new(ComputeLog::ErrorCount);
         let error_count = error_count.as_collection().map({
@@ -547,16 +450,18 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
         });
 
         use ComputeLog::*;
-        let logs = [
-            (DataflowCurrent, dataflow_current),
-            (FrontierCurrent, frontier_current),
-            (ImportFrontierCurrent, import_frontier_current),
-            (PeekCurrent, peek_current),
-            (PeekDuration, peek_duration),
-            (ShutdownDuration, shutdown_duration),
-            (ArrangementHeapSize, arrangement_heap_size),
-            (ArrangementHeapCapacity, arrangement_heap_capacity),
+        let columnar_logs = [
             (ArrangementHeapAllocations, arrangement_heap_allocations),
+            (ArrangementHeapCapacity, arrangement_heap_capacity),
+            (ArrangementHeapSize, arrangement_heap_size),
+            (DataflowCurrent, export),
+            (FrontierCurrent, frontier),
+            (ImportFrontierCurrent, import_frontier),
+            (PeekCurrent, peek),
+            (PeekDuration, peek_duration),
+        ];
+        let logs = [
+            (ShutdownDuration, shutdown_duration),
             (ErrorCount, error_count),
             (HydrationTime, hydration_time),
             (LirMapping, lir_mapping),
@@ -565,6 +470,22 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
 
         // Build the output arrangements.
         let mut collections = BTreeMap::new();
+        for (variant, stream) in columnar_logs {
+            let variant = LogVariant::Compute(variant);
+            if config.index_logs.contains_key(&variant) {
+                let trace = stream
+                    .mz_arrange_core::<_, Col2ValBatcher<_, _, _, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+                        ExchangeCore::<ColumnBuilder<_>, _>::new_core(columnar_exchange::<Row, Row, Timestamp, Diff>),
+                        &format!("Arrange {variant:?}"),
+                    )
+                    .trace;
+                let collection = LogCollection {
+                    trace,
+                    token: Rc::clone(&token),
+                };
+                collections.insert(variant, collection);
+            }
+        }
         for (variant, collection) in logs {
             let variant = LogVariant::Compute(variant);
             if config.index_logs.contains_key(&variant) {
@@ -603,6 +524,12 @@ where
 struct DemuxState<A> {
     /// The timely scheduler.
     scheduler: A,
+    /// The index of this worker.
+    worker_id: usize,
+    /// A reusable scratch string for formatting IDs.
+    scratch_string_a: String,
+    /// A reusable scratch string for formatting IDs.
+    scratch_string_b: String,
     /// State tracked per dataflow export.
     exports: BTreeMap<GlobalId, ExportState>,
     /// Maps live dataflows to counts of their exports.
@@ -619,12 +546,31 @@ struct DemuxState<A> {
     lir_mapping: BTreeMap<GlobalId, BTreeMap<LirId, LirMetadata>>,
     /// Dataflow -> `GlobalId` mapping (many-to-one).
     dataflow_global_ids: BTreeMap<usize, BTreeSet<GlobalId>>,
+    /// A row packer for the arrangement heap allocations output.
+    arrangement_heap_allocations_packer: PermutedRowPacker,
+    /// A row packer for the arrangement heap capacity output.
+    arrangement_heap_capacity_packer: PermutedRowPacker,
+    /// A row packer for the arrangement heap size output.
+    arrangement_heap_size_packer: PermutedRowPacker,
+    /// A row packer for the exports output.
+    export_packer: PermutedRowPacker,
+    /// A row packer for the frontier output.
+    frontier_packer: PermutedRowPacker,
+    /// A row packer for the exports output.
+    import_frontier_packer: PermutedRowPacker,
+    /// A row packer for the peek durations output.
+    peek_duration_packer: PermutedRowPacker,
+    /// A row packer for the peek output.
+    peek_packer: PermutedRowPacker,
 }
 
 impl<A: Scheduler> DemuxState<A> {
-    fn new(scheduler: A) -> Self {
+    fn new(scheduler: A, worker_id: usize) -> Self {
         Self {
             scheduler,
+            worker_id,
+            scratch_string_a: String::new(),
+            scratch_string_b: String::new(),
             exports: Default::default(),
             dataflow_export_counts: Default::default(),
             dataflow_drop_times: Default::default(),
@@ -633,7 +579,113 @@ impl<A: Scheduler> DemuxState<A> {
             arrangement_size: Default::default(),
             lir_mapping: Default::default(),
             dataflow_global_ids: Default::default(),
+            arrangement_heap_allocations_packer: PermutedRowPacker::new(
+                ComputeLog::ArrangementHeapAllocations,
+            ),
+            arrangement_heap_capacity_packer: PermutedRowPacker::new(
+                ComputeLog::ArrangementHeapCapacity,
+            ),
+            arrangement_heap_size_packer: PermutedRowPacker::new(ComputeLog::ArrangementHeapSize),
+            export_packer: PermutedRowPacker::new(ComputeLog::DataflowCurrent),
+            frontier_packer: PermutedRowPacker::new(ComputeLog::FrontierCurrent),
+            import_frontier_packer: PermutedRowPacker::new(ComputeLog::ImportFrontierCurrent),
+            peek_duration_packer: PermutedRowPacker::new(ComputeLog::PeekDuration),
+            peek_packer: PermutedRowPacker::new(ComputeLog::PeekCurrent),
         }
+    }
+
+    /// Pack an arrangement heap allocations update key-value for the given operator.
+    fn pack_arrangement_heap_allocations_update(
+        &mut self,
+        operator_id: usize,
+    ) -> (&RowRef, &RowRef) {
+        self.arrangement_heap_allocations_packer.pack_slice(&[
+            Datum::UInt64(operator_id.try_into().expect("operator_id too big")),
+            Datum::UInt64(u64::cast_from(self.worker_id)),
+        ])
+    }
+
+    /// Pack an arrangement heap capacity update key-value for the given operator.
+    fn pack_arrangement_heap_capacity_update(&mut self, operator_id: usize) -> (&RowRef, &RowRef) {
+        self.arrangement_heap_capacity_packer.pack_slice(&[
+            Datum::UInt64(operator_id.try_into().expect("operator_id too big")),
+            Datum::UInt64(u64::cast_from(self.worker_id)),
+        ])
+    }
+
+    /// Pack an arrangement heap size update key-value for the given operator.
+    fn pack_arrangement_heap_size_update(&mut self, operator_id: usize) -> (&RowRef, &RowRef) {
+        self.arrangement_heap_size_packer.pack_slice(&[
+            Datum::UInt64(operator_id.try_into().expect("operator_id too big")),
+            Datum::UInt64(u64::cast_from(self.worker_id)),
+        ])
+    }
+
+    /// Pack an export update key-value for the given export ID and dataflow index.
+    fn pack_export_update(
+        &mut self,
+        export_id: GlobalId,
+        dataflow_index: usize,
+    ) -> (&RowRef, &RowRef) {
+        self.export_packer.pack_slice(&[
+            make_string_datum(export_id, &mut self.scratch_string_a),
+            Datum::UInt64(u64::cast_from(self.worker_id)),
+            Datum::UInt64(u64::cast_from(dataflow_index)),
+        ])
+    }
+
+    /// Pack an import frontier update key-value for the given export ID and dataflow index.
+    fn pack_import_frontier_update(
+        &mut self,
+        export_id: GlobalId,
+        import_id: GlobalId,
+        time: Timestamp,
+    ) -> (&RowRef, &RowRef) {
+        self.import_frontier_packer.pack_slice(&[
+            make_string_datum(export_id, &mut self.scratch_string_a),
+            make_string_datum(import_id, &mut self.scratch_string_b),
+            Datum::UInt64(u64::cast_from(self.worker_id)),
+            Datum::MzTimestamp(time),
+        ])
+    }
+
+    /// Pack a peek duration update key-value for the given peek and peek type.
+    fn pack_peek_duration_update(
+        &mut self,
+        peek_type: PeekType,
+        bucket: u128,
+    ) -> (&RowRef, &RowRef) {
+        self.peek_duration_packer.pack_slice(&[
+            Datum::UInt64(u64::cast_from(self.worker_id)),
+            Datum::String(peek_type.name()),
+            Datum::UInt64(bucket.try_into().expect("bucket too big")),
+        ])
+    }
+
+    /// Pack a peek update key-value for the given peek and peek type.
+    fn pack_peek_update(
+        &mut self,
+        id: GlobalId,
+        time: Timestamp,
+        uuid: Uuid,
+        peek_type: PeekType,
+    ) -> (&RowRef, &RowRef) {
+        self.peek_packer.pack_slice(&[
+            Datum::Uuid(uuid),
+            Datum::UInt64(u64::cast_from(self.worker_id)),
+            make_string_datum(id, &mut self.scratch_string_a),
+            Datum::String(peek_type.name()),
+            Datum::MzTimestamp(time),
+        ])
+    }
+
+    /// Pack a frontier update key-value for the given export ID and time.
+    fn pack_frontier_update(&mut self, export_id: GlobalId, time: Timestamp) -> (&RowRef, &RowRef) {
+        self.frontier_packer.pack_slice(&[
+            make_string_datum(export_id, &mut self.scratch_string_a),
+            Datum::UInt64(u64::cast_from(self.worker_id)),
+            Datum::MzTimestamp(time),
+        ])
     }
 }
 
@@ -673,55 +725,19 @@ struct ArrangementSizeState {
 
 /// Bundled output sessions used by the demux operator.
 struct DemuxOutput<'a> {
-    export: OutputSessionVec<'a, Update<ExportDatum>>,
-    frontier: OutputSessionVec<'a, Update<FrontierDatum>>,
-    import_frontier: OutputSessionVec<'a, Update<ImportFrontierDatum>>,
-    peek: OutputSessionVec<'a, Update<PeekDatum>>,
-    peek_duration: OutputSessionVec<'a, Update<PeekDurationDatum>>,
+    export: OutputSessionColumnar<'a, Update<(Row, Row)>>,
+    frontier: OutputSessionColumnar<'a, Update<(Row, Row)>>,
+    import_frontier: OutputSessionColumnar<'a, Update<(Row, Row)>>,
+    peek: OutputSessionColumnar<'a, Update<(Row, Row)>>,
+    peek_duration: OutputSessionColumnar<'a, Update<(Row, Row)>>,
     shutdown_duration: OutputSessionVec<'a, Update<u128>>,
-    arrangement_heap_size: OutputSessionVec<'a, Update<ArrangementHeapDatum>>,
-    arrangement_heap_capacity: OutputSessionVec<'a, Update<ArrangementHeapDatum>>,
-    arrangement_heap_allocations: OutputSessionVec<'a, Update<ArrangementHeapDatum>>,
+    arrangement_heap_allocations: OutputSessionColumnar<'a, Update<(Row, Row)>>,
+    arrangement_heap_capacity: OutputSessionColumnar<'a, Update<(Row, Row)>>,
+    arrangement_heap_size: OutputSessionColumnar<'a, Update<(Row, Row)>>,
     hydration_time: OutputSessionVec<'a, Update<HydrationTimeDatum>>,
     error_count: OutputSessionVec<'a, Update<ErrorCountDatum>>,
     lir_mapping: OutputSessionColumnar<'a, Update<LirMappingDatum>>,
     dataflow_global_ids: OutputSessionVec<'a, Update<DataflowGlobalDatum>>,
-}
-
-#[derive(Clone)]
-struct ExportDatum {
-    export_id: GlobalId,
-    dataflow_index: usize,
-}
-
-#[derive(Clone)]
-struct FrontierDatum {
-    export_id: GlobalId,
-    time: Timestamp,
-}
-
-#[derive(Clone)]
-struct ImportFrontierDatum {
-    export_id: GlobalId,
-    import_id: GlobalId,
-    time: Timestamp,
-}
-
-#[derive(Clone)]
-struct PeekDatum {
-    peek: Peek,
-    peek_type: PeekType,
-}
-
-#[derive(Clone)]
-struct PeekDurationDatum {
-    peek_type: PeekType,
-    bucket: u128,
-}
-
-#[derive(Clone, Copy)]
-struct ArrangementHeapDatum {
-    operator_id: usize,
 }
 
 #[derive(Clone)]
@@ -813,10 +829,7 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
     ) {
         let export_id = Columnar::into_owned(export_id);
         let ts = self.ts();
-        let datum = ExportDatum {
-            export_id,
-            dataflow_index,
-        };
+        let datum = self.state.pack_export_update(export_id, dataflow_index);
         self.output.export.give((datum, ts, Diff::ONE));
 
         let existing = self
@@ -854,10 +867,7 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
         let ts = self.ts();
         let dataflow_index = export.dataflow_index;
 
-        let datum = ExportDatum {
-            export_id,
-            dataflow_index,
-        };
+        let datum = self.state.pack_export_update(export_id, dataflow_index);
         self.output.export.give((datum, ts, Diff::MINUS_ONE));
 
         match self.state.dataflow_export_counts.get_mut(&dataflow_index) {
@@ -1038,17 +1048,18 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
     fn handle_peek_install(
         &mut self,
         PeekEventReference {
-            peek,
+            id,
+            time,
+            uuid,
             peek_type,
             installed: _,
         }: Ref<'_, PeekEvent>,
     ) {
-        let peek = Peek::into_owned(peek);
-        let uuid = Uuid::from_bytes(peek.uuid);
+        let id = Columnar::into_owned(id);
+        let uuid = Uuid::from_bytes(uuid::Bytes::into_owned(uuid));
         let ts = self.ts();
-        self.output
-            .peek
-            .give((PeekDatum { peek, peek_type }, ts, Diff::ONE));
+        let datum = self.state.pack_peek_update(id, time, uuid, peek_type);
+        self.output.peek.give((datum, ts, Diff::ONE));
 
         let existing = self.state.peek_stash.insert(uuid, self.time);
         if existing.is_some() {
@@ -1059,26 +1070,24 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
     fn handle_peek_retire(
         &mut self,
         PeekEventReference {
-            peek,
+            id,
+            time,
+            uuid,
             peek_type,
             installed: _,
         }: Ref<'_, PeekEvent>,
     ) {
-        let peek = Peek::into_owned(peek);
-        let uuid = Uuid::from_bytes(peek.uuid);
+        let id = Columnar::into_owned(id);
+        let uuid = Uuid::from_bytes(uuid::Bytes::into_owned(uuid));
         let ts = self.ts();
-        self.output
-            .peek
-            .give((PeekDatum { peek, peek_type }, ts, Diff::MINUS_ONE));
+        let datum = self.state.pack_peek_update(id, time, uuid, peek_type);
+        self.output.peek.give((datum, ts, Diff::MINUS_ONE));
 
         if let Some(start) = self.state.peek_stash.remove(&uuid) {
             let elapsed_ns = self.time.saturating_sub(start).as_nanos();
             let bucket = elapsed_ns.next_power_of_two();
-            self.output.peek_duration.give((
-                PeekDurationDatum { peek_type, bucket },
-                ts,
-                Diff::ONE,
-            ));
+            let datum = self.state.pack_peek_duration_update(peek_type, bucket);
+            self.output.peek_duration.give((datum, ts, Diff::ONE));
         } else {
             error!(%uuid, "peek not yet registered");
         }
@@ -1096,7 +1105,7 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
         let diff = Diff::from(*diff);
         let ts = self.ts();
         let time = Columnar::into_owned(time);
-        let datum = FrontierDatum { export_id, time };
+        let datum = self.state.pack_frontier_update(export_id, time);
         self.output.frontier.give((datum, ts, diff));
     }
 
@@ -1111,16 +1120,13 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
     ) {
         let import_id = Columnar::into_owned(import_id);
         let export_id = Columnar::into_owned(export_id);
+        let diff = Diff::from(*diff);
         let ts = self.ts();
         let time = Columnar::into_owned(time);
-        let datum = ImportFrontierDatum {
-            export_id,
-            import_id,
-            time,
-        };
-        self.output
-            .import_frontier
-            .give((datum, ts, (*diff).into()));
+        let datum = self
+            .state
+            .pack_import_frontier_update(export_id, import_id, time);
+        self.output.import_frontier.give((datum, ts, diff));
     }
 
     /// Update the allocation size for an arrangement.
@@ -1136,12 +1142,11 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
             return;
         };
 
-        let datum = ArrangementHeapDatum { operator_id };
-        self.output
-            .arrangement_heap_size
-            .give((datum, ts, Diff::cast_from(delta_size)));
-
         state.size += delta_size;
+
+        let datum = self.state.pack_arrangement_heap_size_update(operator_id);
+        let diff = Diff::cast_from(delta_size);
+        self.output.arrangement_heap_size.give((datum, ts, diff));
     }
 
     /// Update the allocation capacity for an arrangement.
@@ -1157,12 +1162,13 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
             return;
         };
 
-        let datum = ArrangementHeapDatum { operator_id };
-        self.output
-            .arrangement_heap_capacity
-            .give((datum, ts, Diff::cast_from(delta_capacity)));
-
         state.capacity += delta_capacity;
+
+        let datum = self
+            .state
+            .pack_arrangement_heap_capacity_update(operator_id);
+        let diff = Diff::cast_from(delta_capacity);
+        self.output.arrangement_heap_size.give((datum, ts, diff));
     }
 
     /// Update the allocation count for an arrangement.
@@ -1178,13 +1184,13 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
             return;
         };
 
-        let datum = ArrangementHeapDatum { operator_id };
-        let diff = Diff::cast_from(delta_allocations);
-        self.output
-            .arrangement_heap_allocations
-            .give((datum, ts, diff));
-
         state.count += delta_allocations;
+
+        let datum = self
+            .state
+            .pack_arrangement_heap_allocations_update(operator_id);
+        let diff = Diff::cast_from(delta_allocations);
+        self.output.arrangement_heap_size.give((datum, ts, diff));
     }
 
     /// Indicate that a new arrangement exists, start maintaining the heap size state.
@@ -1223,20 +1229,25 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
         let operator_id = event.operator_id;
         if let Some(state) = self.state.arrangement_size.remove(&operator_id) {
             let ts = self.ts();
-            let datum = ArrangementHeapDatum { operator_id };
-
-            let diff = -Diff::cast_from(state.size);
-            self.output.arrangement_heap_size.give((datum, ts, diff));
-
-            let diff = -Diff::cast_from(state.capacity);
-            self.output
-                .arrangement_heap_capacity
-                .give((datum, ts, diff));
-
+            let allocations = self
+                .state
+                .pack_arrangement_heap_allocations_update(operator_id);
             let diff = -Diff::cast_from(state.count);
             self.output
                 .arrangement_heap_allocations
-                .give((datum, ts, diff));
+                .give((allocations, ts, diff));
+
+            let capacity = self
+                .state
+                .pack_arrangement_heap_capacity_update(operator_id);
+            let diff = -Diff::cast_from(state.capacity);
+            self.output
+                .arrangement_heap_capacity
+                .give((capacity, ts, diff));
+
+            let size = self.state.pack_arrangement_heap_size_update(operator_id);
+            let diff = -Diff::cast_from(state.size);
+            self.output.arrangement_heap_size.give((size, ts, diff));
         }
         self.shared_state
             .arrangement_size_activators

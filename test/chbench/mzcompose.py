@@ -11,9 +11,10 @@ import requests
 
 from materialize.mzcompose.composition import (
     Composition,
+    Service,
     WorkflowArgumentParser,
 )
-from materialize.mzcompose.service import Service
+from materialize.mzcompose.service import Service as MzComposeService
 from materialize.mzcompose.services.debezium import Debezium
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
@@ -32,7 +33,7 @@ SERVICES = [
     Mz(app_password=""),
     Materialized(),
     Metabase(),
-    Service(
+    MzComposeService(
         name="chbench",
         config={
             "mzbuild": "chbenchmark",
@@ -62,11 +63,15 @@ def workflow_no_load(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     args, unknown_args = parser.parse_known_args()
 
-    # Start Materialize.
-    c.up("materialized")
-
-    # Start MySQL and Debezium.
-    c.up("zookeeper", "kafka", "schema-registry", "mysql", "debezium")
+    c.up(
+        "materialized",
+        "zookeeper",
+        "kafka",
+        "schema-registry",
+        "mysql",
+        "debezium",
+        Service("chbench", idle=True),
+    )
 
     # Generate initial data.
     c.run(

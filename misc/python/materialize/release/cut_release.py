@@ -55,7 +55,19 @@ def main():
         print(f"Checking out SHA {args.sha}")
         checkout(args.sha)
         print(f"Bumping version to {version}")
-        spawn.runv([MZ_ROOT / "bin" / "bump-version", version, "--sbom"])
+        spawn.runv(
+            [
+                MZ_ROOT / "bin" / "ci-builder",
+                "run",
+                "stable",
+                MZ_ROOT / "bin" / "bump-version",
+                version,
+                "--no-commit",
+                "--sbom",
+            ]
+        )
+        # Commit here instead of in bump-version so we have access to the correct git author
+        spawn.runv(["git", "commit", "-am", f"release: bump to version {version}"])
         print("Tagging version")
         tag_annotated(version)
         print("Pushing tag to Materialize repo")

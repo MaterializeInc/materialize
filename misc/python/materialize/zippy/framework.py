@@ -24,12 +24,10 @@ class State:
     deploy_generation: int
     system_parameter_defaults: dict[str, str]
 
-    def __init__(self, zero_downtime: bool):
+    def __init__(self):
         self.mz_service = "materialized"
         self.deploy_generation = 0
-        self.system_parameter_defaults = get_default_system_parameters(
-            zero_downtime=zero_downtime
-        )
+        self.system_parameter_defaults = get_default_system_parameters()
 
 
 class Capability:
@@ -192,14 +190,7 @@ class Test:
         self._actions_with_weight: dict[ActionOrFactory, float] = (
             self._scenario.actions_with_weight()
         )
-        self._state = State(
-            zero_downtime=any(
-                [
-                    isinstance(action, Mz0dtDeployBaseAction)
-                    for action in self._actions_with_weight
-                ]
-            )
-        )
+        self._state = State()
         self._max_execution_time: timedelta = max_execution_time
 
         for action_or_factory in self._scenario.bootstrap():

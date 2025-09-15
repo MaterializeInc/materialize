@@ -34,7 +34,7 @@ FROM t_using_dataflow_rendering;
 ----
 Explained Query:
   Project (#1, #2)
-    Map (text_to_bytea(#0{f1}), digest(#1{"?column?"}, "sha512"))
+    Map (text_to_bytea(#0{f1}), digest(#1, "sha512"))
       ReadStorage materialize.public.t_using_dataflow_rendering
 
 Source materialize.public.t_using_dataflow_rendering

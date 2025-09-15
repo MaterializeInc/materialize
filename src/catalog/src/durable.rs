@@ -157,13 +157,6 @@ pub trait OpenableDurableCatalogState: Debug + Send {
     /// deploy generation of this instance.
     async fn get_deployment_generation(&mut self) -> Result<u64, CatalogError>;
 
-    /// Get the `enable_0dt_deployment` config value of this instance.
-    ///
-    /// This mirrors the `enable_0dt_deployment` "system var" so that we can
-    /// toggle the flag with LaunchDarkly, but use it in boot before
-    /// LaunchDarkly is available.
-    async fn get_enable_0dt_deployment(&mut self) -> Result<Option<bool>, CatalogError>;
-
     /// Get the `with_0dt_deployment_max_wait` config value of this instance.
     ///
     /// This mirrors the `with_0dt_deployment_max_wait` "system var" so that we can
