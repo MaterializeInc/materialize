@@ -10,7 +10,6 @@
 # by the Apache License, Version 2.0.
 
 import os
-from concurrent.futures import ThreadPoolExecutor, wait
 from pathlib import Path
 
 from materialize import bazel, mzbuild, spawn, ui
@@ -44,19 +43,10 @@ def main() -> None:
         # Build and push any images that are not already available on Docker Hub,
         # so they are accessible to other build agents.
         print("--- Acquiring mzbuild images")
-        built_images = set()
         deps = repo.resolve_dependencies(image for image in repo if image.publish)
-        deps.ensure(post_build=lambda image: built_images.add(image))
+        deps.ensure(pre_build=lambda images: upload_debuginfo(repo, images))
         set_build_status("success")
-
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            futures = [
-                executor.submit(maybe_upload_debuginfo, repo, built_images),
-                executor.submit(annotate_buildkite_with_tags, repo.rd.arch, deps),
-            ]
-
-            # Wait until all tasks are complete
-            wait(futures)
+        annotate_buildkite_with_tags(repo.rd.arch, deps)
     except:
         set_build_status("failed")
         raise
@@ -90,11 +80,10 @@ def annotate_buildkite_with_tags(arch: Arch, deps: mzbuild.DependencySet) -> Non
     )
 
 
-def maybe_upload_debuginfo(
-    repo: mzbuild.Repository, built_images: set[ResolvedImage], max_tries: int = 3
+def upload_debuginfo(
+    repo: mzbuild.Repository, built_images: list[ResolvedImage], max_tries: int = 3
 ) -> None:
-    """Uploads debuginfo to `DEBUGINFO_S3_BUCKET` and Polar Signals if any
-    DEBUGINFO_BINS were built."""
+    """Uploads debuginfo to `DEBUGINFO_S3_BUCKET` if any DEBUGINFO_BINS were built."""
 
     # Find all binaries created by the `cargo-bin` pre-image.
     bins, bazel_bins = find_binaries_created_by_cargo_bin(
@@ -128,7 +117,7 @@ def maybe_upload_debuginfo(
 
 
 def find_binaries_created_by_cargo_bin(
-    repo: Repository, built_images: set[ResolvedImage], bin_names: set[str]
+    repo: Repository, built_images: list[ResolvedImage], bin_names: set[str]
 ) -> tuple[set[str], dict[str, str]]:
     bins: set[str] = set()
     bazel_bins: dict[str, str] = dict()
