@@ -3418,7 +3418,7 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
 }
 
 /// A single update to the catalog state.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct StateUpdate {
     pub kind: StateUpdateKind,
     pub ts: Timestamp,
@@ -3428,7 +3428,7 @@ pub struct StateUpdate {
 /// The contents of a single state update.
 ///
 /// Variants are listed in dependency order.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum StateUpdateKind {
     Role(durable::objects::Role),
     RoleAuth(durable::objects::RoleAuth),
