@@ -86,14 +86,16 @@ class SmallInt(DataType):
             raise ValueError(f"Unexpected record size {record_size}")
 
         if rng.randrange(10) == 0:
-            return min
-        if rng.randrange(10) == 0:
-            return max
-        return rng.randint(min, max)
+            value = min
+        elif rng.randrange(10) == 0:
+            value = max
+        else:
+            value = rng.randint(min, max)
+        return f"{value}::smallint" if in_query else value
 
     @staticmethod
     def numeric_value(num: int, in_query: bool = False) -> Any:
-        return num
+        return f"{num}::smallint" if in_query else num
 
     @staticmethod
     def name(backend: Backend = Backend.MATERIALIZE) -> str:
@@ -122,14 +124,16 @@ class Int(DataType):
             raise ValueError(f"Unexpected record size {record_size}")
 
         if rng.randrange(10) == 0:
-            return min
-        if rng.randrange(10) == 0:
-            return max
-        return rng.randint(min, max)
+            value = min
+        elif rng.randrange(10) == 0:
+            value = max
+        else:
+            value = rng.randint(min, max)
+        return f"{value}::int" if in_query else value
 
     @staticmethod
     def numeric_value(num: int, in_query: bool = False) -> Any:
-        return num
+        return f"{num}::int" if in_query else num
 
     @staticmethod
     def name(backend: Backend = Backend.MATERIALIZE) -> str:
@@ -158,14 +162,16 @@ class Long(DataType):
             raise ValueError(f"Unexpected record size {record_size}")
 
         if rng.randrange(10) == 0:
-            return min
-        if rng.randrange(10) == 0:
-            return max
-        return rng.randint(min, max)
+            value = min
+        elif rng.randrange(10) == 0:
+            value = max
+        else:
+            value = rng.randint(min, max)
+        return f"{value}::bigint" if in_query else value
 
     @staticmethod
     def numeric_value(num: int, in_query: bool = False) -> Any:
-        return num
+        return f"{num}::bigint" if in_query else num
 
     @staticmethod
     def name(backend: Backend = Backend.MATERIALIZE) -> str:
@@ -192,14 +198,16 @@ class UInt2(DataType):
             raise ValueError(f"Unexpected record size {record_size}")
 
         if rng.randrange(10) == 0:
-            return min
-        if rng.randrange(10) == 0:
-            return max
-        return rng.randint(min, max)
+            value = min
+        elif rng.randrange(10) == 0:
+            value = max
+        else:
+            value = rng.randint(min, max)
+        return f"{value}::uint2" if in_query else value
 
     @staticmethod
     def numeric_value(num: int, in_query: bool = False) -> Any:
-        return num
+        return f"{num}::uint2" if in_query else num
 
     @staticmethod
     def name(backend: Backend = Backend.MATERIALIZE) -> str:
@@ -232,14 +240,16 @@ class UInt4(DataType):
             raise ValueError(f"Unexpected record size {record_size}")
 
         if rng.randrange(10) == 0:
-            return min
-        if rng.randrange(10) == 0:
-            return max
-        return rng.randint(min, max)
+            value = min
+        elif rng.randrange(10) == 0:
+            value = max
+        else:
+            value = rng.randint(min, max)
+        return f"{value}::uint4" if in_query else value
 
     @staticmethod
     def numeric_value(num: int, in_query: bool = False) -> Any:
-        return num
+        return f"{num}::uint4" if in_query else num
 
     @staticmethod
     def name(backend: Backend = Backend.MATERIALIZE) -> str:
@@ -274,14 +284,16 @@ class UInt8(DataType):
             raise ValueError(f"Unexpected record size {record_size}")
 
         if rng.randrange(10) == 0:
-            return min
-        if rng.randrange(10) == 0:
-            return max
-        return rng.randint(min, max)
+            value = min
+        elif rng.randrange(10) == 0:
+            value = max
+        else:
+            value = rng.randint(min, max)
+        return f"{value}::uint8" if in_query else value
 
     @staticmethod
     def numeric_value(num: int, in_query: bool = False) -> Any:
-        return num
+        return f"{num}::uint8" if in_query else num
 
     @staticmethod
     def name(backend: Backend = Backend.MATERIALIZE) -> str:
@@ -305,24 +317,24 @@ class Float(DataType):
         in_query: bool = False,
     ) -> Any:
         if rng.randrange(10) == 0:
-            return 1.0
-        if rng.randrange(10) == 0:
-            return 0.0
-
-        if record_size == RecordSize.TINY:
-            return rng.random()
+            value = 1.0
+        elif rng.randrange(10) == 0:
+            value = 0.0
+        elif record_size == RecordSize.TINY:
+            value = rng.random()
         elif record_size == RecordSize.SMALL:
-            return rng.uniform(-100, 100)
+            value = rng.uniform(-100, 100)
         elif record_size == RecordSize.MEDIUM:
-            return rng.uniform(-1_000_000, 1_000_000)
+            value = rng.uniform(-1_000_000, 1_000_000)
         elif record_size == RecordSize.LARGE:
-            return rng.uniform(-1_000_000_000, 1_000_000_000_00)
+            value = rng.uniform(-1_000_000_000, 1_000_000_000_00)
         else:
             raise ValueError(f"Unexpected record size {record_size}")
+        return f"{value}::float4" if in_query else value
 
     @staticmethod
     def numeric_value(num: int, in_query: bool = False) -> Any:
-        return num
+        return f"{num}::float4" if in_query else num
 
     @staticmethod
     def name(backend: Backend = Backend.MATERIALIZE) -> str:
@@ -336,7 +348,33 @@ class Float(DataType):
             return "float4"
 
 
-class Double(Float):
+class Double(DataType):
+    @staticmethod
+    def random_value(
+        rng: random.Random,
+        record_size: RecordSize = RecordSize.LARGE,
+        in_query: bool = False,
+    ) -> Any:
+        if rng.randrange(10) == 0:
+            value = 1.0
+        elif rng.randrange(10) == 0:
+            value = 0.0
+        elif record_size == RecordSize.TINY:
+            value = rng.random()
+        elif record_size == RecordSize.SMALL:
+            value = rng.uniform(-100, 100)
+        elif record_size == RecordSize.MEDIUM:
+            value = rng.uniform(-1_000_000, 1_000_000)
+        elif record_size == RecordSize.LARGE:
+            value = rng.uniform(-1_000_000_000, 1_000_000_000_00)
+        else:
+            raise ValueError(f"Unexpected record size {record_size}")
+        return f"{value}::float8" if in_query else value
+
+    @staticmethod
+    def numeric_value(num: int, in_query: bool = False) -> Any:
+        return f"{num}::float8" if in_query else num
+
     @staticmethod
     def name(backend: Backend = Backend.MATERIALIZE) -> str:
         if backend == Backend.AVRO:
@@ -349,7 +387,33 @@ class Double(Float):
             return "float8"
 
 
-class Numeric(Float):
+class Numeric(DataType):
+    @staticmethod
+    def random_value(
+        rng: random.Random,
+        record_size: RecordSize = RecordSize.LARGE,
+        in_query: bool = False,
+    ) -> Any:
+        if rng.randrange(10) == 0:
+            value = 1.0
+        elif rng.randrange(10) == 0:
+            value = 0.0
+        elif record_size == RecordSize.TINY:
+            value = rng.random()
+        elif record_size == RecordSize.SMALL:
+            value = rng.uniform(-100, 100)
+        elif record_size == RecordSize.MEDIUM:
+            value = rng.uniform(-1_000_000, 1_000_000)
+        elif record_size == RecordSize.LARGE:
+            value = rng.uniform(-1_000_000_000, 1_000_000_000_00)
+        else:
+            raise ValueError(f"Unexpected record size {record_size}")
+        return f"{value}::numeric" if in_query else value
+
+    @staticmethod
+    def numeric_value(num: int, in_query: bool = False) -> Any:
+        return f"{num}::numeric" if in_query else num
+
     @staticmethod
     def name(backend: Backend = Backend.MATERIALIZE) -> str:
         if backend == Backend.AVRO:
@@ -360,7 +424,33 @@ class Numeric(Float):
             return "numeric"
 
 
-class Numeric383(Float):
+class Numeric383(DataType):
+    @staticmethod
+    def random_value(
+        rng: random.Random,
+        record_size: RecordSize = RecordSize.LARGE,
+        in_query: bool = False,
+    ) -> Any:
+        if rng.randrange(10) == 0:
+            value = 1.0
+        elif rng.randrange(10) == 0:
+            value = 0.0
+        elif record_size == RecordSize.TINY:
+            value = rng.random()
+        elif record_size == RecordSize.SMALL:
+            value = rng.uniform(-100, 100)
+        elif record_size == RecordSize.MEDIUM:
+            value = rng.uniform(-1_000_000, 1_000_000)
+        elif record_size == RecordSize.LARGE:
+            value = rng.uniform(-1_000_000_000, 1_000_000_000_00)
+        else:
+            raise ValueError(f"Unexpected record size {record_size}")
+        return f"{value}::numeric(38,3)" if in_query else value
+
+    @staticmethod
+    def numeric_value(num: int, in_query: bool = False) -> Any:
+        return f"{num}::numeric(38,3)" if in_query else num
+
     @staticmethod
     def name(backend: Backend = Backend.MATERIALIZE) -> str:
         if backend == Backend.AVRO:
@@ -623,18 +713,20 @@ class Timestamp(DataType):
         in_query: bool = False,
     ) -> Any:
         if rng.randrange(100) == 0:
-            return "TIMESTAMP '1-01-01'"
-        if rng.randrange(100) == 0:
-            return "TIMESTAMP '99999-12-31'"
-
-        return f"TIMESTAMP '{rng.randrange(1, 100000)}-{rng.randrange(1, 13)}-{rng.randrange(1, 29)}'"
+            result = "1-01-01"
+        elif rng.randrange(100) == 0:
+            result = "99999-12-31"
+        else:
+            result = f"{rng.randrange(1, 100000)}-{rng.randrange(1, 13)}-{rng.randrange(1, 29)}"
+        return f"TIMESTAMP '{result}'" if in_query else str(result)
 
     @staticmethod
     def numeric_value(num: int, in_query: bool = False) -> Any:
         day = num % 28
         month = num // 28 % 12
         year = num // 336
-        return f"TIMESTAMP '{year}-{month}-{day}'"
+        result = f"{year}-{month}-{day}"
+        return f"TIMESTAMP '{result}'" if in_query else str(result)
 
     @staticmethod
     def name(backend: Backend = Backend.MATERIALIZE) -> str:
@@ -648,6 +740,36 @@ class Timestamp(DataType):
             return "timestamp"
 
 
+class MzTimestamp(DataType):
+    @staticmethod
+    def random_value(
+        rng: random.Random,
+        record_size: RecordSize = RecordSize.LARGE,
+        in_query: bool = False,
+    ) -> Any:
+        if rng.randrange(100) == 0:
+            result = "1970-01-01"
+        elif rng.randrange(100) == 0:
+            result = "99999-12-31"
+        else:
+            result = f"{rng.randrange(1970, 100000)}-{rng.randrange(1, 13)}-{rng.randrange(1, 29)}"
+        return f"MZ_TIMESTAMP '{result}'" if in_query else result
+
+    @staticmethod
+    def numeric_value(num: int, in_query: bool = False) -> Any:
+        day = num % 28
+        month = num // 28 % 12
+        year = 1970 + (num // 336)
+        result = f"{year}-{month}-{day}"
+        return f"MZ_TIMESTAMP '{result}'" if in_query else result
+
+    @staticmethod
+    def name(backend: Backend = Backend.MATERIALIZE) -> str:
+        if backend != Backend.MATERIALIZE:
+            raise ValueError("Unsupported")
+        return "mz_timestamp"
+
+
 class Date(DataType):
     @staticmethod
     def random_value(
@@ -656,18 +778,20 @@ class Date(DataType):
         in_query: bool = False,
     ) -> Any:
         if rng.randrange(100) == 0:
-            return "DATE '1-01-01'"
-        if rng.randrange(100) == 0:
-            return "DATE '99999-12-31'"
-
-        return f"DATE '{rng.randrange(1, 100000)}-{rng.randrange(1, 13)}-{rng.randrange(1, 29)}'"
+            result = "1-01-01"
+        elif rng.randrange(100) == 0:
+            result = "99999-12-31"
+        else:
+            result = f"{rng.randrange(1, 100000)}-{rng.randrange(1, 13)}-{rng.randrange(1, 29)}"
+        return f"DATE '{result}'" if in_query else result
 
     @staticmethod
     def numeric_value(num: int, in_query: bool = False) -> Any:
         day = num % 28
         month = num // 28 % 12
         year = num // 336
-        return f"TIME '{year}-{month}-{day}'"
+        result = f"{year}-{month}-{day}"
+        return f"DATE '{result}'" if in_query else result
 
     @staticmethod
     def name(backend: Backend = Backend.MATERIALIZE) -> str:
@@ -687,18 +811,20 @@ class Time(DataType):
         in_query: bool = False,
     ) -> Any:
         if rng.randrange(100) == 0:
-            return "TIME '00:00:00'"
-        if rng.randrange(100) == 0:
-            return "TIME '23:59:59.999999'"
-
-        return f"TIME '{rng.randrange(0, 24)}:{rng.randrange(0, 60)}:{rng.randrange(0, 60)}.{rng.randrange(0, 1000000)}'"
+            result = "00:00:00"
+        elif rng.randrange(100) == 0:
+            result = "23:59:59.999999"
+        else:
+            result = f"{rng.randrange(0, 24)}:{rng.randrange(0, 60)}:{rng.randrange(0, 60)}.{rng.randrange(0, 1000000)}"
+        return f"TIME '{result}'" if in_query else result
 
     @staticmethod
     def numeric_value(num: int, in_query: bool = False) -> Any:
         seconds = num % 60
         minutes = num // 60 % 60
         hours = num // 3600
-        return f"TIME '{hours}:{minutes}:{seconds}'"
+        result = f"{hours}:{minutes}:{seconds}"
+        return f"TIME '{result}'" if in_query else result
 
     @staticmethod
     def name(backend: Backend = Backend.MATERIALIZE) -> str:
@@ -718,24 +844,26 @@ class Interval(DataType):
         in_query: bool = False,
     ) -> Any:
         if rng.randrange(100) == 0:
-            return "INTERVAL '-178956970 years -8 months -2147483648 days -2562047788:00:54.775808'"
-        if rng.randrange(100) == 0:
-            return "INTERVAL '178956970 years 7 months 2147483647 days 2562047788:00:54.775807'"
-
-        if record_size == RecordSize.TINY:
-            return f"INTERVAL '{rng.random()}' MINUTE"
+            result = (
+                "-178956970 years -8 months -2147483648 days -2562047788:00:54.775808"
+            )
+        elif rng.randrange(100) == 0:
+            result = "178956970 years 7 months 2147483647 days 2562047788:00:54.775807"
+        elif record_size == RecordSize.TINY:
+            result = f"{rng.random():.0f} MINUTE"
         elif record_size == RecordSize.SMALL:
-            return f"INTERVAL '{rng.uniform(-100, 100)} days {rng.uniform(-100, 100)} seconds'"
+            result = f"{rng.uniform(-100, 100):.0f} days {rng.uniform(-100, 100):.0f} seconds"
         elif record_size == RecordSize.MEDIUM:
-            return f"INTERVAL '{rng.uniform(-100, 100)} years {rng.uniform(-100, 100)} days {rng.uniform(-100, 100)} seconds'"
+            result = f"{rng.uniform(-100, 100):.0f} years {rng.uniform(-100, 100):.0f} days {rng.uniform(-100, 100):.0f} seconds"
         elif record_size == RecordSize.LARGE:
-            return f"INTERVAL '{rng.uniform(-178956970, 178956970)} years {rng.uniform(-365, 365)} days {rng.uniform(-1000000000, 1000000000)} seconds'"
+            result = f"{rng.uniform(-178956970, 178956970):.0f} years {rng.uniform(-365, 365):.0f} days {rng.uniform(-1000000000, 1000000000):.0f} seconds"
         else:
             raise ValueError(f"Unexpected record size {record_size}")
+        return f"INTERVAL '{result}'" if in_query else result
 
     @staticmethod
     def numeric_value(num: int, in_query: bool = False) -> Any:
-        return f"INTERVAL '{num}' MINUTE"
+        return f"INTERVAL '{num}' MINUTE" if in_query else str(num)
 
     @staticmethod
     def name(backend: Backend = Backend.MATERIALIZE) -> str:
@@ -778,6 +906,7 @@ DATA_TYPES_FOR_AVRO = sorted(
             Time,
             Date,
             Timestamp,
+            MzTimestamp,
             Oid,
             Numeric,
             Numeric383,
@@ -835,6 +964,7 @@ DATA_TYPES_FOR_SQL_SERVER = sorted(
             Date,
             Time,
             Timestamp,
+            MzTimestamp,
             Float,
             Double,
         }

@@ -140,6 +140,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 '{"key": "value"}',
                 '550e8400-e29b-41d4-a716-446655440000'
             );
+
+            CREATE MATERIALIZED VIEW mv3 AS SELECT * FROM t2;
             """,
             service=mz_server,
         )
