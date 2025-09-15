@@ -1168,7 +1168,9 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
             .state
             .pack_arrangement_heap_capacity_update(operator_id);
         let diff = Diff::cast_from(delta_capacity);
-        self.output.arrangement_heap_size.give((datum, ts, diff));
+        self.output
+            .arrangement_heap_capacity
+            .give((datum, ts, diff));
     }
 
     /// Update the allocation count for an arrangement.
@@ -1190,7 +1192,9 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
             .state
             .pack_arrangement_heap_allocations_update(operator_id);
         let diff = Diff::cast_from(delta_allocations);
-        self.output.arrangement_heap_size.give((datum, ts, diff));
+        self.output
+            .arrangement_heap_allocations
+            .give((datum, ts, diff));
     }
 
     /// Indicate that a new arrangement exists, start maintaining the heap size state.
