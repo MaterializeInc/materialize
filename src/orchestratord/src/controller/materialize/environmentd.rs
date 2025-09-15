@@ -50,7 +50,9 @@ use super::matching_image_from_environmentd_image_ref;
 use crate::controller::materialize::tls::{create_certificate, issuer_ref_defined};
 use crate::k8s::{apply_resource, delete_resource, get_resource};
 use mz_cloud_provider::CloudProvider;
-use mz_cloud_resources::crd::generated::cert_manager::certificates::Certificate;
+use mz_cloud_resources::crd::generated::cert_manager::certificates::{
+    Certificate, CertificatePrivateKeyAlgorithm,
+};
 use mz_cloud_resources::crd::materialize::v1alpha1::Materialize;
 use mz_orchestrator_tracing::TracingCliArgs;
 use mz_ore::instrument;
@@ -893,6 +895,8 @@ fn create_environmentd_certificate(
             mz.environmentd_service_name(),
             mz.environmentd_service_internal_fqdn(),
         ]),
+        CertificatePrivateKeyAlgorithm::Ed25519,
+        None,
     )
 }
 

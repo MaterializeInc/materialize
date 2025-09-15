@@ -20,6 +20,8 @@ pub fn create_certificate(
     cert_name: String,
     secret_name: String,
     additional_dns_names: Option<Vec<String>>,
+    algorithm: CertificatePrivateKeyAlgorithm,
+    size: Option<i64>,
 ) -> Option<Certificate> {
     let default_spec = default_spec.unwrap_or_else(MaterializeCertSpec::default);
     let mz_cert_spec = mz_cert_spec.unwrap_or_else(MaterializeCertSpec::default);
@@ -52,10 +54,10 @@ pub fn create_certificate(
             duration: mz_cert_spec.duration.or(default_spec.duration),
             issuer_ref,
             private_key: Some(CertificatePrivateKey {
-                algorithm: Some(CertificatePrivateKeyAlgorithm::Rsa),
+                algorithm: Some(algorithm),
                 encoding: Some(CertificatePrivateKeyEncoding::Pkcs8),
                 rotation_policy: Some(CertificatePrivateKeyRotationPolicy::Always),
-                size: Some(4096),
+                size,
             }),
             renew_before: mz_cert_spec.renew_before.or(default_spec.renew_before),
             secret_name,
