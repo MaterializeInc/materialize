@@ -26,7 +26,7 @@ This guide assumes you have administrative access to your Kubernetes cluster and
 
 1. Download the Materialize Prometheus scrape configuration file:
    ```bash
-   curl -O https://raw.githubusercontent.com/MaterializeInc/materialize/refs/heads/self-managed-docs/v25.2/doc/user/data/self_managed/prometheus.yml
+   curl -O https://raw.githubusercontent.com/MaterializeInc/materialize/refs/heads/self-managed-docs/v25.2/doc/user/data/monitoring/prometheus.yml
    ```
 
 2. Download the prometheus-community default chart values:
