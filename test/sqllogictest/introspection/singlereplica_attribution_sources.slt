@@ -554,7 +554,7 @@ SELECT mlm.global_id AS global_id, lir_id, parent_lir_id, REPEAT(' ', nesting * 
              mlm.operator_id_start <= megsa.region_id AND megsa.region_id < mlm.operator_id_end)
 ORDER BY mlm.global_id, lir_id DESC;
 ----
-u26  2  NULL  Non-monotonic␠TopK  8  7  3808  15.000
+u26  2  NULL  Non-monotonic␠TopK  NULL  NULL  NULL  NULL
 u26  1  2  ␠␠Stream␠u25  NULL  NULL  NULL  NULL
 u27  4  NULL  Arrange␠(#0{x})  NULL  NULL  NULL  NULL
 u27  3  4  ␠␠Stream␠u26  NULL  NULL  NULL  NULL
@@ -1061,7 +1061,7 @@ EXPLAIN ANALYZE HINTS FOR INDEX v2_idx_x;
 ----
 Arrange␠(#0{x})  NULL  NULL  NULL  NULL
 ␠␠Stream␠u26  NULL  NULL  NULL  NULL
-Non-monotonic␠TopK  8  7  15  3808␠bytes
+Non-monotonic␠TopK  NULL  NULL  NULL  NULL
 ␠␠Stream␠u25  NULL  NULL  NULL  NULL
 
 query T multiline

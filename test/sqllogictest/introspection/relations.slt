@@ -9,6 +9,8 @@
 
 mode cockroach
 
+reset-server
+
 # Test contents of introspection relations
 
 statement ok

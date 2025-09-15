@@ -375,7 +375,6 @@ query T
 SELECT mdo.name FROM mz_introspection.mz_arrangement_sharing mash JOIN mz_introspection.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 ----
 AccumulableErrorCheck
-Arrange ReduceCollation
 Arrange ReduceMinsMaxes
 Arrange ReduceMinsMaxes
 Arrange ReduceMinsMaxes
@@ -411,8 +410,6 @@ Distinct recursive err
 DistinctBy
 DistinctByErrorCheck
 ReduceAccumulable
-ReduceCollation
-ReduceCollation Errors
 ReduceMinsMaxes
 ReduceMinsMaxes
 ReduceMinsMaxes
@@ -864,16 +861,16 @@ SELECT mdo.name FROM mz_introspection.mz_arrangement_sharing mash JOIN mz_intros
 AccumulableErrorCheck
 AccumulableErrorCheck
 AccumulableErrorCheck
-Arrange ReduceCollation
 Arrange ReduceMinsMaxes
 Arrange ReduceMinsMaxes
-Arrange bundle err
 ArrangeAccumulable [val: empty]
 ArrangeAccumulable [val: empty]
 ArrangeAccumulable [val: empty]
 ArrangeBy[[CallBinary(ModInt64, Column(0, "data"), Literal(Ok(Row{[Int64(2)]}), ColumnType { scalar_type: Int64, nullable: false }))]]
 ArrangeBy[[CallUnary(CastInt32ToInt64(CastInt32ToInt64), Column(0, "id"))]]
 ArrangeBy[[Column(0)]]
+ArrangeBy[[Column(0, "data")]]
+ArrangeBy[[Column(0, "data")]]-errors
 ArrangeBy[[Column(0, "id")]]
 ArrangeBy[[Column(0, "id")]]-errors
 ArrangeBy[[Column(0, "max")]]
@@ -893,7 +890,6 @@ Arranged MinsMaxesHierarchical input
 Arranged MinsMaxesHierarchical input
 Arranged MinsMaxesHierarchical input
 Arranged MinsMaxesHierarchical input
-Arranged ReduceFuseBasic input
 Arranged ReduceInaccumulable
 Arranged ReduceInaccumulable
 Arranged TopK input
@@ -907,11 +903,9 @@ Arranged TopK input
 ReduceAccumulable
 ReduceAccumulable
 ReduceAccumulable
-ReduceCollation
-ReduceCollation Errors
-ReduceFuseBasic
 ReduceInaccumulable
 ReduceInaccumulable
+ReduceInaccumulable Error Check
 ReduceInaccumulable Error Check
 ReduceMinsMaxes
 ReduceMinsMaxes
@@ -985,7 +979,6 @@ GROUP BY mdod.name
 ORDER BY mdod.name;
 ----
 AccumulableErrorCheck  11
-Arrange␠ReduceCollation  1
 Arrange␠ReduceMinsMaxes  3
 Arrange␠export␠iterative  2
 Arrange␠export␠iterative␠err  2
@@ -1118,8 +1111,6 @@ Distinct␠recursive␠err  3
 DistinctBy  49
 DistinctByErrorCheck  49
 ReduceAccumulable  11
-ReduceCollation  1
-ReduceCollation␠Errors  1
 ReduceInaccumulable  3
 ReduceInaccumulable␠Error␠Check  3
 ReduceMinsMaxes  3
@@ -1228,12 +1219,9 @@ GROUP BY mdod.name
 ORDER BY mdod.name
 ----
 AccumulableErrorCheck  2
-Arrange␠ReduceCollation  1
 Arrange␠ReduceMinsMaxes  1
 ArrangeAccumulable␠[val:␠empty]  2
 ReduceAccumulable  2
-ReduceCollation  1
-ReduceCollation␠Errors  1
 ReduceMinsMaxes  1
 ReduceMinsMaxes␠Error␠Check  1
 
