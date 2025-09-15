@@ -1248,15 +1248,17 @@ class DependencySet:
         for dep in deps_to_build:
             dep.build(prep)
 
-    def ensure(self, post_build: Callable[[ResolvedImage], None] | None = None):
+    def ensure(self, pre_build: Callable[[list[ResolvedImage]], None] | None = None):
         """Ensure all publishable images in this dependency set exist on Docker
         Hub.
 
         Images are pushed using their spec as their tag.
 
         Args:
-            post_build: A callback to invoke with each dependency that was built
-                locally.
+            pre_build: A callback to invoke with all dependency that are going
+                       to be built locally, invoked after their cargo/bazel
+                       build is done, but before the Docker images are build
+                       and uploaded to DockerHub.
         """
         num_deps = len(list(self))
         if not num_deps:
@@ -1272,6 +1274,8 @@ class DependencySet:
             deps_to_build = [dep for dep, should_build in futures if should_build]
 
         prep = self._prepare_batch(deps_to_build)
+        if pre_build:
+            pre_build(deps_to_build)
         lock = Lock()
         built_deps: set[str] = set([dep.name for dep in self]) - set(
             [dep.name for dep in deps_to_build]
@@ -1297,8 +1301,6 @@ class DependencySet:
                 except Exception:
                     if not dep.publish or attempts_remaining == 0:
                         raise
-            if post_build:
-                post_build(dep)
 
         if deps_to_build:
             with ThreadPoolExecutor(max_workers=len(deps_to_build)) as executor:
