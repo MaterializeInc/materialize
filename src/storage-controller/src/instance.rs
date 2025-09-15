@@ -254,9 +254,17 @@ where
         }
     }
 
-    /// Returns the ingestions running on this instance.
+    /// Returns ingestions running on this instance. This _only_ includes the
+    /// "toplevel" ingestions, not any of their source tables (aka. subsources).
     pub fn active_ingestions(&self) -> impl Iterator<Item = &GlobalId> {
         self.active_ingestions.keys()
+    }
+
+    /// Returns ingestion exports running on this instance. This includes the
+    /// ingestion itself, if any, and running source tables (aka. subsources).
+    pub fn active_ingestion_exports(&self) -> impl Iterator<Item = &GlobalId> {
+        let ingestion_exports = self.ingestion_exports.keys();
+        self.active_ingestions.keys().chain(ingestion_exports)
     }
 
     /// Returns the exports running on this instance.
