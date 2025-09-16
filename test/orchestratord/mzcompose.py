@@ -175,8 +175,7 @@ class Modification:
 class LicenseKey(Modification):
     @classmethod
     def values(cls) -> list[Any]:
-        # TODO: Add back "del" when https://github.com/MaterializeInc/database-issues/issues/9599 is resolved
-        return ["valid", "invalid"]
+        return ["valid", "invalid", "del"]
 
     @classmethod
     def bad_values(cls) -> list[Any]:
