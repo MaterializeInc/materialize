@@ -5,6 +5,8 @@ menu:
   main:
     parent: "monitor"
     weight: 1
+aliases:
+  - /manage/monitor/prometheus-community
 ---
 
 This guide walks you through the steps required to monitor the performance and
