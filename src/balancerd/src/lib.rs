@@ -95,7 +95,7 @@ pub struct BalancerConfig {
     cancellation_resolver: CancellationResolver,
     /// DNS resolver.
     resolver: Resolver,
-    https_addr_template: String,
+    https_sni_addr_template: String,
     tls: Option<TlsCertConfig>,
     internal_tls: bool,
     metrics_registry: MetricsRegistry,
@@ -118,7 +118,7 @@ impl BalancerConfig {
         https_listen_addr: SocketAddr,
         cancellation_resolver: CancellationResolver,
         resolver: Resolver,
-        https_addr_template: String,
+        https_sni_addr_template: String,
         tls: Option<TlsCertConfig>,
         internal_tls: bool,
         metrics_registry: MetricsRegistry,
@@ -139,7 +139,7 @@ impl BalancerConfig {
             https_listen_addr,
             cancellation_resolver,
             resolver,
-            https_addr_template,
+            https_sni_addr_template,
             tls,
             internal_tls,
             metrics_registry,
@@ -350,7 +350,7 @@ impl BalancerService {
             });
         }
         {
-            let Some((addr, port)) = self.cfg.https_addr_template.split_once(':') else {
+            let Some((addr, port)) = self.cfg.https_sni_addr_template.split_once(':') else {
                 panic!("expected port in https_addr_template");
             };
             let port: u16 = port.parse().expect("unexpected port");
@@ -1267,7 +1267,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send> ClientStream for T {}
 #[derive(Debug)]
 pub enum Resolver {
     Static(String),
-    Frontegg(FronteggResolver, StubResolver),
+    Frontegg(FronteggResolver, StubResolver, Option<String>),
 }
 
 impl Resolver {
@@ -1287,15 +1287,16 @@ impl Resolver {
                     addr_template,
                 },
                 stub_resolver,
+                sni_addr_template,
             ) => {
                 let servername = match conn.inner() {
                     Conn::Ssl(ssl_stream) => ssl_stream.ssl().servername(NameType::HOST_NAME),
                     Conn::Unencrypted(_) => None,
                 };
                 let has_sni = servername.is_some();
-                let resolved_addr = match servername {
-                    Some(servername) => {
-                        let sni_addr = addr_template.replace("{}", servername);
+                let resolved_addr = match (servername, sni_addr_template) {
+                    (Some(servername), Some(sni_addr_template)) => {
+                        let sni_addr = sni_addr_template.replace("{}", servername);
                         let tenant = stub_resolver.tenant(&sni_addr).await;
                         let addr = lookup(&sni_addr).await?;
                         ResolvedAddr {
@@ -1304,7 +1305,7 @@ impl Resolver {
                             tenant,
                         }
                     }
-                    None => {
+                    _ => {
                         conn.send(BackendMessage::AuthenticationCleartextPassword)
                             .await?;
                         conn.flush().await?;

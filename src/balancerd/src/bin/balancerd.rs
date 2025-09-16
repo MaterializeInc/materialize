@@ -81,8 +81,17 @@ pub struct ServiceArgs {
     /// HTTPS resolver address template. `{}` is replaced with the first subdomain of the HTTPS SNI
     /// host address to get a DNS address. The first IP that address resolves to is the proxy
     /// destinations.
+    #[clap(
+        long,
+        value_name = "HOST.{}.NAME:PORT",
+        visible_alias = "https-resolver-template"
+    )]
+    https_sni_resolver_template: String,
+    /// PGWIRE sni resolver address template. `{}` is replaced with the first subdomain of the PGWIRE SNI
+    /// host address to get a DNS address. The first IP that address resolves to is the proxy
+    /// destinations.
     #[clap(long, value_name = "HOST.{}.NAME:PORT")]
-    https_resolver_template: String,
+    pgwire_sni_resolver_template: Option<String>,
     /// Cancellation resolver configmap directory. The org id part of the incoming connection id
     /// (the 12 bits after (and excluding) the first bit) converted to a 3-char UUID string is
     /// appended to this to make a file path. That file is read, and every newline-delimited line
@@ -238,6 +247,7 @@ pub async fn run(args: ServiceArgs, tracing_handle: TracingHandle) -> Result<(),
                         addr_template,
                     },
                     StubResolver::new(),
+                    args.pgwire_sni_resolver_template.clone(),
                 ),
                 CancellationResolver::Directory(cancellation_resolver_dir),
             )
@@ -270,7 +280,7 @@ pub async fn run(args: ServiceArgs, tracing_handle: TracingHandle) -> Result<(),
         args.https_listen_addr,
         cancellation_resolver,
         resolver,
-        args.https_resolver_template,
+        args.https_sni_resolver_template,
         args.tls.into_config()?,
         args.internal_tls,
         metrics_registry,
