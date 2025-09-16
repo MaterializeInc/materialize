@@ -1467,6 +1467,23 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    /// Clears the password for role `role_id` in the transaction.
+    pub fn clear_role_password(&mut self, role_id: RoleId) -> Result<(), CatalogError> {
+        let auth_key = RoleAuthKey { role_id };
+
+        if self.role_auth.get(&auth_key).is_some() {
+            let value = RoleAuthValue {
+                password_hash: None,
+                updated_at: SYSTEM_TIME(),
+            };
+            self.role_auth
+                .update_by_key(auth_key.clone(), value, self.op_id)?;
+            Ok(())
+        } else {
+            Err(SqlCatalogError::UnknownRole(role_id.to_string()).into())
+        }
+    }
+
     /// Updates role `id` in the transaction to `role`.
     ///
     /// Returns an error if `id` is not found.
@@ -1493,16 +1510,6 @@ impl<'a> Transaction<'a> {
                 } else {
                     self.role_auth.insert(auth_key.clone(), value, self.op_id)?;
                 }
-            } else if self.role_auth.get(&auth_key).is_some() {
-                // If the role is being updated to not have a password, we need to
-                // remove the password hash from the role_auth catalog.
-                let value = RoleAuthValue {
-                    password_hash: None,
-                    updated_at: SYSTEM_TIME(),
-                };
-
-                self.role_auth
-                    .update_by_key(auth_key.clone(), value, self.op_id)?;
             }
 
             self.roles

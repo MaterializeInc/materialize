@@ -84,6 +84,7 @@ pub enum Op {
         id: RoleId,
         name: String,
         attributes: RoleAttributes,
+        nopassword: bool,
         vars: RoleVars,
     },
     AlterNetworkPolicy {
@@ -672,6 +673,7 @@ impl Catalog {
                 id,
                 name,
                 attributes,
+                nopassword,
                 vars,
             } => {
                 state.ensure_not_reserved_role(&id)?;
@@ -679,6 +681,9 @@ impl Catalog {
                 let mut existing_role = state.get_role(&id).clone();
                 existing_role.attributes = attributes;
                 existing_role.vars = vars;
+                if nopassword {
+                    tx.clear_role_password(id)?;
+                }
                 tx.update_role(id, existing_role.into())?;
 
                 CatalogState::add_to_audit_log(

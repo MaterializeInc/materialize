@@ -433,6 +433,7 @@ pub struct Runner<'a> {
 pub struct RunnerInner<'a> {
     server_addr: SocketAddr,
     internal_server_addr: SocketAddr,
+    password_server_addr: SocketAddr,
     internal_http_server_addr: SocketAddr,
     // Drop order matters for these fields.
     client: tokio_postgres::Client,
@@ -958,8 +959,8 @@ impl<'a> Runner<'a> {
 
         inner.ensure_fixed_features().await?;
 
-        inner.client = connect(inner.server_addr, None).await;
-        inner.system_client = connect(inner.internal_server_addr, Some("mz_system")).await;
+        inner.client = connect(inner.server_addr, None, None).await.unwrap();
+        inner.system_client = connect(inner.internal_server_addr, Some("mz_system"), None).await.unwrap();
         inner.clients = BTreeMap::new();
 
         Ok(())
@@ -1081,6 +1082,12 @@ impl<'a> RunnerInner<'a> {
                     addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
                     authenticator_kind: AuthenticatorKind::None,
                     allowed_roles: AllowedRoles::Internal,
+                    enable_tls: false,
+                },
+                "password".to_owned() => SqlListenerConfig {
+                    addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                    authenticator_kind: AuthenticatorKind::Password,
+                    allowed_roles: AllowedRoles::Normal,
                     enable_tls: false,
                 },
             },
@@ -1234,6 +1241,7 @@ impl<'a> RunnerInner<'a> {
         let (server_addr_tx, server_addr_rx): (oneshot::Sender<Result<_, anyhow::Error>>, _) =
             oneshot::channel();
         let (internal_server_addr_tx, internal_server_addr_rx) = oneshot::channel();
+        let (password_server_addr_tx, password_server_addr_rx) = oneshot::channel();
         let (internal_http_server_addr_tx, internal_http_server_addr_rx) = oneshot::channel();
         let (shutdown_trigger, shutdown_trigger_rx) = trigger::channel();
         let server_thread = thread::spawn(|| {
@@ -1261,6 +1269,9 @@ impl<'a> RunnerInner<'a> {
             internal_server_addr_tx
                 .send(server.sql_listener_handles["internal"].local_addr)
                 .expect("receiver should not drop first");
+            password_server_addr_tx
+                .send(server.sql_listener_handles["password"].local_addr)
+                .expect("receiver should not drop first");
             internal_http_server_addr_tx
                 .send(server.http_listener_handles["internal"].local_addr)
                 .expect("receiver should not drop first");
@@ -1268,14 +1279,16 @@ impl<'a> RunnerInner<'a> {
         });
         let server_addr = server_addr_rx.await??;
         let internal_server_addr = internal_server_addr_rx.await?;
+        let password_server_addr = password_server_addr_rx.await?;
         let internal_http_server_addr = internal_http_server_addr_rx.await?;
 
-        let system_client = connect(internal_server_addr, Some("mz_system")).await;
-        let client = connect(server_addr, None).await;
+        let system_client = connect(internal_server_addr, Some("mz_system"), None).await.unwrap();
+        let client = connect(server_addr, None, None).await.unwrap();
 
         let inner = RunnerInner {
             server_addr,
             internal_server_addr,
+            password_server_addr,
             internal_http_server_addr,
             _shutdown_trigger: shutdown_trigger,
             _server_thread: server_thread.join_on_drop(),
@@ -1367,14 +1380,23 @@ impl<'a> RunnerInner<'a> {
             Record::Simple {
                 conn,
                 user,
+                password,
                 sql,
                 sort,
                 output,
                 location,
                 ..
             } => {
-                self.run_simple(*conn, *user, sql, sort.clone(), output, location.clone())
-                    .await
+                self.run_simple(
+                    *conn,
+                    *user,
+                    *password,
+                    sql,
+                    sort.clone(),
+                    output,
+                    location.clone(),
+                )
+                .await
             }
             Record::Copy {
                 table_name,
@@ -1810,20 +1832,24 @@ impl<'a> RunnerInner<'a> {
         &mut self,
         name: Option<&str>,
         user: Option<&str>,
-    ) -> &tokio_postgres::Client {
+        password: Option<&str>,
+    ) -> Result<&tokio_postgres::Client, tokio_postgres::Error> {
         match name {
-            None => &self.client,
+            None => Ok(&self.client),
             Some(name) => {
                 if !self.clients.contains_key(name) {
                     let addr = if matches!(user, Some("mz_system") | Some("mz_support")) {
                         self.internal_server_addr
+                    } else if password.is_some() {
+                        // Use password server for password authentication
+                        self.password_server_addr
                     } else {
                         self.server_addr
                     };
-                    let client = connect(addr, user).await;
+                    let client = connect(addr, user, password).await?;
                     self.clients.insert(name.into(), client);
                 }
-                self.clients.get(name).unwrap()
+                Ok(self.clients.get(name).unwrap())
             }
         }
     }
@@ -1832,12 +1858,30 @@ impl<'a> RunnerInner<'a> {
         &mut self,
         conn: Option<&'r str>,
         user: Option<&'r str>,
+        password: Option<&'r str>,
         sql: &'r str,
         sort: Sort,
         output: &'r Output,
         location: Location,
     ) -> Result<Outcome<'r>, anyhow::Error> {
-        let client = self.get_conn(conn, user).await;
+        let client = match self.get_conn(conn, user, password).await {
+            Ok(client) => client,
+            Err(e) => {
+                // Connection failed - return as an error output
+                let error_msg = format!("db error: ERROR: {}", e);
+                let actual = Output::Values(vec![error_msg]);
+                if *output != actual {
+                    return Ok(Outcome::OutputFailure {
+                        expected_output: output,
+                        actual_raw_output: vec![],
+                        actual_output: actual,
+                        location,
+                    });
+                } else {
+                    return Ok(Outcome::Success);
+                }
+            }
+        };
         let actual = Output::Values(match client.simple_query(sql).await {
             Ok(result) => {
                 let mut rows = Vec::new();
@@ -1901,25 +1945,26 @@ impl<'a> RunnerInner<'a> {
     }
 }
 
-async fn connect(addr: SocketAddr, user: Option<&str>) -> tokio_postgres::Client {
-    let (client, connection) = tokio_postgres::connect(
-        &format!(
-            "host={} port={} user={}",
-            addr.ip(),
-            addr.port(),
-            user.unwrap_or("materialize")
-        ),
-        NoTls,
-    )
-    .await
-    .unwrap();
+async fn connect(
+    addr: SocketAddr,
+    user: Option<&str>,
+    password: Option<&str>,
+) -> Result<tokio_postgres::Client, tokio_postgres::Error> {
+    let mut config = tokio_postgres::Config::new();
+    config.host(addr.ip().to_string());
+    config.port(addr.port());
+    config.user(user.unwrap_or("materialize"));
+    if let Some(password) = password {
+        config.password(password);
+    }
+    let (client, connection) = config.connect(NoTls).await?;
 
     task::spawn(|| "sqllogictest_connect", async move {
         if let Err(e) = connection.await {
             eprintln!("connection error: {}", e);
         }
     });
-    client
+    Ok(client)
 }
 
 pub trait WriteFmt {

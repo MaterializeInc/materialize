@@ -3497,6 +3497,10 @@ impl Coordinator {
         let mut attributes = role.attributes().clone();
         let mut vars = role.vars().clone();
 
+        // Whether to set the password to NULL. This is a special case since the existing
+        // password is not stored in the role attributes.
+        let mut nopassword = false;
+
         // Apply our updates.
         match option {
             PlannedAlterRoleOption::Attributes(attrs) => {
@@ -3519,7 +3523,7 @@ impl Coordinator {
                 }
 
                 if attrs.nopassword.unwrap_or(false) {
-                    attributes.password = None;
+                    nopassword = true;
                 }
 
                 if let Some(notice) = self.should_emit_rbac_notice(session) {
@@ -3585,6 +3589,7 @@ impl Coordinator {
             id,
             name,
             attributes,
+            nopassword,
             vars: RoleVars { map: vars },
         };
         let response = self
