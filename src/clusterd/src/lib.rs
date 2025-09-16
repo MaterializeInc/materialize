@@ -41,7 +41,7 @@ use mz_storage_types::connections::ConnectionContext;
 use mz_txn_wal::operator::TxnsContext;
 use tokio::runtime::Handle;
 use tower::Service;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 mod usage_metrics;
 
@@ -138,9 +138,21 @@ struct Args {
     #[clap(long, env = "SCRATCH_DIRECTORY", value_name = "PATH")]
     scratch_directory: Option<PathBuf>,
 
-    /// Optional memory limit (bytes) of the cluster replica
+    /// Memory limit (bytes) of the cluster replica, if known.
+    ///
+    /// The limit is expected to be enforced by the orchestrator. The clusterd process only uses it
+    /// to inform configuration of backpressure mechanism.
     #[clap(long)]
     announce_memory_limit: Option<usize>,
+
+    /// Heap limit (bytes) of the cluster replica.
+    ///
+    /// A process heap usage is calculated as the sum of its memory and swap usage.
+    ///
+    /// In contrast to `announce_memory_limit`, this limit is enforced by the clusterd process. If
+    /// the limit is exceeded, the process terminates itself with a 167 exit code.
+    #[clap(long)]
+    heap_limit: Option<usize>,
 
     /// Whether this size represents a modern "cc" size rather than a legacy
     /// T-shirt size.
@@ -212,10 +224,10 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     mz_alloc::register_metrics_into(&metrics_registry).await;
     mz_metrics::register_metrics_into(&metrics_registry, mz_dyncfgs::all_dyncfgs()).await;
 
-    if let Some(memory_limit) = args.announce_memory_limit {
-        mz_compute::memory_limiter::start_limiter(memory_limit, &metrics_registry);
+    if let Some(heap_limit) = args.heap_limit {
+        mz_compute::memory_limiter::start_limiter(heap_limit, &metrics_registry);
     } else {
-        warn!("no memory limit announced; disabling memory limiter");
+        info!("no heap limit announced; disabling memory limiter");
     }
 
     let secrets_reader = args

@@ -5506,9 +5506,8 @@ def workflow_test_memory_limiter(c: Composition) -> None:
         ),
         Clusterd(
             name="clusterd1",
-            # Announce an (unenforced) memory limit of 1GiB. Memory limits are
-            # derived from this memory limit.
-            options=["--announce-memory-limit=1073741824"],
+            # Enforce a heap limit of 1GiB.
+            options=["--heap-limit=1073741824"],
         ),
         Testdrive(no_reset=True),
     ):
@@ -5544,7 +5543,7 @@ def workflow_test_memory_limiter(c: Composition) -> None:
         # Test 1: The MV should be able to hydrate with a memory limit of 2 GiB.
         c.sql(
             """
-            ALTER SYSTEM SET memory_limiter_usage_factor = 2;
+            ALTER SYSTEM SET memory_limiter_usage_bias = 2;
             ALTER SYSTEM SET memory_limiter_burst_factor = 0;
             """,
             port=6877,
@@ -5560,7 +5559,7 @@ def workflow_test_memory_limiter(c: Composition) -> None:
         # Test 2: The MV should be unable to hydrate with a memory limit of 205 MiB.
         c.sql(
             """
-            ALTER SYSTEM SET memory_limiter_usage_factor = 0.20;
+            ALTER SYSTEM SET memory_limiter_usage_bias = 0.2;
             ALTER SYSTEM SET memory_limiter_burst_factor = 0;
             """,
             port=6877,
@@ -5581,7 +5580,7 @@ def workflow_test_memory_limiter(c: Composition) -> None:
         # and a burst budget of 10 GiB-seconds.
         c.sql(
             """
-            ALTER SYSTEM SET memory_limiter_usage_factor = 1;
+            ALTER SYSTEM SET memory_limiter_usage_bias = 1;
             ALTER SYSTEM SET memory_limiter_burst_factor = 10;
             """,
             port=6877,
@@ -5646,16 +5645,16 @@ def workflow_test_paused_cluster_readhold_downgrade(c: Composition):
     )
 
 
-def workflow_test_swap_disk_bytes(c: Composition):
+def workflow_test_swap_heap_limiting(c: Composition) -> None:
     """
-    Test that `mz_cluster_replica_sizes.disk_bytes` shows expected values for
-    swap replica.
+    Test that heap limits are correctly configured for swap replicas, based
+    on their memory and disk limits.
     """
 
     with c.override(
         Materialized(
             cluster_replica_size={
-                "swap,nodisk": {
+                "swap,nolimit": {
                     "workers": 1,
                     "scale": 1,
                     "credits_per_hour": "1",
@@ -5663,7 +5662,7 @@ def workflow_test_swap_disk_bytes(c: Composition):
                     "disk_limit": "0",
                     "swap_enabled": True,
                 },
-                "swap,lodisk": {
+                "swap,limit": {
                     "workers": 1,
                     "scale": 1,
                     "credits_per_hour": "1",
@@ -5671,75 +5670,55 @@ def workflow_test_swap_disk_bytes(c: Composition):
                     "disk_limit": "1G",
                     "swap_enabled": True,
                 },
-                "swap,hidisk": {
-                    "workers": 1,
-                    "scale": 1,
-                    "credits_per_hour": "1",
-                    "memory_limit": "1G",
-                    "disk_limit": "10G",
-                    "swap_enabled": True,
-                },
                 "noswap": {
                     "workers": 1,
                     "scale": 1,
                     "credits_per_hour": "1",
                     "memory_limit": "1G",
-                    "disk_limit": "10G",
+                    "disk_limit": "1G",
                     "swap_enabled": False,
                 },
             },
-            bootstrap_replica_size="swap,nodisk",
+            bootstrap_replica_size="swap,nolimit",
         ),
     ):
         c.up("materialized")
 
-        # Without the memory limiter enabled, disk bytes should reflect
-        # verbatim.
-        c.sql(
-            "ALTER SYSTEM SET memory_limiter_interval = 0",
-            user="mz_system",
-            port=6877,
-        )
-        c.kill("materialized")
-        c.up("materialized")
-
-        c.testdrive(
-            dedent(
-                """
-                > SELECT size, disk_bytes FROM mz_cluster_replica_sizes
-                swap,nodisk 0
-                swap,lodisk 1000000000
-                swap,hidisk 10000000000
-                noswap      10000000000
-                """
-            )
-        )
-
-        # With the memory limiter enabled, disk bytes should reflect the memory
-        # limit, if it reduces the limit from the size definition and swap is
-        # enabled.
         c.sql(
             """
-            ALTER SYSTEM SET memory_limiter_interval = 10;
-            ALTER SYSTEM SET memory_limiter_usage_factor = 3;
-            """,
-            user="mz_system",
-            port=6877,
-        )
-        c.kill("materialized")
-        c.up("materialized")
+            CREATE CLUSTER swap_nolimit SIZE 'swap,nolimit';
+            CREATE CLUSTER swap_limit SIZE 'swap,limit';
+            CREATE CLUSTER noswap SIZE 'noswap';
 
-        c.testdrive(
-            dedent(
-                """
-                > SELECT size, disk_bytes FROM mz_cluster_replica_sizes
-                swap,nodisk 0
-                swap,lodisk 1000000000
-                swap,hidisk 2000000000
-                noswap      10000000000
-                """
-            )
+            -- wait for clusters to become ready
+            CREATE TABLE t (a int);
+            SET CLUSTER = swap_nolimit; SELECT * FROM t;
+            SET CLUSTER = swap_limit; SELECT * FROM t;
+            SET CLUSTER = noswap; SELECT * FROM t;
+            """
         )
+
+        def get_heap_limit(cluster: str) -> int | None:
+            # Find the internal-http port of the given cluster.
+            cluster_id = c.sql_query(
+                f"SELECT id FROM mz_clusters WHERE name = '{cluster}'"
+            )[0][0]
+            logs = c.invoke("logs", "materialized", capture=True).stdout
+            clusterd_port = find_proxy_port(logs, cluster_id, "internal-http")
+
+            url = f"http://localhost:{clusterd_port}/metrics"
+            metrics = c.exec("materialized", "curl", url, capture=True).stdout
+
+            for line in metrics.splitlines():
+                if line.startswith("mz_memory_limiter_memory_limit_bytes"):
+                    limit = int(line.split()[1])
+                    return limit
+
+            return None
+
+        assert get_heap_limit("swap_nolimit") is None
+        assert get_heap_limit("swap_limit") == 2000000000
+        assert get_heap_limit("noswap") is None
 
 
 def workflow_test_operator_hydration_status_reconciliation(c: Composition) -> None:

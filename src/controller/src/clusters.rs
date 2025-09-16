@@ -722,6 +722,20 @@ where
                         args.push("--is-cc".into());
                     }
 
+                    // If swap is enabled, make the replica limit its own heap usage based on the
+                    // configured memory and disk limits.
+                    if location.allocation.swap_enabled
+                        && let Some(memory_limit) = location.allocation.memory_limit
+                        && let Some(disk_limit) = location.allocation.disk_limit
+                        // Currently, the way for replica sizes to request unlimited swap is to
+                        // specify a `disk_limit` of 0. Ideally we'd change this to make them
+                        // specify no disk limit instead, but for now we need to special-case here.
+                        && disk_limit != DiskLimit::ZERO
+                    {
+                        let heap_limit = memory_limit.0 + disk_limit.0;
+                        args.push(format!("--heap-limit={}", heap_limit.as_u64()));
+                    }
+
                     args.extend(secrets_args.clone());
                     args
                 }),

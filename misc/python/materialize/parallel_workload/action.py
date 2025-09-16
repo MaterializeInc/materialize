@@ -1335,7 +1335,6 @@ class FlipFlagsAction(Action):
             "lgalloc_local_buffer_bytes",
             "lgalloc_slow_clear_bytes",
             "memory_limiter_interval",
-            "memory_limiter_usage_factor",
             "memory_limiter_usage_bias",
             "memory_limiter_burst_factor",
             "enable_columnation_lgalloc",

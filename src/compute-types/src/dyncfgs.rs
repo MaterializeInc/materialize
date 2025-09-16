@@ -105,25 +105,18 @@ pub const MEMORY_LIMITER_INTERVAL: Config<Duration> = Config::new(
     "Interval to run the memory limiter. A zero duration disables the limiter.",
 );
 
-/// Factor of the memory limit that the process will be permitted to use before terminating the process.
-pub const MEMORY_LIMITER_USAGE_FACTOR: Config<f64> = Config::new(
-    "memory_limiter_usage_factor",
-    2.,
-    "Factor of the memory limit that the process will use before terminating the process.",
-);
-
 /// Bias to the memory limiter usage factor.
 pub const MEMORY_LIMITER_USAGE_BIAS: Config<f64> = Config::new(
     "memory_limiter_usage_bias",
     1.,
-    "Multiplicative bias to memory_limiter_usage_factor.",
+    "Multiplicative bias to the memory limiter's limit.",
 );
 
 /// Burst factor to memory limit.
 pub const MEMORY_LIMITER_BURST_FACTOR: Config<f64> = Config::new(
     "memory_limiter_burst_factor",
     0.,
-    "Multiplicative burst factor to memory limit.",
+    "Multiplicative burst factor to the memory limiter's limit.",
 );
 
 /// Enable lgalloc for columnation.
@@ -364,7 +357,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&LGALLOC_LOCAL_BUFFER_BYTES)
         .add(&LGALLOC_SLOW_CLEAR_BYTES)
         .add(&MEMORY_LIMITER_INTERVAL)
-        .add(&MEMORY_LIMITER_USAGE_FACTOR)
         .add(&MEMORY_LIMITER_USAGE_BIAS)
         .add(&MEMORY_LIMITER_BURST_FACTOR)
         .add(&ENABLE_LGALLOC_EAGER_RECLAMATION)

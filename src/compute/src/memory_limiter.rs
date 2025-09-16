@@ -8,6 +8,9 @@
 // by the Apache License, Version 2.0.
 
 //! Utilities to limit memory usage.
+//!
+//! In the context of this module, "memory" refers to the sum of physical memory and swap space .
+//! Other parts of the code usually don't include swap space when talking about "memory".
 
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -15,7 +18,6 @@ use std::time::{Duration, Instant};
 use anyhow::Context;
 use mz_compute_types::dyncfgs::{
     MEMORY_LIMITER_BURST_FACTOR, MEMORY_LIMITER_INTERVAL, MEMORY_LIMITER_USAGE_BIAS,
-    MEMORY_LIMITER_USAGE_FACTOR,
 };
 use mz_dyncfg::ConfigSet;
 use mz_ore::cast::{CastFrom, CastLossy};
@@ -79,9 +81,8 @@ impl Limiter {
             interval = Duration::MAX;
         }
 
-        let memory_limit = f64::cast_lossy(self.memory_limit)
-            * MEMORY_LIMITER_USAGE_FACTOR.get(config)
-            * MEMORY_LIMITER_USAGE_BIAS.get(config);
+        let memory_limit =
+            f64::cast_lossy(self.memory_limit) * MEMORY_LIMITER_USAGE_BIAS.get(config);
         let memory_limit = usize::cast_lossy(memory_limit);
 
         let burst_budget = f64::cast_lossy(memory_limit) * MEMORY_LIMITER_BURST_FACTOR.get(config);
