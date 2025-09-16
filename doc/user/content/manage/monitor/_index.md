@@ -18,7 +18,6 @@ To help you get started, the following guides are available:
 
 - [Datadog using Prometheus SQL Exporter](/manage/monitor/datadog/)
 
-- [Grafana using Prometheus SQL Exporter](/manage/monitor/grafana/)
 
 ### Alerting
 
