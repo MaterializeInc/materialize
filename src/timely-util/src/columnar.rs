@@ -25,15 +25,15 @@ use std::hash::Hash;
 use columnar::Container as _;
 use columnar::bytes::{EncodeDecode, Indexed};
 use columnar::common::IterOwn;
-use columnar::{Clear, FromBytes, Index, Len};
 use columnar::{Columnar, Ref};
+use columnar::{FromBytes, Index, Len};
 use differential_dataflow::Hashable;
 use differential_dataflow::containers::TimelyStack;
 use differential_dataflow::trace::implementations::merge_batcher::{ColMerger, MergeBatcher};
 use mz_ore::region::Region;
-use timely::Container;
+use timely::Accountable;
 use timely::bytes::arc::Bytes;
-use timely::container::PushInto;
+use timely::container::{DrainContainer, IterContainer, PushInto};
 use timely::dataflow::channels::ContainerBytes;
 
 /// A batcher for columnar storage.
@@ -65,7 +65,7 @@ pub enum Column<C: Columnar> {
 impl<C: Columnar> Column<C> {
     /// Borrows the container as a reference.
     #[inline]
-    fn borrow(&self) -> <C::Container as columnar::Container>::Borrowed<'_> {
+    pub fn borrow(&self) -> <C::Container as columnar::Container>::Borrowed<'_> {
         match self {
             Column::Typed(t) => t.borrow(),
             Column::Bytes(b) => <<C::Container as columnar::Container>::Borrowed<'_>>::from_bytes(
@@ -109,35 +109,25 @@ where
     }
 }
 
-impl<C: Columnar> Container for Column<C> {
-    type ItemRef<'a> = columnar::Ref<'a, C>;
+impl<C: Columnar> Accountable for Column<C> {
+    #[inline]
+    fn record_count(&self) -> i64 {
+        self.borrow().len().try_into().expect("Must fit")
+    }
+}
+impl<C: Columnar> DrainContainer for Column<C> {
     type Item<'a> = columnar::Ref<'a, C>;
-
-    #[inline]
-    fn len(&self) -> usize {
-        self.borrow().len()
-    }
-
-    // This sets the `Bytes` variant to be an empty `Typed` variant, appropriate for pushing into.
-    #[inline]
-    fn clear(&mut self) {
-        match self {
-            Column::Typed(t) => t.clear(),
-            Column::Bytes(_) | Column::Align(_) => *self = Column::Typed(Default::default()),
-        }
-    }
-
-    type Iter<'a> = IterOwn<<C::Container as columnar::Container>::Borrowed<'a>>;
-
-    #[inline]
-    fn iter(&self) -> Self::Iter<'_> {
-        self.borrow().into_index_iter()
-    }
-
     type DrainIter<'a> = IterOwn<<C::Container as columnar::Container>::Borrowed<'a>>;
-
     #[inline]
     fn drain(&mut self) -> Self::DrainIter<'_> {
+        self.borrow().into_index_iter()
+    }
+}
+impl<C: Columnar> IterContainer for Column<C> {
+    type ItemRef<'a> = columnar::Ref<'a, C>;
+    type Iter<'a> = IterOwn<<C::Container as columnar::Container>::Borrowed<'a>>;
+    #[inline]
+    fn iter(&self) -> Self::Iter<'_> {
         self.borrow().into_index_iter()
     }
 }
@@ -217,7 +207,6 @@ where
 #[cfg(test)]
 mod tests {
     use mz_ore::region::Region;
-    use timely::Container;
     use timely::bytes::arc::BytesMut;
     use timely::container::PushInto;
     use timely::dataflow::channels::ContainerBytes;

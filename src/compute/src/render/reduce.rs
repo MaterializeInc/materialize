@@ -22,6 +22,7 @@ use differential_dataflow::containers::{Columnation, CopyRegion};
 use differential_dataflow::difference::{IsZero, Multiply, Semigroup};
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
+use differential_dataflow::trace::implementations::merge_batcher::container::MergerChunk;
 use differential_dataflow::trace::{Builder, Trace};
 use differential_dataflow::{Collection, Diff as _};
 use itertools::Itertools;
@@ -950,7 +951,7 @@ where
             > + 'static,
         Bu: Builder<
                 Time = G::Timestamp,
-                Input: Container + PushInto<((Row, Tr::ValOwn), Tr::Time, Tr::Diff)>,
+                Input: Container + MergerChunk + PushInto<((Row, Tr::ValOwn), Tr::Time, Tr::Diff)>,
                 Output = Tr::Batch,
             >,
         Arranged<S, TraceAgent<Tr>>: ArrangementSize,
@@ -1271,7 +1272,7 @@ where
             > + 'static,
         Bu: Builder<
                 Time = G::Timestamp,
-                Input: Container + PushInto<((Row, Tr::ValOwn), Tr::Time, Tr::Diff)>,
+                Input: Container + MergerChunk + PushInto<((Row, Tr::ValOwn), Tr::Time, Tr::Diff)>,
                 Output = Tr::Batch,
             >,
         Arranged<S, TraceAgent<Tr>>: ArrangementSize,

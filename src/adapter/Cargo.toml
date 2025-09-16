@@ -19,7 +19,7 @@ bytesize = "1.3.0"
 chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 dec = "0.4.8"
 derivative = "2.2.0"
-differential-dataflow = "0.16.2"
+differential-dataflow = "0.17.0"
 enum-kinds = "0.5.1"
 fail = { version = "0.5.1", features = ["failpoints"] }
 futures = "0.3.31"
@@ -84,7 +84,7 @@ serde_plain = "1.0.2"
 sha2 = "0.10.9"
 smallvec = { version = "1.15.1", features = ["union"] }
 static_assertions = "1.1"
-timely = "0.23.0"
+timely = "0.24.0"
 tokio = { version = "1.44.1", features = ["rt", "time"] }
 tokio-postgres = { version = "0.7.8" }
 tokio-stream = "0.1.17"

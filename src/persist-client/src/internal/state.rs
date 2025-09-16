@@ -48,9 +48,9 @@ use proptest_derive::Arbitrary;
 use semver::Version;
 use serde::ser::SerializeStruct;
 use serde::{Serialize, Serializer};
+use timely::PartialOrder;
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
-use timely::{Container, PartialOrder};
 use tracing::info;
 use uuid::Uuid;
 

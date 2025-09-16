@@ -14,13 +14,13 @@ use std::convert::TryInto;
 use std::rc::Rc;
 use std::time::Duration;
 
+use columnar::Index;
 use mz_compute_client::logging::LoggingConfig;
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, Row, Timestamp};
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::{Col2ValBatcher, Column, columnar_exchange};
 use mz_timely_util::replay::MzReplay;
-use timely::Container;
 use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::ExchangeCore;
 
@@ -64,7 +64,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
                 if !enable_logging {
                     return;
                 }
-                for (time, (operator_id, massaged)) in data.iter() {
+                for (time, (operator_id, massaged)) in data.borrow().into_index_iter() {
                     let time_ms = ((time.as_millis() / interval_ms) + 1) * interval_ms;
                     let time_ms: Timestamp = time_ms.try_into().expect("must fit");
                     for (source, port, update_type, ts, diff) in massaged.into_iter() {

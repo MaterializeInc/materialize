@@ -22,7 +22,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use ::timely::Container;
-use ::timely::container::{CapacityContainerBuilder, ContainerBuilder};
+use ::timely::container::{CapacityContainerBuilder, ContainerBuilder, IterContainer};
 use ::timely::dataflow::StreamCore;
 use ::timely::dataflow::channels::pact::Pipeline;
 use ::timely::dataflow::channels::pushers::buffer::Session;
@@ -234,11 +234,11 @@ where
     G: ::timely::dataflow::Scope<Timestamp = Timestamp>,
     B: Batcher<Time = G::Timestamp> + 'static,
     B::Input: Container + Clone + 'static,
-    B::Output: Container + Clone + 'static,
+    B::Output: Container + IterContainer + Clone + 'static,
     CB: ContainerBuilder,
     L: Into<LogVariant>,
     F: for<'a> FnMut(
-            <B::Output as Container>::ItemRef<'a>,
+            <B::Output as IterContainer>::ItemRef<'a>,
             &mut PermutedRowPacker,
             &mut OutputSession<CB>,
         ) + 'static,

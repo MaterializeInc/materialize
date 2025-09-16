@@ -57,7 +57,6 @@ use mz_sql::rbac;
 use mz_sql::session::user::{MZ_SYSTEM_ROLE_ID, SYSTEM_USER};
 use mz_sql::session::vars::{SessionVars, SystemVars, VarError, VarInput};
 use mz_storage_client::storage_collections::StorageCollections;
-use timely::Container;
 use tracing::{Instrument, info, warn};
 use uuid::Uuid;
 

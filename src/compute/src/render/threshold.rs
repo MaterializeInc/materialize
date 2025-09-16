@@ -13,6 +13,7 @@
 
 use differential_dataflow::Data;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
+use differential_dataflow::trace::implementations::merge_batcher::container::MergerChunk;
 use differential_dataflow::trace::{Builder, Trace, TraceReader};
 use mz_compute_types::plan::threshold::{BasicThresholdPlan, ThresholdPlan};
 use mz_expr::MirScalarExpr;
@@ -42,7 +43,9 @@ where
         + 'static,
     Bu2: Builder<
             Time = G::Timestamp,
-            Input: Container + PushInto<((T1::KeyOwn, T1::ValOwn), G::Timestamp, Diff)>,
+            Input: Container
+                       + MergerChunk
+                       + PushInto<((T1::KeyOwn, T1::ValOwn), G::Timestamp, Diff)>,
             Output = T2::Batch,
         >,
     T2: for<'a> Trace<

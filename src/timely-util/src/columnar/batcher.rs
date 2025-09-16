@@ -17,7 +17,9 @@
 
 use std::collections::VecDeque;
 
-use columnar::Columnar;
+use columnar::{Columnar, Index, Len};
+use columnation::Columnation;
+use differential_dataflow::containers::TimelyStack;
 use differential_dataflow::difference::Semigroup;
 use timely::Container;
 use timely::container::{ContainerBuilder, PushInto};
@@ -53,21 +55,22 @@ impl<C: Container + Clone + 'static> ContainerBuilder for Chunker<C> {
     }
 }
 
-impl<'a, D, T, R, C2> PushInto<&'a mut Column<(D, T, R)>> for Chunker<C2>
+impl<'a, D, T, R> PushInto<&'a mut Column<(D, T, R)>> for Chunker<TimelyStack<(D, T, R)>>
 where
-    D: Columnar,
+    D: Columnar + Columnation,
     for<'b> columnar::Ref<'b, D>: Ord + Copy,
-    T: Columnar,
+    T: Columnar + Columnation,
     for<'b> columnar::Ref<'b, T>: Ord + Copy,
-    R: Columnar + Semigroup + for<'b> Semigroup<columnar::Ref<'b, R>>,
+    R: Columnar + Columnation + Semigroup + for<'b> Semigroup<columnar::Ref<'b, R>>,
     for<'b> columnar::Ref<'b, R>: Ord,
-    C2: Container + for<'b> PushInto<&'b (D, T, R)>,
+    // C2: Container + for<'b> PushInto<&'b (D, T, R)>,
 {
     fn push_into(&mut self, container: &'a mut Column<(D, T, R)>) {
         // Sort input data
         // TODO: consider `Vec<usize>` that we retain, containing indexes.
-        let mut permutation = Vec::with_capacity(container.len());
-        permutation.extend(container.drain());
+        let borrowed = container.borrow();
+        let mut permutation = Vec::with_capacity(borrowed.len());
+        permutation.extend(borrowed.into_index_iter());
         permutation.sort();
 
         self.target.clear();
