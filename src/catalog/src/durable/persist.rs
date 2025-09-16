@@ -41,7 +41,6 @@ use mz_repr::{Diff, RelationDesc, ScalarType};
 use mz_storage_types::StorageDiff;
 use mz_storage_types::sources::SourceData;
 use sha2::Digest;
-use timely::Container;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tracing::{debug, info, warn};
 use uuid::Uuid;

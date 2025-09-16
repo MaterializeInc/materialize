@@ -18,7 +18,6 @@ use crate::internal::state_versions::StateVersions;
 use crate::metrics::Metrics;
 use anyhow::anyhow;
 use mz_persist::location::Blob;
-use timely::Container;
 use tracing::info;
 
 /// Attempt to restore all the blobs referenced by the current state in consensus.

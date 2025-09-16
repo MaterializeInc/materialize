@@ -21,7 +21,6 @@ use mz_expr::{
 use mz_ore::{assert_none, soft_assert_eq_or_log, soft_panic_or_log};
 use mz_repr::GlobalId;
 use mz_repr::optimize::OptimizerFeatures;
-use timely::Container;
 use timely::progress::Timestamp;
 
 use crate::dataflows::{BuildDesc, DataflowDescription, IndexImport};

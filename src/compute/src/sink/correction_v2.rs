@@ -133,9 +133,9 @@ use differential_dataflow::containers::{Columnation, TimelyStack};
 use differential_dataflow::trace::implementations::BatchContainer;
 use mz_persist_client::metrics::{SinkMetrics, SinkWorkerMetrics, UpdateDelta};
 use mz_repr::{Diff, Timestamp};
+use timely::PartialOrder;
 use timely::container::SizableContainer;
 use timely::progress::Antichain;
-use timely::{Container, PartialOrder};
 
 use crate::sink::correction::LengthAndCapacity;
 
@@ -826,7 +826,7 @@ impl<D: Data> Chunk<D> {
 
     /// Return the number of updates in the chunk.
     fn len(&self) -> usize {
-        Container::len(&self.data)
+        self.data.len()
     }
 
     /// Return the (local) capacity of the chunk.
@@ -891,7 +891,7 @@ impl<D: Data> Chunk<D> {
     /// Return the size of the chunk, for use in metrics.
     fn get_size(&mut self) -> LengthAndCapacity {
         if self.cached_size.is_none() {
-            let length = Container::len(&self.data);
+            let length = self.data.len();
             let mut capacity = 0;
             self.data.heap_size(|_, cap| capacity += cap);
             self.cached_size = Some(LengthAndCapacity { length, capacity });

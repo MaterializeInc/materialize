@@ -33,7 +33,6 @@ use mz_timely_util::builder_async::{ButtonHandle, PressOnDropButton};
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::{Col2ValBatcher, columnar_exchange};
 use mz_timely_util::operator::{CollectionExt, StreamExt};
-use timely::Container;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::operators::Capability;

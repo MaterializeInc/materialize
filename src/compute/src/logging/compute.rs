@@ -15,7 +15,7 @@ use std::fmt::{Display, Write};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use columnar::{Columnar, Ref};
+use columnar::{Columnar, Index, Ref};
 use differential_dataflow::Collection;
 use differential_dataflow::collection::AsCollection;
 use differential_dataflow::trace::{BatchReader, Cursor};
@@ -26,13 +26,13 @@ use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::{Col2ValBatcher, Column, columnar_exchange};
 use mz_timely_util::containers::ProvidedBuilder;
 use mz_timely_util::replay::MzReplay;
+use timely::Data;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::operators::Operator;
 use timely::dataflow::operators::core::Map;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::{Scope, Stream};
 use timely::scheduling::Scheduler;
-use timely::{Container, Data};
 use tracing::error;
 use uuid::Uuid;
 
@@ -383,7 +383,7 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
                     };
 
                     let shared_state = &mut shared_state.borrow_mut();
-                    for (time, event) in data.drain() {
+                    for (time, event) in data.borrow().into_index_iter() {
                         DemuxHandler {
                             state: &mut demux_state,
                             shared_state,

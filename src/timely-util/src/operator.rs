@@ -25,7 +25,7 @@ use differential_dataflow::difference::{Multiply, Semigroup};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::{Batcher, Builder, Description};
 use differential_dataflow::{AsCollection, Collection, Hashable};
-use timely::container::{ContainerBuilder, PushInto};
+use timely::container::{ContainerBuilder, DrainContainer, PushInto};
 use timely::dataflow::channels::pact::{Exchange, ParallelizationContract, Pipeline};
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::channels::pushers::buffer::Session;
@@ -56,7 +56,7 @@ pub type SessionFor<'a, G, CB> = Session<
 /// Extension methods for timely [`StreamCore`]s.
 pub trait StreamExt<G, C1>
 where
-    C1: Container,
+    C1: Container + DrainContainer,
     G: Scope,
 {
     /// Like `timely::dataflow::operators::generic::operator::Operator::unary`,
@@ -226,7 +226,7 @@ where
 
 impl<G, C1> StreamExt<G, C1> for StreamCore<G, C1>
 where
-    C1: Container + Data,
+    C1: Container + DrainContainer,
     G: Scope,
 {
     fn unary_fallible<DCB, ECB, B, P>(
@@ -678,7 +678,7 @@ where
 }
 
 /// Merge the contents of multiple streams and combine the containers using a container builder.
-pub trait ConcatenateFlatten<G: Scope, C: Container> {
+pub trait ConcatenateFlatten<G: Scope, C: Container + DrainContainer> {
     /// Merge the contents of multiple streams and use the provided container builder to form
     /// output containers.
     ///
@@ -707,7 +707,7 @@ pub trait ConcatenateFlatten<G: Scope, C: Container> {
 impl<G, C> ConcatenateFlatten<G, C> for StreamCore<G, C>
 where
     G: Scope,
-    C: Container + 'static,
+    C: Container + DrainContainer,
 {
     fn concatenate_flatten<I, CB>(&self, sources: I) -> StreamCore<G, CB::Container>
     where
@@ -723,7 +723,7 @@ where
 impl<G, C> ConcatenateFlatten<G, C> for G
 where
     G: Scope,
-    C: Container + 'static,
+    C: Container + DrainContainer,
 {
     fn concatenate_flatten<I, CB>(&self, sources: I) -> StreamCore<G, CB::Container>
     where

@@ -43,7 +43,6 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arranged;
 use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
 use mz_repr::Diff;
-use timely::PartialOrder;
 use timely::container::{CapacityContainerBuilder, PushInto, SizableContainer};
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::channels::pushers::Tee;
@@ -52,6 +51,7 @@ use timely::dataflow::operators::generic::OutputHandleCore;
 use timely::dataflow::operators::{Capability, Operator};
 use timely::dataflow::{Scope, StreamCore};
 use timely::progress::timestamp::Timestamp;
+use timely::{Container, PartialOrder};
 use tracing::trace;
 
 use crate::render::context::ShutdownProbe;
@@ -79,7 +79,7 @@ where
     I: IntoIterator,
     I::Item: Data,
     YFn: Fn(Instant, usize) -> bool + 'static,
-    C: SizableContainer + PushInto<(I::Item, G::Timestamp, Diff)> + Data,
+    C: Container + SizableContainer + PushInto<(I::Item, G::Timestamp, Diff)> + Data,
 {
     let mut trace1 = arranged1.trace.clone();
     let mut trace2 = arranged2.trace.clone();
@@ -571,7 +571,7 @@ where
         I: IntoIterator<Item = D>,
         L: FnMut(C1::Key<'_>, C1::Val<'_>, C2::Val<'_>) -> I,
         YFn: Fn(usize) -> bool,
-        C: SizableContainer + PushInto<(D, C1::Time, Diff)> + Data,
+        C: Container + SizableContainer + PushInto<(D, C1::Time, Diff)> + Data,
     {
         let meet = self.capability.time();
 

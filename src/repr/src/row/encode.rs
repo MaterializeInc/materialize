@@ -42,7 +42,6 @@ use mz_persist_types::stats::{
 use mz_proto::chrono::ProtoNaiveTime;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use prost::Message;
-use timely::Container;
 use uuid::Uuid;
 
 use crate::adt::array::{ArrayDimension, PackedArrayDimension};

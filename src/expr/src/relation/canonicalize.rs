@@ -17,7 +17,6 @@ use std::rc::Rc;
 use itertools::Itertools;
 use mz_ore::soft_assert_or_log;
 use mz_repr::{ColumnType, ScalarType};
-use timely::Container;
 
 use crate::visit::Visit;
 use crate::{MirScalarExpr, UnaryFunc, VariadicFunc, func};

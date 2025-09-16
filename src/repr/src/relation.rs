@@ -23,7 +23,6 @@ use proptest::prelude::*;
 use proptest::strategy::{Strategy, Union};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
-use timely::Container;
 
 use crate::relation_and_scalar::proto_relation_type::ProtoKey;
 pub use crate::relation_and_scalar::{
@@ -1203,7 +1202,7 @@ impl VersionedRelationDesc {
             .typ
             .keys
             .iter()
-            .any(|keys| keys.iter().any(|key| *key == col.typ_idx));
+            .any(|keys| keys.contains(&col.typ_idx));
         assert!(!dropped_key, "column being dropped was used as a key");
 
         self.validate();

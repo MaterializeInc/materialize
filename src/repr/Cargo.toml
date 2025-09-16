@@ -37,7 +37,7 @@ columnation = "0.1.0"
 chrono = { version = "0.4.39", default-features = false, features = ["serde", "std"] }
 compact_bytes = "0.2.1"
 dec = "0.4.8"
-differential-dataflow = "0.16.2"
+differential-dataflow = "0.17.0"
 enum-kinds = "0.5.1"
 hex = "0.4.3"
 itertools = "0.14.0"
@@ -68,7 +68,7 @@ serde_json = { version = "1.0.127", features = ["arbitrary_precision", "preserve
 smallvec = { version = "1.15.1", features = ["serde", "union"] }
 static_assertions = "1.1"
 strsim = "0.11.1"
-timely = "0.23.0"
+timely = "0.24.0"
 tokio-postgres = { version = "0.7.8" }
 tracing-core = "0.1.34"
 url = { version = "2.3.1", features = ["serde"] }

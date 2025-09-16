@@ -34,7 +34,6 @@ use mz_transform::notice::OptimizerNotice;
 use proptest_derive::Arbitrary;
 use semver::Version;
 use serde::{Deserialize, Serialize};
-use timely::Container;
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
 

@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::Duration;
 
-use columnar::Columnar;
+use columnar::{Columnar, Index};
 use differential_dataflow::containers::{Columnation, CopyRegion};
 use mz_compute_client::logging::LoggingConfig;
 use mz_ore::cast::CastFrom;
@@ -23,7 +23,6 @@ use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::{Col2ValBatcher, columnar_exchange};
 use mz_timely_util::containers::ProvidedBuilder;
 use mz_timely_util::replay::MzReplay;
-use timely::Container;
 use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::operators::Operator;
@@ -171,7 +170,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
             move |input, output| {
                 while let Some((time, data)) = input.next() {
                     let mut session = output.session_with_builder(&time);
-                    for ((datum, ()), time, diff) in data.iter() {
+                    for ((datum, ()), time, diff) in data.borrow().into_index_iter() {
                         let (source_node, source_port) = datum.source;
                         let (target_node, target_port) = datum.target;
                         let data = packer.pack_slice(&[
@@ -649,7 +648,7 @@ impl DemuxHandler<'_, '_> {
 
     fn handle_messages(&mut self, event: MessagesEvent) {
         let ts = self.ts();
-        let count = Diff::try_from(event.length).expect("must fit");
+        let count = Diff::from(event.record_count);
 
         if event.is_send {
             let datum = MessageDatum {

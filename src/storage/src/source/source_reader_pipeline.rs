@@ -51,6 +51,7 @@ use mz_timely_util::builder_async::{
 use mz_timely_util::capture::PusherCapture;
 use mz_timely_util::operator::ConcatenateFlatten;
 use mz_timely_util::reclock::reclock;
+use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::capture::capture::Capture;
@@ -63,7 +64,6 @@ use timely::dataflow::{Scope, Stream};
 use timely::order::TotalOrder;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, Timestamp};
-use timely::{Container, PartialOrder};
 use tokio::sync::{Semaphore, watch};
 use tokio_stream::wrappers::WatchStream;
 use tracing::trace;
