@@ -29,8 +29,7 @@ use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_cluster_client::metrics::{ControllerMetrics, WallclockLagMetrics};
 use mz_cluster_client::{ReplicaId, WallclockLagFn};
 use mz_controller_types::dyncfgs::{
-    ENABLE_0DT_DEPLOYMENT_SOURCES, ENABLE_WALLCLOCK_LAG_HISTOGRAM_COLLECTION,
-    WALLCLOCK_LAG_RECORDING_INTERVAL,
+    ENABLE_0DT_DEPLOYMENT_SOURCES, WALLCLOCK_LAG_RECORDING_INTERVAL,
 };
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
@@ -3594,10 +3593,6 @@ where
             // maximum value instead.
             let secs = lag.unwrap_seconds_or(u64::MAX);
             collection.wallclock_lag_metrics.observe(secs);
-
-            if !ENABLE_WALLCLOCK_LAG_HISTOGRAM_COLLECTION.get(self.config.config_set()) {
-                continue;
-            }
 
             if let Some(stash) = &mut collection.wallclock_lag_histogram_stash {
                 let bucket = lag.map_seconds(|secs| secs.next_power_of_two());
