@@ -157,6 +157,11 @@ pub enum Command {
     Dump {
         tx: oneshot::Sender<Result<serde_json::Value, anyhow::Error>>,
     },
+
+    GetComputeInstanceClient {
+        instance_id: ComputeInstanceId,
+        tx: oneshot::Sender<Result<mz_compute_client::controller::instance::Client<mz_repr::Timestamp>, AdapterError>>,
+    }
 }
 
 impl Command {
@@ -176,7 +181,8 @@ impl Command {
             | Command::SetSystemVars { .. }
             | Command::RetireExecute { .. }
             | Command::CheckConsistency { .. }
-            | Command::Dump { .. } => None,
+            | Command::Dump { .. }
+            | Command::GetComputeInstanceClient { .. } => None,
         }
     }
 
@@ -196,7 +202,8 @@ impl Command {
             | Command::SetSystemVars { .. }
             | Command::RetireExecute { .. }
             | Command::CheckConsistency { .. }
-            | Command::Dump { .. } => None,
+            | Command::Dump { .. }
+            | Command::GetComputeInstanceClient { .. } => None,
         }
     }
 }
@@ -222,11 +229,6 @@ pub struct StartupResponse {
     pub session_defaults: BTreeMap<String, OwnedVarInput>,
     pub catalog: Arc<Catalog>,
     ///////// todo: encapsulate the below into PeekClient?
-    /// Thin compute instance clients keyed by instance id, for fast-path peeks.
-    pub compute_instance_clients: BTreeMap<
-        ComputeInstanceId,
-        mz_compute_client::controller::instance::Client<mz_repr::Timestamp>,
-    >,
     /// Handle to storage collections for reading since/frontiers and policies.
     pub storage_collections: Arc<
         dyn mz_storage_client::storage_collections::StorageCollections<

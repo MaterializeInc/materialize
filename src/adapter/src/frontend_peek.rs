@@ -119,6 +119,7 @@ impl SessionClient {
             let cluster = catalog.resolve_target_cluster(target_cluster, &session)?;
             (cluster, cluster.id.clone(), cluster.name.clone()) /////// todo: or just refs instead of clones?
         };
+        self.ensure_compute_instance_client(target_cluster_id).await?;
 
         ////// todo: statement logging: set_statement_execution_cluster
 

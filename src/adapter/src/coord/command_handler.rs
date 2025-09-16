@@ -269,6 +269,19 @@ impl Coordinator {
                 Command::Dump { tx } => {
                     let _ = tx.send(self.dump().await);
                 }
+
+                Command::GetComputeInstanceClient { instance_id, tx} => {
+                    let _ = tx.send(self
+                        .controller
+                        .compute
+                        .instances
+                        .get(&instance_id)
+                        .map_or_else(
+                            || {Err(AdapterError::ConcurrentClusterDrop)},
+                            |instance_state| Ok(instance_state.client.clone())
+                        )
+                    );
+                }
             }
         }
         .instrument(debug_span!("handle_command"))
@@ -527,13 +540,6 @@ impl Coordinator {
                     write_notify: notify,
                     session_defaults,
                     catalog: self.owned_catalog(),
-                    compute_instance_clients: self
-                        .controller
-                        .compute
-                        .instances
-                        .iter()
-                        .map(|(id, state)| (*id, state.client.clone()))
-                        .collect(),
                     storage_collections: Arc::clone(&self.controller.storage_collections),
                     transient_id_gen: self.transient_id_gen.clone(),
                     optimizer_metrics: self.optimizer_metrics.clone(),

@@ -358,6 +358,7 @@ impl Message {
                 Command::AuthenticatePassword { .. } => "command-auth_check",
                 Command::AuthenticateGetSASLChallenge { .. } => "command-auth_get_sasl_challenge",
                 Command::AuthenticateVerifySASLProof { .. } => "command-auth_verify_sasl_proof",
+                Command::GetComputeInstanceClient { .. } => "get-compute-instance-client",
             },
             Message::ControllerReady {
                 controller: ControllerReadiness::Compute,

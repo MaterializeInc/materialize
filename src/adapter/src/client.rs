@@ -258,15 +258,14 @@ impl Client {
             write_notify,
             session_defaults,
             catalog,
-            compute_instance_clients,
             storage_collections,
             transient_id_gen,
             optimizer_metrics,
             oracles,
         } = response;
 
-        let peek_client = crate::peek_client::PeekClient {
-            compute_instances: compute_instance_clients,
+        let peek_client = PeekClient {
+            compute_instances: Default::default(),
             storage_collections,
             transient_id_gen,
             optimizer_metrics,
@@ -791,6 +790,30 @@ impl SessionClient {
         catalog
     }
 
+    /// Gets a compute instance client from the Coordinator.
+    //////// todo: this is on SessionClient for consistency with the above catalog_snapshot, but it's
+    // not clear to me why is catalog_snapshot and send_without_session on SessionClient, and not
+    // simply on the inner Client? I don't see anything session-specific.
+    pub async fn get_compute_instance_client(&self, instance_id: ComputeInstanceId) -> Result<mz_compute_client::controller::instance::Client<mz_repr::Timestamp>, AdapterError> {
+        self
+            .send_without_session(|tx| Command::GetComputeInstanceClient {
+                instance_id,
+                tx,
+            })
+            .await
+    }
+
+    /// If our PeekClient doesn't already have a client for the specified compute instance, then
+    /// request a client from the Coordinator.
+    ///////////// todo: is it ok that this reaches into the innards of PeekClient?
+    /////// todo: also, can we use or_insert_with? Seems non-trivial because of the error handling.
+    pub async fn ensure_compute_instance_client(&mut self, compute_instance: ComputeInstanceId) -> Result<(), AdapterError> {
+        if !self.peek_client.compute_instances.contains_key(&compute_instance) {
+            self.peek_client.compute_instances.insert(compute_instance, self.get_compute_instance_client(compute_instance).await?);
+        }
+        Ok(())
+    }
+
     /// Dumps the catalog to a JSON string.
     ///
     /// No authorization is performed, so access to this function must be limited to internal
@@ -1009,7 +1032,8 @@ impl SessionClient {
                 | Command::Terminate { .. }
                 | Command::RetireExecute { .. }
                 | Command::CheckConsistency { .. }
-                | Command::Dump { .. } => {}
+                | Command::Dump { .. }
+                | Command::GetComputeInstanceClient { .. } => {}
             };
             cmd
         });
