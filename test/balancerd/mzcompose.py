@@ -246,6 +246,7 @@ def workflow_plaintext(c: Composition) -> None:
                 f"--frontegg-api-token-url={FRONTEGG_URL}/identity/resources/auth/v1/api-token",
                 f"--frontegg-admin-role={ADMIN_ROLE}",
                 "--https-resolver-template=materialized:6876",
+                "--pgwire-sni-resolver-template=materialized:6876",
                 "--tls-key=/secrets/balancerd.key",
                 "--tls-cert=/secrets/balancerd.crt",
                 "--default-config=balancerd_inject_proxy_protocol_header_http=true",

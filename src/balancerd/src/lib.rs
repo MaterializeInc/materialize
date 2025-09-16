@@ -1296,6 +1296,10 @@ impl Resolver {
                 let has_sni = servername.is_some();
                 let resolved_addr = match (servername, sni_addr_template) {
                     (Some(servername), Some(sni_addr_template)) => {
+                        debug!(
+                            "sni header found for connection {:?}, using fastpath",
+                            servername
+                        );
                         let sni_addr = sni_addr_template.replace("{}", servername);
                         let tenant = stub_resolver.tenant(&sni_addr).await;
                         let addr = lookup(&sni_addr).await?;
@@ -1328,6 +1332,10 @@ impl Resolver {
                             addr_template.replace("{}", &auth_session.tenant_id().to_string());
                         let addr = lookup(&addr).await?;
                         let tenant = Some(auth_session.tenant_id().to_string());
+                        debug!(
+                            "No sni header found for tenant connection {:?}, used frontegg",
+                            tenant
+                        );
                         ResolvedAddr {
                             addr,
                             password: Some(password),
