@@ -85,15 +85,12 @@ module "materialize" {
         args = {
           enableLicenseKeyChecks = true
         }
-      },
-      clusters = {
-        defaultReplicationFactor = {
-            system = 1
-            probe = 1
-            support = 1
-            analytics = 1
+        clusters = {
+          # Overriding here because merging values doesn't work.
+          # Remove this when that is fixed.
+          swap_enabled = false
         }
-      }
+      },
   }
 
   providers = {
