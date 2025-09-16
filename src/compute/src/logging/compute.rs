@@ -28,7 +28,6 @@ use mz_timely_util::containers::ProvidedBuilder;
 use mz_timely_util::replay::MzReplay;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::operators::Operator;
-use timely::dataflow::operators::core::Map;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::{Scope, Stream};
 use timely::scheduling::Scheduler;
@@ -36,12 +35,12 @@ use timely::{Container, Data};
 use tracing::error;
 use uuid::Uuid;
 
-use crate::extensions::arrange::{MzArrange, MzArrangeCore};
+use crate::extensions::arrange::MzArrangeCore;
 use crate::logging::{
-    ComputeLog, EventQueue, LogCollection, LogVariant, OutputSessionColumnar, OutputSessionVec,
-    PermutedRowPacker, SharedLoggingState, Update,
+    ComputeLog, EventQueue, LogCollection, LogVariant, OutputSessionColumnar, PermutedRowPacker,
+    SharedLoggingState, Update,
 };
-use crate::row_spine::{RowRowBatcher, RowRowBuilder};
+use crate::row_spine::RowRowBuilder;
 use crate::typedefs::RowRowSpine;
 
 /// Type alias for a logger of compute events.
@@ -371,15 +370,15 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
                         import_frontier: import_frontier.session_with_builder(&cap),
                         peek: peek.session_with_builder(&cap),
                         peek_duration: peek_duration.session_with_builder(&cap),
-                        shutdown_duration: shutdown_duration.session(&cap),
+                        shutdown_duration: shutdown_duration.session_with_builder(&cap),
                         arrangement_heap_allocations: arrangement_heap_allocations.session_with_builder(&cap),
                         arrangement_heap_capacity: arrangement_heap_capacity.session_with_builder(&cap),
                         arrangement_heap_size: arrangement_heap_size.session_with_builder(&cap),
-                        error_count: error_count.session(&cap),
-                        hydration_time: hydration_time.session(&cap),
-                        operator_hydration_status: operator_hydration_status.session(&cap),
+                        error_count: error_count.session_with_builder(&cap),
+                        hydration_time: hydration_time.session_with_builder(&cap),
+                        operator_hydration_status: operator_hydration_status.session_with_builder(&cap),
                         lir_mapping: lir_mapping.session_with_builder(&cap),
-                        dataflow_global_ids: dataflow_global_ids.session(&cap),
+                        dataflow_global_ids: dataflow_global_ids.session_with_builder(&cap),
                     };
 
                     let shared_state = &mut shared_state.borrow_mut();
@@ -397,131 +396,32 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
             }
         });
 
-        let worker_id = scope.index();
-
-        // Encode the contents of each logging stream into its expected `Row` format.
-        let mut packer = PermutedRowPacker::new(ComputeLog::ShutdownDuration);
-        let shutdown_duration = shutdown_duration.as_collection().map(move |bucket| {
-            packer.pack_slice_owned(&[
-                Datum::UInt64(u64::cast_from(worker_id)),
-                Datum::UInt64(bucket.try_into().expect("bucket too big")),
-            ])
-        });
-
-        let mut packer = PermutedRowPacker::new(ComputeLog::ErrorCount);
-        let error_count = error_count.as_collection().map({
-            let mut scratch = String::new();
-            move |datum| {
-                packer.pack_slice_owned(&[
-                    make_string_datum(datum.export_id, &mut scratch),
-                    Datum::UInt64(u64::cast_from(worker_id)),
-                    Datum::Int64(datum.count.into_inner()),
-                ])
-            }
-        });
-
-        let mut packer = PermutedRowPacker::new(ComputeLog::HydrationTime);
-        let hydration_time = hydration_time.as_collection().map({
-            let mut scratch = String::new();
-            move |datum| {
-                packer.pack_slice_owned(&[
-                    make_string_datum(datum.export_id, &mut scratch),
-                    Datum::UInt64(u64::cast_from(worker_id)),
-                    Datum::from(datum.time_ns),
-                ])
-            }
-        });
-
-        let mut packer = PermutedRowPacker::new(ComputeLog::OperatorHydrationStatus);
-        let operator_hydration_status = operator_hydration_status.as_collection().map({
-            let mut scratch = String::new();
-            move |datum| {
-                packer.pack_slice_owned(&[
-                    make_string_datum(datum.export_id, &mut scratch),
-                    Datum::UInt64(datum.lir_id.into()),
-                    Datum::UInt64(u64::cast_from(worker_id)),
-                    Datum::from(datum.hydrated),
-                ])
-            }
-        });
-
-        let mut scratch1 = String::new();
-        let mut scratch2 = String::new();
-        let mut packer = PermutedRowPacker::new(ComputeLog::LirMapping);
-        let lir_mapping = lir_mapping
-            .map(move |(datum, time, diff)| {
-                let row = packer.pack_slice_owned(&[
-                    make_string_datum(GlobalId::into_owned(datum.global_id), &mut scratch1),
-                    Datum::UInt64(<LirId as Columnar>::into_owned(datum.lir_id).into()),
-                    Datum::UInt64(u64::cast_from(worker_id)),
-                    make_string_datum(datum.operator, &mut scratch2),
-                    datum
-                        .parent_lir_id
-                        .map(|lir_id| Datum::UInt64(LirId::into_owned(lir_id).into()))
-                        .unwrap_or_else(|| Datum::Null),
-                    Datum::UInt16(u16::cast_from(*datum.nesting)),
-                    Datum::UInt64(u64::cast_from(datum.operator_span.0)),
-                    Datum::UInt64(u64::cast_from(datum.operator_span.1)),
-                ]);
-                (row, Timestamp::into_owned(time), diff)
-            })
-            .as_collection();
-
-        let mut packer = PermutedRowPacker::new(ComputeLog::DataflowGlobal);
-        let dataflow_global_ids = dataflow_global_ids.as_collection().map({
-            let mut scratch = String::new();
-            move |datum| {
-                packer.pack_slice_owned(&[
-                    Datum::UInt64(u64::cast_from(datum.dataflow_index)),
-                    Datum::UInt64(u64::cast_from(worker_id)),
-                    make_string_datum(datum.global_id, &mut scratch),
-                ])
-            }
-        });
-
         use ComputeLog::*;
-        let columnar_logs = [
+        let logs = [
             (ArrangementHeapAllocations, arrangement_heap_allocations),
             (ArrangementHeapCapacity, arrangement_heap_capacity),
             (ArrangementHeapSize, arrangement_heap_size),
             (DataflowCurrent, export),
+            (DataflowGlobal, dataflow_global_ids),
+            (ErrorCount, error_count),
             (FrontierCurrent, frontier),
+            (HydrationTime, hydration_time),
             (ImportFrontierCurrent, import_frontier),
+            (LirMapping, lir_mapping),
+            (OperatorHydrationStatus, operator_hydration_status),
             (PeekCurrent, peek),
             (PeekDuration, peek_duration),
-        ];
-        let logs = [
             (ShutdownDuration, shutdown_duration),
-            (ErrorCount, error_count),
-            (HydrationTime, hydration_time),
-            (OperatorHydrationStatus, operator_hydration_status),
-            (LirMapping, lir_mapping),
-            (DataflowGlobal, dataflow_global_ids),
         ];
 
         // Build the output arrangements.
         let mut collections = BTreeMap::new();
-        for (variant, stream) in columnar_logs {
+        for (variant, stream) in logs {
             let variant = LogVariant::Compute(variant);
             if config.index_logs.contains_key(&variant) {
                 let trace = stream
                     .mz_arrange_core::<_, Col2ValBatcher<_, _, _, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
                         ExchangeCore::<ColumnBuilder<_>, _>::new_core(columnar_exchange::<Row, Row, Timestamp, Diff>),
-                        &format!("Arrange {variant:?}"),
-                    )
-                    .trace;
-                let collection = LogCollection {
-                    trace,
-                    token: Rc::clone(&token),
-                };
-                collections.insert(variant, collection);
-            }
-        }
-        for (variant, collection) in logs {
-            let variant = LogVariant::Compute(variant);
-            if config.index_logs.contains_key(&variant) {
-                let trace = collection
-                    .mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
                         &format!("Arrange {variant:?}"),
                     )
                     .trace;
@@ -583,16 +483,28 @@ struct DemuxState<A> {
     arrangement_heap_capacity_packer: PermutedRowPacker,
     /// A row packer for the arrangement heap size output.
     arrangement_heap_size_packer: PermutedRowPacker,
+    /// A row packer for the dataflow global output.
+    dataflow_global_packer: PermutedRowPacker,
+    /// A row packer for the error count output.
+    error_count_packer: PermutedRowPacker,
     /// A row packer for the exports output.
     export_packer: PermutedRowPacker,
     /// A row packer for the frontier output.
     frontier_packer: PermutedRowPacker,
     /// A row packer for the exports output.
     import_frontier_packer: PermutedRowPacker,
+    /// A row packer for the LIR mapping output.
+    lir_mapping_packer: PermutedRowPacker,
+    /// A row packer for the operator hydration status output.
+    operator_hydration_status_packer: PermutedRowPacker,
     /// A row packer for the peek durations output.
     peek_duration_packer: PermutedRowPacker,
     /// A row packer for the peek output.
     peek_packer: PermutedRowPacker,
+    /// A row packer for the shutdown duration output.
+    shutdown_duration_packer: PermutedRowPacker,
+    /// A row packer for the hydration time output.
+    hydration_time_packer: PermutedRowPacker,
 }
 
 impl<A: Scheduler> DemuxState<A> {
@@ -617,11 +529,19 @@ impl<A: Scheduler> DemuxState<A> {
                 ComputeLog::ArrangementHeapCapacity,
             ),
             arrangement_heap_size_packer: PermutedRowPacker::new(ComputeLog::ArrangementHeapSize),
+            dataflow_global_packer: PermutedRowPacker::new(ComputeLog::DataflowGlobal),
+            error_count_packer: PermutedRowPacker::new(ComputeLog::ErrorCount),
             export_packer: PermutedRowPacker::new(ComputeLog::DataflowCurrent),
             frontier_packer: PermutedRowPacker::new(ComputeLog::FrontierCurrent),
+            hydration_time_packer: PermutedRowPacker::new(ComputeLog::HydrationTime),
             import_frontier_packer: PermutedRowPacker::new(ComputeLog::ImportFrontierCurrent),
+            lir_mapping_packer: PermutedRowPacker::new(ComputeLog::LirMapping),
+            operator_hydration_status_packer: PermutedRowPacker::new(
+                ComputeLog::OperatorHydrationStatus,
+            ),
             peek_duration_packer: PermutedRowPacker::new(ComputeLog::PeekDuration),
             peek_packer: PermutedRowPacker::new(ComputeLog::PeekCurrent),
+            shutdown_duration_packer: PermutedRowPacker::new(ComputeLog::ShutdownDuration),
         }
     }
 
@@ -652,6 +572,31 @@ impl<A: Scheduler> DemuxState<A> {
         ])
     }
 
+    /// Pack a dataflow global update key-value for the given dataflow index and global ID.
+    fn pack_dataflow_global_update(
+        &mut self,
+        dataflow_index: usize,
+        global_id: GlobalId,
+    ) -> (&RowRef, &RowRef) {
+        self.dataflow_global_packer.pack_slice(&[
+            Datum::UInt64(u64::cast_from(dataflow_index)),
+            Datum::UInt64(u64::cast_from(self.worker_id)),
+            make_string_datum(global_id, &mut self.scratch_string_a),
+        ])
+    }
+
+    /// Pack an error count update key-value for the given export ID and count.
+    fn pack_error_count_update(&mut self, export_id: GlobalId, count: Diff) -> (&RowRef, &RowRef) {
+        // Normally we would use DD's diff field to encode counts, but in this case we can't: The total
+        // per-worker error count might be negative and at the SQL level having negative multiplicities
+        // is treated as an error.
+        self.error_count_packer.pack_slice(&[
+            make_string_datum(export_id, &mut self.scratch_string_a),
+            Datum::UInt64(u64::cast_from(self.worker_id)),
+            Datum::Int64(count.into_inner()),
+        ])
+    }
+
     /// Pack an export update key-value for the given export ID and dataflow index.
     fn pack_export_update(
         &mut self,
@@ -662,6 +607,19 @@ impl<A: Scheduler> DemuxState<A> {
             make_string_datum(export_id, &mut self.scratch_string_a),
             Datum::UInt64(u64::cast_from(self.worker_id)),
             Datum::UInt64(u64::cast_from(dataflow_index)),
+        ])
+    }
+
+    /// Pack a hydration time update key-value for the given export ID and hydration time.
+    fn pack_hydration_time_update(
+        &mut self,
+        export_id: GlobalId,
+        time_ns: Option<u64>,
+    ) -> (&RowRef, &RowRef) {
+        self.hydration_time_packer.pack_slice(&[
+            make_string_datum(export_id, &mut self.scratch_string_a),
+            Datum::UInt64(u64::cast_from(self.worker_id)),
+            Datum::from(time_ns),
         ])
     }
 
@@ -677,6 +635,44 @@ impl<A: Scheduler> DemuxState<A> {
             make_string_datum(import_id, &mut self.scratch_string_b),
             Datum::UInt64(u64::cast_from(self.worker_id)),
             Datum::MzTimestamp(time),
+        ])
+    }
+
+    /// Pack an LIR mapping update key-value for the given LIR operator metadata.
+    fn pack_lir_mapping_update(
+        &mut self,
+        global_id: GlobalId,
+        lir_id: LirId,
+        operator: String,
+        parent_lir_id: Option<LirId>,
+        nesting: u8,
+        operator_span: (usize, usize),
+    ) -> (&RowRef, &RowRef) {
+        self.lir_mapping_packer.pack_slice(&[
+            make_string_datum(global_id, &mut self.scratch_string_a),
+            Datum::UInt64(lir_id.into()),
+            Datum::UInt64(u64::cast_from(self.worker_id)),
+            make_string_datum(operator, &mut self.scratch_string_b),
+            parent_lir_id.map_or(Datum::Null, |lir_id| Datum::UInt64(lir_id.into())),
+            Datum::UInt16(u16::cast_from(nesting)),
+            Datum::UInt64(u64::cast_from(operator_span.0)),
+            Datum::UInt64(u64::cast_from(operator_span.1)),
+        ])
+    }
+
+    /// Pack an operator hydration status update key-value for the given export ID, LIR ID, and
+    /// hydration status.
+    fn pack_operator_hydration_status_update(
+        &mut self,
+        export_id: GlobalId,
+        lir_id: LirId,
+        hydrated: bool,
+    ) -> (&RowRef, &RowRef) {
+        self.operator_hydration_status_packer.pack_slice(&[
+            make_string_datum(export_id, &mut self.scratch_string_a),
+            Datum::UInt64(lir_id.into()),
+            Datum::UInt64(u64::cast_from(self.worker_id)),
+            Datum::from(hydrated),
         ])
     }
 
@@ -716,6 +712,14 @@ impl<A: Scheduler> DemuxState<A> {
             make_string_datum(export_id, &mut self.scratch_string_a),
             Datum::UInt64(u64::cast_from(self.worker_id)),
             Datum::MzTimestamp(time),
+        ])
+    }
+
+    /// Pack a shutdown duration update key-value for the given time bucket.
+    fn pack_shutdown_duration_update(&mut self, bucket: u128) -> (&RowRef, &RowRef) {
+        self.shutdown_duration_packer.pack_slice(&[
+            Datum::UInt64(u64::cast_from(self.worker_id)),
+            Datum::UInt64(bucket.try_into().expect("bucket too big")),
         ])
     }
 }
@@ -764,53 +768,15 @@ struct DemuxOutput<'a> {
     import_frontier: OutputSessionColumnar<'a, Update<(Row, Row)>>,
     peek: OutputSessionColumnar<'a, Update<(Row, Row)>>,
     peek_duration: OutputSessionColumnar<'a, Update<(Row, Row)>>,
-    shutdown_duration: OutputSessionVec<'a, Update<u128>>,
+    shutdown_duration: OutputSessionColumnar<'a, Update<(Row, Row)>>,
     arrangement_heap_allocations: OutputSessionColumnar<'a, Update<(Row, Row)>>,
     arrangement_heap_capacity: OutputSessionColumnar<'a, Update<(Row, Row)>>,
     arrangement_heap_size: OutputSessionColumnar<'a, Update<(Row, Row)>>,
-    hydration_time: OutputSessionVec<'a, Update<HydrationTimeDatum>>,
-    operator_hydration_status: OutputSessionVec<'a, Update<OperatorHydrationStatusDatum>>,
-    error_count: OutputSessionVec<'a, Update<ErrorCountDatum>>,
-    lir_mapping: OutputSessionColumnar<'a, Update<LirMappingDatum>>,
-    dataflow_global_ids: OutputSessionVec<'a, Update<DataflowGlobalDatum>>,
-}
-
-#[derive(Clone)]
-struct HydrationTimeDatum {
-    export_id: GlobalId,
-    time_ns: Option<u64>,
-}
-
-#[derive(Clone)]
-struct OperatorHydrationStatusDatum {
-    export_id: GlobalId,
-    lir_id: LirId,
-    hydrated: bool,
-}
-
-#[derive(Clone)]
-struct ErrorCountDatum {
-    export_id: GlobalId,
-    // Normally we would use DD's diff field to encode counts, but in this case we can't: The total
-    // per-worker error count might be negative and at the SQL level having negative multiplicities
-    // is treated as an error.
-    count: Diff,
-}
-
-#[derive(Clone, Columnar)]
-struct LirMappingDatum {
-    global_id: GlobalId,
-    lir_id: LirId,
-    operator: String,
-    parent_lir_id: Option<LirId>,
-    nesting: u8,
-    operator_span: (usize, usize),
-}
-
-#[derive(Clone)]
-struct DataflowGlobalDatum {
-    dataflow_index: usize,
-    global_id: GlobalId,
+    hydration_time: OutputSessionColumnar<'a, Update<(Row, Row)>>,
+    operator_hydration_status: OutputSessionColumnar<'a, Update<(Row, Row)>>,
+    error_count: OutputSessionColumnar<'a, Update<(Row, Row)>>,
+    lir_mapping: OutputSessionColumnar<'a, Update<(Row, Row)>>,
+    dataflow_global_ids: OutputSessionColumnar<'a, Update<(Row, Row)>>,
 }
 
 /// Event handler of the demux operator.
@@ -890,10 +856,7 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
             .or_default() += 1;
 
         // Insert hydration time logging for this export.
-        let datum = HydrationTimeDatum {
-            export_id,
-            time_ns: None,
-        };
+        let datum = self.state.pack_hydration_time_update(export_id, None);
         self.output.hydration_time.give((datum, ts, Diff::ONE));
     }
 
@@ -927,29 +890,25 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
 
         // Remove error count logging for this export.
         if export.error_count != Diff::ZERO {
-            let datum = ErrorCountDatum {
-                export_id,
-                count: export.error_count,
-            };
+            let datum = self
+                .state
+                .pack_error_count_update(export_id, export.error_count);
             self.output.error_count.give((datum, ts, Diff::MINUS_ONE));
         }
 
         // Remove hydration time logging for this export.
-        let datum = HydrationTimeDatum {
-            export_id,
-            time_ns: export.hydration_time_ns,
-        };
+        let datum = self
+            .state
+            .pack_hydration_time_update(export_id, export.hydration_time_ns);
         self.output
             .hydration_time
             .give((datum, ts, Diff::MINUS_ONE));
 
         // Remove operator hydration logging for this export.
         for (lir_id, hydrated) in export.operator_hydration {
-            let datum = OperatorHydrationStatusDatum {
-                export_id,
-                lir_id,
-                hydrated,
-            };
+            let datum = self
+                .state
+                .pack_operator_hydration_status_update(export_id, lir_id, hydrated);
             self.output
                 .operator_hydration_status
                 .give((datum, ts, Diff::MINUS_ONE));
@@ -957,13 +916,13 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
     }
 
     fn handle_dataflow_dropped(&mut self, dataflow_index: usize) {
+        let ts = self.ts();
         self.state.dataflow_export_counts.remove(&dataflow_index);
 
         if self.state.shutdown_dataflows.remove(&dataflow_index) {
             // Dataflow has already shut down before it was dropped.
-            self.output
-                .shutdown_duration
-                .give((0, self.ts(), Diff::ONE));
+            let datum = self.state.pack_shutdown_duration_update(0);
+            self.output.shutdown_duration.give((datum, ts, Diff::ONE));
         } else {
             // Dataflow has not yet shut down.
             let existing = self
@@ -986,9 +945,8 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
             // Dataflow has already been dropped.
             let elapsed_ns = self.time.saturating_sub(start).as_nanos();
             let elapsed_pow = elapsed_ns.next_power_of_two();
-            self.output
-                .shutdown_duration
-                .give((elapsed_pow, ts, Diff::ONE));
+            let datum = self.state.pack_shutdown_duration_update(elapsed_pow);
+            self.output.shutdown_duration.give((datum, ts, Diff::ONE));
         } else {
             // Dataflow has not yet been dropped.
             let was_new = self.state.shutdown_dataflows.insert(dataflow_index);
@@ -1001,10 +959,9 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
         if let Some(global_ids) = self.state.dataflow_global_ids.remove(&dataflow_index) {
             for global_id in global_ids {
                 // Remove dataflow/`GlobalID` mapping.
-                let datum = DataflowGlobalDatum {
-                    dataflow_index,
-                    global_id,
-                };
+                let datum = self
+                    .state
+                    .pack_dataflow_global_update(dataflow_index, global_id);
                 self.output
                     .dataflow_global_ids
                     .give((datum, ts, Diff::MINUS_ONE));
@@ -1021,15 +978,15 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
                         },
                     ) in mappings
                     {
-                        let datum = LirMappingDatum {
+                        let datum = self.state.pack_lir_mapping_update(
                             global_id,
                             lir_id,
                             operator,
                             parent_lir_id,
                             nesting,
                             operator_span,
-                        };
-                        self.output.lir_mapping.give(&(datum, ts, Diff::MINUS_ONE));
+                        );
+                        self.output.lir_mapping.give((datum, ts, Diff::MINUS_ONE));
                     }
                 }
             }
@@ -1048,23 +1005,16 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
 
         let old_count = export.error_count;
         let new_count = old_count + diff;
+        export.error_count = new_count;
 
         if old_count != Diff::ZERO {
-            let datum = ErrorCountDatum {
-                export_id,
-                count: old_count,
-            };
+            let datum = self.state.pack_error_count_update(export_id, old_count);
             self.output.error_count.give((datum, ts, Diff::MINUS_ONE));
         }
         if new_count != Diff::ZERO {
-            let datum = ErrorCountDatum {
-                export_id,
-                count: new_count,
-            };
+            let datum = self.state.pack_error_count_update(export_id, new_count);
             self.output.error_count.give((datum, ts, Diff::ONE));
         }
-
-        export.error_count = new_count;
     }
 
     fn handle_hydration(&mut self, HydrationReference { export_id }: Ref<'_, Hydration>) {
@@ -1083,21 +1033,16 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
 
         let duration = export.created_at.elapsed();
         let nanos = u64::try_from(duration.as_nanos()).expect("must fit");
+        export.hydration_time_ns = Some(nanos);
 
-        let retraction = HydrationTimeDatum {
-            export_id,
-            time_ns: None,
-        };
-        let insertion = HydrationTimeDatum {
-            export_id,
-            time_ns: Some(nanos),
-        };
+        let retraction = self.state.pack_hydration_time_update(export_id, None);
         self.output
             .hydration_time
             .give((retraction, ts, Diff::MINUS_ONE));
+        let insertion = self
+            .state
+            .pack_hydration_time_update(export_id, Some(nanos));
         self.output.hydration_time.give((insertion, ts, Diff::ONE));
-
-        export.hydration_time_ns = Some(nanos);
     }
 
     fn handle_operator_hydration(
@@ -1119,28 +1064,24 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
             return;
         };
 
-        let old_status = export.operator_hydration.get(&lir_id);
-        if let Some(&hydrated) = old_status {
-            let retraction = OperatorHydrationStatusDatum {
-                export_id,
-                lir_id,
-                hydrated,
-            };
+        let old_status = export.operator_hydration.get(&lir_id).copied();
+        export.operator_hydration.insert(lir_id, hydrated);
+
+        if let Some(hydrated) = old_status {
+            let retraction = self
+                .state
+                .pack_operator_hydration_status_update(export_id, lir_id, hydrated);
             self.output
                 .operator_hydration_status
                 .give((retraction, ts, Diff::MINUS_ONE));
         }
 
-        let insertion = OperatorHydrationStatusDatum {
-            export_id,
-            lir_id,
-            hydrated,
-        };
+        let insertion = self
+            .state
+            .pack_operator_hydration_status_update(export_id, lir_id, hydrated);
         self.output
             .operator_hydration_status
             .give((insertion, ts, Diff::ONE));
-
-        export.operator_hydration.insert(lir_id, hydrated);
     }
 
     fn handle_peek_install(
@@ -1373,14 +1314,14 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
         // send the datum out
         let ts = self.ts();
         for (lir_id, meta) in mapping.into_iter() {
-            let datum = LirMappingDatumReference {
+            let datum = self.state.pack_lir_mapping_update(
                 global_id,
-                lir_id,
-                operator: meta.operator,
-                parent_lir_id: meta.parent_lir_id,
-                nesting: meta.nesting,
-                operator_span: meta.operator_span,
-            };
+                Columnar::into_owned(lir_id),
+                Columnar::into_owned(meta.operator),
+                Columnar::into_owned(meta.parent_lir_id),
+                Columnar::into_owned(meta.nesting),
+                Columnar::into_owned(meta.operator_span),
+            );
             self.output.lir_mapping.give((datum, ts, Diff::ONE));
         }
     }
@@ -1405,10 +1346,9 @@ impl<A: Scheduler> DemuxHandler<'_, '_, A> {
             .or_insert_with(|| BTreeSet::from([global_id]));
 
         let ts = self.ts();
-        let datum = DataflowGlobalDatum {
-            dataflow_index,
-            global_id,
-        };
+        let datum = self
+            .state
+            .pack_dataflow_global_update(dataflow_index, global_id);
         self.output.dataflow_global_ids.give((datum, ts, Diff::ONE));
     }
 }

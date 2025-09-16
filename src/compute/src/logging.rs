@@ -192,16 +192,6 @@ impl PermutedRowPacker {
         self.pack_by_index(|packer, index| packer.push(datums[index]))
     }
 
-    /// Pack a slice of datums suitable for the key columns in the log variant, returning owned
-    /// rows.
-    ///
-    /// This is equivalent to calling [`PermutedRowPacker::pack_slice`] and then calling `to_owned`
-    /// on the returned rows.
-    pub(crate) fn pack_slice_owned(&mut self, datums: &[Datum]) -> (Row, Row) {
-        let (key, value) = self.pack_slice(datums);
-        (key.to_owned(), value.to_owned())
-    }
-
     /// Pack using a callback suitable for the key columns in the log variant.
     pub(crate) fn pack_by_index<F: Fn(&mut RowPacker, usize)>(
         &mut self,
