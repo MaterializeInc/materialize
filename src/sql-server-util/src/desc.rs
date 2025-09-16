@@ -147,6 +147,12 @@ pub struct SqlServerQualifiedTableName {
     pub table_name: Arc<str>,
 }
 
+impl ToString for SqlServerQualifiedTableName {
+    fn to_string(&self) -> String {
+        format!("{}.{}", self.schema_name, self.table_name)
+    }
+}
+
 /// Raw metadata for a table from Microsoft SQL Server.
 ///
 /// See [`SqlServerTableDesc`] for a refined description that is compatible

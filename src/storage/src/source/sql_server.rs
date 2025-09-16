@@ -86,6 +86,8 @@ pub enum DefiniteError {
     ProgrammingError(String),
     #[error("Restore history id changed from {0:?} to {1:?}")]
     RestoreHistoryChanged(Option<i32>, Option<i32>),
+    #[error("Incompatible schema change for table {0} capture instance {1}")]
+    IncompatibleSchemaChange(String, String),
 }
 
 impl From<DefiniteError> for DataflowError {

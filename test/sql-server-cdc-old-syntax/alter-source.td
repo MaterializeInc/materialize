@@ -259,16 +259,11 @@ tb                 subsource
 $ sql-server-execute name=sql-server
 ALTER TABLE table_a DROP COLUMN f2;
 
-# TODO: This should fail
-> SELECT * FROM table_a;
-1 one
-2 two
+! SELECT * FROM table_a;
+contains:Incompatible schema change
 
-#! SELECT * FROM table_a;
-#contains:incompatible schema change
-#
-#> SELECT error ~~ '%incompatible schema change%' FROM mz_internal.mz_source_statuses WHERE name = 'table_a';
-#true
+> SELECT error ~~ '%Incompatible schema change%' FROM mz_internal.mz_source_statuses WHERE name = 'table_a';
+true
 
 # Subsource errors not propagated to primary source
 > SELECT error IS NULL FROM mz_internal.mz_source_statuses WHERE name = 'mz_source';
@@ -281,7 +276,7 @@ true
 1
 2
 
-# If you add columns you can re-ingest them
+# If you add columns you can re-ingest them after recreating the capture instance
 $ sql-server-execute name=sql-server
 ALTER TABLE table_a ADD f2 VARCHAR(128);
 INSERT INTO table_a VALUES (3, 'three');
@@ -292,6 +287,11 @@ INSERT INTO table_a VALUES (3, 'three');
 3
 
 > DROP SOURCE table_a;
+
+$ sql-server-execute name=sql-server
+EXEC sys.sp_cdc_disable_table @source_schema = 'dbo', @source_name = 'table_a', @capture_instance = 'all';
+EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'table_a', @role_name = 'SA', @supports_net_changes = 0;
+
 > ALTER SOURCE mz_source ADD SUBSOURCE table_a;
 
 > SELECT * FROM table_a;
@@ -299,12 +299,18 @@ INSERT INTO table_a VALUES (3, 'three');
 2 <null>
 3 three
 
-# If you add a NOT NULL constraint, you can propagate it.
+# If you add a NOT NULL constraint, you can propagate it.  And we added a column, so recreate the
+# capture instance.
 $ sql-server-execute name=sql-server
 ALTER TABLE table_a ADD f3 int DEFAULT 1 NOT NULL;
 INSERT INTO table_a VALUES (4, 'four', 4);
 
 > DROP SOURCE table_a;
+
+$ sql-server-execute name=sql-server
+EXEC sys.sp_cdc_disable_table @source_schema = 'dbo', @source_name = 'table_a', @capture_instance = 'all';
+EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'table_a', @role_name = 'SA', @supports_net_changes = 0;
+
 > ALTER SOURCE mz_source ADD SUBSOURCE table_a;
 
 > SELECT * FROM table_a;

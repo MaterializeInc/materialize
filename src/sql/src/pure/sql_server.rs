@@ -19,7 +19,9 @@ use mz_sql_parser::ast::{
     ExternalReferences, Ident, SqlServerConfigOptionName, TableConstraint, UnresolvedItemName,
     Value, WithOptionValue,
 };
-use mz_sql_server_util::desc::{SqlServerQualifiedTableName, SqlServerTableDesc};
+use mz_sql_server_util::desc::{
+    SqlServerColumnDesc, SqlServerQualifiedTableName, SqlServerTableDesc,
+};
 use mz_storage_types::sources::{SourceExportStatementDetails, SourceReferenceResolver};
 use prost::Message;
 
@@ -135,16 +137,58 @@ pub(super) async fn purify_source_exports(
                 .unwrap_or(false)
         };
 
-        let maybe_bad_column = table
-            .columns
-            .iter()
-            .find(|col| !col.is_supported() && !is_excluded(col.name.as_ref()));
-        if let Some(bad_column) = maybe_bad_column {
-            Err(SqlServerSourcePurificationError::UnsupportedColumn {
-                schema_name: Arc::clone(&table.schema_name),
-                tbl_name: Arc::clone(&table.name),
-                col_name: Arc::clone(&bad_column.name),
-                col_type: Arc::clone(&bad_column.raw_type),
+        let capture_instance = export
+            .meta
+            .sql_server_capture_instance()
+            .expect("sql server capture instance");
+        let mut cdc_columns =
+            mz_sql_server_util::inspect::get_cdc_table_columns(client, capture_instance).await?;
+        let mut mismatched_columns = vec![];
+
+        for column in table.columns.iter() {
+            let col_excluded = is_excluded(column.name.as_ref());
+            if !column.is_supported() && !col_excluded {
+                Err(SqlServerSourcePurificationError::UnsupportedColumn {
+                    schema_name: Arc::clone(&table.schema_name),
+                    tbl_name: Arc::clone(&table.name),
+                    col_name: Arc::clone(&column.name),
+                    col_type: Arc::clone(&column.raw_type),
+                })?
+            }
+
+            // Columns in the upstream table must be in the CDC table, unless excluded.
+            let cdc_column = cdc_columns.remove(&column.name);
+            if col_excluded {
+                continue;
+            }
+            let Some(cdc_column) = cdc_column else {
+                mismatched_columns.push(Arc::clone(&column.name));
+                continue;
+            };
+
+            let cdc_column = SqlServerColumnDesc::new(&cdc_column);
+            match (cdc_column.column_type.as_ref(), column.column_type.as_ref()) {
+                (None, None) => (),
+                (Some(cdc_type), Some(tbl_type)) => {
+                    // Nullability needs to be excluded in this check as the CDC table column
+                    // must be nullable to support deleted columns from the upstream table.
+                    if cdc_type.scalar_type != tbl_type.scalar_type {
+                        mismatched_columns.push(Arc::clone(&column.name));
+                    }
+                }
+                (Some(_), None) | (None, Some(_)) => {
+                    mismatched_columns.push(Arc::clone(&column.name));
+                }
+            }
+        }
+
+        // We only need to error for columns that exist in the upstream table and not in the CDC
+        // table.  SQL Server decodes based on column name, so any columns missing from the table
+        // description are ignored when reading from CDC.
+        if !mismatched_columns.is_empty() {
+            Err(SqlServerSourcePurificationError::CdcMissingColumns {
+                capture_instance: Arc::clone(capture_instance),
+                col_names: mismatched_columns,
             })?
         }
     }
