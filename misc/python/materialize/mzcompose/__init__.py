@@ -76,6 +76,7 @@ def get_minimal_system_parameters(
         # -----
         # Others (ordered by name)
         "allow_real_time_recency": "true",
+        "clusterd_malloc_conf": "thp:always",
         "constraint_based_timestamp_selection": "verify",
         "enable_compute_peek_response_stash": "true",
         "enable_0dt_deployment_panic_after_timeout": "true",
@@ -571,6 +572,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "enable_ctp_cluster_protocols",
     "enable_paused_cluster_readhold_downgrade",
     "force_swap_for_cc_sizes",
+    "clusterd_malloc_conf",
 ]
 
 
