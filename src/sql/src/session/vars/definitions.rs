@@ -1434,7 +1434,7 @@ pub static ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE: VarDefinition = VarDefinition:
 
 pub static ENABLE_REDUCE_REDUCTION: VarDefinition = VarDefinition::new(
     "enable_reduce_reduction",
-    value!(bool; false),
+    value!(bool; true),
     "split complex reductions in to simpler ones and a join (Materialize).",
     true,
 );

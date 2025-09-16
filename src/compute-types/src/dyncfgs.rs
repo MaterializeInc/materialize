@@ -24,7 +24,7 @@ pub const ENABLE_MZ_JOIN_CORE: Config<bool> = Config::new(
 /// Whether rendering should use `mz_join_core_v2` rather than DD's `JoinCore::join_core`.
 pub const ENABLE_MZ_JOIN_CORE_V2: Config<bool> = Config::new(
     "enable_mz_join_core_v2",
-    false,
+    true,
     "Whether compute should use `mz_join_core_v2` rather than DD's `JoinCore::join_core` to render \
      linear joins.",
 );
