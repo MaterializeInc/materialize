@@ -30,7 +30,6 @@ use mz_persist_types::{Codec, Codec64, StepForward};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Diff, GlobalId, Row, TimestampManipulation};
 use mz_service::client::{GenericClient, Partitionable, PartitionedState};
-use mz_service::grpc::{GrpcClient, GrpcServer, ProtoServiceTypes, ResponseStream};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::oneshot_sources::OneshotIngestionRequest;
 use mz_storage_types::parameters::StorageParameters;
@@ -44,11 +43,8 @@ use smallvec::SmallVec;
 use timely::PartialOrder;
 use timely::progress::Timestamp;
 use timely::progress::frontier::{Antichain, MutableAntichain};
-use tonic::{Request, Status as TonicStatus, Streaming};
 use uuid::Uuid;
 
-use crate::client::proto_storage_server::ProtoStorage;
-use crate::metrics::ReplicaMetrics;
 use crate::statistics::{SinkStatisticsUpdate, SourceStatisticsUpdate};
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage_client.client.rs"));
@@ -75,34 +71,6 @@ impl<T: Send> GenericClient<StorageCommand<T>, StorageResponse<T>> for Box<dyn S
     async fn recv(&mut self) -> Result<Option<StorageResponse<T>>, anyhow::Error> {
         // `GenericClient::recv` is required to be cancel safe.
         (**self).recv().await
-    }
-}
-
-#[derive(Debug, Clone)]
-pub enum StorageProtoServiceTypes {}
-
-impl ProtoServiceTypes for StorageProtoServiceTypes {
-    type PC = ProtoStorageCommand;
-    type PR = ProtoStorageResponse;
-    type STATS = ReplicaMetrics;
-    const URL: &'static str = "/mz_storage_client.client.ProtoStorage/CommandResponseStream";
-}
-
-pub type StorageGrpcClient = GrpcClient<StorageProtoServiceTypes>;
-
-#[async_trait]
-impl<F, G> ProtoStorage for GrpcServer<F>
-where
-    F: Fn() -> G + Send + Sync + 'static,
-    G: StorageClient + 'static,
-{
-    type CommandResponseStreamStream = ResponseStream<ProtoStorageResponse>;
-
-    async fn command_response_stream(
-        &self,
-        request: Request<Streaming<ProtoStorageCommand>>,
-    ) -> Result<tonic::Response<Self::CommandResponseStreamStream>, TonicStatus> {
-        self.forward_bidi_stream(request).await
     }
 }
 

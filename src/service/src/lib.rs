@@ -15,7 +15,6 @@
 
 pub mod boot;
 pub mod client;
-pub mod codec;
 pub mod grpc;
 pub mod local;
 pub mod params;

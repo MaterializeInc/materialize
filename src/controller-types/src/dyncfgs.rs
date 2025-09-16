@@ -62,12 +62,6 @@ pub const ARRANGEMENT_EXERT_PROPORTIONALITY: Config<u32> = Config::new(
     "Value that controls how much merge effort to exert on arrangements.",
 );
 
-pub const ENABLE_CTP_CLUSTER_PROTOCOLS: Config<bool> = Config::new(
-    "enable_ctp_cluster_protocols",
-    true,
-    "Enable CTP (instead of gRPC) for the compute and storage cluster protocols.",
-);
-
 pub const ENABLE_PAUSED_CLUSTER_READHOLD_DOWNGRADE: Config<bool> = Config::new(
     "enable_paused_cluster_readhold_downgrade",
     true,
@@ -85,6 +79,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_TIMELY_ZERO_COPY_LGALLOC)
         .add(&TIMELY_ZERO_COPY_LIMIT)
         .add(&ARRANGEMENT_EXERT_PROPORTIONALITY)
-        .add(&ENABLE_CTP_CLUSTER_PROTOCOLS)
         .add(&ENABLE_PAUSED_CLUSTER_READHOLD_DOWNGRADE)
 }

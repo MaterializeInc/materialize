@@ -23,12 +23,10 @@ use futures::stream::{BoxStream, StreamExt};
 use mz_cluster_client::client::{ClusterReplicaLocation, TimelyConfig};
 use mz_compute_client::controller::ComputeControllerTimestamp;
 use mz_compute_client::logging::LogVariant;
-use mz_compute_client::service::{ComputeClient, ComputeGrpcClient};
 use mz_compute_types::config::{ComputeReplicaConfig, ComputeReplicaLogging};
 use mz_controller_types::dyncfgs::{
     ARRANGEMENT_EXERT_PROPORTIONALITY, CONTROLLER_PAST_GENERATION_REPLICA_CLEANUP_RETRY_INTERVAL,
-    ENABLE_CTP_CLUSTER_PROTOCOLS, ENABLE_TIMELY_ZERO_COPY, ENABLE_TIMELY_ZERO_COPY_LGALLOC,
-    TIMELY_ZERO_COPY_LIMIT,
+    ENABLE_TIMELY_ZERO_COPY, ENABLE_TIMELY_ZERO_COPY_LGALLOC, TIMELY_ZERO_COPY_LIMIT,
 };
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_orchestrator::NamespacedOrchestrator;
@@ -343,7 +341,6 @@ pub struct ClusterEvent {
 impl<T> Controller<T>
 where
     T: ComputeControllerTimestamp,
-    ComputeGrpcClient: ComputeClient<T>,
 {
     /// Creates a cluster with the specified identifier and configuration.
     ///
@@ -401,11 +398,6 @@ where
         let compute_location: ClusterReplicaLocation;
         let metrics_task: Option<AbortOnDropHandle<()>>;
 
-        // For controller-replica communication, we select between CTP or gRPC based on a dyncfg.
-        // We need to be careful to pass the same value to both the orchestrator and the
-        // sub-controllers, to ensure they agree on which protocol to use.
-        let enable_ctp = ENABLE_CTP_CLUSTER_PROTOCOLS.get(&self.dyncfg);
-
         match config.location {
             ReplicaLocation::Unmanaged(UnmanagedReplicaLocation {
                 storagectl_addrs,
@@ -428,7 +420,6 @@ where
                     role,
                     m,
                     enable_worker_core_affinity,
-                    enable_ctp,
                 )?;
                 storage_location = ClusterReplicaLocation {
                     ctl_addrs: service.addresses("storagectl"),
@@ -441,13 +432,12 @@ where
         }
 
         self.storage
-            .connect_replica(cluster_id, replica_id, storage_location, enable_ctp);
+            .connect_replica(cluster_id, replica_id, storage_location);
         self.compute.add_replica_to_instance(
             cluster_id,
             replica_id,
             compute_location,
             config.compute,
-            enable_ctp,
         )?;
 
         if let Some(task) = metrics_task {
@@ -614,7 +604,6 @@ where
         role: ClusterRole,
         location: ManagedReplicaLocation,
         enable_worker_core_affinity: bool,
-        enable_ctp: bool,
     ) -> Result<(Box<dyn Service>, AbortOnDropHandle<()>), anyhow::Error> {
         let service_name = ReplicaServiceName {
             cluster_id,
@@ -731,10 +720,6 @@ where
                     }
                     if location.allocation.is_cc {
                         args.push("--is-cc".into());
-                    }
-
-                    if enable_ctp {
-                        args.push("--use-ctp".into());
                     }
 
                     args.extend(secrets_args.clone());

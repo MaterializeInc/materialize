@@ -69,7 +69,6 @@ use crate::protocol::response::{
     ComputeResponse, CopyToResponse, FrontiersResponse, PeekResponse, StatusResponse,
     SubscribeBatch, SubscribeResponse,
 };
-use crate::service::{ComputeClient, ComputeGrpcClient};
 
 #[derive(Error, Debug)]
 #[error("replica exists already: {0}")]
@@ -154,7 +153,6 @@ impl<T: ComputeControllerTimestamp> Client<T> {
 impl<T> Client<T>
 where
     T: ComputeControllerTimestamp,
-    ComputeGrpcClient: ComputeClient<T>,
 {
     pub fn spawn(
         id: ComputeInstanceId,
@@ -973,7 +971,6 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
 impl<T> Instance<T>
 where
     T: ComputeControllerTimestamp,
-    ComputeGrpcClient: ComputeClient<T>,
 {
     fn new(
         build_info: &'static BuildInfo,

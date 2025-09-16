@@ -1513,7 +1513,6 @@ class FlipFlagsAction(Action):
             "compute_peek_response_stash_read_memory_budget_bytes",
             "persist_enable_incremental_compaction",
             "storage_statistics_retention_duration",
-            "enable_ctp_cluster_protocols",
             "enable_paused_cluster_readhold_downgrade",
             "enable_mz_join_core_v2",
             "force_swap_for_cc_sizes",

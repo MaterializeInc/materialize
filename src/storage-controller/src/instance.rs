@@ -16,7 +16,6 @@ use std::sync::{Arc, atomic};
 use std::time::{Duration, Instant};
 
 use anyhow::bail;
-use async_trait::async_trait;
 use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
 use mz_build_info::BuildInfo;
@@ -31,8 +30,7 @@ use mz_service::client::{GenericClient, Partitioned};
 use mz_service::params::GrpcClientParameters;
 use mz_service::transport;
 use mz_storage_client::client::{
-    RunIngestionCommand, RunSinkCommand, Status, StatusUpdate, StorageClient, StorageCommand,
-    StorageGrpcClient, StorageResponse,
+    RunIngestionCommand, RunSinkCommand, Status, StatusUpdate, StorageCommand, StorageResponse,
 };
 use mz_storage_client::metrics::{InstanceMetrics, ReplicaMetrics};
 use mz_storage_types::sinks::StorageSinkDesc;
@@ -51,7 +49,7 @@ use crate::history::CommandHistory;
 /// Encapsulates communication with replicas in this instance, and their rehydration.
 ///
 /// Note that storage objects (sources and sinks) don't currently support replication (database-issues#5051).
-/// An instance can have muliple replicas connected, but only if it has no storage objects
+/// An instance can have multiple replicas connected, but only if it has no storage objects
 /// installed. Attempting to install storage objects on multi-replica instances, or attempting to
 /// add more than one replica to instances that have storage objects installed, is illegal and will
 /// lead to panics.
@@ -107,7 +105,6 @@ struct ActiveExport {
 impl<T> Instance<T>
 where
     T: Timestamp + Lattice + TotalOrder + Sync,
-    StorageGrpcClient: StorageClient<T>,
 {
     /// Creates a new [`Instance`].
     pub fn new(
@@ -743,7 +740,6 @@ pub(super) struct ReplicaConfig {
     pub build_info: &'static BuildInfo,
     pub location: ClusterReplicaLocation,
     pub grpc_client: GrpcClientParameters,
-    pub enable_ctp: bool,
 }
 
 /// State maintained about individual replicas.
@@ -765,7 +761,6 @@ pub struct Replica<T> {
 impl<T> Replica<T>
 where
     T: Timestamp + Lattice + Sync,
-    StorageGrpcClient: StorageClient<T>,
 {
     /// Creates a new [`Replica`].
     fn new(
@@ -817,40 +812,7 @@ where
 }
 
 type StorageCtpClient<T> = transport::Client<StorageCommand<T>, StorageResponse<T>>;
-
-#[derive(Debug)]
-enum ReplicaClient<T: Timestamp + Lattice> {
-    Grpc(Partitioned<StorageGrpcClient, StorageCommand<T>, StorageResponse<T>>),
-    Ctp(Partitioned<StorageCtpClient<T>, StorageCommand<T>, StorageResponse<T>>),
-}
-
-#[async_trait]
-impl<T> GenericClient<StorageCommand<T>, StorageResponse<T>> for ReplicaClient<T>
-where
-    T: Timestamp + Lattice + Sync,
-    StorageGrpcClient: StorageClient<T>,
-{
-    async fn send(&mut self, cmd: StorageCommand<T>) -> anyhow::Result<()> {
-        match self {
-            Self::Grpc(client) => client.send(cmd).await,
-            Self::Ctp(client) => client.send(cmd).await,
-        }
-    }
-
-    /// # Cancel safety
-    ///
-    /// This method is cancel safe. If `recv` is used as the event in a [`tokio::select!`]
-    /// statement and some other branch completes first, it is guaranteed that no messages were
-    /// received by this client.
-    async fn recv(&mut self) -> anyhow::Result<Option<StorageResponse<T>>> {
-        match self {
-            // `Partitioned::recv` is documented as cancel safe.
-            Self::Grpc(client) => client.recv().await,
-            // `Partitioned::recv` is documented as cancel safe.
-            Self::Ctp(client) => client.recv().await,
-        }
-    }
-}
+type ReplicaClient<T> = Partitioned<StorageCtpClient<T>, StorageCommand<T>, StorageResponse<T>>;
 
 /// A task handling communication with a replica.
 struct ReplicaTask<T> {
@@ -871,7 +833,6 @@ struct ReplicaTask<T> {
 impl<T> ReplicaTask<T>
 where
     T: Timestamp + Lattice + Sync,
-    StorageGrpcClient: StorageClient<T>,
 {
     /// Runs the replica task.
     async fn run(self) {
@@ -895,31 +856,19 @@ where
             let client_params = &self.config.grpc_client;
 
             let connect_start = Instant::now();
-            let connect_result = if self.config.enable_ctp {
-                let connect_timeout = client_params.connect_timeout.unwrap_or(Duration::MAX);
-                let keepalive_timeout = client_params
-                    .http2_keep_alive_timeout
-                    .unwrap_or(Duration::MAX);
+            let connect_timeout = client_params.connect_timeout.unwrap_or(Duration::MAX);
+            let keepalive_timeout = client_params
+                .http2_keep_alive_timeout
+                .unwrap_or(Duration::MAX);
 
-                StorageCtpClient::<T>::connect_partitioned(
-                    self.config.location.ctl_addrs.clone(),
-                    version,
-                    connect_timeout,
-                    keepalive_timeout,
-                    self.metrics.clone(),
-                )
-                .await
-                .map(ReplicaClient::Ctp)
-            } else {
-                let addrs = &self.config.location.ctl_addrs;
-                let dests = addrs
-                    .iter()
-                    .map(|addr| (addr.clone(), self.metrics.clone()))
-                    .collect();
-                StorageGrpcClient::connect_partitioned(dests, version, client_params)
-                    .await
-                    .map(ReplicaClient::Grpc)
-            };
+            let connect_result = StorageCtpClient::<T>::connect_partitioned(
+                self.config.location.ctl_addrs.clone(),
+                version,
+                connect_timeout,
+                keepalive_timeout,
+                self.metrics.clone(),
+            )
+            .await;
 
             self.metrics.observe_connect_time(connect_start.elapsed());
 

@@ -25,12 +25,11 @@ use mz_ore::metrics::{
 };
 use mz_ore::stats::histogram_seconds_buckets;
 use mz_repr::GlobalId;
-use mz_service::codec::StatsCollector;
 use mz_service::transport;
 use prometheus::core::{AtomicF64, AtomicU64};
 
-use crate::protocol::command::{ComputeCommand, ProtoComputeCommand};
-use crate::protocol::response::{ComputeResponse, PeekResponse, ProtoComputeResponse};
+use crate::protocol::command::ComputeCommand;
+use crate::protocol::response::{ComputeResponse, PeekResponse};
 
 pub(crate) type Counter = DeleteOnDropCounter<AtomicF64, Vec<String>>;
 pub(crate) type IntCounter = DeleteOnDropCounter<AtomicU64, Vec<String>>;
@@ -447,23 +446,6 @@ impl ReplicaMetrics {
     }
 }
 
-/// Make [`ReplicaMetrics`] pluggable into the gRPC connection.
-impl StatsCollector<ProtoComputeCommand, ProtoComputeResponse> for ReplicaMetrics {
-    fn send_event(&self, item: &ProtoComputeCommand, size: usize) {
-        self.inner.commands_total.for_proto_command(item).inc();
-        self.inner
-            .command_message_bytes_total
-            .inc_by(u64::cast_from(size));
-    }
-
-    fn receive_event(&self, item: &ProtoComputeResponse, size: usize) {
-        self.inner.responses_total.for_proto_response(item).inc();
-        self.inner
-            .response_message_bytes_total
-            .inc_by(u64::cast_from(size));
-    }
-}
-
 impl<T> transport::Metrics<ComputeCommand<T>, ComputeResponse<T>> for ReplicaMetrics {
     fn bytes_sent(&mut self, len: usize) {
         self.inner
@@ -571,23 +553,6 @@ impl<M> CommandMetrics<M> {
             AllowWrites { .. } => &self.allow_writes,
         }
     }
-
-    fn for_proto_command(&self, proto: &ProtoComputeCommand) -> &M {
-        use crate::protocol::command::proto_compute_command::Kind::*;
-
-        match proto.kind.as_ref().unwrap() {
-            Hello(_) => &self.hello,
-            CreateInstance(_) => &self.create_instance,
-            CreateDataflow(_) => &self.create_dataflow,
-            Schedule(_) => &self.schedule,
-            AllowCompaction(_) => &self.allow_compaction,
-            Peek(_) => &self.peek,
-            CancelPeek(_) => &self.cancel_peek,
-            InitializationComplete(_) => &self.initialization_complete,
-            UpdateConfiguration(_) => &self.update_configuration,
-            AllowWrites(_) => &self.allow_writes,
-        }
-    }
 }
 
 /// Metrics keyed by `ComputeResponse` type.
@@ -623,18 +588,6 @@ impl<M> ResponseMetrics<M> {
             SubscribeResponse(..) => &self.subscribe_response,
             CopyToResponse(..) => &self.copy_to_response,
             Status(..) => &self.status,
-        }
-    }
-
-    fn for_proto_response(&self, proto: &ProtoComputeResponse) -> &M {
-        use crate::protocol::response::proto_compute_response::Kind::*;
-
-        match proto.kind.as_ref().unwrap() {
-            Frontiers(_) => &self.frontiers,
-            PeekResponse(_) => &self.peek_response,
-            SubscribeResponse(_) => &self.subscribe_response,
-            CopyToResponse(_) => &self.copy_to_response,
-            Status(_) => &self.status,
         }
     }
 }
