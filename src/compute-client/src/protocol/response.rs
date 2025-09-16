@@ -11,7 +11,6 @@
 
 use std::num::NonZeroUsize;
 
-use mz_compute_types::plan::LirId;
 use mz_expr::row::RowCollection;
 use mz_ore::cast::CastFrom;
 use mz_ore::tracing::OpenTelemetryContext;
@@ -688,8 +687,9 @@ impl Arbitrary for SubscribeBatch<mz_repr::Timestamp> {
 /// Status updates replicas can report to the controller.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
 pub enum StatusResponse {
-    /// Reports the hydration status of dataflow operators.
-    OperatorHydration(OperatorHydrationStatus),
+    /// No status responses are implemeneted currently, but we're leaving the infrastructure around
+    /// in anticipation of materialize#31246.
+    Placeholder,
 }
 
 impl RustType<ProtoStatusResponse> for StatusResponse {
@@ -697,7 +697,7 @@ impl RustType<ProtoStatusResponse> for StatusResponse {
         use proto_status_response::Kind;
 
         let kind = match self {
-            Self::OperatorHydration(status) => Kind::OperatorHydration(status.into_proto()),
+            Self::Placeholder => Kind::Placeholder(()),
         };
         ProtoStatusResponse { kind: Some(kind) }
     }
@@ -706,48 +706,11 @@ impl RustType<ProtoStatusResponse> for StatusResponse {
         use proto_status_response::Kind;
 
         match proto.kind {
-            Some(Kind::OperatorHydration(status)) => {
-                Ok(Self::OperatorHydration(status.into_rust()?))
-            }
+            Some(Kind::Placeholder(())) => Ok(Self::Placeholder),
             None => Err(TryFromProtoError::missing_field(
                 "ProtoStatusResponse::kind",
             )),
         }
-    }
-}
-
-/// An update about the hydration status of a set of dataflow operators.
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
-pub struct OperatorHydrationStatus {
-    /// The ID of the compute collection exported by the dataflow.
-    pub collection_id: GlobalId,
-    /// The ID of the LIR node for which the hydration status changed.
-    pub lir_id: LirId,
-    /// The ID of the worker for which the hydration status changed.
-    pub worker_id: usize,
-    /// Whether the node is hydrated on the worker.
-    pub hydrated: bool,
-}
-
-impl RustType<ProtoOperatorHydrationStatus> for OperatorHydrationStatus {
-    fn into_proto(&self) -> ProtoOperatorHydrationStatus {
-        ProtoOperatorHydrationStatus {
-            collection_id: Some(self.collection_id.into_proto()),
-            lir_id: self.lir_id.into_proto(),
-            worker_id: self.worker_id.into_proto(),
-            hydrated: self.hydrated.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoOperatorHydrationStatus) -> Result<Self, TryFromProtoError> {
-        Ok(Self {
-            collection_id: proto
-                .collection_id
-                .into_rust_if_some("ProtoOperatorHydrationStatus::collection_id")?,
-            lir_id: proto.lir_id.into_rust()?,
-            worker_id: proto.worker_id.into_rust()?,
-            hydrated: proto.hydrated.into_rust()?,
-        })
     }
 }
 

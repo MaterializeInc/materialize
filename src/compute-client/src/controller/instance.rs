@@ -19,7 +19,6 @@ use mz_build_info::BuildInfo;
 use mz_cluster_client::WallclockLagFn;
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::{BuildDesc, DataflowDescription};
-use mz_compute_types::plan::LirId;
 use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_compute_types::sinks::{
     ComputeSinkConnection, ComputeSinkDesc, ContinualTaskConnection, MaterializedViewSinkConnection,
@@ -67,8 +66,8 @@ use crate::protocol::command::{
 };
 use crate::protocol::history::ComputeCommandHistory;
 use crate::protocol::response::{
-    ComputeResponse, CopyToResponse, FrontiersResponse, OperatorHydrationStatus, PeekResponse,
-    StatusResponse, SubscribeBatch, SubscribeResponse,
+    ComputeResponse, CopyToResponse, FrontiersResponse, PeekResponse, StatusResponse,
+    SubscribeBatch, SubscribeResponse,
 };
 use crate::service::{ComputeClient, ComputeGrpcClient};
 
@@ -754,34 +753,6 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             .collect();
 
         self.deliver_introspection_updates(IntrospectionType::ComputeDependencies, updates);
-    }
-
-    /// Update the tracked hydration status for an operator according to a received status update.
-    fn update_operator_hydration_status(
-        &mut self,
-        replica_id: ReplicaId,
-        status: OperatorHydrationStatus,
-    ) {
-        let Some(replica) = self.replicas.get_mut(&replica_id) else {
-            tracing::error!(
-                %replica_id, ?status,
-                "status update for an unknown replica"
-            );
-            return;
-        };
-        let Some(collection) = replica.collections.get_mut(&status.collection_id) else {
-            tracing::error!(
-                %replica_id, ?status,
-                "status update for an unknown collection"
-            );
-            return;
-        };
-
-        collection.introspection.operator_hydrated(
-            status.lir_id,
-            status.worker_id,
-            status.hydrated,
-        );
     }
 
     /// Returns `true` if the given collection is hydrated on at least one
@@ -2199,11 +2170,9 @@ where
         }
     }
 
-    fn handle_status_response(&mut self, response: StatusResponse, replica_id: ReplicaId) {
+    fn handle_status_response(&self, response: StatusResponse, _replica_id: ReplicaId) {
         match response {
-            StatusResponse::OperatorHydration(status) => {
-                self.update_operator_hydration_status(replica_id, status)
-            }
+            StatusResponse::Placeholder => {}
         }
     }
 
@@ -3200,9 +3169,6 @@ struct ReplicaCollectionIntrospection<T: ComputeControllerTimestamp> {
     replica_id: ReplicaId,
     /// The ID of the compute collection.
     collection_id: GlobalId,
-    /// Operator-level hydration state.
-    /// (lir_id, worker_id) -> hydrated
-    operators: BTreeMap<(LirId, usize), bool>,
     /// The collection's reported replica write frontier.
     write_frontier: Antichain<T>,
     /// A channel through which introspection updates are delivered.
@@ -3220,7 +3186,6 @@ impl<T: ComputeControllerTimestamp> ReplicaCollectionIntrospection<T> {
         let self_ = Self {
             replica_id,
             collection_id,
-            operators: Default::default(),
             write_frontier: as_of,
             introspection_tx,
         };
@@ -3234,39 +3199,6 @@ impl<T: ComputeControllerTimestamp> ReplicaCollectionIntrospection<T> {
         let row = self.write_frontier_row();
         let updates = vec![(row, Diff::ONE)];
         self.send(IntrospectionType::ReplicaFrontiers, updates);
-    }
-
-    /// Update the given (lir_id, worker_id) pair as hydrated.
-    fn operator_hydrated(&mut self, lir_id: LirId, worker_id: usize, hydrated: bool) {
-        let retraction = self.operator_hydration_row(lir_id, worker_id);
-        self.operators.insert((lir_id, worker_id), hydrated);
-        let insertion = self.operator_hydration_row(lir_id, worker_id);
-
-        if retraction == insertion {
-            return; // no change
-        }
-
-        let updates = retraction
-            .map(|r| (r, Diff::MINUS_ONE))
-            .into_iter()
-            .chain(insertion.map(|r| (r, Diff::ONE)))
-            .collect();
-        self.send(IntrospectionType::ComputeOperatorHydrationStatus, updates);
-    }
-
-    /// Return a `Row` reflecting the current hydration status of the identified operator.
-    ///
-    /// Returns `None` if the identified operator is not tracked.
-    fn operator_hydration_row(&self, lir_id: LirId, worker_id: usize) -> Option<Row> {
-        self.operators.get(&(lir_id, worker_id)).map(|hydrated| {
-            Row::pack_slice(&[
-                Datum::String(&self.collection_id.to_string()),
-                Datum::UInt64(lir_id.into()),
-                Datum::String(&self.replica_id.to_string()),
-                Datum::UInt64(u64::cast_from(worker_id)),
-                Datum::from(*hydrated),
-            ])
-        })
     }
 
     /// Observe the given current write frontier and update the introspection state as necessary.
@@ -3305,17 +3237,6 @@ impl<T: ComputeControllerTimestamp> ReplicaCollectionIntrospection<T> {
 
 impl<T: ComputeControllerTimestamp> Drop for ReplicaCollectionIntrospection<T> {
     fn drop(&mut self) {
-        // Retract operator hydration status.
-        let operators: Vec<_> = self.operators.keys().collect();
-        let updates: Vec<_> = operators
-            .into_iter()
-            .flat_map(|(lir_id, worker_id)| self.operator_hydration_row(*lir_id, *worker_id))
-            .map(|r| (r, Diff::MINUS_ONE))
-            .collect();
-        if !updates.is_empty() {
-            self.send(IntrospectionType::ComputeOperatorHydrationStatus, updates);
-        }
-
         // Retract the write frontier.
         let row = self.write_frontier_row();
         let updates = vec![(row, Diff::MINUS_ONE)];

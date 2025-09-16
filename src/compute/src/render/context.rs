@@ -13,7 +13,6 @@
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
-use std::sync::mpsc;
 
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::operators::arrange::Arranged;
@@ -22,7 +21,7 @@ use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
 use differential_dataflow::{AsCollection, Collection, Data};
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::dyncfgs::ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION;
-use mz_compute_types::plan::{AvailableCollections, LirId};
+use mz_compute_types::plan::AvailableCollections;
 use mz_dyncfg::ConfigSet;
 use mz_expr::{Id, MapFilterProject, MirScalarExpr};
 use mz_ore::soft_assert_or_log;
@@ -43,9 +42,8 @@ use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
-use tracing::error;
 
-use crate::compute_state::{ComputeState, HydrationEvent};
+use crate::compute_state::ComputeState;
 use crate::extensions::arrange::{KeyCollection, MzArrange, MzArrangeCore};
 use crate::render::errors::ErrorLogger;
 use crate::render::{LinearJoinSpec, RenderTimestamp};
@@ -78,6 +76,8 @@ where
     pub debug_name: String,
     /// The Timely ID of the dataflow associated with this context.
     pub dataflow_id: usize,
+    /// The collection IDs of exports of the dataflow associated with this context.
+    pub export_ids: Vec<GlobalId>,
     /// Frontier before which updates should not be emitted.
     ///
     /// We *must* apply it to sinks, to ensure correct outputs.
@@ -90,10 +90,6 @@ where
     pub bindings: BTreeMap<Id, CollectionBundle<S, T>>,
     /// A handle that operators can probe to know whether the dataflow is shutting down.
     pub(super) shutdown_probe: ShutdownProbe,
-    /// A logger that operators can use to report hydration events.
-    ///
-    /// `None` if no hydration events should be logged in this context.
-    pub(super) hydration_logger: Option<HydrationLogger>,
     /// The logger, from Timely's logging framework, if logs are enabled.
     pub(super) compute_logger: Option<crate::logging::compute::Logger>,
     /// Specification for rendering linear joins.
@@ -124,32 +120,26 @@ where
             .clone()
             .unwrap_or_else(|| Antichain::from_elem(Timestamp::minimum()));
 
-        // Skip operator hydration logging for transient dataflows. We do this to avoid overhead
-        // for slow-path peeks, but it also affects subscribes. For now that seems fine, but we may
+        let export_ids = dataflow.export_ids().collect();
+
+        // Skip compute event logging for transient dataflows. We do this to avoid overhead for
+        // slow-path peeks, but it also affects subscribes. For now that seems fine, but we may
         // want to reconsider in the future.
-        //
-        // Similarly, we won't capture a compute_logger for logging LIR->address mappings for transient dataflows.
-        let (hydration_logger, compute_logger) = if dataflow.is_transient() {
-            (None, None)
+        let compute_logger = if dataflow.is_transient() {
+            None
         } else {
-            (
-                Some(HydrationLogger {
-                    export_ids: dataflow.export_ids().collect(),
-                    tx: compute_state.hydration_tx.clone(),
-                }),
-                compute_state.compute_logger.clone(),
-            )
+            compute_state.compute_logger.clone()
         };
 
         Self {
             scope,
             debug_name: dataflow.debug_name.clone(),
             dataflow_id,
+            export_ids,
             as_of_frontier,
             until,
             bindings: BTreeMap::new(),
             shutdown_probe: Default::default(),
-            hydration_logger,
             compute_logger,
             linear_join_spec: compute_state.linear_join_spec,
             dataflow_expiration,
@@ -229,10 +219,10 @@ where
             scope: region.clone(),
             debug_name: self.debug_name.clone(),
             dataflow_id: self.dataflow_id.clone(),
+            export_ids: self.export_ids.clone(),
             as_of_frontier: self.as_of_frontier.clone(),
             until: self.until.clone(),
             shutdown_probe: self.shutdown_probe.clone(),
-            hydration_logger: self.hydration_logger.clone(),
             compute_logger: self.compute_logger.clone(),
             linear_join_spec: self.linear_join_spec.clone(),
             bindings,
@@ -282,33 +272,6 @@ impl ShutdownProbe {
         match &self.0 {
             Some(t) => t.borrow_mut().local_pressed(),
             None => false,
-        }
-    }
-}
-
-/// A logger for operator hydration events emitted for a dataflow export.
-#[derive(Clone)]
-pub(super) struct HydrationLogger {
-    export_ids: Vec<GlobalId>,
-    tx: mpsc::Sender<HydrationEvent>,
-}
-
-impl HydrationLogger {
-    /// Log a hydration event for the identified LIR node.
-    ///
-    /// The expectation is that rendering code arranges for `hydrated = false` to be logged for
-    /// each LIR node when a dataflow is first created. Then `hydrated = true` should be logged as
-    /// operators become hydrated.
-    pub fn log(&self, lir_id: LirId, hydrated: bool) {
-        for &export_id in &self.export_ids {
-            let event = HydrationEvent {
-                export_id,
-                lir_id,
-                hydrated,
-            };
-            if self.tx.send(event).is_err() {
-                error!("hydration event receiver dropped unexpectely");
-            }
         }
     }
 }

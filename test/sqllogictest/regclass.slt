@@ -35,12 +35,12 @@ CREATE MATERIALIZED VIEW s.m AS SELECT * FROM s.t;
 query T
 SELECT 't'::regclass::oid::int
 ----
-20190
+20196
 
 query T
 SELECT 's.t'::regclass::oid::int
 ----
-20191
+20197
 
 query T
 SELECT 't'::regclass = 's.t'::regclass
@@ -73,7 +73,7 @@ t
 query T
 SELECT 't'::regclass::oid::int
 ----
-20191
+20197
 
 query T
 SELECT 'public.t'::regclass::text;
@@ -101,12 +101,12 @@ d.public.t
 query T
 SELECT 'm'::regclass::oid::int
 ----
-20195
+20201
 
 query T
 SELECT 's.m'::regclass::oid::int
 ----
-20196
+20202
 
 query T
 SELECT 'm'::regclass = 's.m'::regclass
@@ -296,7 +296,7 @@ true
 query T
 SELECT 'materialize.public.t'::regclass::oid::int
 ----
-20190
+20196
 
 query error db error: ERROR: relation "t" does not exist
 SELECT 't'::regclass::oid::int

@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroUsize;
 
 use std::rc::Rc;
-use std::sync::{Arc, mpsc};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use bytesize::ByteSize;
@@ -25,8 +25,7 @@ use mz_compute_client::protocol::command::{
 };
 use mz_compute_client::protocol::history::ComputeCommandHistory;
 use mz_compute_client::protocol::response::{
-    ComputeResponse, CopyToResponse, FrontiersResponse, OperatorHydrationStatus, PeekResponse,
-    StatusResponse, SubscribeResponse,
+    ComputeResponse, CopyToResponse, FrontiersResponse, PeekResponse, SubscribeResponse,
 };
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::dyncfgs::{
@@ -34,7 +33,6 @@ use mz_compute_types::dyncfgs::{
     PEEK_RESPONSE_STASH_BATCH_MAX_RUNS, PEEK_RESPONSE_STASH_THRESHOLD_BYTES, PEEK_STASH_BATCH_SIZE,
     PEEK_STASH_NUM_BATCHES,
 };
-use mz_compute_types::plan::LirId;
 use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_dyncfg::ConfigSet;
 use mz_expr::SafeMfpPlan;
@@ -148,13 +146,6 @@ pub struct ComputeState {
     /// Reference-counted to avoid cloning for `Context`.
     pub worker_config: Rc<ConfigSet>,
 
-    /// Receiver of operator hydration events.
-    pub hydration_rx: mpsc::Receiver<HydrationEvent>,
-    /// Transmitter of operator hydration events.
-    ///
-    /// Copies of this sender are passed to the hydration logging operators.
-    pub hydration_tx: mpsc::Sender<HydrationEvent>,
-
     /// Collections awaiting schedule instruction by the controller.
     ///
     /// Each entry stores a reference to a token that can be dropped to unsuspend the collection's
@@ -203,7 +194,6 @@ impl ComputeState {
     ) -> Self {
         let traces = TraceManager::new(metrics.clone());
         let command_history = ComputeCommandHistory::new(metrics.for_history());
-        let (hydration_tx, hydration_rx) = mpsc::channel();
 
         // We always initialize as read_only=true. Only when we're explicitly
         // allowed do we switch to doing writes.
@@ -227,8 +217,6 @@ impl ComputeState {
             tracing_handle,
             context,
             worker_config: mz_dyncfgs::all_dyncfgs().into(),
-            hydration_rx,
-            hydration_tx,
             suspended_collections: Default::default(),
             read_only_tx,
             read_only_rx,
@@ -859,28 +847,6 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             if frontiers.has_updates() {
                 self.send_compute_response(ComputeResponse::Frontiers(id, frontiers));
             }
-        }
-    }
-
-    /// Report operator hydration events.
-    pub fn report_operator_hydration(&self) {
-        let worker_id = self.timely_worker.index();
-        for event in self.compute_state.hydration_rx.try_iter() {
-            // The compute protocol forbids reporting `Status` about collections that have advanced
-            // to the empty frontier, so we ignore updates for those.
-            let collection = self.compute_state.collections.get(&event.export_id);
-            if collection.map_or(true, |c| c.reported_frontiers().all_empty()) {
-                continue;
-            }
-
-            let status = OperatorHydrationStatus {
-                collection_id: event.export_id,
-                lir_id: event.lir_id,
-                worker_id,
-                hydrated: event.hydrated,
-            };
-            let response = ComputeResponse::Status(StatusResponse::OperatorHydration(status));
-            self.send_compute_response(response);
         }
     }
 
@@ -1661,13 +1627,6 @@ impl ReportedFrontiers {
             output_frontier: ReportedFrontier::new(),
         }
     }
-
-    /// Returns whether all reported frontiers are empty.
-    fn all_empty(&self) -> bool {
-        self.write_frontier.is_empty()
-            && self.input_frontier.is_empty()
-            && self.output_frontier.is_empty()
-    }
 }
 
 /// A frontier we have reported to the controller, or the least frontier we are allowed to report.
@@ -1849,14 +1808,4 @@ impl CollectionState {
 pub struct DroppedCollection {
     reported_frontiers: ReportedFrontiers,
     is_subscribe_or_copy: bool,
-}
-
-/// An event reporting the hydration status of an LIR node in a dataflow.
-pub struct HydrationEvent {
-    /// The ID of the export this dataflow maintains.
-    pub export_id: GlobalId,
-    /// The ID of the LIR node.
-    pub lir_id: LirId,
-    /// Whether the node is hydrated.
-    pub hydrated: bool,
 }
