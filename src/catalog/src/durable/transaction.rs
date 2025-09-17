@@ -30,14 +30,15 @@ use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
 use mz_repr::{CatalogItemId, Diff, GlobalId, RelationVersion};
 use mz_sql::catalog::{
-    CatalogError as SqlCatalogError, CatalogItemType, ObjectType, RoleAttributes, RoleMembership,
-    RoleVars,
+    CatalogError as SqlCatalogError, CatalogItemType, ObjectType, PasswordAction,
+    RoleAttributesRaw, RoleMembership, RoleVars,
 };
 use mz_sql::names::{CommentObjectId, DatabaseId, ResolvedDatabaseSpecifier, SchemaId};
 use mz_sql::plan::NetworkPolicyRule;
 use mz_sql_parser::ast::QualifiedReplica;
 use mz_storage_client::controller::StorageTxn;
 use mz_storage_types::controller::StorageError;
+use tracing::warn;
 
 use crate::builtin::BuiltinLog;
 use crate::durable::initialize::{
@@ -320,7 +321,7 @@ impl<'a> Transaction<'a> {
         &mut self,
         id: RoleId,
         name: String,
-        attributes: RoleAttributes,
+        attributes: RoleAttributesRaw,
         membership: RoleMembership,
         vars: RoleVars,
         oid: u32,
@@ -333,7 +334,7 @@ impl<'a> Transaction<'a> {
     pub fn insert_user_role(
         &mut self,
         name: String,
-        attributes: RoleAttributes,
+        attributes: RoleAttributesRaw,
         membership: RoleMembership,
         vars: RoleVars,
         temporary_oids: &HashSet<u32>,
@@ -349,7 +350,7 @@ impl<'a> Transaction<'a> {
         &mut self,
         id: RoleId,
         name: String,
-        attributes: RoleAttributes,
+        attributes: RoleAttributesRaw,
         membership: RoleMembership,
         vars: RoleVars,
         oid: u32,
@@ -376,7 +377,7 @@ impl<'a> Transaction<'a> {
             RoleKey { id },
             RoleValue {
                 name: name.clone(),
-                attributes,
+                attributes: attributes.into(),
                 membership,
                 vars,
                 oid,
@@ -1467,23 +1468,6 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    /// Clears the password for role `role_id` in the transaction.
-    pub fn clear_role_password(&mut self, role_id: RoleId) -> Result<(), CatalogError> {
-        let auth_key = RoleAuthKey { role_id };
-
-        if self.role_auth.get(&auth_key).is_some() {
-            let value = RoleAuthValue {
-                password_hash: None,
-                updated_at: SYSTEM_TIME(),
-            };
-            self.role_auth
-                .update_by_key(auth_key.clone(), value, self.op_id)?;
-            Ok(())
-        } else {
-            Err(SqlCatalogError::UnknownRole(role_id.to_string()).into())
-        }
-    }
-
     /// Updates role `id` in the transaction to `role`.
     ///
     /// Returns an error if `id` is not found.
@@ -1491,25 +1475,43 @@ impl<'a> Transaction<'a> {
     /// Runtime is linear with respect to the total number of items in the catalog.
     /// DO NOT call this function in a loop, implement and use some `Self::update_roles` instead.
     /// You should model it after [`Self::update_items`].
-    pub fn update_role(&mut self, id: RoleId, role: Role) -> Result<(), CatalogError> {
+    pub fn update_role(
+        &mut self,
+        id: RoleId,
+        role: Role,
+        password: PasswordAction,
+    ) -> Result<(), CatalogError> {
         let key = RoleKey { id };
         if self.roles.get(&key).is_some() {
             let auth_key = RoleAuthKey { role_id: id };
 
-            if let Some(ref password) = role.attributes.password {
-                let hash =
-                    mz_auth::hash::scram256_hash(password).expect("password hash should be valid");
-                let value = RoleAuthValue {
-                    password_hash: Some(hash),
-                    updated_at: SYSTEM_TIME(),
-                };
+            match password {
+                PasswordAction::Set(new_password) => {
+                    let hash = mz_auth::hash::scram256_hash(&new_password)
+                        .expect("password hash should be valid");
+                    let value = RoleAuthValue {
+                        password_hash: Some(hash),
+                        updated_at: SYSTEM_TIME(),
+                    };
 
-                if self.role_auth.get(&auth_key).is_some() {
-                    self.role_auth
-                        .update_by_key(auth_key.clone(), value, self.op_id)?;
-                } else {
-                    self.role_auth.insert(auth_key.clone(), value, self.op_id)?;
+                    if self.role_auth.get(&auth_key).is_some() {
+                        self.role_auth
+                            .update_by_key(auth_key.clone(), value, self.op_id)?;
+                    } else {
+                        self.role_auth.insert(auth_key.clone(), value, self.op_id)?;
+                    }
                 }
+                PasswordAction::Clear => {
+                    let value = RoleAuthValue {
+                        password_hash: None,
+                        updated_at: SYSTEM_TIME(),
+                    };
+                    if self.role_auth.get(&auth_key).is_some() {
+                        self.role_auth
+                            .update_by_key(auth_key.clone(), value, self.op_id)?;
+                    }
+                }
+                PasswordAction::NoChange => {}
             }
 
             self.roles

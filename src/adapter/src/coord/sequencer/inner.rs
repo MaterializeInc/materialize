@@ -54,7 +54,7 @@ use mz_sql::ast::{CreateSubsourceStatement, MySqlConfigOptionName, UnresolvedIte
 use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError,
     CatalogItem as SqlCatalogItem, CatalogItemType, CatalogRole, CatalogSchema, CatalogTypeDetails,
-    ErrorMessageObjectDescription, ObjectType, RoleAttributes, RoleVars, SessionCatalog,
+    ErrorMessageObjectDescription, ObjectType, RoleAttributesRaw, RoleVars, SessionCatalog,
 };
 use mz_sql::names::{
     Aug, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds, ResolvedItemName,
@@ -1026,7 +1026,7 @@ impl Coordinator {
     }
 
     /// Validates the role attributes for a `CREATE ROLE` statement.
-    fn validate_role_attributes(&self, attributes: &RoleAttributes) -> Result<(), AdapterError> {
+    fn validate_role_attributes(&self, attributes: &RoleAttributesRaw) -> Result<(), AdapterError> {
         if !ENABLE_PASSWORD_AUTH.get(self.catalog().system_config().dyncfgs()) {
             if attributes.superuser.is_some()
                 || attributes.password.is_some()
@@ -3494,7 +3494,7 @@ impl Coordinator {
         let mut notices = vec![];
 
         // Get the attributes and variables from the role, as they currently are.
-        let mut attributes = role.attributes().clone();
+        let mut attributes: RoleAttributesRaw = role.attributes().clone().into();
         let mut vars = role.vars().clone();
 
         // Whether to set the password to NULL. This is a special case since the existing

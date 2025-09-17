@@ -960,7 +960,9 @@ impl<'a> Runner<'a> {
         inner.ensure_fixed_features().await?;
 
         inner.client = connect(inner.server_addr, None, None).await.unwrap();
-        inner.system_client = connect(inner.internal_server_addr, Some("mz_system"), None).await.unwrap();
+        inner.system_client = connect(inner.internal_server_addr, Some("mz_system"), None)
+            .await
+            .unwrap();
         inner.clients = BTreeMap::new();
 
         Ok(())
@@ -1282,7 +1284,9 @@ impl<'a> RunnerInner<'a> {
         let password_server_addr = password_server_addr_rx.await?;
         let internal_http_server_addr = internal_http_server_addr_rx.await?;
 
-        let system_client = connect(internal_server_addr, Some("mz_system"), None).await.unwrap();
+        let system_client = connect(internal_server_addr, Some("mz_system"), None)
+            .await
+            .unwrap();
         let client = connect(server_addr, None, None).await.unwrap();
 
         let inner = RunnerInner {
@@ -1864,58 +1868,47 @@ impl<'a> RunnerInner<'a> {
         output: &'r Output,
         location: Location,
     ) -> Result<Outcome<'r>, anyhow::Error> {
-        let client = match self.get_conn(conn, user, password).await {
-            Ok(client) => client,
-            Err(e) => {
-                // Connection failed - return as an error output
-                let error_msg = format!("db error: ERROR: {}", e);
-                let actual = Output::Values(vec![error_msg]);
-                if *output != actual {
-                    return Ok(Outcome::OutputFailure {
-                        expected_output: output,
-                        actual_raw_output: vec![],
-                        actual_output: actual,
-                        location,
-                    });
-                } else {
-                    return Ok(Outcome::Success);
+        let actual = match self.get_conn(conn, user, password).await {
+            Ok(client) => match client.simple_query(sql).await {
+                Ok(result) => {
+                    let mut rows = Vec::new();
+
+                    for m in result.into_iter() {
+                        match m {
+                            SimpleQueryMessage::Row(row) => {
+                                let mut s = vec![];
+                                for i in 0..row.len() {
+                                    s.push(row.get(i).unwrap_or("NULL"));
+                                }
+                                rows.push(s.join(","));
+                            }
+                            SimpleQueryMessage::CommandComplete(count) => {
+                                // This applies any sort on the COMPLETE line as
+                                // well, but we do the same for the expected output.
+                                rows.push(format!("COMPLETE {}", count));
+                            }
+                            SimpleQueryMessage::RowDescription(_) => {}
+                            _ => panic!("unexpected"),
+                        }
+                    }
+
+                    if let Sort::Row = sort {
+                        rows.sort();
+                    }
+
+                    Output::Values(rows)
                 }
+                // Errors can contain multiple lines (say if there are details), and rewrite
+                // sticks them each on their own line, so we need to split up the lines here to
+                // each be its own String in the Vec.
+                Err(error) => {
+                    Output::Values(error.to_string().lines().map(|s| s.to_string()).collect())
+                }
+            },
+            Err(error) => {
+                Output::Values(error.to_string().lines().map(|s| s.to_string()).collect())
             }
         };
-        let actual = Output::Values(match client.simple_query(sql).await {
-            Ok(result) => {
-                let mut rows = Vec::new();
-
-                for m in result.into_iter() {
-                    match m {
-                        SimpleQueryMessage::Row(row) => {
-                            let mut s = vec![];
-                            for i in 0..row.len() {
-                                s.push(row.get(i).unwrap_or("NULL"));
-                            }
-                            rows.push(s.join(","));
-                        }
-                        SimpleQueryMessage::CommandComplete(count) => {
-                            // This applies any sort on the COMPLETE line as
-                            // well, but we do the same for the expected output.
-                            rows.push(format!("COMPLETE {}", count));
-                        }
-                        SimpleQueryMessage::RowDescription(_) => {}
-                        _ => panic!("unexpected"),
-                    }
-                }
-
-                if let Sort::Row = sort {
-                    rows.sort();
-                }
-
-                rows
-            }
-            // Errors can contain multiple lines (say if there are details), and rewrite
-            // sticks them each on their own line, so we need to split up the lines here to
-            // each be its own String in the Vec.
-            Err(error) => error.to_string().lines().map(|s| s.to_string()).collect(),
-        });
         if *output != actual {
             Ok(Outcome::OutputFailure {
                 expected_output: output,

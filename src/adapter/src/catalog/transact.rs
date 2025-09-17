@@ -46,8 +46,8 @@ use mz_repr::{CatalogItemId, ColumnName, ColumnType, Diff, GlobalId, strconv};
 use mz_sql::ast::RawDataType;
 use mz_sql::catalog::{
     CatalogDatabase, CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem, CatalogRole,
-    CatalogSchema, DefaultPrivilegeAclItem, DefaultPrivilegeObject, RoleAttributes, RoleMembership,
-    RoleVars,
+    CatalogSchema, DefaultPrivilegeAclItem, DefaultPrivilegeObject, PasswordAction,
+    RoleAttributesRaw, RoleMembership, RoleVars,
 };
 use mz_sql::names::{
     CommentObjectId, DatabaseId, FullItemName, ObjectId, QualifiedItemName,
@@ -83,7 +83,7 @@ pub enum Op {
     AlterRole {
         id: RoleId,
         name: String,
-        attributes: RoleAttributes,
+        attributes: RoleAttributesRaw,
         nopassword: bool,
         vars: RoleVars,
     },
@@ -111,7 +111,7 @@ pub enum Op {
     },
     CreateRole {
         name: String,
-        attributes: RoleAttributes,
+        attributes: RoleAttributesRaw,
     },
     CreateCluster {
         id: ClusterId,
@@ -679,12 +679,17 @@ impl Catalog {
                 state.ensure_not_reserved_role(&id)?;
 
                 let mut existing_role = state.get_role(&id).clone();
-                existing_role.attributes = attributes;
+                let password = attributes.password.clone();
+                existing_role.attributes = attributes.into();
                 existing_role.vars = vars;
-                if nopassword {
-                    tx.clear_role_password(id)?;
-                }
-                tx.update_role(id, existing_role.into())?;
+                let password_action = if nopassword {
+                    PasswordAction::Clear
+                } else if let Some(password) = password {
+                    PasswordAction::Set(password)
+                } else {
+                    PasswordAction::NoChange
+                };
+                tx.update_role(id, existing_role.into(), password_action)?;
 
                 CatalogState::add_to_audit_log(
                     &state.system_configuration,
@@ -1603,7 +1608,7 @@ impl Catalog {
                 }
                 let mut member_role = state.get_role(&member_id).clone();
                 member_role.membership.map.insert(role_id, grantor_id);
-                tx.update_role(member_id, member_role.into())?;
+                tx.update_role(member_id, member_role.into(), PasswordAction::NoChange)?;
 
                 CatalogState::add_to_audit_log(
                     &state.system_configuration,
@@ -1633,7 +1638,7 @@ impl Catalog {
                 state.ensure_grantable_role(&role_id)?;
                 let mut member_role = state.get_role(&member_id).clone();
                 member_role.membership.map.remove(&role_id);
-                tx.update_role(member_id, member_role.into())?;
+                tx.update_role(member_id, member_role.into(), PasswordAction::NoChange)?;
 
                 CatalogState::add_to_audit_log(
                     &state.system_configuration,
