@@ -10,17 +10,14 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use bytes::BytesMut;
 use mz_controller_types::ClusterId;
 use mz_ore::now::{NowFn, epoch_to_uuid_v7, to_datetime};
 use mz_ore::task::spawn;
 use mz_ore::{cast::CastFrom, cast::CastInto, now::EpochMillis};
-use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::timestamp::TimestampLike;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, Timestamp};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{AstInfo, Statement};
-use mz_sql::plan::Params;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql_parser::ast::{StatementKind, statement_kind_label_value};
 use mz_storage_client::controller::IntrospectionType;
@@ -439,7 +436,6 @@ impl Coordinator {
             id,
             prepared_statement_id,
             sample_rate,
-            params,
             began_at,
             cluster_id,
             cluster_name,
@@ -477,17 +473,7 @@ impl Coordinator {
                 Some(transient_index_id) => Datum::String(transient_index_id),
             },
         ]);
-        packer
-            .try_push_array(
-                &[ArrayDimension {
-                    lower_bound: 1,
-                    length: params.len(),
-                }],
-                params
-                    .iter()
-                    .map(|p| Datum::from(p.as_ref().map(String::as_str))),
-            )
-            .expect("correct array dimensions");
+
         packer.push(Datum::from(mz_version.as_str()));
         packer.push(Datum::TimestampTz(
             to_datetime(*began_at).try_into().expect("Sane system time"),
@@ -676,7 +662,6 @@ impl Coordinator {
     pub fn begin_statement_execution(
         &mut self,
         session: &mut Session,
-        params: &Params,
         logging: &Arc<QCell<PreparedStatementLoggingInfo>>,
         lifecycle_timestamps: Option<LifecycleTimestamps>,
     ) -> Option<StatementLoggingId> {
@@ -745,21 +730,10 @@ impl Coordinator {
             began_at,
         );
 
-        let params = std::iter::zip(params.execute_types.iter(), params.datums.iter())
-            .map(|(r#type, datum)| {
-                mz_pgrepr::Value::from_datum(datum, r#type).map(|val| {
-                    let mut buf = BytesMut::new();
-                    val.encode_text(&mut buf);
-                    String::from_utf8(Into::<Vec<u8>>::into(buf))
-                        .expect("Serialization shouldn't produce non-UTF-8 strings.")
-                })
-            })
-            .collect();
         let record = StatementBeganExecutionRecord {
             id: execution_uuid,
             prepared_statement_id: ps_uuid,
             sample_rate,
-            params,
             began_at,
             application_name: session.application_name().to_string(),
             transaction_isolation: session.vars().transaction_isolation().to_string(),

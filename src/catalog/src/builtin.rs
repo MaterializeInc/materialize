@@ -3877,7 +3877,7 @@ pub static MZ_STATEMENT_EXECUTION_HISTORY_REDACTED: LazyLock<BuiltinView> = Lazy
     name: "mz_statement_execution_history_redacted",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_STATEMENT_EXECUTION_HISTORY_REDACTED_OID,
-    // everything but `params` and `error_message`
+    // everything but `error_message`
     desc: RelationDesc::builder()
         .with_column("id", ScalarType::Uuid.nullable(false))
         .with_column("prepared_statement_id", ScalarType::Uuid.nullable(false))
@@ -4030,7 +4030,6 @@ pub static MZ_ACTIVITY_LOG_THINNED: LazyLock<BuiltinView> = LazyLock::new(|| {
             .with_column("transaction_isolation", ScalarType::String.nullable(false))
             .with_column("execution_timestamp", ScalarType::UInt64.nullable(true))
             .with_column("transient_index_id", ScalarType::String.nullable(true))
-            .with_column("params", ScalarType::Array(Box::new(ScalarType::String)).nullable(false))
             .with_column("mz_version", ScalarType::String.nullable(false))
             .with_column("began_at", ScalarType::TimestampTz { precision: None }.nullable(false))
             .with_column("finished_at", ScalarType::TimestampTz { precision: None }.nullable(true))
@@ -4054,7 +4053,7 @@ pub static MZ_ACTIVITY_LOG_THINNED: LazyLock<BuiltinView> = LazyLock::new(|| {
         column_comments: BTreeMap::new(),
         sql: "
 SELECT mseh.id AS execution_id, sample_rate, cluster_id, application_name, cluster_name, database_name, search_path,
-transaction_isolation, execution_timestamp, transient_index_id, params, mz_version, began_at, finished_at, finished_status,
+transaction_isolation, execution_timestamp, transient_index_id, mz_version, began_at, finished_at, finished_status,
 error_message, result_size, rows_returned, execution_strategy, transaction_id,
 mpsh.id AS prepared_statement_id, sql_hash, mpsh.name AS prepared_statement_name,
 mpsh.session_id, prepared_at, statement_type, throttled_count,
@@ -4084,7 +4083,6 @@ pub static MZ_RECENT_ACTIVITY_LOG_THINNED: LazyLock<BuiltinView> = LazyLock::new
             .with_column("transaction_isolation", ScalarType::String.nullable(false))
             .with_column("execution_timestamp", ScalarType::UInt64.nullable(true))
             .with_column("transient_index_id", ScalarType::String.nullable(true))
-            .with_column("params", ScalarType::Array(Box::new(ScalarType::String)).nullable(false))
             .with_column("mz_version", ScalarType::String.nullable(false))
             .with_column("began_at", ScalarType::TimestampTz { precision: None }.nullable(false))
             .with_column("finished_at", ScalarType::TimestampTz { precision: None }.nullable(true))
@@ -4137,10 +4135,6 @@ pub static MZ_RECENT_ACTIVITY_LOG: LazyLock<BuiltinView> = LazyLock::new(|| Buil
         .with_column("transaction_isolation", ScalarType::String.nullable(false))
         .with_column("execution_timestamp", ScalarType::UInt64.nullable(true))
         .with_column("transient_index_id", ScalarType::String.nullable(true))
-        .with_column(
-            "params",
-            ScalarType::Array(Box::new(ScalarType::String)).nullable(false),
-        )
         .with_column("mz_version", ScalarType::String.nullable(false))
         .with_column(
             "began_at",
@@ -4220,10 +4214,6 @@ pub static MZ_RECENT_ACTIVITY_LOG: LazyLock<BuiltinView> = LazyLock::new(|| Buil
         (
             "transient_index_id",
             "The internal index of the compute dataflow created for the query, if any.",
-        ),
-        (
-            "params",
-            "The parameters with which the statement was executed.",
         ),
         (
             "mz_version",
@@ -4327,7 +4317,6 @@ pub static MZ_RECENT_ACTIVITY_LOG_REDACTED: LazyLock<BuiltinView> = LazyLock::ne
         .with_column("transaction_isolation", ScalarType::String.nullable(false))
         .with_column("execution_timestamp", ScalarType::UInt64.nullable(true))
         .with_column("transient_index_id", ScalarType::String.nullable(true))
-        .with_column("params", ScalarType::Array(Box::new(ScalarType::String)).nullable(false))
         .with_column("mz_version", ScalarType::String.nullable(false))
         .with_column("began_at", ScalarType::TimestampTz { precision: None }.nullable(false))
         .with_column("finished_at", ScalarType::TimestampTz { precision: None }.nullable(true))
@@ -4350,7 +4339,7 @@ pub static MZ_RECENT_ACTIVITY_LOG_REDACTED: LazyLock<BuiltinView> = LazyLock::ne
     column_comments: BTreeMap::new(),
     sql: "SELECT mralt.execution_id, mralt.sample_rate, mralt.cluster_id, mralt.application_name,
     mralt.cluster_name, mralt.database_name, mralt.search_path, mralt.transaction_isolation, mralt.execution_timestamp,
-    mralt.transient_index_id, mralt.params, mralt.mz_version, mralt.began_at, mralt.finished_at,
+    mralt.transient_index_id, mralt.mz_version, mralt.began_at, mralt.finished_at,
     mralt.finished_status, mralt.result_size, mralt.rows_returned, mralt.execution_strategy, mralt.transaction_id,
     mralt.prepared_statement_id, mralt.sql_hash, mralt.prepared_statement_name, mralt.session_id,
     mralt.prepared_at, mralt.statement_type, mralt.throttled_count,

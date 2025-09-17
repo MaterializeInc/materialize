@@ -46,7 +46,6 @@ pub struct StatementBeganExecutionRecord {
     pub id: Uuid,
     pub prepared_statement_id: Uuid,
     pub sample_rate: f64,
-    pub params: Vec<Option<String>>,
     pub began_at: EpochMillis,
     pub cluster_id: Option<ClusterId>,
     pub cluster_name: Option<String>,

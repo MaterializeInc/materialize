@@ -81,10 +81,6 @@ pub static MZ_STATEMENT_EXECUTION_HISTORY_DESC: LazyLock<RelationDesc> = LazyLoc
         .with_column("execution_timestamp", ScalarType::UInt64.nullable(true))
         .with_column("transaction_id", ScalarType::UInt64.nullable(false))
         .with_column("transient_index_id", ScalarType::String.nullable(true))
-        .with_column(
-            "params",
-            ScalarType::Array(Box::new(ScalarType::String)).nullable(false),
-        )
         .with_column("mz_version", ScalarType::String.nullable(false))
         .with_column(
             "began_at",
