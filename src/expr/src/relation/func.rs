@@ -23,7 +23,6 @@ use mz_ore::cast::CastFrom;
 
 use mz_ore::str::separated;
 use mz_ore::{soft_assert_eq_no_log, soft_assert_or_log};
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::date::Date;
 use mz_repr::adt::interval::Interval;
@@ -49,17 +48,10 @@ use crate::WindowFrameBound::{
 };
 use crate::WindowFrameUnits::{Groups, Range, Rows};
 use crate::explain::{HumanizedExpr, HumanizerMode};
-use crate::relation::proto_aggregate_func::{
-    self, ProtoColumnOrders, ProtoFusedValueWindowFunc, ProtoFusedWindowAggregate,
-};
-use crate::relation::proto_table_func::{ProtoTabletizedScalar, ProtoWithOrdinality};
 use crate::relation::{
-    ColumnOrder, ProtoAggregateFunc, ProtoTableFunc, WindowFrame, WindowFrameBound,
-    WindowFrameUnits, compare_columns, proto_table_func,
+    ColumnOrder, WindowFrame, WindowFrameBound, WindowFrameUnits, compare_columns,
 };
 use crate::scalar::func::{add_timestamp_months, jsonb_stringify};
-
-include!(concat!(env!("OUT_DIR"), "/mz_expr.relation.func.rs"));
 
 // TODO(jamii) be careful about overflow in sum/avg
 // see https://timely.zulipchat.com/#narrow/stream/186635-engineering/topic/additional.20work/near/163507435
@@ -2062,289 +2054,6 @@ impl Arbitrary for AggregateFunc {
     }
 }
 
-impl RustType<ProtoColumnOrders> for Vec<ColumnOrder> {
-    fn into_proto(&self) -> ProtoColumnOrders {
-        ProtoColumnOrders {
-            orders: self.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoColumnOrders) -> Result<Self, TryFromProtoError> {
-        proto.orders.into_rust()
-    }
-}
-
-impl RustType<ProtoAggregateFunc> for AggregateFunc {
-    fn into_proto(&self) -> ProtoAggregateFunc {
-        use proto_aggregate_func::Kind;
-        ProtoAggregateFunc {
-            kind: Some(match self {
-                AggregateFunc::MaxNumeric => Kind::MaxNumeric(()),
-                AggregateFunc::MaxInt16 => Kind::MaxInt16(()),
-                AggregateFunc::MaxInt32 => Kind::MaxInt32(()),
-                AggregateFunc::MaxInt64 => Kind::MaxInt64(()),
-                AggregateFunc::MaxUInt16 => Kind::MaxUint16(()),
-                AggregateFunc::MaxUInt32 => Kind::MaxUint32(()),
-                AggregateFunc::MaxUInt64 => Kind::MaxUint64(()),
-                AggregateFunc::MaxMzTimestamp => Kind::MaxMzTimestamp(()),
-                AggregateFunc::MaxFloat32 => Kind::MaxFloat32(()),
-                AggregateFunc::MaxFloat64 => Kind::MaxFloat64(()),
-                AggregateFunc::MaxBool => Kind::MaxBool(()),
-                AggregateFunc::MaxString => Kind::MaxString(()),
-                AggregateFunc::MaxDate => Kind::MaxDate(()),
-                AggregateFunc::MaxTimestamp => Kind::MaxTimestamp(()),
-                AggregateFunc::MaxTimestampTz => Kind::MaxTimestampTz(()),
-                AggregateFunc::MinNumeric => Kind::MinNumeric(()),
-                AggregateFunc::MaxInterval => Kind::MaxInterval(()),
-                AggregateFunc::MaxTime => Kind::MaxTime(()),
-                AggregateFunc::MinInt16 => Kind::MinInt16(()),
-                AggregateFunc::MinInt32 => Kind::MinInt32(()),
-                AggregateFunc::MinInt64 => Kind::MinInt64(()),
-                AggregateFunc::MinUInt16 => Kind::MinUint16(()),
-                AggregateFunc::MinUInt32 => Kind::MinUint32(()),
-                AggregateFunc::MinUInt64 => Kind::MinUint64(()),
-                AggregateFunc::MinMzTimestamp => Kind::MinMzTimestamp(()),
-                AggregateFunc::MinFloat32 => Kind::MinFloat32(()),
-                AggregateFunc::MinFloat64 => Kind::MinFloat64(()),
-                AggregateFunc::MinBool => Kind::MinBool(()),
-                AggregateFunc::MinString => Kind::MinString(()),
-                AggregateFunc::MinDate => Kind::MinDate(()),
-                AggregateFunc::MinTimestamp => Kind::MinTimestamp(()),
-                AggregateFunc::MinTimestampTz => Kind::MinTimestampTz(()),
-                AggregateFunc::MinInterval => Kind::MinInterval(()),
-                AggregateFunc::MinTime => Kind::MinTime(()),
-                AggregateFunc::SumInt16 => Kind::SumInt16(()),
-                AggregateFunc::SumInt32 => Kind::SumInt32(()),
-                AggregateFunc::SumInt64 => Kind::SumInt64(()),
-                AggregateFunc::SumUInt16 => Kind::SumUint16(()),
-                AggregateFunc::SumUInt32 => Kind::SumUint32(()),
-                AggregateFunc::SumUInt64 => Kind::SumUint64(()),
-                AggregateFunc::SumFloat32 => Kind::SumFloat32(()),
-                AggregateFunc::SumFloat64 => Kind::SumFloat64(()),
-                AggregateFunc::SumNumeric => Kind::SumNumeric(()),
-                AggregateFunc::Count => Kind::Count(()),
-                AggregateFunc::Any => Kind::Any(()),
-                AggregateFunc::All => Kind::All(()),
-                AggregateFunc::JsonbAgg { order_by } => Kind::JsonbAgg(order_by.into_proto()),
-                AggregateFunc::JsonbObjectAgg { order_by } => {
-                    Kind::JsonbObjectAgg(order_by.into_proto())
-                }
-                AggregateFunc::MapAgg {
-                    order_by,
-                    value_type,
-                } => Kind::MapAgg(proto_aggregate_func::ProtoMapAgg {
-                    order_by: Some(order_by.into_proto()),
-                    value_type: Some(value_type.into_proto()),
-                }),
-                AggregateFunc::ArrayConcat { order_by } => Kind::ArrayConcat(order_by.into_proto()),
-                AggregateFunc::ListConcat { order_by } => Kind::ListConcat(order_by.into_proto()),
-                AggregateFunc::StringAgg { order_by } => Kind::StringAgg(order_by.into_proto()),
-                AggregateFunc::RowNumber { order_by } => Kind::RowNumber(order_by.into_proto()),
-                AggregateFunc::Rank { order_by } => Kind::Rank(order_by.into_proto()),
-                AggregateFunc::DenseRank { order_by } => Kind::DenseRank(order_by.into_proto()),
-                AggregateFunc::LagLead {
-                    order_by,
-                    lag_lead,
-                    ignore_nulls,
-                } => Kind::LagLead(proto_aggregate_func::ProtoLagLead {
-                    order_by: Some(order_by.into_proto()),
-                    lag_lead: Some(match lag_lead {
-                        LagLeadType::Lag => proto_aggregate_func::proto_lag_lead::LagLead::Lag(()),
-                        LagLeadType::Lead => {
-                            proto_aggregate_func::proto_lag_lead::LagLead::Lead(())
-                        }
-                    }),
-                    ignore_nulls: *ignore_nulls,
-                }),
-                AggregateFunc::FirstValue {
-                    order_by,
-                    window_frame,
-                } => Kind::FirstValue(proto_aggregate_func::ProtoFramedWindowFunc {
-                    order_by: Some(order_by.into_proto()),
-                    window_frame: Some(window_frame.into_proto()),
-                }),
-                AggregateFunc::LastValue {
-                    order_by,
-                    window_frame,
-                } => Kind::LastValue(proto_aggregate_func::ProtoFramedWindowFunc {
-                    order_by: Some(order_by.into_proto()),
-                    window_frame: Some(window_frame.into_proto()),
-                }),
-                AggregateFunc::WindowAggregate {
-                    wrapped_aggregate,
-                    order_by,
-                    window_frame,
-                } => Kind::WindowAggregate(Box::new(proto_aggregate_func::ProtoWindowAggregate {
-                    wrapped_aggregate: Some(wrapped_aggregate.into_proto()),
-                    order_by: Some(order_by.into_proto()),
-                    window_frame: Some(window_frame.into_proto()),
-                })),
-                AggregateFunc::FusedValueWindowFunc { funcs, order_by } => {
-                    Kind::FusedValueWindowFunc(ProtoFusedValueWindowFunc {
-                        funcs: funcs.into_proto(),
-                        order_by: Some(order_by.into_proto()),
-                    })
-                }
-                AggregateFunc::FusedWindowAggregate {
-                    wrapped_aggregates,
-                    order_by,
-                    window_frame,
-                } => Kind::FusedWindowAggregate(ProtoFusedWindowAggregate {
-                    wrapped_aggregates: wrapped_aggregates.into_proto(),
-                    order_by: Some(order_by.into_proto()),
-                    window_frame: Some(window_frame.into_proto()),
-                }),
-                AggregateFunc::Dummy => Kind::Dummy(()),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoAggregateFunc) -> Result<Self, TryFromProtoError> {
-        use proto_aggregate_func::Kind;
-        let kind = proto
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoAggregateFunc::kind"))?;
-        Ok(match kind {
-            Kind::MaxNumeric(()) => AggregateFunc::MaxNumeric,
-            Kind::MaxInt16(()) => AggregateFunc::MaxInt16,
-            Kind::MaxInt32(()) => AggregateFunc::MaxInt32,
-            Kind::MaxInt64(()) => AggregateFunc::MaxInt64,
-            Kind::MaxUint16(()) => AggregateFunc::MaxUInt16,
-            Kind::MaxUint32(()) => AggregateFunc::MaxUInt32,
-            Kind::MaxUint64(()) => AggregateFunc::MaxUInt64,
-            Kind::MaxMzTimestamp(()) => AggregateFunc::MaxMzTimestamp,
-            Kind::MaxFloat32(()) => AggregateFunc::MaxFloat32,
-            Kind::MaxFloat64(()) => AggregateFunc::MaxFloat64,
-            Kind::MaxBool(()) => AggregateFunc::MaxBool,
-            Kind::MaxString(()) => AggregateFunc::MaxString,
-            Kind::MaxDate(()) => AggregateFunc::MaxDate,
-            Kind::MaxTimestamp(()) => AggregateFunc::MaxTimestamp,
-            Kind::MaxTimestampTz(()) => AggregateFunc::MaxTimestampTz,
-            Kind::MaxInterval(()) => AggregateFunc::MaxInterval,
-            Kind::MaxTime(()) => AggregateFunc::MaxTime,
-            Kind::MinNumeric(()) => AggregateFunc::MinNumeric,
-            Kind::MinInt16(()) => AggregateFunc::MinInt16,
-            Kind::MinInt32(()) => AggregateFunc::MinInt32,
-            Kind::MinInt64(()) => AggregateFunc::MinInt64,
-            Kind::MinUint16(()) => AggregateFunc::MinUInt16,
-            Kind::MinUint32(()) => AggregateFunc::MinUInt32,
-            Kind::MinUint64(()) => AggregateFunc::MinUInt64,
-            Kind::MinMzTimestamp(()) => AggregateFunc::MinMzTimestamp,
-            Kind::MinFloat32(()) => AggregateFunc::MinFloat32,
-            Kind::MinFloat64(()) => AggregateFunc::MinFloat64,
-            Kind::MinBool(()) => AggregateFunc::MinBool,
-            Kind::MinString(()) => AggregateFunc::MinString,
-            Kind::MinDate(()) => AggregateFunc::MinDate,
-            Kind::MinTimestamp(()) => AggregateFunc::MinTimestamp,
-            Kind::MinTimestampTz(()) => AggregateFunc::MinTimestampTz,
-            Kind::MinInterval(()) => AggregateFunc::MinInterval,
-            Kind::MinTime(()) => AggregateFunc::MinTime,
-            Kind::SumInt16(()) => AggregateFunc::SumInt16,
-            Kind::SumInt32(()) => AggregateFunc::SumInt32,
-            Kind::SumInt64(()) => AggregateFunc::SumInt64,
-            Kind::SumUint16(()) => AggregateFunc::SumUInt16,
-            Kind::SumUint32(()) => AggregateFunc::SumUInt32,
-            Kind::SumUint64(()) => AggregateFunc::SumUInt64,
-            Kind::SumFloat32(()) => AggregateFunc::SumFloat32,
-            Kind::SumFloat64(()) => AggregateFunc::SumFloat64,
-            Kind::SumNumeric(()) => AggregateFunc::SumNumeric,
-            Kind::Count(()) => AggregateFunc::Count,
-            Kind::Any(()) => AggregateFunc::Any,
-            Kind::All(()) => AggregateFunc::All,
-            Kind::JsonbAgg(order_by) => AggregateFunc::JsonbAgg {
-                order_by: order_by.into_rust()?,
-            },
-            Kind::JsonbObjectAgg(order_by) => AggregateFunc::JsonbObjectAgg {
-                order_by: order_by.into_rust()?,
-            },
-            Kind::MapAgg(pma) => AggregateFunc::MapAgg {
-                order_by: pma.order_by.into_rust_if_some("ProtoMapAgg::order_by")?,
-                value_type: pma
-                    .value_type
-                    .into_rust_if_some("ProtoMapAgg::value_type")?,
-            },
-            Kind::ArrayConcat(order_by) => AggregateFunc::ArrayConcat {
-                order_by: order_by.into_rust()?,
-            },
-            Kind::ListConcat(order_by) => AggregateFunc::ListConcat {
-                order_by: order_by.into_rust()?,
-            },
-            Kind::StringAgg(order_by) => AggregateFunc::StringAgg {
-                order_by: order_by.into_rust()?,
-            },
-            Kind::RowNumber(order_by) => AggregateFunc::RowNumber {
-                order_by: order_by.into_rust()?,
-            },
-            Kind::Rank(order_by) => AggregateFunc::Rank {
-                order_by: order_by.into_rust()?,
-            },
-            Kind::DenseRank(order_by) => AggregateFunc::DenseRank {
-                order_by: order_by.into_rust()?,
-            },
-            Kind::LagLead(pll) => AggregateFunc::LagLead {
-                order_by: pll.order_by.into_rust_if_some("ProtoLagLead::order_by")?,
-                lag_lead: match pll.lag_lead {
-                    Some(proto_aggregate_func::proto_lag_lead::LagLead::Lag(())) => {
-                        LagLeadType::Lag
-                    }
-                    Some(proto_aggregate_func::proto_lag_lead::LagLead::Lead(())) => {
-                        LagLeadType::Lead
-                    }
-                    None => {
-                        return Err(TryFromProtoError::MissingField(
-                            "ProtoLagLead::lag_lead".into(),
-                        ));
-                    }
-                },
-                ignore_nulls: pll.ignore_nulls,
-            },
-            Kind::FirstValue(pfv) => AggregateFunc::FirstValue {
-                order_by: pfv
-                    .order_by
-                    .into_rust_if_some("ProtoFramedWindowFunc::order_by")?,
-                window_frame: pfv
-                    .window_frame
-                    .into_rust_if_some("ProtoFramedWindowFunc::window_frame")?,
-            },
-            Kind::LastValue(pfv) => AggregateFunc::LastValue {
-                order_by: pfv
-                    .order_by
-                    .into_rust_if_some("ProtoFramedWindowFunc::order_by")?,
-                window_frame: pfv
-                    .window_frame
-                    .into_rust_if_some("ProtoFramedWindowFunc::window_frame")?,
-            },
-            Kind::WindowAggregate(paf) => AggregateFunc::WindowAggregate {
-                wrapped_aggregate: paf
-                    .wrapped_aggregate
-                    .into_rust_if_some("ProtoWindowAggregate::wrapped_aggregate")?,
-                order_by: paf
-                    .order_by
-                    .into_rust_if_some("ProtoWindowAggregate::order_by")?,
-                window_frame: paf
-                    .window_frame
-                    .into_rust_if_some("ProtoWindowAggregate::window_frame")?,
-            },
-            Kind::FusedValueWindowFunc(fvwf) => AggregateFunc::FusedValueWindowFunc {
-                funcs: fvwf.funcs.into_rust()?,
-                order_by: fvwf
-                    .order_by
-                    .into_rust_if_some("ProtoFusedValueWindowFunc::order_by")?,
-            },
-            Kind::FusedWindowAggregate(fwa) => AggregateFunc::FusedWindowAggregate {
-                wrapped_aggregates: fwa.wrapped_aggregates.into_rust()?,
-                order_by: fwa
-                    .order_by
-                    .into_rust_if_some("ProtoFusedWindowAggregate::order_by")?,
-                window_frame: fwa
-                    .window_frame
-                    .into_rust_if_some("ProtoFusedWindowAggregate::window_frame")?,
-            },
-            Kind::Dummy(()) => AggregateFunc::Dummy,
-        })
-    }
-}
-
 impl AggregateFunc {
     pub fn eval<'a, I>(&self, datums: I, temp_storage: &'a RowArena) -> Datum<'a>
     where
@@ -3503,24 +3212,6 @@ pub struct CaptureGroupDesc {
     pub nullable: bool,
 }
 
-impl RustType<ProtoCaptureGroupDesc> for CaptureGroupDesc {
-    fn into_proto(&self) -> ProtoCaptureGroupDesc {
-        ProtoCaptureGroupDesc {
-            index: self.index,
-            name: self.name.clone(),
-            nullable: self.nullable,
-        }
-    }
-
-    fn from_proto(proto: ProtoCaptureGroupDesc) -> Result<Self, TryFromProtoError> {
-        Ok(Self {
-            index: proto.index,
-            name: proto.name,
-            nullable: proto.nullable,
-        })
-    }
-}
-
 #[derive(
     Arbitrary,
     Clone,
@@ -3557,22 +3248,6 @@ impl FromStr for AnalyzedRegexOpts {
     }
 }
 
-impl RustType<ProtoAnalyzedRegexOpts> for AnalyzedRegexOpts {
-    fn into_proto(&self) -> ProtoAnalyzedRegexOpts {
-        ProtoAnalyzedRegexOpts {
-            case_insensitive: self.case_insensitive,
-            global: self.global,
-        }
-    }
-
-    fn from_proto(proto: ProtoAnalyzedRegexOpts) -> Result<Self, TryFromProtoError> {
-        Ok(Self {
-            case_insensitive: proto.case_insensitive,
-            global: proto.global,
-        })
-    }
-}
-
 #[derive(
     Arbitrary, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect,
 )]
@@ -3581,24 +3256,6 @@ pub struct AnalyzedRegex(
     Vec<CaptureGroupDesc>,
     AnalyzedRegexOpts,
 );
-
-impl RustType<ProtoAnalyzedRegex> for AnalyzedRegex {
-    fn into_proto(&self) -> ProtoAnalyzedRegex {
-        ProtoAnalyzedRegex {
-            regex: Some(self.0.into_proto()),
-            groups: self.1.into_proto(),
-            opts: Some(self.2.into_proto()),
-        }
-    }
-
-    fn from_proto(proto: ProtoAnalyzedRegex) -> Result<Self, TryFromProtoError> {
-        Ok(AnalyzedRegex(
-            proto.regex.into_rust_if_some("ProtoAnalyzedRegex::regex")?,
-            proto.groups.into_rust()?,
-            proto.opts.into_rust_if_some("ProtoAnalyzedRegex::opts")?,
-        ))
-    }
-}
 
 impl AnalyzedRegex {
     pub fn new(s: &str, opts: AnalyzedRegexOpts) -> Result<Self, regex::Error> {
@@ -3868,107 +3525,6 @@ impl Arbitrary for TableFunc {
             })
         })
         .boxed()
-    }
-}
-
-impl RustType<ProtoTableFunc> for TableFunc {
-    fn into_proto(&self) -> ProtoTableFunc {
-        use proto_table_func::{Kind, ProtoWrap};
-
-        ProtoTableFunc {
-            kind: Some(match self {
-                TableFunc::AclExplode => Kind::AclExplode(()),
-                TableFunc::MzAclExplode => Kind::MzAclExplode(()),
-                TableFunc::JsonbEach { stringify } => Kind::JsonbEach(*stringify),
-                TableFunc::JsonbObjectKeys => Kind::JsonbObjectKeys(()),
-                TableFunc::JsonbArrayElements { stringify } => Kind::JsonbArrayElements(*stringify),
-                TableFunc::RegexpExtract(x) => Kind::RegexpExtract(x.into_proto()),
-                TableFunc::CsvExtract(x) => Kind::CsvExtract(x.into_proto()),
-                TableFunc::GenerateSeriesInt32 => Kind::GenerateSeriesInt32(()),
-                TableFunc::GenerateSeriesInt64 => Kind::GenerateSeriesInt64(()),
-                TableFunc::GenerateSeriesTimestamp => Kind::GenerateSeriesTimestamp(()),
-                TableFunc::GenerateSeriesTimestampTz => Kind::GenerateSeriesTimestampTz(()),
-                TableFunc::GuardSubquerySize { column_type } => {
-                    Kind::GuardSubquerySize(column_type.into_proto())
-                }
-                TableFunc::Repeat => Kind::Repeat(()),
-                TableFunc::UnnestArray { el_typ } => Kind::UnnestArray(el_typ.into_proto()),
-                TableFunc::UnnestList { el_typ } => Kind::UnnestList(el_typ.into_proto()),
-                TableFunc::UnnestMap { value_type } => Kind::UnnestMap(value_type.into_proto()),
-                TableFunc::Wrap { types, width } => Kind::Wrap(ProtoWrap {
-                    types: types.into_proto(),
-                    width: width.into_proto(),
-                }),
-                TableFunc::GenerateSubscriptsArray => Kind::GenerateSubscriptsArray(()),
-                TableFunc::TabletizedScalar { name, relation } => {
-                    Kind::TabletizedScalar(ProtoTabletizedScalar {
-                        name: name.into_proto(),
-                        relation: Some(relation.into_proto()),
-                    })
-                }
-                TableFunc::RegexpMatches => Kind::RegexpMatches(()),
-                TableFunc::WithOrdinality(WithOrdinality { inner }) => {
-                    Kind::WithOrdinality(Box::new(ProtoWithOrdinality {
-                        inner: Some(inner.into_proto()),
-                    }))
-                }
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoTableFunc) -> Result<Self, TryFromProtoError> {
-        use proto_table_func::Kind;
-
-        let kind = proto
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoTableFunc::Kind"))?;
-
-        Ok(match kind {
-            Kind::AclExplode(()) => TableFunc::AclExplode,
-            Kind::MzAclExplode(()) => TableFunc::MzAclExplode,
-            Kind::JsonbEach(stringify) => TableFunc::JsonbEach { stringify },
-            Kind::JsonbObjectKeys(()) => TableFunc::JsonbObjectKeys,
-            Kind::JsonbArrayElements(stringify) => TableFunc::JsonbArrayElements { stringify },
-            Kind::RegexpExtract(x) => TableFunc::RegexpExtract(x.into_rust()?),
-            Kind::CsvExtract(x) => TableFunc::CsvExtract(x.into_rust()?),
-            Kind::GenerateSeriesInt32(()) => TableFunc::GenerateSeriesInt32,
-            Kind::GenerateSeriesInt64(()) => TableFunc::GenerateSeriesInt64,
-            Kind::GenerateSeriesTimestamp(()) => TableFunc::GenerateSeriesTimestamp,
-            Kind::GenerateSeriesTimestampTz(()) => TableFunc::GenerateSeriesTimestampTz,
-            Kind::GuardSubquerySize(x) => TableFunc::GuardSubquerySize {
-                column_type: x.into_rust()?,
-            },
-            Kind::Repeat(()) => TableFunc::Repeat,
-            Kind::UnnestArray(x) => TableFunc::UnnestArray {
-                el_typ: x.into_rust()?,
-            },
-            Kind::UnnestList(x) => TableFunc::UnnestList {
-                el_typ: x.into_rust()?,
-            },
-            Kind::UnnestMap(value_type) => TableFunc::UnnestMap {
-                value_type: value_type.into_rust()?,
-            },
-            Kind::Wrap(x) => TableFunc::Wrap {
-                width: x.width.into_rust()?,
-                types: x.types.into_rust()?,
-            },
-            Kind::GenerateSubscriptsArray(()) => TableFunc::GenerateSubscriptsArray,
-            Kind::TabletizedScalar(v) => TableFunc::TabletizedScalar {
-                name: v.name,
-                relation: v
-                    .relation
-                    .into_rust_if_some("ProtoTabletizedScalar::relation")?,
-            },
-            Kind::RegexpMatches(_) => TableFunc::RegexpMatches,
-            Kind::WithOrdinality(inner) => TableFunc::WithOrdinality(WithOrdinality {
-                inner: Box::new(
-                    inner
-                        .inner
-                        .map(|inner| *inner)
-                        .into_rust_if_some("ProtoWithOrdinality::inner")?,
-                ),
-            }),
-        })
     }
 }
 
@@ -4381,33 +3937,5 @@ impl WithOrdinality {
                 })
             });
         Ok(Box::new(it))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{AggregateFunc, ProtoAggregateFunc, ProtoTableFunc, TableFunc};
-    use mz_ore::assert_ok;
-    use mz_proto::protobuf_roundtrip;
-    use proptest::prelude::*;
-
-    proptest! {
-       #[mz_ore::test]
-        #[cfg_attr(miri, ignore)] // too slow
-        fn aggregate_func_protobuf_roundtrip(expect in any::<AggregateFunc>() ) {
-            let actual = protobuf_roundtrip::<_, ProtoAggregateFunc>(&expect);
-            assert_ok!(actual);
-            assert_eq!(actual.unwrap(), expect);
-        }
-    }
-
-    proptest! {
-       #[mz_ore::test]
-        #[cfg_attr(miri, ignore)] // too slow
-        fn table_func_protobuf_roundtrip(expect in any::<TableFunc>() ) {
-            let actual = protobuf_roundtrip::<_, ProtoTableFunc>(&expect);
-            assert_ok!(actual);
-            assert_eq!(actual.unwrap(), expect);
-        }
     }
 }

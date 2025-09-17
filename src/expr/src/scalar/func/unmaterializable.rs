@@ -19,12 +19,9 @@
 use std::fmt;
 
 use mz_lowertest::MzReflect;
-use mz_proto::{RustType, TryFromProtoError};
 use mz_repr::{ColumnType, ScalarType};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
-
-use crate::scalar::ProtoUnmaterializableFunc;
 
 #[derive(
     Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
@@ -127,90 +124,6 @@ impl fmt::Display for UnmaterializableFunc {
             UnmaterializableFunc::SessionUser => f.write_str("session_user"),
             UnmaterializableFunc::Version => f.write_str("version"),
             UnmaterializableFunc::ViewableVariables => f.write_str("viewable_variables"),
-        }
-    }
-}
-
-impl RustType<ProtoUnmaterializableFunc> for UnmaterializableFunc {
-    fn into_proto(&self) -> ProtoUnmaterializableFunc {
-        use crate::scalar::proto_unmaterializable_func::Kind::*;
-        let kind = match self {
-            UnmaterializableFunc::CurrentDatabase => CurrentDatabase(()),
-            UnmaterializableFunc::CurrentSchema => CurrentSchema(()),
-            UnmaterializableFunc::CurrentSchemasWithSystem => CurrentSchemasWithSystem(()),
-            UnmaterializableFunc::CurrentSchemasWithoutSystem => CurrentSchemasWithoutSystem(()),
-            UnmaterializableFunc::ViewableVariables => CurrentSetting(()),
-            UnmaterializableFunc::CurrentTimestamp => CurrentTimestamp(()),
-            UnmaterializableFunc::CurrentUser => CurrentUser(()),
-            UnmaterializableFunc::IsRbacEnabled => IsRbacEnabled(()),
-            UnmaterializableFunc::MzEnvironmentId => MzEnvironmentId(()),
-            UnmaterializableFunc::MzIsSuperuser => MzIsSuperuser(()),
-            UnmaterializableFunc::MzNow => MzNow(()),
-            UnmaterializableFunc::MzRoleOidMemberships => MzRoleOidMemberships(()),
-            UnmaterializableFunc::MzSessionId => MzSessionId(()),
-            UnmaterializableFunc::MzUptime => MzUptime(()),
-            UnmaterializableFunc::MzVersion => MzVersion(()),
-            UnmaterializableFunc::MzVersionNum => MzVersionNum(()),
-            UnmaterializableFunc::PgBackendPid => PgBackendPid(()),
-            UnmaterializableFunc::PgPostmasterStartTime => PgPostmasterStartTime(()),
-            UnmaterializableFunc::SessionUser => SessionUser(()),
-            UnmaterializableFunc::Version => Version(()),
-        };
-        ProtoUnmaterializableFunc { kind: Some(kind) }
-    }
-
-    fn from_proto(proto: ProtoUnmaterializableFunc) -> Result<Self, TryFromProtoError> {
-        use crate::scalar::proto_unmaterializable_func::Kind::*;
-        if let Some(kind) = proto.kind {
-            match kind {
-                CurrentDatabase(()) => Ok(UnmaterializableFunc::CurrentDatabase),
-                CurrentSchema(()) => Ok(UnmaterializableFunc::CurrentSchema),
-                CurrentSchemasWithSystem(()) => Ok(UnmaterializableFunc::CurrentSchemasWithSystem),
-                CurrentSchemasWithoutSystem(()) => {
-                    Ok(UnmaterializableFunc::CurrentSchemasWithoutSystem)
-                }
-                CurrentTimestamp(()) => Ok(UnmaterializableFunc::CurrentTimestamp),
-                CurrentSetting(()) => Ok(UnmaterializableFunc::ViewableVariables),
-                CurrentUser(()) => Ok(UnmaterializableFunc::CurrentUser),
-                IsRbacEnabled(()) => Ok(UnmaterializableFunc::IsRbacEnabled),
-                MzEnvironmentId(()) => Ok(UnmaterializableFunc::MzEnvironmentId),
-                MzIsSuperuser(()) => Ok(UnmaterializableFunc::MzIsSuperuser),
-                MzNow(()) => Ok(UnmaterializableFunc::MzNow),
-                MzRoleOidMemberships(()) => Ok(UnmaterializableFunc::MzRoleOidMemberships),
-                MzSessionId(()) => Ok(UnmaterializableFunc::MzSessionId),
-                MzUptime(()) => Ok(UnmaterializableFunc::MzUptime),
-                MzVersion(()) => Ok(UnmaterializableFunc::MzVersion),
-                MzVersionNum(()) => Ok(UnmaterializableFunc::MzVersionNum),
-                PgBackendPid(()) => Ok(UnmaterializableFunc::PgBackendPid),
-                PgPostmasterStartTime(()) => Ok(UnmaterializableFunc::PgPostmasterStartTime),
-                SessionUser(()) => Ok(UnmaterializableFunc::SessionUser),
-                Version(()) => Ok(UnmaterializableFunc::Version),
-            }
-        } else {
-            Err(TryFromProtoError::missing_field(
-                "`ProtoUnmaterializableFunc::kind`",
-            ))
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use mz_ore::assert_ok;
-    use mz_proto::protobuf_roundtrip;
-    use proptest::prelude::*;
-
-    use super::*;
-
-    proptest! {
-        #![proptest_config(ProptestConfig::with_cases(4096))]
-
-        #[mz_ore::test]
-        #[cfg_attr(miri, ignore)] // too slow
-        fn unmaterializable_func_protobuf_roundtrip(expect in any::<UnmaterializableFunc>()) {
-            let actual = protobuf_roundtrip::<_, ProtoUnmaterializableFunc>(&expect);
-            assert_ok!(actual);
-            assert_eq!(actual.unwrap(), expect);
         }
     }
 }

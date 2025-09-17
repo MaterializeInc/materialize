@@ -150,7 +150,7 @@ pub fn timezone_time(tz: Timezone, t: NaiveTime, wall_time: &NaiveDateTime) -> N
 )]
 pub struct TimezoneTime {
     pub tz: Timezone,
-    #[proptest(strategy = "crate::func::any_naive_datetime()")]
+    #[proptest(strategy = "mz_proto::chrono::any_naive_datetime()")]
     pub wall_time: NaiveDateTime,
 }
 
