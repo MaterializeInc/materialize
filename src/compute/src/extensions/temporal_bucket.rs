@@ -11,6 +11,7 @@
 
 use std::marker::PhantomData;
 
+use differential_dataflow::Hashable;
 use differential_dataflow::containers::TimelyStack;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
@@ -19,12 +20,12 @@ use differential_dataflow::trace::implementations::merge_batcher::{ColMerger, Me
 use differential_dataflow::trace::{Batcher, Builder, Description};
 use mz_timely_util::temporal::{Bucket, BucketChain, BucketTimestamp};
 use timely::container::{ContainerBuilder, PushInto};
-use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, StreamCore};
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, PathSummary, Timestamp};
-use timely::{Data, PartialOrder};
+use timely::{Data, ExchangeData, PartialOrder};
 
 use crate::typedefs::MzData;
 
@@ -48,9 +49,8 @@ pub trait TemporalBucketing<G: Scope, O> {
 impl<G, D> TemporalBucketing<G, (D, G::Timestamp, mz_repr::Diff)>
     for StreamCore<G, Vec<(D, G::Timestamp, mz_repr::Diff)>>
 where
-    G: Scope,
-    G::Timestamp: Data + MzData + BucketTimestamp + TotalOrder + Lattice,
-    D: Data + MzData + Ord + std::fmt::Debug,
+    G: Scope<Timestamp: ExchangeData + MzData + BucketTimestamp + TotalOrder + Lattice>,
+    D: ExchangeData + MzData + Ord + std::fmt::Debug + Hashable,
 {
     fn bucket<CB>(
         &self,
@@ -63,7 +63,8 @@ where
         let scope = self.scope();
         let logger = scope.logger_for("differential/arrange").map(Into::into);
 
-        self.unary_frontier::<CB, _, _, _>(Pipeline, "Temporal delay", |cap, info| {
+        let pact = Exchange::new(|(d, _, _): &(D, G::Timestamp, mz_repr::Diff)| d.hashed().into());
+        self.unary_frontier::<CB, _, _, _>(pact, "Temporal delay", |cap, info| {
             let mut chain = BucketChain::new(MergeBatcherWrapper::new(logger, info.global_id));
             let activator = scope.activator_for(info.address);
 

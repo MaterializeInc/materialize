@@ -1302,6 +1302,9 @@ class FlipFlagsAction(Action):
             BOOLEAN_FLAG_VALUES
         )
         self.flags_with_values["compute_apply_column_demands"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["enable_compute_temporal_bucketing"] = (
+            BOOLEAN_FLAG_VALUES
+        )
         self.flags_with_values["enable_alter_table_add_column"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_compute_active_dataflow_cancelation"] = (
             BOOLEAN_FLAG_VALUES
@@ -1353,7 +1356,6 @@ class FlipFlagsAction(Action):
             "enable_compute_replica_expiration",
             "compute_replica_expiration_offset",
             "enable_compute_render_fueled_as_specific_collection",
-            "enable_compute_temporal_bucketing",
             "compute_temporal_bucketing_summary",
             "enable_compute_logical_backpressure",
             "compute_logical_backpressure_max_retained_capabilities",
