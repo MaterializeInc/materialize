@@ -18,9 +18,11 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::Context;
+use domain::resolv::StubResolver;
 use jsonwebtoken::DecodingKey;
 use mz_balancerd::{
     BUILD_INFO, BalancerConfig, BalancerService, CancellationResolver, FronteggResolver, Resolver,
+    SniResolver,
 };
 use mz_frontegg_auth::{
     Authenticator, AuthenticatorConfig, DEFAULT_REFRESH_DROP_FACTOR,
@@ -80,8 +82,17 @@ pub struct ServiceArgs {
     /// HTTPS resolver address template. `{}` is replaced with the first subdomain of the HTTPS SNI
     /// host address to get a DNS address. The first IP that address resolves to is the proxy
     /// destinations.
+    #[clap(
+        long,
+        value_name = "HOST.{}.NAME:PORT",
+        visible_alias = "https-resolver-template"
+    )]
+    https_sni_resolver_template: String,
+    /// PGWIRE sni resolver address template. `{}` is replaced with the first subdomain of the PGWIRE SNI
+    /// host address to get a DNS address. The first IP that address resolves to is the proxy
+    /// destinations.
     #[clap(long, value_name = "HOST.{}.NAME:PORT")]
-    https_resolver_template: String,
+    pgwire_sni_resolver_template: Option<String>,
     /// Cancellation resolver configmap directory. The org id part of the incoming connection id
     /// (the 12 bits after (and excluding) the first bit) converted to a 3-char UUID string is
     /// appended to this to make a file path. That file is read, and every newline-delimited line
@@ -231,17 +242,40 @@ pub async fn run(args: ServiceArgs, tracing_handle: TracingHandle) -> Result<(),
                 anyhow::bail!("{cancellation_resolver_dir:?} is not a directory");
             }
             (
-                Resolver::Frontegg(FronteggResolver {
-                    auth,
-                    addr_template,
-                }),
+                Resolver::MultiTenant(
+                    FronteggResolver {
+                        auth,
+                        addr_template,
+                    },
+                    match args.pgwire_sni_resolver_template {
+                        None => None,
+                        Some(template) => {
+                            let (template, port) = template
+                                .rsplit_once(':')
+                                .map(|(t, p)| {
+                                    (
+                                        t.to_owned(),
+                                        p.parse::<u16>().expect(
+                                            "invalid port for pgwire_sni_resolver_template",
+                                        ),
+                                    )
+                                })
+                                .expect("invalid port for pgwire_sni_resolver_template");
+                            Some(SniResolver {
+                                resolver: StubResolver::new(),
+                                template,
+                                port,
+                            })
+                        }
+                    },
+                ),
                 CancellationResolver::Directory(cancellation_resolver_dir),
             )
         }
         (Some(addr), None) => {
             // As a typo-check, verify that the passed address resolves to at least one IP. This
             // result isn't recorded anywhere: we re-resolve on each request in case DNS changes.
-            // Here only to cause startup to crash if mis-typed.
+            // Here only to cause startup to crash if mistyped.
             let mut addrs = tokio::net::lookup_host(&addr)
                 .await
                 .unwrap_or_else(|_| panic!("could not resolve {addr}"));
@@ -266,7 +300,7 @@ pub async fn run(args: ServiceArgs, tracing_handle: TracingHandle) -> Result<(),
         args.https_listen_addr,
         cancellation_resolver,
         resolver,
-        args.https_resolver_template,
+        args.https_sni_resolver_template,
         args.tls.into_config()?,
         args.internal_tls,
         metrics_registry,
