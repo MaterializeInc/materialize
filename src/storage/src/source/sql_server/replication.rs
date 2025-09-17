@@ -187,8 +187,13 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                     export_stat.set_snapshot_records_staged(0);
                 }
             }
-            source_statistics.set_snapshot_records_known(u64::cast_from(snapshot_total));
-            source_statistics.set_snapshot_records_staged(0);
+
+            // Only emit if there was a snapshot to avoid clearing previous snapshot stats.
+            if !capture_instance_to_snapshot.is_empty() {
+                source_statistics.set_snapshot_records_known(u64::cast_from(snapshot_total));
+                source_statistics.set_snapshot_records_staged(0);
+            }
+
 
             let mut cdc_handle = client
                 .cdc(capture_instances.keys().cloned())
@@ -283,8 +288,11 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                     }
                 }
 
-                source_statistics.set_snapshot_records_staged(snapshot_staged_total);
-                source_statistics.set_snapshot_records_known(snapshot_staged_total);
+                // Only emit if there was a snapshot to avoid clearing previous snapshot stats.
+                if !capture_instance_to_snapshot.is_empty() {
+                    source_statistics.set_snapshot_records_staged(snapshot_staged_total);
+                    source_statistics.set_snapshot_records_known(snapshot_staged_total);
+                }
 
                 snapshot_lsns
             };
