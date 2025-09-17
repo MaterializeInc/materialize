@@ -14,7 +14,7 @@ mz-ore = { path = "../ore", default-features = false, features = ["test", "traci
 mz-proto = { path = "../proto", default-features = false }
 prost = { version = "0.13.5", features = ["no-recursion-limit"] }
 proptest = { version = "1.7.0", default-features = false, features = ["std"] }
-serde = { version = "1.0.219", features = ["derive"] }
+serde = { version = "1.0.225", features = ["derive"] }
 tracing = "0.1.37"
 tracing-subscriber = { version = "0.3.19", default-features = false, features = ["env-filter", "fmt"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }

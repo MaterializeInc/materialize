@@ -32,17 +32,17 @@ ordered-float = { version = "5.0.0", features = ["serde"] }
 proptest = { version = "1.7.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.5.1", features = ["boxed_union"] }
 prost = { version = "0.13.5", features = ["no-recursion-limit"] }
-serde = { version = "1.0.218", features = ["derive"] }
+serde = { version = "1.0.225", features = ["derive"] }
 smallvec = { version = "1.15.1", features = ["union"] }
 static_assertions = "1.1"
-thiserror = "2.0.11"
+thiserror = "2.0.16"
 tiberius = { version = "0.12", features = ["chrono", "sql-browser-tokio", "tds73", "native-tls"], default-features = false }
 timely = "0.24.0"
 tokio = { version = "1.44.1", features = ["net"] }
 tokio-stream = "0.1.17"
-tokio-util = { version = "0.7.15", features = ["compat"] }
+tokio-util = { version = "0.7.16", features = ["compat"] }
 tracing = "0.1.37"
-uuid = "1.17.0"
+uuid = "1.18.1"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]

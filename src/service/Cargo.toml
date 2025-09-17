@@ -34,8 +34,8 @@ prometheus = { version = "0.13.4", default-features = false }
 proptest = { version = "1.7.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.5.1", features = ["boxed_union"] }
 prost = { version = "0.13.5", features = ["no-recursion-limit"] }
-semver = { version = "1.0.26", features = ["serde"] }
-serde = { version = "1.0.219", features = ["derive"] }
+semver = { version = "1.0.27", features = ["serde"] }
+serde = { version = "1.0.225", features = ["derive"] }
 sysinfo = "0.29.11"
 timely = "0.24.0"
 tokio = "1.44.1"
