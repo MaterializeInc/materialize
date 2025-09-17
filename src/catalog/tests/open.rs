@@ -27,7 +27,7 @@ use mz_persist_client::{PersistClient, PersistLocation};
 use mz_persist_types::ShardId;
 use mz_proto::RustType;
 use mz_repr::role_id::RoleId;
-use mz_sql::catalog::{RoleAttributes, RoleMembership, RoleVars};
+use mz_sql::catalog::{RoleAttributesRaw, RoleMembership, RoleVars};
 use uuid::Uuid;
 
 /// A new type for [`Snapshot`] that excludes fields that change often from the debug output. It's
@@ -449,7 +449,7 @@ async fn test_open_read_only(state_builder: TestCatalogStateBuilder) {
     let (role_id, _) = txn
         .insert_user_role(
             "joe".to_string(),
-            RoleAttributes::new(),
+            RoleAttributesRaw::new(),
             RoleMembership::new(),
             RoleVars::default(),
             &HashSet::new(),
