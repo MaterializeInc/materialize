@@ -268,14 +268,6 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                     reader_table_info.len()
             );
 
-            // A worker *must* emit a count even if not responsible for snapshotting a table
-            // as statistic summarization will return null if any worker hasn't set a value.
-            // This will also reset snapshot stats for any exports not snapshotting.
-            for statistics in config.statistics.values() {
-                statistics.set_snapshot_records_known(0);
-                statistics.set_snapshot_records_staged(0);
-            }
-
             let connection_config = connection
                 .connection
                 .config(
@@ -310,6 +302,16 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 // as we do not want to attempt to override the current value with 0. We
                 // just leave it null.
                 return Ok(());
+            }
+
+            // A worker *must* emit a count even if not responsible for snapshotting a table
+            // as statistic summarization will return null if any worker hasn't set a value.
+            // This will also reset snapshot stats for any exports not snapshotting.
+            // If no workers need to snapshot, then avoid emitting these as they will clear
+            // previous stats.
+            for statistics in config.statistics.values() {
+                statistics.set_snapshot_records_known(0);
+                statistics.set_snapshot_records_staged(0);
             }
 
             // replication client is only set if this worker is the snapshot leader
