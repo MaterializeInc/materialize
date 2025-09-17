@@ -192,6 +192,7 @@ impl AdapterNotice {
                 PlanNotice::ColumnAlreadyExists { .. } => Severity::Notice,
                 PlanNotice::UpsertSinkKeyNotEnforced { .. } => Severity::Warning,
                 PlanNotice::ReplicaDiskOptionDeprecated { .. } => Severity::Notice,
+                PlanNotice::KafkaSinkNullablePartitionByExpr => Severity::Warning,
             },
             AdapterNotice::UnknownSessionDatabase(_) => Severity::Notice,
             AdapterNotice::OptimizerNotice { .. } => Severity::Notice,
@@ -296,6 +297,7 @@ impl AdapterNotice {
                 PlanNotice::ReplicaDiskOptionDeprecated { .. } => {
                     SqlState::WARNING_DEPRECATED_FEATURE
                 }
+                PlanNotice::KafkaSinkNullablePartitionByExpr => SqlState::WARNING,
             },
             AdapterNotice::UnknownSessionDatabase(_) => SqlState::from_code("MZ004"),
             AdapterNotice::DefaultClusterDoesNotExist { .. } => SqlState::from_code("MZ005"),

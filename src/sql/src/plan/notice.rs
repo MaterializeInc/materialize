@@ -42,6 +42,7 @@ pub enum PlanNotice {
         name: String,
     },
     ReplicaDiskOptionDeprecated,
+    KafkaSinkNullablePartitionByExpr,
 }
 
 impl PlanNotice {
@@ -58,6 +59,9 @@ impl PlanNotice {
                     name.quoted()
                 );
                 Some(details)
+            }
+            PlanNotice::KafkaSinkNullablePartitionByExpr => {
+                Some("The PARTITION BY expression may evaluate to NULL, which will cause all such rows to be written to a single partition. Consider using a function that is guaranteed to be non-NULL.".into())
             }
             _ => None,
         }
@@ -101,6 +105,9 @@ impl fmt::Display for PlanNotice {
             }
             PlanNotice::ReplicaDiskOptionDeprecated => {
                 write!(f, "the DISK option is deprecated and has no effect")
+            }
+            PlanNotice::KafkaSinkNullablePartitionByExpr => {
+                write!(f, "the PARTITION BY expression may evaluate to NULL")
             }
         }
     }

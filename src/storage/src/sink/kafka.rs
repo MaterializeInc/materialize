@@ -103,6 +103,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
+use mz_ore::soft_assert_or_log;
 use mz_ore::task::{self, AbortOnDropHandle};
 use mz_persist_client::Diagnostics;
 use mz_persist_client::write::WriteHandle;
@@ -1579,13 +1580,14 @@ fn evaluate_partition_by(partition_by: &MirScalarExpr, row: &[Datum]) -> u64 {
     // user-facing `CREATE SINK` docs.
     let temp_storage = RowArena::new();
     match partition_by.eval(row, &temp_storage) {
-        Ok(hash) => match hash {
-            Datum::Int32(i) => i.try_into().unwrap_or(0),
-            Datum::Int64(i) => i.try_into().unwrap_or(0),
-            Datum::UInt32(u) => u64::from(u),
-            Datum::UInt64(u) => u,
-            _ => unreachable!(),
-        },
+        Ok(Datum::UInt64(u)) => u,
+        Ok(datum) => {
+            // If we are here the only valid type that we should be seeing is
+            // null. Anything else is a bug in the planner.
+            soft_assert_or_log!(datum.is_null(), "unexpected partition_by result: {datum:?}");
+            // We treat nulls the same as we treat errors: map them to partition 0.
+            0
+        }
         Err(_) => 0,
     }
 }
