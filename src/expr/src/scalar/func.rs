@@ -60,7 +60,10 @@ use subtle::ConstantTimeEq;
 
 use crate::scalar::ProtoBinaryFunc;
 use crate::scalar::func::format::DateTimeFormat;
-use crate::{EvalError, MirScalarExpr, like_pattern};
+use crate::{
+    EvalError, IncompatibleArrayDimensions, IndexOutOfRange, InvalidByteSequence,
+    InvalidIdentifier, InvalidLayer, MirScalarExpr, like_pattern,
+};
 
 #[macro_use]
 mod macros;
@@ -366,10 +369,10 @@ fn convert_from<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> 
 
     match str::from_utf8(a.unwrap_bytes()) {
         Ok(from) => Ok(Datum::String(from)),
-        Err(e) => Err(EvalError::InvalidByteSequence {
+        Err(e) => Err(EvalError::InvalidByteSequence(InvalidByteSequence {
             byte_sequence: e.to_string().into(),
             encoding_name,
-        }),
+        })),
     }
 }
 
@@ -416,10 +419,10 @@ fn encoded_bytes_char_length<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>
     let decoded_string = match enc.decode(a.unwrap_bytes(), DecoderTrap::Strict) {
         Ok(s) => s,
         Err(e) => {
-            return Err(EvalError::InvalidByteSequence {
+            return Err(EvalError::InvalidByteSequence(InvalidByteSequence {
                 byte_sequence: e.into(),
                 encoding_name,
-            });
+            }));
         }
     };
 
@@ -1750,10 +1753,10 @@ fn power_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError>
 fn get_bit<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let bytes = a.unwrap_bytes();
     let index = b.unwrap_int32();
-    let err = EvalError::IndexOutOfRange {
+    let err = EvalError::IndexOutOfRange(IndexOutOfRange {
         provided: index,
         valid_end: i32::try_from(bytes.len().saturating_mul(8)).unwrap() - 1,
-    };
+    });
 
     let index = usize::try_from(index).map_err(|_| err.clone())?;
 
@@ -1772,10 +1775,10 @@ fn get_bit<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
 fn get_byte<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let bytes = a.unwrap_bytes();
     let index = b.unwrap_int32();
-    let err = EvalError::IndexOutOfRange {
+    let err = EvalError::IndexOutOfRange(IndexOutOfRange {
         provided: index,
         valid_end: i32::try_from(bytes.len()).unwrap() - 1,
-    };
+    });
     let i: &u8 = bytes
         .get(usize::try_from(index).map_err(|_| err.clone())?)
         .ok_or(err)?;
@@ -2862,10 +2865,10 @@ fn parse_ident<'a>(
             let s = buf.take_while(|ch| !matches!(ch, '"'));
 
             if buf.next() != Some('"') {
-                return Err(EvalError::InvalidIdentifier {
+                return Err(EvalError::InvalidIdentifier(InvalidIdentifier {
                     ident: ident.into(),
                     detail: Some("String has unclosed double quotes.".into()),
-                });
+                }));
             }
             elems.push(Datum::String(s));
             missing_ident = false;
@@ -2879,20 +2882,20 @@ fn parse_ident<'a>(
 
         if missing_ident {
             if c == Some('.') {
-                return Err(EvalError::InvalidIdentifier {
+                return Err(EvalError::InvalidIdentifier(InvalidIdentifier {
                     ident: ident.into(),
                     detail: Some("No valid identifier before \".\".".into()),
-                });
+                }));
             } else if after_dot {
-                return Err(EvalError::InvalidIdentifier {
+                return Err(EvalError::InvalidIdentifier(InvalidIdentifier {
                     ident: ident.into(),
                     detail: Some("No valid identifier after \".\".".into()),
-                });
+                }));
             } else {
-                return Err(EvalError::InvalidIdentifier {
+                return Err(EvalError::InvalidIdentifier(InvalidIdentifier {
                     ident: ident.into(),
                     detail: None,
-                });
+                }));
             }
         }
 
@@ -2905,10 +2908,10 @@ fn parse_ident<'a>(
                 buf.take_while(|ch| ch.is_ascii_whitespace());
             }
             Some(_) if strict => {
-                return Err(EvalError::InvalidIdentifier {
+                return Err(EvalError::InvalidIdentifier(InvalidIdentifier {
                     ident: ident.into(),
                     detail: None,
-                });
+                }));
             }
             _ => break,
         }
@@ -5742,7 +5745,7 @@ fn list_length_max<'a>(
     let b = b.unwrap_int64();
 
     if b as usize > max_layer || b < 1 {
-        Err(EvalError::InvalidLayer { max_layer, val: b })
+        Err(EvalError::InvalidLayer(InvalidLayer { max_layer, val: b }))
     } else {
         match max_len_on_layer(a, b) {
             Some(l) => match l.try_into() {
@@ -5846,9 +5849,11 @@ fn array_array_concat<'a>(
     // TODO(benesch): remove potentially dangerous usage of `as`.
     #[allow(clippy::as_conversions)]
     if (a_ndims as isize - b_ndims as isize).abs() > 1 {
-        return Err(EvalError::IncompatibleArrayDimensions {
-            dims: Some((a_ndims, b_ndims)),
-        });
+        return Err(EvalError::IncompatibleArrayDimensions(
+            IncompatibleArrayDimensions {
+                dims: Some((a_ndims, b_ndims)),
+            },
+        ));
     }
 
     let mut dims;
@@ -5863,7 +5868,9 @@ fn array_array_concat<'a>(
         // arrays.
         Ordering::Equal => {
             if &a_dims[1..] != &b_dims[1..] {
-                return Err(EvalError::IncompatibleArrayDimensions { dims: None });
+                return Err(EvalError::IncompatibleArrayDimensions(
+                    IncompatibleArrayDimensions { dims: None },
+                ));
             }
             dims = vec![ArrayDimension {
                 lower_bound: a_dims[0].lower_bound,
@@ -5876,7 +5883,9 @@ fn array_array_concat<'a>(
         // as an element of `b`.
         Ordering::Less => {
             if &a_dims[..] != &b_dims[1..] {
-                return Err(EvalError::IncompatibleArrayDimensions { dims: None });
+                return Err(EvalError::IncompatibleArrayDimensions(
+                    IncompatibleArrayDimensions { dims: None },
+                ));
             }
             dims = vec![ArrayDimension {
                 lower_bound: b_dims[0].lower_bound,
@@ -5892,7 +5901,9 @@ fn array_array_concat<'a>(
         // as an element of `a`.
         Ordering::Greater => {
             if &a_dims[1..] != &b_dims[..] {
-                return Err(EvalError::IncompatibleArrayDimensions { dims: None });
+                return Err(EvalError::IncompatibleArrayDimensions(
+                    IncompatibleArrayDimensions { dims: None },
+                ));
             }
             dims = vec![ArrayDimension {
                 lower_bound: a_dims[0].lower_bound,

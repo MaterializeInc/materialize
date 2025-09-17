@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(output_type = \"mz_repr::ArrayRustType<String>\", propagates_nulls = true)]\nfn parse_ident<'a>(\n    a: Datum<'a>,\n    b: Datum<'a>,\n    temp_storage: &'a RowArena,\n) -> Result<Datum<'a>, EvalError> {\n    fn is_ident_start(c: char) -> bool {\n        matches!(c, 'A'..='Z' | 'a'..='z' | '_' | '\\u{80}'..= char::MAX)\n    }\n    fn is_ident_cont(c: char) -> bool {\n        matches!(c, '0'..='9' | '$') || is_ident_start(c)\n    }\n    let ident = a.unwrap_str();\n    let strict = b.unwrap_bool();\n    let mut elems = vec![];\n    let buf = &mut LexBuf::new(ident);\n    let mut after_dot = false;\n    buf.take_while(|ch| ch.is_ascii_whitespace());\n    loop {\n        let mut missing_ident = true;\n        let c = buf.next();\n        if c == Some('\"') {\n            let s = buf.take_while(|ch| !matches!(ch, '\"'));\n            if buf.next() != Some('\"') {\n                return Err(EvalError::InvalidIdentifier {\n                    ident: ident.into(),\n                    detail: Some(\"String has unclosed double quotes.\".into()),\n                });\n            }\n            elems.push(Datum::String(s));\n            missing_ident = false;\n        } else if c.map(is_ident_start).unwrap_or(false) {\n            buf.prev();\n            let s = buf.take_while(is_ident_cont);\n            let s = temp_storage.push_string(s.to_ascii_lowercase());\n            elems.push(Datum::String(s));\n            missing_ident = false;\n        }\n        if missing_ident {\n            if c == Some('.') {\n                return Err(EvalError::InvalidIdentifier {\n                    ident: ident.into(),\n                    detail: Some(\"No valid identifier before \\\".\\\".\".into()),\n                });\n            } else if after_dot {\n                return Err(EvalError::InvalidIdentifier {\n                    ident: ident.into(),\n                    detail: Some(\"No valid identifier after \\\".\\\".\".into()),\n                });\n            } else {\n                return Err(EvalError::InvalidIdentifier {\n                    ident: ident.into(),\n                    detail: None,\n                });\n            }\n        }\n        buf.take_while(|ch| ch.is_ascii_whitespace());\n        match buf.next() {\n            Some('.') => {\n                after_dot = true;\n                buf.take_while(|ch| ch.is_ascii_whitespace());\n            }\n            Some(_) if strict => {\n                return Err(EvalError::InvalidIdentifier {\n                    ident: ident.into(),\n                    detail: None,\n                });\n            }\n            _ => break,\n        }\n    }\n    Ok(\n        temp_storage\n            .try_make_datum(|packer| {\n                packer\n                    .try_push_array(\n                        &[\n                            ArrayDimension {\n                                lower_bound: 1,\n                                length: elems.len(),\n                            },\n                        ],\n                        elems,\n                    )\n            })?,\n    )\n}\n"
+expression: "#[sqlfunc(output_type = \"mz_repr::ArrayRustType<String>\", propagates_nulls = true)]\nfn parse_ident<'a>(\n    a: Datum<'a>,\n    b: Datum<'a>,\n    temp_storage: &'a RowArena,\n) -> Result<Datum<'a>, EvalError> {\n    fn is_ident_start(c: char) -> bool {\n        matches!(c, 'A'..='Z' | 'a'..='z' | '_' | '\\u{80}'..= char::MAX)\n    }\n    fn is_ident_cont(c: char) -> bool {\n        matches!(c, '0'..='9' | '$') || is_ident_start(c)\n    }\n    let ident = a.unwrap_str();\n    let strict = b.unwrap_bool();\n    let mut elems = vec![];\n    let buf = &mut LexBuf::new(ident);\n    let mut after_dot = false;\n    buf.take_while(|ch| ch.is_ascii_whitespace());\n    loop {\n        let mut missing_ident = true;\n        let c = buf.next();\n        if c == Some('\"') {\n            let s = buf.take_while(|ch| !matches!(ch, '\"'));\n            if buf.next() != Some('\"') {\n                return Err(\n                    EvalError::InvalidIdentifier(InvalidIdentifier {\n                        ident: ident.into(),\n                        detail: Some(\"String has unclosed double quotes.\".into()),\n                    }),\n                );\n            }\n            elems.push(Datum::String(s));\n            missing_ident = false;\n        } else if c.map(is_ident_start).unwrap_or(false) {\n            buf.prev();\n            let s = buf.take_while(is_ident_cont);\n            let s = temp_storage.push_string(s.to_ascii_lowercase());\n            elems.push(Datum::String(s));\n            missing_ident = false;\n        }\n        if missing_ident {\n            if c == Some('.') {\n                return Err(\n                    EvalError::InvalidIdentifier(InvalidIdentifier {\n                        ident: ident.into(),\n                        detail: Some(\"No valid identifier before \\\".\\\".\".into()),\n                    }),\n                );\n            } else if after_dot {\n                return Err(\n                    EvalError::InvalidIdentifier(InvalidIdentifier {\n                        ident: ident.into(),\n                        detail: Some(\"No valid identifier after \\\".\\\".\".into()),\n                    }),\n                );\n            } else {\n                return Err(\n                    EvalError::InvalidIdentifier(InvalidIdentifier {\n                        ident: ident.into(),\n                        detail: None,\n                    }),\n                );\n            }\n        }\n        buf.take_while(|ch| ch.is_ascii_whitespace());\n        match buf.next() {\n            Some('.') => {\n                after_dot = true;\n                buf.take_while(|ch| ch.is_ascii_whitespace());\n            }\n            Some(_) if strict => {\n                return Err(\n                    EvalError::InvalidIdentifier(InvalidIdentifier {\n                        ident: ident.into(),\n                        detail: None,\n                    }),\n                );\n            }\n            _ => break,\n        }\n    }\n    Ok(\n        temp_storage\n            .try_make_datum(|packer| {\n                packer\n                    .try_push_array(\n                        &[\n                            ArrayDimension {\n                                lower_bound: 1,\n                                length: elems.len(),\n                            },\n                        ],\n                        elems,\n                    )\n            })?,\n    )\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -81,10 +81,12 @@ fn parse_ident<'a>(
         if c == Some('"') {
             let s = buf.take_while(|ch| !matches!(ch, '"'));
             if buf.next() != Some('"') {
-                return Err(EvalError::InvalidIdentifier {
-                    ident: ident.into(),
-                    detail: Some("String has unclosed double quotes.".into()),
-                });
+                return Err(
+                    EvalError::InvalidIdentifier(InvalidIdentifier {
+                        ident: ident.into(),
+                        detail: Some("String has unclosed double quotes.".into()),
+                    }),
+                );
             }
             elems.push(Datum::String(s));
             missing_ident = false;
@@ -97,20 +99,26 @@ fn parse_ident<'a>(
         }
         if missing_ident {
             if c == Some('.') {
-                return Err(EvalError::InvalidIdentifier {
-                    ident: ident.into(),
-                    detail: Some("No valid identifier before \".\".".into()),
-                });
+                return Err(
+                    EvalError::InvalidIdentifier(InvalidIdentifier {
+                        ident: ident.into(),
+                        detail: Some("No valid identifier before \".\".".into()),
+                    }),
+                );
             } else if after_dot {
-                return Err(EvalError::InvalidIdentifier {
-                    ident: ident.into(),
-                    detail: Some("No valid identifier after \".\".".into()),
-                });
+                return Err(
+                    EvalError::InvalidIdentifier(InvalidIdentifier {
+                        ident: ident.into(),
+                        detail: Some("No valid identifier after \".\".".into()),
+                    }),
+                );
             } else {
-                return Err(EvalError::InvalidIdentifier {
-                    ident: ident.into(),
-                    detail: None,
-                });
+                return Err(
+                    EvalError::InvalidIdentifier(InvalidIdentifier {
+                        ident: ident.into(),
+                        detail: None,
+                    }),
+                );
             }
         }
         buf.take_while(|ch| ch.is_ascii_whitespace());
@@ -120,10 +128,12 @@ fn parse_ident<'a>(
                 buf.take_while(|ch| ch.is_ascii_whitespace());
             }
             Some(_) if strict => {
-                return Err(EvalError::InvalidIdentifier {
-                    ident: ident.into(),
-                    detail: None,
-                });
+                return Err(
+                    EvalError::InvalidIdentifier(InvalidIdentifier {
+                        ident: ident.into(),
+                        detail: None,
+                    }),
+                );
             }
             _ => break,
         }

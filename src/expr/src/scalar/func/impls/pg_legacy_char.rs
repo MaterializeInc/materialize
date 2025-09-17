@@ -15,6 +15,7 @@ use mz_repr::adt::system::PgLegacyChar;
 use mz_repr::adt::varchar::{VarChar, VarCharMaxLength};
 
 use crate::EvalError;
+use crate::scalar::InvalidByteSequence;
 
 pub fn format_pg_legacy_char<B>(buf: &mut B, c: u8) -> Result<(), EvalError>
 where
@@ -27,10 +28,10 @@ where
             buf.write_str(s);
             Ok(())
         }
-        Err(_) => Err(EvalError::InvalidByteSequence {
+        Err(_) => Err(EvalError::InvalidByteSequence(InvalidByteSequence {
             byte_sequence: format!("{:#02x}", c).into(),
             encoding_name: "UTF8".into(),
-        }),
+        })),
     }
 }
 

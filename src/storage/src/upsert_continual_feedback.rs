@@ -11,23 +11,28 @@
 //! [`upsert_inner`] for a description of how the operator works and why.
 
 use std::cmp::Reverse;
+use std::convert::Infallible;
 use std::fmt::Debug;
 use std::sync::Arc;
 
+use columnar::Columnar;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::{AsCollection, Collection};
 use indexmap::map::Entry;
 use itertools::Itertools;
 use mz_repr::{Diff, GlobalId, Row};
-use mz_storage_types::errors::{DataflowError, EnvelopeError};
+use mz_storage_types::errors::{
+    DataflowError, DataflowErrorReference, EnvelopeError, EnvelopeErrorReference,
+};
 use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
-use std::convert::Infallible;
+use mz_timely_util::columnar::Column;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Exchange;
+use timely::dataflow::operators::core::Map;
 use timely::dataflow::operators::{Capability, CapabilitySet};
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::{Scope, Stream, StreamCore};
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
@@ -103,7 +108,7 @@ pub fn upsert_inner<G: Scope, FromTime, F, Fut, US>(
     input: &Collection<G, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
     key_indices: Vec<usize>,
     resume_upper: Antichain<G::Timestamp>,
-    persist_input: Collection<G, Result<Row, DataflowError>, Diff>,
+    persist_input: StreamCore<G, Column<(Result<Row, DataflowError>, G::Timestamp, Diff)>>,
     mut persist_token: Option<Vec<PressOnDropButton>>,
     upsert_metrics: UpsertMetrics,
     source_config: crate::source::SourceExportCreationConfig,
@@ -118,7 +123,7 @@ pub fn upsert_inner<G: Scope, FromTime, F, Fut, US>(
     PressOnDropButton,
 )
 where
-    G::Timestamp: Refines<mz_repr::Timestamp> + TotalOrder + Sync,
+    G::Timestamp: Refines<mz_repr::Timestamp> + TotalOrder + Columnar + Sync,
     F: FnOnce() -> Fut + 'static,
     Fut: std::future::Future<Output = US>,
     US: UpsertStateBackend<G::Timestamp, FromTime>,
@@ -127,11 +132,11 @@ where
     let mut builder = AsyncOperatorBuilder::new("Upsert".to_string(), input.scope());
 
     // We only care about UpsertValueError since this is the only error that we can retract
-    let persist_input = persist_input.flat_map(move |result| {
+    let persist_input = persist_input.flat_map::<Vec<_>, _, _>(move |(result, t, r)| {
         let value = match result {
-            Ok(ok) => Ok(ok),
-            Err(DataflowError::EnvelopeError(err)) => match *err {
-                EnvelopeError::Upsert(err) => Err(Box::new(err)),
+            Ok(ok) => Ok(Columnar::into_owned(ok)),
+            Err(DataflowErrorReference::EnvelopeError(err)) => match *err {
+                EnvelopeErrorReference::Upsert(err) => Err(Box::new(Columnar::into_owned(err))),
                 _ => return None,
             },
             Err(_) => return None,
@@ -140,7 +145,11 @@ where
             Ok(ref row) => Ok(row),
             Err(ref err) => Err(&**err),
         };
-        Some((UpsertKey::from_value(value_ref, &key_indices), value))
+        Some((
+            (UpsertKey::from_value(value_ref, &key_indices), value),
+            G::Timestamp::into_owned(t),
+            r,
+        ))
     });
     let (output_handle, output) = builder.new_output();
 
@@ -157,7 +166,7 @@ where
     );
 
     let mut persist_input = builder.new_disconnected_input(
-        &persist_input.inner,
+        &persist_input,
         Exchange::new(|((key, _), _, _)| UpsertKey::hashed(key)),
     );
 
@@ -889,9 +898,11 @@ mod test {
     use mz_storage_operators::persist_source::Subtime;
     use mz_storage_types::sources::SourceEnvelope;
     use mz_storage_types::sources::envelope::{KeyEnvelope, UpsertEnvelope, UpsertStyle};
+    use mz_timely_util::columnar::builder::ColumnBuilder;
     use rocksdb::Env;
     use timely::dataflow::operators::capture::Extract;
-    use timely::dataflow::operators::{Capture, Input, Probe};
+    use timely::dataflow::operators::core::Input;
+    use timely::dataflow::operators::{Capture, Probe};
     use timely::progress::Timestamp;
 
     use crate::metrics::StorageMetrics;
@@ -916,7 +927,8 @@ mod test {
                     // enabled scope.
                     scope.scoped::<(MzTimestamp, Subtime), _, _>("upsert", |scope| {
                         let (input_handle, input) = scope.new_input();
-                        let (persist_handle, persist_input) = scope.new_input();
+                        let (persist_handle, persist_input) =
+                            scope.new_input_with_builder::<ColumnBuilder<_>>();
                         let upsert_config = UpsertConfig {
                             shrink_upsert_unused_buffers_by_ratio: 0,
                         };
@@ -959,7 +971,7 @@ mod test {
                             &input.as_collection(),
                             vec![0],
                             Antichain::from_elem(Timestamp::minimum()),
-                            persist_input.as_collection(),
+                            persist_input,
                             None,
                             upsert_metrics,
                             source_config,
@@ -1003,7 +1015,7 @@ mod test {
 
             // We assume this worker succesfully CAAs the update to the shard so we send it back
             // through the persist_input
-            persist_handle.send((Ok(value1), new_ts(0), Diff::ONE));
+            persist_handle.send((Ok::<_, &DataflowError>(&value1), new_ts(0), Diff::ONE));
             persist_handle.advance_to(new_ts(1));
             worker.step();
 
@@ -1068,7 +1080,8 @@ mod test {
                     // enabled scope.
                     scope.scoped::<(MzTimestamp, Subtime), _, _>("upsert", |scope| {
                         let (input_handle, input) = scope.new_input();
-                        let (persist_handle, persist_input) = scope.new_input();
+                        let (persist_handle, persist_input) =
+                            scope.new_input_with_builder::<ColumnBuilder<_>>();
                         let upsert_config = UpsertConfig {
                             shrink_upsert_unused_buffers_by_ratio: 0,
                         };
@@ -1150,7 +1163,7 @@ mod test {
                             &input.as_collection(),
                             vec![0],
                             Antichain::from_elem(Timestamp::minimum()),
-                            persist_input.as_collection(),
+                            persist_input,
                             None,
                             upsert_metrics,
                             source_config,
@@ -1195,7 +1208,7 @@ mod test {
                 worker.step_or_park(None);
             }
             // Feedback the produced output..
-            persist_handle.send((Ok(value1.clone()), mz_ts(0), Diff::ONE));
+            persist_handle.send((Ok::<_, &DataflowError>(&value1), mz_ts(0), Diff::ONE));
             persist_handle.advance_to(mz_ts(1));
             // ..and send the next upsert command that deletes the key.
             input_handle.send(msg2);
@@ -1205,7 +1218,7 @@ mod test {
             }
 
             // Feedback the produced output..
-            persist_handle.send((Ok(value1), mz_ts(1), Diff::MINUS_ONE));
+            persist_handle.send((Ok::<_, &DataflowError>(&value1), mz_ts(1), Diff::MINUS_ONE));
             persist_handle.advance_to(mz_ts(2));
             // ..and send the next *out of order* upsert command that deletes the key. Here msg4
             // happens at offset 4 and the operator should rememeber that.

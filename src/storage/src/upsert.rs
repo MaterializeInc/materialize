@@ -10,11 +10,13 @@
 use std::cell::RefCell;
 use std::cmp::Reverse;
 use std::convert::AsRef;
+use std::convert::Infallible;
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use columnar::Columnar;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::{AsCollection, Collection};
 use futures::StreamExt;
@@ -27,18 +29,23 @@ use mz_rocksdb::ValueIterator;
 use mz_storage_operators::metrics::BackpressureMetrics;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::dyncfgs;
-use mz_storage_types::errors::{DataflowError, EnvelopeError, UpsertError};
+use mz_storage_types::errors::{
+    DataflowError, DataflowErrorReference, EnvelopeError, EnvelopeErrorReference, UpsertError,
+};
 use mz_storage_types::sources::envelope::UpsertEnvelope;
 use mz_timely_util::builder_async::{
     AsyncOutputHandle, Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder,
     PressOnDropButton,
 };
+use mz_timely_util::columnar::Column;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use timely::dataflow::channels::pact::Exchange;
+use timely::container::CapacityContainerBuilder;
+use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::channels::pushers::Tee;
+use timely::dataflow::operators::core::Map;
 use timely::dataflow::operators::{Capability, InputCapability, Operator};
-use timely::dataflow::{Scope, ScopeParent, Stream};
+use timely::dataflow::{Scope, ScopeParent, Stream, StreamCore};
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
@@ -46,11 +53,11 @@ use timely::progress::{Antichain, Timestamp};
 use crate::healthcheck::HealthStatusUpdate;
 use crate::metrics::upsert::UpsertMetrics;
 use crate::storage_state::StorageInstanceContext;
-use crate::upsert_continual_feedback;
-use types::{
-    BincodeOpts, StateValue, UpsertState, UpsertStateBackend, consolidating_merge_function,
-    upsert_bincode_opts,
+use crate::upsert::types::{
+    BincodeOpts, StateValue, UpsertState, UpsertStateBackend, ValueMetadata,
+    consolidating_merge_function, upsert_bincode_opts,
 };
+use crate::upsert_continual_feedback;
 
 #[cfg(test)]
 pub mod memory;
@@ -161,12 +168,6 @@ impl<H: Digest> Hasher for DigestHasher<H> {
     }
 }
 
-use std::convert::Infallible;
-use timely::container::CapacityContainerBuilder;
-use timely::dataflow::channels::pact::Pipeline;
-
-use self::types::ValueMetadata;
-
 /// This leaf operator drops `token` after the input reaches the `resume_upper`.
 /// This is useful to take coordinated actions across all workers, after the `upsert`
 /// operator has rehydrated.
@@ -215,7 +216,7 @@ pub(crate) fn upsert<G: Scope, FromTime>(
     input: &Collection<G, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
     upsert_envelope: UpsertEnvelope,
     resume_upper: Antichain<G::Timestamp>,
-    previous: Collection<G, Result<Row, DataflowError>, Diff>,
+    previous: StreamCore<G, Column<(Result<Row, DataflowError>, G::Timestamp, Diff)>>,
     previous_token: Option<Vec<PressOnDropButton>>,
     source_config: crate::source::SourceExportCreationConfig,
     instance_context: &StorageInstanceContext,
@@ -229,8 +230,7 @@ pub(crate) fn upsert<G: Scope, FromTime>(
     PressOnDropButton,
 )
 where
-    G::Timestamp: TotalOrder + Sync,
-    G::Timestamp: Refines<mz_repr::Timestamp> + TotalOrder + Sync,
+    G::Timestamp: TotalOrder + Sync + Columnar + Refines<mz_repr::Timestamp>,
     FromTime: Timestamp + Sync,
 {
     let upsert_metrics = source_config.metrics.get_upsert_metrics(
@@ -345,7 +345,7 @@ fn upsert_operator<G: Scope, FromTime, F, Fut, US>(
     input: &Collection<G, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
     key_indices: Vec<usize>,
     resume_upper: Antichain<G::Timestamp>,
-    persist_input: Collection<G, Result<Row, DataflowError>, Diff>,
+    persist_input: StreamCore<G, Column<(Result<Row, DataflowError>, G::Timestamp, Diff)>>,
     persist_token: Option<Vec<PressOnDropButton>>,
     upsert_metrics: UpsertMetrics,
     source_config: crate::source::SourceExportCreationConfig,
@@ -361,8 +361,7 @@ fn upsert_operator<G: Scope, FromTime, F, Fut, US>(
     PressOnDropButton,
 )
 where
-    G::Timestamp: TotalOrder + Sync,
-    G::Timestamp: Refines<mz_repr::Timestamp> + TotalOrder + Sync,
+    G::Timestamp: TotalOrder + Columnar + Sync + Refines<mz_repr::Timestamp>,
     F: FnOnce() -> Fut + 'static,
     Fut: std::future::Future<Output = US>,
     US: UpsertStateBackend<G::Timestamp, FromTime>,
@@ -663,7 +662,7 @@ fn upsert_classic<G: Scope, FromTime, F, Fut, US>(
     input: &Collection<G, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
     key_indices: Vec<usize>,
     resume_upper: Antichain<G::Timestamp>,
-    previous: Collection<G, Result<Row, DataflowError>, Diff>,
+    previous: StreamCore<G, Column<(Result<Row, DataflowError>, G::Timestamp, Diff)>>,
     previous_token: Option<Vec<PressOnDropButton>>,
     upsert_metrics: UpsertMetrics,
     source_config: crate::source::SourceExportCreationConfig,
@@ -678,7 +677,7 @@ fn upsert_classic<G: Scope, FromTime, F, Fut, US>(
     PressOnDropButton,
 )
 where
-    G::Timestamp: TotalOrder + Sync,
+    G::Timestamp: TotalOrder + Columnar + Sync,
     F: FnOnce() -> Fut + 'static,
     Fut: std::future::Future<Output = US>,
     US: UpsertStateBackend<G::Timestamp, FromTime>,
@@ -687,11 +686,11 @@ where
     let mut builder = AsyncOperatorBuilder::new("Upsert".to_string(), input.scope());
 
     // We only care about UpsertValueError since this is the only error that we can retract
-    let previous = previous.flat_map(move |result| {
+    let previous = previous.flat_map::<Vec<_>, _, _>(move |(result, t, r)| {
         let value = match result {
-            Ok(ok) => Ok(ok),
-            Err(DataflowError::EnvelopeError(err)) => match *err {
-                EnvelopeError::Upsert(err) => Err(Box::new(err)),
+            Ok(ok) => Ok(Columnar::into_owned(ok)),
+            Err(DataflowErrorReference::EnvelopeError(err)) => match *err {
+                EnvelopeErrorReference::Upsert(err) => Err(Box::new(Columnar::into_owned(err))),
                 _ => return None,
             },
             Err(_) => return None,
@@ -700,7 +699,11 @@ where
             Ok(ref row) => Ok(row),
             Err(ref err) => Err(&**err),
         };
-        Some((UpsertKey::from_value(value_ref, &key_indices), value))
+        Some((
+            (UpsertKey::from_value(value_ref, &key_indices), value),
+            G::Timestamp::into_owned(t),
+            r,
+        ))
     });
     let (output_handle, output) = builder.new_output();
 
@@ -717,7 +720,7 @@ where
     );
 
     let mut previous = builder.new_input_for(
-        &previous.inner,
+        &previous,
         Exchange::new(|((key, _), _, _)| UpsertKey::hashed(key)),
         &output_handle,
     );

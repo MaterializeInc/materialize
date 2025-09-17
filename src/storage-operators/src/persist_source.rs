@@ -9,8 +9,6 @@
 
 //! A source that reads from an a persist shard.
 
-use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
-use mz_dyncfg::ConfigSet;
 use std::convert::Infallible;
 use std::fmt::Debug;
 use std::future::Future;
@@ -18,9 +16,12 @@ use std::hash::Hash;
 use std::sync::Arc;
 use std::time::Instant;
 
+use columnar::Columnar;
 use differential_dataflow::lattice::Lattice;
 use futures::{StreamExt, future::Either};
+use mz_dyncfg::ConfigSet;
 use mz_expr::{ColumnSpecs, Interpreter, MfpPlan, ResultSpec, UnmaterializableFunc};
+use mz_ore::Overflowing;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_persist_client::cache::PersistClientCache;
@@ -43,12 +44,13 @@ use mz_storage_types::stats::RelationPartStats;
 use mz_timely_util::builder_async::{
     Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
+use mz_timely_util::columnar::Column;
+use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::probe::ProbeNotify;
 use mz_txn_wal::operator::{TxnsContext, txns_progress};
 use serde::{Deserialize, Serialize};
 use timely::PartialOrder;
 use timely::communication::Push;
-use timely::dataflow::ScopeParent;
 use timely::dataflow::channels::Message;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::OutputHandleCore;
@@ -57,6 +59,7 @@ use timely::dataflow::operators::{Capability, Leave, OkErr};
 use timely::dataflow::operators::{CapabilitySet, ConnectLoop, Feedback};
 use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, Stream};
+use timely::dataflow::{ScopeParent, StreamCore};
 use timely::order::TotalOrder;
 use timely::progress::Antichain;
 use timely::progress::Timestamp as TimelyTimestamp;
@@ -75,7 +78,18 @@ use crate::metrics::BackpressureMetrics;
 /// is a simple batch counter, though we may change it to eg. reflect progress through the keyspace
 /// in the future.)
 #[derive(
-    Copy, Clone, PartialEq, Default, Eq, PartialOrd, Ord, Debug, Serialize, Deserialize, Hash,
+    Copy,
+    Clone,
+    PartialEq,
+    Default,
+    Eq,
+    PartialOrd,
+    Ord,
+    Debug,
+    Serialize,
+    Deserialize,
+    Hash,
+    Columnar,
 )]
 pub struct Subtime(u64);
 
@@ -257,9 +271,9 @@ where
         None => (stream, vec![]),
     };
     tokens.extend(txns_tokens);
-    let (ok_stream, err_stream) = stream.ok_err(|(d, t, r)| match d {
-        Ok(row) => Ok((row, t.0, r)),
-        Err(err) => Err((err, t.0, r)),
+    let (ok_stream, err_stream) = stream.ok_err::<Vec<_>, _, Vec<_>, _, _>(|(d, t, r)| match d {
+        Ok(row) => Ok((Row::into_owned(row), t.0, r)),
+        Err(err) => Err((DataflowError::into_owned(err), t.0, r)),
     });
     (ok_stream, err_stream, tokens)
 }
@@ -289,14 +303,7 @@ pub fn persist_source_core<'g, G>(
     start_signal: impl Future<Output = ()> + 'static,
     error_handler: ErrorHandler,
 ) -> (
-    Stream<
-        RefinedScope<'g, G>,
-        (
-            Result<Row, DataflowError>,
-            (mz_repr::Timestamp, Subtime),
-            Diff,
-        ),
-    >,
+    StreamCore<RefinedScope<'g, G>, Column<Update>>,
     Vec<PressOnDropButton>,
 )
 where
@@ -432,7 +439,7 @@ pub fn decode_and_mfp<G>(
     name: &str,
     until: Antichain<Timestamp>,
     mut map_filter_project: Option<&mut MfpPlan>,
-) -> Stream<G, (Result<Row, DataflowError>, G::Timestamp, Diff)>
+) -> StreamCore<G, Column<(Result<Row, DataflowError>, G::Timestamp, Diff)>>
 where
     G: Scope<Timestamp = (mz_repr::Timestamp, Subtime)>,
 {
@@ -444,8 +451,7 @@ where
     let operator_info = builder.operator_info();
 
     let mut fetched_input = builder.new_input(fetched, Pipeline);
-    let (mut updates_output, updates_stream) =
-        builder.new_output::<ConsolidatingContainerBuilder<_>>();
+    let (mut updates_output, updates_stream) = builder.new_output::<ColumnBuilder<_>>();
 
     // Re-used state for processing and building rows.
     let mut datum_vec = mz_repr::DatumVec::new();
@@ -544,6 +550,12 @@ impl PendingPart {
     }
 }
 
+type Update = (
+    Result<Row, DataflowError>,
+    (mz_repr::Timestamp, Subtime),
+    Diff,
+);
+
 impl PendingWork {
     /// Perform work, reading from the fetched part, decoding, and sending outputs, while checking
     /// `yield_fn` whether more fuel is available.
@@ -557,30 +569,10 @@ impl PendingWork {
         map_filter_project: Option<&MfpPlan>,
         datum_vec: &mut DatumVec,
         row_builder: &mut Row,
-        output: &mut OutputHandleCore<
-            '_,
-            (mz_repr::Timestamp, Subtime),
-            ConsolidatingContainerBuilder<
-                Vec<(
-                    Result<Row, DataflowError>,
-                    (mz_repr::Timestamp, Subtime),
-                    Diff,
-                )>,
-            >,
-            P,
-        >,
+        output: &mut OutputHandleCore<'_, (mz_repr::Timestamp, Subtime), ColumnBuilder<Update>, P>,
     ) -> bool
     where
-        P: Push<
-            Message<
-                (mz_repr::Timestamp, Subtime),
-                Vec<(
-                    Result<Row, DataflowError>,
-                    (mz_repr::Timestamp, Subtime),
-                    Diff,
-                )>,
-            >,
-        >,
+        P: Push<Message<(mz_repr::Timestamp, Subtime), Column<Update>>>,
         YFn: Fn(Instant, usize) -> bool,
     {
         let mut session = output.session_with_builder(&self.capability);
@@ -648,7 +640,11 @@ impl PendingWork {
                                     if !until.less_equal(&time) {
                                         let mut emit_time = *self.capability.time();
                                         emit_time.0 = time;
-                                        session.give((Ok(row), emit_time, diff));
+                                        session.give((
+                                            &Ok::<_, DataflowError>(row),
+                                            emit_time,
+                                            diff,
+                                        ));
                                         *work += 1;
                                     }
                                 }
@@ -657,7 +653,11 @@ impl PendingWork {
                                     if !until.less_equal(&time) {
                                         let mut emit_time = *self.capability.time();
                                         emit_time.0 = time;
-                                        session.give((Err(err), emit_time, diff));
+                                        session.give((
+                                            &Err::<Row, DataflowError>(err),
+                                            emit_time,
+                                            diff,
+                                        ));
                                         *work += 1;
                                     }
                                 }
@@ -671,16 +671,17 @@ impl PendingWork {
                     } else {
                         let mut emit_time = *self.capability.time();
                         emit_time.0 = time;
+                        let ok = Ok(row);
                         // Clone row so we retain our row allocation.
-                        session.give((Ok(row.clone()), emit_time, diff.into()));
-                        row_buf.replace(SourceData(Ok(row)));
+                        session.give((&ok, emit_time, &Overflowing::from(diff)));
+                        row_buf.replace(SourceData(ok));
                         *work += 1;
                     }
                 }
-                (Ok(SourceData(Err(err))), Ok(())) => {
+                (Ok(SourceData(err @ Err(_))), Ok(())) => {
                     let mut emit_time = *self.capability.time();
                     emit_time.0 = time;
-                    session.give((Err(err), emit_time, diff.into()));
+                    session.give((&err, emit_time, &Overflowing::from(diff)));
                     *work += 1;
                 }
                 // TODO(petrosagg): error handling

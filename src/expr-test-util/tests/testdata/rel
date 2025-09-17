@@ -240,7 +240,7 @@ Error "division by zero"
 # constant_err
 build
 (constant_err
-  (invalid_layer 10 100)
+  (invalid_layer (10 100))
   [int64 int32 int64])
 ----
 ----

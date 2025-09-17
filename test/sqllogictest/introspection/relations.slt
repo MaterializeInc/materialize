@@ -73,13 +73,13 @@ decode_backpressure_probe(u1)  Feedback  alloc::vec::Vec<core::convert::Infallib
 expire_stream_at(materialize.public.test_primary_idx_export_index_errs)  LogDataflowErrorsStream  alloc::vec::Vec<alloc::rc::Rc<differential_dataflow::trace::implementations::ord_neu::key_batch::OrdKeyBatch<mz_compute::typedefs::spines::MzStack<((mz_storage_types::errors::DataflowError,␠()),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>>>>
 expire_stream_at(materialize.public.test_primary_idx_export_index_oks)  InspectBatch  alloc::vec::Vec<alloc::rc::Rc<differential_dataflow::trace::implementations::ord_neu::val_batch::OrdValBatch<mz_compute::row_spine::spines::RowRowLayout<((mz_repr::row::Row,␠mz_repr::row::Row),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>>>>
 granular_backpressure(u1)  shard_source_descs_return(u1)  alloc::vec::Vec<core::convert::Infallible>
-granular_backpressure(u1)  txns_progress_frontiers(u1)  alloc::vec::Vec<(core::result::Result<mz_repr::row::Row,␠mz_storage_types::errors::DataflowError>,␠(mz_repr::timestamp::Timestamp,␠mz_storage_operators::persist_source::Subtime),␠mz_ore::overflowing::Overflowing<i64>)>
-persist_source::decode_and_mfp(u1)  InspectBatch  alloc::vec::Vec<(core::result::Result<mz_repr::row::Row,␠mz_storage_types::errors::DataflowError>,␠(mz_repr::timestamp::Timestamp,␠mz_storage_operators::persist_source::Subtime),␠mz_ore::overflowing::Overflowing<i64>)>
+granular_backpressure(u1)  txns_progress_frontiers(u1)  mz_timely_util::columnar::Column<(core::result::Result<mz_repr::row::Row,␠mz_storage_types::errors::DataflowError>,␠(mz_repr::timestamp::Timestamp,␠mz_storage_operators::persist_source::Subtime),␠mz_ore::overflowing::Overflowing<i64>)>
+persist_source::decode_and_mfp(u1)  InspectBatch  mz_timely_util::columnar::Column<(core::result::Result<mz_repr::row::Row,␠mz_storage_types::errors::DataflowError>,␠(mz_repr::timestamp::Timestamp,␠mz_storage_operators::persist_source::Subtime),␠mz_ore::overflowing::Overflowing<i64>)>
 persist_source_backpressure(backpressure(u1))  shard_source_fetch(u1)  alloc::vec::Vec<(usize,␠mz_persist_client::fetch::ExchangeableBatchPart<mz_repr::timestamp::Timestamp>)>
 shard_source_descs(u1)  granular_backpressure(u1)  alloc::vec::Vec<(usize,␠mz_persist_client::fetch::ExchangeableBatchPart<mz_repr::timestamp::Timestamp>)>
 shard_source_fetch(u1)  Feedback  alloc::vec::Vec<core::convert::Infallible>
 shard_source_fetch(u1)  persist_source::decode_and_mfp(u1)  alloc::vec::Vec<mz_persist_client::fetch::FetchedBlob<mz_storage_types::sources::SourceData,␠(),␠mz_repr::timestamp::Timestamp,␠i64>>
-txns_progress_frontiers(u1)  OkErr  alloc::vec::Vec<(core::result::Result<mz_repr::row::Row,␠mz_storage_types::errors::DataflowError>,␠(mz_repr::timestamp::Timestamp,␠mz_storage_operators::persist_source::Subtime),␠mz_ore::overflowing::Overflowing<i64>)>
+txns_progress_frontiers(u1)  OkErr  mz_timely_util::columnar::Column<(core::result::Result<mz_repr::row::Row,␠mz_storage_types::errors::DataflowError>,␠(mz_repr::timestamp::Timestamp,␠mz_storage_operators::persist_source::Subtime),␠mz_ore::overflowing::Overflowing<i64>)>
 txns_progress_source(u1)  FlatMap  alloc::vec::Vec<mz_txn_wal::txn_read::DataRemapEntry<mz_repr::timestamp::Timestamp>>
 
 query IT rowsort
@@ -98,7 +98,7 @@ GROUP BY type;
 2  alloc::vec::Vec<(u64,␠mz_txn_wal::txn_read::DataRemapEntry<mz_repr::timestamp::Timestamp>)>
 2  alloc::vec::Vec<(usize,␠mz_persist_client::fetch::ExchangeableBatchPart<mz_repr::timestamp::Timestamp>)>
 2  alloc::vec::Vec<mz_txn_wal::txn_read::DataRemapEntry<mz_repr::timestamp::Timestamp>>
-4  alloc::vec::Vec<(core::result::Result<mz_repr::row::Row,␠mz_storage_types::errors::DataflowError>,␠(mz_repr::timestamp::Timestamp,␠mz_storage_operators::persist_source::Subtime),␠mz_ore::overflowing::Overflowing<i64>)>
+4  mz_timely_util::columnar::Column<(core::result::Result<mz_repr::row::Row,␠mz_storage_types::errors::DataflowError>,␠(mz_repr::timestamp::Timestamp,␠mz_storage_operators::persist_source::Subtime),␠mz_ore::overflowing::Overflowing<i64>)>
 5  alloc::vec::Vec<alloc::rc::Rc<differential_dataflow::trace::implementations::ord_neu::key_batch::OrdKeyBatch<mz_compute::typedefs::spines::MzStack<((mz_storage_types::errors::DataflowError,␠()),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>>>>
 5  alloc::vec::Vec<core::convert::Infallible>
 6  alloc::vec::Vec<(mz_storage_types::errors::DataflowError,␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>

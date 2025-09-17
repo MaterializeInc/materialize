@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(output_type = \"String\", sqlname = \"convert_from\", propagates_nulls = true)]\nfn convert_from<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {\n    let encoding_name = b.unwrap_str().to_lowercase().replace('_', \"-\").into_boxed_str();\n    if encoding_from_whatwg_label(&encoding_name).map(|e| e.name()) != Some(\"utf-8\") {\n        return Err(EvalError::InvalidEncodingName(encoding_name));\n    }\n    match str::from_utf8(a.unwrap_bytes()) {\n        Ok(from) => Ok(Datum::String(from)),\n        Err(e) => {\n            Err(EvalError::InvalidByteSequence {\n                byte_sequence: e.to_string().into(),\n                encoding_name,\n            })\n        }\n    }\n}\n"
+expression: "#[sqlfunc(output_type = \"String\", sqlname = \"convert_from\", propagates_nulls = true)]\nfn convert_from<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {\n    let encoding_name = b.unwrap_str().to_lowercase().replace('_', \"-\").into_boxed_str();\n    if encoding_from_whatwg_label(&encoding_name).map(|e| e.name()) != Some(\"utf-8\") {\n        return Err(EvalError::InvalidEncodingName(encoding_name));\n    }\n    match str::from_utf8(a.unwrap_bytes()) {\n        Ok(from) => Ok(Datum::String(from)),\n        Err(e) => {\n            Err(\n                EvalError::InvalidByteSequence(InvalidByteSequence {\n                    byte_sequence: e.to_string().into(),\n                    encoding_name,\n                }),\n            )\n        }\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -66,10 +66,12 @@ fn convert_from<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> 
     match str::from_utf8(a.unwrap_bytes()) {
         Ok(from) => Ok(Datum::String(from)),
         Err(e) => {
-            Err(EvalError::InvalidByteSequence {
-                byte_sequence: e.to_string().into(),
-                encoding_name,
-            })
+            Err(
+                EvalError::InvalidByteSequence(InvalidByteSequence {
+                    byte_sequence: e.to_string().into(),
+                    encoding_name,
+                }),
+            )
         }
     }
 }

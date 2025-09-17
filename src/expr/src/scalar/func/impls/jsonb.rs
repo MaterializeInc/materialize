@@ -17,6 +17,7 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use crate::EvalError;
+use crate::scalar::InvalidJsonbCast;
 use crate::scalar::func::EagerUnaryFunc;
 use crate::scalar::func::impls::numeric::*;
 
@@ -37,10 +38,10 @@ sqlfunc!(
     fn cast_jsonb_to_int16<'a>(a: JsonbRef<'a>) -> Result<i16, EvalError> {
         match a.into_datum() {
             Datum::Numeric(a) => cast_numeric_to_int16(a.into_inner()),
-            datum => Err(EvalError::InvalidJsonbCast {
+            datum => Err(EvalError::InvalidJsonbCast(InvalidJsonbCast {
                 from: jsonb_typeof(JsonbRef::from_datum(datum)).into(),
                 to: "smallint".into(),
-            }),
+            })),
         }
     }
 );
@@ -51,10 +52,10 @@ sqlfunc!(
     fn cast_jsonb_to_int32<'a>(a: JsonbRef<'a>) -> Result<i32, EvalError> {
         match a.into_datum() {
             Datum::Numeric(a) => cast_numeric_to_int32(a.into_inner()),
-            datum => Err(EvalError::InvalidJsonbCast {
+            datum => Err(EvalError::InvalidJsonbCast(InvalidJsonbCast {
                 from: jsonb_typeof(JsonbRef::from_datum(datum)).into(),
                 to: "integer".into(),
-            }),
+            })),
         }
     }
 );
@@ -65,10 +66,10 @@ sqlfunc!(
     fn cast_jsonb_to_int64<'a>(a: JsonbRef<'a>) -> Result<i64, EvalError> {
         match a.into_datum() {
             Datum::Numeric(a) => cast_numeric_to_int64(a.into_inner()),
-            datum => Err(EvalError::InvalidJsonbCast {
+            datum => Err(EvalError::InvalidJsonbCast(InvalidJsonbCast {
                 from: jsonb_typeof(JsonbRef::from_datum(datum)).into(),
                 to: "bigint".into(),
-            }),
+            })),
         }
     }
 );
@@ -79,10 +80,10 @@ sqlfunc!(
     fn cast_jsonb_to_float32<'a>(a: JsonbRef<'a>) -> Result<f32, EvalError> {
         match a.into_datum() {
             Datum::Numeric(a) => cast_numeric_to_float32(a.into_inner()),
-            datum => Err(EvalError::InvalidJsonbCast {
+            datum => Err(EvalError::InvalidJsonbCast(InvalidJsonbCast {
                 from: jsonb_typeof(JsonbRef::from_datum(datum)).into(),
                 to: "real".into(),
-            }),
+            })),
         }
     }
 );
@@ -93,10 +94,10 @@ sqlfunc!(
     fn cast_jsonb_to_float64<'a>(a: JsonbRef<'a>) -> Result<f64, EvalError> {
         match a.into_datum() {
             Datum::Numeric(a) => cast_numeric_to_float64(a.into_inner()),
-            datum => Err(EvalError::InvalidJsonbCast {
+            datum => Err(EvalError::InvalidJsonbCast(InvalidJsonbCast {
                 from: jsonb_typeof(JsonbRef::from_datum(datum)).into(),
                 to: "double precision".into(),
-            }),
+            })),
         }
     }
 );
@@ -121,10 +122,10 @@ impl<'a> EagerUnaryFunc<'a> for CastJsonbToNumeric {
                     Ok(num.into_inner())
                 }
             },
-            datum => Err(EvalError::InvalidJsonbCast {
+            datum => Err(EvalError::InvalidJsonbCast(InvalidJsonbCast {
                 from: jsonb_typeof(JsonbRef::from_datum(datum)).into(),
                 to: "numeric".into(),
-            }),
+            })),
         }
     }
 
@@ -150,10 +151,10 @@ sqlfunc!(
         match a.into_datum() {
             Datum::True => Ok(true),
             Datum::False => Ok(false),
-            datum => Err(EvalError::InvalidJsonbCast {
+            datum => Err(EvalError::InvalidJsonbCast(InvalidJsonbCast {
                 from: jsonb_typeof(JsonbRef::from_datum(datum)).into(),
                 to: "boolean".into(),
-            }),
+            })),
         }
     }
 );

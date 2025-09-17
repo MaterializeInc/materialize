@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/jsonb.rs
-expression: "#[sqlfunc(\n    sqlname = \"jsonb_to_smallint\",\n    preserves_uniqueness = false,\n    inverse = None,\n    is_monotone = true,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn cast_jsonb_to_int16<'a>(a: JsonbRef<'a>) -> Result<i16, EvalError> {\n    {\n        match a.into_datum() {\n            Datum::Numeric(a) => cast_numeric_to_int16(a.into_inner()),\n            datum => {\n                Err(EvalError::InvalidJsonbCast {\n                    from: jsonb_typeof(JsonbRef::from_datum(datum)).into(),\n                    to: \"smallint\".into(),\n                })\n            }\n        }\n    }\n}\n"
+expression: "#[sqlfunc(\n    sqlname = \"jsonb_to_smallint\",\n    preserves_uniqueness = false,\n    inverse = None,\n    is_monotone = true,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn cast_jsonb_to_int16<'a>(a: JsonbRef<'a>) -> Result<i16, EvalError> {\n    {\n        match a.into_datum() {\n            Datum::Numeric(a) => cast_numeric_to_int16(a.into_inner()),\n            datum => {\n                Err(\n                    EvalError::InvalidJsonbCast(InvalidJsonbCast {\n                        from: jsonb_typeof(JsonbRef::from_datum(datum)).into(),\n                        to: \"smallint\".into(),\n                    }),\n                )\n            }\n        }\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -50,10 +50,12 @@ pub fn cast_jsonb_to_int16<'a>(a: JsonbRef<'a>) -> Result<i16, EvalError> {
         match a.into_datum() {
             Datum::Numeric(a) => cast_numeric_to_int16(a.into_inner()),
             datum => {
-                Err(EvalError::InvalidJsonbCast {
-                    from: jsonb_typeof(JsonbRef::from_datum(datum)).into(),
-                    to: "smallint".into(),
-                })
+                Err(
+                    EvalError::InvalidJsonbCast(InvalidJsonbCast {
+                        from: jsonb_typeof(JsonbRef::from_datum(datum)).into(),
+                        to: "smallint".into(),
+                    }),
+                )
             }
         }
     }

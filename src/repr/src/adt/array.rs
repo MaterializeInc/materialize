@@ -13,6 +13,7 @@ use std::cmp::Ordering;
 use std::error::Error;
 use std::{fmt, mem};
 
+use columnar::Columnar;
 use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 use mz_persist_types::columnar::FixedSizeCodec;
@@ -150,6 +151,26 @@ impl ArrayDimension {
     }
 }
 
+#[derive(
+    Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    Hash,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    MzReflect,
+    Columnar,
+)]
+pub struct WrongCardinality {
+    pub actual: usize,
+    pub expected: usize,
+}
+
 /// An error that can occur when constructing an array.
 #[derive(
     Arbitrary,
@@ -164,13 +185,14 @@ impl ArrayDimension {
     Serialize,
     Deserialize,
     MzReflect,
+    Columnar,
 )]
 pub enum InvalidArrayError {
     /// The number of dimensions in the array exceeds [`MAX_ARRAY_DIMENSIONS]`.
     TooManyDimensions(usize),
     /// The number of array elements does not match the cardinality derived from
     /// its dimensions.
-    WrongCardinality { actual: usize, expected: usize },
+    WrongCardinality(WrongCardinality),
 }
 
 impl fmt::Display for InvalidArrayError {
@@ -181,7 +203,7 @@ impl fmt::Display for InvalidArrayError {
                 "number of array dimensions ({}) exceeds the maximum allowed ({})",
                 n, MAX_ARRAY_DIMENSIONS
             ),
-            InvalidArrayError::WrongCardinality { actual, expected } => write!(
+            InvalidArrayError::WrongCardinality(WrongCardinality { actual, expected }) => write!(
                 f,
                 "number of array elements ({}) does not match declared cardinality ({})",
                 actual, expected
@@ -198,12 +220,13 @@ impl Error for InvalidArrayError {
 
 impl RustType<ProtoInvalidArrayError> for InvalidArrayError {
     fn into_proto(&self) -> ProtoInvalidArrayError {
-        use Kind::*;
         use proto_invalid_array_error::*;
         let kind = match self {
-            InvalidArrayError::TooManyDimensions(dims) => TooManyDimensions(dims.into_proto()),
-            InvalidArrayError::WrongCardinality { actual, expected } => {
-                WrongCardinality(ProtoWrongCardinality {
+            InvalidArrayError::TooManyDimensions(dims) => {
+                Kind::TooManyDimensions(dims.into_proto())
+            }
+            InvalidArrayError::WrongCardinality(WrongCardinality { actual, expected }) => {
+                Kind::WrongCardinality(ProtoWrongCardinality {
                     actual: actual.into_proto(),
                     expected: expected.into_proto(),
                 })
@@ -213,16 +236,18 @@ impl RustType<ProtoInvalidArrayError> for InvalidArrayError {
     }
 
     fn from_proto(proto: ProtoInvalidArrayError) -> Result<Self, TryFromProtoError> {
-        use proto_invalid_array_error::Kind::*;
+        use proto_invalid_array_error::Kind;
         match proto.kind {
             Some(kind) => match kind {
-                TooManyDimensions(dims) => Ok(InvalidArrayError::TooManyDimensions(
+                Kind::TooManyDimensions(dims) => Ok(InvalidArrayError::TooManyDimensions(
                     usize::from_proto(dims)?,
                 )),
-                WrongCardinality(v) => Ok(InvalidArrayError::WrongCardinality {
-                    actual: usize::from_proto(v.actual)?,
-                    expected: usize::from_proto(v.expected)?,
-                }),
+                Kind::WrongCardinality(v) => {
+                    Ok(InvalidArrayError::WrongCardinality(WrongCardinality {
+                        actual: usize::from_proto(v.actual)?,
+                        expected: usize::from_proto(v.expected)?,
+                    }))
+                }
             },
             None => Err(TryFromProtoError::missing_field(
                 "`ProtoInvalidArrayError::kind`",

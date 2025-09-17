@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/jsonb.rs
-expression: "#[sqlfunc(\n    sqlname = \"jsonb_to_boolean\",\n    preserves_uniqueness = false,\n    inverse = None,\n    is_monotone = true,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn cast_jsonb_to_bool<'a>(a: JsonbRef<'a>) -> Result<bool, EvalError> {\n    {\n        match a.into_datum() {\n            Datum::True => Ok(true),\n            Datum::False => Ok(false),\n            datum => {\n                Err(EvalError::InvalidJsonbCast {\n                    from: jsonb_typeof(JsonbRef::from_datum(datum)).into(),\n                    to: \"boolean\".into(),\n                })\n            }\n        }\n    }\n}\n"
+expression: "#[sqlfunc(\n    sqlname = \"jsonb_to_boolean\",\n    preserves_uniqueness = false,\n    inverse = None,\n    is_monotone = true,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn cast_jsonb_to_bool<'a>(a: JsonbRef<'a>) -> Result<bool, EvalError> {\n    {\n        match a.into_datum() {\n            Datum::True => Ok(true),\n            Datum::False => Ok(false),\n            datum => {\n                Err(\n                    EvalError::InvalidJsonbCast(InvalidJsonbCast {\n                        from: jsonb_typeof(JsonbRef::from_datum(datum)).into(),\n                        to: \"boolean\".into(),\n                    }),\n                )\n            }\n        }\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -51,10 +51,12 @@ pub fn cast_jsonb_to_bool<'a>(a: JsonbRef<'a>) -> Result<bool, EvalError> {
             Datum::True => Ok(true),
             Datum::False => Ok(false),
             datum => {
-                Err(EvalError::InvalidJsonbCast {
-                    from: jsonb_typeof(JsonbRef::from_datum(datum)).into(),
-                    to: "boolean".into(),
-                })
+                Err(
+                    EvalError::InvalidJsonbCast(InvalidJsonbCast {
+                        from: jsonb_typeof(JsonbRef::from_datum(datum)).into(),
+                        to: "boolean".into(),
+                    }),
+                )
             }
         }
     }

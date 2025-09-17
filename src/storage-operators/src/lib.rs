@@ -9,6 +9,8 @@
 
 //! Shared Storage dataflow operators
 
+#![recursion_limit = "256"]
+
 pub mod metrics;
 pub mod oneshot_source;
 pub mod persist_source;
