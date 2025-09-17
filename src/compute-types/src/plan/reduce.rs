@@ -65,7 +65,7 @@ use std::collections::BTreeMap;
 use mz_expr::{
     AggregateExpr, AggregateFunc, MapFilterProject, MirScalarExpr, permutation_for_arrangement,
 };
-use mz_ore::{assert_none, soft_assert_or_log};
+use mz_ore::soft_assert_or_log;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use proptest::prelude::{Arbitrary, BoxedStrategy, any};
 use proptest::strategy::Strategy;
@@ -158,10 +158,6 @@ pub enum ReducePlan {
     Hierarchical(HierarchicalPlan),
     /// Plan for computing only basic aggregations.
     Basic(BasicPlan),
-    /// Plan for computing a mix of different kinds of aggregations.
-    /// We need to do extra work here to reassemble results back in the
-    /// requested order.
-    Collation(CollationPlan),
 }
 
 proptest::prop_compose! {
@@ -235,7 +231,6 @@ impl RustType<ProtoReducePlan> for ReducePlan {
                 ReducePlan::Accumulable(plan) => Accumulable(plan.into_proto()),
                 ReducePlan::Hierarchical(plan) => Hierarchical(plan.into_proto()),
                 ReducePlan::Basic(plan) => Basic(plan.into_proto()),
-                ReducePlan::Collation(plan) => Collation(plan.into_proto()),
             }),
         }
     }
@@ -250,7 +245,6 @@ impl RustType<ProtoReducePlan> for ReducePlan {
             Accumulable(plan) => ReducePlan::Accumulable(plan.into_rust()?),
             Hierarchical(plan) => ReducePlan::Hierarchical(plan.into_rust()?),
             Basic(plan) => ReducePlan::Basic(plan.into_rust()?),
-            Collation(plan) => ReducePlan::Collation(plan.into_rust()?),
         })
     }
 }
@@ -577,56 +571,6 @@ impl RustType<ProtoBasicPlan> for BasicPlan {
     }
 }
 
-/// Plan for collating the results of computing multiple aggregation
-/// types.
-///
-/// TODO: could we express this as a delta join
-#[derive(Clone, Debug, Default, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
-pub struct CollationPlan {
-    /// Accumulable aggregation results to collate, if any.
-    pub accumulable: Option<AccumulablePlan>,
-    /// Hierarchical aggregation results to collate, if any.
-    pub hierarchical: Option<HierarchicalPlan>,
-    /// Basic aggregation results to collate, if any.
-    pub basic: Option<BasicPlan>,
-    /// When we get results back from each of the different
-    /// aggregation types, they will be subsequences of
-    /// the sequence aggregations in the original reduce expression.
-    /// We keep a map from output position -> reduction type
-    /// to easily merge results back into the requested order.
-    pub aggregate_types: Vec<ReductionType>,
-}
-
-impl CollationPlan {
-    /// Upgrades the hierarchical component of the collation plan to monotonic, if necessary,
-    /// and sets consolidation requirements.
-    pub fn as_monotonic(&mut self, must_consolidate: bool) {
-        self.hierarchical
-            .as_mut()
-            .map(|plan| plan.as_monotonic(must_consolidate));
-    }
-}
-
-impl RustType<ProtoCollationPlan> for CollationPlan {
-    fn into_proto(&self) -> ProtoCollationPlan {
-        ProtoCollationPlan {
-            accumulable: self.accumulable.into_proto(),
-            hierarchical: self.hierarchical.into_proto(),
-            basic: self.basic.into_proto(),
-            aggregate_types: self.aggregate_types.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoCollationPlan) -> Result<Self, TryFromProtoError> {
-        Ok(Self {
-            accumulable: proto.accumulable.into_rust()?,
-            hierarchical: proto.hierarchical.into_rust()?,
-            basic: proto.basic.into_rust()?,
-            aggregate_types: proto.aggregate_types.into_rust()?,
-        })
-    }
-}
-
 impl ReducePlan {
     /// Generate a plan for computing the supplied aggregations.
     ///
@@ -655,63 +599,21 @@ impl ReducePlan {
         }
 
         // Convert each grouped list of reductions into a plan.
-        let plan: Vec<_> = reduction_types
-            .into_iter()
-            .map(|(typ, aggregates_list)| {
-                ReducePlan::create_inner(
-                    typ,
-                    aggregates_list,
-                    monotonic,
-                    expected_group_size,
-                    fused_unnest_list,
-                )
-            })
-            .collect();
+        let Some(plan) = reduction_types.pop_first().map(|(typ, aggregates_list)| {
+            ReducePlan::create_inner(
+                typ,
+                aggregates_list,
+                monotonic,
+                expected_group_size,
+                fused_unnest_list,
+            )
+        }) else {
+            panic!(
+                "Multiple reduction types ({reduction_types:?}) detected in ReducePlan::create_from. This indicates a bug in reduce reduction."
+            );
+        };
 
-        // If we only have a single type of aggregation present we can
-        // render that directly
-        if plan.len() == 1 {
-            return plan[0].clone();
-        }
-
-        // Otherwise, we have to stitch reductions together.
-
-        // First, lets sanity check that we don't have an impossible number
-        // of reduction types.
-        assert!(plan.len() <= 3);
-
-        let mut collation: CollationPlan = Default::default();
-
-        // Construct a mapping from output_position -> reduction that we can
-        // use to reconstruct the output in the correct order.
-        let aggregate_types = aggregates
-            .iter()
-            .map(|a| reduction_type(&a.func))
-            .collect::<Vec<_>>();
-
-        collation.aggregate_types = aggregate_types;
-
-        for expr in plan.into_iter() {
-            match expr {
-                ReducePlan::Accumulable(e) => {
-                    assert_none!(collation.accumulable);
-                    collation.accumulable = Some(e);
-                }
-                ReducePlan::Hierarchical(e) => {
-                    assert_none!(collation.hierarchical);
-                    collation.hierarchical = Some(e);
-                }
-                ReducePlan::Basic(e) => {
-                    assert_none!(collation.basic);
-                    collation.basic = Some(e);
-                }
-                ReducePlan::Distinct | ReducePlan::Collation(_) => {
-                    panic!("Inner reduce plan was unsupported type!")
-                }
-            }
-        }
-
-        ReducePlan::Collation(collation)
+        plan
     }
 
     /// Generate a plan for computing the specified type of aggregations.
