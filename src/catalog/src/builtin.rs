@@ -42,9 +42,10 @@ use mz_repr::namespaces::{
 };
 use mz_repr::role_id::RoleId;
 use mz_repr::{RelationDesc, RelationType, ScalarType};
+use mz_sql::catalog::RoleAttributesRaw;
 use mz_sql::catalog::{
     CatalogItemType, CatalogType, CatalogTypeDetails, CatalogTypePgMetadata, NameReference,
-    ObjectType, RoleAttributes, SystemObjectType, TypeReference,
+    ObjectType, SystemObjectType, TypeReference,
 };
 use mz_sql::rbac;
 use mz_sql::session::user::{
@@ -288,7 +289,7 @@ pub struct BuiltinRole {
     /// IMPORTANT: Must start with a prefix from [`BUILTIN_PREFIXES`].
     pub name: &'static str,
     pub oid: u32,
-    pub attributes: RoleAttributes,
+    pub attributes: RoleAttributesRaw,
 }
 
 #[derive(Clone, Debug)]
@@ -13392,21 +13393,21 @@ pub const MZ_SYSTEM_ROLE: BuiltinRole = BuiltinRole {
     id: MZ_SYSTEM_ROLE_ID,
     name: SYSTEM_USER_NAME,
     oid: oid::ROLE_MZ_SYSTEM_OID,
-    attributes: RoleAttributes::new().with_all(),
+    attributes: RoleAttributesRaw::new().with_all(),
 };
 
 pub const MZ_SUPPORT_ROLE: BuiltinRole = BuiltinRole {
     id: MZ_SUPPORT_ROLE_ID,
     name: SUPPORT_USER_NAME,
     oid: oid::ROLE_MZ_SUPPORT_OID,
-    attributes: RoleAttributes::new(),
+    attributes: RoleAttributesRaw::new(),
 };
 
 pub const MZ_ANALYTICS_ROLE: BuiltinRole = BuiltinRole {
     id: MZ_ANALYTICS_ROLE_ID,
     name: ANALYTICS_USER_NAME,
     oid: oid::ROLE_MZ_ANALYTICS_OID,
-    attributes: RoleAttributes::new(),
+    attributes: RoleAttributesRaw::new(),
 };
 
 /// This role can `SELECT` from various query history objects,
@@ -13415,7 +13416,7 @@ pub const MZ_MONITOR_ROLE: BuiltinRole = BuiltinRole {
     id: MZ_MONITOR_ROLE_ID,
     name: "mz_monitor",
     oid: oid::ROLE_MZ_MONITOR_OID,
-    attributes: RoleAttributes::new(),
+    attributes: RoleAttributesRaw::new(),
 };
 
 /// This role is like [`MZ_MONITOR_ROLE`], but can only query
@@ -13424,7 +13425,7 @@ pub const MZ_MONITOR_REDACTED: BuiltinRole = BuiltinRole {
     id: MZ_MONITOR_REDACTED_ROLE_ID,
     name: "mz_monitor_redacted",
     oid: oid::ROLE_MZ_MONITOR_REDACTED_OID,
-    attributes: RoleAttributes::new(),
+    attributes: RoleAttributesRaw::new(),
 };
 
 pub const MZ_SYSTEM_CLUSTER: BuiltinCluster = BuiltinCluster {

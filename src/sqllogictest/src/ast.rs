@@ -130,6 +130,7 @@ pub enum Record<'a> {
         location: Location,
         conn: Option<&'a str>,
         user: Option<&'a str>,
+        password: Option<&'a str>,
         sql: &'a str,
         sort: Sort,
         output: Output,

@@ -481,9 +481,23 @@ pub trait CatalogSchema {
     fn privileges(&self) -> &PrivilegeMap;
 }
 
-/// Attributes belonging to a [`CatalogRole`].
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd, Arbitrary)]
-pub struct RoleAttributes {
+/// A modification of a role password in the catalog
+#[derive(Debug, Clone, Eq, PartialEq, Arbitrary)]
+pub enum PasswordAction {
+    /// Set a new password.
+    Set(Password),
+    /// Remove the existing password.
+    Clear,
+    /// Leave the existing password unchanged.
+    NoChange,
+}
+
+/// A raw representation of attributes belonging to a [`CatalogRole`] that we might
+/// get as input from the user. This includes the password.
+/// This struct explicity does not implement `Serialize` or `Deserialize` to avoid
+/// accidentally serializing passwords.
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Arbitrary)]
+pub struct RoleAttributesRaw {
     /// Indicates whether the role has inheritance of privileges.
     pub inherit: bool,
     /// The raw password of the role. This is for self managed auth, not cloud.
@@ -496,12 +510,45 @@ pub struct RoleAttributes {
     _private: (),
 }
 
+/// Attributes belonging to a [`CatalogRole`].
+#[derive(Debug, Clone, Eq, Serialize, Deserialize, PartialEq, Ord, PartialOrd, Arbitrary)]
+pub struct RoleAttributes {
+    /// Indicates whether the role has inheritance of privileges.
+    pub inherit: bool,
+    /// Whether or not this user is a superuser.
+    pub superuser: Option<bool>,
+    /// Whether this role is login
+    pub login: Option<bool>,
+    // Force use of constructor.
+    _private: (),
+}
+
+impl RoleAttributesRaw {
+    /// Creates a new [`RoleAttributesRaw`] with default attributes.
+    pub const fn new() -> RoleAttributesRaw {
+        RoleAttributesRaw {
+            inherit: true,
+            password: None,
+            superuser: None,
+            login: None,
+            _private: (),
+        }
+    }
+
+    /// Adds all attributes excluding password.
+    pub const fn with_all(mut self) -> RoleAttributesRaw {
+        self.inherit = true;
+        self.superuser = Some(true);
+        self.login = Some(true);
+        self
+    }
+}
+
 impl RoleAttributes {
     /// Creates a new [`RoleAttributes`] with default attributes.
     pub const fn new() -> RoleAttributes {
         RoleAttributes {
             inherit: true,
-            password: None,
             superuser: None,
             login: None,
             _private: (),
@@ -520,25 +567,46 @@ impl RoleAttributes {
     pub const fn is_inherit(&self) -> bool {
         self.inherit
     }
+}
 
-    /// Returns whether or not the role has a password.
-    pub const fn has_password(&self) -> bool {
-        self.password.is_some()
-    }
-
-    /// Returns self without the password.
-    pub fn without_password(self) -> RoleAttributes {
+impl From<RoleAttributesRaw> for RoleAttributes {
+    fn from(
+        RoleAttributesRaw {
+            inherit,
+            superuser,
+            login,
+            ..
+        }: RoleAttributesRaw,
+    ) -> RoleAttributes {
         RoleAttributes {
-            inherit: self.inherit,
-            password: None,
-            superuser: self.superuser,
-            login: self.login,
+            inherit,
+            superuser,
+            login,
             _private: (),
         }
     }
 }
 
-impl From<PlannedRoleAttributes> for RoleAttributes {
+impl From<RoleAttributes> for RoleAttributesRaw {
+    fn from(
+        RoleAttributes {
+            inherit,
+            superuser,
+            login,
+            ..
+        }: RoleAttributes,
+    ) -> RoleAttributesRaw {
+        RoleAttributesRaw {
+            inherit,
+            password: None,
+            superuser,
+            login,
+            _private: (),
+        }
+    }
+}
+
+impl From<PlannedRoleAttributes> for RoleAttributesRaw {
     fn from(
         PlannedRoleAttributes {
             inherit,
@@ -547,9 +615,9 @@ impl From<PlannedRoleAttributes> for RoleAttributes {
             login,
             ..
         }: PlannedRoleAttributes,
-    ) -> RoleAttributes {
-        let default_attributes = RoleAttributes::new();
-        RoleAttributes {
+    ) -> RoleAttributesRaw {
+        let default_attributes = RoleAttributesRaw::new();
+        RoleAttributesRaw {
             inherit: inherit.unwrap_or(default_attributes.inherit),
             password,
             superuser,

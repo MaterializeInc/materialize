@@ -31,7 +31,7 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
 use mz_sql::catalog::{
-    DefaultPrivilegeAclItem, DefaultPrivilegeObject, ObjectType, RoleAttributes, RoleMembership,
+    DefaultPrivilegeAclItem, DefaultPrivilegeObject, ObjectType, RoleAttributesRaw, RoleMembership,
     RoleVars, SystemObjectType,
 };
 use mz_sql::names::{
@@ -290,7 +290,7 @@ pub(crate) async fn initialize(
     tx.insert_builtin_role(
         RoleId::Public,
         PUBLIC_ROLE_NAME.as_str().to_lowercase(),
-        RoleAttributes::new(),
+        RoleAttributesRaw::new(),
         RoleMembership::new(),
         RoleVars::default(),
         ROLE_PUBLIC_OID,
@@ -298,7 +298,7 @@ pub(crate) async fn initialize(
 
     // If provided, generate a new Id for the bootstrap role.
     let bootstrap_role = if let Some(role) = &options.bootstrap_role {
-        let attributes = RoleAttributes::new();
+        let attributes = RoleAttributesRaw::new();
         let membership = RoleMembership::new();
         let vars = RoleVars::default();
 
@@ -322,7 +322,7 @@ pub(crate) async fn initialize(
         Some(Role {
             id,
             name: role.to_string(),
-            attributes,
+            attributes: attributes.into(),
             membership,
             vars,
             oid,

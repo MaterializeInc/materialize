@@ -78,7 +78,7 @@ use crate::ast::{
 };
 use crate::catalog::{
     CatalogType, DefaultPrivilegeAclItem, DefaultPrivilegeObject, IdReference, ObjectType,
-    RoleAttributes,
+    RoleAttributesRaw,
 };
 use crate::names::{
     Aug, CommentObjectId, DependencyIds, FullItemName, ObjectId, QualifiedItemName,
@@ -550,7 +550,7 @@ pub struct CreateSchemaPlan {
 #[derive(Debug)]
 pub struct CreateRolePlan {
     pub name: String,
-    pub attributes: RoleAttributes,
+    pub attributes: RoleAttributesRaw,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
