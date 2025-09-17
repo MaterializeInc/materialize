@@ -67,7 +67,7 @@ cargo update --workspace
 
 bin/bazel gen
 
-bin/helm-chart-version-bump --bump-orchestratord-version "v$version"
+bin/helm-chart-version-bump --bump-weekly-version --bump-orchestratord-version "v$version"
 
 helm_docs_version=1.14.2
 if ! helm-docs --help > /dev/null; then

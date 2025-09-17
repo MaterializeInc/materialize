@@ -23,6 +23,11 @@ def main() -> int:
         description="Bump environmentd (appVersion), orchestratord and helm-chart versions in helm chart.",
     )
     parser.add_argument(
+        "--bump-weekly-version",
+        action="store_true",
+        help="Also bump the weekly Materialize operator release instead of the bi-yearly one",
+    )
+    parser.add_argument(
         "--helm-chart-version",
         type=str,
         help="Helm-chart version to bump to, no change if not set.",
@@ -55,6 +60,19 @@ def main() -> int:
             ),
         ),
     ]
+
+    if args.bump_weekly_version:
+        mods += [
+            (
+                MZ_ROOT / "misc" / "helm-charts" / "operator-weekly" / "Chart.yaml",
+                lambda docs: docs[0].update(
+                    {
+                        "version": args.environmentd_version,
+                        "appVersion": args.environmentd_version,
+                    }
+                ),
+            ),
+        ]
 
     if args.bump_orchestratord_version:
         # There are two cases that bump the version:

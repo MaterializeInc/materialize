@@ -56,43 +56,28 @@ if git tag "$TAG"; then
     run_if_not_dry git push "https://github.com/MaterializeInc/materialize.git" "$TAG"
 fi
 
-# Find directories containing Chart.yaml
-CHARTS=""
-for dir in "$CHARTS_DIR"/*/; do
-  if [ -f "${dir}Chart.yaml" ]; then
-    chart_name=$(basename "$dir")
-    CHARTS="${CHARTS:+${CHARTS} }$chart_name"
-  fi
-done
-if [ -z "$CHARTS" ]; then
-  echo "No valid Helm charts found"
-  exit 0
-fi
-echo "Found valid charts: $CHARTS"
-
 rm -rf gh-pages
 git clone --branch "$GITHUB_PAGES_BRANCH" --depth 1 https://github.com/MaterializeInc/materialize.git gh-pages
 
 mkdir -p $RELEASE_DIR
 CHANGES_MADE=0
-for CHART in $CHARTS; do
-  CHART_PATH="$CHARTS_DIR/$CHART"
-  VERSION=$(yq eval '.version' "$CHART_PATH"/Chart.yaml)
-  echo "Processing chart: $CHART version: $VERSION"
-  # Check if version already exists
-  if [ -f "gh-pages/$CHART-$VERSION.tgz" ]; then
-    echo "Chart $CHART version $VERSION already exists, skipping"
-    continue
-  fi
-  # Lint chart
-  if ! helm lint "$CHART_PATH"; then
-    echo "Linting failed for $CHART"
-    exit 1
-  fi
-  # Package chart
-  helm package "$CHART_PATH" --destination $RELEASE_DIR
-  CHANGES_MADE=1
-done
+CHART=operator
+CHART_PATH="$CHARTS_DIR/$CHART"
+VERSION=$(yq eval '.version' "$CHART_PATH"/Chart.yaml)
+echo "Processing chart: $CHART version: $VERSION"
+# Check if version already exists
+if [ -f "gh-pages/$CHART-$VERSION.tgz" ]; then
+  echo "Chart $CHART version $VERSION already exists, skipping"
+  exit 0
+fi
+# Lint chart
+if ! helm lint "$CHART_PATH"; then
+  echo "Linting failed for $CHART"
+  exit 1
+fi
+# Package chart
+helm package "$CHART_PATH" --destination $RELEASE_DIR
+CHANGES_MADE=1
 # Only proceed if we have new packages
 if [ $CHANGES_MADE -eq 1 ]; then
   # Copy new charts to gh-pages
