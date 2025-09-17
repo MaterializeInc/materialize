@@ -29,7 +29,7 @@ bin/ci-annotate-errors junit_coverage*.xml
 ci_unimportant_heading "Create coverage report"
 REPORT=coverage_without_unittests_"$BUILDKITE_BUILD_ID"
 REPORT_UNITTESTS=coverage_with_unittests_"$BUILDKITE_BUILD_ID"
-find coverage -name '*.lcov' -exec sed -i "s#SF:/var/lib/buildkite-agent/builds/buildkite-[^/]*/materialize/.*/#SF:#" {} +
+find coverage -name '*.lcov' -exec sed -i "s#SF:/var/lib/buildkite-agent/builds/buildkite-.*/materialize/coverage/#SF:#" {} +
 find coverage -name '*.lcov' -not -name 'cargotest.lcov' -exec genhtml -o "$REPORT" {} +
 find coverage -name '*.lcov' -exec genhtml -o "$REPORT_UNITTESTS" {} +
 tar -I zstd -cf "$REPORT".tar.zst "$REPORT"

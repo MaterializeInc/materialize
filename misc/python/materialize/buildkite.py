@@ -103,7 +103,7 @@ def get_pipeline_default_branch(fallback: str = "main"):
 def get_merge_base(url: str = "https://github.com/MaterializeInc/materialize") -> str:
     base_branch = get_pull_request_base_branch() or get_pipeline_default_branch()
     merge_base = git.get_common_ancestor_commit(
-        remote=git.get_remote(url), branch=base_branch
+        remote=git.get_remote(url), branch=base_branch, fetch_branch=True
     )
     return merge_base
 

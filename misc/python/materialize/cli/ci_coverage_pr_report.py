@@ -29,8 +29,6 @@ SOURCE_RE = re.compile(
     ( src/(.*$)"
     | bazel-out/.*/bin/(.*$)
     | external/(.*$)
-    | /usr/local/lib/rustlib/(.*$)
-    | /var/lib/buildkite-agent/builds/buildkite-.*/materialize/[^/]*/src/(.*$)
     )""",
     re.VERBOSE,
 )
@@ -103,7 +101,7 @@ def mark_covered_lines(
                 file = content
             else:
                 result = SOURCE_RE.search(content)
-                assert result, f"not found: {content}"
+                assert result, f"Unexpected file {content}"
                 file = result.group(1)
         # DA:111,15524
         # DA:112,0

@@ -571,15 +571,9 @@ class DockerComposeCommand(Command):
             return
 
         composition = load_composition(args)
-
-        if (
-            args.coverage
-            or not ui.env_is_truthy("CI")
-            or ui.env_is_truthy("CI_ALLOW_LOCAL_BUILD")
-        ):
-            ui.section("Collecting mzbuild images")
-            for d in composition.dependencies:
-                ui.say(d.spec())
+        ui.section("Collecting mzbuild images")
+        for d in composition.dependencies:
+            ui.say(d.spec())
 
         if self.runs_containers:
             if args.coverage:

@@ -152,7 +152,7 @@ def main() -> int:
     parser.add_argument(
         "--coverage",
         help="Build with coverage",
-        default=ui.env_is_truthy("CI_COVERAGE_ENABLED"),
+        default=False,
         action="store_true",
     )
     parser.add_argument(

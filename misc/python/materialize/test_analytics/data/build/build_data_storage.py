@@ -32,7 +32,7 @@ class BuildDataStorage(BaseDataStorage):
         branch = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_BRANCH)
         commit_hash = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_COMMIT)
         main_ancestor_commit_hash = git.get_common_ancestor_commit(
-            remote=git.get_remote(), branch="main"
+            remote=git.get_remote(), branch="main", fetch_branch=True
         )
         mz_version = MzVersion.parse_cargo()
 

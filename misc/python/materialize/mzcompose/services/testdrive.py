@@ -11,7 +11,7 @@ import json
 import random
 from typing import Any
 
-from materialize import buildkite, ui
+from materialize import buildkite
 from materialize.mzcompose import DEFAULT_MZ_VOLUMES, cluster_replica_size_map
 from materialize.mzcompose.service import (
     Service,
@@ -134,9 +134,7 @@ class Testdrive(Service):
             entrypoint.append(f"--materialize-param={k}={v}")
 
         if default_timeout is None:
-            default_timeout = (
-                "120s" if ui.env_is_truthy("CI_COVERAGE_ENABLED") else "20s"
-            )
+            default_timeout = "360s"
         entrypoint.append(f"--default-timeout={default_timeout}")
 
         if kafka_default_partitions:

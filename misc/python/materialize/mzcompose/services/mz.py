@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 
 import hashlib
-import os
 
 import toml
 
@@ -58,13 +57,10 @@ class Mz(Service):
 
         with open(config_name, "w") as f:
             f.write(config_str)
-        os.chmod(config_name, 0o777)
         super().__init__(
             name=name,
             config={
                 "mzbuild": "mz",
-                "volumes": [
-                    f"{config_name}:/home/materialize/.config/materialize/mz.toml"
-                ],
+                "volumes": [f"{config_name}:/root/.config/materialize/mz.toml"],
             },
         )
