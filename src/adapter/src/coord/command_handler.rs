@@ -33,7 +33,7 @@ use mz_sql::ast::{
     AlterConnectionAction, AlterConnectionStatement, AlterSourceAction, AstInfo, ConstantVisitor,
     CopyRelation, CopyStatement, CreateSourceOptionName, Raw, Statement, SubscribeStatement,
 };
-use mz_sql::catalog::RoleAttributes;
+use mz_sql::catalog::RoleAttributesRaw;
 use mz_sql::names::{Aug, PartialItemName, ResolvedIds};
 use mz_sql::plan::{
     AbortTransactionPlan, CommitTransactionPlan, CreateRolePlan, Params, Plan,
@@ -396,7 +396,7 @@ impl Coordinator {
             // This includes preventing any user, except a pre-defined set of system users, from
             // connecting to an internal port. Therefore it's ok to always create a new role for the
             // user.
-            let attributes = RoleAttributes::new();
+            let attributes = RoleAttributesRaw::new();
             let plan = CreateRolePlan {
                 name: user.name.to_string(),
                 attributes,
