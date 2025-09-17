@@ -52,47 +52,32 @@ bin/helm-chart-version-bump --helm-chart-version "$CI_HELM_CHART_VERSION" "$CI_M
 git commit -a -m "Bumping helm-chart version to $CI_HELM_CHART_VERSION with Materialize $CI_MZ_VERSION"
 TAG="self-managed-$CI_HELM_CHART_VERSION"
 if git tag "$TAG"; then
-    git diff HEAD~
+    git --no-pager diff HEAD~
     run_if_not_dry git push "https://github.com/MaterializeInc/materialize.git" "$TAG"
 fi
-
-# Find directories containing Chart.yaml
-CHARTS=""
-for dir in "$CHARTS_DIR"/*/; do
-  if [ -f "${dir}Chart.yaml" ]; then
-    chart_name=$(basename "$dir")
-    CHARTS="${CHARTS:+${CHARTS} }$chart_name"
-  fi
-done
-if [ -z "$CHARTS" ]; then
-  echo "No valid Helm charts found"
-  exit 0
-fi
-echo "Found valid charts: $CHARTS"
 
 rm -rf gh-pages
 git clone --branch "$GITHUB_PAGES_BRANCH" --depth 1 https://github.com/MaterializeInc/materialize.git gh-pages
 
 mkdir -p $RELEASE_DIR
 CHANGES_MADE=0
-for CHART in $CHARTS; do
-  CHART_PATH="$CHARTS_DIR/$CHART"
-  VERSION=$(yq eval '.version' "$CHART_PATH"/Chart.yaml)
-  echo "Processing chart: $CHART version: $VERSION"
-  # Check if version already exists
-  if [ -f "gh-pages/$CHART-$VERSION.tgz" ]; then
-    echo "Chart $CHART version $VERSION already exists, skipping"
-    continue
-  fi
-  # Lint chart
-  if ! helm lint "$CHART_PATH"; then
-    echo "Linting failed for $CHART"
-    exit 1
-  fi
-  # Package chart
-  helm package "$CHART_PATH" --destination $RELEASE_DIR
-  CHANGES_MADE=1
-done
+CHART=operator
+CHART_PATH="$CHARTS_DIR/$CHART"
+VERSION=$(yq eval '.version' "$CHART_PATH"/Chart.yaml)
+echo "Processing chart: $CHART version: $VERSION"
+# Check if version already exists
+if [ -f "gh-pages/$CHART-$VERSION.tgz" ]; then
+  echo "Chart $CHART version $VERSION already exists, skipping"
+  exit 0
+fi
+# Lint chart
+if ! helm lint "$CHART_PATH"; then
+  echo "Linting failed for $CHART"
+  exit 1
+fi
+# Package chart
+helm package "$CHART_PATH" --destination $RELEASE_DIR
+CHANGES_MADE=1
 # Only proceed if we have new packages
 if [ $CHANGES_MADE -eq 1 ]; then
   # Copy new charts to gh-pages
@@ -110,7 +95,7 @@ if [ $CHANGES_MADE -eq 1 ]; then
   git config user.email "noreply@materialize.com"
   git config user.name "Buildkite"
   git commit -m "helm-charts: publish updated charts"
-  git diff HEAD~
+  git --no-pager diff HEAD~
   run_if_not_dry git push origin $GITHUB_PAGES_BRANCH
   cd ..
 else
@@ -171,7 +156,7 @@ else
 # Bump the patch version by one (v0.1.12 -> v0.1.13)
   TERRAFORM_HELM_VERSION=$(git for-each-ref --sort=creatordate --format '%(refname:strip=2)' refs/tags | grep '^v' | tail -n1 | awk -F. -v OFS=. '{$NF += 1; print}')
   git tag "$TERRAFORM_HELM_VERSION"
-  git diff HEAD~
+  git --no-pager diff HEAD~
   run_if_not_dry git push origin main "$TERRAFORM_HELM_VERSION"
   cd ..
 
@@ -199,7 +184,7 @@ else
 # Bump the patch version by one (v0.1.12 -> v0.1.13)
     TERRAFORM_VERSION[$repo]=$(git for-each-ref --sort=creatordate --format '%(refname:strip=2)' refs/tags | grep '^v' | tail -n1 | awk -F. -v OFS=. '{$NF += 1; print}')
     git tag "${TERRAFORM_VERSION[$repo]}"
-    git diff HEAD~
+    git --no-pager diff HEAD~
     run_if_not_dry git push origin main "${TERRAFORM_VERSION[$repo]}"
     cd ..
   done
@@ -225,7 +210,7 @@ if ! is_truthy "$CI_NO_TERRAFORM_BUMP"; then
 fi
 git add $VERSIONS_YAML_PATH
 git commit -m "docs: Bump to helm-chart $CI_HELM_CHART_VERSION, environmentd $CI_MZ_VERSION, orchestratord $ORCHESTRATORD_VERSION"
-git diff HEAD~
+git --no-pager diff HEAD~
 run_if_not_dry git push origin "HEAD:$DOCS_BRANCH"
 
 if ! is_truthy "$CI_NO_TERRAFORM_BUMP"; then
@@ -238,6 +223,6 @@ if ! is_truthy "$CI_NO_TERRAFORM_BUMP"; then
   sed -i "s|\"git::https://github.com/MaterializeInc/terraform-google-materialize.git?ref=.*\"|\"git::https://github.com/MaterializeInc/terraform-google-materialize.git?ref=${TERRAFORM_VERSION[terraform-google-materialize]}\"|" test/terraform/gcp-*/main.tf
   git add test/terraform/*/main.tf
   git commit -m "terraform tests: Bump to AWS ${TERRAFORM_VERSION[terraform-aws-materialize]}, GCP ${TERRAFORM_VERSION[terraform-google-materialize]}, Azure ${TERRAFORM_VERSION[terraform-azurerm-materialize]}"
-  git diff HEAD~
+  git --no-pager diff HEAD~
   run_if_not_dry git push origin HEAD:main
 fi
