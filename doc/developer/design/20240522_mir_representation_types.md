@@ -21,7 +21,7 @@ It will also simplify and clarify what MIR is doing.
 - `char(n)`, `bpchar(n)` for fixed-length strings with a fixed-length representation (whitespace padded)
 - `varchar(n)` for fixed-length strings with a variable-length representation
 - `varchar` for arbitrary-length strings with a variable-length representation
-- `bpchar` for artbirary-length strings with a variable-length representation where trailing whitespace is trimmed
+- `bpchar` for arbitrary-length strings with a variable-length representation where trailing whitespace is trimmed
 - `text` for arbitrary-length strings with a variable-length representation
 
 (There are also `"char"` and `name`, but they are very much internal to Postgres---let's ignore them for the moment.)
