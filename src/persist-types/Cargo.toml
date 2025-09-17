@@ -12,7 +12,7 @@ workspace = true
 # NB: This is meant to be a strong, independent abstraction boundary. Please
 # don't leak in dependencies on other Materialize packages.
 [dependencies]
-anyhow = "1.0.98"
+anyhow = "1.0.99"
 arrow = { version = "55.2.0", default-features = false }
 bytes = { version = "1.10.1", features = ["serde"] }
 chrono = { version = "0.4.39", default-features = false, features = ["std"] }
