@@ -22,6 +22,7 @@ import "repr/src/relation_and_scalar.proto";
 import "storage-types/src/connections/aws.proto";
 import "storage-types/src/controller.proto";
 import "storage-types/src/sinks.proto";
+import "expr/src/relation.proto";
 
 message ProtoComputeSinkDesc {
   mz_repr.global_id.ProtoGlobalId from = 1;
@@ -33,9 +34,34 @@ message ProtoComputeSinkDesc {
   mz_repr.refresh_schedule.ProtoRefreshSchedule refresh_schedule = 7;
 }
 
+message ProtoSubscribeSinkConnection {
+  ProtoSubscribeOutput output = 1;
+}
+
+message ProtoSubscribeOutput {
+  oneof kind {
+    google.protobuf.Empty diffs = 1;
+    ProtoWithinTimestampOrderBy within_timestamp_order_by = 2;
+    ProtoEnvelopeUpsert envelope_upsert = 3;
+    ProtoEnvelopeDebezium envelope_debezium = 4;
+  }
+}
+
+message ProtoWithinTimestampOrderBy {
+  repeated mz_expr.relation.ProtoColumnOrder order_by = 1;
+}
+
+message ProtoEnvelopeUpsert {
+  repeated mz_expr.relation.ProtoColumnOrder order_by_keys = 1;
+}
+
+message ProtoEnvelopeDebezium {
+  repeated mz_expr.relation.ProtoColumnOrder order_by_keys = 1;
+}
+
 message ProtoComputeSinkConnection {
   oneof kind {
-    google.protobuf.Empty subscribe = 1;
+    ProtoSubscribeSinkConnection subscribe = 1;
     ProtoMaterializedViewSinkConnection materialized_view = 2;
     ProtoCopyToS3OneshotSinkConnection copy_to_s3_oneshot = 3;
     ProtoContinualTaskConnection continual_task = 4;

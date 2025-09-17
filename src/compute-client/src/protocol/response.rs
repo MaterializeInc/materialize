@@ -17,7 +17,7 @@ use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::batch::ProtoBatch;
 use mz_persist_types::ShardId;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError, any_uuid};
-use mz_repr::{Diff, GlobalId, RelationDesc, Row};
+use mz_repr::{Diff, GlobalId, RelationDesc, Row, Timestamp};
 use mz_timely_util::progress::any_antichain;
 use proptest::prelude::{Arbitrary, any};
 use proptest::strategy::{BoxedStrategy, Just, Strategy, Union};
@@ -415,6 +415,137 @@ pub struct StashedPeekResponse {
     pub inline_rows: RowCollection,
 }
 
+/// Response from a subscribe whose results have been stashed into persist.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StashedSubscribeBatch {
+    /// The number of rows stored in response batches. This is the sum of the
+    /// diff values of the contained rows.
+    ///
+    /// This does _NOT_ include rows in `inline_updates`.
+    pub num_rows_batches: u64,
+    /// The sum of the encoded sizes of all batches in this response.
+    pub encoded_size_bytes: usize,
+    /// [RelationDesc] for the rows in these stashed batches of results.
+    pub relation_desc: RelationDesc,
+    /// The [ShardId] under which result batches have been stashed.
+    pub shard_id: ShardId,
+    /// Batches of Updates, must be combined with responses from other workers and
+    /// consolidated before sending back via a client.
+    pub batches: Vec<ProtoBatch>,
+    /// Updates that have not been uploaded to the stash, because their total size
+    /// did not go above the threshold for using the subscribe stash.
+    ///
+    /// We will have a mix of stashed responses and inline responses because the
+    /// result sizes across different workers can and will vary.
+    pub inline_updates: Vec<(Timestamp, Row, Diff)>,
+}
+
+impl StashedSubscribeBatch {
+    /// Total count of updates represented by this collection.
+    pub fn num_updates(&self) -> usize {
+        let num_stashed_updates: usize = usize::cast_from(self.num_rows_batches);
+        let num_inline_updates = self.inline_updates.len();
+        num_stashed_updates + num_inline_updates
+    }
+
+    /// The size in bytes of the encoded updates in this result.
+    pub fn size_bytes(&self) -> usize {
+        let inline_size: usize = self
+            .inline_updates
+            .iter()
+            .map(|(_time, row, _diff)| row.byte_len())
+            .sum();
+
+        self.encoded_size_bytes + inline_size
+    }
+}
+
+impl RustType<ProtoStashedSubscribeBatch> for StashedSubscribeBatch {
+    fn into_proto(&self) -> ProtoStashedSubscribeBatch {
+        use proto_subscribe_batch::ProtoUpdate;
+        ProtoStashedSubscribeBatch {
+            relation_desc: Some(self.relation_desc.into_proto()),
+            shard_id: self.shard_id.into_proto(),
+            batches: self.batches.clone(),
+            num_rows: self.num_rows_batches.into_proto(),
+            encoded_size_bytes: self.encoded_size_bytes.into_proto(),
+            inline_updates: self
+                .inline_updates
+                .iter()
+                .map(|(t, r, d)| ProtoUpdate {
+                    timestamp: t.into(),
+                    row: Some(r.into_proto()),
+                    diff: d.into_proto(),
+                })
+                .collect(),
+        }
+    }
+
+    fn from_proto(proto: ProtoStashedSubscribeBatch) -> Result<Self, TryFromProtoError> {
+        let shard_id: ShardId = proto
+            .shard_id
+            .into_rust()
+            .expect("valid transmittable shard_id");
+        Ok(StashedSubscribeBatch {
+            relation_desc: proto
+                .relation_desc
+                .into_rust_if_some("ProtoStashedSubscribeBatch::relation_desc")?,
+            shard_id,
+            batches: proto.batches,
+            num_rows_batches: proto.num_rows,
+            encoded_size_bytes: usize::cast_from(proto.encoded_size_bytes),
+            inline_updates: proto
+                .inline_updates
+                .into_iter()
+                .map(|update| {
+                    Ok((
+                        update.timestamp.into(),
+                        update.row.into_rust_if_some("ProtoUpdate::row")?,
+                        update.diff.into(),
+                    ))
+                })
+                .collect::<Result<Vec<_>, TryFromProtoError>>()?,
+        })
+    }
+}
+
+impl Arbitrary for StashedSubscribeBatch {
+    type Strategy = BoxedStrategy<Self>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        (
+            any::<RelationDesc>(),
+            any::<ShardId>(),
+            any::<u64>(),
+            any::<usize>(),
+            proptest::collection::vec(
+                (any::<mz_repr::Timestamp>(), any::<Row>(), any::<Diff>()),
+                0..4,
+            ),
+        )
+            .prop_map(
+                |(
+                    relation_desc,
+                    shard_id,
+                    num_rows_batches,
+                    encoded_size_bytes,
+                    inline_updates,
+                )| {
+                    StashedSubscribeBatch {
+                        relation_desc,
+                        shard_id,
+                        batches: Vec::new(), // ProtoBatch doesn't implement Arbitrary, so use empty vec
+                        num_rows_batches,
+                        encoded_size_bytes,
+                        inline_updates,
+                    }
+                },
+            )
+            .boxed()
+    }
+}
+
 impl StashedPeekResponse {
     /// Total count of [`Row`]s represented by this collection, considering a
     /// possible `OFFSET` and `LIMIT`.
@@ -511,7 +642,7 @@ impl RustType<ProtoCopyToResponse> for CopyToResponse {
 }
 
 /// Various responses that can be communicated about the progress of a SUBSCRIBE command.
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum SubscribeResponse<T = mz_repr::Timestamp> {
     /// A batch of updates over a non-empty interval of time.
     Batch(SubscribeBatch<T>),
@@ -569,33 +700,55 @@ impl Arbitrary for SubscribeResponse<mz_repr::Timestamp> {
     }
 }
 
+/// The contents of a subscribe batch.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum SubscribeBatchContents<T = mz_repr::Timestamp> {
+    /// Regular updates.
+    Updates(Vec<(T, Row, Diff)>),
+    /// Updates that have been stashed in persist batches.
+    Stashed(Box<StashedSubscribeBatch>),
+    /// Error message.
+    Error(String),
+}
+
 /// A batch of updates for the interval `[lower, upper)`.
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SubscribeBatch<T = mz_repr::Timestamp> {
     /// The lower frontier of the batch of updates.
     pub lower: Antichain<T>,
     /// The upper frontier of the batch of updates.
     pub upper: Antichain<T>,
     /// All updates greater than `lower` and not greater than `upper`.
-    ///
-    /// An `Err` variant can be used to indicate e.g. that the size of the updates exceeds internal limits.
-    pub updates: Result<Vec<(T, Row, Diff)>, String>,
+    pub updates: SubscribeBatchContents<T>,
 }
 
 impl<T> SubscribeBatch<T> {
     /// Converts `self` to an error if a maximum size is exceeded.
     fn to_error_if_exceeds(&mut self, max_result_size: usize) {
         use bytesize::ByteSize;
-        if let Ok(updates) = &self.updates {
-            let total_size: usize = updates
-                .iter()
-                .map(|(_time, row, _diff)| row.byte_len())
-                .sum();
-            if total_size > max_result_size {
-                self.updates = Err(format!(
-                    "result exceeds max size of {}",
-                    ByteSize::b(u64::cast_from(max_result_size))
-                ));
+        match &self.updates {
+            SubscribeBatchContents::Updates(updates) => {
+                let total_size: usize = updates
+                    .iter()
+                    .map(|(_time, row, _diff)| row.byte_len())
+                    .sum();
+                if total_size > max_result_size {
+                    self.updates = SubscribeBatchContents::Error(format!(
+                        "result exceeds max size of {}",
+                        ByteSize::b(u64::cast_from(max_result_size))
+                    ));
+                }
+            }
+            SubscribeBatchContents::Stashed(stashed) => {
+                if stashed.size_bytes() > max_result_size {
+                    self.updates = SubscribeBatchContents::Error(format!(
+                        "result exceeds max size of {}",
+                        ByteSize::b(u64::cast_from(max_result_size))
+                    ));
+                }
+            }
+            SubscribeBatchContents::Error(_) => {
+                // Already an error, nothing to do
             }
         }
     }
@@ -609,7 +762,7 @@ impl RustType<ProtoSubscribeBatch> for SubscribeBatch<mz_repr::Timestamp> {
             upper: Some(self.upper.into_proto()),
             updates: Some(proto_subscribe_batch::ProtoSubscribeBatchContents {
                 kind: match &self.updates {
-                    Ok(updates) => {
+                    SubscribeBatchContents::Updates(updates) => {
                         let updates = updates
                             .iter()
                             .map(|(t, r, d)| ProtoUpdate {
@@ -625,7 +778,12 @@ impl RustType<ProtoSubscribeBatch> for SubscribeBatch<mz_repr::Timestamp> {
                             ),
                         )
                     }
-                    Err(text) => Some(
+                    SubscribeBatchContents::Stashed(stashed) => Some(
+                        proto_subscribe_batch::proto_subscribe_batch_contents::Kind::Stashed(
+                            stashed.as_ref().into_proto(),
+                        ),
+                    ),
+                    SubscribeBatchContents::Error(text) => Some(
                         proto_subscribe_batch::proto_subscribe_batch_contents::Kind::Error(
                             text.clone(),
                         ),
@@ -642,23 +800,52 @@ impl RustType<ProtoSubscribeBatch> for SubscribeBatch<mz_repr::Timestamp> {
             updates: match proto.updates.unwrap().kind {
                 Some(proto_subscribe_batch::proto_subscribe_batch_contents::Kind::Updates(
                     updates,
-                )) => Ok(updates
-                    .updates
-                    .into_iter()
-                    .map(|update| {
-                        Ok((
-                            update.timestamp.into(),
-                            update.row.into_rust_if_some("ProtoUpdate::row")?,
-                            update.diff.into(),
-                        ))
-                    })
-                    .collect::<Result<Vec<_>, TryFromProtoError>>()?),
+                )) => SubscribeBatchContents::Updates(
+                    updates
+                        .updates
+                        .into_iter()
+                        .map(|update| {
+                            Ok((
+                                update.timestamp.into(),
+                                update.row.into_rust_if_some("ProtoUpdate::row")?,
+                                update.diff.into(),
+                            ))
+                        })
+                        .collect::<Result<Vec<_>, TryFromProtoError>>()?,
+                ),
+                Some(proto_subscribe_batch::proto_subscribe_batch_contents::Kind::Stashed(
+                    stashed,
+                )) => SubscribeBatchContents::Stashed(Box::new(stashed.into_rust()?)),
                 Some(proto_subscribe_batch::proto_subscribe_batch_contents::Kind::Error(text)) => {
-                    Err(text)
+                    SubscribeBatchContents::Error(text)
                 }
-                None => Err(TryFromProtoError::missing_field("ProtoPeekResponse::kind"))?,
+                None => {
+                    return Err(TryFromProtoError::missing_field(
+                        "ProtoSubscribeBatch::kind",
+                    ));
+                }
             },
         })
+    }
+}
+
+impl Arbitrary for SubscribeBatchContents<mz_repr::Timestamp> {
+    type Strategy = Union<BoxedStrategy<Self>>;
+    type Parameters = ();
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        Union::new(vec![
+            proptest::collection::vec(
+                (any::<mz_repr::Timestamp>(), any::<Row>(), any::<Diff>()),
+                1..4,
+            )
+            .prop_map(SubscribeBatchContents::Updates)
+            .boxed(),
+            any::<StashedSubscribeBatch>()
+                .prop_map(|s| SubscribeBatchContents::Stashed(Box::new(s)))
+                .boxed(),
+            ".*".prop_map(SubscribeBatchContents::Error).boxed(),
+        ])
     }
 }
 
@@ -670,15 +857,12 @@ impl Arbitrary for SubscribeBatch<mz_repr::Timestamp> {
         (
             proptest::collection::vec(any::<mz_repr::Timestamp>(), 1..4),
             proptest::collection::vec(any::<mz_repr::Timestamp>(), 1..4),
-            proptest::collection::vec(
-                (any::<mz_repr::Timestamp>(), any::<Row>(), any::<Diff>()),
-                1..4,
-            ),
+            any::<SubscribeBatchContents<mz_repr::Timestamp>>(),
         )
             .prop_map(|(lower, upper, updates)| SubscribeBatch {
                 lower: Antichain::from(lower),
                 upper: Antichain::from(upper),
-                updates: Ok(updates),
+                updates,
             })
             .boxed()
     }

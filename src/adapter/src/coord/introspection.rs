@@ -33,7 +33,7 @@ use derivative::Derivative;
 use mz_adapter_types::dyncfgs::ENABLE_INTROSPECTION_SUBSCRIBES;
 use mz_cluster_client::ReplicaId;
 use mz_compute_client::controller::error::ERROR_TARGET_REPLICA_FAILED;
-use mz_compute_client::protocol::response::SubscribeBatch;
+use mz_compute_client::protocol::response::{SubscribeBatch, SubscribeBatchContents};
 use mz_controller_types::ClusterId;
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_panic_or_log;
@@ -216,6 +216,7 @@ impl Coordinator {
             format!("introspection-subscribe-{subscribe_id}"),
             optimizer_config,
             self.optimizer_metrics(),
+            plan.output.clone(),
         );
         let catalog = self.owned_catalog();
 
@@ -430,19 +431,23 @@ impl Coordinator {
         };
 
         let updates = match batch.updates {
-            Ok(updates) if updates.is_empty() => return,
-            Ok(updates) => updates,
-            Err(error) if error == ERROR_TARGET_REPLICA_FAILED => {
+            SubscribeBatchContents::Updates(updates) if updates.is_empty() => return,
+            SubscribeBatchContents::Updates(updates) => updates,
+            SubscribeBatchContents::Error(ref error) if error == ERROR_TARGET_REPLICA_FAILED => {
                 // The target replica disconnected, reinstall the subscribe.
                 self.reinstall_introspection_subscribe(id).await;
                 return;
             }
-            Err(error) => {
+            SubscribeBatchContents::Error(error) => {
                 soft_panic_or_log!(
                     "introspection subscribe produced an error: {error} \
                      (id={id}, subscribe={subscribe:?})",
                 );
                 return;
+            }
+            SubscribeBatchContents::Stashed(stashed) => {
+                // WIP: Fix this!
+                stashed.inline_updates
             }
         };
 
