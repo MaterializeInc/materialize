@@ -35,11 +35,11 @@ postgres = { version = "0.19.5" }
 tokio = "1.44.1"
 tokio-stream = "0.1.17"
 tokio-openssl = "0.6.5"
-tokio-util = { version = "0.7.15", features = ["codec"] }
-tokio-metrics = "0.4.2"
+tokio-util = { version = "0.7.16", features = ["codec"] }
+tokio-metrics = "0.4.5"
 tracing = "0.1.37"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
-uuid = { version = "1.17.0", features = ["v4"] }
+uuid = { version = "1.18.1", features = ["v4"] }
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
