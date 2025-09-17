@@ -24,11 +24,12 @@ For each threshold level, use the following table as a guide to set up your own 
 
 Metric | Warning | Alert | Description
 -- | -- | -- | --
-CPU | 85% | 100% | Average CPU usage for a cluster in the last *15 minutes*.
-Memory | 80% | 90% | Average memory usage for a cluster in the last *15 minutes*.
+Memory utilization | 80% | 90% | Average memory utilization for a cluster in the last *15 minutes*.
 Source status | - | On Change | Source status change in the last *1 minute*.
 Cluster status | - | On Change | Cluster replica status change in the last *1 minute*.
 Freshness | > 5s | > 1m | Average [lag behind an input](/sql/system-catalog/mz_internal/#mz_materialization_lag) in the last *15 minutes*.
+
+NOTE: Customers on legacy cluster sizes should still monitor their Memory usage. Please [contact support](/support/) for questions.
 
 ### Custom Thresholds
 
