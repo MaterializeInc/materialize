@@ -23,7 +23,6 @@ use md5::Md5;
 use mz_lowertest::MzReflect;
 use mz_ore::cast::{CastFrom, ReinterpretCast};
 use mz_pgtz::timezone::TimezoneSpec;
-use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::mz_acl_item::{AclItem, AclMode, MzAclItem};
 use mz_repr::adt::range::{InvalidRangeError, Range, RangeBound, parse_range_bound_flags};
@@ -42,7 +41,6 @@ use crate::func::{
     regexp_match_static, regexp_replace_parse_flags, regexp_replace_static,
     regexp_split_to_array_re, stringify_datum, timezone_time,
 };
-use crate::scalar::ProtoVariadicFunc;
 use crate::{EvalError, MirScalarExpr};
 
 pub fn and<'a>(
@@ -1714,152 +1712,5 @@ impl Arbitrary for VariadicFunc {
                 .prop_map(|elem_type| VariadicFunc::ArrayFill { elem_type })
                 .boxed(),
         ])
-    }
-}
-
-impl RustType<ProtoVariadicFunc> for VariadicFunc {
-    fn into_proto(&self) -> ProtoVariadicFunc {
-        use crate::scalar::proto_variadic_func::Kind::*;
-        use crate::scalar::proto_variadic_func::ProtoRecordCreate;
-        let kind = match self {
-            VariadicFunc::Coalesce => Coalesce(()),
-            VariadicFunc::Greatest => Greatest(()),
-            VariadicFunc::Least => Least(()),
-            VariadicFunc::Concat => Concat(()),
-            VariadicFunc::ConcatWs => ConcatWs(()),
-            VariadicFunc::MakeTimestamp => MakeTimestamp(()),
-            VariadicFunc::PadLeading => PadLeading(()),
-            VariadicFunc::Substr => Substr(()),
-            VariadicFunc::Replace => Replace(()),
-            VariadicFunc::Translate => Translate(()),
-            VariadicFunc::JsonbBuildArray => JsonbBuildArray(()),
-            VariadicFunc::JsonbBuildObject => JsonbBuildObject(()),
-            VariadicFunc::MapBuild { value_type } => MapBuild(value_type.into_proto()),
-            VariadicFunc::ArrayCreate { elem_type } => ArrayCreate(elem_type.into_proto()),
-            VariadicFunc::ArrayToString { elem_type } => ArrayToString(elem_type.into_proto()),
-            VariadicFunc::ArrayIndex { offset } => ArrayIndex(offset.into_proto()),
-            VariadicFunc::ListCreate { elem_type } => ListCreate(elem_type.into_proto()),
-            VariadicFunc::RecordCreate { field_names } => RecordCreate(ProtoRecordCreate {
-                field_names: field_names.into_proto(),
-            }),
-            VariadicFunc::ListIndex => ListIndex(()),
-            VariadicFunc::ListSliceLinear => ListSliceLinear(()),
-            VariadicFunc::SplitPart => SplitPart(()),
-            VariadicFunc::RegexpMatch => RegexpMatch(()),
-            VariadicFunc::HmacString => HmacString(()),
-            VariadicFunc::HmacBytes => HmacBytes(()),
-            VariadicFunc::ErrorIfNull => ErrorIfNull(()),
-            VariadicFunc::DateBinTimestamp => DateBinTimestamp(()),
-            VariadicFunc::DateBinTimestampTz => DateBinTimestampTz(()),
-            VariadicFunc::DateDiffTimestamp => DateDiffTimestamp(()),
-            VariadicFunc::DateDiffTimestampTz => DateDiffTimestampTz(()),
-            VariadicFunc::DateDiffDate => DateDiffDate(()),
-            VariadicFunc::DateDiffTime => DateDiffTime(()),
-            VariadicFunc::And => And(()),
-            VariadicFunc::Or => Or(()),
-            VariadicFunc::RangeCreate { elem_type } => RangeCreate(elem_type.into_proto()),
-            VariadicFunc::MakeAclItem => MakeAclItem(()),
-            VariadicFunc::MakeMzAclItem => MakeMzAclItem(()),
-            VariadicFunc::ArrayPosition => ArrayPosition(()),
-            VariadicFunc::ArrayFill { elem_type } => ArrayFill(elem_type.into_proto()),
-            VariadicFunc::TimezoneTime => TimezoneTime(()),
-            VariadicFunc::RegexpSplitToArray => RegexpSplitToArray(()),
-            VariadicFunc::RegexpReplace => RegexpReplace(()),
-            VariadicFunc::StringToArray => StringToArray(()),
-        };
-        ProtoVariadicFunc { kind: Some(kind) }
-    }
-
-    fn from_proto(proto: ProtoVariadicFunc) -> Result<Self, TryFromProtoError> {
-        use crate::scalar::proto_variadic_func::Kind::*;
-        use crate::scalar::proto_variadic_func::ProtoRecordCreate;
-        if let Some(kind) = proto.kind {
-            match kind {
-                Coalesce(()) => Ok(VariadicFunc::Coalesce),
-                Greatest(()) => Ok(VariadicFunc::Greatest),
-                Least(()) => Ok(VariadicFunc::Least),
-                Concat(()) => Ok(VariadicFunc::Concat),
-                ConcatWs(()) => Ok(VariadicFunc::ConcatWs),
-                MakeTimestamp(()) => Ok(VariadicFunc::MakeTimestamp),
-                PadLeading(()) => Ok(VariadicFunc::PadLeading),
-                Substr(()) => Ok(VariadicFunc::Substr),
-                Replace(()) => Ok(VariadicFunc::Replace),
-                Translate(()) => Ok(VariadicFunc::Translate),
-                JsonbBuildArray(()) => Ok(VariadicFunc::JsonbBuildArray),
-                JsonbBuildObject(()) => Ok(VariadicFunc::JsonbBuildObject),
-                MapBuild(value_type) => Ok(VariadicFunc::MapBuild {
-                    value_type: value_type.into_rust()?,
-                }),
-                ArrayCreate(elem_type) => Ok(VariadicFunc::ArrayCreate {
-                    elem_type: elem_type.into_rust()?,
-                }),
-                ArrayToString(elem_type) => Ok(VariadicFunc::ArrayToString {
-                    elem_type: elem_type.into_rust()?,
-                }),
-                ArrayIndex(offset) => Ok(VariadicFunc::ArrayIndex {
-                    offset: offset.into_rust()?,
-                }),
-                ListCreate(elem_type) => Ok(VariadicFunc::ListCreate {
-                    elem_type: elem_type.into_rust()?,
-                }),
-                RecordCreate(ProtoRecordCreate { field_names }) => Ok(VariadicFunc::RecordCreate {
-                    field_names: field_names.into_rust()?,
-                }),
-                ListIndex(()) => Ok(VariadicFunc::ListIndex),
-                ListSliceLinear(()) => Ok(VariadicFunc::ListSliceLinear),
-                SplitPart(()) => Ok(VariadicFunc::SplitPart),
-                RegexpMatch(()) => Ok(VariadicFunc::RegexpMatch),
-                HmacString(()) => Ok(VariadicFunc::HmacString),
-                HmacBytes(()) => Ok(VariadicFunc::HmacBytes),
-                ErrorIfNull(()) => Ok(VariadicFunc::ErrorIfNull),
-                DateBinTimestamp(()) => Ok(VariadicFunc::DateBinTimestamp),
-                DateBinTimestampTz(()) => Ok(VariadicFunc::DateBinTimestampTz),
-                DateDiffTimestamp(()) => Ok(VariadicFunc::DateDiffTimestamp),
-                DateDiffTimestampTz(()) => Ok(VariadicFunc::DateDiffTimestampTz),
-                DateDiffDate(()) => Ok(VariadicFunc::DateDiffDate),
-                DateDiffTime(()) => Ok(VariadicFunc::DateDiffTime),
-                And(()) => Ok(VariadicFunc::And),
-                Or(()) => Ok(VariadicFunc::Or),
-                RangeCreate(elem_type) => Ok(VariadicFunc::RangeCreate {
-                    elem_type: elem_type.into_rust()?,
-                }),
-                MakeAclItem(()) => Ok(VariadicFunc::MakeAclItem),
-                MakeMzAclItem(()) => Ok(VariadicFunc::MakeMzAclItem),
-                ArrayPosition(()) => Ok(VariadicFunc::ArrayPosition),
-                ArrayFill(elem_type) => Ok(VariadicFunc::ArrayFill {
-                    elem_type: elem_type.into_rust()?,
-                }),
-                TimezoneTime(()) => Ok(VariadicFunc::TimezoneTime),
-                RegexpSplitToArray(()) => Ok(VariadicFunc::RegexpSplitToArray),
-                RegexpReplace(()) => Ok(VariadicFunc::RegexpReplace),
-                StringToArray(()) => Ok(VariadicFunc::StringToArray),
-            }
-        } else {
-            Err(TryFromProtoError::missing_field(
-                "`ProtoVariadicFunc::kind`",
-            ))
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use mz_ore::assert_ok;
-    use mz_proto::protobuf_roundtrip;
-    use proptest::prelude::*;
-
-    use super::*;
-
-    proptest! {
-        #![proptest_config(ProptestConfig::with_cases(4096))]
-
-
-        #[mz_ore::test]
-        #[cfg_attr(miri, ignore)] // too slow
-        fn variadic_func_protobuf_roundtrip(expect in any::<VariadicFunc>()) {
-            let actual = protobuf_roundtrip::<_, ProtoVariadicFunc>(&expect);
-            assert_ok!(actual);
-            assert_eq!(actual.unwrap(), expect);
-        }
     }
 }

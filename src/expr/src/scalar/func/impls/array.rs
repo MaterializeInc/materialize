@@ -243,9 +243,7 @@ impl fmt::Display for CastArrayToJsonb {
 /// Casts an array of one type to an array of another type. Does so by casting
 /// each element of the first array to the desired inner type and collecting
 /// the results into a new array.
-#[derive(
-    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
-)]
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastArrayToArray {
     pub return_ty: ScalarType,
     pub cast_expr: Box<MirScalarExpr>,

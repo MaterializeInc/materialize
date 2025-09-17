@@ -29,13 +29,11 @@ pub mod row;
 pub mod virtual_syntax;
 pub mod visit;
 
-pub use id::{Id, LocalId, ProtoId, ProtoLocalId, SourceInstanceId};
+pub use id::{Id, LocalId, SourceInstanceId};
 pub use interpret::{ColumnSpec, ColumnSpecs, Interpreter, ResultSpec, Trace, TraceSummary};
 pub use linear::plan::{MfpPlan, SafeMfpPlan};
 pub use linear::util::{join_permutations, permutation_for_arrangement};
-pub use linear::{
-    MapFilterProject, ProtoMapFilterProject, ProtoMfpPlan, ProtoSafeMfpPlan, memoize_expr,
-};
+pub use linear::{MapFilterProject, memoize_expr};
 pub use relation::func::order_aggregate_datums as order_aggregate_datums_exported_for_benchmarking;
 pub use relation::func::{
     AggregateFunc, AnalyzedRegex, AnalyzedRegexOpts, CaptureGroupDesc, LagLeadType,
@@ -44,15 +42,13 @@ pub use relation::func::{
 pub use relation::join_input_mapper::JoinInputMapper;
 pub use relation::{
     AccessStrategy, AggregateExpr, CollectionPlan, ColumnOrder, JoinImplementation,
-    JoinInputCharacteristics, LetRecLimit, MirRelationExpr, ProtoAggregateExpr, ProtoAggregateFunc,
-    ProtoColumnOrder, ProtoRowSetFinishing, ProtoTableFunc, RECURSION_LIMIT, RowSetFinishing,
+    JoinInputCharacteristics, LetRecLimit, MirRelationExpr, RECURSION_LIMIT, RowSetFinishing,
     RowSetFinishingIncremental, WindowFrame, WindowFrameBound, WindowFrameUnits, canonicalize,
     compare_columns, non_nullable_columns,
 };
 pub use scalar::func::{self, BinaryFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc};
 pub use scalar::{
-    EvalError, FilterCharacteristics, MirScalarExpr, ProtoDomainLimit, ProtoEvalError,
-    ProtoMirScalarExpr, like_pattern,
+    EvalError, FilterCharacteristics, MirScalarExpr, ProtoDomainLimit, ProtoEvalError, like_pattern,
 };
 
 /// A [`MirRelationExpr`] that claims to have been optimized, e.g., by an

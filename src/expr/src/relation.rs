@@ -29,7 +29,6 @@ use mz_ore::num::NonNeg;
 use mz_ore::soft_assert_no_log;
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::Indent;
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::explain::text::text_string_at;
 use mz_repr::explain::{
@@ -57,8 +56,6 @@ use crate::{
 pub mod canonicalize;
 pub mod func;
 pub mod join_input_mapper;
-
-include!(concat!(env!("OUT_DIR"), "/mz_expr.relation.rs"));
 
 /// A recursion limit to be used for stack-safe traversals of [`MirRelationExpr`] trees.
 ///
@@ -2593,24 +2590,6 @@ impl Columnation for ColumnOrder {
     type InnerRegion = CopyRegion<Self>;
 }
 
-impl RustType<ProtoColumnOrder> for ColumnOrder {
-    fn into_proto(&self) -> ProtoColumnOrder {
-        ProtoColumnOrder {
-            column: self.column.into_proto(),
-            desc: self.desc,
-            nulls_last: self.nulls_last,
-        }
-    }
-
-    fn from_proto(proto: ProtoColumnOrder) -> Result<Self, TryFromProtoError> {
-        Ok(ColumnOrder {
-            column: proto.column.into_rust()?,
-            desc: proto.desc,
-            nulls_last: proto.nulls_last,
-        })
-    }
-}
-
 impl<'a, M> fmt::Display for HumanizedExpr<'a, ColumnOrder, M>
 where
     M: HumanizerMode,
@@ -2643,24 +2622,6 @@ pub struct AggregateExpr {
     /// Should the aggregation be applied only to distinct results in each group.
     #[serde(default)]
     pub distinct: bool,
-}
-
-impl RustType<ProtoAggregateExpr> for AggregateExpr {
-    fn into_proto(&self) -> ProtoAggregateExpr {
-        ProtoAggregateExpr {
-            func: Some(self.func.into_proto()),
-            expr: Some(self.expr.into_proto()),
-            distinct: self.distinct,
-        }
-    }
-
-    fn from_proto(proto: ProtoAggregateExpr) -> Result<Self, TryFromProtoError> {
-        Ok(Self {
-            func: proto.func.into_rust_if_some("ProtoAggregateExpr::func")?,
-            expr: proto.expr.into_rust_if_some("ProtoAggregateExpr::expr")?,
-            distinct: proto.distinct,
-        })
-    }
 }
 
 impl AggregateExpr {
@@ -3648,26 +3609,6 @@ pub struct RowSetFinishing<L = NonNeg<i64>, O = usize> {
     pub project: Vec<usize>,
 }
 
-impl RustType<ProtoRowSetFinishing> for RowSetFinishing {
-    fn into_proto(&self) -> ProtoRowSetFinishing {
-        ProtoRowSetFinishing {
-            order_by: self.order_by.into_proto(),
-            limit: self.limit.into_proto(),
-            offset: self.offset.into_proto(),
-            project: self.project.into_proto(),
-        }
-    }
-
-    fn from_proto(x: ProtoRowSetFinishing) -> Result<Self, TryFromProtoError> {
-        Ok(RowSetFinishing {
-            order_by: x.order_by.into_rust()?,
-            limit: x.limit.into_rust()?,
-            offset: x.offset.into_rust()?,
-            project: x.project.into_rust()?,
-        })
-    }
-}
-
 impl<L> RowSetFinishing<L> {
     /// Returns a trivial finishing, i.e., that does nothing to the result set.
     pub fn trivial(arity: usize) -> RowSetFinishing<L> {
@@ -4026,28 +3967,6 @@ impl WindowFrame {
     }
 }
 
-impl RustType<ProtoWindowFrame> for WindowFrame {
-    fn into_proto(&self) -> ProtoWindowFrame {
-        ProtoWindowFrame {
-            units: Some(self.units.into_proto()),
-            start_bound: Some(self.start_bound.into_proto()),
-            end_bound: Some(self.end_bound.into_proto()),
-        }
-    }
-
-    fn from_proto(proto: ProtoWindowFrame) -> Result<Self, TryFromProtoError> {
-        Ok(WindowFrame {
-            units: proto.units.into_rust_if_some("ProtoWindowFrame::units")?,
-            start_bound: proto
-                .start_bound
-                .into_rust_if_some("ProtoWindowFrame::start_bound")?,
-            end_bound: proto
-                .end_bound
-                .into_rust_if_some("ProtoWindowFrame::end_bound")?,
-        })
-    }
-}
-
 /// Describe how frame bounds are interpreted
 #[derive(
     Arbitrary, Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect,
@@ -4070,35 +3989,6 @@ impl Display for WindowFrameUnits {
             WindowFrameUnits::Range => write!(f, "range"),
             WindowFrameUnits::Groups => write!(f, "groups"),
         }
-    }
-}
-
-impl RustType<proto_window_frame::ProtoWindowFrameUnits> for WindowFrameUnits {
-    fn into_proto(&self) -> proto_window_frame::ProtoWindowFrameUnits {
-        use proto_window_frame::proto_window_frame_units::Kind::*;
-        proto_window_frame::ProtoWindowFrameUnits {
-            kind: Some(match self {
-                WindowFrameUnits::Rows => Rows(()),
-                WindowFrameUnits::Range => Range(()),
-                WindowFrameUnits::Groups => Groups(()),
-            }),
-        }
-    }
-
-    fn from_proto(
-        proto: proto_window_frame::ProtoWindowFrameUnits,
-    ) -> Result<Self, TryFromProtoError> {
-        use proto_window_frame::proto_window_frame_units::Kind::*;
-        Ok(match proto.kind {
-            Some(Rows(())) => WindowFrameUnits::Rows,
-            Some(Range(())) => WindowFrameUnits::Range,
-            Some(Groups(())) => WindowFrameUnits::Groups,
-            None => {
-                return Err(TryFromProtoError::missing_field(
-                    "ProtoWindowFrameUnits::kind",
-                ));
-            }
-        })
     }
 }
 
@@ -4131,37 +4021,6 @@ impl Display for WindowFrameBound {
             WindowFrameBound::OffsetFollowing(offset) => write!(f, "{} following", offset),
             WindowFrameBound::UnboundedFollowing => write!(f, "unbounded following"),
         }
-    }
-}
-
-impl RustType<proto_window_frame::ProtoWindowFrameBound> for WindowFrameBound {
-    fn into_proto(&self) -> proto_window_frame::ProtoWindowFrameBound {
-        use proto_window_frame::proto_window_frame_bound::Kind::*;
-        proto_window_frame::ProtoWindowFrameBound {
-            kind: Some(match self {
-                WindowFrameBound::UnboundedPreceding => UnboundedPreceding(()),
-                WindowFrameBound::OffsetPreceding(offset) => OffsetPreceding(*offset),
-                WindowFrameBound::CurrentRow => CurrentRow(()),
-                WindowFrameBound::OffsetFollowing(offset) => OffsetFollowing(*offset),
-                WindowFrameBound::UnboundedFollowing => UnboundedFollowing(()),
-            }),
-        }
-    }
-
-    fn from_proto(x: proto_window_frame::ProtoWindowFrameBound) -> Result<Self, TryFromProtoError> {
-        use proto_window_frame::proto_window_frame_bound::Kind::*;
-        Ok(match x.kind {
-            Some(UnboundedPreceding(())) => WindowFrameBound::UnboundedPreceding,
-            Some(OffsetPreceding(offset)) => WindowFrameBound::OffsetPreceding(offset),
-            Some(CurrentRow(())) => WindowFrameBound::CurrentRow,
-            Some(OffsetFollowing(offset)) => WindowFrameBound::OffsetFollowing(offset),
-            Some(UnboundedFollowing(())) => WindowFrameBound::UnboundedFollowing,
-            None => {
-                return Err(TryFromProtoError::missing_field(
-                    "ProtoWindowFrameBound::kind",
-                ));
-            }
-        })
     }
 }
 
@@ -4220,60 +4079,11 @@ pub enum AccessStrategy {
 
 #[cfg(test)]
 mod tests {
-    use mz_ore::assert_ok;
-    use mz_proto::protobuf_roundtrip;
     use mz_repr::explain::text::text_string_at;
-    use proptest::prelude::*;
 
     use crate::explain::HumanizedExplain;
 
     use super::*;
-
-    proptest! {
-        #[mz_ore::test]
-        fn column_order_protobuf_roundtrip(expect in any::<ColumnOrder>()) {
-            let actual = protobuf_roundtrip::<_, ProtoColumnOrder>(&expect);
-            assert_ok!(actual);
-            assert_eq!(actual.unwrap(), expect);
-        }
-    }
-
-    proptest! {
-        #[mz_ore::test]
-        #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
-        fn aggregate_expr_protobuf_roundtrip(expect in any::<AggregateExpr>()) {
-            let actual = protobuf_roundtrip::<_, ProtoAggregateExpr>(&expect);
-            assert_ok!(actual);
-            assert_eq!(actual.unwrap(), expect);
-        }
-    }
-
-    proptest! {
-        #[mz_ore::test]
-        fn window_frame_units_protobuf_roundtrip(expect in any::<WindowFrameUnits>()) {
-            let actual = protobuf_roundtrip::<_, proto_window_frame::ProtoWindowFrameUnits>(&expect);
-            assert_ok!(actual);
-            assert_eq!(actual.unwrap(), expect);
-        }
-    }
-
-    proptest! {
-        #[mz_ore::test]
-        fn window_frame_bound_protobuf_roundtrip(expect in any::<WindowFrameBound>()) {
-            let actual = protobuf_roundtrip::<_, proto_window_frame::ProtoWindowFrameBound>(&expect);
-            assert_ok!(actual);
-            assert_eq!(actual.unwrap(), expect);
-        }
-    }
-
-    proptest! {
-        #[mz_ore::test]
-        fn window_frame_protobuf_roundtrip(expect in any::<WindowFrame>()) {
-            let actual = protobuf_roundtrip::<_, ProtoWindowFrame>(&expect);
-            assert_ok!(actual);
-            assert_eq!(actual.unwrap(), expect);
-        }
-    }
 
     #[mz_ore::test]
     fn test_row_set_finishing_as_text() {

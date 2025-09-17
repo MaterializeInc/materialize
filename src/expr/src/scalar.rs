@@ -42,7 +42,6 @@ use crate::scalar::func::{
     regexp_replace_parse_flags,
 };
 use crate::scalar::proto_eval_error::proto_incompatible_array_dimensions::ProtoDims;
-use crate::scalar::proto_mir_scalar_expr::*;
 use crate::visit::{Visit, VisitChildren};
 
 pub mod func;
@@ -168,117 +167,6 @@ impl Arbitrary for MirScalarExpr {
             ])
         })
         .boxed()
-    }
-}
-
-impl RustType<ProtoMirScalarExpr> for MirScalarExpr {
-    fn into_proto(&self) -> ProtoMirScalarExpr {
-        use proto_mir_scalar_expr::Kind::*;
-        ProtoMirScalarExpr {
-            kind: Some(match self {
-                MirScalarExpr::Column(index, name) => Column(ProtoColumn {
-                    index: index.into_proto(),
-                    name: name.0.as_ref().map(ToString::to_string),
-                }),
-                MirScalarExpr::Literal(lit, typ) => Literal(ProtoLiteral {
-                    lit: Some(lit.into_proto()),
-                    typ: Some(typ.into_proto()),
-                }),
-                MirScalarExpr::CallUnmaterializable(func) => {
-                    CallUnmaterializable(func.into_proto())
-                }
-                MirScalarExpr::CallUnary { func, expr } => CallUnary(Box::new(ProtoCallUnary {
-                    func: Some(Box::new(func.into_proto())),
-                    expr: Some(expr.into_proto()),
-                })),
-                MirScalarExpr::CallBinary { func, expr1, expr2 } => {
-                    CallBinary(Box::new(ProtoCallBinary {
-                        func: Some(func.into_proto()),
-                        expr1: Some(expr1.into_proto()),
-                        expr2: Some(expr2.into_proto()),
-                    }))
-                }
-                MirScalarExpr::CallVariadic { func, exprs } => CallVariadic(ProtoCallVariadic {
-                    func: Some(func.into_proto()),
-                    exprs: exprs.into_proto(),
-                }),
-                MirScalarExpr::If { cond, then, els } => If(Box::new(ProtoIf {
-                    cond: Some(cond.into_proto()),
-                    then: Some(then.into_proto()),
-                    els: Some(els.into_proto()),
-                })),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoMirScalarExpr) -> Result<Self, TryFromProtoError> {
-        use proto_mir_scalar_expr::Kind::*;
-        let kind = proto
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoMirScalarExpr::kind"))?;
-        Ok(match kind {
-            Column(ProtoColumn { index, name }) => {
-                let index = usize::from_proto(index)?;
-                match name {
-                    Some(name) => MirScalarExpr::named_column(index, name.into()),
-                    None => MirScalarExpr::column(index),
-                }
-            }
-            Literal(ProtoLiteral { lit, typ }) => MirScalarExpr::Literal(
-                lit.into_rust_if_some("ProtoLiteral::lit")?,
-                typ.into_rust_if_some("ProtoLiteral::typ")?,
-            ),
-            CallUnmaterializable(func) => MirScalarExpr::CallUnmaterializable(func.into_rust()?),
-            CallUnary(call_unary) => MirScalarExpr::CallUnary {
-                func: call_unary.func.into_rust_if_some("ProtoCallUnary::func")?,
-                expr: call_unary.expr.into_rust_if_some("ProtoCallUnary::expr")?,
-            },
-            CallBinary(call_binary) => MirScalarExpr::CallBinary {
-                func: call_binary
-                    .func
-                    .into_rust_if_some("ProtoCallBinary::func")?,
-                expr1: call_binary
-                    .expr1
-                    .into_rust_if_some("ProtoCallBinary::expr1")?,
-                expr2: call_binary
-                    .expr2
-                    .into_rust_if_some("ProtoCallBinary::expr2")?,
-            },
-            CallVariadic(ProtoCallVariadic { func, exprs }) => MirScalarExpr::CallVariadic {
-                func: func.into_rust_if_some("ProtoCallVariadic::func")?,
-                exprs: exprs.into_rust()?,
-            },
-            If(if_struct) => MirScalarExpr::If {
-                cond: if_struct.cond.into_rust_if_some("ProtoIf::cond")?,
-                then: if_struct.then.into_rust_if_some("ProtoIf::then")?,
-                els: if_struct.els.into_rust_if_some("ProtoIf::els")?,
-            },
-        })
-    }
-}
-
-impl RustType<proto_literal::ProtoLiteralData> for Result<Row, EvalError> {
-    fn into_proto(&self) -> proto_literal::ProtoLiteralData {
-        use proto_literal::proto_literal_data::Result::*;
-        proto_literal::ProtoLiteralData {
-            result: Some(match self {
-                Result::Ok(row) => Ok(row.into_proto()),
-                Result::Err(err) => Err(err.into_proto()),
-            }),
-        }
-    }
-
-    fn from_proto(proto: proto_literal::ProtoLiteralData) -> Result<Self, TryFromProtoError> {
-        use proto_literal::proto_literal_data::Result::*;
-        match proto.result {
-            Some(Ok(row)) => Result::Ok(Result::Ok(
-                (&row)
-                    .try_into()
-                    .map_err(TryFromProtoError::RowConversionError)?,
-            )),
-            Some(Err(err)) => Result::Ok(Result::Err(err.into_rust()?)),
-            None => Result::Err(TryFromProtoError::missing_field("ProtoLiteralData::result")),
-        }
     }
 }
 
@@ -3386,9 +3274,6 @@ impl RustType<ProtoDims> for (usize, usize) {
 
 #[cfg(test)]
 mod tests {
-    use mz_ore::assert_ok;
-    use mz_proto::protobuf_roundtrip;
-
     use super::*;
 
     #[mz_ore::test]
@@ -3481,35 +3366,6 @@ mod tests {
                 actual,
                 tc.output
             );
-        }
-    }
-
-    proptest! {
-        #[mz_ore::test]
-        #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
-        fn mir_scalar_expr_protobuf_roundtrip(expect in any::<MirScalarExpr>()) {
-            let actual = protobuf_roundtrip::<_, ProtoMirScalarExpr>(&expect);
-            assert_ok!(actual);
-            assert_eq!(actual.unwrap(), expect);
-        }
-    }
-
-    proptest! {
-        #[mz_ore::test]
-        fn domain_limit_protobuf_roundtrip(expect in any::<DomainLimit>()) {
-            let actual = protobuf_roundtrip::<_, ProtoDomainLimit>(&expect);
-            assert_ok!(actual);
-            assert_eq!(actual.unwrap(), expect);
-        }
-    }
-
-    proptest! {
-        #[mz_ore::test]
-        #[cfg_attr(miri, ignore)] // too slow
-        fn eval_error_protobuf_roundtrip(expect in any::<EvalError>()) {
-            let actual = protobuf_roundtrip::<_, ProtoEvalError>(&expect);
-            assert_ok!(actual);
-            assert_eq!(actual.unwrap(), expect);
         }
     }
 }

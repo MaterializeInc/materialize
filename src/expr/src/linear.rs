@@ -9,16 +9,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Display;
 
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{Datum, Row};
 use proptest::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::linear::proto_map_filter_project::ProtoPredicate;
 use crate::visit::Visit;
 use crate::{MirRelationExpr, MirScalarExpr};
-
-include!(concat!(env!("OUT_DIR"), "/mz_expr.linear.rs"));
 
 /// A compound operator that can be applied row-by-row.
 ///
@@ -83,44 +79,6 @@ impl Arbitrary for MapFilterProject {
                 },
             )
             .boxed()
-    }
-}
-
-impl RustType<ProtoMapFilterProject> for MapFilterProject {
-    fn into_proto(&self) -> ProtoMapFilterProject {
-        ProtoMapFilterProject {
-            expressions: self.expressions.into_proto(),
-            predicates: self.predicates.into_proto(),
-            projection: self.projection.into_proto(),
-            input_arity: self.input_arity.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoMapFilterProject) -> Result<Self, TryFromProtoError> {
-        Ok(MapFilterProject {
-            expressions: proto.expressions.into_rust()?,
-            predicates: proto.predicates.into_rust()?,
-            projection: proto.projection.into_rust()?,
-            input_arity: proto.input_arity.into_rust()?,
-        })
-    }
-}
-
-impl RustType<ProtoPredicate> for (usize, MirScalarExpr) {
-    fn into_proto(&self) -> ProtoPredicate {
-        ProtoPredicate {
-            column_to_apply: self.0.into_proto(),
-            predicate: Some(self.1.into_proto()),
-        }
-    }
-
-    fn from_proto(proto: ProtoPredicate) -> Result<Self, TryFromProtoError> {
-        Ok((
-            proto.column_to_apply.into_rust()?,
-            proto
-                .predicate
-                .into_rust_if_some("ProtoPredicate::predicate")?,
-        ))
     }
 }
 
@@ -1646,35 +1604,17 @@ pub mod util {
 pub mod plan {
     use std::iter;
 
-    use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
     use mz_repr::{Datum, Diff, Row, RowArena};
     use proptest::prelude::*;
     use proptest_derive::Arbitrary;
     use serde::{Deserialize, Serialize};
 
-    use crate::{
-        BinaryFunc, EvalError, MapFilterProject, MirScalarExpr, ProtoMfpPlan, ProtoSafeMfpPlan,
-        UnaryFunc, func,
-    };
+    use crate::{BinaryFunc, EvalError, MapFilterProject, MirScalarExpr, UnaryFunc, func};
 
     /// A wrapper type which indicates it is safe to simply evaluate all expressions.
     #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
     pub struct SafeMfpPlan {
         pub(crate) mfp: MapFilterProject,
-    }
-
-    impl RustType<ProtoSafeMfpPlan> for SafeMfpPlan {
-        fn into_proto(&self) -> ProtoSafeMfpPlan {
-            ProtoSafeMfpPlan {
-                mfp: Some(self.mfp.into_proto()),
-            }
-        }
-
-        fn from_proto(proto: ProtoSafeMfpPlan) -> Result<Self, TryFromProtoError> {
-            Ok(SafeMfpPlan {
-                mfp: proto.mfp.into_rust_if_some("ProtoSafeMfpPlan::mfp")?,
-            })
-        }
     }
 
     impl SafeMfpPlan {
@@ -1792,34 +1732,14 @@ pub mod plan {
     /// They must directly constrain `MzNow` from below or above,
     /// by expressions that do not themselves contain `MzNow`.
     /// Conjunctions of such constraints are also ok.
-    #[derive(Arbitrary, Clone, Debug, PartialEq)]
+    #[derive(Clone, Debug, PartialEq)]
     pub struct MfpPlan {
         /// Normal predicates to evaluate on `&[Datum]` and expect `Ok(Datum::True)`.
         pub(crate) mfp: SafeMfpPlan,
         /// Expressions that when evaluated lower-bound `MzNow`.
-        #[proptest(strategy = "prop::collection::vec(any::<MirScalarExpr>(), 0..2)")]
         pub(crate) lower_bounds: Vec<MirScalarExpr>,
         /// Expressions that when evaluated upper-bound `MzNow`.
-        #[proptest(strategy = "prop::collection::vec(any::<MirScalarExpr>(), 0..2)")]
         pub(crate) upper_bounds: Vec<MirScalarExpr>,
-    }
-
-    impl RustType<ProtoMfpPlan> for MfpPlan {
-        fn into_proto(&self) -> ProtoMfpPlan {
-            ProtoMfpPlan {
-                mfp: Some(self.mfp.into_proto()),
-                lower_bounds: self.lower_bounds.into_proto(),
-                upper_bounds: self.upper_bounds.into_proto(),
-            }
-        }
-
-        fn from_proto(proto: ProtoMfpPlan) -> Result<Self, TryFromProtoError> {
-            Ok(MfpPlan {
-                mfp: proto.mfp.into_rust_if_some("ProtoMfpPlan::mfp")?,
-                lower_bounds: proto.lower_bounds.into_rust()?,
-                upper_bounds: proto.upper_bounds.into_rust()?,
-            })
-        }
     }
 
     impl MfpPlan {
@@ -2075,28 +1995,6 @@ pub mod plan {
                 && self.upper_bounds.is_empty()
                 && self.mfp.mfp.projection.is_empty()
                 && self.mfp.mfp.predicates.is_empty()
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use mz_ore::assert_ok;
-    use mz_proto::protobuf_roundtrip;
-
-    use crate::linear::plan::*;
-
-    use super::*;
-
-    proptest! {
-        #![proptest_config(ProptestConfig::with_cases(32))]
-
-        #[mz_ore::test]
-        #[cfg_attr(miri, ignore)] // too slow
-        fn mfp_plan_protobuf_roundtrip(expect in any::<MfpPlan>()) {
-            let actual = protobuf_roundtrip::<_, ProtoMfpPlan>(&expect);
-            assert_ok!(actual);
-            assert_eq!(actual.unwrap(), expect);
         }
     }
 }

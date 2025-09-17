@@ -121,9 +121,7 @@ impl fmt::Display for CastTimestampToTimestampTz {
     }
 }
 
-#[derive(
-    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
-)]
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct AdjustTimestampPrecision {
     pub from: Option<TimestampPrecision>,
     pub to: Option<TimestampPrecision>,
@@ -221,9 +219,7 @@ impl fmt::Display for CastTimestampTzToTimestamp {
     }
 }
 
-#[derive(
-    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
-)]
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct AdjustTimestampTzPrecision {
     pub from: Option<TimestampPrecision>,
     pub to: Option<TimestampPrecision>,
