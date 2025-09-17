@@ -26,7 +26,6 @@ message ProtoReducePlan {
     ProtoAccumulablePlan accumulable = 3;
     ProtoHierarchicalPlan hierarchical = 4;
     ProtoBasicPlan basic = 5;
-    ProtoCollationPlan collation = 6;
   }
 }
 
@@ -81,13 +80,6 @@ message ProtoBasicPlan {
     ProtoSingleBasicPlan single = 1;
     ProtoMultipleBasicPlan multiple = 2;
   }
-}
-
-message ProtoCollationPlan {
-  ProtoAccumulablePlan accumulable = 1;
-  ProtoHierarchicalPlan hierarchical = 2;
-  ProtoBasicPlan basic = 3;
-  repeated ProtoReductionType aggregate_types = 4;
 }
 
 message ProtoReductionType {
