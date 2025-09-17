@@ -21,14 +21,11 @@ use mz_expr::{
     JoinInputCharacteristics, JoinInputMapper, MapFilterProject, MirScalarExpr, join_permutations,
     permutation_for_arrangement,
 };
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use proptest::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::plan::AvailableCollections;
-use crate::plan::join::{
-    JoinBuildState, JoinClosure, ProtoDeltaJoinPlan, ProtoDeltaPathPlan, ProtoDeltaStagePlan,
-};
+use crate::plan::join::{JoinBuildState, JoinClosure};
 
 /// A delta query is implemented by a set of paths, one for each input.
 ///
@@ -53,20 +50,6 @@ impl Arbitrary for DeltaJoinPlan {
         prop::collection::vec(any::<DeltaPathPlan>(), 0..3)
             .prop_map(|path_plans| DeltaJoinPlan { path_plans })
             .boxed()
-    }
-}
-
-impl RustType<ProtoDeltaJoinPlan> for DeltaJoinPlan {
-    fn into_proto(&self) -> ProtoDeltaJoinPlan {
-        ProtoDeltaJoinPlan {
-            path_plans: self.path_plans.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoDeltaJoinPlan) -> Result<Self, TryFromProtoError> {
-        Ok(DeltaJoinPlan {
-            path_plans: proto.path_plans.into_rust()?,
-        })
     }
 }
 
@@ -114,29 +97,6 @@ impl Arbitrary for DeltaPathPlan {
     }
 }
 
-impl RustType<ProtoDeltaPathPlan> for DeltaPathPlan {
-    fn into_proto(&self) -> ProtoDeltaPathPlan {
-        ProtoDeltaPathPlan {
-            source_relation: self.source_relation.into_proto(),
-            source_key: self.source_key.into_proto(),
-            initial_closure: Some(self.initial_closure.into_proto()),
-            stage_plans: self.stage_plans.into_proto(),
-            final_closure: self.final_closure.into_proto(),
-        }
-    }
-    fn from_proto(proto: ProtoDeltaPathPlan) -> Result<Self, TryFromProtoError> {
-        Ok(DeltaPathPlan {
-            source_relation: proto.source_relation.try_into()?,
-            source_key: proto.source_key.into_rust()?,
-            initial_closure: proto
-                .initial_closure
-                .into_rust_if_some("ProtoDeltaPathPlan::initial_closure")?,
-            stage_plans: proto.stage_plans.into_rust()?,
-            final_closure: proto.final_closure.into_rust()?,
-        })
-    }
-}
-
 /// A delta query stage performs a stream lookup into an arrangement.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct DeltaStagePlan {
@@ -181,30 +141,6 @@ impl Arbitrary for DeltaStagePlan {
                 },
             )
             .boxed()
-    }
-}
-
-impl RustType<ProtoDeltaStagePlan> for DeltaStagePlan {
-    fn into_proto(&self) -> ProtoDeltaStagePlan {
-        ProtoDeltaStagePlan {
-            lookup_relation: self.lookup_relation.into_proto(),
-            stream_key: self.stream_key.into_proto(),
-            stream_thinning: self.stream_thinning.into_proto(),
-            lookup_key: self.lookup_key.into_proto(),
-            closure: Some(self.closure.into_proto()),
-        }
-    }
-
-    fn from_proto(proto: ProtoDeltaStagePlan) -> Result<Self, TryFromProtoError> {
-        Ok(Self {
-            lookup_relation: proto.lookup_relation.into_rust()?,
-            stream_key: proto.stream_key.into_rust()?,
-            stream_thinning: proto.stream_thinning.into_rust()?,
-            lookup_key: proto.lookup_key.into_rust()?,
-            closure: proto
-                .closure
-                .into_rust_if_some("ProtoDeltaStagePlan::closure")?,
-        })
     }
 }
 

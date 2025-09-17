@@ -39,42 +39,12 @@ breaking:
     - catalog-protos/protos/objects_v76.proto
     # reason: does currently not require backward-compatibility
     - catalog-protos/protos/objects_v77.proto
-    # reason: does currently not require backward-compatibility
-    - compute-client/src/logging.proto
-    # reason: does currently not require backward-compatibility
-    - compute-client/src/protocol/command.proto
-    # reason: does currently not require backward-compatibility
-    - compute-client/src/protocol/response.proto
-    # reason: does currently not require backward-compatibility
-    - compute-client/src/service.proto
-    # reason: does currently not require backward-compatibility
-    - compute-types/src/dataflows.proto
-    # reason: does currently not require backward-compatibility
-    - compute-types/src/plan.proto
-    # reason: does currently not require backward-compatibility
-    - compute-types/src/plan/reduce.proto
-    # reason: does not currently require backward-compatibility
-    - compute-types/src/plan/render_plan.proto
-    # reason: does currently not require backward-compatibility
-    - compute-types/src/plan/threshold.proto
-    # reason: does not currently require backward-compatibility
-    - compute-types/src/sinks.proto
     # reason: Ignore because plans are currently not persisted.
     - expr/src/relation.proto
     # reason: Ignore because plans are currently not persisted.
     - expr/src/scalar.proto
     # reason: we very carefully evolve these protobuf definitions
     - persist-client/src/internal/state.proto
-    # reason: does currently not require backward-compatibility
-    - storage-client/src/client.proto
-    # reason: does currently not require backward-compatibility
-    - storage-client/src/statistics.proto
-    # reason: currently does not require backward-compatibility
-    - storage-types/src/connections/aws.proto
-    # reason: currently does not require backward-compatibility
-    - storage-types/src/connections/string_or_secret.proto
-    # reason: does currently not require backward-compatibility
-    - storage-types/src/parameters.proto
 lint:
   use:
     - DEFAULT

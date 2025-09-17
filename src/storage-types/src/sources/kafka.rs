@@ -19,12 +19,9 @@ use mz_dyncfg::ConfigSet;
 use mz_kafka_util::client::MzClientContext;
 use mz_ore::collections::CollectionExt;
 use mz_ore::future::InTask;
-use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::{CatalogItemId, ColumnType, Datum, GlobalId, RelationDesc, Row, ScalarType};
 use mz_timely_util::order::{Extrema, Partitioned};
-use proptest::prelude::any;
-use proptest_derive::Arbitrary;
 use rdkafka::admin::AdminClient;
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
@@ -48,19 +45,17 @@ include!(concat!(
 /// visible offset.
 pub type KafkaTimestamp = Partitioned<RangeBound<i32>, MzOffset>;
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KafkaSourceConnection<C: ConnectionAccess = InlinedConnection> {
     pub connection: C::Kafka,
     pub connection_id: CatalogItemId,
     pub topic: String,
     // Map from partition -> starting offset
-    #[proptest(strategy = "proptest::collection::btree_map(any::<i32>(), any::<i64>(), 0..4)")]
     pub start_offsets: BTreeMap<i32, i64>,
     pub group_id_prefix: Option<String>,
     // The metadata_columns for the primary source export from this kafka source
     // TODO: This should be removed once we stop outputting to the primary source collection
     // and instead only output to source_exports
-    #[proptest(strategy = "proptest::collection::vec(any::<(String, KafkaMetadataKind)>(), 0..4)")]
     pub metadata_columns: Vec<(String, KafkaMetadataKind)>,
     pub topic_metadata_refresh_interval: Duration,
 }
@@ -285,53 +280,6 @@ impl<C: ConnectionAccess> crate::AlterCompatible for KafkaSourceConnection<C> {
     }
 }
 
-impl RustType<ProtoKafkaSourceConnection> for KafkaSourceConnection<InlinedConnection> {
-    fn into_proto(&self) -> ProtoKafkaSourceConnection {
-        ProtoKafkaSourceConnection {
-            connection: Some(self.connection.into_proto()),
-            connection_id: Some(self.connection_id.into_proto()),
-            topic: self.topic.clone(),
-            start_offsets: self.start_offsets.clone(),
-            group_id_prefix: self.group_id_prefix.clone(),
-            metadata_columns: self
-                .metadata_columns
-                .iter()
-                .map(|(name, kind)| ProtoKafkaMetadataColumn {
-                    name: name.into_proto(),
-                    kind: Some(kind.into_proto()),
-                })
-                .collect(),
-            topic_metadata_refresh_interval: Some(
-                self.topic_metadata_refresh_interval.into_proto(),
-            ),
-        }
-    }
-
-    fn from_proto(proto: ProtoKafkaSourceConnection) -> Result<Self, TryFromProtoError> {
-        let mut metadata_columns = Vec::with_capacity(proto.metadata_columns.len());
-        for c in proto.metadata_columns {
-            let kind = c.kind.into_rust_if_some("ProtoKafkaMetadataColumn::kind")?;
-            metadata_columns.push((c.name, kind));
-        }
-
-        Ok(KafkaSourceConnection {
-            connection: proto
-                .connection
-                .into_rust_if_some("ProtoKafkaSourceConnection::connection")?,
-            connection_id: proto
-                .connection_id
-                .into_rust_if_some("ProtoKafkaSourceConnection::connection_id")?,
-            topic: proto.topic,
-            start_offsets: proto.start_offsets,
-            group_id_prefix: proto.group_id_prefix,
-            metadata_columns,
-            topic_metadata_refresh_interval: proto
-                .topic_metadata_refresh_interval
-                .into_rust_if_some("ProtoKafkaSourceConnection::topic_metadata_refresh_interval")?,
-        })
-    }
-}
-
 /// Return the column types used to describe the metadata columns of a kafka source export.
 pub fn kafka_metadata_columns_desc(
     metadata_columns: &Vec<(String, KafkaMetadataKind)>,
@@ -382,9 +330,8 @@ pub fn kafka_metadata_columns_desc(
 }
 
 /// The details of a source export from a kafka source.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KafkaSourceExportDetails {
-    #[proptest(strategy = "proptest::collection::vec(any::<(String, KafkaMetadataKind)>(), 0..4)")]
     pub metadata_columns: Vec<(String, KafkaMetadataKind)>,
 }
 
@@ -407,31 +354,6 @@ impl crate::AlterCompatible for KafkaSourceExportDetails {
             }
         }
         Ok(())
-    }
-}
-
-impl RustType<ProtoKafkaSourceExportDetails> for KafkaSourceExportDetails {
-    fn into_proto(&self) -> ProtoKafkaSourceExportDetails {
-        ProtoKafkaSourceExportDetails {
-            metadata_columns: self
-                .metadata_columns
-                .iter()
-                .map(|(name, kind)| ProtoKafkaMetadataColumn {
-                    name: name.into_proto(),
-                    kind: Some(kind.into_proto()),
-                })
-                .collect(),
-        }
-    }
-
-    fn from_proto(proto: ProtoKafkaSourceExportDetails) -> Result<Self, TryFromProtoError> {
-        let mut metadata_columns = Vec::with_capacity(proto.metadata_columns.len());
-        for c in proto.metadata_columns {
-            let kind = c.kind.into_rust_if_some("ProtoKafkaMetadataColumn::kind")?;
-            metadata_columns.push((c.name, kind));
-        }
-
-        Ok(KafkaSourceExportDetails { metadata_columns })
     }
 }
 
@@ -589,45 +511,11 @@ impl SourceTimestamp for KafkaTimestamp {
 }
 
 /// Which piece of metadata a column corresponds to
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum KafkaMetadataKind {
     Partition,
     Offset,
     Timestamp,
     Headers,
     Header { key: String, use_bytes: bool },
-}
-
-impl RustType<ProtoKafkaMetadataKind> for KafkaMetadataKind {
-    fn into_proto(&self) -> ProtoKafkaMetadataKind {
-        use proto_kafka_metadata_kind::Kind;
-        ProtoKafkaMetadataKind {
-            kind: Some(match self {
-                KafkaMetadataKind::Partition => Kind::Partition(()),
-                KafkaMetadataKind::Offset => Kind::Offset(()),
-                KafkaMetadataKind::Timestamp => Kind::Timestamp(()),
-                KafkaMetadataKind::Headers => Kind::Headers(()),
-                KafkaMetadataKind::Header { key, use_bytes } => Kind::Header(ProtoKafkaHeader {
-                    key: key.clone(),
-                    use_bytes: *use_bytes,
-                }),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoKafkaMetadataKind) -> Result<Self, TryFromProtoError> {
-        use proto_kafka_metadata_kind::Kind;
-        let kind = proto
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoKafkaMetadataKind::kind"))?;
-        Ok(match kind {
-            Kind::Partition(()) => KafkaMetadataKind::Partition,
-            Kind::Offset(()) => KafkaMetadataKind::Offset,
-            Kind::Timestamp(()) => KafkaMetadataKind::Timestamp,
-            Kind::Headers(()) => KafkaMetadataKind::Headers,
-            Kind::Header(ProtoKafkaHeader { key, use_bytes }) => {
-                KafkaMetadataKind::Header { key, use_bytes }
-            }
-        })
-    }
 }

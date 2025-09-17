@@ -10,7 +10,7 @@
 # by the Apache License, Version 2.0.
 
 load("@crates_io//:defs.bzl", "aliases", "all_crate_deps")
-load("@rules_rust//cargo:defs.bzl", "cargo_build_script", "extract_cargo_lints")
+load("@rules_rust//cargo:defs.bzl", "extract_cargo_lints")
 load("@rules_rust//rust:defs.bzl", "rust_doc_test", "rust_library", "rust_test")
 
 package(default_visibility = ["//visibility:public"])
@@ -31,7 +31,6 @@ rust_library(
     rustc_flags = [],
     version = "0.0.0",
     deps = [
-        ":mz_compute_client_build_script",
         "//src/build-info:mz_build_info",
         "//src/cluster-client:mz_cluster_client",
         "//src/compute-types:mz_compute_types",
@@ -40,15 +39,12 @@ rust_library(
         "//src/dyncfgs:mz_dyncfgs",
         "//src/expr:mz_expr",
         "//src/ore:mz_ore",
-        "//src/persist:mz_persist",
         "//src/persist-client:mz_persist_client",
         "//src/persist-types:mz_persist_types",
-        "//src/proto:mz_proto",
         "//src/repr:mz_repr",
         "//src/service:mz_service",
         "//src/storage-client:mz_storage_client",
         "//src/storage-types:mz_storage_types",
-        "//src/timely-util:mz_timely_util",
         "//src/tracing:mz_tracing",
     ] + all_crate_deps(normal = True),
 )
@@ -89,15 +85,12 @@ rust_test(
         "//src/dyncfgs:mz_dyncfgs",
         "//src/expr:mz_expr",
         "//src/ore:mz_ore",
-        "//src/persist:mz_persist",
         "//src/persist-client:mz_persist_client",
         "//src/persist-types:mz_persist_types",
-        "//src/proto:mz_proto",
         "//src/repr:mz_repr",
         "//src/service:mz_service",
         "//src/storage-client:mz_storage_client",
         "//src/storage-types:mz_storage_types",
-        "//src/timely-util:mz_timely_util",
         "//src/tracing:mz_tracing",
     ] + all_crate_deps(
         normal = True,
@@ -117,52 +110,17 @@ rust_doc_test(
         "//src/dyncfgs:mz_dyncfgs",
         "//src/expr:mz_expr",
         "//src/ore:mz_ore",
-        "//src/persist:mz_persist",
         "//src/persist-client:mz_persist_client",
         "//src/persist-types:mz_persist_types",
-        "//src/proto:mz_proto",
         "//src/repr:mz_repr",
         "//src/service:mz_service",
         "//src/storage-client:mz_storage_client",
         "//src/storage-types:mz_storage_types",
-        "//src/timely-util:mz_timely_util",
         "//src/tracing:mz_tracing",
     ] + all_crate_deps(
         normal = True,
         normal_dev = True,
     ),
-)
-
-filegroup(
-    name = "all_protos",
-    srcs = [
-        "src/logging.proto",
-        "src/protocol/command.proto",
-        "src/protocol/response.proto",
-        "src/service.proto",
-        "//src/compute-types:all_protos",
-        "//src/dyncfg:all_protos",
-        "//src/expr:all_protos",
-        "//src/persist-client:all_protos",
-        "//src/proto:all_protos",
-        "//src/repr:all_protos",
-        "//src/service:all_protos",
-        "//src/storage-client:all_protos",
-        "//src/storage-types:all_protos",
-        "//src/tracing:all_protos",
-    ],
-)
-
-cargo_build_script(
-    name = "mz_compute_client_build_script",
-    srcs = ["build.rs"],
-    build_script_env = {},
-    compile_data = [],
-    data = [":all_protos"],
-    proc_macro_deps = [] + all_crate_deps(build_proc_macro = True),
-    rustc_env = {},
-    rustc_flags = [],
-    deps = ["//src/build-tools:mz_build_tools"] + all_crate_deps(build = True),
 )
 
 extract_cargo_lints(

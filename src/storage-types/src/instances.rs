@@ -13,13 +13,8 @@ use std::fmt;
 use std::str::FromStr;
 
 use anyhow::bail;
-use mz_proto::{RustType, TryFromProtoError};
-use proptest::prelude::{Arbitrary, Strategy};
-use proptest::strategy::BoxedStrategy;
 use serde::{Deserialize, Serialize};
 use tracing::error;
-
-include!(concat!(env!("OUT_DIR"), "/mz_storage_types.instances.rs"));
 
 /// Identifier of a storage instance.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
@@ -96,52 +91,4 @@ impl fmt::Display for StorageInstanceId {
             Self::User(id) => write!(f, "u{}", id),
         }
     }
-}
-
-impl RustType<ProtoStorageInstanceId> for StorageInstanceId {
-    fn into_proto(&self) -> ProtoStorageInstanceId {
-        use proto_storage_instance_id::Kind::*;
-        ProtoStorageInstanceId {
-            kind: Some(match self {
-                StorageInstanceId::System(x) => System(*x),
-                StorageInstanceId::User(x) => User(*x),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoStorageInstanceId) -> Result<Self, TryFromProtoError> {
-        use proto_storage_instance_id::Kind::*;
-        match proto.kind {
-            Some(System(x)) => StorageInstanceId::system(x).ok_or_else(|| {
-                TryFromProtoError::InvalidPersistState(format!(
-                    "{x} is not a valid StorageInstanceId"
-                ))
-            }),
-            Some(User(x)) => StorageInstanceId::user(x).ok_or_else(|| {
-                TryFromProtoError::InvalidPersistState(format!(
-                    "{x} is not a valid StorageInstanceId"
-                ))
-            }),
-            None => Err(TryFromProtoError::missing_field(
-                "ProtoStorageInstanceId::kind",
-            )),
-        }
-    }
-}
-
-impl Arbitrary for StorageInstanceId {
-    type Parameters = ();
-
-    fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
-        const UPPER_BOUND: u64 = 1 << 47;
-        (0..2, 0..UPPER_BOUND)
-            .prop_map(|(variant, id)| match variant {
-                0 => StorageInstanceId::System(id),
-                1 => StorageInstanceId::User(id),
-                _ => unreachable!(),
-            })
-            .boxed()
-    }
-
-    type Strategy = BoxedStrategy<StorageInstanceId>;
 }

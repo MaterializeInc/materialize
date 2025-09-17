@@ -80,7 +80,6 @@ iceberg = "0.6.0"
 iceberg-catalog-rest = "0.6.0"
 
 [dev-dependencies]
-base64 = "0.22.1"
 criterion = { version = "0.6.0" }
 insta = { version = "1.43", features = ["json"] }
 mz-persist = { path = "../persist" }

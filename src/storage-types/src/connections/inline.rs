@@ -19,8 +19,6 @@ use std::fmt::Debug;
 use std::hash::Hash;
 
 use mz_repr::CatalogItemId;
-use proptest::prelude::Arbitrary;
-use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use crate::AlterCompatible;
@@ -54,11 +52,8 @@ pub trait IntoInlineConnection<T, R: ConnectionResolver + ?Sized> {
 
 /// Expresses how a struct/enum can access details about any connections it
 /// uses. Meant to be used as a type constraint on structs that use connections.
-pub trait ConnectionAccess:
-    Arbitrary + Clone + Debug + Eq + PartialEq + Serialize + 'static
-{
-    type Kafka: Arbitrary
-        + Clone
+pub trait ConnectionAccess: Clone + Debug + Eq + PartialEq + Serialize + 'static {
+    type Kafka: Clone
         + Debug
         + Eq
         + PartialEq
@@ -66,8 +61,7 @@ pub trait ConnectionAccess:
         + Serialize
         + for<'a> Deserialize<'a>
         + AlterCompatible;
-    type Pg: Arbitrary
-        + Clone
+    type Pg: Clone
         + Debug
         + Eq
         + PartialEq
@@ -75,8 +69,7 @@ pub trait ConnectionAccess:
         + Serialize
         + for<'a> Deserialize<'a>
         + AlterCompatible;
-    type Aws: Arbitrary
-        + Clone
+    type Aws: Clone
         + Debug
         + Eq
         + PartialEq
@@ -84,8 +77,7 @@ pub trait ConnectionAccess:
         + Serialize
         + for<'a> Deserialize<'a>
         + AlterCompatible;
-    type Ssh: Arbitrary
-        + Clone
+    type Ssh: Clone
         + Debug
         + Eq
         + PartialEq
@@ -93,8 +85,7 @@ pub trait ConnectionAccess:
         + Serialize
         + for<'a> Deserialize<'a>
         + AlterCompatible;
-    type Csr: Arbitrary
-        + Clone
+    type Csr: Clone
         + Debug
         + Eq
         + PartialEq
@@ -102,8 +93,7 @@ pub trait ConnectionAccess:
         + Serialize
         + for<'a> Deserialize<'a>
         + AlterCompatible;
-    type MySql: Arbitrary
-        + Clone
+    type MySql: Clone
         + Debug
         + Eq
         + PartialEq
@@ -111,8 +101,7 @@ pub trait ConnectionAccess:
         + Serialize
         + for<'a> Deserialize<'a>
         + AlterCompatible;
-    type SqlServer: Arbitrary
-        + Clone
+    type SqlServer: Clone
         + Debug
         + Eq
         + PartialEq
@@ -120,8 +109,7 @@ pub trait ConnectionAccess:
         + Serialize
         + for<'a> Deserialize<'a>
         + AlterCompatible;
-    type IcebergCatalog: Arbitrary
-        + Clone
+    type IcebergCatalog: Clone
         + Debug
         + Eq
         + PartialEq
@@ -134,7 +122,7 @@ pub trait ConnectionAccess:
 /// Expresses that the struct contains references to connections. Use a
 /// combination of [`IntoInlineConnection`] and [`ConnectionResolver`] to take
 /// this into [`InlinedConnection`].
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct ReferencedConnection;
 
 impl ConnectionAccess for ReferencedConnection {
@@ -149,7 +137,7 @@ impl ConnectionAccess for ReferencedConnection {
 }
 
 /// Expresses that the struct contains an inlined definition of a connection.
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct InlinedConnection;
 
 impl ConnectionAccess for InlinedConnection {

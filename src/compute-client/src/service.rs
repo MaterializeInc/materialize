@@ -37,8 +37,6 @@ use crate::protocol::response::{
     SubscribeBatch, SubscribeResponse,
 };
 
-include!(concat!(env!("OUT_DIR"), "/mz_compute_client.service.rs"));
-
 /// A client to a compute server.
 pub trait ComputeClient<T = mz_repr::Timestamp>:
     GenericClient<ComputeCommand<T>, ComputeResponse<T>>
