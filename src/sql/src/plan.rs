@@ -1538,7 +1538,7 @@ impl WebhookValidation {
         let reduce_task = mz_ore::task::spawn_blocking(
             || "webhook-validation-reduce",
             move || {
-                expression_.reduce(&desc_.typ().column_types);
+                expression_.reduce::<true>(&desc_.typ().column_types);
                 expression_
             },
         );

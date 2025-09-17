@@ -24,7 +24,7 @@ mod test {
         let mut scalar: MirScalarExpr = deserialize(&mut input_stream, "MirScalarExpr", &mut ctx)?;
         let typ: Vec<ColumnType> = deserialize(&mut input_stream, "Vec<ColumnType> ", &mut ctx)?;
         let before = scalar.typ(&typ);
-        scalar.reduce(&typ);
+        scalar.reduce::<true>(&typ);
         let after = scalar.typ(&typ);
         // Verify that `reduce` did not change the type of the scalar.
         if before.scalar_type != after.scalar_type {
