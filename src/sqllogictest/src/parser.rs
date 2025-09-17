@@ -374,6 +374,7 @@ impl<'a> Parser<'a> {
         let location = self.location();
         let mut conn = None;
         let mut user = None;
+        let mut password = None;
         let mut multiline = false;
         let mut sort = Sort::No;
         if let Some(options) = words.next() {
@@ -382,6 +383,8 @@ impl<'a> Parser<'a> {
                     conn = Some(value);
                 } else if let Some(value) = option.strip_prefix("user=") {
                     user = Some(value);
+                } else if let Some(value) = option.strip_prefix("password=") {
+                    password = Some(value);
                 } else if option == "rowsort" {
                     sort = Sort::Row;
                 } else if option == "multiline" {
@@ -393,6 +396,9 @@ impl<'a> Parser<'a> {
         }
         if user.is_some() && conn.is_none() {
             bail!("cannot set user without also setting conn");
+        }
+        if password.is_some() && user.is_none() {
+            bail!("cannot set password without also setting user");
         }
         let sql = self.split_at(&QUERY_OUTPUT_REGEX)?;
         let output_str = self
@@ -425,6 +431,7 @@ impl<'a> Parser<'a> {
             location,
             conn,
             user,
+            password,
             sql,
             sort,
             output,

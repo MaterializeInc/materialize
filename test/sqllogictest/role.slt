@@ -275,3 +275,234 @@ query TT
 SHOW ROLES LIKE 'f%'
 ----
 foo (empty)
+
+# Enable password authentication in the system.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_password_auth = true;
+----
+COMPLETE 0
+
+# Test creating and using a role with password
+statement ok
+CREATE ROLE password_user WITH LOGIN PASSWORD 'test_password123'
+
+# Grant necessary permissions to the new role (using mz_system which has appropriate privileges)
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON DATABASE materialize TO password_user
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT CREATE ON SCHEMA materialize.public TO password_user
+----
+COMPLETE 0
+
+# Test connecting with the password
+simple conn=password_conn,user=password_user,password=test_password123
+SELECT current_user();
+----
+password_user
+COMPLETE 1
+
+# Test that connection fails with wrong password (should error)
+simple conn=bad_password_conn,user=password_user,password=wrong_password
+SELECT current_user();
+----
+db error: FATAL: invalid password
+
+# Test that connection succeeds even without password when using the no-auth listener
+# This is expected behavior - the external listener doesn't require authentication
+simple conn=no_password_conn,user=password_user
+SELECT current_user();
+----
+password_user
+COMPLETE 1
+
+# Clean up
+# First revoke the privileges that were granted to password_user
+simple conn=mz_system,user=mz_system
+REVOKE USAGE ON DATABASE materialize FROM password_user
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE CREATE ON SCHEMA materialize.public FROM password_user
+----
+COMPLETE 0
+
+# Now drop the role using the default connection
+simple
+DROP ROLE password_user
+----
+COMPLETE 0
+
+# Test role inheritance with password authentication
+# Create a base role to grant privileges
+statement ok
+CREATE ROLE base_role
+
+# Create a user with LOGIN and PASSWORD
+statement ok
+CREATE ROLE test_user WITH LOGIN PASSWORD 'secure_password456'
+
+# Grant the base role to the user
+statement ok
+GRANT base_role TO test_user
+
+# Grant necessary permissions for the user to connect
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON DATABASE materialize TO test_user
+----
+COMPLETE 0
+
+# Test that the user can login with password
+simple conn=test_user_conn,user=test_user,password=secure_password456
+SELECT current_user()
+----
+test_user
+COMPLETE 1
+
+# Create another role
+statement ok
+CREATE ROLE additional_role
+
+# Grant the additional role to the user
+statement ok
+GRANT additional_role TO test_user
+
+# Verify the user can still login after being granted another role
+simple conn=test_user_conn2,user=test_user,password=secure_password456
+SELECT current_user()
+----
+test_user
+COMPLETE 1
+
+# Clean up - revoke privileges and drop roles
+simple conn=mz_system,user=mz_system
+REVOKE USAGE ON DATABASE materialize FROM test_user
+----
+COMPLETE 0
+
+statement ok
+REVOKE base_role FROM test_user
+
+statement ok
+REVOKE additional_role FROM test_user
+
+statement ok
+DROP ROLE test_user
+
+statement ok
+DROP ROLE base_role
+
+statement ok
+DROP ROLE additional_role
+
+# Test removing password from a role
+# Create a role with a password
+statement ok
+CREATE ROLE password_removal_test WITH LOGIN PASSWORD 'initial_password789'
+
+# Grant necessary permissions for connection
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON DATABASE materialize TO password_removal_test
+----
+COMPLETE 0
+
+# Verify login works with password
+simple conn=pwd_test_conn,user=password_removal_test,password=initial_password789
+SELECT current_user()
+----
+password_removal_test
+COMPLETE 1
+
+# Remove the password from the role
+statement ok
+ALTER ROLE password_removal_test PASSWORD NULL
+
+# Test that connection with the old password now fails
+simple conn=pwd_test_conn2,user=password_removal_test,password=initial_password789
+SELECT current_user()
+----
+db error: FATAL: invalid password
+
+# Test that connection without password still works on no-auth listener
+simple conn=pwd_test_noauth,user=password_removal_test
+SELECT current_user()
+----
+password_removal_test
+COMPLETE 1
+
+# Clean up
+simple conn=mz_system,user=mz_system
+REVOKE USAGE ON DATABASE materialize FROM password_removal_test
+----
+COMPLETE 0
+
+statement ok
+DROP ROLE password_removal_test
+
+# Test that granting a role with a password to a role without a password
+# only inherits privileges, not the password
+statement ok
+CREATE ROLE role_with_password WITH LOGIN PASSWORD 'secure_password123'
+
+statement ok
+CREATE ROLE role_without_password
+
+# Grant necessary permissions to the role with password
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON DATABASE materialize TO role_with_password
+----
+COMPLETE 0
+
+# Grant the role with password to the role without password
+statement ok
+GRANT role_with_password TO role_without_password
+
+# Grant USAGE permission directly to role_without_password so it can connect
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON DATABASE materialize TO role_without_password
+----
+COMPLETE 0
+
+# Verify that role_without_password can connect without a password
+simple conn=no_pwd_inherit,user=role_without_password
+SELECT current_user()
+----
+role_without_password
+COMPLETE 1
+
+# Verify that trying to connect to role_without_password with the password
+# from role_with_password fails (password is not inherited)
+simple conn=pwd_inherit_test,user=role_without_password,password=secure_password123
+SELECT current_user()
+----
+db error: FATAL: invalid password
+
+# Verify that role_with_password still requires its password
+simple conn=with_pwd_test,user=role_with_password,password=secure_password123
+SELECT current_user()
+----
+role_with_password
+COMPLETE 1
+
+# Clean up
+simple conn=mz_system,user=mz_system
+REVOKE USAGE ON DATABASE materialize FROM role_with_password
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE USAGE ON DATABASE materialize FROM role_without_password
+----
+COMPLETE 0
+
+statement ok
+REVOKE role_with_password FROM role_without_password
+
+statement ok
+DROP ROLE role_without_password
+
+statement ok
+DROP ROLE role_with_password

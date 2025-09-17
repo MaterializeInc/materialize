@@ -25,7 +25,7 @@ use mz_persist_client::PersistClient;
 use mz_proto::RustType;
 use mz_repr::role_id::RoleId;
 use mz_repr::{CatalogItemId, GlobalId};
-use mz_sql::catalog::{RoleAttributes, RoleMembership, RoleVars};
+use mz_sql::catalog::{RoleAttributesRaw, RoleMembership, RoleVars};
 use mz_sql::names::{DatabaseId, ResolvedDatabaseSpecifier, SchemaId};
 
 #[mz_ore::test(tokio::test)]
@@ -389,7 +389,7 @@ async fn test_non_writer_commits(state_builder: TestCatalogStateBuilder) {
         let (role_id, _) = txn
             .insert_user_role(
                 role_name.to_string(),
-                RoleAttributes::new(),
+                RoleAttributesRaw::new(),
                 RoleMembership::new(),
                 RoleVars::default(),
                 &HashSet::new(),

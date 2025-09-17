@@ -180,7 +180,7 @@ mod tests {
     use mz_ore::{assert_contains, assert_ok};
     use mz_repr::role_id::RoleId;
     use mz_repr::{CatalogItemId, Timestamp};
-    use mz_sql::catalog::RoleAttributes;
+    use mz_sql::catalog::RoleAttributesRaw;
     use mz_sql::session::metadata::SessionMetadata;
     use uuid::Uuid;
 
@@ -208,7 +208,7 @@ mod tests {
                     None,
                     vec![Op::CreateRole {
                         name: role.into(),
-                        attributes: RoleAttributes::new(),
+                        attributes: RoleAttributesRaw::new(),
                     }],
                 )
                 .await
