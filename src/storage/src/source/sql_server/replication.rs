@@ -43,9 +43,7 @@ use crate::source::RawSourceCreationConfig;
 use crate::source::sql_server::{
     DefiniteError, ReplicationError, SourceOutputInfo, TransientError,
 };
-use crate::source::types::{
-    ProgressStatisticsUpdate, SignaledFuture, SourceMessage, StackedCollection,
-};
+use crate::source::types::{SignaledFuture, SourceMessage, StackedCollection};
 
 /// Used as a partition ID to determine the worker that is responsible for
 /// reading data from SQL Server.
@@ -63,7 +61,6 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
     StackedCollection<G, (u64, Result<SourceMessage, DataflowError>)>,
     TimelyStream<G, Infallible>,
     TimelyStream<G, ReplicationError>,
-    TimelyStream<G, ProgressStatisticsUpdate>,
     PressOnDropButton,
 ) {
     let op_name = format!("SqlServerReplicationReader({})", config.id);
@@ -71,7 +68,6 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
 
     let (data_output, data_stream) = builder.new_output::<AccountedStackBuilder<_>>();
     let (_upper_output, upper_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
-    let (stats_output, stats_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
 
     // Captures DefiniteErrors that affect the entire source, including all outputs
     let (definite_error_handle, definite_errors) =
@@ -83,14 +79,10 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
             let [
                 data_cap_set,
                 upper_cap_set,
-                stats_cap,
                 definite_error_cap_set,
-            ]: &mut [_; 4] = caps.try_into().unwrap();
+            ]: &mut [_; 3] = caps.try_into().unwrap();
 
-            // TODO(sql_server2): Run ingestions across multiple workers.
-            if !config.responsible_for(REPL_READER) {
-                return Ok::<_, TransientError>(());
-            }
+            let source_statistics = config.source_statistics();
 
             let connection_config = source
                 .connection
@@ -110,8 +102,10 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
             let mut capture_instance_to_snapshot: BTreeMap<Arc<str>, Vec<_>> = BTreeMap::new();
             // Maps the 'capture instance' to the output index for all outputs of this worker
             let mut capture_instances: BTreeMap<Arc<str>, Vec<_>> = BTreeMap::new();
+            // Export statistics for a given capture instance
+            let mut export_statistics: BTreeMap<_, Vec<_>> = BTreeMap::new();
 
-            for output in outputs.values() {
+            for (export_id, output) in outputs.iter() {
                 if decoder_map.insert(output.partition_index, Arc::clone(&output.decoder)).is_some() {
                     panic!("Multiple decoders for output index {}", output.partition_index);
                 }
@@ -126,6 +120,31 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                         .or_default()
                         .push((output.partition_index, output.initial_lsn));
                 }
+                export_statistics.entry(Arc::clone(&output.capture_instance))
+                    .or_default()
+                    .push(
+                        config
+                            .statistics
+                            .get(export_id)
+                            .expect("statistics have been intialized")
+                            .clone(),
+                    );
+            }
+
+            // Eagerly emit an event if we have tables to snapshot.
+            // A worker *must* emit a count even if not responsible for snapshotting a table
+            // as statistic summarization will return null if any worker hasn't set a value.
+            // This will also reset snapshot stats for any exports not snapshotting.
+            if !capture_instance_to_snapshot.is_empty() {
+                for stats in config.statistics.values() {
+                    stats.set_snapshot_records_known(0);
+                    stats.set_snapshot_records_staged(0);
+                }
+            }
+            // We need to emit statistics before we exit
+            // TODO(sql_server2): Run ingestions across multiple workers.
+            if !config.responsible_for(REPL_READER) {
+                return Ok::<_, TransientError>(());
             }
 
             let snapshot_instances = capture_instance_to_snapshot
@@ -154,6 +173,28 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                 return Ok(());
             }
 
+            let mut snapshot_total = 0;
+            let mut snapshot_staged_total = 0u64;
+
+            // We first calculate all the total rows we need to fetch across all tables. Since this
+            // happens outside the snapshot transaction the totals might be off, so we won't assert
+            // that we get exactly this many rows later.
+            for table in &snapshot_tables {
+                let table_total = mz_sql_server_util::inspect::snapshot_size(&mut client, &table.schema_name, &table.name).await?;
+                snapshot_total += table_total;
+                for export_stat in export_statistics.get(&table.capture_instance.name).unwrap() {
+                    export_stat.set_snapshot_records_known(u64::cast_from(table_total));
+                    export_stat.set_snapshot_records_staged(0);
+                }
+            }
+
+            // Only emit if there was a snapshot to avoid clearing previous snapshot stats.
+            if !capture_instance_to_snapshot.is_empty() {
+                source_statistics.set_snapshot_records_known(u64::cast_from(snapshot_total));
+                source_statistics.set_snapshot_records_staged(0);
+            }
+
+
             let mut cdc_handle = client
                 .cdc(capture_instances.keys().cloned())
                 .max_lsn_wait(MAX_LSN_WAIT.get(config.config.config_set()));
@@ -161,15 +202,6 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
             // Snapshot any instance that requires it.
             // Each table snapshot will have its own LSN captured at the moment of snapshotting.
             let snapshot_lsns: BTreeMap<Arc<str>, Lsn> = {
-                // Small helper closure.
-                let emit_stats = |cap, known: usize, total: usize| {
-                    let update = ProgressStatisticsUpdate::Snapshot {
-                        records_known: u64::cast_from(known),
-                        records_staged: u64::cast_from(total),
-                    };
-                    tracing::debug!(?config.id, %known, %total, "snapshot progress");
-                    stats_output.give(cap, update);
-                };
                 // Before starting a transaction where the LSN will not advance, ensure
                 // the upstream DB is ready for CDC.
                 cdc_handle.wait_for_ready().await?;
@@ -179,47 +211,39 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                 // knowing where stall/hang might be happening.
                 tracing::info!(%config.worker_id, "timely-{worker_id} upstream is ready");
 
-                // Eagerly emit an event if we have tables to snapshot.
-                if !snapshot_tables.is_empty() {
-                    emit_stats(&stats_cap[0], 0, 0);
-                }
-
                 let report_interval =
                     SNAPSHOT_PROGRESS_REPORT_INTERVAL.handle(config.config.config_set());
                 let mut last_report = Instant::now();
-                let mut records_known: usize = 0;
-                let mut records_total: usize = 0;
                 let mut snapshot_lsns = BTreeMap::new();
                 let arena = RowArena::default();
 
                 for table in snapshot_tables {
                     // TODO(sql_server3): filter columns to only select columns required for Source.
-                    let (snapshot_lsn, size, snapshot)= cdc_handle
+                    let (snapshot_lsn, snapshot)= cdc_handle
                         .snapshot(&table, config.worker_id, config.id)
                         .await?;
 
-                    tracing::info!(%config.id, %table.name, %table.schema_name, %snapshot_lsn, %size, "timely-{worker_id} snapshot start");
+                    tracing::info!(%config.id, %table.name, %table.schema_name, %snapshot_lsn, "timely-{worker_id} snapshot start");
 
                     let mut snapshot = std::pin::pin!(snapshot);
 
                     snapshot_lsns.insert(Arc::clone(&table.capture_instance.name), snapshot_lsn);
-
-                    records_known = records_known.saturating_add(size);
-                    emit_stats(&stats_cap[0], records_known, records_total);
 
                     let partition_indexes = capture_instance_to_snapshot.get(&table.capture_instance.name)
                         .unwrap_or_else(|| {
                             panic!("no snapshot outputs in known capture instances [{}] for capture instance: '{}'", capture_instance_to_snapshot.keys().join(","), table.capture_instance.name);
                         });
 
+                    let mut snapshot_staged = 0;
                     while let Some(result) = snapshot.next().await {
                         let sql_server_row = result.map_err(TransientError::from)?;
 
-                        records_total = records_total.saturating_add(1);
-
                         if last_report.elapsed() > report_interval.get() {
                             last_report = Instant::now();
-                            emit_stats(&stats_cap[0], records_known, records_total);
+                            for export_stat in export_statistics.get(&table.capture_instance.name).unwrap() {
+                                export_stat.set_snapshot_records_staged(snapshot_staged);
+                            }
+                            source_statistics.set_snapshot_records_staged(snapshot_staged_total);
                         }
 
                         for (partition_idx, _) in partition_indexes {
@@ -251,17 +275,24 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                                 )
                                 .await;
                         }
+                        snapshot_staged += 1;
+                        snapshot_staged_total += u64::cast_from(partition_indexes.len());
                     }
 
-                    tracing::info!(%config.id, %table.name, %table.schema_name, %snapshot_lsn, %size, "timely-{worker_id} snapshot complete");
+                    tracing::info!(%config.id, %table.name, %table.schema_name, %snapshot_lsn, "timely-{worker_id} snapshot complete");
+
+                    // final update for snapshot_staged, using the staged values as the total is an estimate
+                    for export_stat in export_statistics.get(&table.capture_instance.name).unwrap() {
+                        export_stat.set_snapshot_records_staged(snapshot_staged);
+                        export_stat.set_snapshot_records_known(snapshot_staged);
+                    }
                 }
 
-                mz_ore::soft_assert_eq_or_log!(
-                    records_known,
-                    records_total,
-                    "snapshot size did not match total records received",
-                );
-                emit_stats(&stats_cap[0], records_known, records_total);
+                // Only emit if there was a snapshot to avoid clearing previous snapshot stats.
+                if !capture_instance_to_snapshot.is_empty() {
+                    source_statistics.set_snapshot_records_staged(snapshot_staged_total);
+                    source_statistics.set_snapshot_records_known(snapshot_staged_total);
+                }
 
                 snapshot_lsns
             };
@@ -457,7 +488,6 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
         data_stream.as_collection(),
         upper_stream,
         error_stream,
-        stats_stream,
         button.press_on_drop(),
     )
 }

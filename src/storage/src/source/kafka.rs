@@ -67,9 +67,7 @@ use tracing::{error, info, trace};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::metrics::source::kafka::KafkaSourceMetrics;
-use crate::source::types::{
-    Probe, ProgressStatisticsUpdate, SignaledFuture, SourceRender, StackedCollection,
-};
+use crate::source::types::{Probe, SignaledFuture, SourceRender, StackedCollection};
 use crate::source::{RawSourceCreationConfig, SourceMessage, probe};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -190,13 +188,12 @@ impl SourceRender for KafkaSourceConnection {
         BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
         Stream<G, Infallible>,
         Stream<G, HealthStatusMessage>,
-        Stream<G, ProgressStatisticsUpdate>,
         Option<Stream<G, Probe<KafkaTimestamp>>>,
         Vec<PressOnDropButton>,
     ) {
         let (metadata, probes, metadata_token) =
             render_metadata_fetcher(scope, self.clone(), config.clone());
-        let (data, progress, health, stats, reader_token) = render_reader(
+        let (data, progress, health, reader_token) = render_reader(
             scope,
             self,
             config.clone(),
@@ -226,7 +223,6 @@ impl SourceRender for KafkaSourceConnection {
             data_collections,
             progress,
             health,
-            stats,
             Some(probes),
             vec![metadata_token, reader_token],
         )
@@ -248,7 +244,6 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
     StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
     Stream<G, Infallible>,
     Stream<G, HealthStatusMessage>,
-    Stream<G, ProgressStatisticsUpdate>,
     PressOnDropButton,
 ) {
     let name = format!("KafkaReader({})", config.id);
@@ -257,11 +252,13 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
     let (data_output, stream) = builder.new_output::<AccountedStackBuilder<_>>();
     let (_progress_output, progress_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
     let (health_output, health_stream) = builder.new_output();
-    let (stats_output, stats_stream) = builder.new_output();
 
     let mut metadata_input = builder.new_disconnected_input(&metadata_stream.broadcast(), Pipeline);
 
     let mut outputs = vec![];
+
+    // Contains the `SourceStatistics` entries for exports that require a snapshot.
+    let mut snapshot_export_stats = vec![];
     for (idx, (id, export)) in config.source_exports.iter().enumerate() {
         let SourceExport {
             details,
@@ -290,6 +287,16 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
             _ => panic!("unexpected source export details: {:?}", details),
         };
 
+        // export requires snapshot
+        if resume_upper.as_ref() == &[Partitioned::minimum()] {
+            let statistics = config
+                .statistics
+                .get(id)
+                .expect("statistics have been initialized")
+                .clone();
+            snapshot_export_stats.push(statistics);
+        }
+
         let output = SourceOutputInfo {
             id: *id,
             resume_upper,
@@ -302,7 +309,8 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
     let busy_signal = Arc::clone(&config.busy_signal);
     let button = builder.build(move |caps| {
         SignaledFuture::new(busy_signal, async move {
-            let [mut data_cap, mut progress_cap, health_cap, stats_cap] = caps.try_into().unwrap();
+            let [mut data_cap, mut progress_cap, health_cap] = caps.try_into().unwrap();
+            let source_statistics = config.source_statistics();
 
             let client_id = connection.client_id(
                 config.config.config_set(),
@@ -338,9 +346,6 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
                     .map(|output| output.resume_upper.clone())
                     .flatten(),
             );
-
-            // Whether or not this instance of the dataflow is performing a snapshot.
-            let mut is_snapshotting = &*resume_upper == &[Partitioned::minimum()];
 
             for ts in resume_upper.elements() {
                 if let Some(pid) = ts.interval().singleton() {
@@ -501,7 +506,7 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
             };
 
             // Seed the progress metrics with `0` if we are snapshotting.
-            if is_snapshotting {
+            if !snapshot_export_stats.is_empty() {
                 if let Err(e) = offset_committer
                     .process_frontier(resume_upper.clone())
                     .await
@@ -514,6 +519,13 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
                         source_id = config.id,
                         upper = resume_upper.pretty()
                     );
+                }
+                // Reset snapshot statistics for any exports that are not involved
+                // in this round of snapshotting. Those that are snapshotting this round will
+                // see updates as the snapshot commences.
+                for statistics in config.statistics.values() {
+                    statistics.set_snapshot_records_known(0);
+                    statistics.set_snapshot_records_staged(0);
                 }
             }
 
@@ -626,7 +638,7 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
 
                         // If we are snapshotting, record our first set of partitions as the snapshot
                         // size.
-                        if is_snapshotting && snapshot_total.is_none() {
+                        if !snapshot_export_stats.is_empty() && snapshot_total.is_none() {
                             // Note that we want to represent the _number of offsets_, which
                             // means the watermark's frontier semantics is correct, without
                             // subtracting (Kafka offsets start at 0).
@@ -856,7 +868,7 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
                         let part_cap = reader.partition_capabilities.get_mut(&pid).unwrap();
                         match part_cap.data.try_downgrade(&upper) {
                             Ok(()) => {
-                                if is_snapshotting {
+                                if !snapshot_export_stats.is_empty() {
                                     // The `.position()` of the consumer represents what offset we have
                                     // read up to.
                                     snapshot_staged += offset.try_into().unwrap_or(0u64);
@@ -900,28 +912,23 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
                 let offset_committed = stats.offset_committed.take().or(prev_offset_committed);
                 let offset_known = stats.offset_known.take().or(prev_offset_known);
                 if let Some((offset_known, offset_committed)) = offset_known.zip(offset_committed) {
-                    stats_output.give(
-                        &stats_cap,
-                        ProgressStatisticsUpdate::SteadyState {
-                            offset_committed,
-                            offset_known,
-                        },
-                    );
+                    source_statistics.set_offset_known(offset_known);
+                    source_statistics.set_offset_committed(offset_committed);
                 }
                 prev_offset_committed = offset_committed;
                 prev_offset_known = offset_known;
 
-                if let (Some(snapshot_total), true) = (snapshot_total, is_snapshotting) {
-                    stats_output.give(
-                        &stats_cap,
-                        ProgressStatisticsUpdate::Snapshot {
-                            records_known: snapshot_total,
-                            records_staged: snapshot_staged,
-                        },
-                    );
-
+                if let (Some(snapshot_total), true) =
+                    (snapshot_total, !snapshot_export_stats.is_empty())
+                {
+                    source_statistics.set_snapshot_records_known(snapshot_total);
+                    source_statistics.set_snapshot_records_staged(snapshot_staged);
+                    for export_stat in snapshot_export_stats.iter() {
+                        export_stat.set_snapshot_records_known(snapshot_total);
+                        export_stat.set_snapshot_records_staged(snapshot_staged);
+                    }
                     if snapshot_total == snapshot_staged {
-                        is_snapshotting = false;
+                        snapshot_export_stats.clear();
                     }
                 }
             }
@@ -932,7 +939,6 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
         stream.as_collection(),
         progress_stream,
         health_stream,
-        stats_stream,
         button.press_on_drop(),
     )
 }

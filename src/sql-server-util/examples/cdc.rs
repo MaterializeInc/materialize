@@ -83,11 +83,9 @@ async fn main() -> Result<(), anyhow::Error> {
 
     for table in tables {
         // Get an initial snapshot of the table.
-        let (lsn, stats, snapshot) = cdc_handle
+        let (lsn, snapshot) = cdc_handle
             .snapshot(&table, 1, mz_repr::GlobalId::User(1))
             .await?;
-
-        tracing::info!("snapshot stats: {stats:?}");
 
         instance_to_lsn.insert(Arc::clone(&table.capture_instance.name), lsn);
 

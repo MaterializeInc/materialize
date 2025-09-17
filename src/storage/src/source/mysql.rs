@@ -88,7 +88,7 @@ use mz_timely_util::order::Extrema;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::source::types::Probe;
-use crate::source::types::{ProgressStatisticsUpdate, SourceRender, StackedCollection};
+use crate::source::types::{SourceRender, StackedCollection};
 use crate::source::{RawSourceCreationConfig, SourceMessage};
 
 mod replication;
@@ -113,7 +113,6 @@ impl SourceRender for MySqlSourceConnection {
         BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
         Stream<G, Infallible>,
         Stream<G, HealthStatusMessage>,
-        Stream<G, ProgressStatisticsUpdate>,
         Option<Stream<G, Probe<GtidPartition>>>,
         Vec<PressOnDropButton>,
     ) {
@@ -151,19 +150,19 @@ impl SourceRender for MySqlSourceConnection {
                 exclude_columns: details.exclude_columns.clone(),
                 initial_gtid_set: gtid_set_frontier(&initial_gtid_set).expect("invalid gtid set"),
                 resume_upper,
+                export_id: id.clone(),
             });
         }
 
         let metrics = config.metrics.get_mysql_source_metrics(config.id);
 
-        let (snapshot_updates, rewinds, snapshot_stats, snapshot_err, snapshot_token) =
-            snapshot::render(
-                scope.clone(),
-                config.clone(),
-                self.clone(),
-                source_outputs.clone(),
-                metrics.snapshot_metrics.clone(),
-            );
+        let (snapshot_updates, rewinds, snapshot_err, snapshot_token) = snapshot::render(
+            scope.clone(),
+            config.clone(),
+            self.clone(),
+            source_outputs.clone(),
+            metrics.snapshot_metrics.clone(),
+        );
 
         let (repl_updates, uppers, repl_err, repl_token) = replication::render(
             scope.clone(),
@@ -174,10 +173,8 @@ impl SourceRender for MySqlSourceConnection {
             metrics,
         );
 
-        let (stats_stream, stats_err, probe_stream, stats_token) =
+        let (stats_err, probe_stream, stats_token) =
             statistics::render(scope.clone(), config.clone(), self, resume_uppers);
-
-        let stats_stream = stats_stream.concat(&snapshot_stats);
 
         let updates = snapshot_updates.concat(&repl_updates);
         let partition_count = u64::cast_from(config.source_exports.len());
@@ -235,7 +232,6 @@ impl SourceRender for MySqlSourceConnection {
             data_collections,
             uppers,
             health,
-            stats_stream,
             Some(probe_stream),
             vec![snapshot_token, repl_token, stats_token],
         )
@@ -251,6 +247,7 @@ struct SourceOutputInfo {
     exclude_columns: Vec<String>,
     initial_gtid_set: Antichain<GtidPartition>,
     resume_upper: Antichain<GtidPartition>,
+    export_id: GlobalId,
 }
 
 #[derive(Clone, Debug, thiserror::Error)]

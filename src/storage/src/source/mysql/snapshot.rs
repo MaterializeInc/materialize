@@ -115,9 +115,8 @@ use tracing::{error, trace};
 
 use crate::metrics::source::mysql::MySqlSnapshotMetrics;
 use crate::source::RawSourceCreationConfig;
-use crate::source::types::{
-    ProgressStatisticsUpdate, SignaledFuture, SourceMessage, StackedCollection,
-};
+use crate::source::types::{SignaledFuture, SourceMessage, StackedCollection};
+use crate::statistics::SourceStatistics;
 
 use super::schemas::verify_schemas;
 use super::{
@@ -135,7 +134,6 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
 ) -> (
     StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
     Stream<G, RewindRequest>,
-    Stream<G, ProgressStatisticsUpdate>,
     Stream<G, ReplicationError>,
     PressOnDropButton,
 ) {
@@ -147,13 +145,13 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
     // Captures DefiniteErrors that affect the entire source, including all outputs
     let (definite_error_handle, definite_errors) = builder.new_output();
 
-    let (stats_output, stats_stream) = builder.new_output();
-
     // A global view of all outputs that will be snapshot by all workers.
     let mut all_outputs = vec![];
     // A map containing only the table infos that this worker should snapshot.
     let mut reader_snapshot_table_info = BTreeMap::new();
-
+    // Maps MySQL table name to export `SourceStatistics`. Same info exists in reader_snapshot_table_info,
+    // but this avoids having to iterate + map each time the statistics are needed.
+    let mut export_statistics = BTreeMap::new();
     for output in source_outputs.into_iter() {
         // Determine which outputs need to be snapshot and which already have been.
         if *output.resume_upper != [GtidPartition::minimum()] {
@@ -162,6 +160,16 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
         }
         all_outputs.push(output.output_index);
         if config.responsible_for(&output.table_name) {
+            let export_stats = config
+                .statistics
+                .get(&output.export_id)
+                .expect("statistics have been intialized")
+                .clone();
+            export_statistics
+                .entry(output.table_name.clone())
+                .or_insert_with(Vec::new)
+                .push(export_stats);
+
             reader_snapshot_table_info
                 .entry(output.table_name.clone())
                 .or_insert_with(Vec::new)
@@ -173,33 +181,27 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
         builder.build_fallible(move |caps| {
             let busy_signal = Arc::clone(&config.busy_signal);
             Box::pin(SignaledFuture::new(busy_signal, async move {
-                let [
-                    data_cap_set,
-                    rewind_cap_set,
-                    definite_error_cap_set,
-                    stats_cap,
-                ]: &mut [_; 4] = caps.try_into().unwrap();
+                let [data_cap_set, rewind_cap_set, definite_error_cap_set]: &mut [_; 3] =
+                    caps.try_into().unwrap();
 
                 let id = config.id;
                 let worker_id = config.worker_id;
+                let source_statistics = config.source_statistics();
+
+                if !all_outputs.is_empty() {
+                    // A worker *must* emit a count even if not responsible for snapshotting a table
+                    // as statistic summarization will return null if any worker hasn't set a value.
+                    // This will also reset snapshot stats for any exports not snapshotting.
+                    for statistics in config.statistics.values() {
+                        statistics.set_snapshot_records_known(0);
+                        statistics.set_snapshot_records_staged(0);
+                    }
+                }
 
                 // If this worker has no tables to snapshot then there is nothing to do.
                 if reader_snapshot_table_info.is_empty() {
                     trace!(%id, "timely-{worker_id} initializing table reader \
                                  with no tables to snapshot, exiting");
-                    if !all_outputs.is_empty() {
-                        // Emit 0, to mark this worker as having started up correctly,
-                        // but having done no snapshotting. Otherwise leave
-                        // this not filled in (no snapshotting is occurring in this instance of
-                        // the dataflow).
-                        stats_output.give(
-                            &stats_cap[0],
-                            ProgressStatisticsUpdate::Snapshot {
-                                records_known: 0,
-                                records_staged: 0,
-                            },
-                        );
-                    }
                     return Ok(());
                 } else {
                     trace!(%id, "timely-{worker_id} initializing table reader \
@@ -387,19 +389,20 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                     &mut tx,
                     reader_snapshot_table_info
                         .iter()
-                        .map(|(name, outputs)| ((*name).clone(), outputs.len()))
+                        .map(|(name, outputs)| {
+                            (
+                                name.clone(),
+                                outputs.len(),
+                                export_statistics.get(name).unwrap(),
+                            )
+                        })
                         .collect(),
                     metrics,
                 )
                 .await?;
-
-                stats_output.give(
-                    &stats_cap[0],
-                    ProgressStatisticsUpdate::Snapshot {
-                        records_known: snapshot_total,
-                        records_staged: 0,
-                    },
-                );
+                // statistics for each export were set when fetching the size, updates the source with the total.
+                source_statistics.set_snapshot_records_known(snapshot_total);
+                source_statistics.set_snapshot_records_staged(0);
 
                 // This worker has nothing else to do
                 if reader_snapshot_table_info.is_empty() {
@@ -409,14 +412,15 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 // Read the snapshot data from the tables
                 let mut final_row = Row::default();
 
-                let mut snapshot_staged = 0;
+                let mut snapshot_staged_total = 0;
                 for (table, outputs) in &reader_snapshot_table_info {
+                    let mut snapshot_staged = 0;
                     let query = build_snapshot_query(outputs);
                     trace!(%id, "timely-{worker_id} reading snapshot query='{}'", query);
                     let mut results = tx.exec_stream(query, ()).await?;
-                    let mut count = 0;
                     while let Some(row) = results.try_next().await? {
                         let row: MySqlRow = row;
+                        snapshot_staged += 1;
                         for (output, row_val) in outputs.iter().repeat_clone(row) {
                             let event = match pack_mysql_row(&mut final_row, row_val, &output.desc)
                             {
@@ -443,22 +447,22 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                                     ),
                                 )
                                 .await;
-                            count += 1;
-                            snapshot_staged += 1;
-                            // TODO(guswynn): does this 1000 need to be configurable?
-                            if snapshot_staged % 1000 == 0 {
-                                stats_output.give(
-                                    &stats_cap[0],
-                                    ProgressStatisticsUpdate::Snapshot {
-                                        records_known: snapshot_total,
-                                        records_staged: snapshot_staged,
-                                    },
-                                );
+                        }
+                        // This overcounting maintains existing behavior but will be removed one readers no longer rely on the value.
+                        snapshot_staged_total += u64::cast_from(outputs.len());
+                        if snapshot_staged_total % 1000 == 0 {
+                            for statistics in export_statistics.get(table).unwrap() {
+                                statistics.set_snapshot_records_staged(snapshot_staged);
                             }
+                            source_statistics.set_snapshot_records_staged(snapshot_staged_total);
                         }
                     }
-                    trace!(%id, "timely-{worker_id} snapshotted {count} records from \
-                                 table '{table}'");
+                    for statistics in export_statistics.get(table).unwrap() {
+                        statistics.set_snapshot_records_staged(snapshot_staged);
+                    }
+                    source_statistics.set_snapshot_records_staged(snapshot_staged_total);
+                    trace!(%id, "timely-{worker_id} snapshotted {} records from \
+                                 table '{table}'", snapshot_staged * u64::cast_from(outputs.len()));
                 }
 
                 // We are done with the snapshot so now we will emit rewind requests. It is
@@ -480,18 +484,16 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 }
                 *rewind_cap_set = CapabilitySet::new();
 
-                if snapshot_staged < snapshot_total {
+                // TODO (maz): Should we remove this to match Postgres?
+                if snapshot_staged_total < snapshot_total {
                     error!(%id, "timely-{worker_id} snapshot size {snapshot_total} is somehow \
-                                 bigger than records staged {snapshot_staged}");
-                    snapshot_staged = snapshot_total;
+                                 bigger than records staged {snapshot_staged_total}");
+                    snapshot_staged_total = snapshot_total;
                 }
-                stats_output.give(
-                    &stats_cap[0],
-                    ProgressStatisticsUpdate::Snapshot {
-                        records_known: snapshot_total,
-                        records_staged: snapshot_staged,
-                    },
-                );
+
+                // Match the postgresql behavior for setting the metrics
+                source_statistics.set_snapshot_records_known(snapshot_staged_total);
+
                 Ok(())
             }))
         });
@@ -503,25 +505,29 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
     (
         raw_data.as_collection(),
         rewinds,
-        stats_stream,
         errors,
         button.press_on_drop(),
     )
 }
 
-/// Fetch the size of the snapshot on this worker.
+/// Fetch the size of the snapshot on this worker and emits the appropriate emtrics and statistics
+/// for each table.
 async fn fetch_snapshot_size<Q>(
     conn: &mut Q,
-    tables: Vec<(MySqlTableName, usize)>,
+    tables: Vec<(MySqlTableName, usize, &Vec<SourceStatistics>)>,
     metrics: MySqlSnapshotMetrics,
 ) -> Result<u64, anyhow::Error>
 where
     Q: Queryable,
 {
     let mut total = 0;
-    for (table, num_outputs) in tables {
+    for (table, num_outputs, export_statistics) in tables {
         let stats = collect_table_statistics(conn, &table).await?;
         metrics.record_table_count_latency(table.1, table.0, stats.count_latency);
+        for export_stat in export_statistics {
+            export_stat.set_snapshot_records_known(stats.count);
+            export_stat.set_snapshot_records_staged(0);
+        }
         total += stats.count * u64::cast_from(num_outputs);
     }
     Ok(total)
@@ -610,6 +616,7 @@ mod tests {
             exclude_columns: vec![],
             initial_gtid_set: Antichain::default(),
             resume_upper: Antichain::default(),
+            export_id: mz_repr::GlobalId::User(1),
         };
         let query = build_snapshot_query(&[info.clone(), info]);
         assert_eq!(
