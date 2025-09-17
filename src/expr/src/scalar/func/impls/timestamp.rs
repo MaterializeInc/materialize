@@ -20,7 +20,7 @@ use mz_repr::adt::datetime::DateTimeUnits;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::numeric::{DecimalLike, Numeric};
 use mz_repr::adt::timestamp::{CheckedTimestamp, MAX_PRECISION, TimestampPrecision};
-use mz_repr::{ColumnType, ScalarType, strconv};
+use mz_repr::{SqlColumnType, SqlScalarType, strconv};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -92,8 +92,8 @@ impl<'a> EagerUnaryFunc<'a> for CastTimestampToTimestampTz {
         Ok(updated)
     }
 
-    fn output_type(&self, input: ColumnType) -> ColumnType {
-        ScalarType::TimestampTz { precision: self.to }.nullable(input.nullable)
+    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+        SqlScalarType::TimestampTz { precision: self.to }.nullable(input.nullable)
     }
 
     fn preserves_uniqueness(&self) -> bool {
@@ -143,8 +143,8 @@ impl<'a> EagerUnaryFunc<'a> for AdjustTimestampPrecision {
         Ok(updated)
     }
 
-    fn output_type(&self, input: ColumnType) -> ColumnType {
-        ScalarType::Timestamp { precision: self.to }.nullable(input.nullable)
+    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+        SqlScalarType::Timestamp { precision: self.to }.nullable(input.nullable)
     }
 
     fn preserves_uniqueness(&self) -> bool {
@@ -190,8 +190,8 @@ impl<'a> EagerUnaryFunc<'a> for CastTimestampTzToTimestamp {
         Ok(updated)
     }
 
-    fn output_type(&self, input: ColumnType) -> ColumnType {
-        ScalarType::Timestamp { precision: self.to }.nullable(input.nullable)
+    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+        SqlScalarType::Timestamp { precision: self.to }.nullable(input.nullable)
     }
 
     fn preserves_uniqueness(&self) -> bool {
@@ -241,8 +241,8 @@ impl<'a> EagerUnaryFunc<'a> for AdjustTimestampTzPrecision {
         Ok(updated)
     }
 
-    fn output_type(&self, input: ColumnType) -> ColumnType {
-        ScalarType::TimestampTz { precision: self.to }.nullable(input.nullable)
+    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+        SqlScalarType::TimestampTz { precision: self.to }.nullable(input.nullable)
     }
 
     fn preserves_uniqueness(&self) -> bool {
@@ -328,8 +328,8 @@ impl<'a> EagerUnaryFunc<'a> for ExtractInterval {
         date_part_interval_inner(self.0, a)
     }
 
-    fn output_type(&self, input: ColumnType) -> ColumnType {
-        ScalarType::Numeric { max_scale: None }.nullable(input.nullable)
+    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+        SqlScalarType::Numeric { max_scale: None }.nullable(input.nullable)
     }
 }
 
@@ -352,8 +352,8 @@ impl<'a> EagerUnaryFunc<'a> for DatePartInterval {
         date_part_interval_inner(self.0, a)
     }
 
-    fn output_type(&self, input: ColumnType) -> ColumnType {
-        ScalarType::Float64.nullable(input.nullable)
+    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+        SqlScalarType::Float64.nullable(input.nullable)
     }
 }
 
@@ -422,8 +422,8 @@ impl<'a> EagerUnaryFunc<'a> for ExtractTimestamp {
         date_part_timestamp_inner(self.0, &*a)
     }
 
-    fn output_type(&self, input: ColumnType) -> ColumnType {
-        ScalarType::Numeric { max_scale: None }.nullable(input.nullable)
+    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+        SqlScalarType::Numeric { max_scale: None }.nullable(input.nullable)
     }
 
     fn is_monotone(&self) -> bool {
@@ -450,8 +450,8 @@ impl<'a> EagerUnaryFunc<'a> for ExtractTimestampTz {
         date_part_timestamp_inner(self.0, &*a)
     }
 
-    fn output_type(&self, input: ColumnType) -> ColumnType {
-        ScalarType::Numeric { max_scale: None }.nullable(input.nullable)
+    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+        SqlScalarType::Numeric { max_scale: None }.nullable(input.nullable)
     }
 
     fn is_monotone(&self) -> bool {
@@ -481,8 +481,8 @@ impl<'a> EagerUnaryFunc<'a> for DatePartTimestamp {
         date_part_timestamp_inner(self.0, &*a)
     }
 
-    fn output_type(&self, input: ColumnType) -> ColumnType {
-        ScalarType::Float64.nullable(input.nullable)
+    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+        SqlScalarType::Float64.nullable(input.nullable)
     }
 }
 
@@ -505,8 +505,8 @@ impl<'a> EagerUnaryFunc<'a> for DatePartTimestampTz {
         date_part_timestamp_inner(self.0, &*a)
     }
 
-    fn output_type(&self, input: ColumnType) -> ColumnType {
-        ScalarType::Float64.nullable(input.nullable)
+    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+        SqlScalarType::Float64.nullable(input.nullable)
     }
 }
 
@@ -561,8 +561,8 @@ impl<'a> EagerUnaryFunc<'a> for DateTruncTimestamp {
         date_trunc_inner(self.0, &*a)?.try_into().err_into()
     }
 
-    fn output_type(&self, input: ColumnType) -> ColumnType {
-        ScalarType::Timestamp { precision: None }.nullable(input.nullable)
+    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+        SqlScalarType::Timestamp { precision: None }.nullable(input.nullable)
     }
 
     fn is_monotone(&self) -> bool {
@@ -592,8 +592,8 @@ impl<'a> EagerUnaryFunc<'a> for DateTruncTimestampTz {
         date_trunc_inner(self.0, &*a)?.try_into().err_into()
     }
 
-    fn output_type(&self, input: ColumnType) -> ColumnType {
-        ScalarType::TimestampTz { precision: None }.nullable(input.nullable)
+    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+        SqlScalarType::TimestampTz { precision: None }.nullable(input.nullable)
     }
 
     fn is_monotone(&self) -> bool {
@@ -679,8 +679,8 @@ impl<'a> EagerUnaryFunc<'a> for TimezoneTimestamp {
         timezone_timestamp(self.0, a.to_naive())
     }
 
-    fn output_type(&self, input: ColumnType) -> ColumnType {
-        ScalarType::TimestampTz { precision: None }.nullable(input.nullable)
+    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+        SqlScalarType::TimestampTz { precision: None }.nullable(input.nullable)
     }
 }
 
@@ -708,8 +708,8 @@ impl<'a> EagerUnaryFunc<'a> for TimezoneTimestampTz {
             .err_into()
     }
 
-    fn output_type(&self, input: ColumnType) -> ColumnType {
-        ScalarType::Timestamp { precision: None }.nullable(input.nullable)
+    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+        SqlScalarType::Timestamp { precision: None }.nullable(input.nullable)
     }
 }
 
@@ -733,8 +733,8 @@ impl<'a> EagerUnaryFunc<'a> for ToCharTimestamp {
         self.format.render(&*input)
     }
 
-    fn output_type(&self, input: ColumnType) -> ColumnType {
-        ScalarType::String.nullable(input.nullable)
+    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+        SqlScalarType::String.nullable(input.nullable)
     }
 }
 
@@ -758,8 +758,8 @@ impl<'a> EagerUnaryFunc<'a> for ToCharTimestampTz {
         self.format.render(&*input)
     }
 
-    fn output_type(&self, input: ColumnType) -> ColumnType {
-        ScalarType::String.nullable(input.nullable)
+    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
+        SqlScalarType::String.nullable(input.nullable)
     }
 }
 

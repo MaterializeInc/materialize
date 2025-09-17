@@ -11,7 +11,7 @@ use std::fmt;
 
 use itertools::Itertools;
 use mz_lowertest::MzReflect;
-use mz_repr::{ColumnType, Datum, RowArena, ScalarType};
+use mz_repr::{Datum, RowArena, SqlColumnType, SqlScalarType};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -22,7 +22,7 @@ use crate::{EvalError, MirScalarExpr};
     Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
 )]
 pub struct CastRecordToString {
-    pub ty: ScalarType,
+    pub ty: SqlScalarType,
 }
 
 impl LazyUnaryFunc for CastRecordToString {
@@ -41,8 +41,8 @@ impl LazyUnaryFunc for CastRecordToString {
         Ok(Datum::String(temp_storage.push_string(buf)))
     }
 
-    fn output_type(&self, input_type: ColumnType) -> ColumnType {
-        ScalarType::String.nullable(input_type.nullable)
+    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
+        SqlScalarType::String.nullable(input_type.nullable)
     }
 
     fn propagates_nulls(&self) -> bool {
@@ -77,7 +77,7 @@ impl fmt::Display for CastRecordToString {
 /// `cast_expr` and collecting the results into a new record ("record2").
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastRecord1ToRecord2 {
-    pub return_ty: ScalarType,
+    pub return_ty: SqlScalarType,
     pub cast_exprs: Box<[MirScalarExpr]>,
 }
 
@@ -99,7 +99,7 @@ impl LazyUnaryFunc for CastRecord1ToRecord2 {
         Ok(temp_storage.make_datum(|packer| packer.push_list(cast_datums)))
     }
 
-    fn output_type(&self, input_type: ColumnType) -> ColumnType {
+    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
         self.return_ty
             .without_modifiers()
             .nullable(input_type.nullable)
@@ -155,9 +155,9 @@ impl LazyUnaryFunc for RecordGet {
         Ok(a.unwrap_list().iter().nth(self.0).unwrap())
     }
 
-    fn output_type(&self, input_type: ColumnType) -> ColumnType {
+    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
         match input_type.scalar_type {
-            ScalarType::Record { fields, .. } => {
+            SqlScalarType::Record { fields, .. } => {
                 let (_name, ty) = &fields[self.0];
                 let mut ty = ty.clone();
                 ty.nullable = ty.nullable || input_type.nullable;

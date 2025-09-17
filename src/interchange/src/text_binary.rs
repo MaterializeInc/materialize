@@ -9,14 +9,14 @@
 
 use bytes::BytesMut;
 use itertools::Itertools;
-use mz_repr::{ColumnName, ColumnType, RelationDesc};
+use mz_repr::{ColumnName, RelationDesc, SqlColumnType};
 
 use crate::encode::{Encode, column_names_and_types};
 use crate::envelopes;
 
 #[derive(Debug)]
 pub struct TextEncoder {
-    columns: Vec<(ColumnName, ColumnType)>,
+    columns: Vec<(ColumnName, SqlColumnType)>,
 }
 
 impl TextEncoder {
@@ -44,7 +44,7 @@ impl Encode for TextEncoder {
 
 #[derive(Debug)]
 pub struct BinaryEncoder {
-    columns: Vec<(ColumnName, ColumnType)>,
+    columns: Vec<(ColumnName, SqlColumnType)>,
 }
 
 impl BinaryEncoder {

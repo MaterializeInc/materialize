@@ -9,7 +9,7 @@
 
 //! Types for describing dataflow sources.
 
-use mz_repr::RelationType;
+use mz_repr::SqlRelationType;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -25,7 +25,7 @@ pub struct SourceInstanceDesc<M> {
     /// Additional metadata used by the storage client of a compute instance to read it.
     pub storage_metadata: M,
     /// The relation type of this source
-    pub typ: RelationType,
+    pub typ: SqlRelationType,
 }
 
 /// Per-source construction arguments.

@@ -30,7 +30,7 @@ use mz_repr::adt::date::Date;
 use mz_repr::adt::jsonb::JsonbPacker;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::adt::timestamp::CheckedTimestamp;
-use mz_repr::{Datum, RelationDesc, Row, RowPacker, ScalarType, SharedRow};
+use mz_repr::{Datum, RelationDesc, Row, RowPacker, SharedRow, SqlScalarType};
 use ordered_float::OrderedFloat;
 use uuid::Uuid;
 
@@ -114,7 +114,7 @@ impl ArrowReader {
 }
 
 fn scalar_type_and_array_to_reader(
-    scalar_type: &ScalarType,
+    scalar_type: &SqlScalarType,
     array: Arc<dyn Array>,
 ) -> Result<ColReader, anyhow::Error> {
     fn downcast_array<T: arrow::array::Array + Clone + 'static>(array: Arc<dyn Array>) -> T {
@@ -126,64 +126,67 @@ fn scalar_type_and_array_to_reader(
     }
 
     match (scalar_type, array.data_type()) {
-        (ScalarType::Bool, DataType::Boolean) => {
+        (SqlScalarType::Bool, DataType::Boolean) => {
             Ok(ColReader::Boolean(downcast_array::<BooleanArray>(array)))
         }
-        (ScalarType::Int16 | ScalarType::Int32 | ScalarType::Int64, DataType::Int8) => {
+        (SqlScalarType::Int16 | SqlScalarType::Int32 | SqlScalarType::Int64, DataType::Int8) => {
             let array = downcast_array::<Int8Array>(array);
             let cast: fn(i8) -> Datum<'static> = match scalar_type {
-                ScalarType::Int16 => |x| Datum::Int16(i16::cast_from(x)),
-                ScalarType::Int32 => |x| Datum::Int32(i32::cast_from(x)),
-                ScalarType::Int64 => |x| Datum::Int64(i64::cast_from(x)),
+                SqlScalarType::Int16 => |x| Datum::Int16(i16::cast_from(x)),
+                SqlScalarType::Int32 => |x| Datum::Int32(i32::cast_from(x)),
+                SqlScalarType::Int64 => |x| Datum::Int64(i64::cast_from(x)),
                 _ => unreachable!("checked above"),
             };
             Ok(ColReader::Int8 { array, cast })
         }
-        (ScalarType::Int16, DataType::Int16) => {
+        (SqlScalarType::Int16, DataType::Int16) => {
             Ok(ColReader::Int16(downcast_array::<Int16Array>(array)))
         }
-        (ScalarType::Int32, DataType::Int32) => {
+        (SqlScalarType::Int32, DataType::Int32) => {
             Ok(ColReader::Int32(downcast_array::<Int32Array>(array)))
         }
-        (ScalarType::Int64, DataType::Int64) => {
+        (SqlScalarType::Int64, DataType::Int64) => {
             Ok(ColReader::Int64(downcast_array::<Int64Array>(array)))
         }
-        (ScalarType::UInt16 | ScalarType::UInt32 | ScalarType::UInt64, DataType::UInt8) => {
+        (
+            SqlScalarType::UInt16 | SqlScalarType::UInt32 | SqlScalarType::UInt64,
+            DataType::UInt8,
+        ) => {
             let array = downcast_array::<UInt8Array>(array);
             let cast: fn(u8) -> Datum<'static> = match scalar_type {
-                ScalarType::UInt16 => |x| Datum::UInt16(u16::cast_from(x)),
-                ScalarType::UInt32 => |x| Datum::UInt32(u32::cast_from(x)),
-                ScalarType::UInt64 => |x| Datum::UInt64(u64::cast_from(x)),
+                SqlScalarType::UInt16 => |x| Datum::UInt16(u16::cast_from(x)),
+                SqlScalarType::UInt32 => |x| Datum::UInt32(u32::cast_from(x)),
+                SqlScalarType::UInt64 => |x| Datum::UInt64(u64::cast_from(x)),
                 _ => unreachable!("checked above"),
             };
             Ok(ColReader::UInt8 { array, cast })
         }
-        (ScalarType::UInt16, DataType::UInt16) => {
+        (SqlScalarType::UInt16, DataType::UInt16) => {
             Ok(ColReader::UInt16(downcast_array::<UInt16Array>(array)))
         }
-        (ScalarType::UInt32, DataType::UInt32) => {
+        (SqlScalarType::UInt32, DataType::UInt32) => {
             Ok(ColReader::UInt32(downcast_array::<UInt32Array>(array)))
         }
-        (ScalarType::UInt64, DataType::UInt64) => {
+        (SqlScalarType::UInt64, DataType::UInt64) => {
             Ok(ColReader::UInt64(downcast_array::<UInt64Array>(array)))
         }
-        (ScalarType::Float32 | ScalarType::Float64, DataType::Float16) => {
+        (SqlScalarType::Float32 | SqlScalarType::Float64, DataType::Float16) => {
             let array = downcast_array::<Float16Array>(array);
             let cast: fn(half::f16) -> Datum<'static> = match scalar_type {
-                ScalarType::Float32 => |x| Datum::Float32(OrderedFloat::from(x.to_f32())),
-                ScalarType::Float64 => |x| Datum::Float64(OrderedFloat::from(x.to_f64())),
+                SqlScalarType::Float32 => |x| Datum::Float32(OrderedFloat::from(x.to_f32())),
+                SqlScalarType::Float64 => |x| Datum::Float64(OrderedFloat::from(x.to_f64())),
                 _ => unreachable!("checked above"),
             };
             Ok(ColReader::Float16 { array, cast })
         }
-        (ScalarType::Float32, DataType::Float32) => {
+        (SqlScalarType::Float32, DataType::Float32) => {
             Ok(ColReader::Float32(downcast_array::<Float32Array>(array)))
         }
-        (ScalarType::Float64, DataType::Float64) => {
+        (SqlScalarType::Float64, DataType::Float64) => {
             Ok(ColReader::Float64(downcast_array::<Float64Array>(array)))
         }
         // TODO(cf3): Consider the max_scale for numeric.
-        (ScalarType::Numeric { .. }, DataType::Decimal128(precision, scale)) => {
+        (SqlScalarType::Numeric { .. }, DataType::Decimal128(precision, scale)) => {
             use num_traits::Pow;
 
             let base = Numeric::from(10);
@@ -206,7 +209,7 @@ fn scalar_type_and_array_to_reader(
             })
         }
         // TODO(cf3): Consider the max_scale for numeric.
-        (ScalarType::Numeric { .. }, DataType::Decimal256(precision, scale)) => {
+        (SqlScalarType::Numeric { .. }, DataType::Decimal256(precision, scale)) => {
             use num_traits::Pow;
 
             let base = Numeric::from(10);
@@ -228,82 +231,82 @@ fn scalar_type_and_array_to_reader(
                 precision,
             })
         }
-        (ScalarType::Bytes, DataType::Binary) => {
+        (SqlScalarType::Bytes, DataType::Binary) => {
             Ok(ColReader::Binary(downcast_array::<BinaryArray>(array)))
         }
-        (ScalarType::Bytes, DataType::LargeBinary) => {
+        (SqlScalarType::Bytes, DataType::LargeBinary) => {
             let array = downcast_array::<LargeBinaryArray>(array);
             Ok(ColReader::LargeBinary(array))
         }
-        (ScalarType::Bytes, DataType::FixedSizeBinary(_)) => {
+        (SqlScalarType::Bytes, DataType::FixedSizeBinary(_)) => {
             let array = downcast_array::<FixedSizeBinaryArray>(array);
             Ok(ColReader::FixedSizeBinary(array))
         }
-        (ScalarType::Bytes, DataType::BinaryView) => {
+        (SqlScalarType::Bytes, DataType::BinaryView) => {
             let array = downcast_array::<BinaryViewArray>(array);
             Ok(ColReader::BinaryView(array))
         }
         (
-            ScalarType::Uuid,
+            SqlScalarType::Uuid,
             DataType::Binary
             | DataType::BinaryView
             | DataType::LargeBinary
             | DataType::FixedSizeBinary(_),
         ) => {
-            let reader = scalar_type_and_array_to_reader(&ScalarType::Bytes, array)
+            let reader = scalar_type_and_array_to_reader(&SqlScalarType::Bytes, array)
                 .context("uuid reader")?;
             Ok(ColReader::Uuid(Box::new(reader)))
         }
-        (ScalarType::String, DataType::Utf8) => {
+        (SqlScalarType::String, DataType::Utf8) => {
             Ok(ColReader::String(downcast_array::<StringArray>(array)))
         }
-        (ScalarType::String, DataType::LargeUtf8) => {
+        (SqlScalarType::String, DataType::LargeUtf8) => {
             let array = downcast_array::<LargeStringArray>(array);
             Ok(ColReader::LargeString(array))
         }
-        (ScalarType::String, DataType::Utf8View) => {
+        (SqlScalarType::String, DataType::Utf8View) => {
             let array = downcast_array::<StringViewArray>(array);
             Ok(ColReader::StringView(array))
         }
-        (ScalarType::Jsonb, DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View) => {
-            let reader = scalar_type_and_array_to_reader(&ScalarType::String, array)
+        (SqlScalarType::Jsonb, DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View) => {
+            let reader = scalar_type_and_array_to_reader(&SqlScalarType::String, array)
                 .context("json reader")?;
             Ok(ColReader::Jsonb(Box::new(reader)))
         }
-        (ScalarType::Timestamp { .. }, DataType::Timestamp(TimeUnit::Second, None)) => {
+        (SqlScalarType::Timestamp { .. }, DataType::Timestamp(TimeUnit::Second, None)) => {
             let array = downcast_array::<TimestampSecondArray>(array);
             Ok(ColReader::TimestampSecond(array))
         }
-        (ScalarType::Timestamp { .. }, DataType::Timestamp(TimeUnit::Millisecond, None)) => {
+        (SqlScalarType::Timestamp { .. }, DataType::Timestamp(TimeUnit::Millisecond, None)) => {
             let array = downcast_array::<TimestampMillisecondArray>(array);
             Ok(ColReader::TimestampMillisecond(array))
         }
-        (ScalarType::Timestamp { .. }, DataType::Timestamp(TimeUnit::Microsecond, None)) => {
+        (SqlScalarType::Timestamp { .. }, DataType::Timestamp(TimeUnit::Microsecond, None)) => {
             let array = downcast_array::<TimestampMicrosecondArray>(array);
             Ok(ColReader::TimestampMicrosecond(array))
         }
-        (ScalarType::Timestamp { .. }, DataType::Timestamp(TimeUnit::Nanosecond, None)) => {
+        (SqlScalarType::Timestamp { .. }, DataType::Timestamp(TimeUnit::Nanosecond, None)) => {
             let array = downcast_array::<TimestampNanosecondArray>(array);
             Ok(ColReader::TimestampNanosecond(array))
         }
-        (ScalarType::Date, DataType::Date32) => {
+        (SqlScalarType::Date, DataType::Date32) => {
             let array = downcast_array::<Date32Array>(array);
             Ok(ColReader::Date32(array))
         }
-        (ScalarType::Date, DataType::Date64) => {
+        (SqlScalarType::Date, DataType::Date64) => {
             let array = downcast_array::<Date64Array>(array);
             Ok(ColReader::Date64(array))
         }
-        (ScalarType::Time, DataType::Time32(TimeUnit::Second)) => {
+        (SqlScalarType::Time, DataType::Time32(TimeUnit::Second)) => {
             let array = downcast_array::<Time32SecondArray>(array);
             Ok(ColReader::Time32Seconds(array))
         }
-        (ScalarType::Time, DataType::Time32(TimeUnit::Millisecond)) => {
+        (SqlScalarType::Time, DataType::Time32(TimeUnit::Millisecond)) => {
             let array = downcast_array::<Time32MillisecondArray>(array);
             Ok(ColReader::Time32Milliseconds(array))
         }
         (
-            ScalarType::List {
+            SqlScalarType::List {
                 element_type,
                 custom_id: _,
             },
@@ -320,7 +323,7 @@ fn scalar_type_and_array_to_reader(
             })
         }
         (
-            ScalarType::List {
+            SqlScalarType::List {
                 element_type,
                 custom_id: _,
             },
@@ -337,7 +340,7 @@ fn scalar_type_and_array_to_reader(
             })
         }
         (
-            ScalarType::Record {
+            SqlScalarType::Record {
                 fields,
                 custom_id: _,
             },
@@ -784,18 +787,18 @@ mod tests {
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
     fn smoketest_reader() {
         let desc = RelationDesc::builder()
-            .with_column("bool", ScalarType::Bool.nullable(true))
-            .with_column("int4", ScalarType::Int32.nullable(true))
-            .with_column("uint8", ScalarType::UInt64.nullable(true))
-            .with_column("float32", ScalarType::Float32.nullable(true))
-            .with_column("string", ScalarType::String.nullable(true))
-            .with_column("bytes", ScalarType::Bytes.nullable(true))
-            .with_column("uuid", ScalarType::Uuid.nullable(true))
-            .with_column("json", ScalarType::Jsonb.nullable(true))
+            .with_column("bool", SqlScalarType::Bool.nullable(true))
+            .with_column("int4", SqlScalarType::Int32.nullable(true))
+            .with_column("uint8", SqlScalarType::UInt64.nullable(true))
+            .with_column("float32", SqlScalarType::Float32.nullable(true))
+            .with_column("string", SqlScalarType::String.nullable(true))
+            .with_column("bytes", SqlScalarType::Bytes.nullable(true))
+            .with_column("uuid", SqlScalarType::Uuid.nullable(true))
+            .with_column("json", SqlScalarType::Jsonb.nullable(true))
             .with_column(
                 "list",
-                ScalarType::List {
-                    element_type: Box::new(ScalarType::UInt32),
+                SqlScalarType::List {
+                    element_type: Box::new(SqlScalarType::UInt32),
                     custom_id: None,
                 }
                 .nullable(true),
@@ -848,7 +851,10 @@ mod tests {
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
     fn smoketest_decimal128() {
         let desc = RelationDesc::builder()
-            .with_column("a", ScalarType::Numeric { max_scale: None }.nullable(true))
+            .with_column(
+                "a",
+                SqlScalarType::Numeric { max_scale: None }.nullable(true),
+            )
             .finish();
 
         let mut dec128 = arrow::array::Decimal128Builder::new();
@@ -894,7 +900,10 @@ mod tests {
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
     fn smoketest_decimal256() {
         let desc = RelationDesc::builder()
-            .with_column("a", ScalarType::Numeric { max_scale: None }.nullable(true))
+            .with_column(
+                "a",
+                SqlScalarType::Numeric { max_scale: None }.nullable(true),
+            )
             .finish();
 
         let mut dec256 = arrow::array::Decimal256Builder::new();

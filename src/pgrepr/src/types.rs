@@ -12,7 +12,7 @@ use std::fmt;
 use std::mem::size_of;
 use std::sync::LazyLock;
 
-use mz_repr::ScalarType;
+use mz_repr::SqlScalarType;
 use mz_repr::adt::char::{CharLength as AdtCharLength, InvalidCharLengthError};
 use mz_repr::adt::mz_acl_item::{AclItem, MzAclItem};
 use mz_repr::adt::numeric::{
@@ -1001,37 +1001,37 @@ impl fmt::Display for Type {
     }
 }
 
-impl TryFrom<&Type> for ScalarType {
+impl TryFrom<&Type> for SqlScalarType {
     type Error = TypeConversionError;
 
-    fn try_from(typ: &Type) -> Result<ScalarType, TypeConversionError> {
+    fn try_from(typ: &Type) -> Result<SqlScalarType, TypeConversionError> {
         match typ {
-            Type::AclItem => Ok(ScalarType::AclItem),
-            Type::Array(t) => Ok(ScalarType::Array(Box::new(TryFrom::try_from(&**t)?))),
-            Type::Bool => Ok(ScalarType::Bool),
-            Type::Bytea => Ok(ScalarType::Bytes),
-            Type::Char => Ok(ScalarType::PgLegacyChar),
-            Type::Date => Ok(ScalarType::Date),
-            Type::Float4 => Ok(ScalarType::Float32),
-            Type::Float8 => Ok(ScalarType::Float64),
-            Type::Int2 => Ok(ScalarType::Int16),
-            Type::Int4 => Ok(ScalarType::Int32),
-            Type::Int8 => Ok(ScalarType::Int64),
-            Type::UInt2 => Ok(ScalarType::UInt16),
-            Type::UInt4 => Ok(ScalarType::UInt32),
-            Type::UInt8 => Ok(ScalarType::UInt64),
-            Type::Interval { .. } => Ok(ScalarType::Interval),
+            Type::AclItem => Ok(SqlScalarType::AclItem),
+            Type::Array(t) => Ok(SqlScalarType::Array(Box::new(TryFrom::try_from(&**t)?))),
+            Type::Bool => Ok(SqlScalarType::Bool),
+            Type::Bytea => Ok(SqlScalarType::Bytes),
+            Type::Char => Ok(SqlScalarType::PgLegacyChar),
+            Type::Date => Ok(SqlScalarType::Date),
+            Type::Float4 => Ok(SqlScalarType::Float32),
+            Type::Float8 => Ok(SqlScalarType::Float64),
+            Type::Int2 => Ok(SqlScalarType::Int16),
+            Type::Int4 => Ok(SqlScalarType::Int32),
+            Type::Int8 => Ok(SqlScalarType::Int64),
+            Type::UInt2 => Ok(SqlScalarType::UInt16),
+            Type::UInt4 => Ok(SqlScalarType::UInt32),
+            Type::UInt8 => Ok(SqlScalarType::UInt64),
+            Type::Interval { .. } => Ok(SqlScalarType::Interval),
             Type::Json => Err(TypeConversionError::UnsupportedType(Type::Json)),
-            Type::Jsonb => Ok(ScalarType::Jsonb),
-            Type::List(t) => Ok(ScalarType::List {
+            Type::Jsonb => Ok(SqlScalarType::Jsonb),
+            Type::List(t) => Ok(SqlScalarType::List {
                 element_type: Box::new(TryFrom::try_from(&**t)?),
                 custom_id: None,
             }),
-            Type::Map { value_type } => Ok(ScalarType::Map {
+            Type::Map { value_type } => Ok(SqlScalarType::Map {
                 value_type: Box::new(TryFrom::try_from(&**value_type)?),
                 custom_id: None,
             }),
-            Type::Name => Ok(ScalarType::PgLegacyName),
+            Type::Name => Ok(SqlScalarType::PgLegacyName),
             Type::Numeric { constraints } => {
                 let max_scale = match constraints {
                     Some(constraints) => {
@@ -1051,26 +1051,26 @@ impl TryFrom<&Type> for ScalarType {
                     }
                     None => None,
                 };
-                Ok(ScalarType::Numeric { max_scale })
+                Ok(SqlScalarType::Numeric { max_scale })
             }
-            Type::Oid => Ok(ScalarType::Oid),
-            Type::Record(_) => Ok(ScalarType::Record {
+            Type::Oid => Ok(SqlScalarType::Oid),
+            Type::Record(_) => Ok(SqlScalarType::Record {
                 fields: [].into(),
                 custom_id: None,
             }),
-            Type::Text => Ok(ScalarType::String),
-            Type::Time { precision: None } => Ok(ScalarType::Time),
+            Type::Text => Ok(SqlScalarType::String),
+            Type::Time { precision: None } => Ok(SqlScalarType::Time),
             Type::Time { precision: Some(_) } => {
                 Err(TypeConversionError::UnsupportedType(typ.clone()))
             }
             Type::TimeTz { .. } => Err(TypeConversionError::UnsupportedType(typ.clone())),
-            Type::BpChar { length } => Ok(ScalarType::Char {
+            Type::BpChar { length } => Ok(SqlScalarType::Char {
                 length: match length {
                     Some(length) => Some(AdtCharLength::try_from(i64::from(length.into_i32()))?),
                     None => None,
                 },
             }),
-            Type::VarChar { max_length } => Ok(ScalarType::VarChar {
+            Type::VarChar { max_length } => Ok(SqlScalarType::VarChar {
                 max_length: match max_length {
                     Some(max_length) => Some(VarCharMaxLength::try_from(i64::from(
                         max_length.into_i32(),
@@ -1078,7 +1078,7 @@ impl TryFrom<&Type> for ScalarType {
                     None => None,
                 },
             }),
-            Type::Timestamp { precision } => Ok(ScalarType::Timestamp {
+            Type::Timestamp { precision } => Ok(SqlScalarType::Timestamp {
                 precision: match precision {
                     Some(precision) => Some(AdtTimestampPrecision::try_from(i64::from(
                         precision.into_i32(),
@@ -1086,7 +1086,7 @@ impl TryFrom<&Type> for ScalarType {
                     None => None,
                 },
             }),
-            Type::TimestampTz { precision } => Ok(ScalarType::TimestampTz {
+            Type::TimestampTz { precision } => Ok(SqlScalarType::TimestampTz {
                 precision: match precision {
                     Some(precision) => Some(AdtTimestampPrecision::try_from(i64::from(
                         precision.into_i32(),
@@ -1094,16 +1094,16 @@ impl TryFrom<&Type> for ScalarType {
                     None => None,
                 },
             }),
-            Type::Uuid => Ok(ScalarType::Uuid),
-            Type::RegClass => Ok(ScalarType::RegClass),
-            Type::RegProc => Ok(ScalarType::RegProc),
-            Type::RegType => Ok(ScalarType::RegType),
-            Type::Int2Vector => Ok(ScalarType::Int2Vector),
-            Type::MzTimestamp => Ok(ScalarType::MzTimestamp),
-            Type::Range { element_type } => Ok(ScalarType::Range {
+            Type::Uuid => Ok(SqlScalarType::Uuid),
+            Type::RegClass => Ok(SqlScalarType::RegClass),
+            Type::RegProc => Ok(SqlScalarType::RegProc),
+            Type::RegType => Ok(SqlScalarType::RegType),
+            Type::Int2Vector => Ok(SqlScalarType::Int2Vector),
+            Type::MzTimestamp => Ok(SqlScalarType::MzTimestamp),
+            Type::Range { element_type } => Ok(SqlScalarType::Range {
                 element_type: Box::new(TryFrom::try_from(&**element_type)?),
             }),
-            Type::MzAclItem => Ok(ScalarType::MzAclItem),
+            Type::MzAclItem => Ok(SqlScalarType::MzAclItem),
         }
     }
 }
@@ -1145,25 +1145,25 @@ impl fmt::Display for TypeFromOidError {
 
 impl Error for TypeFromOidError {}
 
-/// An error that can occur when converting a [`Type`] to a [`ScalarType`].
+/// An error that can occur when converting a [`Type`] to a [`SqlScalarType`].
 #[derive(Debug, Clone)]
 pub enum TypeConversionError {
-    /// The source type is unsupported as a `ScalarType`.
+    /// The source type is unsupported as a `SqlScalarType`.
     UnsupportedType(Type),
     /// The source type contained an invalid max scale for a
-    /// [`ScalarType::Numeric`].
+    /// [`SqlScalarType::Numeric`].
     InvalidNumericMaxScale(InvalidNumericMaxScaleError),
     /// The source type contained an invalid constraint for a
-    /// [`ScalarType::Numeric`].
+    /// [`SqlScalarType::Numeric`].
     InvalidNumericConstraint(String),
     /// The source type contained an invalid length for a
-    /// [`ScalarType::Char`].
+    /// [`SqlScalarType::Char`].
     InvalidCharLength(InvalidCharLengthError),
     /// The source type contained an invalid max length for a
-    /// [`ScalarType::VarChar`].
+    /// [`SqlScalarType::VarChar`].
     InvalidVarCharMaxLength(InvalidVarCharMaxLengthError),
     /// The source type contained an invalid precision for a
-    /// [`ScalarType::Timestamp`] or [`ScalarType::TimestampTz`].
+    /// [`SqlScalarType::Timestamp`] or [`SqlScalarType::TimestampTz`].
     InvalidTimestampPrecision(InvalidTimestampPrecisionError),
 }
 
@@ -1206,55 +1206,55 @@ impl From<InvalidTimestampPrecisionError> for TypeConversionError {
     }
 }
 
-impl From<&ScalarType> for Type {
-    fn from(typ: &ScalarType) -> Type {
+impl From<&SqlScalarType> for Type {
+    fn from(typ: &SqlScalarType) -> Type {
         match typ {
-            ScalarType::AclItem => Type::AclItem,
-            ScalarType::Array(t) => Type::Array(Box::new(From::from(&**t))),
-            ScalarType::Bool => Type::Bool,
-            ScalarType::Bytes => Type::Bytea,
-            ScalarType::PgLegacyChar => Type::Char,
-            ScalarType::Date => Type::Date,
-            ScalarType::Float64 => Type::Float8,
-            ScalarType::Float32 => Type::Float4,
-            ScalarType::Int16 => Type::Int2,
-            ScalarType::Int32 => Type::Int4,
-            ScalarType::Int64 => Type::Int8,
-            ScalarType::UInt16 => Type::UInt2,
-            ScalarType::UInt32 => Type::UInt4,
-            ScalarType::UInt64 => Type::UInt8,
-            ScalarType::Interval => Type::Interval { constraints: None },
-            ScalarType::Jsonb => Type::Jsonb,
-            ScalarType::List { element_type, .. } => {
+            SqlScalarType::AclItem => Type::AclItem,
+            SqlScalarType::Array(t) => Type::Array(Box::new(From::from(&**t))),
+            SqlScalarType::Bool => Type::Bool,
+            SqlScalarType::Bytes => Type::Bytea,
+            SqlScalarType::PgLegacyChar => Type::Char,
+            SqlScalarType::Date => Type::Date,
+            SqlScalarType::Float64 => Type::Float8,
+            SqlScalarType::Float32 => Type::Float4,
+            SqlScalarType::Int16 => Type::Int2,
+            SqlScalarType::Int32 => Type::Int4,
+            SqlScalarType::Int64 => Type::Int8,
+            SqlScalarType::UInt16 => Type::UInt2,
+            SqlScalarType::UInt32 => Type::UInt4,
+            SqlScalarType::UInt64 => Type::UInt8,
+            SqlScalarType::Interval => Type::Interval { constraints: None },
+            SqlScalarType::Jsonb => Type::Jsonb,
+            SqlScalarType::List { element_type, .. } => {
                 Type::List(Box::new(From::from(&**element_type)))
             }
-            ScalarType::Map { value_type, .. } => Type::Map {
+            SqlScalarType::Map { value_type, .. } => Type::Map {
                 value_type: Box::new(From::from(&**value_type)),
             },
-            ScalarType::PgLegacyName => Type::Name,
-            ScalarType::Oid => Type::Oid,
-            ScalarType::Record { fields, .. } => Type::Record(
+            SqlScalarType::PgLegacyName => Type::Name,
+            SqlScalarType::Oid => Type::Oid,
+            SqlScalarType::Record { fields, .. } => Type::Record(
                 fields
                     .iter()
                     .map(|(_name, ty)| Type::from(&ty.scalar_type))
                     .collect(),
             ),
-            ScalarType::String => Type::Text,
-            ScalarType::Char { length } => Type::BpChar {
+            SqlScalarType::String => Type::Text,
+            SqlScalarType::Char { length } => Type::BpChar {
                 length: (*length).map(CharLength::from),
             },
-            ScalarType::VarChar { max_length } => Type::VarChar {
+            SqlScalarType::VarChar { max_length } => Type::VarChar {
                 max_length: (*max_length).map(CharLength::from),
             },
-            ScalarType::Time => Type::Time { precision: None },
-            ScalarType::Timestamp { precision } => Type::Timestamp {
+            SqlScalarType::Time => Type::Time { precision: None },
+            SqlScalarType::Timestamp { precision } => Type::Timestamp {
                 precision: (*precision).map(TimestampPrecision::from),
             },
-            ScalarType::TimestampTz { precision } => Type::TimestampTz {
+            SqlScalarType::TimestampTz { precision } => Type::TimestampTz {
                 precision: (*precision).map(TimestampPrecision::from),
             },
-            ScalarType::Uuid => Type::Uuid,
-            ScalarType::Numeric { max_scale } => Type::Numeric {
+            SqlScalarType::Uuid => Type::Uuid,
+            SqlScalarType::Numeric { max_scale } => Type::Numeric {
                 constraints: Some(NumericConstraints {
                     max_precision: i32::from(NUMERIC_DATUM_MAX_PRECISION),
                     max_scale: match max_scale {
@@ -1263,15 +1263,15 @@ impl From<&ScalarType> for Type {
                     },
                 }),
             },
-            ScalarType::RegClass => Type::RegClass,
-            ScalarType::RegProc => Type::RegProc,
-            ScalarType::RegType => Type::RegType,
-            ScalarType::Int2Vector => Type::Int2Vector,
-            ScalarType::MzTimestamp => Type::MzTimestamp,
-            ScalarType::Range { element_type } => Type::Range {
+            SqlScalarType::RegClass => Type::RegClass,
+            SqlScalarType::RegProc => Type::RegProc,
+            SqlScalarType::RegType => Type::RegType,
+            SqlScalarType::Int2Vector => Type::Int2Vector,
+            SqlScalarType::MzTimestamp => Type::MzTimestamp,
+            SqlScalarType::Range { element_type } => Type::Range {
                 element_type: Box::new(From::from(&**element_type)),
             },
-            ScalarType::MzAclItem => Type::MzAclItem,
+            SqlScalarType::MzAclItem => Type::MzAclItem,
         }
     }
 }

@@ -17,7 +17,7 @@ use std::{fmt, str};
 
 use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::adt::regex::any_regex;
-use mz_repr::{ColumnType, Datum, DatumType, RowArena, ScalarType};
+use mz_repr::{Datum, DatumType, RowArena, SqlColumnType, SqlScalarType};
 use proptest::prelude::*;
 use proptest::strategy::*;
 
@@ -34,8 +34,8 @@ pub trait LazyUnaryFunc {
         a: &'a MirScalarExpr,
     ) -> Result<Datum<'a>, EvalError>;
 
-    /// The output ColumnType of this function.
-    fn output_type(&self, input_type: ColumnType) -> ColumnType;
+    /// The output SqlColumnType of this function.
+    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType;
 
     /// Whether this function will produce NULL on NULL input.
     fn propagates_nulls(&self) -> bool;
@@ -108,8 +108,8 @@ pub trait EagerUnaryFunc<'a> {
 
     fn call(&self, input: Self::Input) -> Self::Output;
 
-    /// The output ColumnType of this function
-    fn output_type(&self, input_type: ColumnType) -> ColumnType;
+    /// The output SqlColumnType of this function
+    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType;
 
     /// Whether this function will produce NULL on NULL input
     fn propagates_nulls(&self) -> bool {
@@ -161,7 +161,7 @@ impl<T: for<'a> EagerUnaryFunc<'a>> LazyUnaryFunc for T {
         }
     }
 
-    fn output_type(&self, input_type: ColumnType) -> ColumnType {
+    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
         self.output_type(input_type)
     }
 
@@ -706,7 +706,7 @@ impl Arbitrary for UnaryFunc {
             CastStringToFloat32::arbitrary().prop_map_into().boxed(),
             CastStringToFloat64::arbitrary().prop_map_into().boxed(),
             CastStringToDate::arbitrary().prop_map_into().boxed(),
-            (any::<ScalarType>(), any::<MirScalarExpr>())
+            (any::<SqlScalarType>(), any::<MirScalarExpr>())
                 .prop_map(|(return_ty, expr)| {
                     UnaryFunc::CastStringToArray(CastStringToArray {
                         return_ty,
@@ -714,7 +714,7 @@ impl Arbitrary for UnaryFunc {
                     })
                 })
                 .boxed(),
-            (any::<ScalarType>(), any::<MirScalarExpr>())
+            (any::<SqlScalarType>(), any::<MirScalarExpr>())
                 .prop_map(|(return_ty, expr)| {
                     UnaryFunc::CastStringToList(CastStringToList {
                         return_ty,
@@ -722,7 +722,7 @@ impl Arbitrary for UnaryFunc {
                     })
                 })
                 .boxed(),
-            (any::<ScalarType>(), any::<MirScalarExpr>())
+            (any::<SqlScalarType>(), any::<MirScalarExpr>())
                 .prop_map(|(return_ty, expr)| {
                     UnaryFunc::CastStringToMap(CastStringToMap {
                         return_ty,
@@ -730,7 +730,7 @@ impl Arbitrary for UnaryFunc {
                     })
                 })
                 .boxed(),
-            (any::<ScalarType>(), any::<MirScalarExpr>())
+            (any::<SqlScalarType>(), any::<MirScalarExpr>())
                 .prop_map(|(return_ty, expr)| {
                     UnaryFunc::CastStringToRange(CastStringToRange {
                         return_ty,
@@ -790,7 +790,7 @@ impl Arbitrary for UnaryFunc {
             CastUuidToString::arbitrary().prop_map_into().boxed(),
             CastRecordToString::arbitrary().prop_map_into().boxed(),
             (
-                any::<ScalarType>(),
+                any::<SqlScalarType>(),
                 proptest::collection::vec(any::<MirScalarExpr>(), 1..5),
             )
                 .prop_map(|(return_ty, cast_exprs)| {
@@ -804,7 +804,7 @@ impl Arbitrary for UnaryFunc {
             CastArrayToString::arbitrary().prop_map_into().boxed(),
             CastListToString::arbitrary().prop_map_into().boxed(),
             CastListToJsonb::arbitrary().prop_map_into().boxed(),
-            (any::<ScalarType>(), any::<MirScalarExpr>())
+            (any::<SqlScalarType>(), any::<MirScalarExpr>())
                 .prop_map(|(return_ty, expr)| {
                     UnaryFunc::CastList1ToList2(CastList1ToList2 {
                         return_ty,
@@ -875,7 +875,7 @@ impl Arbitrary for UnaryFunc {
             TrimTrailingWhitespace::arbitrary().prop_map_into().boxed(),
             RecordGet::arbitrary().prop_map_into().boxed(),
             ListLength::arbitrary().prop_map_into().boxed(),
-            (any::<ScalarType>())
+            (any::<SqlScalarType>())
                 .prop_map(|value_type| {
                     UnaryFunc::MapBuildFromRecordList(MapBuildFromRecordList { value_type })
                 })
@@ -1001,7 +1001,7 @@ mod test {
         }
 
         let interesting_i32s: Vec<Datum<'static>> =
-            ScalarType::Int32.interesting_datums().collect();
+            SqlScalarType::Int32.interesting_datums().collect();
         let i32_datums = proptest::strategy::Union::new([
             any::<i32>().prop_map(PropDatum::Int32).boxed(),
             (0..interesting_i32s.len())

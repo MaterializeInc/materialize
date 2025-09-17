@@ -29,7 +29,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::iter::IteratorExt;
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::vec::swap_remove_multiple;
-use mz_repr::{Diff, GlobalId, RelationType, Row};
+use mz_repr::{Diff, GlobalId, Row, SqlRelationType};
 
 use crate::TransformCtx;
 use crate::canonicalize_mfp::CanonicalizeMfp;
@@ -89,7 +89,7 @@ impl LiteralConstraints {
                 mfp: &mut MapFilterProject,
                 orig_mfp: &MapFilterProject,
                 relation: &MirRelationExpr,
-                relation_type: RelationType,
+                relation_type: SqlRelationType,
             ) {
                 // undo list_of_predicates_to_and_of_predicates, distribute_and_over_or, unary_and
                 // (It undoes the latter 2 through `MirScalarExp::reduce`.)
@@ -150,7 +150,7 @@ impl LiteralConstraints {
                             .iter()
                             .map(|val| (val.clone(), Diff::ONE))
                             .collect()),
-                        typ: mz_repr::RelationType {
+                        typ: mz_repr::SqlRelationType {
                             column_types: key
                                 .iter()
                                 .map(|e| {
@@ -620,7 +620,7 @@ impl LiteralConstraints {
     fn canonicalize_predicates(
         mfp: &mut MapFilterProject,
         relation: &MirRelationExpr,
-        relation_type: RelationType,
+        relation_type: SqlRelationType,
     ) {
         let (map, mut predicates, project) = mfp.as_map_filter_project();
         let typ_after_map = relation

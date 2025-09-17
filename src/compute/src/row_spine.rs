@@ -292,7 +292,7 @@ mod container {
         use differential_dataflow::trace::implementations::BatchContainer;
         use mz_repr::adt::date::Date;
         use mz_repr::adt::interval::Interval;
-        use mz_repr::{Datum, Row, ScalarType};
+        use mz_repr::{Datum, Row, SqlScalarType};
 
         #[mz_ore::test]
         #[cfg_attr(miri, ignore)] // unsupported operation: integer-to-pointer casts and `ptr::with_exposed_provenance` are not supported
@@ -313,7 +313,7 @@ mod container {
 
             round_trip(vec![]);
             round_trip(
-                ScalarType::enumerate()
+                SqlScalarType::enumerate()
                     .iter()
                     .flat_map(|r#type| r#type.interesting_datums())
                     .collect(),

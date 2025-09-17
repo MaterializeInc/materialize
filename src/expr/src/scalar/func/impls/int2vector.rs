@@ -10,7 +10,7 @@
 use std::fmt;
 
 use mz_lowertest::MzReflect;
-use mz_repr::{ColumnType, Datum, RowArena, ScalarType};
+use mz_repr::{Datum, RowArena, SqlColumnType, SqlScalarType};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -34,9 +34,9 @@ impl LazyUnaryFunc for CastInt2VectorToArray {
         a.eval(datums, temp_storage)
     }
 
-    /// The output ColumnType of this function
-    fn output_type(&self, input_type: ColumnType) -> ColumnType {
-        ScalarType::Array(Box::from(ScalarType::Int16)).nullable(input_type.nullable)
+    /// The output SqlColumnType of this function
+    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
+        SqlScalarType::Array(Box::from(SqlScalarType::Int16)).nullable(input_type.nullable)
     }
 
     /// Whether this function will produce NULL on NULL input
@@ -86,12 +86,12 @@ impl LazyUnaryFunc for CastInt2VectorToString {
             return Ok(Datum::Null);
         }
         let mut buf = String::new();
-        stringify_datum(&mut buf, a, &ScalarType::Int2Vector)?;
+        stringify_datum(&mut buf, a, &SqlScalarType::Int2Vector)?;
         Ok(Datum::String(temp_storage.push_string(buf)))
     }
 
-    fn output_type(&self, input_type: ColumnType) -> ColumnType {
-        ScalarType::String.nullable(input_type.nullable)
+    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
+        SqlScalarType::String.nullable(input_type.nullable)
     }
 
     fn propagates_nulls(&self) -> bool {

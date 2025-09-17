@@ -18,7 +18,7 @@ use mz_expr::visit::Visit;
 use mz_expr::{
     AggregateExpr, ColumnOrder, EvalError, MirRelationExpr, MirScalarExpr, TableFunc, UnaryFunc,
 };
-use mz_repr::{Datum, Diff, RelationType, Row, RowArena};
+use mz_repr::{Datum, Diff, Row, RowArena, SqlRelationType};
 
 use crate::{TransformCtx, TransformError, any};
 
@@ -72,7 +72,7 @@ impl FoldConstants {
     pub fn action(
         &self,
         relation: &mut MirRelationExpr,
-        relation_type: &mut RelationType,
+        relation_type: &mut SqlRelationType,
     ) -> Result<(), TransformError> {
         match relation {
             MirRelationExpr::Constant { .. } => { /* handled after match */ }

@@ -29,7 +29,7 @@ use mz_repr::adt::range::{InvalidRangeError, Range, RangeBound, parse_range_boun
 use mz_repr::adt::system::Oid;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::role_id::RoleId;
-use mz_repr::{ColumnName, ColumnType, Datum, Row, RowArena, ScalarType};
+use mz_repr::{ColumnName, Datum, Row, RowArena, SqlColumnType, SqlScalarType};
 use proptest::prelude::*;
 use proptest::strategy::Union;
 use serde::{Deserialize, Serialize};
@@ -276,7 +276,7 @@ fn array_position<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
 
 fn array_to_string<'a>(
     datums: &[Datum<'a>],
-    elem_type: &ScalarType,
+    elem_type: &SqlScalarType,
     temp_storage: &'a RowArena,
 ) -> Result<Datum<'a>, EvalError> {
     if datums[0].is_null() || datums[1].is_null() {
@@ -1081,14 +1081,14 @@ pub enum VariadicFunc {
     JsonbBuildArray,
     JsonbBuildObject,
     MapBuild {
-        value_type: ScalarType,
+        value_type: SqlScalarType,
     },
     ArrayCreate {
         // We need to know the element type to type empty arrays.
-        elem_type: ScalarType,
+        elem_type: SqlScalarType,
     },
     ArrayToString {
-        elem_type: ScalarType,
+        elem_type: SqlScalarType,
     },
     ArrayIndex {
         // Adjusts the index by offset depending on whether being called on an array or an
@@ -1097,7 +1097,7 @@ pub enum VariadicFunc {
     },
     ListCreate {
         // We need to know the element type to type empty lists.
-        elem_type: ScalarType,
+        elem_type: SqlScalarType,
     },
     RecordCreate {
         field_names: Vec<ColumnName>,
@@ -1118,14 +1118,14 @@ pub enum VariadicFunc {
     And,
     Or,
     RangeCreate {
-        elem_type: ScalarType,
+        elem_type: SqlScalarType,
     },
     MakeAclItem,
     MakeMzAclItem,
     Translate,
     ArrayPosition,
     ArrayFill {
-        elem_type: ScalarType,
+        elem_type: SqlScalarType,
     },
     StringToArray,
     TimezoneTime,
@@ -1180,7 +1180,7 @@ impl VariadicFunc {
             VariadicFunc::JsonbBuildObject => jsonb_build_object(&ds, temp_storage),
             VariadicFunc::MapBuild { .. } => Ok(map_build(&ds, temp_storage)),
             VariadicFunc::ArrayCreate {
-                elem_type: ScalarType::Array(_),
+                elem_type: SqlScalarType::Array(_),
             } => array_create_multidim(&ds, temp_storage),
             VariadicFunc::ArrayCreate { .. } => array_create_scalar(&ds, temp_storage),
             VariadicFunc::ArrayToString { elem_type } => {
@@ -1290,7 +1290,7 @@ impl VariadicFunc {
         }
     }
 
-    pub fn output_type(&self, input_types: Vec<ColumnType>) -> ColumnType {
+    pub fn output_type(&self, input_types: Vec<SqlColumnType>) -> SqlColumnType {
         use VariadicFunc::*;
         let in_nullable = input_types.iter().any(|t| t.nullable);
         match self {
@@ -1309,14 +1309,14 @@ impl VariadicFunc {
                     .unwrap()
                     .nullable(nullable)
             }
-            Concat | ConcatWs => ScalarType::String.nullable(in_nullable),
-            MakeTimestamp => ScalarType::Timestamp { precision: None }.nullable(true),
-            PadLeading => ScalarType::String.nullable(in_nullable),
-            Substr => ScalarType::String.nullable(in_nullable),
-            Replace => ScalarType::String.nullable(in_nullable),
-            Translate => ScalarType::String.nullable(in_nullable),
-            JsonbBuildArray | JsonbBuildObject => ScalarType::Jsonb.nullable(true),
-            MapBuild { value_type } => ScalarType::Map {
+            Concat | ConcatWs => SqlScalarType::String.nullable(in_nullable),
+            MakeTimestamp => SqlScalarType::Timestamp { precision: None }.nullable(true),
+            PadLeading => SqlScalarType::String.nullable(in_nullable),
+            Substr => SqlScalarType::String.nullable(in_nullable),
+            Replace => SqlScalarType::String.nullable(in_nullable),
+            Translate => SqlScalarType::String.nullable(in_nullable),
+            JsonbBuildArray | JsonbBuildObject => SqlScalarType::Jsonb.nullable(true),
+            MapBuild { value_type } => SqlScalarType::Map {
                 value_type: Box::new(value_type.clone()),
                 custom_id: None,
             }
@@ -1327,11 +1327,11 @@ impl VariadicFunc {
                     "Args to ArrayCreate should have types that are compatible with the elem_type"
                 );
                 match elem_type {
-                    ScalarType::Array(_) => elem_type.clone().nullable(false),
-                    _ => ScalarType::Array(Box::new(elem_type.clone())).nullable(false),
+                    SqlScalarType::Array(_) => elem_type.clone().nullable(false),
+                    _ => SqlScalarType::Array(Box::new(elem_type.clone())).nullable(false),
                 }
             }
-            ArrayToString { .. } => ScalarType::String.nullable(in_nullable),
+            ArrayToString { .. } => SqlScalarType::String.nullable(in_nullable),
             ArrayIndex { .. } => input_types[0]
                 .scalar_type
                 .unwrap_array_element_type()
@@ -1344,7 +1344,7 @@ impl VariadicFunc {
                 //     input_types.iter().all(|t| t.scalar_type.base_eq(elem_type)),
                 //     "{}", format!("Args to ListCreate should have types that are compatible with the elem_type.\nArgs:{:#?}\nelem_type:{:#?}", input_types, elem_type)
                 // );
-                ScalarType::List {
+                SqlScalarType::List {
                     element_type: Box::new(elem_type.clone()),
                     custom_id: None,
                 }
@@ -1356,7 +1356,7 @@ impl VariadicFunc {
                 .clone()
                 .nullable(true),
             ListSliceLinear { .. } => input_types[0].scalar_type.clone().nullable(in_nullable),
-            RecordCreate { field_names } => ScalarType::Record {
+            RecordCreate { field_names } => SqlScalarType::Record {
                 fields: field_names
                     .clone()
                     .into_iter()
@@ -1365,33 +1365,35 @@ impl VariadicFunc {
                 custom_id: None,
             }
             .nullable(false),
-            SplitPart => ScalarType::String.nullable(in_nullable),
-            RegexpMatch => ScalarType::Array(Box::new(ScalarType::String)).nullable(true),
-            HmacString | HmacBytes => ScalarType::Bytes.nullable(in_nullable),
+            SplitPart => SqlScalarType::String.nullable(in_nullable),
+            RegexpMatch => SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(true),
+            HmacString | HmacBytes => SqlScalarType::Bytes.nullable(in_nullable),
             ErrorIfNull => input_types[0].scalar_type.clone().nullable(false),
-            DateBinTimestamp => ScalarType::Timestamp { precision: None }.nullable(in_nullable),
-            DateBinTimestampTz => ScalarType::TimestampTz { precision: None }.nullable(in_nullable),
-            DateDiffTimestamp => ScalarType::Int64.nullable(in_nullable),
-            DateDiffTimestampTz => ScalarType::Int64.nullable(in_nullable),
-            DateDiffDate => ScalarType::Int64.nullable(in_nullable),
-            DateDiffTime => ScalarType::Int64.nullable(in_nullable),
-            And | Or => ScalarType::Bool.nullable(in_nullable),
-            RangeCreate { elem_type } => ScalarType::Range {
+            DateBinTimestamp => SqlScalarType::Timestamp { precision: None }.nullable(in_nullable),
+            DateBinTimestampTz => {
+                SqlScalarType::TimestampTz { precision: None }.nullable(in_nullable)
+            }
+            DateDiffTimestamp => SqlScalarType::Int64.nullable(in_nullable),
+            DateDiffTimestampTz => SqlScalarType::Int64.nullable(in_nullable),
+            DateDiffDate => SqlScalarType::Int64.nullable(in_nullable),
+            DateDiffTime => SqlScalarType::Int64.nullable(in_nullable),
+            And | Or => SqlScalarType::Bool.nullable(in_nullable),
+            RangeCreate { elem_type } => SqlScalarType::Range {
                 element_type: Box::new(elem_type.clone()),
             }
             .nullable(false),
-            MakeAclItem => ScalarType::AclItem.nullable(true),
-            MakeMzAclItem => ScalarType::MzAclItem.nullable(true),
-            ArrayPosition => ScalarType::Int32.nullable(true),
+            MakeAclItem => SqlScalarType::AclItem.nullable(true),
+            MakeMzAclItem => SqlScalarType::MzAclItem.nullable(true),
+            ArrayPosition => SqlScalarType::Int32.nullable(true),
             ArrayFill { elem_type } => {
-                ScalarType::Array(Box::new(elem_type.clone())).nullable(false)
+                SqlScalarType::Array(Box::new(elem_type.clone())).nullable(false)
             }
-            TimezoneTime => ScalarType::Time.nullable(in_nullable),
+            TimezoneTime => SqlScalarType::Time.nullable(in_nullable),
             RegexpSplitToArray => {
-                ScalarType::Array(Box::new(ScalarType::String)).nullable(in_nullable)
+                SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(in_nullable)
             }
-            RegexpReplace => ScalarType::String.nullable(in_nullable),
-            StringToArray => ScalarType::Array(Box::new(ScalarType::String)).nullable(true),
+            RegexpReplace => SqlScalarType::String.nullable(in_nullable),
+            StringToArray => SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(true),
         }
     }
 
@@ -1625,12 +1627,12 @@ impl std::fmt::Display for VariadicFunc {
             VariadicFunc::RangeCreate {
                 elem_type: element_type,
             } => f.write_str(match element_type {
-                ScalarType::Int32 => "int4range",
-                ScalarType::Int64 => "int8range",
-                ScalarType::Date => "daterange",
-                ScalarType::Numeric { .. } => "numrange",
-                ScalarType::Timestamp { .. } => "tsrange",
-                ScalarType::TimestampTz { .. } => "tstzrange",
+                SqlScalarType::Int32 => "int4range",
+                SqlScalarType::Int64 => "int8range",
+                SqlScalarType::Date => "daterange",
+                SqlScalarType::Numeric { .. } => "numrange",
+                SqlScalarType::Timestamp { .. } => "tsrange",
+                SqlScalarType::TimestampTz { .. } => "tstzrange",
                 _ => unreachable!(),
             }),
             VariadicFunc::MakeAclItem => f.write_str("makeaclitem"),
@@ -1669,21 +1671,21 @@ impl Arbitrary for VariadicFunc {
             Just(VariadicFunc::Replace).boxed(),
             Just(VariadicFunc::JsonbBuildArray).boxed(),
             Just(VariadicFunc::JsonbBuildObject).boxed(),
-            ScalarType::arbitrary()
+            SqlScalarType::arbitrary()
                 .prop_map(|value_type| VariadicFunc::MapBuild { value_type })
                 .boxed(),
             Just(VariadicFunc::MakeAclItem).boxed(),
             Just(VariadicFunc::MakeMzAclItem).boxed(),
-            ScalarType::arbitrary()
+            SqlScalarType::arbitrary()
                 .prop_map(|elem_type| VariadicFunc::ArrayCreate { elem_type })
                 .boxed(),
-            ScalarType::arbitrary()
+            SqlScalarType::arbitrary()
                 .prop_map(|elem_type| VariadicFunc::ArrayToString { elem_type })
                 .boxed(),
             i64::arbitrary()
                 .prop_map(|offset| VariadicFunc::ArrayIndex { offset })
                 .boxed(),
-            ScalarType::arbitrary()
+            SqlScalarType::arbitrary()
                 .prop_map(|elem_type| VariadicFunc::ListCreate { elem_type })
                 .boxed(),
             Vec::<ColumnName>::arbitrary()
@@ -1708,7 +1710,7 @@ impl Arbitrary for VariadicFunc {
                 .prop_map(|elem_type| VariadicFunc::RangeCreate { elem_type })
                 .boxed(),
             Just(VariadicFunc::ArrayPosition).boxed(),
-            ScalarType::arbitrary()
+            SqlScalarType::arbitrary()
                 .prop_map(|elem_type| VariadicFunc::ArrayFill { elem_type })
                 .boxed(),
         ])

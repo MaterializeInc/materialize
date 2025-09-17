@@ -23,42 +23,45 @@ use std::time::Instant;
 use mz_controller_types::ReplicaId;
 use serde::{Deserialize, Serialize};
 
-use mz_repr::{GlobalId, RelationDesc, Row, ScalarType};
+use mz_repr::{GlobalId, RelationDesc, Row, SqlScalarType};
 
 pub static MZ_SOURCE_STATISTICS_RAW_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
     RelationDesc::builder()
         // Id of the source (or subsource).
-        .with_column("id", ScalarType::String.nullable(false))
+        .with_column("id", SqlScalarType::String.nullable(false))
         // Id of the replica producing these statistics.
-        .with_column("replica_id", ScalarType::String.nullable(true))
+        .with_column("replica_id", SqlScalarType::String.nullable(true))
         //
         // Counters
         //
         // A counter of the messages we have read from upstream for this source.
         // Never resets.
-        .with_column("messages_received", ScalarType::UInt64.nullable(false))
+        .with_column("messages_received", SqlScalarType::UInt64.nullable(false))
         // A counter of the bytes we have read from upstream for this source.
         // Never resets.
-        .with_column("bytes_received", ScalarType::UInt64.nullable(false))
+        .with_column("bytes_received", SqlScalarType::UInt64.nullable(false))
         // A counter of the updates we have staged to commit for this source.
         // Never resets.
-        .with_column("updates_staged", ScalarType::UInt64.nullable(false))
+        .with_column("updates_staged", SqlScalarType::UInt64.nullable(false))
         // A counter of the updates we have committed for this source.
         // Never resets.
-        .with_column("updates_committed", ScalarType::UInt64.nullable(false))
+        .with_column("updates_committed", SqlScalarType::UInt64.nullable(false))
         //
         // Resetting gauges
         //
         // A gauge of the number of records in the envelope state. 0 for sources
         // Resetted when the source is restarted, for any reason.
-        .with_column("records_indexed", ScalarType::UInt64.nullable(false))
+        .with_column("records_indexed", SqlScalarType::UInt64.nullable(false))
         // A gauge of the number of bytes in the envelope state. 0 for sources
         // Resetted when the source is restarted, for any reason.
-        .with_column("bytes_indexed", ScalarType::UInt64.nullable(false))
+        .with_column("bytes_indexed", SqlScalarType::UInt64.nullable(false))
         // A gauge that shows the duration of rehydration. `NULL` before rehydration
         // is done.
         // Resetted when the source is restarted, for any reason.
-        .with_column("rehydration_latency", ScalarType::Interval.nullable(true))
+        .with_column(
+            "rehydration_latency",
+            SqlScalarType::Interval.nullable(true),
+        )
         // A gauge of the number of _values_ (source defined unit) the _snapshot_ of this source
         // contains.
         // Sometimes resetted when the source can snapshot new pieces of upstream (like Postgres and
@@ -66,19 +69,25 @@ pub static MZ_SOURCE_STATISTICS_RAW_DESC: LazyLock<RelationDesc> = LazyLock::new
         // (like pg and mysql) may repopulate this column when tables are added.
         //
         // `NULL` while we discover the snapshot size.
-        .with_column("snapshot_records_known", ScalarType::UInt64.nullable(true))
+        .with_column(
+            "snapshot_records_known",
+            SqlScalarType::UInt64.nullable(true),
+        )
         // A gauge of the number of _values_ (source defined unit) we have read of the _snapshot_
         // of this source.
         // Sometimes resetted when the source can snapshot new pieces of upstream (like Postgres and
         // MySql).
         //
         // `NULL` while we discover the snapshot size.
-        .with_column("snapshot_records_staged", ScalarType::UInt64.nullable(true))
+        .with_column(
+            "snapshot_records_staged",
+            SqlScalarType::UInt64.nullable(true),
+        )
         //
         // Non-resetting gauges
         //
         // Whether or not the snapshot for the source has been committed. Never resets.
-        .with_column("snapshot_committed", ScalarType::Bool.nullable(false))
+        .with_column("snapshot_committed", SqlScalarType::Bool.nullable(false))
         // The following are not yet reported by sources and have 0 or `NULL` values.
         // They have been added here to reduce churn changing the schema of this collection.
         //
@@ -87,34 +96,34 @@ pub static MZ_SOURCE_STATISTICS_RAW_DESC: LazyLock<RelationDesc> = LazyLock::new
         //
         // A gauge of the number of _values_ (source defined unit) available to be read from upstream.
         // Never resets. Not to be confused with any of the counters above.
-        .with_column("offset_known", ScalarType::UInt64.nullable(true))
+        .with_column("offset_known", SqlScalarType::UInt64.nullable(true))
         // A gauge of the number of _values_ (source defined unit) we have committed.
         // Never resets. Not to be confused with any of the counters above.
-        .with_column("offset_committed", ScalarType::UInt64.nullable(true))
+        .with_column("offset_committed", SqlScalarType::UInt64.nullable(true))
         .finish()
 });
 
 pub static MZ_SINK_STATISTICS_RAW_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
     RelationDesc::builder()
         // Id of the sink.
-        .with_column("id", ScalarType::String.nullable(false))
+        .with_column("id", SqlScalarType::String.nullable(false))
         // Id of the replica producing these statistics.
-        .with_column("replica_id", ScalarType::String.nullable(true))
+        .with_column("replica_id", SqlScalarType::String.nullable(true))
         //
         // Counters
         //
         // A counter of the messages we have staged to upstream.
         // Never resets.
-        .with_column("messages_staged", ScalarType::UInt64.nullable(false))
+        .with_column("messages_staged", SqlScalarType::UInt64.nullable(false))
         // A counter of the messages we have committed.
         // Never resets.
-        .with_column("messages_committed", ScalarType::UInt64.nullable(false))
+        .with_column("messages_committed", SqlScalarType::UInt64.nullable(false))
         // A counter of the bytes we have staged to upstream.
         // Never resets.
-        .with_column("bytes_staged", ScalarType::UInt64.nullable(false))
+        .with_column("bytes_staged", SqlScalarType::UInt64.nullable(false))
         // A counter of the bytes we have committed.
         // Never resets.
-        .with_column("bytes_committed", ScalarType::UInt64.nullable(false))
+        .with_column("bytes_committed", SqlScalarType::UInt64.nullable(false))
         .finish()
 });
 

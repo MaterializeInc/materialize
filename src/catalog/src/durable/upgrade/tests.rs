@@ -13,7 +13,7 @@ use std::io::Write;
 
 use base64::Engine;
 use mz_persist_types::Codec;
-use mz_repr::{RelationDesc, ScalarType};
+use mz_repr::{RelationDesc, SqlScalarType};
 use mz_storage_types::sources::SourceData;
 
 use crate::durable::objects::state_update::StateUpdateKindJson;
@@ -67,7 +67,7 @@ fn test_proto_serialization_stability() {
     }
 
     let relation_desc = RelationDesc::builder()
-        .with_column("a", ScalarType::Jsonb.nullable(false))
+        .with_column("a", SqlScalarType::Jsonb.nullable(false))
         .finish();
     for snapshot_file in snapshot_files {
         let encoded_bytes = fs::read(format!("{}/{}.txt", SNAPSHOT_DIRECTORY, snapshot_file))

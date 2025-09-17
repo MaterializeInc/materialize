@@ -11,7 +11,7 @@ use std::fmt;
 
 use itertools::Itertools;
 use mz_lowertest::MzReflect;
-use mz_repr::{ColumnType, Datum, RowArena, ScalarType};
+use mz_repr::{Datum, RowArena, SqlColumnType, SqlScalarType};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -22,7 +22,7 @@ use crate::{EvalError, MirScalarExpr};
     Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
 )]
 pub struct CastMapToString {
-    pub ty: ScalarType,
+    pub ty: SqlScalarType,
 }
 
 impl LazyUnaryFunc for CastMapToString {
@@ -41,8 +41,8 @@ impl LazyUnaryFunc for CastMapToString {
         Ok(Datum::String(temp_storage.push_string(buf)))
     }
 
-    fn output_type(&self, input_type: ColumnType) -> ColumnType {
-        ScalarType::String.nullable(input_type.nullable)
+    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
+        SqlScalarType::String.nullable(input_type.nullable)
     }
 
     fn propagates_nulls(&self) -> bool {
@@ -96,8 +96,8 @@ impl LazyUnaryFunc for MapLength {
         }
     }
 
-    fn output_type(&self, input_type: ColumnType) -> ColumnType {
-        ScalarType::Int32.nullable(input_type.nullable)
+    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
+        SqlScalarType::Int32.nullable(input_type.nullable)
     }
 
     fn propagates_nulls(&self) -> bool {
@@ -129,7 +129,7 @@ impl fmt::Display for MapLength {
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct MapBuildFromRecordList {
-    pub value_type: ScalarType,
+    pub value_type: SqlScalarType,
 }
 
 impl LazyUnaryFunc for MapBuildFromRecordList {
@@ -163,8 +163,8 @@ impl LazyUnaryFunc for MapBuildFromRecordList {
         Ok(map)
     }
 
-    fn output_type(&self, _input_type: ColumnType) -> ColumnType {
-        ScalarType::Map {
+    fn output_type(&self, _input_type: SqlColumnType) -> SqlColumnType {
+        SqlScalarType::Map {
             value_type: Box::new(self.value_type.clone()),
             custom_id: None,
         }

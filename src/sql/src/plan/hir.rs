@@ -97,18 +97,18 @@ impl AlgExcept for Hir {
 pub enum HirRelationExpr {
     Constant {
         rows: Vec<Row>,
-        typ: RelationType,
+        typ: SqlRelationType,
     },
     Get {
         id: mz_expr::Id,
-        typ: RelationType,
+        typ: SqlRelationType,
     },
     /// Mutually recursive CTE
     LetRec {
         /// Maximum number of iterations to evaluate. If None, then there is no limit.
         limit: Option<LetRecLimit>,
         /// List of bindings all of which are in scope of each other.
-        bindings: Vec<(String, mz_expr::LocalId, HirRelationExpr, RelationType)>,
+        bindings: Vec<(String, mz_expr::LocalId, HirRelationExpr, SqlRelationType)>,
         /// Result of the AST node.
         body: Box<HirRelationExpr>,
     },
@@ -167,7 +167,7 @@ pub enum HirRelationExpr {
         /// Column indices used to order rows within groups.
         order_key: Vec<ColumnOrder>,
         /// Number of records to retain.
-        /// It is of ScalarType::Int64.
+        /// It is of SqlScalarType::Int64.
         /// (UInt64 would make sense in theory: Then we wouldn't need to manually check
         /// non-negativity, but would just get this for free when casting to UInt64. However, Int64
         /// is better for Postgres compat. This is because if there is a $1 here, then when external
@@ -176,7 +176,7 @@ pub enum HirRelationExpr {
         /// unsigned types are non-standard, and also don't exist even in Postgres.)
         limit: Option<HirScalarExpr>,
         /// Number of records to skip.
-        /// It is of ScalarType::Int64.
+        /// It is of SqlScalarType::Int64.
         /// This can contain parameters at first, but by the time we reach lowering, this should
         /// already be simply a Literal.
         offset: HirScalarExpr,
@@ -207,7 +207,7 @@ pub enum HirScalarExpr {
     /// We use ColumnRef to denote the difference.
     Column(ColumnRef, NameMetadata),
     Parameter(usize, NameMetadata),
-    Literal(Row, ColumnType, NameMetadata),
+    Literal(Row, SqlColumnType, NameMetadata),
     CallUnmaterializable(UnmaterializableFunc, NameMetadata),
     CallUnary {
         func: UnaryFunc,
@@ -402,10 +402,10 @@ impl WindowExprType {
 
     fn typ(
         &self,
-        outers: &[RelationType],
-        inner: &RelationType,
-        params: &BTreeMap<usize, ScalarType>,
-    ) -> ColumnType {
+        outers: &[SqlRelationType],
+        inner: &SqlRelationType,
+        params: &BTreeMap<usize, SqlScalarType>,
+    ) -> SqlColumnType {
         match self {
             Self::Scalar(expr) => expr.typ(outers, inner, params),
             Self::Value(expr) => expr.typ(outers, inner, params),
@@ -497,10 +497,10 @@ impl ScalarWindowExpr {
 
     fn typ(
         &self,
-        _outers: &[RelationType],
-        _inner: &RelationType,
-        _params: &BTreeMap<usize, ScalarType>,
-    ) -> ColumnType {
+        _outers: &[SqlRelationType],
+        _inner: &SqlRelationType,
+        _params: &BTreeMap<usize, SqlScalarType>,
+    ) -> SqlColumnType {
         self.func.output_type()
     }
 
@@ -538,11 +538,11 @@ impl Display for ScalarWindowFunc {
 }
 
 impl ScalarWindowFunc {
-    pub fn output_type(&self) -> ColumnType {
+    pub fn output_type(&self) -> SqlColumnType {
         match self {
-            ScalarWindowFunc::RowNumber => ScalarType::Int64.nullable(false),
-            ScalarWindowFunc::Rank => ScalarType::Int64.nullable(false),
-            ScalarWindowFunc::DenseRank => ScalarType::Int64.nullable(false),
+            ScalarWindowFunc::RowNumber => SqlScalarType::Int64.nullable(false),
+            ScalarWindowFunc::Rank => SqlScalarType::Int64.nullable(false),
+            ScalarWindowFunc::DenseRank => SqlScalarType::Int64.nullable(false),
         }
     }
 }
@@ -593,10 +593,10 @@ impl ValueWindowExpr {
 
     fn typ(
         &self,
-        outers: &[RelationType],
-        inner: &RelationType,
-        params: &BTreeMap<usize, ScalarType>,
-    ) -> ColumnType {
+        outers: &[SqlRelationType],
+        inner: &SqlRelationType,
+        params: &BTreeMap<usize, SqlScalarType>,
+    ) -> SqlColumnType {
         self.func.output_type(self.args.typ(outers, inner, params))
     }
 
@@ -653,7 +653,7 @@ pub enum ValueWindowFunc {
 }
 
 impl ValueWindowFunc {
-    pub fn output_type(&self, input_type: ColumnType) -> ColumnType {
+    pub fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
         match self {
             ValueWindowFunc::Lag | ValueWindowFunc::Lead => {
                 // The input is a (value, offset, default) record, so extract the type of the first arg
@@ -666,7 +666,7 @@ impl ValueWindowFunc {
             }
             ValueWindowFunc::Fused(funcs) => {
                 let input_types = input_type.scalar_type.unwrap_record_element_column_type();
-                ScalarType::Record {
+                SqlScalarType::Record {
                     fields: funcs
                         .iter()
                         .zip_eq(input_types)
@@ -744,10 +744,10 @@ impl AggregateWindowExpr {
 
     fn typ(
         &self,
-        outers: &[RelationType],
-        inner: &RelationType,
-        params: &BTreeMap<usize, ScalarType>,
-    ) -> ColumnType {
+        outers: &[SqlRelationType],
+        inner: &SqlRelationType,
+        params: &BTreeMap<usize, SqlScalarType>,
+    ) -> SqlColumnType {
         self.aggregate_expr
             .func
             .output_type(self.aggregate_expr.expr.typ(outers, inner, params))
@@ -842,7 +842,11 @@ pub enum CoercibleScalarExpr {
 }
 
 impl CoercibleScalarExpr {
-    pub fn type_as(self, ecx: &ExprContext, ty: &ScalarType) -> Result<HirScalarExpr, PlanError> {
+    pub fn type_as(
+        self,
+        ecx: &ExprContext,
+        ty: &SqlScalarType,
+    ) -> Result<HirScalarExpr, PlanError> {
         let expr = typeconv::plan_coerce(ecx, self, ty)?;
         let expr_ty = ecx.scalar_type(&expr);
         if ty != &expr_ty {
@@ -857,14 +861,14 @@ impl CoercibleScalarExpr {
     }
 
     pub fn type_as_any(self, ecx: &ExprContext) -> Result<HirScalarExpr, PlanError> {
-        typeconv::plan_coerce(ecx, self, &ScalarType::String)
+        typeconv::plan_coerce(ecx, self, &SqlScalarType::String)
     }
 
     pub fn cast_to(
         self,
         ecx: &ExprContext,
         ccx: CastContext,
-        ty: &ScalarType,
+        ty: &SqlScalarType,
     ) -> Result<HirScalarExpr, PlanError> {
         let expr = typeconv::plan_coerce(ecx, self, ty)?;
         typeconv::plan_cast(ecx, ccx, expr, ty)
@@ -874,7 +878,7 @@ impl CoercibleScalarExpr {
 /// The column type for a [`CoercibleScalarExpr`].
 #[derive(Clone, Debug)]
 pub enum CoercibleColumnType {
-    Coerced(ColumnType),
+    Coerced(SqlColumnType),
     Record(Vec<CoercibleColumnType>),
     Uncoerced,
 }
@@ -899,7 +903,7 @@ impl CoercibleColumnType {
 /// The scalar type for a [`CoercibleScalarExpr`].
 #[derive(Clone, Debug)]
 pub enum CoercibleScalarType {
-    Coerced(ScalarType),
+    Coerced(SqlScalarType),
     Record(Vec<CoercibleColumnType>),
     Uncoerced,
 }
@@ -911,7 +915,7 @@ impl CoercibleScalarType {
     }
 
     /// Returns the coerced scalar type, if the type is coerced.
-    pub fn as_coerced(&self) -> Option<&ScalarType> {
+    pub fn as_coerced(&self) -> Option<&SqlScalarType> {
         match self {
             CoercibleScalarType::Coerced(t) => Some(t),
             _ => None,
@@ -922,7 +926,7 @@ impl CoercibleScalarType {
     /// scalar type.
     pub fn map_coerced<F>(self, f: F) -> CoercibleScalarType
     where
-        F: FnOnce(ScalarType) -> ScalarType,
+        F: FnOnce(SqlScalarType) -> SqlScalarType,
     {
         match self {
             CoercibleScalarType::Coerced(t) => CoercibleScalarType::Coerced(f(t)),
@@ -937,7 +941,7 @@ impl CoercibleScalarType {
     /// accepts a type hint that can indicate the types of uncoerced field
     /// types.
     pub fn force_coerced_if_record(&mut self) {
-        fn convert(uncoerced_fields: impl Iterator<Item = CoercibleColumnType>) -> ScalarType {
+        fn convert(uncoerced_fields: impl Iterator<Item = CoercibleColumnType>) -> SqlScalarType {
             let mut fields = vec![];
             for (i, uf) in uncoerced_fields.enumerate() {
                 let name = ColumnName::from(format!("f{}", i + 1));
@@ -946,11 +950,11 @@ impl CoercibleScalarType {
                     CoercibleColumnType::Record(mut fields) => {
                         convert(fields.drain(..)).nullable(false)
                     }
-                    CoercibleColumnType::Uncoerced => ScalarType::String.nullable(true),
+                    CoercibleColumnType::Uncoerced => SqlScalarType::String.nullable(true),
                 };
                 fields.push((name, ty))
             }
-            ScalarType::Record {
+            SqlScalarType::Record {
                 fields: fields.into(),
                 custom_id: None,
             }
@@ -971,9 +975,9 @@ pub trait AbstractExpr {
     /// Computes the type of the expression.
     fn typ(
         &self,
-        outers: &[RelationType],
-        inner: &RelationType,
-        params: &BTreeMap<usize, ScalarType>,
+        outers: &[SqlRelationType],
+        inner: &SqlRelationType,
+        params: &BTreeMap<usize, SqlScalarType>,
     ) -> Self::Type;
 }
 
@@ -982,9 +986,9 @@ impl AbstractExpr for CoercibleScalarExpr {
 
     fn typ(
         &self,
-        outers: &[RelationType],
-        inner: &RelationType,
-        params: &BTreeMap<usize, ScalarType>,
+        outers: &[SqlRelationType],
+        inner: &SqlRelationType,
+        params: &BTreeMap<usize, SqlScalarType>,
     ) -> Self::Type {
         match self {
             CoercibleScalarExpr::Coerced(expr) => {
@@ -1005,7 +1009,7 @@ impl AbstractExpr for CoercibleScalarExpr {
 /// A column type-like object whose underlying scalar type-like object can be
 /// ascertained.
 ///
-/// Abstracts over `ColumnType` and `CoercibleColumnType`.
+/// Abstracts over `SqlColumnType` and `CoercibleColumnType`.
 pub trait AbstractColumnType {
     type AbstractScalarType;
 
@@ -1014,8 +1018,8 @@ pub trait AbstractColumnType {
     fn scalar_type(self) -> Self::AbstractScalarType;
 }
 
-impl AbstractColumnType for ColumnType {
-    type AbstractScalarType = ScalarType;
+impl AbstractColumnType for SqlColumnType {
+    type AbstractScalarType = SqlScalarType;
 
     fn scalar_type(self) -> Self::AbstractScalarType {
         self.scalar_type
@@ -1175,7 +1179,7 @@ pub enum AggregateFunc {
     /// elements are columns used by `order_by`.
     MapAgg {
         order_by: Vec<ColumnOrder>,
-        value_type: ScalarType,
+        value_type: SqlScalarType,
     },
     /// Accumulates `Datum::List`s whose first element is a `Datum::Array` into a
     /// single `Datum::Array`. The other elements are columns used by `order_by`.
@@ -1363,30 +1367,30 @@ impl AggregateFunc {
     /// The output column type also contains nullability information, which
     /// is (without further information) true for aggregations that are not
     /// counts.
-    pub fn output_type(&self, input_type: ColumnType) -> ColumnType {
+    pub fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
         let scalar_type = match self {
-            AggregateFunc::Count => ScalarType::Int64,
-            AggregateFunc::Any => ScalarType::Bool,
-            AggregateFunc::All => ScalarType::Bool,
-            AggregateFunc::JsonbAgg { .. } => ScalarType::Jsonb,
-            AggregateFunc::JsonbObjectAgg { .. } => ScalarType::Jsonb,
-            AggregateFunc::StringAgg { .. } => ScalarType::String,
-            AggregateFunc::SumInt16 | AggregateFunc::SumInt32 => ScalarType::Int64,
-            AggregateFunc::SumInt64 => ScalarType::Numeric {
+            AggregateFunc::Count => SqlScalarType::Int64,
+            AggregateFunc::Any => SqlScalarType::Bool,
+            AggregateFunc::All => SqlScalarType::Bool,
+            AggregateFunc::JsonbAgg { .. } => SqlScalarType::Jsonb,
+            AggregateFunc::JsonbObjectAgg { .. } => SqlScalarType::Jsonb,
+            AggregateFunc::StringAgg { .. } => SqlScalarType::String,
+            AggregateFunc::SumInt16 | AggregateFunc::SumInt32 => SqlScalarType::Int64,
+            AggregateFunc::SumInt64 => SqlScalarType::Numeric {
                 max_scale: Some(NumericMaxScale::ZERO),
             },
-            AggregateFunc::SumUInt16 | AggregateFunc::SumUInt32 => ScalarType::UInt64,
-            AggregateFunc::SumUInt64 => ScalarType::Numeric {
+            AggregateFunc::SumUInt16 | AggregateFunc::SumUInt32 => SqlScalarType::UInt64,
+            AggregateFunc::SumUInt64 => SqlScalarType::Numeric {
                 max_scale: Some(NumericMaxScale::ZERO),
             },
-            AggregateFunc::MapAgg { value_type, .. } => ScalarType::Map {
+            AggregateFunc::MapAgg { value_type, .. } => SqlScalarType::Map {
                 value_type: Box::new(value_type.clone()),
                 custom_id: None,
             },
             AggregateFunc::ArrayConcat { .. } | AggregateFunc::ListConcat { .. } => {
                 match input_type.scalar_type {
                     // The input is wrapped in a Record if there's an ORDER BY, so extract it out.
-                    ScalarType::Record { fields, .. } => fields[0].1.scalar_type.clone(),
+                    SqlScalarType::Record { fields, .. } => fields[0].1.scalar_type.clone(),
                     _ => unreachable!(),
                 }
             }
@@ -1430,7 +1434,7 @@ impl AggregateFunc {
             | AggregateFunc::Dummy => input_type.scalar_type,
             AggregateFunc::FusedWindowAgg { funcs } => {
                 let input_types = input_type.scalar_type.unwrap_record_element_column_type();
-                ScalarType::Record {
+                SqlScalarType::Record {
                     fields: funcs
                         .iter()
                         .zip_eq(input_types)
@@ -1462,9 +1466,9 @@ impl AggregateFunc {
 impl HirRelationExpr {
     pub fn typ(
         &self,
-        outers: &[RelationType],
-        params: &BTreeMap<usize, ScalarType>,
-    ) -> RelationType {
+        outers: &[SqlRelationType],
+        params: &BTreeMap<usize, SqlScalarType>,
+    ) -> SqlRelationType {
         stack::maybe_grow(|| match self {
             HirRelationExpr::Constant { typ, .. } => typ.clone(),
             HirRelationExpr::Get { typ, .. } => typ.clone(),
@@ -1472,7 +1476,7 @@ impl HirRelationExpr {
             HirRelationExpr::LetRec { body, .. } => body.typ(outers, params),
             HirRelationExpr::Project { input, outputs } => {
                 let input_typ = input.typ(outers, params);
-                RelationType::new(
+                SqlRelationType::new(
                     outputs
                         .iter()
                         .map(|&i| input_typ.column_types[i].clone())
@@ -1501,7 +1505,7 @@ impl HirRelationExpr {
                     t.nullable(nullable)
                 });
                 let mut outers = outers.to_vec();
-                outers.insert(0, RelationType::new(lt.clone().collect()));
+                outers.insert(0, SqlRelationType::new(lt.clone().collect()));
                 let rt = right
                     .typ(&outers, params)
                     .column_types
@@ -1510,7 +1514,7 @@ impl HirRelationExpr {
                         let nullable = t.nullable || right_nullable;
                         t.nullable(nullable)
                     });
-                RelationType::new(lt.chain(rt).collect())
+                SqlRelationType::new(lt.chain(rt).collect())
             }
             HirRelationExpr::Reduce {
                 input,
@@ -1527,7 +1531,7 @@ impl HirRelationExpr {
                     column_types.push(agg.typ(outers, &input_typ, params));
                 }
                 // TODO(frank): add primary key information.
-                RelationType::new(column_types)
+                SqlRelationType::new(column_types)
             }
             // TODO(frank): check for removal; add primary key information.
             HirRelationExpr::Distinct { input }
@@ -1543,7 +1547,7 @@ impl HirRelationExpr {
                         *base_col = base_col.union(&col).unwrap();
                     }
                 }
-                RelationType::new(base_cols)
+                SqlRelationType::new(base_cols)
             }
         })
     }
@@ -1573,7 +1577,7 @@ impl HirRelationExpr {
     }
 
     /// If self is a constant, return the value and the type, otherwise `None`.
-    pub fn as_const(&self) -> Option<(&Vec<Row>, &RelationType)> {
+    pub fn as_const(&self) -> Option<(&Vec<Row>, &SqlRelationType)> {
         match self {
             Self::Constant { rows, typ } => Some((rows, typ)),
             _ => None,
@@ -1775,7 +1779,7 @@ impl HirRelationExpr {
     pub fn take(&mut self) -> HirRelationExpr {
         mem::replace(
             self,
-            HirRelationExpr::constant(vec![], RelationType::new(Vec::new())),
+            HirRelationExpr::constant(vec![], SqlRelationType::new(Vec::new())),
         )
     }
 
@@ -2137,7 +2141,7 @@ impl HirRelationExpr {
     }
 
     /// Constructs a constant collection from specific rows and schema.
-    pub fn constant(rows: Vec<Vec<Datum>>, typ: RelationType) -> Self {
+    pub fn constant(rows: Vec<Vec<Datum>>, typ: SqlRelationType) -> Self {
         let rows = rows
             .into_iter()
             .map(move |datums| Row::pack_slice(&datums))
@@ -2165,7 +2169,7 @@ impl HirRelationExpr {
                     self,
                     HirRelationExpr::Constant {
                         rows: vec![],
-                        typ: RelationType::new(Vec::new()),
+                        typ: SqlRelationType::new(Vec::new()),
                     },
                 ),
                 vec![],
@@ -2188,7 +2192,7 @@ impl HirRelationExpr {
         RowSetFinishing {
             order_by: Vec::new(),
             limit: None,
-            offset: HirScalarExpr::literal(Datum::Int64(0), ScalarType::Int64),
+            offset: HirScalarExpr::literal(Datum::Int64(0), SqlScalarType::Int64),
             project: (0..arity).collect(),
         }
     }
@@ -3085,34 +3089,34 @@ impl HirScalarExpr {
         HirScalarExpr::Parameter(n, TreatAsEqual(None))
     }
 
-    pub fn literal(datum: Datum, scalar_type: ScalarType) -> HirScalarExpr {
+    pub fn literal(datum: Datum, scalar_type: SqlScalarType) -> HirScalarExpr {
         let col_type = scalar_type.nullable(datum.is_null());
-        soft_assert_or_log!(datum.is_instance_of(&col_type), "type is correct");
+        soft_assert_or_log!(datum.is_instance_of_sql(&col_type), "type is correct");
         let row = Row::pack([datum]);
         HirScalarExpr::Literal(row, col_type, TreatAsEqual(None))
     }
 
     pub fn literal_true() -> HirScalarExpr {
-        HirScalarExpr::literal(Datum::True, ScalarType::Bool)
+        HirScalarExpr::literal(Datum::True, SqlScalarType::Bool)
     }
 
     pub fn literal_false() -> HirScalarExpr {
-        HirScalarExpr::literal(Datum::False, ScalarType::Bool)
+        HirScalarExpr::literal(Datum::False, SqlScalarType::Bool)
     }
 
-    pub fn literal_null(scalar_type: ScalarType) -> HirScalarExpr {
+    pub fn literal_null(scalar_type: SqlScalarType) -> HirScalarExpr {
         HirScalarExpr::literal(Datum::Null, scalar_type)
     }
 
     pub fn literal_1d_array(
         datums: Vec<Datum>,
-        element_scalar_type: ScalarType,
+        element_scalar_type: SqlScalarType,
     ) -> Result<HirScalarExpr, PlanError> {
         let scalar_type = match element_scalar_type {
-            ScalarType::Array(_) => {
+            SqlScalarType::Array(_) => {
                 sql_bail!("cannot build array from array type");
             }
-            typ => ScalarType::Array(Box::new(typ)).nullable(false),
+            typ => SqlScalarType::Array(Box::new(typ)).nullable(false),
         };
 
         let mut row = Row::default();
@@ -3273,7 +3277,7 @@ impl HirScalarExpr {
     }
 
     pub fn take(&mut self) -> Self {
-        mem::replace(self, HirScalarExpr::literal_null(ScalarType::String))
+        mem::replace(self, HirScalarExpr::literal_null(SqlScalarType::String))
     }
 
     #[deprecated = "Redefine this based on the `Visit` and `VisitChildren` methods."]
@@ -3496,7 +3500,7 @@ impl HirScalarExpr {
     ///
     /// # Panics
     ///
-    /// Panics if this expression does not have type [`ScalarType::Int64`].
+    /// Panics if this expression does not have type [`SqlScalarType::Int64`].
     pub fn into_literal_int64(self) -> Option<i64> {
         self.simplify_to_literal().and_then(|row| {
             let datum = row.unpack_first();
@@ -3515,7 +3519,7 @@ impl HirScalarExpr {
     ///
     /// # Panics
     ///
-    /// Panics if this expression does not have type [`ScalarType::String`].
+    /// Panics if this expression does not have type [`SqlScalarType::String`].
     pub fn into_literal_string(self) -> Option<String> {
         self.simplify_to_literal().and_then(|row| {
             let datum = row.unpack_first();
@@ -3537,7 +3541,7 @@ impl HirScalarExpr {
     ///
     /// # Panics
     ///
-    /// Panics if this expression does not have type [`ScalarType::MzTimestamp`].
+    /// Panics if this expression does not have type [`SqlScalarType::MzTimestamp`].
     pub fn into_literal_mz_timestamp(self) -> Option<Timestamp> {
         self.simplify_to_literal().and_then(|row| {
             let datum = row.unpack_first();
@@ -3549,7 +3553,7 @@ impl HirScalarExpr {
         })
     }
 
-    /// Attempts to simplify this expression of [`ScalarType::Int64`] to a literal Int64 and
+    /// Attempts to simplify this expression of [`SqlScalarType::Int64`] to a literal Int64 and
     /// returns it as an i64.
     ///
     /// Returns `PlanError::ConstantExpressionSimplificationFailed` if
@@ -3559,7 +3563,7 @@ impl HirScalarExpr {
     ///
     /// # Panics
     ///
-    /// Panics if this expression does not have type [`ScalarType::Int64`].
+    /// Panics if this expression does not have type [`SqlScalarType::Int64`].
     pub fn try_into_literal_int64(self) -> Result<i64, PlanError> {
         // TODO: add the `is_constant` check also to all the other into_literal_... (by adding it to
         // `simplify_to_literal`), but those should be just soft_asserts at first that it doesn't
@@ -3737,13 +3741,13 @@ impl VisitChildren<Self> for HirScalarExpr {
 }
 
 impl AbstractExpr for HirScalarExpr {
-    type Type = ColumnType;
+    type Type = SqlColumnType;
 
     fn typ(
         &self,
-        outers: &[RelationType],
-        inner: &RelationType,
-        params: &BTreeMap<usize, ScalarType>,
+        outers: &[SqlRelationType],
+        inner: &SqlRelationType,
+        params: &BTreeMap<usize, SqlScalarType>,
     ) -> Self::Type {
         stack::maybe_grow(|| match self {
             HirScalarExpr::Column(ColumnRef { level, column }, _name) => {
@@ -3785,7 +3789,7 @@ impl AbstractExpr for HirScalarExpr {
                 let else_type = els.typ(outers, inner, params);
                 then_type.union(&else_type).unwrap()
             }
-            HirScalarExpr::Exists(_, _name) => ScalarType::Bool.nullable(true),
+            HirScalarExpr::Exists(_, _name) => SqlScalarType::Bool.nullable(true),
             HirScalarExpr::Select(expr, _name) => {
                 let mut outers = outers.to_vec();
                 outers.insert(0, inner.clone());
@@ -3802,10 +3806,10 @@ impl AbstractExpr for HirScalarExpr {
 impl AggregateExpr {
     pub fn typ(
         &self,
-        outers: &[RelationType],
-        inner: &RelationType,
-        params: &BTreeMap<usize, ScalarType>,
-    ) -> ColumnType {
+        outers: &[SqlRelationType],
+        inner: &SqlRelationType,
+        params: &BTreeMap<usize, SqlScalarType>,
+    ) -> SqlColumnType {
         self.func.output_type(self.expr.typ(outers, inner, params))
     }
 
