@@ -34,8 +34,8 @@ SELECT mz_unsafe.mz_sleep(8)
 query IT
 SELECT id, global_id FROM mz_internal.mz_dataflow_global_ids ORDER BY id, global_id;
 ----
-4  u2
-4  u3
+5  u2
+5  u3
 
 query TI
 SELECT global_id, lir_id FROM mz_internal.mz_lir_mapping ORDER BY global_id, lir_id DESC;
@@ -119,17 +119,17 @@ SELECT mz_unsafe.mz_sleep(8)
 query IT
 SELECT id, global_id FROM mz_internal.mz_dataflow_global_ids ORDER BY id, global_id;
 ----
-9  t44
+10  t52
 
 
 query TI
 SELECT global_id, lir_id FROM mz_internal.mz_lir_mapping ORDER BY global_id, lir_id DESC;
 ----
-t44  5
-t44  4
-t44  3
-t44  2
-t44  1
+t52  5
+t52  4
+t52  3
+t52  2
+t52  1
 
 ## attribution queries
 
@@ -142,11 +142,11 @@ SELECT global_id, lir_id, parent_lir_id, REPEAT(' ', nesting * 2) || operator AS
 GROUP BY global_id, lir_id, operator, parent_lir_id, nesting
 ORDER BY global_id, lir_id DESC;
 ----
-t44  5  NULL  Differential␠Join␠%0␠»␠%1
-t44  4  5  ␠␠Arrange␠(#0{y})
-t44  3  4  ␠␠␠␠Read␠u4
-t44  2  5  ␠␠Arrange␠(#0{x})
-t44  1  2  ␠␠␠␠Read␠u4
+t52  5  NULL  Differential␠Join␠%0␠»␠%1
+t52  4  5  ␠␠Arrange␠(#0{y})
+t52  3  4  ␠␠␠␠Read␠u4
+t52  2  5  ␠␠Arrange␠(#0{x})
+t52  1  2  ␠␠␠␠Read␠u4
 
 # omitting pg_size_pretty(sum(size)) as size
 query TIIT
@@ -157,11 +157,11 @@ SELECT global_id, lir_id, parent_lir_id, REPEAT(' ', nesting * 2) || operator AS
 GROUP BY global_id, lir_id, operator, parent_lir_id, nesting
 ORDER BY global_id, lir_id DESC;
 ----
-t44  5  NULL  Differential␠Join␠%0␠»␠%1
-t44  4  5  ␠␠Arrange␠(#0{y})
-t44  3  4  ␠␠␠␠Read␠u4
-t44  2  5  ␠␠Arrange␠(#0{x})
-t44  1  2  ␠␠␠␠Read␠u4
+t52  5  NULL  Differential␠Join␠%0␠»␠%1
+t52  4  5  ␠␠Arrange␠(#0{y})
+t52  3  4  ␠␠␠␠Read␠u4
+t52  2  5  ␠␠Arrange␠(#0{x})
+t52  1  2  ␠␠␠␠Read␠u4
 
 statement ok
 DROP TABLE u CASCADE;
@@ -417,26 +417,26 @@ SELECT global_id, REPEAT(' ', nesting * 2) || operator AS operator
 FROM mz_internal.mz_lir_mapping mlm
 ORDER BY global_id, lir_id DESC;
 ----
-t69  Returning␠Distinct␠GroupAggregate
-t69  ␠␠Union
-t69  ␠␠␠␠Differential␠Join␠%0␠»␠%1
-t69  ␠␠␠␠␠␠Arrange␠(#0{messageid})
-t69  ␠␠␠␠␠␠␠␠Stream␠l0
-t69  ␠␠␠␠␠␠Arranged␠u15
-t69  ␠␠␠␠Arranged␠u13
-t69  With␠Recursive␠l0␠=␠Unarranged␠Raw␠Stream
-t69  ␠␠Distinct␠GroupAggregate
-t69  ␠␠␠␠Union
-t69  ␠␠␠␠␠␠Differential␠Join␠%0␠»␠%1
-t69  ␠␠␠␠␠␠␠␠Arrange␠(#0{messageid})
-t69  ␠␠␠␠␠␠␠␠␠␠Read␠l0
-t69  ␠␠␠␠␠␠␠␠Arrange␠(#1{parentcommentid})
-t69  ␠␠␠␠␠␠␠␠␠␠Arranged␠u15
-t69  ␠␠␠␠␠␠Differential␠Join␠%1␠»␠%0
-t69  ␠␠␠␠␠␠␠␠Arranged␠u13
-t69  ␠␠␠␠␠␠␠␠Arrange␠(#1{parentpostid})
-t69  ␠␠␠␠␠␠␠␠␠␠Arranged␠u15
-t69  ␠␠␠␠␠␠Arranged␠u13
+t77  Returning␠Distinct␠GroupAggregate
+t77  ␠␠Union
+t77  ␠␠␠␠Differential␠Join␠%0␠»␠%1
+t77  ␠␠␠␠␠␠Arrange␠(#0{messageid})
+t77  ␠␠␠␠␠␠␠␠Stream␠l0
+t77  ␠␠␠␠␠␠Arranged␠u15
+t77  ␠␠␠␠Arranged␠u13
+t77  With␠Recursive␠l0␠=␠Unarranged␠Raw␠Stream
+t77  ␠␠Distinct␠GroupAggregate
+t77  ␠␠␠␠Union
+t77  ␠␠␠␠␠␠Differential␠Join␠%0␠»␠%1
+t77  ␠␠␠␠␠␠␠␠Arrange␠(#0{messageid})
+t77  ␠␠␠␠␠␠␠␠␠␠Read␠l0
+t77  ␠␠␠␠␠␠␠␠Arrange␠(#1{parentcommentid})
+t77  ␠␠␠␠␠␠␠␠␠␠Arranged␠u15
+t77  ␠␠␠␠␠␠Differential␠Join␠%1␠»␠%0
+t77  ␠␠␠␠␠␠␠␠Arranged␠u13
+t77  ␠␠␠␠␠␠␠␠Arrange␠(#1{parentpostid})
+t77  ␠␠␠␠␠␠␠␠␠␠Arranged␠u15
+t77  ␠␠␠␠␠␠Arranged␠u13
 u10  Arrange␠(#1{person1id})
 u10  ␠␠Stream␠u9
 u11  Arrange␠(#2{person2id})
@@ -592,7 +592,7 @@ materialize.public.v2_idx_x  u26  2
 materialize.public.v2_idx_x  u27  2
 materialize.public.v_idx_x  u28  5
 materialize.public.v_idx_x  u29  2
-materialize.public.w  t82  5
+materialize.public.w  t90  5
 
 # explain analyze SQL generate
 
@@ -622,14 +622,10 @@ WITH
                 AS avg_records
         FROM
             mz_introspection.mz_lir_mapping AS mlm
+                 CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
                 JOIN
                     mz_introspection.mz_arrangement_sizes_per_worker AS mas
-                    ON
-                        (
-                            mlm.operator_id_start <= mas.operator_id
-                                AND
-                            mas.operator_id < mlm.operator_id_end
-                        )
+                    ON (mas.operator_id = valid_id)
         GROUP BY mlm.global_id, mlm.lir_id
     )
 SELECT
@@ -666,14 +662,10 @@ WITH
                 AS avg_ns
         FROM
             mz_introspection.mz_lir_mapping AS mlm
+                 CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
                 JOIN
                     mz_introspection.mz_scheduling_elapsed_per_worker AS mse
-                    ON
-                        (
-                            mlm.operator_id_start <= mse.id
-                                AND
-                            mse.id < mlm.operator_id_end
-                        )
+                    ON (mse.id = valid_id)
         GROUP BY mlm.global_id, mlm.lir_id
     )
 SELECT
@@ -715,14 +707,10 @@ WITH
                 AS avg_records
         FROM
             mz_introspection.mz_lir_mapping AS mlm
+                 CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
                 JOIN
                     mz_introspection.mz_arrangement_sizes_per_worker AS mas
-                    ON
-                        (
-                            mlm.operator_id_start <= mas.operator_id
-                                AND
-                            mas.operator_id < mlm.operator_id_end
-                        )
+                    ON (mas.operator_id = valid_id)
         GROUP BY mlm.global_id, mlm.lir_id
     ),
     summary_cpu AS
@@ -741,14 +729,10 @@ WITH
                 AS avg_ns
         FROM
             mz_introspection.mz_lir_mapping AS mlm
+                 CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
                 JOIN
                     mz_introspection.mz_scheduling_elapsed_per_worker AS mse
-                    ON
-                        (
-                            mlm.operator_id_start <= mse.id
-                                AND
-                            mse.id < mlm.operator_id_end
-                        )
+                    ON (mse.id = valid_id)
         GROUP BY mlm.global_id, mlm.lir_id
     )
 SELECT
@@ -793,14 +777,10 @@ WITH
                 AS avg_records
         FROM
             mz_introspection.mz_lir_mapping AS mlm
+                 CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
                 JOIN
                     mz_introspection.mz_arrangement_sizes_per_worker AS mas
-                    ON
-                        (
-                            mlm.operator_id_start <= mas.operator_id
-                                AND
-                            mas.operator_id < mlm.operator_id_end
-                        )
+                    ON (mas.operator_id = valid_id)
         GROUP BY mlm.global_id, mlm.lir_id
     ),
     per_worker_memory AS
@@ -813,14 +793,10 @@ WITH
             sum(mas.records) AS worker_records
         FROM
             mz_introspection.mz_lir_mapping AS mlm
+                 CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
                 JOIN
                     mz_introspection.mz_arrangement_sizes_per_worker AS mas
-                    ON
-                        (
-                            mlm.operator_id_start <= mas.operator_id
-                                AND
-                            mas.operator_id < mlm.operator_id_end
-                        )
+                    ON (mas.operator_id = valid_id)
         GROUP BY mlm.global_id, mlm.lir_id, mas.worker_id
     ),
     summary_cpu AS
@@ -839,14 +815,10 @@ WITH
                 AS avg_ns
         FROM
             mz_introspection.mz_lir_mapping AS mlm
+                 CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
                 JOIN
                     mz_introspection.mz_scheduling_elapsed_per_worker AS mse
-                    ON
-                        (
-                            mlm.operator_id_start <= mse.id
-                                AND
-                            mse.id < mlm.operator_id_end
-                        )
+                    ON (mse.id = valid_id)
         GROUP BY mlm.global_id, mlm.lir_id
     ),
     per_worker_cpu AS
@@ -858,14 +830,10 @@ WITH
             sum(mse.elapsed_ns) AS worker_ns
         FROM
             mz_introspection.mz_lir_mapping AS mlm
+                 CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
                 JOIN
                     mz_introspection.mz_scheduling_elapsed_per_worker AS mse
-                    ON
-                        (
-                            mlm.operator_id_start <= mse.id
-                                AND
-                            mse.id < mlm.operator_id_end
-                        )
+                    ON (mse.id = valid_id)
         GROUP BY mlm.global_id, mlm.lir_id, mse.worker_id
     )
 SELECT
@@ -931,14 +899,10 @@ WITH
                 AS avg_ns
         FROM
             mz_introspection.mz_lir_mapping AS mlm
+                 CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
                 JOIN
                     mz_introspection.mz_scheduling_elapsed_per_worker AS mse
-                    ON
-                        (
-                            mlm.operator_id_start <= mse.id
-                                AND
-                            mse.id < mlm.operator_id_end
-                        )
+                    ON (mse.id = valid_id)
         GROUP BY mlm.global_id, mlm.lir_id
     ),
     per_worker_cpu AS
@@ -950,14 +914,10 @@ WITH
             sum(mse.elapsed_ns) AS worker_ns
         FROM
             mz_introspection.mz_lir_mapping AS mlm
+                 CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
                 JOIN
                     mz_introspection.mz_scheduling_elapsed_per_worker AS mse
-                    ON
-                        (
-                            mlm.operator_id_start <= mse.id
-                                AND
-                            mse.id < mlm.operator_id_end
-                        )
+                    ON (mse.id = valid_id)
         GROUP BY mlm.global_id, mlm.lir_id, mse.worker_id
     ),
     summary_memory AS
@@ -982,14 +942,10 @@ WITH
                 AS avg_records
         FROM
             mz_introspection.mz_lir_mapping AS mlm
+                 CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
                 JOIN
                     mz_introspection.mz_arrangement_sizes_per_worker AS mas
-                    ON
-                        (
-                            mlm.operator_id_start <= mas.operator_id
-                                AND
-                            mas.operator_id < mlm.operator_id_end
-                        )
+                    ON (mas.operator_id = valid_id)
         GROUP BY mlm.global_id, mlm.lir_id
     ),
     per_worker_memory AS
@@ -1002,14 +958,10 @@ WITH
             sum(mas.records) AS worker_records
         FROM
             mz_introspection.mz_lir_mapping AS mlm
+                 CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
                 JOIN
                     mz_introspection.mz_arrangement_sizes_per_worker AS mas
-                    ON
-                        (
-                            mlm.operator_id_start <= mas.operator_id
-                                AND
-                            mas.operator_id < mlm.operator_id_end
-                        )
+                    ON (mas.operator_id = valid_id)
         GROUP BY mlm.global_id, mlm.lir_id, mas.worker_id
     )
 SELECT
@@ -1072,22 +1024,20 @@ SELECT
     megsa.levels AS levels,
     megsa.to_cut AS to_cut,
     megsa.hint AS hint,
-    pg_size_pretty(savings) AS savings
+    pg_size_pretty(megsa.savings) AS savings
 FROM
     mz_introspection.mz_lir_mapping AS mlm
         JOIN
             mz_introspection.mz_dataflow_global_ids AS mdgi
             ON (mlm.global_id = mdgi.global_id)
         LEFT JOIN
-            mz_introspection.mz_expected_group_size_advice AS megsa
-            ON
-                (
-                    megsa.dataflow_id = mdgi.id
-                        AND
-                    mlm.operator_id_start <= megsa.region_id
-                        AND
-                    megsa.region_id < mlm.operator_id_end
-                )
+            (
+                generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
+                    JOIN
+                        mz_introspection.mz_expected_group_size_advice AS megsa
+                        ON (megsa.region_id = valid_id)
+            )
+            ON (megsa.dataflow_id = mdgi.id)
         JOIN
             mz_introspection.mz_mappable_objects AS mo
             ON (mlm.global_id = mo.global_id)
@@ -1115,14 +1065,10 @@ WITH
                 AS avg_ns
         FROM
             mz_introspection.mz_lir_mapping AS mlm
+                 CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
                 JOIN
                     mz_introspection.mz_scheduling_elapsed_per_worker AS mse
-                    ON
-                        (
-                            mlm.operator_id_start <= mse.id
-                                AND
-                            mse.id < mlm.operator_id_end
-                        )
+                    ON (mse.id = valid_id)
         GROUP BY mlm.global_id, mlm.lir_id
     ),
     per_worker_cpu AS
@@ -1134,14 +1080,10 @@ WITH
             sum(mse.elapsed_ns) AS worker_ns
         FROM
             mz_introspection.mz_lir_mapping AS mlm
+                 CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
                 JOIN
                     mz_introspection.mz_scheduling_elapsed_per_worker AS mse
-                    ON
-                        (
-                            mlm.operator_id_start <= mse.id
-                                AND
-                            mse.id < mlm.operator_id_end
-                        )
+                    ON (mse.id = valid_id)
         GROUP BY mlm.global_id, mlm.lir_id, mse.worker_id
     ),
     summary_memory AS
@@ -1166,14 +1108,10 @@ WITH
                 AS avg_records
         FROM
             mz_introspection.mz_lir_mapping AS mlm
+                 CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
                 JOIN
                     mz_introspection.mz_arrangement_sizes_per_worker AS mas
-                    ON
-                        (
-                            mlm.operator_id_start <= mas.operator_id
-                                AND
-                            mas.operator_id < mlm.operator_id_end
-                        )
+                    ON (mas.operator_id = valid_id)
         GROUP BY mlm.global_id, mlm.lir_id
     ),
     per_worker_memory AS
@@ -1186,14 +1124,10 @@ WITH
             sum(mas.records) AS worker_records
         FROM
             mz_introspection.mz_lir_mapping AS mlm
+                 CROSS JOIN generate_series((mlm.operator_id_start)::int8, (mlm.operator_id_end - 1)::int8) AS valid_id
                 JOIN
                     mz_introspection.mz_arrangement_sizes_per_worker AS mas
-                    ON
-                        (
-                            mlm.operator_id_start <= mas.operator_id
-                                AND
-                            mas.operator_id < mlm.operator_id_end
-                        )
+                    ON (mas.operator_id = valid_id)
         GROUP BY mlm.global_id, mlm.lir_id, mas.worker_id
     )
 SELECT
