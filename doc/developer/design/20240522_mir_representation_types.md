@@ -38,8 +38,8 @@ We know these implicit coercions interfere with joins; they may also interfere w
 
 ## Success Criteria
 
-1. Plan joins without implicit coercions between equivalent representation types getting in the way.
-2. It should be possible for us to elide noop casts at the MIR level.
+1. Plan joins and fast-path index lookups without implicit coercions between equivalent representation types getting in the way.
+2. It should be possible for us to elide noop casts (and possibly others!) at the MIR level.
 3. The catalog should reflect SQL-level types.
 4. There is clear guidance for customers regarding the different character sequence types.
 5. Notices help customers avoid pitfalls with character sequence types.
@@ -47,6 +47,8 @@ We know these implicit coercions interfere with joins; they may also interfere w
 ## Out of Scope
 
 We will not rethink other components of MIR types, like nullability or unique keys.
+
+We will not simplify our representation of numbers or reconsider numeric types.
 
 In general, we may want a "smart index selector", which can appropriately handle mixed-type lookups, i.e., it should let us look up an `i32` in an `i64`-sized index without needing to build a separate `i32`-sized arrangement. Such an approach generalizes `eq-indx` (see ["Alternatives"](#alternatives)).
 
@@ -132,12 +134,12 @@ In `EXPLAIN PLAN`s, we will report `ReprScalarType`s with `r`-prefixed names, wh
 
 These first two steps are in [#33321](https://github.com/MaterializeInc/materialize/pull/33321).
 
-  - Adapt `MirScalarExpr`, `MirRelationExpr`, `PlanNode`, and `Expr` to use `ReprColumnType`.
+  - Adapt `MirScalarExpr`, `MirRelationExpr`, `PlanNode`, and LIR `Expr` to use `ReprColumnType`.
     + `TableFunc` uses `ScalarType`. We can split into `Sql` and `Repr` versions, or have it take the type as a parameter.
     + `AggregateFunc` is already split; the `expr` crate's `MapAgg` can use `ReprScalarType`.
     + `UnaryFunc` doesn't take any type arguments.
     + `BinaryFunc::RangeContainsElem` changes to use `ReprScalarType`.
-    + `VariadicFunc` uses `ScalarType`. We can split it or parameterize it.
+    + `VariadicFunc` uses `ScalarType`. We can split it or parameterize it (likely better).
   - Several transforms need to change.
     * Parametric (used for arity or equality)
       + `optimize_dataflow_demand`
@@ -158,8 +160,12 @@ These first two steps are in [#33321](https://github.com/MaterializeInc/material
       + `semijoin_idempotence` (nullability only)
       + `fusion::filter` (calls `canonicalize_predicates`)
       + `typecheck` (quelle surprise)
+      + the `RelationType` analysis (ibid.)
   - `AvailableCollections` could be split or parameterized---or its users can use the `From` instance to deal with `Repr` types.
   - Some `EXPLAIN` infrastructure would have to be updated to emit representation types.
+  - `StatementDesc` and `RelationDesc` will stay in the SQL-typed world.
+
+Followup PRs will need to resolve the reamining bullet points; we can do this in a variety of orders.
 
 ### What would it look like to address nullability at the same time?
 
