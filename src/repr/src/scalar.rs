@@ -992,7 +992,9 @@ impl<'a> Datum<'a> {
         }
     }
 
-    /// Reports whether this datum is an instance of the specified (SQL) column type.
+    /// Reports whether this datum is an instance of the specified (representation) column type.
+    ///
+    /// See [`is_instance_of_sql`] for comparing `Datum`s to `SqlColumnType`s.
     pub fn is_instance_of(self, column_type: &ReprColumnType) -> bool {
         fn is_instance_of_scalar(datum: Datum, scalar_type: &ReprScalarType) -> bool {
             if let ReprScalarType::Jsonb = scalar_type {
@@ -1122,6 +1124,8 @@ impl<'a> Datum<'a> {
     }
 
     /// Reports whether this datum is an instance of the specified (SQL) column type.
+    ///
+    /// See [`is_instance_of`] for comparing `Datum`s to `ReprColumnType`s.
     pub fn is_instance_of_sql(self, column_type: &SqlColumnType) -> bool {
         fn is_instance_of_scalar(datum: Datum, scalar_type: &SqlScalarType) -> bool {
             if let SqlScalarType::Jsonb = scalar_type {
