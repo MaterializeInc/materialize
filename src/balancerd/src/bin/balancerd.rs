@@ -22,6 +22,7 @@ use domain::resolv::StubResolver;
 use jsonwebtoken::DecodingKey;
 use mz_balancerd::{
     BUILD_INFO, BalancerConfig, BalancerService, CancellationResolver, FronteggResolver, Resolver,
+    SniResolver,
 };
 use mz_frontegg_auth::{
     Authenticator, AuthenticatorConfig, DEFAULT_REFRESH_DROP_FACTOR,
@@ -241,13 +242,32 @@ pub async fn run(args: ServiceArgs, tracing_handle: TracingHandle) -> Result<(),
                 anyhow::bail!("{cancellation_resolver_dir:?} is not a directory");
             }
             (
-                Resolver::Frontegg(
+                Resolver::MultiTenant(
                     FronteggResolver {
                         auth,
                         addr_template,
                     },
-                    StubResolver::new(),
-                    args.pgwire_sni_resolver_template.clone(),
+                    match args.pgwire_sni_resolver_template {
+                        None => None,
+                        Some(template) => {
+                            let (template, port) = template
+                                .rsplit_once(':')
+                                .map(|(t, p)| {
+                                    (
+                                        t.to_owned(),
+                                        p.parse::<u16>().expect(
+                                            "invalid port for pgwire_sni_resolver_template",
+                                        ),
+                                    )
+                                })
+                                .expect("invalid port for pgwire_sni_resolver_template");
+                            Some(SniResolver {
+                                resolver: StubResolver::new(),
+                                template,
+                                port,
+                            })
+                        }
+                    },
                 ),
                 CancellationResolver::Directory(cancellation_resolver_dir),
             )
@@ -255,7 +275,7 @@ pub async fn run(args: ServiceArgs, tracing_handle: TracingHandle) -> Result<(),
         (Some(addr), None) => {
             // As a typo-check, verify that the passed address resolves to at least one IP. This
             // result isn't recorded anywhere: we re-resolve on each request in case DNS changes.
-            // Here only to cause startup to crash if mis-typed.
+            // Here only to cause startup to crash if mistyped.
             let mut addrs = tokio::net::lookup_host(&addr)
                 .await
                 .unwrap_or_else(|_| panic!("could not resolve {addr}"));

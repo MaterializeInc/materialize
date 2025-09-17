@@ -89,6 +89,7 @@ SERVICES = [
     ),
     Balancerd(
         command=[
+            "--startup-log-filter=debug",
             "service",
             "--pgwire-listen-addr=0.0.0.0:6875",
             "--https-listen-addr=0.0.0.0:6876",
@@ -97,7 +98,8 @@ SERVICES = [
             "--frontegg-jwk-file=/secrets/frontegg-mock.crt",
             f"--frontegg-api-token-url={FRONTEGG_URL}/identity/resources/auth/v1/api-token",
             f"--frontegg-admin-role={ADMIN_ROLE}",
-            "--https-resolver-template=materialized:6876",
+            "--https-sni-resolver-template=materialized:6876",
+            "--pgwire-sni-resolver-template=materialized:6875",
             "--tls-key=/secrets/balancerd.key",
             "--tls-cert=/secrets/balancerd.crt",
             "--default-config=balancerd_inject_proxy_protocol_header_http=true",
@@ -664,3 +666,15 @@ def workflow_webhook(c: Composition) -> None:
     """
         )
     )
+
+
+def workflow_pgwire_with_sni(c: Composition) -> None:
+    c.up(
+        "balancerd",
+        "materialized",
+        Service("testdrive", idle=True),
+    )
+    # We're going to run this using ssl and, notably, without frontegg mock.
+    # This should mean that we need to rely on SNI to do tenant resolution
+    cursor = sql_cursor(c)
+    cursor.execute("select 1;")

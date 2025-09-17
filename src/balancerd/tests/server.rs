@@ -21,6 +21,7 @@ use futures::StreamExt;
 use jsonwebtoken::{DecodingKey, EncodingKey};
 use mz_balancerd::{
     BUILD_INFO, BalancerConfig, BalancerService, CancellationResolver, FronteggResolver, Resolver,
+    SniResolver,
 };
 use mz_environmentd::test_util::{self, Ca, make_pg_tls};
 use mz_frontegg_auth::{
@@ -143,12 +144,16 @@ async fn test_balancer() {
             CancellationResolver::Static(envd_server.sql_local_addr().to_string()),
         ),
         (
-            Resolver::Frontegg(
+            Resolver::MultiTenant(
                 FronteggResolver {
                     auth: frontegg_auth,
                     addr_template: envd_server.sql_local_addr().to_string(),
                 },
-                StubResolver::new(),
+                Some(SniResolver {
+                    resolver: StubResolver::new(),
+                    template: envd_server.sql_local_addr().ip().to_string(),
+                    port: envd_server.sql_local_addr().port(),
+                }),
             ),
             CancellationResolver::Directory(cancel_dir.path().to_owned()),
         ),
@@ -171,7 +176,7 @@ async fn test_balancer() {
     for (resolver, cancellation_resolver) in resolvers {
         let (mut reload_tx, reload_rx) = futures::channel::mpsc::channel(1);
         let ticker = Box::pin(reload_rx);
-        let is_frontegg_resolver = matches!(resolver, Resolver::Frontegg(_, _));
+        let is_multi_tenant_resolver = matches!(resolver, Resolver::MultiTenant(_, _));
         let balancer_cfg = BalancerConfig::new(
             &BUILD_INFO,
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
@@ -298,7 +303,7 @@ async fn test_balancer() {
         let resp_x509 = X509::from_der(tlsinfo.peer_certificate().unwrap()).unwrap();
         assert_eq!(resp_x509, next_x509);
 
-        if !is_frontegg_resolver {
+        if !is_multi_tenant_resolver {
             continue;
         }
 

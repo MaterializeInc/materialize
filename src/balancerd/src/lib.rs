@@ -1107,6 +1107,7 @@ impl StubResolverExt for StubResolver {
         let Ok(dname) = Name::<Vec<_>>::from_str(addr) else {
             return None;
         };
+        debug!("resolving tenant for {:?}", addr);
         // Lookup the CNAME. If there's a CNAME, find the tenant.
         let lookup = self.query((dname, Rtype::CNAME)).await;
         if let Ok(lookup) = lookup {
@@ -1193,7 +1194,7 @@ impl mz_server_core::Server for HttpsBalancer {
                                     }
                                     .into()
                                 });
-                            debug!("servername: {servername:?}");
+                            debug!("Found sni servername: {servername:?} (https)");
                             (Box::new(ssl_stream), servername)
                         }
                         _ => (Box::new(conn), None),
@@ -1261,13 +1262,20 @@ impl mz_server_core::Server for HttpsBalancer {
     }
 }
 
+#[derive(Debug)]
+pub struct SniResolver {
+    pub resolver: StubResolver,
+    pub template: String,
+    pub port: u16,
+}
+
 trait ClientStream: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send> ClientStream for T {}
 
 #[derive(Debug)]
 pub enum Resolver {
     Static(String),
-    Frontegg(FronteggResolver, StubResolver, Option<String>),
+    MultiTenant(FronteggResolver, Option<SniResolver>),
 }
 
 impl Resolver {
@@ -1281,27 +1289,41 @@ impl Resolver {
         A: AsyncRead + AsyncWrite + Unpin,
     {
         match self {
-            Resolver::Frontegg(
+            Resolver::MultiTenant(
                 FronteggResolver {
                     auth,
                     addr_template,
                 },
-                stub_resolver,
-                sni_addr_template,
+                sni_resolver,
             ) => {
                 let servername = match conn.inner() {
-                    Conn::Ssl(ssl_stream) => ssl_stream.ssl().servername(NameType::HOST_NAME),
+                    Conn::Ssl(ssl_stream) => {
+                        ssl_stream.ssl().servername(NameType::HOST_NAME).map(|sn| {
+                            match sn.split_once('.') {
+                                Some((left, _right)) => left,
+                                None => sn,
+                            }
+                        })
+                    }
                     Conn::Unencrypted(_) => None,
                 };
                 let has_sni = servername.is_some();
-                let resolved_addr = match (servername, sni_addr_template) {
-                    (Some(servername), Some(sni_addr_template)) => {
-                        debug!(
-                            "sni header found for connection {:?}, using fastpath",
-                            servername
-                        );
+                // We found an SNi
+                let resolved_addr = match (servername, sni_resolver) {
+                    (
+                        Some(servername),
+                        Some(SniResolver {
+                            resolver: stub_resolver,
+                            template: sni_addr_template,
+                            port,
+                        }),
+                    ) => {
+                        debug!("Found sni servername: {servername:?} (pgwire)");
                         let sni_addr = sni_addr_template.replace("{}", servername);
                         let tenant = stub_resolver.tenant(&sni_addr).await;
+                        debug!("sni_addr tenant lookup {:?} - {:?}", sni_addr, tenant);
+                        let sni_addr = format!("{sni_addr}:{port}");
+                        debug!("sni_addr backend lookup {sni_addr}");
                         let addr = lookup(&sni_addr).await?;
                         ResolvedAddr {
                             addr,
