@@ -472,6 +472,7 @@ async fn test_open_read_only(state_builder: TestCatalogStateBuilder) {
 
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+#[ignore] // doesn't work with https://github.com/MaterializeInc/materialize/commit/4b63360843dce25b4b634964c2fa35781ec990c5
 async fn test_persist_open() {
     let persist_client = PersistClient::new_for_tests().await;
     let state_builder = TestCatalogStateBuilder::new(persist_client);
