@@ -178,9 +178,13 @@ SELECT cr.id
 
 $ unset-regex
 
+
+# In a resource constrained environment, changing the replication factor can be delayed
+# and MZ may see the event that should be published while no replica exists, so offset_committed
+# for the previous replica may include that event.
 > SELECT
     s.name,
-    SUM(u.offset_committed) > ${pre-restart-offset-committed},
+    SUM(u.offset_committed) >= ${pre-restart-offset-committed},
     SUM(u.snapshot_records_known),
     SUM(u.snapshot_records_staged),
     u.replica_id
@@ -189,7 +193,7 @@ $ unset-regex
   WHERE s.name IN ('upsert', 'upsert_tbl')
   GROUP BY s.name, u.replica_id
   ORDER BY s.name, u.replica_id
-upsert false 9 9 ${old_replica_id}
+upsert true 9 9 ${old_replica_id}
 upsert_tbl false 9 9 ${old_replica_id}
 upsert true <null> <null> ${new_replica_id}
 upsert_tbl false <null> <null> ${new_replica_id}
@@ -214,7 +218,7 @@ moose  100
 
 > SELECT
     s.name,
-    SUM(u.offset_committed) > ${pre-restart-offset-committed},
+    SUM(u.offset_committed) >= ${pre-restart-offset-committed},
     SUM(u.snapshot_records_known),
     SUM(u.snapshot_records_staged),
     u.replica_id
@@ -224,7 +228,7 @@ moose  100
   GROUP BY s.name, u.replica_id
   ORDER BY s.name, u.replica_id
 append_tbl false 11 11 ${new_replica_id}
-upsert false 9 9 ${old_replica_id}
+upsert true 9 9 ${old_replica_id}
 upsert true 11 11 ${new_replica_id}
 upsert_tbl false 9 9 ${old_replica_id}
 upsert_tbl false 0 0 ${new_replica_id}

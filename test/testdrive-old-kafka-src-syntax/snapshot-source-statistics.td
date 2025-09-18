@@ -122,6 +122,10 @@ SELECT
 
 > ALTER CLUSTER stats_cluster SET (REPLICATION FACTOR 0)
 
+# In a resource constrained environment, changing the replication factor can be delayed
+# and MZ may see the event that should be published while no replica exists.
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=5s
+
 $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} schema=${schema}
 {"key": "mammalmore"} {"f1":"moose", "f2": 100}
 
