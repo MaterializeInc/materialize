@@ -64,11 +64,8 @@ ALTER SYSTEM SET mysql_offset_known_interval = '1s'
   JOIN mz_sources ON object_id = id
   WHERE id LIKE 'u%'
 kafka_src          true
-kafka_src_progress true
 pg_src             true
-pg_src_progress    true
 mysql_src          true
-mysql_src_progress true
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET kafka_default_metadata_fetch_interval = 1234
@@ -80,11 +77,8 @@ ALTER SYSTEM SET mysql_offset_known_interval = 1234
   JOIN mz_sources ON object_id = id
   WHERE id LIKE 'u%'
 kafka_src          true
-kafka_src_progress true
 pg_src             true
-pg_src_progress    true
 mysql_src          true
-mysql_src_progress true
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET kafka_default_metadata_fetch_interval = 500
@@ -96,8 +90,5 @@ ALTER SYSTEM SET mysql_offset_known_interval = 500
   JOIN mz_sources ON object_id = id
   WHERE id LIKE 'u%'
 kafka_src          true
-kafka_src_progress true
 pg_src             true
-pg_src_progress    true
 mysql_src          true
-mysql_src_progress true

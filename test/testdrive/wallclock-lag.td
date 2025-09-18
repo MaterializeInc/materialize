@@ -66,7 +66,6 @@ mv_const     r2     true  true
 mv_const     <null> true  true
 snk          <null> true  true
 src          <null> true  true
-src_progress <null> true  true
 tbl          <null> true  true
 
 > SELECT DISTINCT ON(o.name)
@@ -81,7 +80,6 @@ mv           true  true
 mv_const     true  true
 snk          true  true
 src          true  true
-src_progress true  true
 tbl          true  true
 
 > SELECT DISTINCT ON(o.name)
@@ -96,7 +94,6 @@ mv           true  true
 mv_const     true  true
 snk          true  true
 src          true  true
-src_progress true  true
 tbl          true  true
 
 > SELECT o.name, l.lag >= '0s', l.lag < '20s'
@@ -109,7 +106,6 @@ mv           true  true
 mv_const     true  true
 snk          true  true
 src          true  true
-src_progress true  true
 tbl          true  true
 
 > SELECT DISTINCT o.name, l.count > 0, l.labels
@@ -122,7 +118,6 @@ mv           true  {}
 mv_const     true  {}
 snk          true  {}
 src          true  {}
-src_progress true  {}
 tbl          true  {}
 
 # Test that history lag values are rounded to seconds.
@@ -146,7 +141,6 @@ mv_const     r2     true
 mv_const     <null> true
 snk          <null> true
 src          <null> true
-src_progress <null> true
 tbl          <null> true
 
 # Test annotation of histogram measurements with labels.
@@ -171,7 +165,6 @@ snk          true  "{}"
 snk          true  "{\"workload_class\":\"storage\"}"
 src          true  "{}"
 src          true  "{\"workload_class\":\"storage\"}"
-src_progress true  "{}"
 tbl          true  "{}"
 
 # Test changing the histogram period interval.

@@ -148,7 +148,6 @@ source1 s1
     frontiers.read_frontier > 0 AND
     frontiers.write_frontier > 0
 source1
-source1_progress
 
 # Test that frontiers of sinks are reported.
 
