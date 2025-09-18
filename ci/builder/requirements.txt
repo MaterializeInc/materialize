@@ -27,7 +27,8 @@ matplotlib==3.10.1
 matplotlib-stubs==0.3.4
 networkx==3.4.2
 networkx-stubs==0.0.1
-numpy==2.3.3
+# Keep on 2.2.6 for Python 3.10 compatibility
+numpy==2.2.6
 pandas==2.3.2
 pandas-stubs==2.2.3.250308
 parameterized==0.9.0
