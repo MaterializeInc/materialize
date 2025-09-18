@@ -131,15 +131,6 @@ pub const PERSIST_FAST_PATH_ORDER: Config<bool> = Config::new(
     "If set, send queries with a compatible literal constraint or ordering clause down the Persist fast path.",
 );
 
-/// This flag exists solely to facilitate the slow rollout of swap for cc replica sizes. The plan
-/// is to remove it once the rollout is complete and the cc replica size definitions have been
-/// adjusted to enable swap directly.
-pub const FORCE_SWAP_FOR_CC_SIZES: Config<bool> = Config::new(
-    "force_swap_for_cc_sizes",
-    false,
-    "Whether to enable swap for all cc replica sizes.",
-);
-
 /// Adds the full set of all compute `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -160,5 +151,4 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_PASSWORD_AUTH)
         .add(&CONSTRAINT_BASED_TIMESTAMP_SELECTION)
         .add(&PERSIST_FAST_PATH_ORDER)
-        .add(&FORCE_SWAP_FOR_CC_SIZES)
 }
