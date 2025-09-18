@@ -19,6 +19,7 @@ from materialize import buildkite
 from materialize.data_ingest.executor import (
     KafkaExecutor,
     MySqlExecutor,
+    SqlServerExecutor,
 )
 from materialize.data_ingest.workload import *  # noqa: F401 F403
 from materialize.data_ingest.workload import WORKLOADS, execute_workload
@@ -118,8 +119,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     # TODO: Reenable KafkaRoundtripExecutor when database-issues#8657 is fixed
-    # TODO: Reenable SqlServerExecutor when database-issues#9618 is fixed
-    executor_classes = [MySqlExecutor, KafkaExecutor]
+    executor_classes = [MySqlExecutor, KafkaExecutor, SqlServerExecutor]
 
     with c.override(
         # Fixed port so that we keep the same port after restarting Mz in disruptions
