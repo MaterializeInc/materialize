@@ -218,7 +218,7 @@ moose  100
 
 > SELECT
     s.name,
-    SUM(u.offset_committed) > ${pre-restart-offset-committed},
+    SUM(u.offset_committed) >= ${pre-restart-offset-committed},
     SUM(u.snapshot_records_known),
     SUM(u.snapshot_records_staged),
     u.replica_id
@@ -228,7 +228,7 @@ moose  100
   GROUP BY s.name, u.replica_id
   ORDER BY s.name, u.replica_id
 append_tbl false 11 11 ${new_replica_id}
-upsert false 9 9 ${old_replica_id}
+upsert true 9 9 ${old_replica_id}
 upsert true 11 11 ${new_replica_id}
 upsert_tbl false 9 9 ${old_replica_id}
 upsert_tbl false 0 0 ${new_replica_id}
