@@ -157,7 +157,7 @@ ALTER SOURCE s SET (RETAIN HISTORY FOR '1m')
 query T
 SELECT create_sql FROM (SHOW CREATE SOURCE s)
 ----
-CREATE SOURCE materialize.public.s⏎IN CLUSTER quickstart⏎FROM LOAD GENERATOR COUNTER⏎EXPOSE PROGRESS AS materialize.public.s_progress⏎WITH (RETAIN HISTORY = FOR '1m');
+CREATE SOURCE materialize.public.s⏎IN CLUSTER quickstart⏎FROM LOAD GENERATOR COUNTER⏎WITH (RETAIN HISTORY = FOR '1m');
 
 statement ok
 ALTER SOURCE s RESET (RETAIN HISTORY)
@@ -165,7 +165,7 @@ ALTER SOURCE s RESET (RETAIN HISTORY)
 query T
 SELECT create_sql FROM (SHOW CREATE SOURCE s)
 ----
-CREATE SOURCE materialize.public.s⏎IN CLUSTER quickstart⏎FROM LOAD GENERATOR COUNTER⏎EXPOSE PROGRESS AS materialize.public.s_progress;
+CREATE SOURCE materialize.public.s⏎IN CLUSTER quickstart⏎FROM LOAD GENERATOR COUNTER;
 
 statement ok
 ALTER INDEX i SET (RETAIN HISTORY FOR '1m')

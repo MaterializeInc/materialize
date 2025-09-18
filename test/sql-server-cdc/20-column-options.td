@@ -44,7 +44,7 @@ INSERT INTO t2_columns VALUES ('invisible');
   FOR TABLES (dbo.t1_columns);
 
 > SHOW CREATE SOURCE t1_columns_sql_server;
-materialize.public.t1_columns_sql_server "CREATE SOURCE materialize.public.t1_columns_sql_server\nIN CLUSTER quickstart\nFROM\n    SQL SERVER CONNECTION materialize.public.sql_server_columns_connection (TEXT COLUMNS = (dbo.t1_columns.c1, dbo.t1_columns.c2, dbo.t1_columns.c4), EXCLUDE COLUMNS = (dbo.t1_columns.c3))\nFOR TABLES (test.dbo.t1_columns AS materialize.public.t1_columns)\nEXPOSE PROGRESS AS materialize.public.t1_columns_sql_server_progress;"
+materialize.public.t1_columns_sql_server "CREATE SOURCE materialize.public.t1_columns_sql_server\nIN CLUSTER quickstart\nFROM\n    SQL SERVER CONNECTION materialize.public.sql_server_columns_connection (TEXT COLUMNS = (dbo.t1_columns.c1, dbo.t1_columns.c2, dbo.t1_columns.c4), EXCLUDE COLUMNS = (dbo.t1_columns.c3))\nFOR TABLES (test.dbo.t1_columns AS materialize.public.t1_columns);"
 
 > SHOW COLUMNS FROM t1_columns;
 c1 true text ""

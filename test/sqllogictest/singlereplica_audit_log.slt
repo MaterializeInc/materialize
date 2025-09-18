@@ -178,11 +178,8 @@ SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY 
 39  create  index  {"cluster_id":"u1","database":"materialize","id":"u6","item":"renamed_primary_idx","schema":"public"}  materialize
 40  drop  index  {"database":"materialize","id":"u6","item":"renamed_primary_idx","schema":"public"}  materialize
 41  drop  view  {"database":"materialize","id":"u2","item":"renamed","schema":"public"}  materialize
-42  create  source  {"cluster_id":null,"database":"materialize","id":"u7","item":"s_progress","schema":"public","type":"progress"}  materialize
 43  create  source  {"cluster_id":"u1","database":"materialize","id":"u8","item":"s","schema":"public","type":"load-generator"}  materialize
 44  drop  source  {"database":"materialize","id":"u8","item":"s","schema":"public"}  materialize
-45  drop  source  {"database":"materialize","id":"u7","item":"s_progress","schema":"public"}  materialize
-46  create  source  {"cluster_id":null,"database":"materialize","id":"u9","item":"multiplex_progress","schema":"public","type":"progress"}  materialize
 47  create  source  {"cluster_id":"u1","database":"materialize","id":"u10","item":"multiplex","schema":"public","type":"load-generator"}  materialize
 48  create  table  {"database":"materialize","id":"u11","item":"accounts","schema":"public"}  materialize
 49  create  table  {"database":"materialize","id":"u12","item":"auctions","schema":"public"}  materialize

@@ -138,7 +138,7 @@ CREATE SOURCE s FROM LOAD GENERATOR COUNTER
 query T multiline
 SELECT regexp_replace(redacted_create_sql, 'u[0-9]+', 'uX', 'g') FROM mz_sources WHERE name = 's'
 ----
-CREATE SOURCE materialize.public.s IN CLUSTER [uX] FROM LOAD GENERATOR COUNTER EXPOSE PROGRESS AS [uX AS materialize.public.s_progress]
+CREATE SOURCE materialize.public.s IN CLUSTER [uX] FROM LOAD GENERATOR COUNTER
 EOF
 
 query T multiline
@@ -146,8 +146,7 @@ SELECT regexp_replace(create_sql, 'u[0-9]+', 'uX', 'g') FROM (SHOW REDACTED CREA
 ----
 CREATE SOURCE materialize.public.s
 IN CLUSTER quickstart
-FROM LOAD GENERATOR COUNTER
-EXPOSE PROGRESS AS materialize.public.s_progress;
+FROM LOAD GENERATOR COUNTER:
 EOF
 
 query T multiline
@@ -155,8 +154,7 @@ SELECT regexp_replace(pretty_sql(redacted_create_sql), 'u[0-9]+', 'uX', 'g') FRO
 ----
 CREATE SOURCE materialize.public.s
 IN CLUSTER [uX]
-FROM LOAD GENERATOR COUNTER
-EXPOSE PROGRESS AS [uX AS materialize.public.s_progress];
+FROM LOAD GENERATOR COUNTER;
 EOF
 
 query T multiline
@@ -164,8 +162,7 @@ SELECT regexp_replace(pretty_sql(create_sql), 'u[0-9]+', 'uX', 'g') FROM (SHOW R
 ----
 CREATE SOURCE materialize.public.s
 IN CLUSTER quickstart
-FROM LOAD GENERATOR COUNTER
-EXPOSE PROGRESS AS materialize.public.s_progress;
+FROM LOAD GENERATOR COUNTER;
 EOF
 
 statement ok

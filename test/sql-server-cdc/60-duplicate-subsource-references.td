@@ -54,5 +54,4 @@ detail: subsources referencing table: x, y
 
 > SHOW sources
  mz_source          sql-server quickstart  ""
- mz_source_progress progress   <null>      ""
  t                  subsource  quickstart  ""
