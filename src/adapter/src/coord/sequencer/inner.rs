@@ -525,38 +525,39 @@ impl Coordinator {
         &mut self,
         ctx: &ExecuteContext,
         params: Params,
-        progress_stmt: CreateSubsourceStatement<Aug>,
+        progress_stmt: Option<CreateSubsourceStatement<Aug>>,
         mut source_stmt: mz_sql::ast::CreateSourceStatement<Aug>,
         subsources: BTreeMap<UnresolvedItemName, PurifiedSourceExport>,
         available_source_references: plan::SourceReferences,
     ) -> Result<(Plan, ResolvedIds), AdapterError> {
         let mut create_source_plans = Vec::with_capacity(subsources.len() + 2);
 
-        // 1. First plan the progress subsource.
-        //
-        // The primary source depends on this subsource because the primary
-        // source needs to know its shard ID, and the easiest way of
-        // guaranteeing that the shard ID is discoverable is to create this
-        // collection first.
-        assert_none!(progress_stmt.of_source);
-        let id_ts = self.get_catalog_write_ts().await;
-        let (item_id, global_id) = self.catalog_mut().allocate_user_id(id_ts).await?;
-        let progress_plan =
-            self.plan_subsource(ctx.session(), &params, progress_stmt, item_id, global_id)?;
-        let progress_full_name = self
-            .catalog()
-            .resolve_full_name(&progress_plan.plan.name, None);
-        let progress_subsource = ResolvedItemName::Item {
-            id: progress_plan.item_id,
-            qualifiers: progress_plan.plan.name.qualifiers.clone(),
-            full_name: progress_full_name,
-            print_id: true,
-            version: RelationVersionSelector::Latest,
-        };
+        // 1. First plan the progress subsource, if any.
+        if let Some(progress_stmt) = progress_stmt {
+            // The primary source depends on this subsource because the primary
+            // source needs to know its shard ID, and the easiest way of
+            // guaranteeing that the shard ID is discoverable is to create this
+            // collection first.
+            assert_none!(progress_stmt.of_source);
+            let id_ts = self.get_catalog_write_ts().await;
+            let (item_id, global_id) = self.catalog_mut().allocate_user_id(id_ts).await?;
+            let progress_plan =
+                self.plan_subsource(ctx.session(), &params, progress_stmt, item_id, global_id)?;
+            let progress_full_name = self
+                .catalog()
+                .resolve_full_name(&progress_plan.plan.name, None);
+            let progress_subsource = ResolvedItemName::Item {
+                id: progress_plan.item_id,
+                qualifiers: progress_plan.plan.name.qualifiers.clone(),
+                full_name: progress_full_name,
+                print_id: true,
+                version: RelationVersionSelector::Latest,
+            };
 
-        create_source_plans.push(progress_plan);
+            create_source_plans.push(progress_plan);
 
-        source_stmt.progress_subsource = Some(DeferredItemName::Named(progress_subsource));
+            source_stmt.progress_subsource = Some(DeferredItemName::Named(progress_subsource));
+        }
 
         let catalog = self.catalog().for_session(ctx.session());
         let resolved_ids = mz_sql::names::visit_dependencies(&catalog, &source_stmt);
@@ -678,9 +679,11 @@ impl Coordinator {
                         let (data_source, status_collection_id) = match source.data_source {
                             DataSourceDesc::Ingestion { desc, cluster_id } => {
                                 let desc = desc.into_inline_connection(coord.catalog().state());
+                                let item_global_id =
+                                    coord.catalog().get_entry(&item_id).latest_global_id();
 
                                 let ingestion =
-                                    IngestionDescription::new(desc, cluster_id, source.global_id);
+                                    IngestionDescription::new(desc, cluster_id, item_global_id);
 
                                 (
                                     DataSource::Ingestion(ingestion),

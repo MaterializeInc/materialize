@@ -1986,10 +1986,12 @@ where
                     // for now...
                     match &collection.data_source {
                         DataSource::Ingestion(ingestion_desc) => {
-                            self.dropped_objects.insert(
-                                ingestion_desc.remap_collection_id,
-                                active_replicas.clone(),
-                            );
+                            if *id != ingestion_desc.remap_collection_id {
+                                self.dropped_objects.insert(
+                                    ingestion_desc.remap_collection_id,
+                                    active_replicas.clone(),
+                                );
+                            }
                         }
                         _ => {}
                     }
@@ -3248,7 +3250,11 @@ where
                 // since stays one step behind the upper, and, 2) that the remap
                 // shard's since stays one step behind their upper. Hence they
                 // track themselves and the remap shard as dependencies.
-                vec![self_id, ingestion.remap_collection_id]
+                let mut dependencies = vec![self_id];
+                if self_id != ingestion.remap_collection_id {
+                    dependencies.push(ingestion.remap_collection_id);
+                }
+                dependencies
             }
             DataSource::Sink { desc } => {
                 // Sinks hold back their own frontier and the frontier of their input.

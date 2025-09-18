@@ -905,12 +905,7 @@ pub fn plan_create_source(
         None => scx.catalog.config().timestamp_interval,
     };
 
-    let source_desc = SourceDesc::<ReferencedConnection> {
-        connection: external_connection,
-        timestamp_interval,
-    };
-
-    let data_source = match progress_subsource {
+    let (desc, data_source) = match progress_subsource {
         Some(name) => {
             let DeferredItemName::Named(name) = name else {
                 sql_bail!("[internal error] progress subsource must be named during purification");
@@ -919,7 +914,7 @@ pub fn plan_create_source(
                 sql_bail!("[internal error] invalid target id");
             };
 
-            let details = match source_desc.connection {
+            let details = match external_connection {
                 GenericSourceConnection::Kafka(ref c) => {
                     SourceExportDetails::Kafka(KafkaSourceExportDetails {
                         metadata_columns: c.metadata_columns.clone(),
@@ -943,17 +938,28 @@ pub fn plan_create_source(
                 | GenericSourceConnection::SqlServer(_) => SourceExportDetails::None,
             };
 
-            DataSourceDesc::OldSyntaxIngestion {
-                desc: source_desc,
+            let data_source = DataSourceDesc::OldSyntaxIngestion {
+                desc: SourceDesc {
+                    connection: external_connection,
+                    timestamp_interval,
+                },
                 progress_subsource: *id,
                 data_config: SourceExportDataConfig {
                     encoding,
                     envelope: envelope.clone(),
                 },
                 details,
-            }
+            };
+            (desc, data_source)
         }
-        None => DataSourceDesc::Ingestion(source_desc),
+        None => {
+            let desc = external_connection.timestamp_desc();
+            let data_source = DataSourceDesc::Ingestion(SourceDesc {
+                connection: external_connection,
+                timestamp_interval,
+            });
+            (desc, data_source)
+        }
     };
 
     let if_not_exists = *if_not_exists;
