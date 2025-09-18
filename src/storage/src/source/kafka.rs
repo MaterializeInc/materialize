@@ -280,10 +280,6 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
                 .iter()
                 .map(|(_name, kind)| kind.clone())
                 .collect::<Vec<_>>(),
-            SourceExportDetails::None => {
-                // This is an export that doesn't need any data output to it.
-                continue;
-            }
             _ => panic!("unexpected source export details: {:?}", details),
         };
 

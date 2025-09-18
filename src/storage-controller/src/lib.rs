@@ -891,19 +891,10 @@ where
                     && !(self.read_only && migrated_storage_collections.contains(&id))
             };
 
-            let mut data_source = description.data_source;
+            let data_source = description.data_source;
 
             to_execute.insert(id);
             new_collections.insert(id);
-
-            // Ensure that the ingestion has an export for its primary source if applicable.
-            // This is done in an awkward spot to appease the borrow checker.
-            // TODO(database-issues#8620): This will be removed once sources no longer export
-            // to primary collections and only export to explicit SourceExports (tables).
-            if let DataSource::Ingestion(ingestion) = &mut data_source {
-                let export = ingestion.desc.primary_source_export();
-                ingestion.source_exports.insert(id, export);
-            }
 
             let write_frontier = write.upper();
 
@@ -3307,22 +3298,14 @@ where
 
         // Enrich all of the exports with their metadata
         let mut source_exports = BTreeMap::new();
-        for (
-            export_id,
-            SourceExport {
-                storage_metadata: (),
-                details,
-                data_config,
-            },
-        ) in ingestion_description.source_exports.clone()
-        {
+        for (export_id, export) in ingestion_description.source_exports.clone() {
             let export_storage_metadata = self.collection(export_id)?.collection_metadata.clone();
             source_exports.insert(
                 export_id,
                 SourceExport {
                     storage_metadata: export_storage_metadata,
-                    details,
-                    data_config,
+                    details: export.details,
+                    data_config: export.data_config,
                 },
             );
         }

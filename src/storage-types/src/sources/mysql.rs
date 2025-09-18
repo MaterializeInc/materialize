@@ -34,8 +34,6 @@ use crate::connections::inline::{
 use crate::controller::AlterError;
 use crate::sources::{SourceConnection, SourceTimestamp};
 
-use super::SourceExportDetails;
-
 include!(concat!(
     env!("OUT_DIR"),
     "/mz_storage_types.sources.mysql.rs"
@@ -129,10 +127,6 @@ impl<C: ConnectionAccess> SourceConnection for MySqlSourceConnection<C> {
 
     fn connection_id(&self) -> Option<CatalogItemId> {
         Some(self.connection_id)
-    }
-
-    fn primary_export_details(&self) -> SourceExportDetails {
-        SourceExportDetails::None
     }
 
     fn supports_read_only(&self) -> bool {

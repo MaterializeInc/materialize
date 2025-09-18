@@ -509,11 +509,6 @@ pub trait SourceConnection: Debug + Clone + PartialEq + AlterCompatible {
     /// the catalog, if any.
     fn connection_id(&self) -> Option<CatalogItemId>;
 
-    /// If this source connection can output to a primary collection, contains the source-specific
-    /// details of that export, else is set to `SourceExportDetails::None` to indicate that
-    /// this source should not export to the primary collection.
-    fn primary_export_details(&self) -> SourceExportDetails;
-
     /// Whether the source type supports read only mode.
     fn supports_read_only(&self) -> bool;
 
@@ -615,12 +610,6 @@ impl<C: ConnectionAccess> SourceExportDataConfig<C> {
 pub struct SourceDesc<C: ConnectionAccess = InlinedConnection> {
     pub connection: GenericSourceConnection<C>,
     pub timestamp_interval: Duration,
-    /// The data encoding and format of data to export to the
-    /// primary collection for this source.
-    /// TODO(database-issues#8620): This will be removed once sources no longer export
-    /// to primary collections and only export to explicit SourceExports (tables).
-    pub primary_export: SourceExportDataConfig<C>,
-    pub primary_export_details: SourceExportDetails,
 }
 
 impl<R: ConnectionResolver> IntoInlineConnection<SourceDesc, R>
@@ -629,15 +618,11 @@ impl<R: ConnectionResolver> IntoInlineConnection<SourceDesc, R>
     fn into_inline_connection(self, r: R) -> SourceDesc {
         let SourceDesc {
             connection,
-            primary_export,
-            primary_export_details,
             timestamp_interval,
         } = self;
 
         SourceDesc {
             connection: connection.into_inline_connection(&r),
-            primary_export: primary_export.into_inline_connection(r),
-            primary_export_details,
             timestamp_interval,
         }
     }
@@ -653,8 +638,6 @@ impl<C: ConnectionAccess> AlterCompatible for SourceDesc<C> {
         }
         let Self {
             connection,
-            primary_export,
-            primary_export_details,
             timestamp_interval,
         } = &self;
 
@@ -662,11 +645,6 @@ impl<C: ConnectionAccess> AlterCompatible for SourceDesc<C> {
             (
                 connection.alter_compatible(id, &other.connection).is_ok(),
                 "connection",
-            ),
-            (primary_export == &other.primary_export, "primary_export"),
-            (
-                primary_export_details == &other.primary_export_details,
-                "primary_export_details",
             ),
             (
                 timestamp_interval == &other.timestamp_interval,
@@ -687,19 +665,6 @@ impl<C: ConnectionAccess> AlterCompatible for SourceDesc<C> {
         }
 
         Ok(())
-    }
-}
-
-impl SourceDesc<InlinedConnection> {
-    /// Returns the SourceExport details for the primary export.
-    /// TODO(database-issues#8620): This will be removed once sources no longer export
-    /// to primary collections and only export to explicit SourceExports (tables).
-    pub fn primary_source_export(&self) -> SourceExport<(), InlinedConnection> {
-        SourceExport {
-            storage_metadata: (),
-            details: self.primary_export_details.clone(),
-            data_config: self.primary_export.clone(),
-        }
     }
 }
 
@@ -824,16 +789,6 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
             Self::MySql(conn) => conn.connection_id(),
             Self::SqlServer(conn) => conn.connection_id(),
             Self::LoadGenerator(conn) => conn.connection_id(),
-        }
-    }
-
-    fn primary_export_details(&self) -> SourceExportDetails {
-        match self {
-            Self::Kafka(conn) => conn.primary_export_details(),
-            Self::Postgres(conn) => conn.primary_export_details(),
-            Self::MySql(conn) => conn.primary_export_details(),
-            Self::SqlServer(conn) => conn.primary_export_details(),
-            Self::LoadGenerator(conn) => conn.primary_export_details(),
         }
     }
 

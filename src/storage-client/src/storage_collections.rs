@@ -50,8 +50,8 @@ use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::read_holds::{ReadHold, ReadHoldError};
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sources::{
-    GenericSourceConnection, SourceData, SourceDesc, SourceEnvelope,
-    SourceExport, SourceExportDataConfig, Timeline,
+    GenericSourceConnection, SourceData, SourceDesc, SourceEnvelope, SourceExport,
+    SourceExportDataConfig, Timeline,
 };
 use mz_storage_types::time_dependence::{TimeDependence, TimeDependenceError};
 use mz_txn_wal::metrics::Metrics as TxnMetrics;
@@ -1948,16 +1948,7 @@ where
         // hashmap inserts and unbounded channel sends.
         let mut self_collections = self.collections.lock().expect("lock poisoned");
 
-        for (id, mut description, write_handle, since_handle, metadata) in to_register {
-            // Ensure that the ingestion has an export for its primary source if applicable.
-            // This is done in an awkward spot to appease the borrow checker.
-            // TODO(database-issues#8620): This will be removed once sources no longer export
-            // to primary collections and only export to explicit SourceExports (tables).
-            if let DataSource::Ingestion(ingestion) = &mut description.data_source {
-                let export = ingestion.desc.primary_source_export();
-                ingestion.source_exports.insert(id, export);
-            }
-
+        for (id, description, write_handle, since_handle, metadata) in to_register {
             let write_frontier = write_handle.upper();
             let data_shard_since = since_handle.since().clone();
 

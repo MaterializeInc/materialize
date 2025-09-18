@@ -63,7 +63,7 @@ use mz_sql::names::{
 use mz_sql::plan::{ConnectionDetails, NetworkPolicyRule, StatementContext};
 use mz_sql::pure::{PurifiedSourceExport, generate_subsource_statements};
 use mz_storage_types::sinks::StorageSinkDesc;
-use mz_storage_types::sources::GenericSourceConnection;
+use mz_storage_types::sources::{GenericSourceConnection, IngestionDescription, SourceExport};
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
 use mz_sql::plan::{
     AlterConnectionAction, AlterConnectionPlan, CreateSourcePlanBundle, ExplainSinkSchemaPlan,
@@ -308,11 +308,12 @@ impl Coordinator {
             let name = plan.name.clone();
 
             match plan.source.data_source {
-                plan::DataSourceDesc::Ingestion(ref ingestion) => {
+                plan::DataSourceDesc::Ingestion(ref desc)
+                | plan::DataSourceDesc::OldSyntaxIngestion { ref desc, .. } => {
                     let cluster_id = plan
                         .in_cluster
                         .expect("ingestion plans must specify cluster");
-                    match ingestion.desc.connection {
+                    match desc.connection {
                         GenericSourceConnection::Postgres(_)
                         | GenericSourceConnection::MySql(_)
                         | GenericSourceConnection::SqlServer(_)
@@ -675,15 +676,27 @@ impl Coordinator {
                         );
 
                         let (data_source, status_collection_id) = match source.data_source {
-                            DataSourceDesc::Ingestion {
-                                ingestion_desc:
-                                    mz_sql::plan::Ingestion {
-                                        desc,
-                                        progress_subsource,
-                                    },
+                            DataSourceDesc::Ingestion { desc, cluster_id } => {
+                                let desc = desc.into_inline_connection(coord.catalog().state());
+
+                                let ingestion =
+                                    IngestionDescription::new(desc, cluster_id, source.global_id);
+
+                                (
+                                    DataSource::Ingestion(ingestion),
+                                    source_status_collection_id,
+                                )
+                            }
+                            DataSourceDesc::OldSyntaxIngestion {
+                                desc,
+                                progress_subsource,
+                                data_config,
+                                details,
                                 cluster_id,
                             } => {
                                 let desc = desc.into_inline_connection(coord.catalog().state());
+                                let data_config =
+                                    data_config.into_inline_connection(coord.catalog().state());
                                 // TODO(parkmycar): We should probably check the type here, but I'm not
                                 // sure if this will always be a Source or a Table.
                                 let progress_subsource = coord
@@ -691,12 +704,16 @@ impl Coordinator {
                                     .get_entry(&progress_subsource)
                                     .latest_global_id();
 
-                                let ingestion =
-                                    mz_storage_types::sources::IngestionDescription::new(
-                                        desc,
-                                        cluster_id,
-                                        progress_subsource,
-                                    );
+                                let mut ingestion =
+                                    IngestionDescription::new(desc, cluster_id, progress_subsource);
+                                let legacy_export = SourceExport {
+                                    storage_metadata: (),
+                                    data_config,
+                                    details,
+                                };
+                                ingestion
+                                    .source_exports
+                                    .insert(source.global_id, legacy_export);
 
                                 (
                                     DataSource::Ingestion(ingestion),
@@ -4010,10 +4027,10 @@ impl Coordinator {
                     CatalogItem::Connection(_) => connections.push_back(*id),
                     CatalogItem::Source(source) => {
                         let desc = match &entry.source().expect("known to be source").data_source {
-                            DataSourceDesc::Ingestion { ingestion_desc, .. } => ingestion_desc
-                                .desc
-                                .clone()
-                                .into_inline_connection(self.catalog().state()),
+                            DataSourceDesc::Ingestion { desc, .. }
+                            | DataSourceDesc::OldSyntaxIngestion { desc, .. } => {
+                                desc.clone().into_inline_connection(self.catalog().state())
+                            }
                             _ => unreachable!("only ingestions reference connections"),
                         };
 
@@ -4351,10 +4368,10 @@ impl Coordinator {
 
                 // Get new ingestion description for storage.
                 let desc = match &source.data_source {
-                    DataSourceDesc::Ingestion { ingestion_desc, .. } => ingestion_desc
-                        .desc
-                        .clone()
-                        .into_inline_connection(self.catalog().state()),
+                    DataSourceDesc::Ingestion { desc, .. }
+                    | DataSourceDesc::OldSyntaxIngestion { desc, .. } => {
+                        desc.clone().into_inline_connection(self.catalog().state())
+                    }
                     _ => unreachable!("already verified of type ingestion"),
                 };
 
