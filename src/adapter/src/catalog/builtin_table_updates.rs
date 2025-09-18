@@ -9,9 +9,6 @@
 
 mod notice;
 
-use std::cmp;
-use std::time::Duration;
-
 use bytesize::ByteSize;
 use ipnet::IpNet;
 use mz_adapter_types::compaction::CompactionWindow;
@@ -40,9 +37,6 @@ use mz_catalog::memory::objects::{
     CatalogItem, ClusterVariant, Connection, ContinualTask, DataSourceDesc, Func, Index,
     MaterializedView, Sink, Table, TableDataSource, Type, View,
 };
-use mz_compute_types::dyncfgs::{
-    MEMORY_LIMITER_INTERVAL, MEMORY_LIMITER_USAGE_BIAS, MEMORY_LIMITER_USAGE_FACTOR,
-};
 use mz_controller::clusters::{
     ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ReplicaLocation,
 };
@@ -50,7 +44,7 @@ use mz_controller_types::ClusterId;
 use mz_expr::MirScalarExpr;
 use mz_license_keys::ValidatedLicenseKey;
 use mz_orchestrator::{CpuLimit, DiskLimit, MemoryLimit};
-use mz_ore::cast::{CastFrom, CastLossy};
+use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_persist_client::batch::ProtoBatch;
 use mz_repr::adt::array::ArrayDimension;
@@ -2028,27 +2022,13 @@ impl CatalogState {
             let DiskLimit(ByteSize(disk_bytes)) =
                 (alloc.disk_limit).unwrap_or(DiskLimit::ARBITRARY);
 
-            let mut disk_limit = disk_bytes;
-
-            // If swap is enabled, the memory limiter configuration might further reduce the disk
-            // limit.
-            let dyncfg = self.system_config().dyncfgs();
-            if alloc.swap_enabled && MEMORY_LIMITER_INTERVAL.get(dyncfg) != Duration::ZERO {
-                let swap_memory_limit = f64::cast_lossy(memory_bytes)
-                    * MEMORY_LIMITER_USAGE_FACTOR.get(dyncfg)
-                    * MEMORY_LIMITER_USAGE_BIAS.get(dyncfg);
-                let swap_memory_limit = u64::cast_lossy(swap_memory_limit);
-                let swap_disk_limit = swap_memory_limit.saturating_sub(memory_bytes);
-                disk_limit = cmp::min(swap_disk_limit, disk_limit);
-            }
-
             let row = Row::pack_slice(&[
                 size.as_str().into(),
                 u64::from(alloc.scale).into(),
                 u64::cast_from(alloc.workers).into(),
                 cpu_limit.as_nanocpus().into(),
                 memory_bytes.into(),
-                disk_limit.into(),
+                disk_bytes.into(),
                 (alloc.credits_per_hour).into(),
             ]);
 
