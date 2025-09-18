@@ -193,7 +193,7 @@ $ unset-regex
   WHERE s.name IN ('upsert', 'upsert_tbl')
   GROUP BY s.name, u.replica_id
   ORDER BY s.name, u.replica_id
-upsert false 9 9 ${old_replica_id}
+upsert true 9 9 ${old_replica_id}
 upsert_tbl false 9 9 ${old_replica_id}
 upsert true <null> <null> ${new_replica_id}
 upsert_tbl false <null> <null> ${new_replica_id}
