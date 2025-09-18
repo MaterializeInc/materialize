@@ -66,7 +66,6 @@ impl ValidatedLicenseKey {
         }
     }
 
-    // TODO: temporary until we get the rest of the infrastructure in place
     pub fn disabled() -> Self {
         Self {
             id: "".to_string(),
@@ -100,7 +99,6 @@ impl ValidatedLicenseKey {
 
 impl Default for ValidatedLicenseKey {
     fn default() -> Self {
-        // this is used for the emulator if no license key is provided
         Self {
             id: "".to_string(),
             organization: "".to_string(),

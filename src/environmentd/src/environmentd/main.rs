@@ -693,7 +693,8 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     } else if matches!(args.orchestrator, OrchestratorKind::Kubernetes) {
         bail!("--license-key is required when running in Kubernetes");
     } else {
-        ValidatedLicenseKey::default()
+        // license key checks are optional for the emulator
+        ValidatedLicenseKey::disabled()
     };
 
     // Configure testing options.
