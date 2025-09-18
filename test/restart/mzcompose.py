@@ -136,7 +136,6 @@ def workflow_github_5108(c: Composition) -> None:
               WHERE top_level_s.name = 'with_subsources' AND (s.type = 'progress' OR s.type = 'subsource');
             source          subsource
             -------------------------
-            with_subsources with_subsources_progress
 
             > SELECT DISTINCT
               s.name AS source,
@@ -173,7 +172,6 @@ def workflow_github_5108(c: Composition) -> None:
               WHERE top_level_s.name = 'with_subsources' AND (s.type = 'progress' OR s.type = 'subsource');
             source          subsource
             -------------------------
-            with_subsources with_subsources_progress
 
             > SELECT DISTINCT
               s.name AS source,

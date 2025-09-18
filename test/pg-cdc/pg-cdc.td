@@ -173,7 +173,6 @@ ALTER SYSTEM SET pg_source_wal_sender_timeout = 0;
 # $ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=materialize_% active=true
 
 > SHOW SUBSOURCES ON test_slot_source
-test_slot_source_progress progress
 
 > DROP SOURCE test_slot_source CASCADE
 
@@ -299,7 +298,6 @@ detail:referenced items: public.no_replica_identity
 
 > SHOW SOURCES
 mz_source             postgres   cdc_cluster  ""
-mz_source_progress    progress   <null>       ""
 
 > SHOW TABLES
 array_types_table     ""
@@ -358,16 +356,13 @@ true
 > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'mz_source';
 running
 
-> SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'mz_source_progress';
-running
-
-> SELECT lsn > 0 FROM mz_source_progress
+> SELECT lsn > 0 FROM mz_source
 true
 
 # Ensure we report the write frontier of the progress subsource
 $ set-regex match=(\s{12}0|\d{13,20}|u\d{1,5}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d\.\d\d\d\)|true|false) replacement=<>
-> EXPLAIN TIMESTAMP FOR SELECT * FROM mz_source_progress
-"                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n              session wall time: <> <>\n\nsource materialize.public.mz_source_progress (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n\nbinding constraints:\nlower:\n  (IsolationLevel(StrictSerializable)): [<> <>]\n"
+> EXPLAIN TIMESTAMP FOR SELECT * FROM mz_source
+"                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n              session wall time: <> <>\n\nsource materialize.public.mz_source (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n\nbinding constraints:\nlower:\n  (IsolationLevel(StrictSerializable)): [<> <>]\n"
 
 $ set-regex match=[0-9]+|_[a-f0-9]+ replacement=<SUPPRESSED>
 
@@ -728,7 +723,6 @@ contains:invalid TEXT COLUMNS option value: column "enum_table.колона" doe
 
 > SELECT * FROM (SHOW SOURCES) WHERE name LIKE '%enum%';
 enum_source             postgres  cdc_cluster  ""
-enum_source_progress    progress  <null>       ""
 
 > SELECT * FROM (SHOW TABLES) WHERE name LIKE '%enum%';
 another_enum_table      ""
@@ -797,7 +791,6 @@ true
 
 > SHOW SOURCES
 another_source          postgres  cdc_cluster  ""
-another_source_progress progress  <null>       ""
 
 > SHOW TABLES
 another_table           ""

@@ -13,7 +13,10 @@
 #
 
 statement ok
-CREATE SOURCE counter FROM LOAD GENERATOR COUNTER;
+CREATE SOURCE counter_src FROM LOAD GENERATOR COUNTER;
+
+statement ok
+CREATE TABLE counter FROM SOURCE counter_src;
 
 # Properly TopK
 query T multiline

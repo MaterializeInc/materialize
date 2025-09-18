@@ -109,7 +109,7 @@ three:four
   GROUP BY s.name
 sink1 2 2 true true
 
-> SELECT s.name,
+> SELECT o.name,
   SUM(u.updates_committed) > 0,
   SUM(u.messages_received) >= 4
   FROM mz_sources s
@@ -117,3 +117,4 @@ sink1 2 2 true true
   WHERE s.name IN ('upsert1')
   GROUP BY s.id, s.name
 upsert1 true true
+upsert1_tbl true true
