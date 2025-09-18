@@ -1,0 +1,1667 @@
+{
+  "__inputs": [
+    {
+      "name": "DS_PROMETHEUS",
+      "label": "prometheus",
+      "description": "",
+      "type": "datasource",
+      "pluginId": "prometheus",
+      "pluginName": "Prometheus"
+    }
+  ],
+  "__elements": {},
+  "__requires": [
+    {
+      "type": "panel",
+      "id": "bargauge",
+      "name": "Bar gauge",
+      "version": ""
+    },
+    {
+      "type": "grafana",
+      "id": "grafana",
+      "name": "Grafana",
+      "version": "12.1.1"
+    },
+    {
+      "type": "datasource",
+      "id": "prometheus",
+      "name": "Prometheus",
+      "version": "1.0.0"
+    },
+    {
+      "type": "panel",
+      "id": "table",
+      "name": "Table",
+      "version": ""
+    },
+    {
+      "type": "panel",
+      "id": "timeseries",
+      "name": "Time series",
+      "version": ""
+    }
+  ],
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "datasource",
+          "uid": "grafana"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "target": {
+          "limit": 100,
+          "matchAny": false,
+          "tags": [],
+          "type": "dashboard"
+        },
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "center",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": false,
+            "inspect": false
+          },
+          "mappings": [
+            {
+              "options": {
+                "environment-0896c951-c2b2-41fd-a8e8-c50e07524783-0": {
+                  "index": 4,
+                  "text": "Datalot"
+                },
+                "environment-0f97b2fb-b49e-41dc-bcbe-ad19c9112172-0": {
+                  "index": 27,
+                  "text": "Clockwork Labs"
+                },
+                "environment-1081c89d-a9ba-427e-81e3-d15afb7e5095-0": {
+                  "index": 25,
+                  "text": "Prize Picks"
+                },
+                "environment-180fd09f-029c-45b1-ba91-aeadf64083c1-0": {
+                  "index": 9,
+                  "text": "Ramp"
+                },
+                "environment-1c0bbe99-a487-464f-9625-5085deac2de7-0": {
+                  "index": 14,
+                  "text": "Torch"
+                },
+                "environment-28c9bddb-02ed-42eb-911d-b335d4387b05-0": {
+                  "index": 32,
+                  "text": "Xomnia"
+                },
+                "environment-3792e9f3-34e4-4c23-b0f8-701ca5db235a-0": {
+                  "index": 19,
+                  "text": "Supergrain"
+                },
+                "environment-3abd6e4c-10b5-4137-93ea-d5dca5847347-0": {
+                  "index": 6,
+                  "text": "GOAT"
+                },
+                "environment-3c4d7891-8a99-4e54-89ae-773690b1c73a-0": {
+                  "index": 10,
+                  "text": "Software.com"
+                },
+                "environment-4a04c0db-30e1-4bef-9419-5c634cdb0ea5-0": {
+                  "index": 28,
+                  "text": "IRIS.TV"
+                },
+                "environment-5b58adea-4699-4af1-be96-1e21d26693c3-0": {
+                  "index": 2,
+                  "text": "BTWB"
+                },
+                "environment-63235a11-a6c9-4172-9730-e6f21f05da94-0": {
+                  "index": 26,
+                  "text": "Onward Delivery"
+                },
+                "environment-69f6c81e-8f5a-4c7f-95b0-f463dacca7db-0": {
+                  "index": 22,
+                  "text": "Vivian Health"
+                },
+                "environment-6f87a4e0-71b8-4d77-97dd-c33eed5ceee5-0": {
+                  "index": 12,
+                  "text": "Superscript"
+                },
+                "environment-71b6ca40-1eff-45be-8238-1ca5ef3b7cf4-0": {
+                  "index": 0,
+                  "text": "Applied Sciences Fiction"
+                },
+                "environment-726e2b0b-3552-4603-8f6e-00097534f1fc-0": {
+                  "index": 20,
+                  "text": "Installation Made Easy"
+                },
+                "environment-7fa40647-423c-4156-ab1d-04f1b580e307-0": {
+                  "index": 8,
+                  "text": "Parker"
+                },
+                "environment-8d130536-24e6-462d-8480-6cc71aa67b83-0": {
+                  "index": 31,
+                  "text": "Olive Invest"
+                },
+                "environment-98febd2e-3715-471d-bcc9-e10f53c173b1-0": {
+                  "index": 7,
+                  "text": "Jobber"
+                },
+                "environment-af219ea9-308a-4cad-b949-3d3745a6790a-0": {
+                  "index": 16,
+                  "text": "Maverick"
+                },
+                "environment-b6af3eaf-d3c3-48f9-805c-a18b19d0ab95-0": {
+                  "index": 3,
+                  "text": "Crane"
+                },
+                "environment-badfeeee-863d-48b7-9a07-01910724340f-0": {
+                  "index": 29,
+                  "text": "Danske"
+                },
+                "environment-bf548702-2cae-49e2-b29a-1bbddd35bfa8-0": {
+                  "index": 15,
+                  "text": "Vori"
+                },
+                "environment-c611f929-16ec-4e66-8401-5f1de028f7b1-0": {
+                  "index": 13,
+                  "text": "Tellie"
+                },
+                "environment-c674c04c-d899-4a8e-a500-1c126f00f65a-0": {
+                  "index": 18,
+                  "text": "Datos"
+                },
+                "environment-ca639649-94f7-4fe2-8545-1950ae604cf8-0": {
+                  "index": 33,
+                  "text": "Veho"
+                },
+                "environment-d2297c63-3bb4-4cb8-a904-491eaea9338e-0": {
+                  "index": 11,
+                  "text": "Sproutfi"
+                },
+                "environment-d6c89515-5739-48a8-a6dd-3c2c4220ec12-0": {
+                  "index": 21,
+                  "text": "Trimble"
+                },
+                "environment-dc22c1f3-12fa-4b90-af5f-da1b5558229d-0": {
+                  "index": 30,
+                  "text": "Pluralsight"
+                },
+                "environment-e3147d32-7626-4f66-bdcf-2d9a357eaaaa-0": {
+                  "index": 24,
+                  "text": "fuboTV"
+                },
+                "environment-e48e0164-ab42-4507-b852-75112144a47e-0": {
+                  "index": 23,
+                  "text": "Genesis.xyz"
+                },
+                "environment-f75d8471-ea4c-4994-8f2b-64ad30fcd746-0": {
+                  "index": 1,
+                  "text": "Block"
+                },
+                "environment-f8a56600-b1b5-4367-a07c-5d364ef93fba-0": {
+                  "index": 5,
+                  "text": "Flike"
+                },
+                "environment-fa81c86c-8894-403a-82ff-76878134121c-0": {
+                  "index": 17,
+                  "text": "Block Michael"
+                }
+              },
+              "type": "value"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "compute_cluster_name"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 436
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "mz_cluster"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 157
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "AZ"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 129
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Cluster ID"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 126
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Cluster Name"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 582
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Replica ID"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 114
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "size"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 170
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Replica Name"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 503
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "compute_cluster_id"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 249
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "compute_replica_id"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 198
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "compute_replica_name"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 373
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "cluster_id"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 101
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "replica_id"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 109
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "cluster_name"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 230
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "replica_name"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 153
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 10,
+        "x": 0,
+        "y": 0
+      },
+      "id": 632,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "enablePagination": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "frameIndex": 0,
+        "showHeader": true,
+        "sortBy": [
+          {
+            "desc": false,
+            "displayName": "cluster_id"
+          }
+        ]
+      },
+      "pluginVersion": "12.1.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "(mz_compute_cluster_status{ materialize_cloud_organization_namespace=\"$namespace\",compute_cluster_id=~\"u.*\"})",
+          "instant": false,
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Cluster Replicas",
+      "transformations": [
+        {
+          "id": "reduce",
+          "options": {
+            "labelsToFields": true,
+            "reducers": [
+              "max"
+            ]
+          }
+        },
+        {
+          "id": "groupBy",
+          "options": {
+            "fields": {
+              "compute_cluster_id": {
+                "aggregations": [],
+                "operation": "groupby"
+              },
+              "compute_cluster_name": {
+                "aggregations": [],
+                "operation": "groupby"
+              },
+              "compute_replica_id": {
+                "aggregations": [],
+                "operation": "groupby"
+              },
+              "compute_replica_name": {
+                "aggregations": [],
+                "operation": "groupby"
+              },
+              "pod": {
+                "aggregations": []
+              },
+              "size": {
+                "aggregations": [],
+                "operation": "groupby"
+              }
+            }
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "indexByName": {
+              "compute_cluster_id": 0,
+              "compute_cluster_name": 2,
+              "compute_replica_id": 1,
+              "compute_replica_name": 3,
+              "size": 4
+            },
+            "renameByName": {
+              "compute_cluster_id": "cluster_id",
+              "compute_cluster_name": "cluster_name",
+              "compute_replica_id": "replica_id",
+              "compute_replica_name": "replica_name"
+            }
+          }
+        }
+      ],
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "log": 2,
+              "type": "log"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 14,
+        "x": 10,
+        "y": 0
+      },
+      "id": 633,
+      "options": {
+        "legend": {
+          "calcs": [
+            "max",
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true,
+          "sortBy": "Last *",
+          "sortDesc": false
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "maxHeight": 600,
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "12.1.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum(time() - container_start_time_seconds{namespace=\"$namespace\", pod=~\".*cluster-u.*\"}) by (pod)",
+          "instant": false,
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Cluster Replica Uptime",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 8
+      },
+      "id": 629,
+      "panels": [],
+      "title": "Cluster Overview for $OrgName",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "links": [
+            {
+              "targetBlank": true,
+              "title": "Click panel to view frontiers for all objects",
+              "url": "https://grafana.dev.materialize.com/explore?schemaVersion=1&panes=%7B%22cqo%22%3A%7B%22datasource%22%3A%222K85O21Vz%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22expr%22%3A%22min%28%28v2_mz_write_frontiers%7Bnamespace%3D%5C%22%24namespace%5C%22%7D%29+%5Cn%2B+on+%28collection_id%29+group_left+%28name%2C+type%29%5Cn%5Cn%280*%28increase%28%5Cn%28min%28v2_mz_write_frontiers%7Bnamespace%3D%5C%22%24namespace%5C%22%7D%5Cn%2B+on+%28collection_id%29+group_left+%28cluster_id%2C+cluster_name%2C+name%2C+type%29++++%5Cn+%280*+%28v2_mz_production_object%7Bworkload_class%3D%5C%22production%5C%22%2C+namespace%3D%5C%22%24namespace%5C%22%2C+cluster_name%3D%5C%22%24cluster_name%5C%22%7D%29%29%29+%5Cnby+%28collection_id%2C+cluster_id%2C+cluster_name%2C+name%2C+type%29%29%5Cn%5B10m%3A1m%5D%29%3D%3D0%29%29%29+by+%28name%2C+type%29%22%2C%22range%22%3Atrue%2C%22instant%22%3Atrue%2C%22datasource%22%3A%7B%22type%22%3A%22prometheus%22%2C%22uid%22%3A%222K85O21Vz%22%7D%2C%22editorMode%22%3A%22code%22%2C%22legendFormat%22%3A%22__auto%22%2C%22hide%22%3Afalse%7D%5D%2C%22range%22%3A%7B%22from%22%3A%22now-3h%22%2C%22to%22%3A%22now%22%7D%7D%7D&orgId=1"
+            }
+          ],
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "dateTimeAsIso"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 0,
+        "w": 24,
+        "x": 0,
+        "y": 8
+      },
+      "id": 621,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true,
+          "sortBy": "Last *",
+          "sortDesc": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "11.3.1",
+      "repeat": "cluster_name",
+      "repeatDirection": "v",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "min((v2_mz_write_frontiers{namespace=\"$namespace\"}) \n+ on (collection_id) group_left (name, type)\n\n(0*(increase(\n(min(v2_mz_write_frontiers{namespace=\"$namespace\"}\n+ on (collection_id) group_left (cluster_id, cluster_name, name, type)    \n (0* (v2_mz_production_object{workload_class=\"production\", namespace=\"$namespace\", cluster_name=\"$cluster_name\"}))) \nby (collection_id, cluster_id, cluster_name, name, type))\n[10m:1m])>0))) by (name, type)",
+          "instant": false,
+          "legendFormat": "__auto",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Progressing Objects in $cluster_name",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "default": false,
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 0,
+        "w": 18,
+        "x": 6,
+        "y": 8
+      },
+      "id": 626,
+      "options": {
+        "legend": {
+          "calcs": [
+            "max",
+            "last"
+          ],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true,
+          "sortBy": "Max",
+          "sortDesc": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "11.4.0",
+      "repeat": "cluster_name",
+      "repeatDirection": "v",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "disableTextWrap": false,
+          "editorMode": "code",
+          "expr": "(max by(namespace, instance_id, replica_id, materialize_cloud_generation,mz_context_org_name, collection_id) (mz_dataflow_wallclock_lag_seconds{quantile=\"1\", namespace=~\"$namespace\"}))\n\n+ on (namespace, instance_id, collection_id) group_left (cluster_name, name, type)\n\n(0*\nsum by(namespace, instance_id, cluster_name, collection_id, name, type)\n(label_replace(v2_mz_production_object{namespace=~\"$namespace\", cluster_name=\"$cluster_name\"},\"instance_id\", \"$1\", \"cluster_id\", \"(.*)\"))\n\n)",
+          "fullMetaSearch": false,
+          "hide": false,
+          "includeNullMetadata": true,
+          "instant": false,
+          "legendFormat": "replica-{{replica_id}}-gen{{materialize_cloud_generation}} | {{collection_id}}-{{name}}",
+          "range": true,
+          "refId": "A",
+          "useBackend": false
+        }
+      ],
+      "title": "Seconds of dataflow wallclock lag for $cluster_name by collection",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "*most recent w/I time range\n*missing replica ids indicate compute storage collections",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "yellow",
+                "value": 2
+              },
+              {
+                "color": "orange",
+                "value": 5
+              },
+              {
+                "color": "red",
+                "value": 60
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 9
+      },
+      "id": 630,
+      "options": {
+        "displayMode": "lcd",
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
+        },
+        "maxVizHeight": 300,
+        "minVizHeight": 16,
+        "minVizWidth": 8,
+        "namePlacement": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true,
+        "sizing": "auto",
+        "valueMode": "color"
+      },
+      "pluginVersion": "12.1.1",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "exemplar": false,
+          "expr": "(max by(materialize_cloud_organization_namespace, instance_id, replica_id, materialize_cloud_generation,mz_context_org_name) (mz_dataflow_wallclock_lag_seconds{quantile=\"1\", materialize_cloud_organization_namespace=\"$namespace\", instance_id=~\"$cluster_id\", replica_id=~\"$replica_id\"}))\n\n+ on (materialize_cloud_organization_namespace, instance_id) group_left (compute_cluster_name)\n(0*\nsum by(materialize_cloud_organization_namespace, instance_id, compute_cluster_name)\n(label_replace(mz_compute_cluster_status{materialize_cloud_organization_namespace=~\"$namespace\"},\"instance_id\", \"$1\", \"compute_cluster_id\", \"(.*)\"))\n)\n\nor on (materialize_cloud_organization_namespace, instance_id )\n\n(max by(materialize_cloud_organization_namespace, instance_id, replica_id, materialize_cloud_generation,mz_context_org_name) (mz_dataflow_wallclock_lag_seconds{quantile=\"1\", materialize_cloud_organization_namespace=\"$namespace\", instance_id=~\".*u.*\", instance_id=~\"$cluster_id\", replica_id=~\"$replica_id\"}))",
+          "instant": true,
+          "legendFormat": "{{instance_id}}-{{compute_cluster_name}}-{{replica_id}}",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Current Maximum Wallclock Lag by Cluster, Replica, Generation",
+      "type": "bargauge"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic-by-name"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 52,
+            "gradientMode": "opacity",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": true,
+            "stacking": {
+              "group": "A",
+              "mode": "percent"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "/.*60.*/"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "red",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "/.*5-60.*/"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "orange",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "/.*2-5.*/"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "yellow",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "/.*0-2.*/"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "green",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 17
+      },
+      "id": 631,
+      "options": {
+        "legend": {
+          "calcs": [
+            "last"
+          ],
+          "displayMode": "list",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "12.1.1",
+      "repeat": "replica_id",
+      "repeatDirection": "h",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "count(\n    label_replace(\n      max(mz_dataflow_wallclock_lag_seconds{materialize_cloud_organization_namespace=\"$namespace\", collection_id=~\".*u.*\",instance_id=~\"$cluster_id\", replica_id=~\"$replica_id\", quantile=\"1\"}) by (materialize_cloud_organization_namespace, instance_id, replica_id, collection_id) <= 2, \"bucket\", \"0-2s\", \"\", \"\"\n    ) \n    or \n    label_replace(\n      max(mz_dataflow_wallclock_lag_seconds{materialize_cloud_organization_namespace=\"$namespace\", collection_id=~\".*u.*\",instance_id=~\"$cluster_id\", replica_id=~\"$replica_id\", quantile=\"1\"}) by (materialize_cloud_organization_namespace, instance_id, replica_id, collection_id) > 2 and max(mz_dataflow_wallclock_lag_seconds{materialize_cloud_organization_namespace=\"$namespace\", collection_id=~\".*u.*\",instance_id=~\"$cluster_id\", replica_id=~\"$replica_id\", quantile=\"1\"}) by (materialize_cloud_organization_namespace, instance_id, replica_id, collection_id) <= 5, \"bucket\", \"2-5s\", \"\", \"\"\n    )\n    or \n    label_replace(\n      max(mz_dataflow_wallclock_lag_seconds{materialize_cloud_organization_namespace=\"$namespace\", collection_id=~\".*u.*\",instance_id=~\"$cluster_id\", replica_id=~\"$replica_id\", quantile=\"1\"}) by (materialize_cloud_organization_namespace, instance_id, replica_id, collection_id) > 5 and max(mz_dataflow_wallclock_lag_seconds{materialize_cloud_organization_namespace=\"$namespace\", collection_id=~\".*u.*\",instance_id=~\"$cluster_id\", replica_id=~\"$replica_id\", quantile=\"1\"}) by (materialize_cloud_organization_namespace, instance_id, replica_id, collection_id) <= 60, \"bucket\", \"5-60s\", \"\", \"\"\n    )\n     or \n    label_replace(\n      max(mz_dataflow_wallclock_lag_seconds{materialize_cloud_organization_namespace=\"$namespace\", collection_id=~\".*u.*\",instance_id=~\"$cluster_id\", replica_id=~\"$replica_id\", quantile=\"1\"}) by (materialize_cloud_organization_namespace, instance_id, replica_id, collection_id) > 60, \"bucket\", \"60s+\", \"\", \"\"\n    )\n\n) by (materialize_cloud_organization_namespace, bucket, instance_id, replica_id)",
+          "hide": false,
+          "instant": false,
+          "legendFormat": "{{replica_id}} - {{bucket}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "% of Collections by Lag - replica $replica_id",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 27
+      },
+      "id": 625,
+      "panels": [],
+      "title": "Wallclock Lag",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "links": [
+            {
+              "targetBlank": true,
+              "title": "Click panel to view frontiers for all objects",
+              "url": "https://grafana.dev.materialize.com/explore?schemaVersion=1&panes=%7B%22cqo%22%3A%7B%22datasource%22%3A%222K85O21Vz%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22expr%22%3A%22min%28%28v2_mz_write_frontiers%7Bnamespace%3D%5C%22%24namespace%5C%22%7D%29+%5Cn%2B+on+%28collection_id%29+group_left+%28name%2C+type%29%5Cn%5Cn%280*%28increase%28%5Cn%28min%28v2_mz_write_frontiers%7Bnamespace%3D%5C%22%24namespace%5C%22%7D%5Cn%2B+on+%28collection_id%29+group_left+%28cluster_id%2C+cluster_name%2C+name%2C+type%29++++%5Cn+%280*+%28v2_mz_production_object%7Bworkload_class%3D%5C%22production%5C%22%2C+namespace%3D%5C%22%24namespace%5C%22%2C+cluster_name%3D%5C%22%24cluster_name%5C%22%7D%29%29%29+%5Cnby+%28collection_id%2C+cluster_id%2C+cluster_name%2C+name%2C+type%29%29%5Cn%5B10m%3A1m%5D%29%3D%3D0%29%29%29+by+%28name%2C+type%29%22%2C%22range%22%3Atrue%2C%22instant%22%3Atrue%2C%22datasource%22%3A%7B%22type%22%3A%22prometheus%22%2C%22uid%22%3A%222K85O21Vz%22%7D%2C%22editorMode%22%3A%22code%22%2C%22legendFormat%22%3A%22__auto%22%2C%22hide%22%3Afalse%7D%5D%2C%22range%22%3A%7B%22from%22%3A%22now-3h%22%2C%22to%22%3A%22now%22%7D%7D%7D&orgId=1"
+            }
+          ],
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "dateTimeAsIso"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 0,
+        "w": 12,
+        "x": 12,
+        "y": 27
+      },
+      "id": 619,
+      "maxPerRow": 2,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true,
+          "sortBy": "Last *",
+          "sortDesc": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "11.3.1",
+      "repeat": "cluster_name",
+      "repeatDirection": "v",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "min((v2_mz_write_frontiers{namespace=\"$namespace\"}) \n+ on (collection_id) group_left (name, type)\n\n(0*(increase(\n(min(v2_mz_write_frontiers{namespace=\"$namespace\"}\n+ on (collection_id) group_left (cluster_id, cluster_name, name, type)    \n (0* (v2_mz_production_object{workload_class=\"production\", namespace=\"$namespace\", cluster_name=\"$cluster_name\"}))) \nby (collection_id, cluster_id, cluster_name, name, type))\n[10m:1m])>0))) by (name, type)",
+          "instant": false,
+          "legendFormat": "__auto",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Progressing Objects in $cluster_name",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "links": [
+            {
+              "targetBlank": true,
+              "title": "Click panel to view frontiers for all objects",
+              "url": "https://grafana.dev.materialize.com/explore?schemaVersion=1&panes=%7B%22cqo%22%3A%7B%22datasource%22%3A%222K85O21Vz%22%2C%22queries%22%3A%5B%7B%22refId%22%3A%22A%22%2C%22expr%22%3A%22min%28%28v2_mz_write_frontiers%7Bnamespace%3D%5C%22%24namespace%5C%22%7D%29+%5Cn%2B+on+%28collection_id%29+group_left+%28name%2C+type%29%5Cn%5Cn%280*%28increase%28%5Cn%28min%28v2_mz_write_frontiers%7Bnamespace%3D%5C%22%24namespace%5C%22%7D%5Cn%2B+on+%28collection_id%29+group_left+%28cluster_id%2C+cluster_name%2C+name%2C+type%29++++%5Cn+%280*+%28v2_mz_production_object%7Bworkload_class%3D%5C%22production%5C%22%2C+namespace%3D%5C%22%24namespace%5C%22%2C+cluster_name%3D%5C%22%24cluster_name%5C%22%7D%29%29%29+%5Cnby+%28collection_id%2C+cluster_id%2C+cluster_name%2C+name%2C+type%29%29%5Cn%5B10m%3A1m%5D%29%3D%3D0%29%29%29+by+%28name%2C+type%29%22%2C%22range%22%3Atrue%2C%22instant%22%3Atrue%2C%22datasource%22%3A%7B%22type%22%3A%22prometheus%22%2C%22uid%22%3A%222K85O21Vz%22%7D%2C%22editorMode%22%3A%22code%22%2C%22legendFormat%22%3A%22__auto%22%2C%22hide%22%3Afalse%7D%5D%2C%22range%22%3A%7B%22from%22%3A%22now-3h%22%2C%22to%22%3A%22now%22%7D%7D%7D&orgId=1"
+            }
+          ],
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "dateTimeAsIso"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 0,
+        "w": 12,
+        "x": 12,
+        "y": 27
+      },
+      "id": 620,
+      "maxPerRow": 2,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true,
+          "sortBy": "Last *",
+          "sortDesc": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "11.3.1",
+      "repeat": "cluster_name",
+      "repeatDirection": "v",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "min((v2_mz_write_frontiers{namespace=\"$namespace\"}) \n+ on (collection_id) group_left (name, type)\n\n(0*(increase(\n(min(v2_mz_write_frontiers{namespace=\"$namespace\"}\n+ on (collection_id) group_left (cluster_id, cluster_name, name, type)    \n (0* (v2_mz_production_object{workload_class=\"production\", namespace=\"$namespace\", cluster_name=\"$cluster_name\"}))) \nby (collection_id, cluster_id, cluster_name, name, type))\n[10m:1m])==0))) by (name, type)",
+          "instant": false,
+          "legendFormat": "__auto",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Progressing Objects in $cluster_name",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 6,
+        "x": 0,
+        "y": 28
+      },
+      "id": 624,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "12.1.1",
+      "repeat": "replica_id",
+      "repeatDirection": "v",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "disableTextWrap": false,
+          "editorMode": "code",
+          "expr": "(max by(materialize_cloud_organization_namespace, instance_id, replica_id) (mz_dataflow_wallclock_lag_seconds{quantile=\"1\", materialize_cloud_organization_namespace=\"$namespace\", replica_id=~\"$replica_id\"}))\n\n+ on (materialize_cloud_organization_namespace, instance_id) group_left (compute_cluster_name)\n(0*\nsum by(materialize_cloud_organization_namespace, instance_id, compute_cluster_name)\n(label_replace(mz_compute_cluster_status{materialize_cloud_organization_namespace=~\"$namespace\"},\"instance_id\", \"$1\", \"compute_cluster_id\", \"(.*)\"))\n)\n",
+          "fullMetaSearch": false,
+          "hide": false,
+          "includeNullMetadata": true,
+          "instant": false,
+          "legendFormat": "{{compute_cluster_name - {{instance_id}}-{{replica_id}}",
+          "range": true,
+          "refId": "A",
+          "useBackend": false
+        }
+      ],
+      "title": "Maximum seconds of dataflow wallclock lag for $replica_id",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 18,
+        "x": 6,
+        "y": 28
+      },
+      "id": 628,
+      "options": {
+        "legend": {
+          "calcs": [
+            "max",
+            "mean",
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "12.1.1",
+      "repeat": "replica_id",
+      "repeatDirection": "v",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "disableTextWrap": false,
+          "editorMode": "code",
+          "expr": "(max by(materialize_cloud_organization_namespace, instance_id, replica_id,  collection_id) (mz_dataflow_wallclock_lag_seconds{quantile=\"1\", materialize_cloud_organization_namespace=~\"$namespace\", instance_id=~\"$cluster_id\",replica_id=~\"$replica_id\"}))\n\n+ on (collection_id) group_left (label2)\n0 *\nmax by(collection_id, label2) (\n    label_replace(mz_object_id{materialize_cloud_organization_namespace=~\"$namespace\"}, \"collection_id\", \"$1\", \"label1\", \"(.*)\")\n)",
+          "fullMetaSearch": false,
+          "hide": false,
+          "includeNullMetadata": true,
+          "instant": false,
+          "legendFormat": "replica-{{replica_id}} | {{collection_id}}-{{label2}}",
+          "range": true,
+          "refId": "A",
+          "useBackend": false
+        }
+      ],
+      "title": "Seconds of dataflow wallclock lag for $replica_id by object",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "5m",
+  "schemaVersion": 41,
+  "tags": [],
+  "templating": {
+    "list": [
+      {
+        "current": {},
+        "includeAll": false,
+        "name": "datasource",
+        "options": [],
+        "query": "prometheus",
+        "refresh": 1,
+        "regex": "",
+        "type": "datasource"
+      },
+      {
+        "current": {},
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "definition": "label_values(materialize_cloud_organization_namespace)",
+        "name": "namespace",
+        "options": [],
+        "query": {
+          "qryType": 1,
+          "query": "label_values(materialize_cloud_organization_namespace)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 1,
+        "regex": "",
+        "type": "query"
+      },
+      {
+        "allowCustomValue": false,
+        "current": {},
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "definition": "label_values(mz_dataflow_wallclock_lag_seconds{materialize_cloud_organization_namespace=\"$namespace\", instance_id=~\"u.*\", collection_id=~\"u.*\", replica_id=~\"u.*\"},instance_id)",
+        "includeAll": true,
+        "multi": true,
+        "name": "cluster_id",
+        "options": [],
+        "query": {
+          "qryType": 1,
+          "query": "label_values(mz_dataflow_wallclock_lag_seconds{materialize_cloud_organization_namespace=\"$namespace\", instance_id=~\"u.*\", collection_id=~\"u.*\", replica_id=~\"u.*\"},instance_id)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 1,
+        "regex": "",
+        "type": "query"
+      },
+      {
+        "allowCustomValue": false,
+        "current": {},
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "definition": "label_values(mz_dataflow_wallclock_lag_seconds{materialize_cloud_organization_namespace=\"$namespace\", instance_id=~\"$cluster_id\", collection_id=~\"u.*\"},replica_id)",
+        "includeAll": true,
+        "label": "replica_id",
+        "multi": true,
+        "name": "replica_id",
+        "options": [],
+        "query": {
+          "qryType": 1,
+          "query": "label_values(mz_dataflow_wallclock_lag_seconds{materialize_cloud_organization_namespace=\"$namespace\", instance_id=~\"$cluster_id\", collection_id=~\"u.*\"},replica_id)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 1,
+        "regex": "",
+        "type": "query"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Freshness",
+  "uid": "ee60ugtzlw7pcf",
+  "version": 14,
+  "weekStart": ""
+}
