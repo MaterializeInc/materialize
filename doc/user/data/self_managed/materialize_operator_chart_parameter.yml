@@ -1,199 +1,231 @@
 parameters:
+  - parameter: balancerd.enabled
+    description: |
+      Flag to indicate whether to create balancerd pods for the environments
+    default: "true"
+
+  - parameter: balancerd.nodeSelector
+    description: |
+      Node selector to use for balancerd pods spawned by the operator
+    default: "{}"
+
   - parameter: clusterd.nodeSelector
     description: |
       Node selector to use for clusterd pods spawned by the operator
     default: "{}"
+
+  - parameter: console.enabled
+    description: |
+      Flag to indicate whether to create console pods for the environments
+    default: "true"
+
+  - parameter: console.imageTagMapOverride
+    description: |
+      Override the mapping of environmentd versions to console versions
+    default: "{}"
+
+  - parameter: console.nodeSelector
+    description: |
+      Node selector to use for console pods spawned by the operator
+    default: "{}"
+
   - parameter: environmentd.nodeSelector
     description: |
       Node selector to use for environmentd pods spawned by the operator
     default: "{}"
 
   - parameter: networkPolicies.egress
-    description: egress from Materialize pods to sources and sinks
-    default: |
-      {"cidrs":["0.0.0.0/0"],"enabled":false}
+    description: |
+      egress from Materialize pods to sources and sinks
+    default: '{"cidrs":["0.0.0.0/0"],"enabled":false}'
 
   - parameter: networkPolicies.enabled
     description: |
       Whether to enable network policies for securing communication between pods
-    default: false
+    default: "false"
 
   - parameter: networkPolicies.ingress
     description: |
-      Ingress to the SQL and HTTP interfaces on environmentd or balancerd
-    default: |
-      {"cidrs":["0.0.0.0/0"],"enabled":false}
+      Whether to enable ingress to the SQL and HTTP interfaces on environmentd or balancerd
+    default: '{"cidrs":["0.0.0.0/0"],"enabled":false}'
 
   - parameter: networkPolicies.internal
     description: |
-      Internal communication between Materialize pods
-    default: |
-      {"enabled":false}
+      Whether to enable internal communication between Materialize pods
+    default: '{"enabled":false}'
 
   - parameter: observability.enabled
-    description: ""
-    default: true
+    description: |
+      Whether to enable observability features
+    default: "true"
 
   - parameter: observability.podMetrics.enabled
     description: |
       Whether to enable the pod metrics scraper which populates the Environment Overview Monitoring tab in the web console (requires metrics-server to be installed)
-    default: false
+    default: "false"
 
   - parameter: observability.prometheus.scrapeAnnotations.enabled
     description: |
       Whether to annotate pods with common keys used for prometheus scraping.
-    default: true
+    default: "true"
 
   - parameter: operator.args.enableInternalStatementLogging
     description: ""
-    default: true
+    default: "true"
 
   - parameter: operator.args.startupLogFilter
-    description: Log filtering settings for startup logs
-    default: INFO,mz_orchestratord=TRACE
+    description: |
+      Log filtering settings for startup logs
+    default: "INFO,mz_orchestratord=TRACE"
 
   - parameter: operator.cloudProvider.providers.aws.accountID
-    description: When using AWS, accountID is required
+    description: |
+      When using AWS, accountID is required
     default: ""
 
   - parameter: operator.cloudProvider.providers.aws.enabled
     description: ""
-    default: false
+    default: "false"
 
   - parameter: operator.cloudProvider.providers.aws.iam.roles.connection
-    description: ARN for CREATE CONNECTION feature
+    description: |
+      ARN for CREATE CONNECTION feature
     default: ""
 
   - parameter: operator.cloudProvider.providers.aws.iam.roles.environment
-    description: ARN of the IAM role for environmentd
+    description: |
+      ARN of the IAM role for environmentd
     default: ""
 
   - parameter: operator.cloudProvider.providers.gcp
-    description: GCP Configuration (placeholder for future use)
-    default: |
-      {"enabled":false}
+    description: |
+      GCP Configuration (placeholder for future use)
+    default: '{"enabled":false}'
 
   - parameter: operator.cloudProvider.region
-    description: Common cloud provider settings
-    default: |
-      kind
+    description: |
+      Common cloud provider settings
+    default: "kind"
 
   - parameter: operator.cloudProvider.type
+    description: |
+      Specifies cloud provider. Valid values are 'aws', 'gcp', 'azure', 'generic', or 'local'
+    default: "local"
+
+  - parameter: operator.clusters.defaultReplicationFactor.analytics
     description: ""
-    default: local
+    default: "0"
+
+  - parameter: operator.clusters.defaultReplicationFactor.probe
+    description: ""
+    default: "0"
+
+  - parameter: operator.clusters.defaultReplicationFactor.support
+    description: ""
+    default: "0"
+
+  - parameter: operator.clusters.defaultReplicationFactor.system
+    description: ""
+    default: "0"
 
   - parameter: operator.clusters.defaultSizes.analytics
     description: ""
-    default: 25cc
+    default: "25cc"
 
   - parameter: operator.clusters.defaultSizes.catalogServer
     description: ""
-    default: 50cc
+    default: "25cc"
 
   - parameter: operator.clusters.defaultSizes.default
     description: ""
-    default: 25cc
+    default: "25cc"
 
   - parameter: operator.clusters.defaultSizes.probe
     description: ""
-    default: mz_probe
+    default: "mz_probe"
 
   - parameter: operator.clusters.defaultSizes.support
     description: ""
-    default: 25cc
+    default: "25cc"
 
   - parameter: operator.clusters.defaultSizes.system
     description: ""
-    default: 25cc
-
-  - parameter: operator.features.authentication
-    description: |
-      Whether to enable environmentd rbac checks.
-
-      *Not yet supported in the helm chart*
-    default: false
-
-  - parameter: operator.features.consoleImageTagMapOverride
-    description: |
-      Override the mapping of environmentd versions to console versions
-    default: |
-      {}
-
-  - parameter: operator.features.createBalancers
-    description: |
-      Flag to indicate whether to create balancerd pods for the environments
-    default: true
-
-  - parameter: operator.features.createConsole
-    description: |
-      Flag to indicate whether to create console pods for the environments
-    default: true
+    default: "25cc"
 
   - parameter: operator.image.pullPolicy
     description: |
       Policy for pulling the image: "IfNotPresent" avoids unnecessary re-pulling of images
-    default: IfNotPresent
+    default: "IfNotPresent"
 
   - parameter: operator.image.repository
     description: |
       The Docker repository for the operator image
-    default: materialize/orchestratord
+    default: "materialize/orchestratord"
 
   - parameter: operator.image.tag
     description: |
       The tag/version of the operator image to be used
-    default: v0.127.0
+    default: "v0.138.0"
 
   - parameter: operator.nodeSelector
     description: ""
-    default: |
-      {}
+    default: "{}"
 
   - parameter: operator.resources.limits
     description: |
       Resource limits for the operator's CPU and memory
-    default: |
-      {"memory":"512Mi"}
+    default: '{"memory":"512Mi"}'
 
   - parameter: operator.resources.requests
     description: |
       Resources requested by the operator for CPU and memory
-    default: |
-      {"cpu":"100m","memory":"512Mi"}
+    default: '{"cpu":"100m","memory":"512Mi"}'
+
+  - parameter: operator.secretsController
+    description: |
+      Which secrets controller to use for storing secrets. Valid values are 'kubernetes' and 'aws-secrets-manager'.
+      Setting 'aws-secrets-manager' requires a configured AWS cloud provider and IAM role for the environment with Secrets Manager permissions.
+    default: "kubernetes"
 
   - parameter: rbac.create
     description: |
       Whether to create necessary RBAC roles and bindings
-    default: true
+    default: "true"
+
+  - parameter: schedulerName
+    description: |
+      Optionally use a non-default kubernetes scheduler.
+    default: "nil"
 
   - parameter: serviceAccount.create
     description: |
       Whether to create a new service account for the operator
-    default: true
+    default: "true"
 
   - parameter: serviceAccount.name
     description: |
       The name of the service account to be created
-    default: orchestratord
+    default: "orchestratord"
 
   - parameter: storage.storageClass.allowVolumeExpansion
     description: ""
-    default: false
+    default: "false"
 
   - parameter: storage.storageClass.create
     description: |
-      Set to false to use an existing StorageClass instead
-    default: false
+      Set to false to use an existing StorageClass instead.
+      Refer to the [Kubernetes StorageClass documentation](https://kubernetes.io/docs/concepts/storage/storage-classes/)
+    default: "false"
 
   - parameter: storage.storageClass.name
     description: |
-      Name of the StorageClass to create/use: e.g.,"openebs-lvm-instance-store-ext4"
+      Name of the StorageClass to create/use: eg "openebs-lvm-instance-store-ext4"
     default: ""
 
   - parameter: storage.storageClass.parameters
-    description: Parameters for the CSI driver
-    default: |
-      {"fsType":"ext4","storage":"lvm","volgroup":"instance-store-vg"}
+    description: |
+      Parameters for the CSI driver
+    default: '{"fsType":"ext4","storage":"lvm","volgroup":"instance-store-vg"}'
 
   - parameter: storage.storageClass.provisioner
     description: |
@@ -202,25 +234,24 @@ parameters:
 
   - parameter: storage.storageClass.reclaimPolicy
     description: ""
-    default: Delete
+    default: "Delete"
 
   - parameter: storage.storageClass.volumeBindingMode
     description: ""
-    default: WaitForFirstConsumer
+    default: "WaitForFirstConsumer"
 
   - parameter: telemetry.enabled
     description: ""
-    default: true
+    default: "true"
 
   - parameter: telemetry.segmentApiKey
     description: ""
-    default: hMWi3sZ17KFMjn2sPWo9UJGpOQqiba4A
+    default: "hMWi3sZ17KFMjn2sPWo9UJGpOQqiba4A"
 
   - parameter: telemetry.segmentClientSide
     description: ""
-    default: true
+    default: "true"
 
   - parameter: tls.defaultCertificateSpecs
     description: ""
-    default: |
-      {}
+    default: "{}"

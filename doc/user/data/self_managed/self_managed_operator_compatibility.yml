@@ -1,0 +1,49 @@
+columns:
+  - column: "Materialize Operator"
+  - column: "orchestratord version"
+  - column: "environmentd version"
+  - column: "Release date"
+  - column: "Notes"
+
+rows:
+  - "Materialize Operator": "v25.2.5"
+    "orchestratord version": "v0.154.0."
+    "environmentd version": "v0.147.6"
+    "Release date": "2025-08-21"
+    "Notes": "Fixes license key issues, adds broader service account support."
+
+  - "Materialize Operator": "v25.2.4"
+    "orchestratord version": "v0.153.0"
+    "environmentd version": "v0.147.4"
+    "Release date": "2025-07-15"
+    "Notes": "DO NOT USE"
+
+  - "Materialize Operator": "v25.2.3"
+    "orchestratord version": "v0.147.5"
+    "environmentd version": "v0.147.4"
+    "Release date": "2025-07-15"
+    "Notes": ""
+
+  - "Materialize Operator": "v25.2.0"
+    "orchestratord version": "v0.147.0"
+    "environmentd version": "v0.147.0"
+    "Release date": "2025-06-24"
+    "Notes": "Support for password authentication."
+
+  - "Materialize Operator": "v25.1.12"
+    "orchestratord version": "v0.144.0"
+    "environmentd version": "v0.130.13"
+    "Release date": "2025-05-15"
+    "Notes": ""
+
+  - "Materialize Operator": "v25.1.11"
+    "orchestratord version": "v0.143.0"
+    "environmentd version": "v0.130.12"
+    "Release date": "2025-05-15"
+    "Notes": ""
+
+  - "Materialize Operator": "v25.1.10"
+    "orchestratord version": "v0.142.1"
+    "environmentd version": "v0.130.11"
+    "Release date": "2025-04-24"
+    "Notes": ""

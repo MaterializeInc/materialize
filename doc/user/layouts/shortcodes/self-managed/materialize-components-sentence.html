@@ -1,0 +1,4 @@
+{{- $blobstorage := .Get "blobstorage" | default "blob storage" -}}
+
+Self-managed Materialize requires: a Kubernetes (v1.31+) cluster; PostgreSQL as
+a metadata database; and {{$blobstorage}}.
