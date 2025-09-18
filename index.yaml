@@ -278,16 +278,4 @@ entries:
     urls:
     - https://materializeinc.github.io/materialize/materialize-operator-weekly-v0.157.4.tgz
     version: v0.157.4
-  - apiVersion: v2
-    appVersion: v0.157.3
-    created: "2025-09-18T13:12:53.952250801Z"
-    description: Materialize Kubernetes Operator Helm Chart (weekly version upgrades)
-    digest: 4ebb886802ef3a69d3f0b9c72ab5cc71739444301924717178ece8ced16aa3e3
-    home: https://materialize.com
-    icon: https://materialize.com/favicon.ico
-    name: materialize-operator-weekly
-    type: application
-    urls:
-    - https://materializeinc.github.io/materialize/materialize-operator-weekly-v0.157.3.tgz
-    version: v0.157.3
 generated: "2025-09-18T13:12:53.939256116Z"
