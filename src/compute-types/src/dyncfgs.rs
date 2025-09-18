@@ -61,7 +61,7 @@ pub const LINEAR_JOIN_YIELDING: Config<&str> = Config::new(
 );
 
 /// Enable lgalloc.
-pub const ENABLE_LGALLOC: Config<bool> = Config::new("enable_lgalloc", true, "Enable lgalloc.");
+pub const ENABLE_LGALLOC: Config<bool> = Config::new("enable_lgalloc", false, "Enable lgalloc.");
 
 /// Enable lgalloc's eager memory return/reclamation feature.
 pub const ENABLE_LGALLOC_EAGER_RECLAMATION: Config<bool> = Config::new(
