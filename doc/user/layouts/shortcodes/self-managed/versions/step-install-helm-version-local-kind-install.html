@@ -4,7 +4,7 @@
    `materialize` namespace.
 
    ```shell
-   helm install my-materialize-operator materialize/materialize-operator \
+   helm install my-materialize-operator materialize/materialize-operator-weekly \
        --namespace=materialize --create-namespace \
        --version {{ $operator_version }} \
        --set observability.podMetrics.enabled=true \

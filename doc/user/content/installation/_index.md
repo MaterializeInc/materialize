@@ -1,5 +1,5 @@
 ---
-title: "Installation"
+title: "Self-Managed Weekly Installation"
 description: "Installation guides for self-managed Materialize."
 disable_list: true
 
