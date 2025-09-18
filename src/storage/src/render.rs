@@ -284,7 +284,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                 as_of: as_of.clone(),
                 resume_uppers: resume_uppers.clone(),
                 source_resume_uppers,
-                storage_metadata: description.ingestion_metadata.clone(),
+                remap_metadata: description.remap_metadata.clone(),
                 persist_clients: Arc::clone(&storage_state.persist_clients),
                 statistics: storage_state.aggregated_statistics.get_local_source_stats(),
                 shared_remap_upper: Rc::clone(

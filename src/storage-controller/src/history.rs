@@ -270,7 +270,6 @@ mod tests {
                             blob_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
                             consensus_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
                         },
-                        remap_shard: Default::default(),
                         data_shard: Default::default(),
                         relation_desc: RelationDesc::new(
                             SqlRelationType {
@@ -311,12 +310,11 @@ mod tests {
                 primary_export_details,
                 timestamp_interval: Default::default(),
             },
-            ingestion_metadata: CollectionMetadata {
+            remap_metadata: CollectionMetadata {
                 persist_location: PersistLocation {
                     blob_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
                     consensus_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
                 },
-                remap_shard: Default::default(),
                 data_shard: Default::default(),
                 relation_desc: RelationDesc::new(
                     SqlRelationType {
@@ -385,7 +383,6 @@ mod tests {
                     blob_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
                     consensus_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
                 },
-                remap_shard: Default::default(),
                 data_shard: Default::default(),
                 relation_desc: RelationDesc::new(
                     SqlRelationType {
@@ -401,7 +398,6 @@ mod tests {
                     blob_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
                     consensus_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
                 },
-                remap_shard: Default::default(),
                 data_shard: Default::default(),
                 relation_desc: RelationDesc::new(
                     SqlRelationType {

@@ -67,7 +67,7 @@ where
     pub async fn new(
         persist_clients: Arc<PersistClientCache>,
         read_only_rx: watch::Receiver<bool>,
-        metadata: CollectionMetadata,
+        remap_metadata: CollectionMetadata,
         as_of: Antichain<IntoTime>,
         shared_write_frontier: Rc<RefCell<Antichain<IntoTime>>>,
         // additional information to improve logging
@@ -84,23 +84,14 @@ where
         remap_relation_desc: RelationDesc,
         remap_collection_id: GlobalId,
     ) -> anyhow::Result<Self> {
-        let remap_shard = if let Some(remap_shard) = metadata.remap_shard {
-            remap_shard
-        } else {
-            panic!(
-                "cannot create remap PersistHandle for collection without remap shard: {id}, metadata: {:?}",
-                metadata
-            );
-        };
-
         let persist_client = persist_clients
-            .open(metadata.persist_location.clone())
+            .open(remap_metadata.persist_location.clone())
             .await
             .context("error creating persist client")?;
 
         let (write_handle, mut read_handle) = persist_client
             .open(
-                remap_shard,
+                remap_metadata.data_shard,
                 Arc::new(remap_relation_desc),
                 Arc::new(UnitSchema),
                 Diagnostics {
@@ -155,7 +146,7 @@ where
                 "invalid as_of: as_of({as_of:?}) < since({since:?}), \
                 source {id}, \
                 remap_shard: {:?}",
-                metadata.remap_shard
+                remap_metadata.data_shard
             );
         }
 

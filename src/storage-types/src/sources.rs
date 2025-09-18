@@ -79,8 +79,6 @@ include!(concat!(env!("OUT_DIR"), "/mz_storage_types.sources.rs"));
 pub struct IngestionDescription<S: 'static = (), C: ConnectionAccess = InlinedConnection> {
     /// The source description.
     pub desc: SourceDesc<C>,
-    /// Additional storage controller metadata needed to ingest this source
-    pub ingestion_metadata: S,
     /// Collections to be exported by this ingestion.
     ///
     /// # Notes
@@ -99,6 +97,8 @@ pub struct IngestionDescription<S: 'static = (), C: ConnectionAccess = InlinedCo
     pub instance_id: StorageInstanceId,
     /// The ID of this ingestion's remap/progress collection.
     pub remap_collection_id: GlobalId,
+    /// The storage metadata for the remap/progress collection
+    pub remap_metadata: S,
 }
 
 impl IngestionDescription {
@@ -109,7 +109,7 @@ impl IngestionDescription {
     ) -> Self {
         Self {
             desc,
-            ingestion_metadata: (),
+            remap_metadata: (),
             source_exports: BTreeMap::new(),
             instance_id,
             remap_collection_id,
@@ -127,7 +127,7 @@ impl<S> IngestionDescription<S> {
         // increase the likelihood of developers seeing this function.
         let IngestionDescription {
             desc: _,
-            ingestion_metadata: _,
+            remap_metadata: _,
             source_exports,
             instance_id: _,
             remap_collection_id,
@@ -151,7 +151,7 @@ impl<S: Debug + Eq + PartialEq + AlterCompatible> AlterCompatible for IngestionD
         }
         let IngestionDescription {
             desc,
-            ingestion_metadata,
+            remap_metadata,
             source_exports,
             instance_id,
             remap_collection_id,
@@ -159,10 +159,7 @@ impl<S: Debug + Eq + PartialEq + AlterCompatible> AlterCompatible for IngestionD
 
         let compatibility_checks = [
             (desc.alter_compatible(id, &other.desc).is_ok(), "desc"),
-            (
-                ingestion_metadata == &other.ingestion_metadata,
-                "ingestion_metadata",
-            ),
+            (remap_metadata == &other.remap_metadata, "remap_metadata"),
             (
                 source_exports
                     .iter()
@@ -224,7 +221,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<IngestionDescription, R>
     fn into_inline_connection(self, r: R) -> IngestionDescription {
         let IngestionDescription {
             desc,
-            ingestion_metadata,
+            remap_metadata,
             source_exports,
             instance_id,
             remap_collection_id,
@@ -232,7 +229,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<IngestionDescription, R>
 
         IngestionDescription {
             desc: desc.into_inline_connection(r),
-            ingestion_metadata,
+            remap_metadata,
             source_exports,
             instance_id,
             remap_collection_id,

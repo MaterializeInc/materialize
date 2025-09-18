@@ -105,10 +105,10 @@ where
     C: SourceConnection + SourceRender,
     IntoTime: Timestamp + TotalOrder + Lattice + Codec64 + Display + Sync,
 {
-    let metadata = &ingestion_description.ingestion_metadata;
+    let remap_metadata = &ingestion_description.remap_metadata;
 
     let persist_client = persist_clients
-        .open(metadata.persist_location.clone())
+        .open(remap_metadata.persist_location.clone())
         .await
         .expect("location unavailable");
 
@@ -132,8 +132,8 @@ where
                 None => {
                     let read_handle = persist_client
                         .open_leased_reader::<SourceData, (), IntoTime, StorageDiff>(
-                            metadata.remap_shard.clone().unwrap(),
-                            Arc::new(ingestion_description.desc.connection.timestamp_desc()),
+                            remap_metadata.data_shard.clone(),
+                            Arc::new(remap_metadata.relation_desc.clone()),
                             Arc::new(UnitSchema),
                             Diagnostics {
                                 shard_name: ingestion_description.remap_collection_id.to_string(),
@@ -222,16 +222,10 @@ impl<T: Timestamp + TimestampManipulation + Lattice + Codec64 + Display + Sync>
                     ) => {
                         let mut resume_uppers = BTreeMap::new();
 
-                        let seen_remap_shard = ingestion_description
-                            .ingestion_metadata
-                            .remap_shard
-                            .expect("ingestions must have a remap shard");
-
                         for (id, export) in ingestion_description.source_exports.iter() {
                             // Explicit destructuring to force a compile error when the metadata change
                             let CollectionMetadata {
                                 persist_location,
-                                remap_shard,
                                 data_shard,
                                 relation_desc,
                                 txns_shard,
@@ -268,13 +262,6 @@ impl<T: Timestamp + TimestampManipulation + Lattice + Codec64 + Display + Sync>
                             };
                             resume_uppers.insert(*id, upper);
                             write_handle.expire().await;
-
-                            if let Some(remap_shard) = remap_shard {
-                                assert_eq!(
-                                    seen_remap_shard, *remap_shard,
-                                    "ingestion with multiple remap shards"
-                                );
-                            }
                         }
 
                         // Here we update the as-of frontier of the ingestion.
@@ -295,7 +282,7 @@ impl<T: Timestamp + TimestampManipulation + Lattice + Codec64 + Display + Sync>
                         let client = persist_clients
                             .open(
                                 ingestion_description
-                                    .ingestion_metadata
+                                    .remap_metadata
                                     .persist_location
                                     .clone(),
                             )
@@ -303,8 +290,10 @@ impl<T: Timestamp + TimestampManipulation + Lattice + Codec64 + Display + Sync>
                             .expect("error creating persist client");
                         let read_handle = client
                             .open_leased_reader::<SourceData, (), T, StorageDiff>(
-                                seen_remap_shard,
-                                Arc::new(ingestion_description.desc.connection.timestamp_desc()),
+                                ingestion_description.remap_metadata.data_shard,
+                                Arc::new(
+                                    ingestion_description.remap_metadata.relation_desc.clone(),
+                                ),
                                 Arc::new(UnitSchema),
                                 Diagnostics {
                                     shard_name: ingestion_description
