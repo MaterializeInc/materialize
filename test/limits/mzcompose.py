@@ -1421,6 +1421,8 @@ class Rows(Generator):
 class RowsAggregate(Generator):
     COUNT = 1_000_000
 
+    MAX_COUNT = 16_000_000  # Query timeout with 32_000_000
+
     @classmethod
     def body(cls) -> None:
         cls.store_explain_and_run(
