@@ -33,7 +33,6 @@ rm -rf gh-pages
 git clone --branch "$GITHUB_PAGES_BRANCH" --depth 1 git@github.com:MaterializeInc/materialize.git gh-pages
 
 mkdir -p $RELEASE_DIR
-CHANGES_MADE=0
 CHART=operator-weekly
 CHART_PATH="$CHARTS_DIR/$CHART"
 echo "Processing chart: $CHART version: $VERSION"
@@ -49,29 +48,25 @@ if ! helm lint "$CHART_PATH"; then
   exit 1
 fi
 # Package chart
+cp "$CHARTS_DIR/operator/values.yaml" "$CHART_PATH"
+cp -r "$CHARTS_DIR/operator/templates" "$CHART_PATH"
 helm package "$CHART_PATH" --destination $RELEASE_DIR
-CHANGES_MADE=1
-# Only proceed if we have new packages
-if [ $CHANGES_MADE -eq 1 ]; then
-  # Copy new charts to gh-pages
-  cp $RELEASE_DIR/*.tgz gh-pages/
-  # Update the repository index
-  cd gh-pages
-  REPO_URL="https://materializeinc.github.io/materialize"
-  if [ -f index.yaml ]; then
-    helm repo index . --url "$REPO_URL" --merge index.yaml
-  else
-    helm repo index . --url "$REPO_URL"
-  fi
-  # Commit and push changes
-  git add .
-  git config user.email "noreply@materialize.com"
-  git config user.name "Buildkite"
-  git commit -m "helm-charts: publish updated charts"
-  git --no-pager diff HEAD~
-  run_if_not_dry git push origin $GITHUB_PAGES_BRANCH
-  cd ..
+rm -rf "$CHART_PATH/values.yaml" "$CHART_PATH/templates"
+# Copy new charts to gh-pages
+cp $RELEASE_DIR/*.tgz gh-pages/
+# Update the repository index
+cd gh-pages
+REPO_URL="https://materializeinc.github.io/materialize"
+if [ -f index.yaml ]; then
+  helm repo index . --url "$REPO_URL" --merge index.yaml
 else
-  echo "No new chart versions to publish"
-  exit 0
+  helm repo index . --url "$REPO_URL"
 fi
+# Commit and push changes
+git add .
+git config user.email "noreply@materialize.com"
+git config user.name "Buildkite"
+git commit -m "helm-charts: publish updated charts"
+git --no-pager diff HEAD~
+run_if_not_dry git push origin $GITHUB_PAGES_BRANCH
+cd ..
