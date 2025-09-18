@@ -316,35 +316,10 @@ impl SessionClient {
             }
         };
 
-        //////// todo: txn_read_holds stuff. Work with SessionClient::txn_read_holds.
-
-        // TODO: Checking for only `InTransaction` and not `Implied` (also `Started`?) seems
-        // arbitrary and we don't recall why we did it (possibly an error!). Change this to always
-        // set the transaction ops. Decide and document what our policy should be on AS OF queries.
-        // Maybe they shouldn't be allowed in transactions at all because it's hard to explain
-        // what's going on there. This should probably get a small design document.
-
-        // We only track the peeks in the session if the query doesn't use AS
-        // OF or we're inside an explicit transaction. The latter case is
-        // necessary to support PG's `BEGIN` semantics, whose behavior can
-        // depend on whether or not reads have occurred in the txn.
-        let mut transaction_determination = determination.clone();
-        let requires_linearization = (&explain_ctx).into();
-        if select_plan.when.is_transactional() {
-            session.add_transaction_ops(TransactionOps::Peeks {
-                determination: transaction_determination,
-                cluster_id: target_cluster_id,
-                requires_linearization,
-            })?;
-        } else if matches!(session.transaction(), &TransactionStatus::InTransaction(_)) {
-            // If the query uses AS OF, then ignore the timestamp.
-            transaction_determination.timestamp_context = TimestampContext::NoTimestamp;
-            session.add_transaction_ops(TransactionOps::Peeks {
-                determination: transaction_determination,
-                cluster_id: target_cluster_id,
-                requires_linearization,
-            })?;
-        };
+        // The old peek sequencing's sequence_peek_timestamp does two more things here:
+        // the txn_read_holds stuff and session.add_transaction_ops. We do these later in the new
+        // peek sequencing code, because at this point we might still bail out from the new peek
+        // sequencing, in which case we don't want the mentioned side effects to happen.
 
         // # From peek_optimize
 
@@ -421,6 +396,43 @@ impl SessionClient {
                 return Ok(None);
             }
         };
+
+        // # We do the second half of sequence_peek_timestamp, as mentioned above.
+
+        //////// todo: txn_read_holds stuff. Work with SessionClient::txn_read_holds.
+
+        // TODO: Checking for only `InTransaction` and not `Implied` (also `Started`?) seems
+        // arbitrary and we don't recall why we did it (possibly an error!). Change this to always
+        // set the transaction ops. Decide and document what our policy should be on AS OF queries.
+        // Maybe they shouldn't be allowed in transactions at all because it's hard to explain
+        // what's going on there. This should probably get a small design document.
+
+        // We only track the peeks in the session if the query doesn't use AS
+        // OF or we're inside an explicit transaction. The latter case is
+        // necessary to support PG's `BEGIN` semantics, whose behavior can
+        // depend on whether or not reads have occurred in the txn.
+        let mut transaction_determination = determination.clone();
+        let requires_linearization = (&explain_ctx).into();
+        if select_plan.when.is_transactional() {
+            session.add_transaction_ops(TransactionOps::Peeks {
+                determination: transaction_determination,
+                cluster_id: target_cluster_id,
+                requires_linearization,
+            })?;
+        } else if matches!(session.transaction(), &TransactionStatus::InTransaction(_)) {
+            // If the query uses AS OF, then ignore the timestamp.
+            transaction_determination.timestamp_context = TimestampContext::NoTimestamp;
+            session.add_transaction_ops(TransactionOps::Peeks {
+                determination: transaction_determination,
+                cluster_id: target_cluster_id,
+                requires_linearization,
+            })?;
+        };
+
+        // Warning: Do not bail out from the new peek sequencing after this point, because the above
+        // had side effects.
+
+        // # Now back to peek_finish
 
         //////// todo: statement logging
 
