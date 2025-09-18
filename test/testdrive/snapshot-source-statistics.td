@@ -142,10 +142,6 @@ SELECT cr.id
 
 > ALTER CLUSTER stats_cluster SET (REPLICATION FACTOR 0)
 
-# In a resource constrained environment, changing the replication factor can be delayed
-# and MZ may see the event that should be published while no replica exists.
-$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=5s
-
 $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} schema=${schema}
 {"key": "mammalmore"} {"f1":"moose", "f2": 100}
 
@@ -182,9 +178,13 @@ SELECT cr.id
 
 $ unset-regex
 
+
+# In a resource constrained environment, changing the replication factor can be delayed
+# and MZ may see the event that should be published while no replica exists, so offset_committed
+# for the previous replica may include that event.
 > SELECT
     s.name,
-    SUM(u.offset_committed) > ${pre-restart-offset-committed},
+    SUM(u.offset_committed) >= ${pre-restart-offset-committed},
     SUM(u.snapshot_records_known),
     SUM(u.snapshot_records_staged),
     u.replica_id
