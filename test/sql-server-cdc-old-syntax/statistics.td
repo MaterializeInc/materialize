@@ -160,7 +160,7 @@ SELECT cr.id
 $ unset-regex
 
 # Ensure the snapshot stats stay there, and don't change for the original replica
-# and the new replica has reset stats
+# and the new replica has no snapshot stats as no snapshots needed.
 > SELECT
     s.name,
     u.replica_id,
@@ -174,7 +174,7 @@ $ unset-regex
   GROUP BY s.name, u.replica_id
   ORDER BY s.name, u.replica_id
 mz_source "${old_replica_id}" false true 2 2
-mz_source "${replica_id}" true true 0 0
+mz_source "${replica_id}" true true <null> <null>
 
 $ sql-server-execute name=sql-server
 CREATE TABLE alt (f1 VARCHAR(128));
