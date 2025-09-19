@@ -50,7 +50,7 @@ pub enum PgSourcePurificationError {
     NotPgConnection(FullItemName),
     #[error("CONNECTION must specify PUBLICATION")]
     ConnectionMissingPublication,
-    #[error("CONNECTION must specify PUBLICATION")]
+    #[error(transparent)]
     InvalidConnection(PostgresConnectionValidationError),
 }
 

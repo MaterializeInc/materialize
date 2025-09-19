@@ -120,13 +120,13 @@ impl<R: ConnectionResolver> IntoInlineConnection<SqlServerSourceConnection, R>
 {
     fn into_inline_connection(self, r: R) -> SqlServerSourceConnection {
         let SqlServerSourceConnection {
-            connection_id: catalog_id,
+            connection_id,
             connection,
             extras,
         } = self;
 
         SqlServerSourceConnection {
-            connection_id: catalog_id,
+            connection_id,
             connection: r.resolve_connection(connection).unwrap_sql_server(),
             extras,
         }
@@ -176,13 +176,13 @@ impl<C: ConnectionAccess> AlterCompatible for SqlServerSourceConnection<C> {
         }
 
         let SqlServerSourceConnection {
-            connection_id: catalog_id,
+            connection_id,
             connection,
             extras,
         } = self;
 
         let compatibility_checks = [
-            (catalog_id == &other.connection_id, "catalog_id"),
+            (connection_id == &other.connection_id, "connection_id"),
             (
                 connection.alter_compatible(id, &other.connection).is_ok(),
                 "connection",
