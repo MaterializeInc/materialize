@@ -70,17 +70,6 @@ SELECT id FROM mz_sources WHERE name = 't1_pk_sql_server';
 $ set-from-sql var=subsource-id
 SELECT id FROM mz_sources WHERE name = 't1_pk';
 
-# Wait until snapshot has emitted stats and then insert a new row
-# to force LSN in MS SQL to progress.
-> SELECT s.name, ss.snapshot_records_known = ss.snapshot_records_staged
-  FROM mz_internal.mz_source_statistics ss JOIN mz_sources s using (id)
-  WHERE s.name = 't1_pk_sql_server' AND ss.snapshot_records_staged > 0;
-t1_pk_sql_server true
-
-# Doesn't work anymore with auto dummy updates
-# > SELECT snapshot_records_known, snapshot_records_staged, snapshot_committed FROM mz_internal.mz_source_statistics WHERE id = '${source-id}';
-# 3 3 true
-
 > SELECT * FROM t1_pk;
 a "hello world"
 b "foobar"
@@ -89,15 +78,13 @@ c "anotha one"
 $ sql-server-execute name=sql-server
 UPDATE t1_pk SET val_col = 'I am an updated value' WHERE key_col = 'a';
 
-# Doesn't work anymore with auto dummy updates
-# > SELECT messages_received FROM mz_internal.mz_source_statistics WHERE id = '${source-id}';
-# 6
-#
-# > SELECT updates_staged, updates_committed FROM mz_internal.mz_source_statistics WHERE id = '${subsource-id}';
-# 5 5
-
 > SELECT offset_known IS NULL, offset_committed IS NULL FROM mz_internal.mz_source_statistics WHERE id = '${subsource-id}';
 false false
+
+> SELECT snapshot_records_staged, snapshot_records_known
+  FROM mz_internal.mz_source_statistics
+  WHERE id = '${subsource-id}';
+3 3
 
 > SELECT * FROM t1_pk;
 a "I am an updated value"
@@ -114,7 +101,7 @@ c "anotha one"
 $ sql-server-execute name=sql-server
 INSERT INTO t1_pk VALUES ('😊', 'lets see what happens');
 
-# Note: VARCHAR columns in SQL Server do not support emojis, hence the '??'.
+# The test setup uses a UTF8 collation, which allows VARCHAR to store emojis.
 > SELECT * FROM t1_pk;
 b "foobar"
 c "anotha one"

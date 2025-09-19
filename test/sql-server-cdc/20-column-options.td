@@ -51,13 +51,6 @@ c1 true text ""
 c2 true text ""
 c4 true text ""
 
-# Wait until snapshot has emitted stats and then insert a new row
-# to force LSN in MS SQL to progress.
-> SELECT s.name, ss.snapshot_records_known = ss.snapshot_records_staged
-  FROM mz_internal.mz_source_statistics ss JOIN mz_sources s using (id)
-  WHERE s.name = 't1_columns_sql_server' AND ss.snapshot_records_staged > 0;
-t1_columns_sql_server true
-
 > SELECT c1, c2, c4 FROM t1_columns;
 1.4448890000 12:00:00 EQCr
 

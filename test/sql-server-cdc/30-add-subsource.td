@@ -49,14 +49,6 @@ ALTER SYSTEM SET log_filter = 'mz_sql=debug,info';
   FROM SQL SERVER CONNECTION sql_server_test_add_subsource_conn
   FOR TABLES (dbo.t1_add_subsource);
 
-# Wait until snapshot has emitted stats and then insert a new row
-# to force LSN in MS SQL to progress.
-> SELECT s.name, ss.snapshot_records_known = ss.snapshot_records_staged
-  FROM mz_internal.mz_source_statistics ss JOIN mz_sources s using (id)
-  WHERE s.name = 'my_source_add_subsources' AND ss.snapshot_records_staged > 0;
-my_source_add_subsources true
-
-
 > SELECT * FROM t1_add_subsource;
 a
 b
@@ -64,13 +56,6 @@ c
 <null>
 
 > ALTER SOURCE my_source_add_subsources ADD SUBSOURCE dbo.t2_add_subsource;
-
-# Wait until snapshot has emitted stats and then insert a new row
-# to force LSN in MS SQL to progress.
-> SELECT s.name, ss.snapshot_records_known = ss.snapshot_records_staged
-  FROM mz_internal.mz_source_statistics ss JOIN mz_sources s using (id)
-  WHERE s.name = 'my_source_add_subsources' AND ss.snapshot_records_staged > 0;
-my_source_add_subsources true
 
 > SELECT * FROM t2_add_subsource;
 100
@@ -113,13 +98,6 @@ INSERT INTO t2_add_subsource VALUES ('500');
 <null>
 
 > ALTER SOURCE my_source_add_subsources ADD SUBSOURCE dbo.t1_add_subsource;
-
-# Wait until snapshot has emitted stats and then insert a new row
-# to force LSN in MS SQL to progress.
-> SELECT s.name, ss.snapshot_records_known = ss.snapshot_records_staged
-  FROM mz_internal.mz_source_statistics ss JOIN mz_sources s using (id)
-  WHERE s.name = 'my_source_add_subsources' AND ss.snapshot_records_staged > 0;
-my_source_add_subsources true
 
 > SELECT * FROM t1_add_subsource;
 a

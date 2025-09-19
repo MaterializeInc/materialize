@@ -17,22 +17,11 @@ $ sql-server-connect name=sql-server
 server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID=${arg.default-sql-server-user};Password=${arg.default-sql-server-password}
 
 $ sql-server-execute name=sql-server
-DROP DATABASE IF EXISTS test_stats;
-CREATE DATABASE test_stats;
-USE test_stats;
-
-EXEC sys.sp_cdc_enable_db;
-ALTER DATABASE test_stats SET ALLOW_SNAPSHOT_ISOLATION ON;
-
+USE test;
 CREATE TABLE t1 (f1 VARCHAR(20));
 EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 't1', @role_name = 'SA', @supports_net_changes = 0;
 
 INSERT INTO t1 VALUES ('one');
-
-CREATE TABLE dummy (data int);
-EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'dummy', @role_name = 'SA', @supports_net_changes = 0;
-
-
 
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
@@ -45,7 +34,7 @@ ALTER SYSTEM SET storage_statistics_interval = 2000;
 > CREATE CONNECTION msconn TO SQL SERVER (
     HOST 'sql-server',
     PORT 1433,
-    DATABASE test_stats,
+    DATABASE test,
     USER '${arg.default-sql-server-user}',
     PASSWORD = SECRET mspass
   );
@@ -83,21 +72,8 @@ SELECT cr.id
   ORDER BY cr.id
   LIMIT 1
 
-# Wait until snapshot has emitted stats and then insert a new row
-# to force LSN in MS SQL to progress.
-> SELECT s.name, ss.snapshot_records_known = ss.snapshot_records_staged
-  FROM mz_internal.mz_source_statistics ss JOIN mz_sources s using (id)
-  WHERE s.name = 'mz_source'
-    AND ss.replica_id = '${replica_id}'
-    AND ss.snapshot_records_staged > 0;
-mz_source true
-
-$ sql-server-execute name=sql-server
-INSERT INTO dummy VALUES (1);
-
 > SELECT COUNT(*) > 0 FROM t1;
 true
-
 
 # NOTE: we make sure that we have stats for a replica, otherwise the
 # set-from-sql below might fail because it doesn't do retries when a row is
@@ -249,18 +225,6 @@ INSERT INTO t2 VALUES ('two');
 
 
 > CREATE TABLE t2 FROM SOURCE mz_source (REFERENCE dbo.t2);
-
-# Wait until snapshot has emitted stats and then insert a new row
-# to force LSN in MS SQL to progress.
-> SELECT s.name, ss.snapshot_records_known = ss.snapshot_records_staged
-  FROM mz_internal.mz_source_statistics ss JOIN mz_sources s using (id)
-  WHERE s.name = 'mz_source'
-    AND ss.replica_id = '${replica_id}'
-    AND ss.snapshot_records_staged > 0;
-mz_source true
-
-$ sql-server-execute name=sql-server
-INSERT INTO dummy VALUES (1);
 
 > SELECT COUNT(*) > 0 FROM t2;
 true
