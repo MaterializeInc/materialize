@@ -240,6 +240,22 @@ steps:
         coverage: skip
         sanitizer: skip
 
+      - id: lint-cargo-doc-test
+        label: Cargo doc tests
+        command: bin/ci-builder run stable ci/test/lint-cargo-doc-test.sh
+        inputs:
+          - Cargo.lock
+          - Cargo.toml
+          - "**/Cargo.toml"
+          - "**/*.rs"
+        depends_on: []
+        timeout_in_minutes: 40
+        agents:
+          queue: hetzner-x86-64-dedi-32cpu-128gb-cargo-test
+        coverage: skip
+        sanitizer: skip
+
+
   - id: cargo-test
     label: ":rust: Cargo test"
     timeout_in_minutes: 60
