@@ -13,8 +13,6 @@ use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{CatalogItemId, GlobalId, RelationDesc, Timestamp};
 use mz_storage_types::connections::aws::AwsConnection;
 use mz_storage_types::sinks::S3UploadInfo;
-use proptest::prelude::{Arbitrary, BoxedStrategy, Strategy, any};
-use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
 
@@ -37,47 +35,8 @@ pub struct ComputeSinkDesc<S: 'static = (), T = Timestamp> {
     pub refresh_schedule: Option<RefreshSchedule>,
 }
 
-impl Arbitrary for ComputeSinkDesc<(), Timestamp> {
-    type Strategy = BoxedStrategy<Self>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        (
-            any::<GlobalId>(),
-            any::<RelationDesc>(),
-            any::<ComputeSinkConnection<()>>(),
-            any::<bool>(),
-            proptest::collection::vec(any::<Timestamp>(), 1..4),
-            proptest::collection::vec(any::<usize>(), 0..4),
-            proptest::option::of(any::<RefreshSchedule>()),
-        )
-            .prop_map(
-                |(
-                    from,
-                    from_desc,
-                    connection,
-                    with_snapshot,
-                    up_to_frontier,
-                    non_null_assertions,
-                    refresh_schedule,
-                )| {
-                    ComputeSinkDesc {
-                        from,
-                        from_desc,
-                        connection,
-                        with_snapshot,
-                        up_to: Antichain::from(up_to_frontier),
-                        non_null_assertions,
-                        refresh_schedule,
-                    }
-                },
-            )
-            .boxed()
-    }
-}
-
 /// TODO(database-issues#7533): Add documentation.
-#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub enum ComputeSinkConnection<S: 'static = ()> {
     /// TODO(database-issues#7533): Add documentation.
     Subscribe(SubscribeSinkConnection),
@@ -112,11 +71,11 @@ impl<S> ComputeSinkConnection<S> {
 }
 
 /// TODO(database-issues#7533): Add documentation.
-#[derive(Arbitrary, Default, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Default, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct SubscribeSinkConnection {}
 
 /// Connection attributes required to do a oneshot copy to s3.
-#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct CopyToS3OneshotSinkConnection {
     /// Information specific to the upload.
     pub upload_info: S3UploadInfo,
@@ -131,7 +90,7 @@ pub struct CopyToS3OneshotSinkConnection {
 }
 
 /// TODO(database-issues#7533): Add documentation.
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct MaterializedViewSinkConnection<S> {
     /// TODO(database-issues#7533): Add documentation.
     pub value_desc: RelationDesc,
@@ -141,7 +100,7 @@ pub struct MaterializedViewSinkConnection<S> {
 
 /// ContinualTask-specific information necessary for rendering a ContinualTask
 /// sink. (Shared-sink information is instead stored on ComputeSinkConnection.)
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ContinualTaskConnection<S> {
     /// The id of the (for now) single input to this CT.
     //

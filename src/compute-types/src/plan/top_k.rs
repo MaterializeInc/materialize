@@ -18,13 +18,12 @@
 //! * A [BasicTopKPlan] maintains up to K rows per key and can handle retractions.
 
 use mz_expr::ColumnOrder;
-use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use crate::plan::bucketing_of_expected_group_size;
 
 /// A plan encapsulating different variants to compute a TopK operation.
-#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub enum TopKPlan {
     /// A plan for Top1 for monotonic inputs.
     MonotonicTop1(MonotonicTop1Plan),
@@ -166,7 +165,7 @@ impl TopKPlan {
 /// differential's semantics. (2) is especially interesting because Kafka is
 /// monotonic with an ENVELOPE of NONE, which is the default for ENVELOPE in
 /// Materialize and commonly used by users.
-#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct MonotonicTop1Plan {
     /// The columns that form the key for each group.
     pub group_key: Vec<usize>,
@@ -183,7 +182,7 @@ pub struct MonotonicTop1Plan {
 }
 
 /// A plan for monotonic TopKs with an offset of 0 and an arbitrary limit.
-#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct MonotonicTopKPlan {
     /// The columns that form the key for each group.
     pub group_key: Vec<usize>,
@@ -205,7 +204,7 @@ pub struct MonotonicTopKPlan {
 }
 
 /// A plan for generic TopKs that don't fit any more specific category.
-#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct BasicTopKPlan {
     /// The columns that form the key for each group.
     pub group_key: Vec<usize>,

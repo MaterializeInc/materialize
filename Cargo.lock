@@ -6059,8 +6059,6 @@ dependencies = [
  "mz-ore",
  "mz-repr",
  "mz-storage-types",
- "proptest",
- "proptest-derive",
  "serde",
  "timely",
  "tracing",

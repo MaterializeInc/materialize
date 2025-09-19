@@ -66,9 +66,6 @@ use mz_expr::{
     AggregateExpr, AggregateFunc, MapFilterProject, MirScalarExpr, permutation_for_arrangement,
 };
 use mz_ore::{assert_none, soft_assert_or_log};
-use proptest::prelude::{Arbitrary, BoxedStrategy, any};
-use proptest::strategy::Strategy;
-use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use crate::plan::{AvailableCollections, bucketing_of_expected_group_size};
@@ -134,68 +131,6 @@ pub enum ReducePlan {
     /// We need to do extra work here to reassemble results back in the
     /// requested order.
     Collation(CollationPlan),
-}
-
-proptest::prop_compose! {
-    /// `expected_group_size` is a u64, but instead of a uniform distribution,
-    /// we want a logarithmic distribution so that we have an even distribution
-    /// in the number of layers of buckets that a hierarchical plan would have.
-    fn any_group_size()
-        (bits in 0..u64::BITS)
-        (integer in (((1_u64) << bits) - 1)
-            ..(if bits == (u64::BITS - 1){ u64::MAX }
-                else { (1_u64) << (bits + 1) - 1 }))
-    -> u64 {
-        integer
-    }
-}
-
-/// To avoid stack overflow, this limits the arbitrarily-generated test
-/// `ReducePlan`s to involve at most 8 aggregations.
-///
-/// To have better coverage of realistic expected group sizes, the
-/// `expected group size` has a logarithmic distribution.
-impl Arbitrary for ReducePlan {
-    type Parameters = ();
-
-    type Strategy = BoxedStrategy<Self>;
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        (
-            proptest::collection::vec(any::<AggregateExpr>(), 0..8),
-            any::<bool>(),
-            any::<bool>(),
-            any_group_size(),
-            any::<bool>(),
-        )
-            .prop_map(
-                |(
-                    exprs,
-                    monotonic,
-                    any_expected_size,
-                    expected_group_size,
-                    mut fused_unnest_list,
-                )| {
-                    let expected_group_size = if any_expected_size {
-                        Some(expected_group_size)
-                    } else {
-                        None
-                    };
-                    if !(exprs.len() == 1
-                        && matches!(reduction_type(&exprs[0].func), ReductionType::Basic))
-                    {
-                        fused_unnest_list = false;
-                    }
-                    ReducePlan::create_from(
-                        exprs,
-                        monotonic,
-                        expected_group_size,
-                        fused_unnest_list,
-                    )
-                },
-            )
-            .boxed()
-    }
 }
 
 /// Plan for computing a set of accumulable aggregations.
@@ -648,7 +583,7 @@ impl ReducePlan {
 }
 
 /// Plan for extracting keys and values in preparation for a reduction.
-#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct KeyValPlan {
     /// Extracts the columns used as the key.
     pub key_plan: mz_expr::SafeMfpPlan,

@@ -21,7 +21,6 @@ use mz_expr::{
     JoinInputCharacteristics, JoinInputMapper, MapFilterProject, MirScalarExpr, join_permutations,
     permutation_for_arrangement,
 };
-use proptest::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::plan::AvailableCollections;
@@ -42,17 +41,6 @@ pub struct DeltaJoinPlan {
     pub path_plans: Vec<DeltaPathPlan>,
 }
 
-impl Arbitrary for DeltaJoinPlan {
-    type Parameters = ();
-    type Strategy = BoxedStrategy<Self>;
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        prop::collection::vec(any::<DeltaPathPlan>(), 0..3)
-            .prop_map(|path_plans| DeltaJoinPlan { path_plans })
-            .boxed()
-    }
-}
-
 /// A delta query path is implemented by a sequences of stages,
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct DeltaPathPlan {
@@ -68,33 +56,6 @@ pub struct DeltaPathPlan {
     ///
     /// Values of `None` indicate the identity closure.
     pub final_closure: Option<JoinClosure>,
-}
-
-impl Arbitrary for DeltaPathPlan {
-    type Parameters = ();
-    type Strategy = BoxedStrategy<Self>;
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        (
-            any::<usize>(),
-            prop::collection::vec(any::<MirScalarExpr>(), 0..3),
-            any::<JoinClosure>(),
-            prop::collection::vec(any::<DeltaStagePlan>(), 0..1),
-            any::<Option<JoinClosure>>(),
-        )
-            .prop_map(
-                |(source_relation, source_key, initial_closure, stage_plans, final_closure)| {
-                    DeltaPathPlan {
-                        source_relation,
-                        source_key,
-                        initial_closure,
-                        stage_plans,
-                        final_closure,
-                    }
-                },
-            )
-            .boxed()
-    }
 }
 
 /// A delta query stage performs a stream lookup into an arrangement.
@@ -115,33 +76,6 @@ pub struct DeltaStagePlan {
     /// The closure to apply to the concatenation of columns
     /// of the stream and lookup relations.
     pub closure: JoinClosure,
-}
-
-impl Arbitrary for DeltaStagePlan {
-    type Parameters = ();
-    type Strategy = BoxedStrategy<Self>;
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        (
-            any::<usize>(),
-            prop::collection::vec(any::<MirScalarExpr>(), 0..3),
-            prop::collection::vec(any::<usize>(), 0..3),
-            prop::collection::vec(any::<MirScalarExpr>(), 0..3),
-            any::<JoinClosure>(),
-        )
-            .prop_map(
-                |(lookup_relation, stream_key, stream_thinning, lookup_key, closure)| {
-                    DeltaStagePlan {
-                        lookup_relation,
-                        stream_key,
-                        stream_thinning,
-                        lookup_key,
-                        closure,
-                    }
-                },
-            )
-            .boxed()
-    }
 }
 
 impl DeltaJoinPlan {
