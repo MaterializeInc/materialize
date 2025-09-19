@@ -7214,16 +7214,11 @@ dependencies = [
  "bytes",
  "csv",
  "itertools 0.14.0",
- "mz-build-tools",
  "mz-ore",
  "mz-pgrepr",
- "mz-proto",
  "mz-repr",
  "proptest",
- "prost",
- "prost-build",
  "serde",
- "tonic-build",
  "workspace-hack",
 ]
 
