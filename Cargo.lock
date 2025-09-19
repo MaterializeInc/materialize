@@ -8392,14 +8392,8 @@ dependencies = [
 name = "mz-tracing"
 version = "0.0.0"
 dependencies = [
- "mz-build-tools",
  "mz-ore",
- "mz-proto",
- "proptest",
- "prost",
- "prost-build",
  "serde",
- "tonic-build",
  "tracing",
  "tracing-subscriber",
  "workspace-hack",
