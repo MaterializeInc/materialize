@@ -3366,7 +3366,7 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
 }
 
 /// A single update to the catalog state.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct StateUpdate {
     pub kind: StateUpdateKind,
     pub ts: Timestamp,
@@ -3376,7 +3376,7 @@ pub struct StateUpdate {
 /// The contents of a single state update.
 ///
 /// Variants are listed in dependency order.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum StateUpdateKind {
     Role(durable::objects::Role),
     RoleAuth(durable::objects::RoleAuth),
@@ -3438,6 +3438,35 @@ pub struct TemporaryItem {
     pub item: CatalogItem,
     pub owner_id: RoleId,
     pub privileges: PrivilegeMap,
+}
+
+impl PartialEq for TemporaryItem {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.oid == other.oid
+            && self.name == other.name
+            && self.owner_id == other.owner_id
+            && self.privileges == other.privileges
+    }
+}
+
+impl Eq for TemporaryItem {}
+
+impl PartialOrd for TemporaryItem {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for TemporaryItem {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.id
+            .cmp(&other.id)
+            .then_with(|| self.oid.cmp(&other.oid))
+            .then_with(|| self.name.cmp(&other.name))
+            .then_with(|| self.owner_id.cmp(&other.owner_id))
+            .then_with(|| self.privileges.cmp(&other.privileges))
+    }
 }
 
 impl From<CatalogEntry> for TemporaryItem {
