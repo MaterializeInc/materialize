@@ -12429,15 +12429,8 @@ max_memory_and_disk AS (
         CASE
           WHEN disk_bytes IS NULL
           AND memory_bytes IS NULL THEN NULL
-          ELSE (
-            (
-              COALESCE(disk_bytes, 0) + COALESCE(memory_bytes, 0)
-            ) / total_memory_bytes
-          ) / (
-            (
-              total_disk_bytes::numeric + total_memory_bytes::numeric
-            ) / total_memory_bytes
-          )
+          ELSE (COALESCE(disk_bytes, 0) + COALESCE(memory_bytes, 0))
+               / (total_disk_bytes::numeric + total_memory_bytes::numeric)
         END AS memory_and_disk_percent
       FROM replica_utilization_history_binned
     ) AS max_memory_and_disk_inner
