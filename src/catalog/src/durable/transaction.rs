@@ -62,10 +62,11 @@ use crate::durable::objects::{
 use crate::durable::{
     AUDIT_LOG_ID_ALLOC_KEY, BUILTIN_MIGRATION_SHARD_KEY, CATALOG_CONTENT_VERSION_KEY, CatalogError,
     DATABASE_ID_ALLOC_KEY, DefaultPrivilege, DurableCatalogError, DurableCatalogState,
-    EXPRESSION_CACHE_SHARD_KEY, NetworkPolicy, OID_ALLOC_KEY, SCHEMA_ID_ALLOC_KEY,
-    STORAGE_USAGE_ID_ALLOC_KEY, SYSTEM_CLUSTER_ID_ALLOC_KEY, SYSTEM_ITEM_ALLOC_KEY,
-    SYSTEM_REPLICA_ID_ALLOC_KEY, Snapshot, SystemConfiguration, USER_ITEM_ALLOC_KEY,
-    USER_NETWORK_POLICY_ID_ALLOC_KEY, USER_REPLICA_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
+    EXPRESSION_CACHE_SHARD_KEY, MOCK_AUTHENTICATION_NONCE_KEY, NetworkPolicy, OID_ALLOC_KEY,
+    SCHEMA_ID_ALLOC_KEY, STORAGE_USAGE_ID_ALLOC_KEY, SYSTEM_CLUSTER_ID_ALLOC_KEY,
+    SYSTEM_ITEM_ALLOC_KEY, SYSTEM_REPLICA_ID_ALLOC_KEY, Snapshot, SystemConfiguration,
+    USER_ITEM_ALLOC_KEY, USER_NETWORK_POLICY_ID_ALLOC_KEY, USER_REPLICA_ID_ALLOC_KEY,
+    USER_ROLE_ID_ALLOC_KEY,
 };
 use crate::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
 
@@ -1920,7 +1921,7 @@ impl<'a> Transaction<'a> {
     }
 
     /// Get the value of a persisted setting.
-    fn get_setting(&self, name: String) -> Option<&str> {
+    pub fn get_setting(&self, name: String) -> Option<&str> {
         self.settings
             .get(&SettingKey { name })
             .map(|entry| &*entry.value)
@@ -2194,6 +2195,14 @@ impl<'a> Transaction<'a> {
                 name: CATALOG_CONTENT_VERSION_KEY.to_string(),
             })
             .map(|value| &*value.value)
+    }
+
+    pub fn get_authentication_mock_nonce(&self) -> Option<String> {
+        self.settings
+            .get(&SettingKey {
+                name: MOCK_AUTHENTICATION_NONCE_KEY.to_string(),
+            })
+            .map(|value| value.value.clone())
     }
 
     /// Commit the current operation within the transaction. This does not cause anything to be

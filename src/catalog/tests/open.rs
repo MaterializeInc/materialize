@@ -16,8 +16,8 @@ use mz_catalog::durable::objects::serialization::proto;
 use mz_catalog::durable::objects::{DurableType, Snapshot};
 use mz_catalog::durable::{
     BUILTIN_MIGRATION_SHARD_KEY, CATALOG_VERSION, CatalogError, Database, DurableCatalogError,
-    DurableCatalogState, EXPRESSION_CACHE_SHARD_KEY, Epoch, FenceError, Schema,
-    TestCatalogStateBuilder, test_bootstrap_args,
+    DurableCatalogState, EXPRESSION_CACHE_SHARD_KEY, Epoch, FenceError,
+    MOCK_AUTHENTICATION_NONCE_KEY, Schema, TestCatalogStateBuilder, test_bootstrap_args,
 };
 use mz_ore::cast::usize_to_u64;
 use mz_ore::collections::HashSet;
@@ -65,6 +65,12 @@ impl StableSnapshot<'_> {
             name: EXPRESSION_CACHE_SHARD_KEY.to_string(),
         }
     }
+
+    fn mock_authentication_nonce_key() -> proto::SettingKey {
+        proto::SettingKey {
+            name: MOCK_AUTHENTICATION_NONCE_KEY.to_string(),
+        }
+    }
 }
 
 impl Debug for StableSnapshot<'_> {
@@ -97,6 +103,7 @@ impl Debug for StableSnapshot<'_> {
         let mut settings: BTreeMap<proto::SettingKey, proto::SettingValue> = settings.clone();
         settings.remove(&Self::builtin_migration_shard_key());
         settings.remove(&Self::expression_cache_shard_key());
+        settings.remove(&Self::mock_authentication_nonce_key());
         f.debug_struct("Snapshot")
             .field("databases", databases)
             .field("schemas", schemas)

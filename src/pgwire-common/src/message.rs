@@ -179,9 +179,52 @@ pub enum FrontendMessage {
 
     CopyFail(String),
 
+    RawAuthentication(Vec<u8>),
+
     Password {
         password: String,
     },
+
+    SASLInitialResponse {
+        mechanism: String,
+        initial_response: SASLInitialResponse,
+    },
+
+    SASLResponse(SASLClientFinalResponse),
+}
+
+#[derive(Debug)]
+pub enum ChannelBinding {
+    /// Client doesn't support channel binding.
+    None,
+    /// Client supports channel binding but thinks server does not.
+    ClientSupported,
+    /// Client requires channel binding.
+    Required(String),
+}
+
+#[derive(Debug)]
+pub struct GS2Header {
+    pub cbind_flag: ChannelBinding,
+    pub authzid: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct SASLInitialResponse {
+    pub gs2_header: GS2Header,
+    pub nonce: String,
+    pub extensions: Vec<String>,
+    pub reserved_mext: Option<String>,
+    pub client_first_message_bare_raw: String,
+}
+
+#[derive(Debug)]
+pub struct SASLClientFinalResponse {
+    pub channel_binding: String,
+    pub nonce: String,
+    pub extensions: Vec<String>,
+    pub proof: String,
+    pub client_final_message_bare_raw: String,
 }
 
 impl FrontendMessage {
@@ -201,7 +244,10 @@ impl FrontendMessage {
             FrontendMessage::CopyData(_) => "copy_data",
             FrontendMessage::CopyDone => "copy_done",
             FrontendMessage::CopyFail(_) => "copy_fail",
+            FrontendMessage::RawAuthentication(_) => "raw_authentication",
             FrontendMessage::Password { .. } => "password",
+            FrontendMessage::SASLInitialResponse { .. } => "sasl_initial_response",
+            FrontendMessage::SASLResponse(_) => "sasl_response",
         }
     }
 }
