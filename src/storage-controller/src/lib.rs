@@ -610,17 +610,17 @@ where
             replica_id: Some(replica_id),
         };
 
-        for id in instance.active_ingestions() {
-            if let Some(active_replicas) = self.dropped_objects.get_mut(id) {
+        for ingestion_id in instance.active_ingestions() {
+            if let Some(active_replicas) = self.dropped_objects.get_mut(ingestion_id) {
                 active_replicas.remove(&replica_id);
                 if active_replicas.is_empty() {
-                    self.dropped_objects.remove(id);
+                    self.dropped_objects.remove(ingestion_id);
                 }
             }
 
             let ingestion = self
                 .collections
-                .get_mut(id)
+                .get_mut(ingestion_id)
                 .expect("instance contains unknown ingestion");
 
             let ingestion_description = match &ingestion.data_source {
@@ -631,18 +631,22 @@ where
                 ),
             };
 
-            // NOTE(aljoscha): We filter out the remap collection because we
-            // don't get any status updates about it from the replica side. So
-            // we don't want to synthesize a 'paused' status here.
-            //
-            // TODO(aljoscha): I think we want to fix this eventually, and make
-            // sure we get status updates for the remap shard as well. Currently
-            // its handling in the source status collection is a bit difficult
-            // because we don't have updates for it in the status history
-            // collection.
-            let subsource_ids = ingestion_description
-                .collection_ids()
-                .filter(|id| id != &ingestion_description.remap_collection_id);
+            let subsource_ids = ingestion_description.collection_ids().filter(|id| {
+                if *ingestion_id == ingestion_description.remap_collection_id {
+                    true
+                } else {
+                    // NOTE(aljoscha): We filter out the remap collection because we
+                    // don't get any status updates about it from the replica side. So
+                    // we don't want to synthesize a 'paused' status here.
+                    //
+                    // TODO(aljoscha): I think we want to fix this eventually, and make
+                    // sure we get status updates for the remap shard as well. Currently
+                    // its handling in the source status collection is a bit difficult
+                    // because we don't have updates for it in the status history
+                    // collection.
+                    id != &ingestion_description.remap_collection_id
+                }
+            });
             for id in subsource_ids {
                 source_status_updates.push(make_update(id, "source"));
             }

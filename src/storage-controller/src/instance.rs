@@ -295,19 +295,22 @@ where
         for command in self.history.iter() {
             match command {
                 StorageCommand::RunIngestion(ingestion) => {
-                    // NOTE(aljoscha): We filter out the remap collection because we
-                    // don't get any status updates about it from the replica side. So
-                    // we don't want to synthesize a 'paused' status here.
-                    //
-                    // TODO(aljoscha): I think we want to fix this eventually, and make
-                    // sure we get status updates for the remap shard as well. Currently
-                    // its handling in the source status collection is a bit difficult
-                    // because we don't have updates for it in the status history
-                    // collection.
-                    let subsource_ids = ingestion
-                        .description
-                        .collection_ids()
-                        .filter(|id| id != &ingestion.description.remap_collection_id);
+                    let subsource_ids = ingestion.description.collection_ids().filter(|id| {
+                        if ingestion.id == ingestion.description.remap_collection_id {
+                            true
+                        } else {
+                            // NOTE(aljoscha): We filter out the remap collection because we
+                            // don't get any status updates about it from the replica side. So
+                            // we don't want to synthesize a 'paused' status here.
+                            //
+                            // TODO(aljoscha): I think we want to fix this eventually, and make
+                            // sure we get status updates for the remap shard as well. Currently
+                            // its handling in the source status collection is a bit difficult
+                            // because we don't have updates for it in the status history
+                            // collection.
+                            id != &ingestion.description.remap_collection_id
+                        }
+                    });
                     for id in subsource_ids {
                         status_updates.push(make_update(id, "source"));
                     }
