@@ -1033,32 +1033,6 @@ where
     Ok(expr.map(map_exprs).project(project_key))
 }
 
-/// Plans an expression in the `UP TO` position of a `SUBSCRIBE` statement.
-pub fn plan_up_to(
-    scx: &StatementContext,
-    mut up_to: Expr<Aug>,
-) -> Result<MirScalarExpr, PlanError> {
-    let scope = Scope::empty();
-    let desc = RelationDesc::empty();
-    // Even though this is part of a SUBSCRIBE, we need a QueryLifetime::OneShot (instead of
-    // QueryLifetime::Subscribe), because the UP TO is evaluated only once.
-    let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
-    transform_ast::transform(scx, &mut up_to)?;
-    let ecx = &ExprContext {
-        qcx: &qcx,
-        name: "UP TO",
-        scope: &scope,
-        relation_type: desc.typ(),
-        allow_aggregates: false,
-        allow_subqueries: false,
-        allow_parameters: false,
-        allow_windows: false,
-    };
-    plan_expr(ecx, &up_to)?
-        .type_as_any(ecx)?
-        .lower_uncorrelated()
-}
-
 /// Plans an expression in the AS OF position of a `SELECT` or `SUBSCRIBE`, or `CREATE MATERIALIZED
 /// VIEW` statement.
 pub fn plan_as_of(
@@ -1067,34 +1041,60 @@ pub fn plan_as_of(
 ) -> Result<QueryWhen, PlanError> {
     match as_of {
         None => Ok(QueryWhen::Immediately),
-        Some(mut as_of) => match as_of {
-            AsOf::At(ref mut expr) | AsOf::AtLeast(ref mut expr) => {
-                let scope = Scope::empty();
-                let desc = RelationDesc::empty();
-                // Even for a SUBSCRIBE, we need QueryLifetime::OneShot, because the AS OF is
-                // evaluated only once.
-                let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
-                transform_ast::transform(scx, expr)?;
-                let ecx = &ExprContext {
-                    qcx: &qcx,
-                    name: "AS OF",
-                    scope: &scope,
-                    relation_type: desc.typ(),
-                    allow_aggregates: false,
-                    allow_subqueries: false,
-                    allow_parameters: false,
-                    allow_windows: false,
-                };
-                let expr = plan_expr(ecx, expr)?
-                    .type_as_any(ecx)?
-                    .lower_uncorrelated()?;
-                match as_of {
-                    AsOf::At(_) => Ok(QueryWhen::AtTimestamp(expr)),
-                    AsOf::AtLeast(_) => Ok(QueryWhen::AtLeastTimestamp(expr)),
-                }
-            }
+        Some(as_of) => match as_of {
+            AsOf::At(expr) => Ok(QueryWhen::AtTimestamp(plan_as_of_or_up_to(scx, expr)?)),
+            AsOf::AtLeast(expr) => Ok(QueryWhen::AtLeastTimestamp(plan_as_of_or_up_to(scx, expr)?)),
         },
     }
+}
+
+/// Plans and evaluates a scalar expression in a OneShot context to a non-null MzTimestamp.
+///
+/// Produces [`PlanError::InvalidAsOfUpTo`] if the expression is
+/// - not a constant,
+/// - not castable to MzTimestamp,
+/// - is null,
+/// - contains an unmaterializable function,
+/// - some other evaluation error occurs, e.g., a division by 0,
+/// - contains aggregates, subqueries, parameters, or window function calls.
+pub fn plan_as_of_or_up_to(
+    scx: &StatementContext,
+    mut expr: Expr<Aug>,
+) -> Result<mz_repr::Timestamp, PlanError> {
+    let scope = Scope::empty();
+    let desc = RelationDesc::empty();
+    // (Even for a SUBSCRIBE, we need QueryLifetime::OneShot, because the AS OF or UP TO is
+    // evaluated only once.)
+    let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
+    transform_ast::transform(scx, &mut expr)?;
+    let ecx = &ExprContext {
+        qcx: &qcx,
+        name: "AS OF or UP TO",
+        scope: &scope,
+        relation_type: desc.typ(),
+        allow_aggregates: false,
+        allow_subqueries: false,
+        allow_parameters: false,
+        allow_windows: false,
+    };
+    let hir = plan_expr(ecx, &expr)?.cast_to(
+        ecx,
+        CastContext::Assignment,
+        &SqlScalarType::MzTimestamp,
+    )?;
+    if hir.contains_unmaterializable() {
+        bail_unsupported!("calling an unmaterializable function in AS OF or UP TO");
+    }
+    // At this point, we definitely have a constant expression:
+    // - it can't contain any unmaterializable functions;
+    // - it can't refer to any columns.
+    // But the following can still fail due to a variety of reasons: most commonly, the cast can
+    // fail, but also a null might appear, or some other evaluation error can happen, e.g., a
+    // division by 0.
+    let timestamp = hir
+        .into_literal_mz_timestamp()
+        .ok_or_else(|| PlanError::InvalidAsOfUpTo)?;
+    Ok(timestamp)
 }
 
 /// Plans an expression in the AS position of a `CREATE SECRET`.

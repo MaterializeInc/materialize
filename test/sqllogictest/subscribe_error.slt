@@ -61,3 +61,31 @@ FETCH 1 c
 
 statement ok
 ROLLBACK
+
+# Test that invalid UP TO expressions are rejected.
+# (`SUBSCRIBE ... AS OF ... UP TO` is also tested in `as_of.slt` and in some cargo tests:
+# test_empty_subscribe_error, test_empty_subscribe_notice, test_subscribe_basic)
+
+statement error db error: ERROR: AS OF or UP TO should be castable to a \(non\-null\) mz_timestamp value
+SUBSCRIBE mv UP TO -1;
+
+statement error db error: ERROR: AS OF or UP TO should be castable to a \(non\-null\) mz_timestamp value
+SUBSCRIBE mv UP TO null;
+
+statement error db error: ERROR: AS OF or UP TO should be castable to a \(non\-null\) mz_timestamp value
+SUBSCRIBE mv UP TO null::mz_timestamp;
+
+statement error db error: ERROR: AS OF or UP TO should be castable to a \(non\-null\) mz_timestamp value
+SUBSCRIBE mv UP TO 'xxx';
+
+statement error db error: ERROR: calling an unmaterializable function in AS OF or UP TO not yet supported
+SUBSCRIBE mv UP TO now();
+
+statement error db error: ERROR: calling an unmaterializable function in AS OF or UP TO not yet supported
+SUBSCRIBE mv UP TO mz_now();
+
+statement error db error: ERROR: calling an unmaterializable function in AS OF or UP TO not yet supported
+SUBSCRIBE mv UP TO current_database();
+
+statement error db error: ERROR: calling an unmaterializable function in AS OF or UP TO not yet supported
+SUBSCRIBE mv UP TO current_database()::mz_timestamp;
