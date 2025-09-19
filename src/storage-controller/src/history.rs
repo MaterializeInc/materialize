@@ -236,9 +236,8 @@ mod tests {
         LoadGenerator, LoadGeneratorOutput, LoadGeneratorSourceExportDetails,
     };
     use mz_storage_types::sources::{
-        GenericSourceConnection, IngestionDescription, LoadGeneratorSourceConnection,
-        SourceConnection, SourceDesc, SourceEnvelope, SourceExport, SourceExportDataConfig,
-        SourceExportDetails,
+        GenericSourceConnection, IngestionDescription, LoadGeneratorSourceConnection, SourceDesc,
+        SourceEnvelope, SourceExport, SourceExportDataConfig, SourceExportDetails,
     };
     use timely::progress::Antichain;
 
@@ -270,7 +269,6 @@ mod tests {
                             blob_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
                             consensus_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
                         },
-                        remap_shard: Default::default(),
                         data_shard: Default::default(),
                         relation_desc: RelationDesc::new(
                             SqlRelationType {
@@ -299,24 +297,17 @@ mod tests {
             as_of: Default::default(),
             up_to: Default::default(),
         });
-        let primary_export_details = connection.primary_export_details();
 
         IngestionDescription {
             desc: SourceDesc {
                 connection,
-                primary_export: SourceExportDataConfig {
-                    encoding: Default::default(),
-                    envelope: SourceEnvelope::CdcV2,
-                },
-                primary_export_details,
                 timestamp_interval: Default::default(),
             },
-            ingestion_metadata: CollectionMetadata {
+            remap_metadata: CollectionMetadata {
                 persist_location: PersistLocation {
                     blob_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
                     consensus_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
                 },
-                remap_shard: Default::default(),
                 data_shard: Default::default(),
                 relation_desc: RelationDesc::new(
                     SqlRelationType {
@@ -385,7 +376,6 @@ mod tests {
                     blob_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
                     consensus_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
                 },
-                remap_shard: Default::default(),
                 data_shard: Default::default(),
                 relation_desc: RelationDesc::new(
                     SqlRelationType {
@@ -401,7 +391,6 @@ mod tests {
                     blob_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
                     consensus_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
                 },
-                remap_shard: Default::default(),
                 data_shard: Default::default(),
                 relation_desc: RelationDesc::new(
                     SqlRelationType {

@@ -79,8 +79,6 @@ include!(concat!(env!("OUT_DIR"), "/mz_storage_types.sources.rs"));
 pub struct IngestionDescription<S: 'static = (), C: ConnectionAccess = InlinedConnection> {
     /// The source description.
     pub desc: SourceDesc<C>,
-    /// Additional storage controller metadata needed to ingest this source
-    pub ingestion_metadata: S,
     /// Collections to be exported by this ingestion.
     ///
     /// # Notes
@@ -99,6 +97,8 @@ pub struct IngestionDescription<S: 'static = (), C: ConnectionAccess = InlinedCo
     pub instance_id: StorageInstanceId,
     /// The ID of this ingestion's remap/progress collection.
     pub remap_collection_id: GlobalId,
+    /// The storage metadata for the remap/progress collection
+    pub remap_metadata: S,
 }
 
 impl IngestionDescription {
@@ -109,7 +109,7 @@ impl IngestionDescription {
     ) -> Self {
         Self {
             desc,
-            ingestion_metadata: (),
+            remap_metadata: (),
             source_exports: BTreeMap::new(),
             instance_id,
             remap_collection_id,
@@ -127,7 +127,7 @@ impl<S> IngestionDescription<S> {
         // increase the likelihood of developers seeing this function.
         let IngestionDescription {
             desc: _,
-            ingestion_metadata: _,
+            remap_metadata: _,
             source_exports,
             instance_id: _,
             remap_collection_id,
@@ -151,7 +151,7 @@ impl<S: Debug + Eq + PartialEq + AlterCompatible> AlterCompatible for IngestionD
         }
         let IngestionDescription {
             desc,
-            ingestion_metadata,
+            remap_metadata,
             source_exports,
             instance_id,
             remap_collection_id,
@@ -159,10 +159,7 @@ impl<S: Debug + Eq + PartialEq + AlterCompatible> AlterCompatible for IngestionD
 
         let compatibility_checks = [
             (desc.alter_compatible(id, &other.desc).is_ok(), "desc"),
-            (
-                ingestion_metadata == &other.ingestion_metadata,
-                "ingestion_metadata",
-            ),
+            (remap_metadata == &other.remap_metadata, "remap_metadata"),
             (
                 source_exports
                     .iter()
@@ -224,7 +221,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<IngestionDescription, R>
     fn into_inline_connection(self, r: R) -> IngestionDescription {
         let IngestionDescription {
             desc,
-            ingestion_metadata,
+            remap_metadata,
             source_exports,
             instance_id,
             remap_collection_id,
@@ -232,7 +229,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<IngestionDescription, R>
 
         IngestionDescription {
             desc: desc.into_inline_connection(r),
-            ingestion_metadata,
+            remap_metadata,
             source_exports,
             instance_id,
             remap_collection_id,
@@ -512,11 +509,6 @@ pub trait SourceConnection: Debug + Clone + PartialEq + AlterCompatible {
     /// the catalog, if any.
     fn connection_id(&self) -> Option<CatalogItemId>;
 
-    /// If this source connection can output to a primary collection, contains the source-specific
-    /// details of that export, else is set to `SourceExportDetails::None` to indicate that
-    /// this source should not export to the primary collection.
-    fn primary_export_details(&self) -> SourceExportDetails;
-
     /// Whether the source type supports read only mode.
     fn supports_read_only(&self) -> bool;
 
@@ -618,12 +610,6 @@ impl<C: ConnectionAccess> SourceExportDataConfig<C> {
 pub struct SourceDesc<C: ConnectionAccess = InlinedConnection> {
     pub connection: GenericSourceConnection<C>,
     pub timestamp_interval: Duration,
-    /// The data encoding and format of data to export to the
-    /// primary collection for this source.
-    /// TODO(database-issues#8620): This will be removed once sources no longer export
-    /// to primary collections and only export to explicit SourceExports (tables).
-    pub primary_export: SourceExportDataConfig<C>,
-    pub primary_export_details: SourceExportDetails,
 }
 
 impl<R: ConnectionResolver> IntoInlineConnection<SourceDesc, R>
@@ -632,15 +618,11 @@ impl<R: ConnectionResolver> IntoInlineConnection<SourceDesc, R>
     fn into_inline_connection(self, r: R) -> SourceDesc {
         let SourceDesc {
             connection,
-            primary_export,
-            primary_export_details,
             timestamp_interval,
         } = self;
 
         SourceDesc {
             connection: connection.into_inline_connection(&r),
-            primary_export: primary_export.into_inline_connection(r),
-            primary_export_details,
             timestamp_interval,
         }
     }
@@ -656,8 +638,6 @@ impl<C: ConnectionAccess> AlterCompatible for SourceDesc<C> {
         }
         let Self {
             connection,
-            primary_export,
-            primary_export_details,
             timestamp_interval,
         } = &self;
 
@@ -665,11 +645,6 @@ impl<C: ConnectionAccess> AlterCompatible for SourceDesc<C> {
             (
                 connection.alter_compatible(id, &other.connection).is_ok(),
                 "connection",
-            ),
-            (primary_export == &other.primary_export, "primary_export"),
-            (
-                primary_export_details == &other.primary_export_details,
-                "primary_export_details",
             ),
             (
                 timestamp_interval == &other.timestamp_interval,
@@ -690,19 +665,6 @@ impl<C: ConnectionAccess> AlterCompatible for SourceDesc<C> {
         }
 
         Ok(())
-    }
-}
-
-impl SourceDesc<InlinedConnection> {
-    /// Returns the SourceExport details for the primary export.
-    /// TODO(database-issues#8620): This will be removed once sources no longer export
-    /// to primary collections and only export to explicit SourceExports (tables).
-    pub fn primary_source_export(&self) -> SourceExport<(), InlinedConnection> {
-        SourceExport {
-            storage_metadata: (),
-            details: self.primary_export_details.clone(),
-            data_config: self.primary_export.clone(),
-        }
     }
 }
 
@@ -827,16 +789,6 @@ impl<C: ConnectionAccess> SourceConnection for GenericSourceConnection<C> {
             Self::MySql(conn) => conn.connection_id(),
             Self::SqlServer(conn) => conn.connection_id(),
             Self::LoadGenerator(conn) => conn.connection_id(),
-        }
-    }
-
-    fn primary_export_details(&self) -> SourceExportDetails {
-        match self {
-            Self::Kafka(conn) => conn.primary_export_details(),
-            Self::Postgres(conn) => conn.primary_export_details(),
-            Self::MySql(conn) => conn.primary_export_details(),
-            Self::SqlServer(conn) => conn.primary_export_details(),
-            Self::LoadGenerator(conn) => conn.primary_export_details(),
         }
     }
 

@@ -155,8 +155,8 @@ use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::connections::inline::{IntoInlineConnection, ReferencedConnection};
 use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::sinks::{S3SinkFormat, StorageSinkDesc};
-use mz_storage_types::sources::Timeline;
 use mz_storage_types::sources::kafka::KAFKA_PROGRESS_DESC;
+use mz_storage_types::sources::{IngestionDescription, SourceExport, Timeline};
 use mz_timestamp_oracle::WriteTimestamp;
 use mz_timestamp_oracle::postgres_oracle::{
     PostgresTimestampOracle, PostgresTimestampOracleConfig,
@@ -2642,68 +2642,82 @@ impl Coordinator {
             .get_entry(&source_status_collection_id)
             .latest_global_id();
 
-        let source_desc =
-            |data_source: &DataSourceDesc, desc: &RelationDesc, timeline: &Timeline| {
-                let (data_source, status_collection_id) = match data_source.clone() {
-                    // Re-announce the source description.
-                    DataSourceDesc::Ingestion {
-                        ingestion_desc:
-                            mz_sql::plan::Ingestion {
-                                desc,
-                                progress_subsource,
-                            },
-                        cluster_id,
-                    } => {
-                        let desc = desc.into_inline_connection(catalog.state());
-                        // TODO(parkmycar): We should probably check the type here, but I'm not sure if
-                        // this will always be a Source or a Table.
-                        let progress_subsource =
-                            catalog.get_entry(&progress_subsource).latest_global_id();
-                        let ingestion = mz_storage_types::sources::IngestionDescription::new(
-                            desc,
-                            cluster_id,
-                            progress_subsource,
-                        );
+        let source_desc = |object_id: GlobalId,
+                           data_source: &DataSourceDesc,
+                           desc: &RelationDesc,
+                           timeline: &Timeline| {
+            let (data_source, status_collection_id) = match data_source.clone() {
+                // Re-announce the source description.
+                DataSourceDesc::Ingestion { desc, cluster_id } => {
+                    let desc = desc.into_inline_connection(catalog.state());
+                    let ingestion = IngestionDescription::new(desc, cluster_id, object_id);
 
-                        (
-                            DataSource::Ingestion(ingestion.clone()),
-                            Some(source_status_collection_id),
-                        )
-                    }
-                    DataSourceDesc::IngestionExport {
-                        ingestion_id,
-                        external_reference: _,
-                        details,
+                    (
+                        DataSource::Ingestion(ingestion),
+                        Some(source_status_collection_id),
+                    )
+                }
+                DataSourceDesc::OldSyntaxIngestion {
+                    desc,
+                    progress_subsource,
+                    data_config,
+                    details,
+                    cluster_id,
+                } => {
+                    let desc = desc.into_inline_connection(catalog.state());
+                    let data_config = data_config.into_inline_connection(catalog.state());
+                    // TODO(parkmycar): We should probably check the type here, but I'm not sure if
+                    // this will always be a Source or a Table.
+                    let progress_subsource =
+                        catalog.get_entry(&progress_subsource).latest_global_id();
+                    let mut ingestion =
+                        IngestionDescription::new(desc, cluster_id, progress_subsource);
+                    let legacy_export = SourceExport {
+                        storage_metadata: (),
                         data_config,
-                    } => {
-                        // TODO(parkmycar): We should probably check the type here, but I'm not sure if
-                        // this will always be a Source or a Table.
-                        let ingestion_id = catalog.get_entry(&ingestion_id).latest_global_id();
-                        (
-                            DataSource::IngestionExport {
-                                ingestion_id,
-                                details,
-                                data_config: data_config.into_inline_connection(catalog.state()),
-                            },
-                            Some(source_status_collection_id),
-                        )
-                    }
-                    DataSourceDesc::Webhook { .. } => {
-                        (DataSource::Webhook, Some(source_status_collection_id))
-                    }
-                    DataSourceDesc::Progress => (DataSource::Progress, None),
-                    DataSourceDesc::Introspection(introspection) => {
-                        (DataSource::Introspection(introspection), None)
-                    }
-                };
-                CollectionDescription {
-                    desc: desc.clone(),
-                    data_source,
-                    since: None,
-                    status_collection_id,
-                    timeline: Some(timeline.clone()),
+                        details,
+                    };
+                    ingestion.source_exports.insert(object_id, legacy_export);
+
+                    (
+                        DataSource::Ingestion(ingestion),
+                        Some(source_status_collection_id),
+                    )
+                }
+                DataSourceDesc::IngestionExport {
+                    ingestion_id,
+                    external_reference: _,
+                    details,
+                    data_config,
+                } => {
+                    // TODO(parkmycar): We should probably check the type here, but I'm not sure if
+                    // this will always be a Source or a Table.
+                    let ingestion_id = catalog.get_entry(&ingestion_id).latest_global_id();
+                    (
+                        DataSource::IngestionExport {
+                            ingestion_id,
+                            details,
+                            data_config: data_config.into_inline_connection(catalog.state()),
+                        },
+                        Some(source_status_collection_id),
+                    )
+                }
+                DataSourceDesc::Webhook { .. } => {
+                    (DataSource::Webhook, Some(source_status_collection_id))
+                }
+                DataSourceDesc::Progress => (DataSource::Progress, None),
+                DataSourceDesc::Introspection(introspection) => {
+                    (DataSource::Introspection(introspection), None)
                 }
             };
+            CollectionDescription {
+                desc: desc.clone(),
+                data_source,
+                since: None,
+                status_collection_id,
+                timeline: Some(timeline.clone()),
+            }
+        };
 
         let mut compute_collections = vec![];
         let mut collections = vec![];
@@ -2713,7 +2727,12 @@ impl Coordinator {
                 CatalogItem::Source(source) => {
                     collections.push((
                         source.global_id(),
-                        source_desc(&source.data_source, &source.desc, &source.timeline),
+                        source_desc(
+                            source.global_id(),
+                            &source.data_source,
+                            &source.desc,
+                            &source.timeline,
+                        ),
                     ));
                 }
                 CatalogItem::Table(table) => {
@@ -2744,7 +2763,15 @@ impl Coordinator {
                             soft_assert_eq_or_log!(table.collections.len(), 1);
                             let collection_descs =
                                 table.collection_descs().map(|(gid, _version, desc)| {
-                                    (gid, source_desc(data_source_desc, &desc, timeline))
+                                    (
+                                        gid,
+                                        source_desc(
+                                            entry.latest_global_id(),
+                                            data_source_desc,
+                                            &desc,
+                                            timeline,
+                                        ),
+                                    )
                                 });
                             collections.extend(collection_descs);
                         }

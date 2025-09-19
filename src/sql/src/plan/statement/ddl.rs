@@ -100,7 +100,7 @@ use mz_storage_types::sources::kafka::{
 };
 use mz_storage_types::sources::load_generator::{
     KeyValueLoadGenerator, LOAD_GENERATOR_KEY_VALUE_OFFSET_DEFAULT, LoadGenerator,
-    LoadGeneratorSourceConnection, LoadGeneratorSourceExportDetails,
+    LoadGeneratorOutput, LoadGeneratorSourceConnection, LoadGeneratorSourceExportDetails,
 };
 use mz_storage_types::sources::mysql::{
     MySqlSourceConnection, MySqlSourceDetails, ProtoMySqlSourceDetails,
@@ -155,11 +155,11 @@ use crate::plan::{
     CreateMaterializedViewPlan, CreateNetworkPolicyPlan, CreateRolePlan, CreateSchemaPlan,
     CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
     CreateViewPlan, DataSourceDesc, DropObjectsPlan, DropOwnedPlan, HirRelationExpr, Index,
-    Ingestion, MaterializedView, NetworkPolicyRule, NetworkPolicyRuleAction,
-    NetworkPolicyRuleDirection, Plan, PlanClusterOption, PlanNotice, PolicyAddress, QueryContext,
-    ReplicaConfig, Secret, Sink, Source, Table, TableDataSource, Type, VariableValue, View,
-    WebhookBodyFormat, WebhookHeaderFilters, WebhookHeaders, WebhookValidation, literal,
-    plan_utils, query, transform_ast,
+    MaterializedView, NetworkPolicyRule, NetworkPolicyRuleAction, NetworkPolicyRuleDirection, Plan,
+    PlanClusterOption, PlanNotice, PolicyAddress, QueryContext, ReplicaConfig, Secret, Sink,
+    Source, Table, TableDataSource, Type, VariableValue, View, WebhookBodyFormat,
+    WebhookHeaderFilters, WebhookHeaders, WebhookValidation, literal, plan_utils, query,
+    transform_ast,
 };
 use crate::session::vars::{
     self, ENABLE_CLUSTER_SCHEDULE_REFRESH, ENABLE_COLLECTION_PARTITION_BY,
@@ -1149,51 +1149,55 @@ pub fn plan_create_source(
         None => scx.catalog.config().timestamp_interval,
     };
 
-    let (primary_export, primary_export_details) = if force_source_table_syntax {
-        (
-            SourceExportDataConfig {
-                encoding: None,
-                envelope: SourceEnvelope::None(NoneEnvelope {
-                    key_envelope: KeyEnvelope::None,
-                    key_arity: 0,
-                }),
-            },
-            SourceExportDetails::None,
-        )
-    } else {
-        (
-            SourceExportDataConfig {
-                encoding,
-                envelope: envelope.clone(),
-            },
-            external_connection.primary_export_details(),
-        )
-    };
     let source_desc = SourceDesc::<ReferencedConnection> {
         connection: external_connection,
-        // We only define primary-export details for this source if we are still supporting
-        // the legacy source syntax. Otherwise, we will not output to the primary collection.
-        // TODO(database-issues#8620): Remove this field once the new syntax is enabled everywhere
-        primary_export,
-        primary_export_details,
         timestamp_interval,
     };
 
-    let progress_subsource = match progress_subsource {
-        Some(name) => match name {
-            DeferredItemName::Named(name) => match name {
-                ResolvedItemName::Item { id, .. } => *id,
-                ResolvedItemName::Cte { .. }
-                | ResolvedItemName::ContinualTask { .. }
-                | ResolvedItemName::Error => {
-                    sql_bail!("[internal error] invalid target id")
+    let data_source = match progress_subsource {
+        Some(name) => {
+            let DeferredItemName::Named(name) = name else {
+                sql_bail!("[internal error] progress subsource must be named during purification");
+            };
+            let ResolvedItemName::Item { id, .. } = name else {
+                sql_bail!("[internal error] invalid target id");
+            };
+
+            let details = match source_desc.connection {
+                GenericSourceConnection::Kafka(ref c) => {
+                    SourceExportDetails::Kafka(KafkaSourceExportDetails {
+                        metadata_columns: c.metadata_columns.clone(),
+                    })
                 }
-            },
-            DeferredItemName::Deferred(_) => {
-                sql_bail!("[internal error] progress subsource must be named during purification")
+                GenericSourceConnection::LoadGenerator(ref c) => match c.load_generator {
+                    LoadGenerator::Auction
+                    | LoadGenerator::Marketing
+                    | LoadGenerator::Tpch { .. } => SourceExportDetails::None,
+                    LoadGenerator::Counter { .. }
+                    | LoadGenerator::Clock
+                    | LoadGenerator::Datums
+                    | LoadGenerator::KeyValue(_) => {
+                        SourceExportDetails::LoadGenerator(LoadGeneratorSourceExportDetails {
+                            output: LoadGeneratorOutput::Default,
+                        })
+                    }
+                },
+                GenericSourceConnection::Postgres(_)
+                | GenericSourceConnection::MySql(_)
+                | GenericSourceConnection::SqlServer(_) => SourceExportDetails::None,
+            };
+
+            DataSourceDesc::OldSyntaxIngestion {
+                desc: source_desc,
+                progress_subsource: *id,
+                data_config: SourceExportDataConfig {
+                    encoding,
+                    envelope: envelope.clone(),
+                },
+                details,
             }
-        },
-        _ => sql_bail!("[internal error] progress subsource must be named during purification"),
+        }
+        None => DataSourceDesc::Ingestion(source_desc),
     };
 
     let if_not_exists = *if_not_exists;
@@ -1230,12 +1234,10 @@ pub fn plan_create_source(
     };
 
     let compaction_window = plan_retain_history_option(scx, retain_history)?;
+
     let source = Source {
         create_sql,
-        data_source: DataSourceDesc::Ingestion(Ingestion {
-            desc: source_desc,
-            progress_subsource,
-        }),
+        data_source,
         desc,
         compaction_window,
     };

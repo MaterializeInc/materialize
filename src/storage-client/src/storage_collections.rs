@@ -50,8 +50,8 @@ use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::read_holds::{ReadHold, ReadHoldError};
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sources::{
-    GenericSourceConnection, IngestionDescription, SourceData, SourceDesc, SourceEnvelope,
-    SourceExport, SourceExportDataConfig, Timeline,
+    GenericSourceConnection, SourceData, SourceDesc, SourceEnvelope, SourceExport,
+    SourceExportDataConfig, Timeline,
 };
 use mz_storage_types::time_dependence::{TimeDependence, TimeDependenceError};
 use mz_txn_wal::metrics::Metrics as TxnMetrics;
@@ -1814,24 +1814,6 @@ where
             .map(|(id, description)| {
                 let data_shard = storage_metadata.get_collection_shard::<T>(id)?;
 
-                let get_shard = |id| -> Result<ShardId, StorageError<T>> {
-                    let shard = storage_metadata.get_collection_shard::<T>(id)?;
-                    Ok(shard)
-                };
-
-                let remap_shard = match &description.data_source {
-                    // Only ingestions can have remap shards.
-                    DataSource::Ingestion(IngestionDescription {
-                        remap_collection_id,
-                        ..
-                    }) => {
-                        // Iff ingestion has a remap collection, its metadata
-                        // must exist (and be correct) by this point.
-                        Some(get_shard(*remap_collection_id)?)
-                    }
-                    _ => None,
-                };
-
                 // If the shard is being managed by txn-wal (initially,
                 // tables), then we need to pass along the shard id for the txns
                 // shard to dataflow rendering.
@@ -1842,7 +1824,6 @@ where
 
                 let metadata = CollectionMetadata {
                     persist_location: self.persist_location.clone(),
-                    remap_shard,
                     data_shard,
                     relation_desc: description.desc.clone(),
                     txns_shard,
@@ -1873,10 +1854,7 @@ where
                     // (https://github.com/MaterializeInc/database-issues/issues/4078)
                     // but for now, it's helpful to have this mapping written down
                     // somewhere
-                    debug!(
-                        "mapping GlobalId={} to remap shard ({:?}), data shard ({})",
-                        id, metadata.remap_shard, metadata.data_shard
-                    );
+                    debug!("mapping GlobalId={} to shard ({})", id, metadata.data_shard);
 
                     let (write, mut since_handle) = this
                         .open_data_handles(
@@ -1970,16 +1948,7 @@ where
         // hashmap inserts and unbounded channel sends.
         let mut self_collections = self.collections.lock().expect("lock poisoned");
 
-        for (id, mut description, write_handle, since_handle, metadata) in to_register {
-            // Ensure that the ingestion has an export for its primary source if applicable.
-            // This is done in an awkward spot to appease the borrow checker.
-            // TODO(database-issues#8620): This will be removed once sources no longer export
-            // to primary collections and only export to explicit SourceExports (tables).
-            if let DataSource::Ingestion(ingestion) = &mut description.data_source {
-                let export = ingestion.desc.primary_source_export();
-                ingestion.source_exports.insert(id, export);
-            }
-
+        for (id, description, write_handle, since_handle, metadata) in to_register {
             let write_frontier = write_handle.upper();
             let data_shard_since = since_handle.since().clone();
 
@@ -2389,7 +2358,6 @@ where
                 relation_desc: collection_desc.desc.clone(),
                 data_shard,
                 // TODO(alter_table): Support changes to sources.
-                remap_shard: None,
                 txns_shard: Some(self.txns_read.txns_id().clone()),
             };
             let collection_state = CollectionState::new(

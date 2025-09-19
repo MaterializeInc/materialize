@@ -634,17 +634,16 @@ impl CatalogState {
                 );
 
                 updates.extend(match &source.data_source {
-                    DataSourceDesc::Ingestion { ingestion_desc, .. } => {
-                        match &ingestion_desc.desc.connection {
-                            GenericSourceConnection::Postgres(postgres) => {
-                                self.pack_postgres_source_update(id, postgres, diff)
-                            }
-                            GenericSourceConnection::Kafka(kafka) => {
-                                self.pack_kafka_source_update(id, source.global_id(), kafka, diff)
-                            }
-                            _ => vec![],
+                    DataSourceDesc::Ingestion { desc, .. }
+                    | DataSourceDesc::OldSyntaxIngestion { desc, .. } => match &desc.connection {
+                        GenericSourceConnection::Postgres(postgres) => {
+                            self.pack_postgres_source_update(id, postgres, diff)
                         }
-                    }
+                        GenericSourceConnection::Kafka(kafka) => {
+                            self.pack_kafka_source_update(id, source.global_id(), kafka, diff)
+                        }
+                        _ => vec![],
+                    },
                     DataSourceDesc::IngestionExport {
                         ingestion_id,
                         external_reference: UnresolvedItemName(external_reference),

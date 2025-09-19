@@ -34,8 +34,6 @@ use crate::connections::{ConnectionContext, KafkaConnection};
 use crate::controller::AlterError;
 use crate::sources::{MzOffset, SourceConnection, SourceTimestamp};
 
-use super::SourceExportDetails;
-
 include!(concat!(
     env!("OUT_DIR"),
     "/mz_storage_types.sources.kafka.rs"
@@ -212,12 +210,6 @@ impl<C: ConnectionAccess> SourceConnection for KafkaSourceConnection<C> {
 
     fn connection_id(&self) -> Option<CatalogItemId> {
         Some(self.connection_id)
-    }
-
-    fn primary_export_details(&self) -> SourceExportDetails {
-        SourceExportDetails::Kafka(KafkaSourceExportDetails {
-            metadata_columns: self.metadata_columns.clone(),
-        })
     }
 
     fn supports_read_only(&self) -> bool {

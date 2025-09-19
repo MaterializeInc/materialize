@@ -97,8 +97,6 @@ pub struct RawSourceCreationConfig {
     pub now_fn: NowFn,
     /// The metrics & registry that each source instantiates.
     pub metrics: StorageMetrics,
-    /// Storage Metadata
-    pub storage_metadata: CollectionMetadata,
     /// The upper frontier this source should resume ingestion at
     pub as_of: Antichain<mz_repr::Timestamp>,
     /// For each source export, the upper frontier this source should resume ingestion at in the
@@ -121,6 +119,8 @@ pub struct RawSourceCreationConfig {
     pub config: StorageConfiguration,
     /// The ID of this source remap/progress collection.
     pub remap_collection_id: GlobalId,
+    /// The storage metadata for the remap/progress collection
+    pub remap_metadata: CollectionMetadata,
     // A semaphore that should be acquired by async operators in order to signal that upstream
     // operators should slow down.
     pub busy_signal: Arc<Semaphore>,
@@ -456,7 +456,7 @@ where
         worker_id,
         worker_count,
         timestamp_interval,
-        storage_metadata,
+        remap_metadata,
         as_of,
         resume_uppers: _,
         source_resume_uppers: _,
@@ -493,7 +493,7 @@ where
         let remap_handle = crate::source::reclock::compat::PersistHandle::<FromTime, _>::new(
             Arc::clone(&persist_clients),
             read_only_rx,
-            storage_metadata.clone(),
+            remap_metadata.clone(),
             as_of.clone(),
             shared_remap_upper,
             id,

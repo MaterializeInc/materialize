@@ -33,8 +33,6 @@ use crate::sources::SourceData;
 pub struct CollectionMetadata {
     /// The persist location where the shards are located.
     pub persist_location: PersistLocation,
-    /// The persist shard id of the remap collection used to reclock this collection.
-    pub remap_shard: Option<ShardId>,
     /// The persist shard containing the contents of this storage collection.
     pub data_shard: ShardId,
     /// The `RelationDesc` that describes the contents of the `data_shard`.
@@ -55,14 +53,12 @@ impl crate::AlterCompatible for CollectionMetadata {
             // we allow this because if this changes unexpectedly, we will
             // notice in other ways.
             persist_location: _,
-            remap_shard,
             data_shard,
             relation_desc,
             txns_shard,
         } = self;
 
         let compatibility_checks = [
-            (remap_shard == &other.remap_shard, "remap_shard"),
             (data_shard == &other.data_shard, "data_shard"),
             (relation_desc == &other.relation_desc, "relation_desc"),
             (txns_shard == &other.txns_shard, "txns_shard"),

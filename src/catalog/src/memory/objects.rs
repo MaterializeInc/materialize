@@ -51,14 +51,15 @@ use mz_sql::names::{
 use mz_sql::plan::{
     ClusterSchedule, ComputeReplicaConfig, ComputeReplicaIntrospectionConfig, ConnectionDetails,
     CreateClusterManagedPlan, CreateClusterPlan, CreateClusterVariant, CreateSourcePlan,
-    HirRelationExpr, Ingestion as PlanIngestion, NetworkPolicyRule, PlanError, WebhookBodyFormat,
-    WebhookHeaders, WebhookValidation,
+    HirRelationExpr, NetworkPolicyRule, PlanError, WebhookBodyFormat, WebhookHeaders,
+    WebhookValidation,
 };
 use mz_sql::rbac;
 use mz_sql::session::vars::OwnedVarInput;
 use mz_storage_client::controller::IntrospectionType;
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::sinks::{SinkEnvelope, StorageSinkConnection};
+use mz_storage_types::sources::load_generator::LoadGenerator;
 use mz_storage_types::sources::{
     GenericSourceConnection, SourceConnection, SourceDesc, SourceEnvelope, SourceExportDataConfig,
     SourceExportDetails, Timeline,
@@ -972,8 +973,18 @@ pub enum TableDataSource {
 pub enum DataSourceDesc {
     /// Receives data from an external system
     Ingestion {
-        ingestion_desc: PlanIngestion,
+        desc: SourceDesc<ReferencedConnection>,
         cluster_id: ClusterId,
+    },
+    /// Receives data from an external system
+    OldSyntaxIngestion {
+        desc: SourceDesc<ReferencedConnection>,
+        cluster_id: ClusterId,
+        // If we're dealing with an old syntax ingestion the progress id will be some other collection
+        // and the ingestion itself will have the data from an external reference
+        progress_subsource: CatalogItemId,
+        data_config: SourceExportDataConfig<ReferencedConnection>,
+        details: SourceExportDetails,
     },
     /// This source receives its data from the identified ingestion,
     /// specifically the output identified by `external_reference`.
@@ -1009,8 +1020,9 @@ impl DataSourceDesc {
     /// The key and value formats of the data source.
     pub fn formats(&self) -> (Option<&str>, Option<&str>) {
         match &self {
-            DataSourceDesc::Ingestion { ingestion_desc, .. } => {
-                match &ingestion_desc.desc.primary_export.encoding.as_ref() {
+            DataSourceDesc::Ingestion { .. } => (None, None),
+            DataSourceDesc::OldSyntaxIngestion { data_config, .. } => {
+                match &data_config.encoding.as_ref() {
                     Some(encoding) => match &encoding.key {
                         Some(key) => (Some(key.type_()), Some(encoding.value.type_())),
                         None => (None, Some(encoding.value.type_())),
@@ -1065,9 +1077,10 @@ impl DataSourceDesc {
             // `SourceEnvelope` itself, but that one feels more like an internal
             // thing and adapter should own how we represent envelopes as a
             // string? It would not be hard to convince me otherwise, though.
-            DataSourceDesc::Ingestion { ingestion_desc, .. } => Some(envelope_string(
-                &ingestion_desc.desc.primary_export.envelope,
-            )),
+            DataSourceDesc::Ingestion { .. } => None,
+            DataSourceDesc::OldSyntaxIngestion { data_config, .. } => {
+                Some(envelope_string(&data_config.envelope))
+            }
             DataSourceDesc::IngestionExport { data_config, .. } => {
                 Some(envelope_string(&data_config.envelope))
             }
@@ -1119,14 +1132,26 @@ impl Source {
         Source {
             create_sql: Some(plan.source.create_sql),
             data_source: match plan.source.data_source {
-                mz_sql::plan::DataSourceDesc::Ingestion(ingestion_desc) => {
-                    DataSourceDesc::Ingestion {
-                        ingestion_desc,
-                        cluster_id: plan
-                            .in_cluster
-                            .expect("ingestion-based sources must be given a cluster ID"),
-                    }
-                }
+                mz_sql::plan::DataSourceDesc::Ingestion(desc) => DataSourceDesc::Ingestion {
+                    desc,
+                    cluster_id: plan
+                        .in_cluster
+                        .expect("ingestion-based sources must be given a cluster ID"),
+                },
+                mz_sql::plan::DataSourceDesc::OldSyntaxIngestion {
+                    desc,
+                    progress_subsource,
+                    data_config,
+                    details,
+                } => DataSourceDesc::OldSyntaxIngestion {
+                    desc,
+                    cluster_id: plan
+                        .in_cluster
+                        .expect("ingestion-based sources must be given a cluster ID"),
+                    progress_subsource,
+                    data_config,
+                    details,
+                },
                 mz_sql::plan::DataSourceDesc::Progress => {
                     assert!(
                         plan.in_cluster.is_none(),
@@ -1186,9 +1211,8 @@ impl Source {
     /// Type of the source.
     pub fn source_type(&self) -> &str {
         match &self.data_source {
-            DataSourceDesc::Ingestion { ingestion_desc, .. } => {
-                ingestion_desc.desc.connection.name()
-            }
+            DataSourceDesc::Ingestion { desc, .. }
+            | DataSourceDesc::OldSyntaxIngestion { desc, .. } => desc.connection.name(),
             DataSourceDesc::Progress => "progress",
             DataSourceDesc::IngestionExport { .. } => "subsource",
             DataSourceDesc::Introspection(_) => "source",
@@ -1199,9 +1223,8 @@ impl Source {
     /// Connection ID of the source, if one exists.
     pub fn connection_id(&self) -> Option<CatalogItemId> {
         match &self.data_source {
-            DataSourceDesc::Ingestion { ingestion_desc, .. } => {
-                ingestion_desc.desc.connection.connection_id()
-            }
+            DataSourceDesc::Ingestion { desc, .. }
+            | DataSourceDesc::OldSyntaxIngestion { desc, .. } => desc.connection.connection_id(),
             DataSourceDesc::IngestionExport { .. }
             | DataSourceDesc::Introspection(_)
             | DataSourceDesc::Webhook { .. }
@@ -1223,25 +1246,25 @@ impl Source {
     /// the limit calculation.
     pub fn user_controllable_persist_shard_count(&self) -> i64 {
         match &self.data_source {
-            DataSourceDesc::Ingestion { ingestion_desc, .. } => {
-                match &ingestion_desc.desc.connection {
+            DataSourceDesc::Ingestion { .. } => 0,
+            DataSourceDesc::OldSyntaxIngestion { desc, .. } => {
+                match &desc.connection {
                     // These multi-output sources do not use their primary
                     // source's data shard, so we don't include it in accounting
                     // for users.
                     GenericSourceConnection::Postgres(_)
                     | GenericSourceConnection::MySql(_)
                     | GenericSourceConnection::SqlServer(_) => 0,
-                    GenericSourceConnection::LoadGenerator(lg) => {
-                        // TODO: make this a method on the load generator.
-                        if lg.load_generator.views().is_empty() {
-                            // Load generator writes directly to its persist shard
-                            1
-                        } else {
-                            // Load generator has 1 persist shard per output,
-                            // which will be accounted for by `SourceExport`.
-                            0
-                        }
-                    }
+                    GenericSourceConnection::LoadGenerator(lg) => match lg.load_generator {
+                        // Load generators that output data in their primary shard
+                        LoadGenerator::Clock
+                        | LoadGenerator::Counter { .. }
+                        | LoadGenerator::Datums
+                        | LoadGenerator::KeyValue(_) => 1,
+                        LoadGenerator::Auction
+                        | LoadGenerator::Marketing
+                        | LoadGenerator::Tpch { .. } => 0,
+                    },
                     GenericSourceConnection::Kafka(_) => 1,
                 }
             }
@@ -1713,7 +1736,8 @@ impl CatalogItem {
     ) -> Result<Option<&SourceDesc<ReferencedConnection>>, SqlCatalogError> {
         match &self {
             CatalogItem::Source(source) => match &source.data_source {
-                DataSourceDesc::Ingestion { ingestion_desc, .. } => Ok(Some(&ingestion_desc.desc)),
+                DataSourceDesc::Ingestion { desc, .. }
+                | DataSourceDesc::OldSyntaxIngestion { desc, .. } => Ok(Some(desc)),
                 DataSourceDesc::IngestionExport { .. }
                 | DataSourceDesc::Introspection(_)
                 | DataSourceDesc::Webhook { .. }
@@ -2132,7 +2156,8 @@ impl CatalogItem {
             CatalogItem::MaterializedView(mv) => Some(mv.cluster_id),
             CatalogItem::Index(index) => Some(index.cluster_id),
             CatalogItem::Source(source) => match &source.data_source {
-                DataSourceDesc::Ingestion { cluster_id, .. } => Some(*cluster_id),
+                DataSourceDesc::Ingestion { cluster_id, .. }
+                | DataSourceDesc::OldSyntaxIngestion { cluster_id, .. } => Some(*cluster_id),
                 // This is somewhat of a lie because the export runs on the same
                 // cluster as its ingestion but we don't yet have a way of
                 // cross-referencing the items
@@ -2520,9 +2545,10 @@ impl CatalogEntry {
     pub fn progress_id(&self) -> Option<CatalogItemId> {
         match &self.item() {
             CatalogItem::Source(source) => match &source.data_source {
-                DataSourceDesc::Ingestion { ingestion_desc, .. } => {
-                    Some(ingestion_desc.progress_subsource)
-                }
+                DataSourceDesc::Ingestion { .. } => Some(self.id),
+                DataSourceDesc::OldSyntaxIngestion {
+                    progress_subsource, ..
+                } => Some(*progress_subsource),
                 DataSourceDesc::IngestionExport { .. }
                 | DataSourceDesc::Introspection(_)
                 | DataSourceDesc::Progress
