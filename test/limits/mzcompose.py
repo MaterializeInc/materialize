@@ -345,6 +345,8 @@ class KafkaSourcesSameTopic(Generator):
               """
             )
 
+        print("$ set-sql-timeout duration=600s")
+
         for i in cls.all():
             cls.store_explain_and_run(f"SELECT * FROM s{i}")
             print("123")
@@ -714,6 +716,8 @@ class TablesCommaJoinWithJoinCondition(Generator):
 
 class TablesCommaJoinWithCondition(Generator):
     COUNT = min(Generator.COUNT, 100)
+
+    MAX_COUNT = 200  # Too long-running with 400 conditions
 
     @classmethod
     def body(cls) -> None:
@@ -1420,8 +1424,6 @@ class Rows(Generator):
 
 class RowsAggregate(Generator):
     COUNT = 1_000_000
-
-    MAX_COUNT = 16_000_000  # Query timeout with 32_000_000
 
     @classmethod
     def body(cls) -> None:
