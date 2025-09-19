@@ -13,7 +13,6 @@ use mz_lowertest::MzReflect;
 use mz_repr::adt::jsonb::{Jsonb, JsonbRef};
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
 use mz_repr::{Datum, Row, RowPacker, SqlColumnType, SqlScalarType, strconv};
-use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use crate::EvalError;
@@ -101,9 +100,7 @@ sqlfunc!(
     }
 );
 
-#[derive(
-    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
-)]
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastJsonbToNumeric(pub Option<NumericMaxScale>);
 
 impl<'a> EagerUnaryFunc<'a> for CastJsonbToNumeric {

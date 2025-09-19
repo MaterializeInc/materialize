@@ -12,15 +12,12 @@ use std::fmt;
 use mz_lowertest::MzReflect;
 use mz_repr::adt::range::Range;
 use mz_repr::{Datum, RowArena, SqlColumnType, SqlScalarType};
-use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use crate::scalar::func::{LazyUnaryFunc, stringify_datum};
 use crate::{EvalError, MirScalarExpr};
 
-#[derive(
-    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
-)]
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastRangeToString {
     pub ty: SqlScalarType,
 }
@@ -73,9 +70,7 @@ impl fmt::Display for CastRangeToString {
     }
 }
 
-#[derive(
-    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
-)]
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct RangeLower;
 
 impl LazyUnaryFunc for RangeLower {
@@ -130,9 +125,7 @@ impl fmt::Display for RangeLower {
     }
 }
 
-#[derive(
-    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
-)]
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct RangeUpper;
 
 impl LazyUnaryFunc for RangeUpper {

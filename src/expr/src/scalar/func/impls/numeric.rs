@@ -13,7 +13,6 @@ use dec::{OrderedDecimal, Rounding};
 use mz_lowertest::MzReflect;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
 use mz_repr::{SqlColumnType, SqlScalarType, strconv};
-use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use crate::EvalError;
@@ -330,9 +329,7 @@ sqlfunc!(
     }
 );
 
-#[derive(
-    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
-)]
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct AdjustNumericScale(pub NumericMaxScale);
 
 impl<'a> EagerUnaryFunc<'a> for AdjustNumericScale {

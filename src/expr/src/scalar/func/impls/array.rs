@@ -12,15 +12,12 @@ use std::fmt;
 use mz_lowertest::MzReflect;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::{Datum, Row, RowArena, RowPacker, SqlColumnType, SqlScalarType};
-use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use crate::scalar::func::{LazyUnaryFunc, stringify_datum};
 use crate::{EvalError, MirScalarExpr};
 
-#[derive(
-    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
-)]
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastArrayToListOneDim;
 
 impl LazyUnaryFunc for CastArrayToListOneDim {
@@ -90,9 +87,7 @@ impl fmt::Display for CastArrayToListOneDim {
     }
 }
 
-#[derive(
-    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
-)]
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastArrayToString {
     pub ty: SqlScalarType,
 }
@@ -146,9 +141,7 @@ impl fmt::Display for CastArrayToString {
     }
 }
 
-#[derive(
-    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
-)]
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastArrayToJsonb {
     pub cast_element: Box<MirScalarExpr>,
 }

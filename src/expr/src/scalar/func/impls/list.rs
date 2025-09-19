@@ -11,15 +11,12 @@ use std::fmt;
 
 use mz_lowertest::MzReflect;
 use mz_repr::{Datum, Row, RowArena, SqlColumnType, SqlScalarType};
-use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use crate::scalar::func::{LazyUnaryFunc, stringify_datum};
 use crate::{EvalError, MirScalarExpr};
 
-#[derive(
-    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
-)]
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastListToString {
     pub ty: SqlScalarType,
 }
@@ -72,9 +69,7 @@ impl fmt::Display for CastListToString {
     }
 }
 
-#[derive(
-    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
-)]
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastListToJsonb {
     pub cast_element: Box<MirScalarExpr>,
 }
@@ -203,9 +198,7 @@ impl fmt::Display for CastList1ToList2 {
     }
 }
 
-#[derive(
-    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
-)]
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct ListLength;
 
 impl LazyUnaryFunc for ListLength {

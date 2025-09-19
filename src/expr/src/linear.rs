@@ -10,7 +10,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Display;
 
 use mz_repr::{Datum, Row};
-use proptest::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::visit::Visit;
@@ -55,31 +54,6 @@ pub struct MapFilterProject {
     /// This is needed to ensure correct identification of newly formed
     /// columns in the output.
     pub input_arity: usize,
-}
-
-/// Use a custom [`Arbitrary`] implementation to cap the number of internal
-/// [`MirScalarExpr`] referenced by the generated [`MapFilterProject`]  instances.
-impl Arbitrary for MapFilterProject {
-    type Parameters = ();
-    type Strategy = BoxedStrategy<Self>;
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        (
-            prop::collection::vec(any::<MirScalarExpr>(), 0..10),
-            prop::collection::vec((any::<usize>(), any::<MirScalarExpr>()), 0..10),
-            prop::collection::vec(any::<usize>(), 0..10),
-            usize::arbitrary(),
-        )
-            .prop_map(
-                |(expressions, predicates, projection, input_arity)| MapFilterProject {
-                    expressions,
-                    predicates,
-                    projection,
-                    input_arity,
-                },
-            )
-            .boxed()
-    }
 }
 
 impl Display for MapFilterProject {
@@ -1605,14 +1579,12 @@ pub mod plan {
     use std::iter;
 
     use mz_repr::{Datum, Diff, Row, RowArena};
-    use proptest::prelude::*;
-    use proptest_derive::Arbitrary;
     use serde::{Deserialize, Serialize};
 
     use crate::{BinaryFunc, EvalError, MapFilterProject, MirScalarExpr, UnaryFunc, func};
 
     /// A wrapper type which indicates it is safe to simply evaluate all expressions.
-    #[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
+    #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
     pub struct SafeMfpPlan {
         pub(crate) mfp: MapFilterProject,
     }
