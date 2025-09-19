@@ -8663,6 +8663,11 @@ impl<'a> Parser<'a> {
         };
         let as_of = self.parse_optional_as_of()?;
         let up_to = self.parse_optional_up_to()?;
+
+        if up_to.is_some() {
+            panic!();
+        }
+
         // For backwards compatibility, we allow parsing output options
         // (`ENVELOPE`, `WITHIN TIMESTAMP ORDER BY`) at the end of the
         // statement, if they haven't already been specified where we prefer
