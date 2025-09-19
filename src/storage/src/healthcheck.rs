@@ -383,21 +383,19 @@ where
         // Write the initial starting state to the status shard for all managed objects
         if is_active_worker {
             for (id, state) in health_states.iter_mut() {
-                if mark_starting.contains(id) {
-                    let status = OverallStatus::Starting;
-                    let timestamp = mz_ore::now::to_datetime(now());
-                    health_operator_impl.record_new_status(
-                        *id,
-                        timestamp,
-                        (&status).into(),
-                        status.error(),
-                        &status.hints(),
-                        status.errors().unwrap_or(&BTreeMap::new()),
-                        write_namespaced_map,
-                    );
+                let status = OverallStatus::Starting;
+                let timestamp = mz_ore::now::to_datetime(now());
+                health_operator_impl.record_new_status(
+                    *id,
+                    timestamp,
+                    (&status).into(),
+                    status.error(),
+                    &status.hints(),
+                    status.errors().unwrap_or(&BTreeMap::new()),
+                    write_namespaced_map,
+                );
 
-                    state.last_reported_status = Some(status);
-                }
+                state.last_reported_status = Some(status);
             }
         }
 
