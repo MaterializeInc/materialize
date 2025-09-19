@@ -318,7 +318,7 @@ impl CatalogState {
                 );
             }
             StateUpdateKind::TemporaryItem(item) => {
-                self.apply_temporary_item_update(item, diff, retractions);
+                self.apply_temporary_item_update(item, diff, retractions, local_expression_cache);
             }
             StateUpdateKind::Item(item) => {
                 self.apply_item_update(item, diff, retractions, local_expression_cache)?;
@@ -991,46 +991,108 @@ impl CatalogState {
     #[instrument(level = "debug")]
     fn apply_temporary_item_update(
         &mut self,
-        TemporaryItem {
-            id,
-            oid,
-            name,
-            item,
-            owner_id,
-            privileges,
-        }: TemporaryItem,
+        temporary_item: TemporaryItem,
         diff: StateDiff,
         retractions: &mut InProgressRetractions,
+        local_expression_cache: &mut LocalExpressionCache,
     ) {
         match diff {
             StateDiff::Addition => {
+                let TemporaryItem {
+                    id,
+                    oid,
+                    global_id,
+                    schema_id,
+                    name,
+                    conn_id,
+                    create_sql,
+                    owner_id,
+                    privileges,
+                    extra_versions,
+                } = temporary_item;
+                let schema = self.find_temp_schema(&schema_id);
+                let name = QualifiedItemName {
+                    qualifiers: ItemQualifiers {
+                        database_spec: schema.database().clone(),
+                        schema_spec: schema.id().clone(),
+                    },
+                    item: name.clone(),
+                };
+
                 let entry = match retractions.temp_items.remove(&id) {
                     Some(mut retraction) => {
                         assert_eq!(retraction.id, id);
-                        retraction.item = item;
+
+                        // We only reparse the SQL if it's changed. Otherwise, we use the existing
+                        // item. This is a performance optimization and not needed for correctness.
+                        // This makes it difficult to use the `UpdateFrom` trait, but the structure
+                        // is still the same as the trait.
+                        if retraction.create_sql() != create_sql {
+                            let mut catalog_item = self
+                                .deserialize_item(
+                                    global_id,
+                                    &create_sql,
+                                    &extra_versions,
+                                    local_expression_cache,
+                                    Some(retraction.item),
+                                )
+                                .unwrap_or_else(|e| {
+                                    panic!("{e:?}: invalid persisted SQL: {create_sql}")
+                                });
+                            // Have to patch up the item because parsing doesn't
+                            // take into account temporary schemas/conn_id.
+                            // NOTE(aljoscha): I don't like how we're patching
+                            // this in here, but it's but one of the ways in
+                            // which temporary items are a bit weird. So, here
+                            // we are ...
+                            catalog_item.set_conn_id(conn_id);
+                            retraction.item = catalog_item;
+                        }
+
                         retraction.id = id;
                         retraction.oid = oid;
                         retraction.name = name;
                         retraction.owner_id = owner_id;
-                        retraction.privileges = privileges;
+                        retraction.privileges = PrivilegeMap::from_mz_acl_items(privileges);
                         retraction
                     }
-                    None => CatalogEntry {
-                        item,
-                        referenced_by: Vec::new(),
-                        used_by: Vec::new(),
-                        id,
-                        oid,
-                        name,
-                        owner_id,
-                        privileges,
-                    },
+                    None => {
+                        let mut catalog_item = self
+                            .deserialize_item(
+                                global_id,
+                                &create_sql,
+                                &extra_versions,
+                                local_expression_cache,
+                                None,
+                            )
+                            .unwrap_or_else(|e| {
+                                panic!("{e:?}: invalid persisted SQL: {create_sql}")
+                            });
+
+                        // Have to patch up the item because parsing doesn't
+                        // take into account temporary schemas/conn_id.
+                        // NOTE(aljoscha): I don't like how we're patching this
+                        // in here, but it's but one of the ways in which
+                        // temporary items are a bit weird. So, here we are ...
+                        catalog_item.set_conn_id(conn_id);
+
+                        CatalogEntry {
+                            item: catalog_item,
+                            referenced_by: Vec::new(),
+                            used_by: Vec::new(),
+                            id,
+                            oid,
+                            name,
+                            owner_id,
+                            privileges: PrivilegeMap::from_mz_acl_items(privileges),
+                        }
+                    }
                 };
                 self.insert_entry(entry);
             }
             StateDiff::Retraction => {
-                let entry = self.drop_item(id);
-                retractions.temp_items.insert(id, entry);
+                let entry = self.drop_item(temporary_item.id);
+                retractions.temp_items.insert(temporary_item.id, entry);
             }
         }
     }
@@ -2157,7 +2219,7 @@ fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
         let mut continual_tasks = Vec::new();
 
         for update in temp_item_updates {
-            match update.0.item.typ() {
+            match update.0.item_type() {
                 CatalogItemType::Type => types.push(update),
                 CatalogItemType::Func => funcs.push(update),
                 CatalogItemType::Secret => secrets.push(update),

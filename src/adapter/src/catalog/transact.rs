@@ -1158,15 +1158,31 @@ impl Catalog {
                         )));
                     }
                     let oid = tx.allocate_oid(&temporary_oids)?;
+
+                    let schema_id = name.qualifiers.schema_spec.clone().into();
+                    let item_type = item.typ();
+                    let (create_sql, global_id, versions) = item.to_serialized();
+
                     let item = TemporaryItem {
                         id,
                         oid,
-                        name: name.clone(),
-                        item: item.clone(),
+                        global_id,
+                        schema_id,
+                        name: name.item.clone(),
+                        create_sql,
+                        conn_id: item.conn_id().cloned(),
                         owner_id,
-                        privileges: PrivilegeMap::from_mz_acl_items(privileges),
+                        privileges: privileges.clone(),
+                        extra_versions: versions,
                     };
                     temporary_item_updates.push((item, StateDiff::Addition));
+
+                    info!(
+                        "create temporary {} {} ({})",
+                        item_type,
+                        state.resolve_full_name(&name, None),
+                        id
+                    );
                 } else {
                     if let Some(temp_id) =
                         item.uses()
