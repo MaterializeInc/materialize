@@ -40,6 +40,7 @@ use mz_sql::session::vars::{MAX_REPLICAS_PER_CLUSTER, SystemVars, Var};
 use tracing::{Instrument, Span, debug};
 
 use super::return_if_err;
+use crate::AdapterError::AlterClusterWhilePendingReplicas;
 use crate::catalog::{self, Op, ReplicaCreateDropReason};
 use crate::coord::{
     AlterCluster, AlterClusterFinalize, AlterClusterWaitForHydrated, ClusterStage, Coordinator,
@@ -1143,7 +1144,7 @@ impl Coordinator {
 
         // check for active updates
         if cluster.replicas().any(|r| r.config.location.pending()) {
-            coord_bail!("Cannot Alter clusters with pending updates.")
+            return Err(AlterClusterWhilePendingReplicas);
         }
 
         let compute = mz_sql::plan::ComputeReplicaConfig {

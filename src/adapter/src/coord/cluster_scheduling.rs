@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use crate::coord::{Coordinator, Message};
 use itertools::Itertools;
 use mz_audit_log::SchedulingDecisionsWithReasonsV2;
 use mz_catalog::memory::objects::{CatalogItem, ClusterVariant, ClusterVariantManaged};
@@ -20,6 +19,9 @@ use mz_sql::catalog::CatalogCluster;
 use mz_sql::plan::{AlterClusterPlanStrategy, ClusterSchedule};
 use std::time::{Duration, Instant};
 use tracing::{debug, warn};
+
+use crate::AdapterError;
+use crate::coord::{Coordinator, Message};
 
 const POLICIES: &[&str] = &[REFRESH_POLICY_NAME];
 
@@ -363,16 +365,22 @@ impl Coordinator {
                         )
                         .await
                     {
-                        soft_panic_or_log!(
-                            "handle_scheduling_decisions couldn't alter cluster {}. \
-                             Old config: {:?}, \
-                             New config: {:?}, \
-                             Error: {}",
-                            cluster_id,
-                            cluster_config,
-                            new_config,
-                            e
-                        );
+                        if let AdapterError::AlterClusterWhilePendingReplicas = e {
+                            debug!(
+                                "handle_scheduling_decisions tried to alter a cluster that is undergoing a graceful reconfiguration"
+                            );
+                        } else {
+                            soft_panic_or_log!(
+                                "handle_scheduling_decisions couldn't alter cluster {}. \
+                                 Old config: {:?}, \
+                                 New config: {:?}, \
+                                 Error: {}",
+                                cluster_id,
+                                cluster_config,
+                                new_config,
+                                e
+                            );
+                        }
                     }
                 }
             } else {
