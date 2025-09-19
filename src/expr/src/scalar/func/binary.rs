@@ -175,6 +175,21 @@ impl<T: for<'a> EagerBinaryFunc<'a>> LazyBinaryFunc for T {
     }
 }
 
+mod derive {
+    use crate::scalar::func::*;
+
+    derive_binary! {
+        AddInt16,
+        AddInt32,
+        AddInt64,
+        AddUint16,
+        AddUint32,
+        AddUint64,
+        AddFloat32,
+        AddFloat64,
+    }
+}
+
 #[cfg(test)]
 mod test {
     use mz_expr_derive::sqlfunc;
@@ -514,55 +529,6 @@ mod test {
         //   which works because most don't look at the type. We should fix this
         //   and pass expected column types.
 
-        check(
-            func::AddInt16,
-            BF::AddInt16(func::AddInt16),
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::AddInt32,
-            BF::AddInt32(func::AddInt32),
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::AddInt64,
-            BF::AddInt64(func::AddInt64),
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::AddUint16,
-            BF::AddUInt16(func::AddUint16),
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::AddUint32,
-            BF::AddUInt32(func::AddUint32),
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::AddUint64,
-            BF::AddUInt64(func::AddUint64),
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::AddFloat32,
-            BF::AddFloat32(func::AddFloat32),
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::AddFloat64,
-            BF::AddFloat64(func::AddFloat64),
-            &i32_ty,
-            &i32_ty,
-        );
-        check(func::AddDateTime, BF::AddDateTime, &i32_ty, &i32_ty);
         check(func::AddDateInterval, BF::AddDateInterval, &i32_ty, &i32_ty);
         check(
             func::AddTimeInterval,
@@ -590,21 +556,21 @@ mod test {
         check(func::BitAndInt16, BF::BitAndInt16, &i32_ty, &i32_ty);
         check(func::BitAndInt32, BF::BitAndInt32, &i32_ty, &i32_ty);
         check(func::BitAndInt64, BF::BitAndInt64, &i32_ty, &i32_ty);
-        check(func::BitAndUint16, BF::BitAndUInt16, &i32_ty, &i32_ty);
-        check(func::BitAndUint32, BF::BitAndUInt32, &i32_ty, &i32_ty);
-        check(func::BitAndUint64, BF::BitAndUInt64, &i32_ty, &i32_ty);
+        check(func::BitAndUint16, BF::BitAndUint16, &i32_ty, &i32_ty);
+        check(func::BitAndUint32, BF::BitAndUint32, &i32_ty, &i32_ty);
+        check(func::BitAndUint64, BF::BitAndUint64, &i32_ty, &i32_ty);
         check(func::BitOrInt16, BF::BitOrInt16, &i32_ty, &i32_ty);
         check(func::BitOrInt32, BF::BitOrInt32, &i32_ty, &i32_ty);
         check(func::BitOrInt64, BF::BitOrInt64, &i32_ty, &i32_ty);
-        check(func::BitOrUint16, BF::BitOrUInt16, &i32_ty, &i32_ty);
-        check(func::BitOrUint32, BF::BitOrUInt32, &i32_ty, &i32_ty);
-        check(func::BitOrUint64, BF::BitOrUInt64, &i32_ty, &i32_ty);
+        check(func::BitOrUint16, BF::BitOrUint16, &i32_ty, &i32_ty);
+        check(func::BitOrUint32, BF::BitOrUint32, &i32_ty, &i32_ty);
+        check(func::BitOrUint64, BF::BitOrUint64, &i32_ty, &i32_ty);
         check(func::BitXorInt16, BF::BitXorInt16, &i32_ty, &i32_ty);
         check(func::BitXorInt32, BF::BitXorInt32, &i32_ty, &i32_ty);
         check(func::BitXorInt64, BF::BitXorInt64, &i32_ty, &i32_ty);
-        check(func::BitXorUint16, BF::BitXorUInt16, &i32_ty, &i32_ty);
-        check(func::BitXorUint32, BF::BitXorUInt32, &i32_ty, &i32_ty);
-        check(func::BitXorUint64, BF::BitXorUInt64, &i32_ty, &i32_ty);
+        check(func::BitXorUint16, BF::BitXorUint16, &i32_ty, &i32_ty);
+        check(func::BitXorUint32, BF::BitXorUint32, &i32_ty, &i32_ty);
+        check(func::BitXorUint64, BF::BitXorUint64, &i32_ty, &i32_ty);
 
         check(
             func::BitShiftLeftInt16,
@@ -626,19 +592,19 @@ mod test {
         );
         check(
             func::BitShiftLeftUint16,
-            BF::BitShiftLeftUInt16,
+            BF::BitShiftLeftUint16,
             &i32_ty,
             &i32_ty,
         );
         check(
             func::BitShiftLeftUint32,
-            BF::BitShiftLeftUInt32,
+            BF::BitShiftLeftUint32,
             &i32_ty,
             &i32_ty,
         );
         check(
             func::BitShiftLeftUint64,
-            BF::BitShiftLeftUInt64,
+            BF::BitShiftLeftUint64,
             &i32_ty,
             &i32_ty,
         );
@@ -663,19 +629,19 @@ mod test {
         );
         check(
             func::BitShiftRightUint16,
-            BF::BitShiftRightUInt16,
+            BF::BitShiftRightUint16,
             &i32_ty,
             &i32_ty,
         );
         check(
             func::BitShiftRightUint32,
-            BF::BitShiftRightUInt32,
+            BF::BitShiftRightUint32,
             &i32_ty,
             &i32_ty,
         );
         check(
             func::BitShiftRightUint64,
-            BF::BitShiftRightUInt64,
+            BF::BitShiftRightUint64,
             &i32_ty,
             &i32_ty,
         );
@@ -683,9 +649,9 @@ mod test {
         check(func::SubInt16, BF::SubInt16, &i32_ty, &i32_ty);
         check(func::SubInt32, BF::SubInt32, &i32_ty, &i32_ty);
         check(func::SubInt64, BF::SubInt64, &i32_ty, &i32_ty);
-        check(func::SubUint16, BF::SubUInt16, &i32_ty, &i32_ty);
-        check(func::SubUint32, BF::SubUInt32, &i32_ty, &i32_ty);
-        check(func::SubUint64, BF::SubUInt64, &i32_ty, &i32_ty);
+        check(func::SubUint16, BF::SubUint16, &i32_ty, &i32_ty);
+        check(func::SubUint32, BF::SubUint32, &i32_ty, &i32_ty);
+        check(func::SubUint64, BF::SubUint64, &i32_ty, &i32_ty);
         check(func::SubFloat32, BF::SubFloat32, &i32_ty, &i32_ty);
         check(func::SubFloat64, BF::SubFloat64, &i32_ty, &i32_ty);
         check(func::SubNumeric, BF::SubNumeric, &i32_ty, &i32_ty);
@@ -709,9 +675,9 @@ mod test {
         check(func::MulInt16, BF::MulInt16, &i32_ty, &i32_ty);
         check(func::MulInt32, BF::MulInt32, &i32_ty, &i32_ty);
         check(func::MulInt64, BF::MulInt64, &i32_ty, &i32_ty);
-        check(func::MulUint16, BF::MulUInt16, &i32_ty, &i32_ty);
-        check(func::MulUint32, BF::MulUInt32, &i32_ty, &i32_ty);
-        check(func::MulUint64, BF::MulUInt64, &i32_ty, &i32_ty);
+        check(func::MulUint16, BF::MulUint16, &i32_ty, &i32_ty);
+        check(func::MulUint32, BF::MulUint32, &i32_ty, &i32_ty);
+        check(func::MulUint64, BF::MulUint64, &i32_ty, &i32_ty);
         check(func::MulFloat32, BF::MulFloat32, &i32_ty, &i32_ty);
         check(func::MulFloat64, BF::MulFloat64, &i32_ty, &i32_ty);
         check(func::MulNumeric, BF::MulNumeric, &i32_ty, &i32_ty);
@@ -720,9 +686,9 @@ mod test {
         check(func::DivInt16, BF::DivInt16, &i32_ty, &i32_ty);
         check(func::DivInt32, BF::DivInt32, &i32_ty, &i32_ty);
         check(func::DivInt64, BF::DivInt64, &i32_ty, &i32_ty);
-        check(func::DivUint16, BF::DivUInt16, &i32_ty, &i32_ty);
-        check(func::DivUint32, BF::DivUInt32, &i32_ty, &i32_ty);
-        check(func::DivUint64, BF::DivUInt64, &i32_ty, &i32_ty);
+        check(func::DivUint16, BF::DivUint16, &i32_ty, &i32_ty);
+        check(func::DivUint32, BF::DivUint32, &i32_ty, &i32_ty);
+        check(func::DivUint64, BF::DivUint64, &i32_ty, &i32_ty);
         check(func::DivFloat32, BF::DivFloat32, &i32_ty, &i32_ty);
         check(func::DivFloat64, BF::DivFloat64, &i32_ty, &i32_ty);
         check(func::DivNumeric, BF::DivNumeric, &i32_ty, &i32_ty);
@@ -731,9 +697,9 @@ mod test {
         check(func::ModInt16, BF::ModInt16, &i32_ty, &i32_ty);
         check(func::ModInt32, BF::ModInt32, &i32_ty, &i32_ty);
         check(func::ModInt64, BF::ModInt64, &i32_ty, &i32_ty);
-        check(func::ModUint16, BF::ModUInt16, &i32_ty, &i32_ty);
-        check(func::ModUint32, BF::ModUInt32, &i32_ty, &i32_ty);
-        check(func::ModUint64, BF::ModUInt64, &i32_ty, &i32_ty);
+        check(func::ModUint16, BF::ModUint16, &i32_ty, &i32_ty);
+        check(func::ModUint32, BF::ModUint32, &i32_ty, &i32_ty);
+        check(func::ModUint64, BF::ModUint64, &i32_ty, &i32_ty);
         check(func::ModFloat32, BF::ModFloat32, &i32_ty, &i32_ty);
         check(func::ModFloat64, BF::ModFloat64, &i32_ty, &i32_ty);
         check(func::ModNumeric, BF::ModNumeric, &i32_ty, &i32_ty);

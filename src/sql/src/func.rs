@@ -4502,9 +4502,9 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
             params!(Int16, Int16) => AddInt16(func::AddInt16) => Int16, 550;
             params!(Int32, Int32) => AddInt32(func::AddInt32) => Int32, 551;
             params!(Int64, Int64) => AddInt64(func::AddInt64) => Int64, 684;
-            params!(UInt16, UInt16) => AddUInt16(func::AddUint16) => UInt16, oid::FUNC_ADD_UINT16;
-            params!(UInt32, UInt32) => AddUInt32(func::AddUint32) => UInt32, oid::FUNC_ADD_UINT32;
-            params!(UInt64, UInt64) => AddUInt64(func::AddUint64) => UInt64, oid::FUNC_ADD_UINT64;
+            params!(UInt16, UInt16) => AddUint16(func::AddUint16) => UInt16, oid::FUNC_ADD_UINT16;
+            params!(UInt32, UInt32) => AddUint32(func::AddUint32) => UInt32, oid::FUNC_ADD_UINT32;
+            params!(UInt64, UInt64) => AddUint64(func::AddUint64) => UInt64, oid::FUNC_ADD_UINT64;
             params!(Float32, Float32) => AddFloat32(func::AddFloat32) => Float32, 586;
             params!(Float64, Float64) => AddFloat64(func::AddFloat64) => Float64, 591;
             params!(Interval, Interval) => AddInterval => Interval, 1337;
@@ -4541,9 +4541,9 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
             params!(Interval) => UnaryFunc::NegInterval(func::NegInterval) => Interval, 1336;
             params!(Int32, Int32) => SubInt32 => Int32, 555;
             params!(Int64, Int64) => SubInt64 => Int64, 685;
-            params!(UInt16, UInt16) => SubUInt16 => UInt16, oid::FUNC_SUB_UINT16;
-            params!(UInt32, UInt32) => SubUInt32 => UInt32, oid::FUNC_SUB_UINT32;
-            params!(UInt64, UInt64) => SubUInt64 => UInt64, oid::FUNC_SUB_UINT64;
+            params!(UInt16, UInt16) => SubUint16 => UInt16, oid::FUNC_SUB_UINT16;
+            params!(UInt32, UInt32) => SubUint32 => UInt32, oid::FUNC_SUB_UINT32;
+            params!(UInt64, UInt64) => SubUint64 => UInt64, oid::FUNC_SUB_UINT64;
             params!(Float32, Float32) => SubFloat32 => Float32, 587;
             params!(Float64, Float64) => SubFloat64 => Float64, 592;
             params!(Numeric, Numeric) => SubNumeric => Numeric, 17590;
@@ -4566,9 +4566,9 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
             params!(Int16, Int16) => MulInt16 => Int16, 526;
             params!(Int32, Int32) => MulInt32 => Int32, 514;
             params!(Int64, Int64) => MulInt64 => Int64, 686;
-            params!(UInt16, UInt16) => MulUInt16 => UInt16, oid::FUNC_MUL_UINT16;
-            params!(UInt32, UInt32) => MulUInt32 => UInt32, oid::FUNC_MUL_UINT32;
-            params!(UInt64, UInt64) => MulUInt64 => UInt64, oid::FUNC_MUL_UINT64;
+            params!(UInt16, UInt16) => MulUint16 => UInt16, oid::FUNC_MUL_UINT16;
+            params!(UInt32, UInt32) => MulUint32 => UInt32, oid::FUNC_MUL_UINT32;
+            params!(UInt64, UInt64) => MulUint64 => UInt64, oid::FUNC_MUL_UINT64;
             params!(Float32, Float32) => MulFloat32 => Float32, 589;
             params!(Float64, Float64) => MulFloat64 => Float64, 594;
             params!(Interval, Float64) => MulInterval => Interval, 1583;
@@ -4582,9 +4582,9 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
             params!(Int16, Int16) => DivInt16 => Int16, 527;
             params!(Int32, Int32) => DivInt32 => Int32, 528;
             params!(Int64, Int64) => DivInt64 => Int64, 687;
-            params!(UInt16, UInt16) => DivUInt16 => UInt16, oid::FUNC_DIV_UINT16;
-            params!(UInt32, UInt32) => DivUInt32 => UInt32, oid::FUNC_DIV_UINT32;
-            params!(UInt64, UInt64) => DivUInt64 => UInt64, oid::FUNC_DIV_UINT64;
+            params!(UInt16, UInt16) => DivUint16 => UInt16, oid::FUNC_DIV_UINT16;
+            params!(UInt32, UInt32) => DivUint32 => UInt32, oid::FUNC_DIV_UINT32;
+            params!(UInt64, UInt64) => DivUint64 => UInt64, oid::FUNC_DIV_UINT64;
             params!(Float32, Float32) => DivFloat32 => Float32, 588;
             params!(Float64, Float64) => DivFloat64 => Float64, 593;
             params!(Interval, Float64) => DivInterval => Interval, 1585;
@@ -4594,9 +4594,9 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
             params!(Int16, Int16) => ModInt16 => Int16, 529;
             params!(Int32, Int32) => ModInt32 => Int32, 530;
             params!(Int64, Int64) => ModInt64 => Int64, 439;
-            params!(UInt16, UInt16) => ModUInt16 => UInt16, oid::FUNC_MOD_UINT16;
-            params!(UInt32, UInt32) => ModUInt32 => UInt32, oid::FUNC_MOD_UINT32;
-            params!(UInt64, UInt64) => ModUInt64 => UInt64, oid::FUNC_MOD_UINT64;
+            params!(UInt16, UInt16) => ModUint16 => UInt16, oid::FUNC_MOD_UINT16;
+            params!(UInt32, UInt32) => ModUint32 => UInt32, oid::FUNC_MOD_UINT32;
+            params!(UInt64, UInt64) => ModUint64 => UInt64, oid::FUNC_MOD_UINT64;
             params!(Float32, Float32) => ModFloat32 => Float32, oid::OP_MOD_F32_OID;
             params!(Float64, Float64) => ModFloat64 => Float64, oid::OP_MOD_F64_OID;
             params!(Numeric, Numeric) => ModNumeric => Numeric, 1762;
@@ -4605,42 +4605,42 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
             params!(Int16, Int16) => BitAndInt16 => Int16, 1874;
             params!(Int32, Int32) => BitAndInt32 => Int32, 1880;
             params!(Int64, Int64) => BitAndInt64 => Int64, 1886;
-            params!(UInt16, UInt16) => BitAndUInt16 => UInt16, oid::FUNC_AND_UINT16;
-            params!(UInt32, UInt32) => BitAndUInt32 => UInt32, oid::FUNC_AND_UINT32;
-            params!(UInt64, UInt64) => BitAndUInt64 => UInt64, oid::FUNC_AND_UINT64;
+            params!(UInt16, UInt16) => BitAndUint16 => UInt16, oid::FUNC_AND_UINT16;
+            params!(UInt32, UInt32) => BitAndUint32 => UInt32, oid::FUNC_AND_UINT32;
+            params!(UInt64, UInt64) => BitAndUint64 => UInt64, oid::FUNC_AND_UINT64;
         },
         "|" => Scalar {
             params!(Int16, Int16) => BitOrInt16 => Int16, 1875;
             params!(Int32, Int32) => BitOrInt32 => Int32, 1881;
             params!(Int64, Int64) => BitOrInt64 => Int64, 1887;
-            params!(UInt16, UInt16) => BitOrUInt16 => UInt16, oid::FUNC_OR_UINT16;
-            params!(UInt32, UInt32) => BitOrUInt32 => UInt32, oid::FUNC_OR_UINT32;
-            params!(UInt64, UInt64) => BitOrUInt64 => UInt64, oid::FUNC_OR_UINT64;
+            params!(UInt16, UInt16) => BitOrUint16 => UInt16, oid::FUNC_OR_UINT16;
+            params!(UInt32, UInt32) => BitOrUint32 => UInt32, oid::FUNC_OR_UINT32;
+            params!(UInt64, UInt64) => BitOrUint64 => UInt64, oid::FUNC_OR_UINT64;
         },
         "#" => Scalar {
             params!(Int16, Int16) => BitXorInt16 => Int16, 1876;
             params!(Int32, Int32) => BitXorInt32 => Int32, 1882;
             params!(Int64, Int64) => BitXorInt64 => Int64, 1888;
-            params!(UInt16, UInt16) => BitXorUInt16 => UInt16, oid::FUNC_XOR_UINT16;
-            params!(UInt32, UInt32) => BitXorUInt32 => UInt32, oid::FUNC_XOR_UINT32;
-            params!(UInt64, UInt64) => BitXorUInt64 => UInt64, oid::FUNC_XOR_UINT64;
+            params!(UInt16, UInt16) => BitXorUint16 => UInt16, oid::FUNC_XOR_UINT16;
+            params!(UInt32, UInt32) => BitXorUint32 => UInt32, oid::FUNC_XOR_UINT32;
+            params!(UInt64, UInt64) => BitXorUint64 => UInt64, oid::FUNC_XOR_UINT64;
         },
         "<<" => Scalar {
             params!(Int16, Int32) => BitShiftLeftInt16 => Int16, 1878;
             params!(Int32, Int32) => BitShiftLeftInt32 => Int32, 1884;
             params!(Int64, Int32) => BitShiftLeftInt64 => Int64, 1890;
-            params!(UInt16, UInt32) => BitShiftLeftUInt16 => UInt16, oid::FUNC_SHIFT_LEFT_UINT16;
-            params!(UInt32, UInt32) => BitShiftLeftUInt32 => UInt32, oid::FUNC_SHIFT_LEFT_UINT32;
-            params!(UInt64, UInt32) => BitShiftLeftUInt64 => UInt64, oid::FUNC_SHIFT_LEFT_UINT64;
+            params!(UInt16, UInt32) => BitShiftLeftUint16 => UInt16, oid::FUNC_SHIFT_LEFT_UINT16;
+            params!(UInt32, UInt32) => BitShiftLeftUint32 => UInt32, oid::FUNC_SHIFT_LEFT_UINT32;
+            params!(UInt64, UInt32) => BitShiftLeftUint64 => UInt64, oid::FUNC_SHIFT_LEFT_UINT64;
             params!(RangeAny, RangeAny) => RangeBefore => Bool, 3893;
         },
         ">>" => Scalar {
             params!(Int16, Int32) => BitShiftRightInt16 => Int16, 1879;
             params!(Int32, Int32) => BitShiftRightInt32 => Int32, 1885;
             params!(Int64, Int32) => BitShiftRightInt64 => Int64, 1891;
-            params!(UInt16, UInt32) => BitShiftRightUInt16 => UInt16, oid::FUNC_SHIFT_RIGHT_UINT16;
-            params!(UInt32, UInt32) => BitShiftRightUInt32 => UInt32, oid::FUNC_SHIFT_RIGHT_UINT32;
-            params!(UInt64, UInt32) => BitShiftRightUInt64 => UInt64, oid::FUNC_SHIFT_RIGHT_UINT64;
+            params!(UInt16, UInt32) => BitShiftRightUint16 => UInt16, oid::FUNC_SHIFT_RIGHT_UINT16;
+            params!(UInt32, UInt32) => BitShiftRightUint32 => UInt32, oid::FUNC_SHIFT_RIGHT_UINT32;
+            params!(UInt64, UInt32) => BitShiftRightUint64 => UInt64, oid::FUNC_SHIFT_RIGHT_UINT64;
             params!(RangeAny, RangeAny) => RangeAfter => Bool, 3894;
         },
 
