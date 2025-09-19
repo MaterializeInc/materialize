@@ -1618,6 +1618,13 @@ impl CatalogState {
             .into_first()
     }
 
+    pub(super) fn find_temp_schema(&self, schema_id: &SchemaId) -> &Schema {
+        self.temporary_schemas
+            .values()
+            .filter(|schema| schema.id() == &SchemaSpecifier::from(*schema_id))
+            .into_first()
+    }
+
     pub fn get_mz_catalog_schema_id(&self) -> SchemaId {
         self.ambient_schemas_by_name[MZ_CATALOG_SCHEMA]
     }
