@@ -308,6 +308,7 @@ class KafkaSourcesSameTopic(Generator):
 
     @classmethod
     def body(cls) -> None:
+        print("$ set-sql-timeout duration=300s")
         print("$ postgres-execute connection=mz_system")
         print(f"ALTER SYSTEM SET max_sources = {cls.COUNT * 10};")
         print("$ postgres-execute connection=mz_system")
