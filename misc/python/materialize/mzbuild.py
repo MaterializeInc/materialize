@@ -1589,3 +1589,33 @@ def publish_multiarch_images(
         ],
         stdin=markdown.encode(),
     )
+
+
+def tag_multiarch_images(
+    new_tag: str, previous_tag: str, dependency_sets: Iterable[Iterable[ResolvedImage]]
+) -> None:
+    """Publishes a set of docker images under a given tag."""
+    for images in zip(*dependency_sets):
+        names = set(image.image.name for image in images)
+        assert len(names) == 1, "dependency sets did not contain identical images"
+        new_name = images[0].image.docker_name(new_tag)
+
+        # Doesn't have tagged images
+        if images[0].image.name == "mz":
+            continue
+
+        previous_name = images[0].image.docker_name(previous_tag)
+        spawn.runv(["docker", "pull", previous_name])
+        spawn.runv(["docker", "tag", previous_name, new_name])
+        spawn.runv(["docker", "push", new_name])
+    print(f"--- Nofifying for tag {new_tag}")
+    markdown = f"""Pushed images with Docker tag `{new_tag}`"""
+    spawn.runv(
+        [
+            "buildkite-agent",
+            "annotate",
+            "--style=info",
+            f"--context=build-tags-{new_tag}",
+        ],
+        stdin=markdown.encode(),
+    )
