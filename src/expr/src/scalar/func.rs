@@ -2954,9 +2954,9 @@ pub enum BinaryFunc {
     AddInt16(AddInt16),
     AddInt32(AddInt32),
     AddInt64(AddInt64),
-    AddUInt16(AddUint16),
-    AddUInt32(AddUint32),
-    AddUInt64(AddUint64),
+    AddUint16(AddUint16),
+    AddUint32(AddUint32),
+    AddUint64(AddUint64),
     AddFloat32(AddFloat32),
     AddFloat64(AddFloat64),
     AddInterval,
@@ -2971,39 +2971,39 @@ pub enum BinaryFunc {
     BitAndInt16,
     BitAndInt32,
     BitAndInt64,
-    BitAndUInt16,
-    BitAndUInt32,
-    BitAndUInt64,
+    BitAndUint16,
+    BitAndUint32,
+    BitAndUint64,
     BitOrInt16,
     BitOrInt32,
     BitOrInt64,
-    BitOrUInt16,
-    BitOrUInt32,
-    BitOrUInt64,
+    BitOrUint16,
+    BitOrUint32,
+    BitOrUint64,
     BitXorInt16,
     BitXorInt32,
     BitXorInt64,
-    BitXorUInt16,
-    BitXorUInt32,
-    BitXorUInt64,
+    BitXorUint16,
+    BitXorUint32,
+    BitXorUint64,
     BitShiftLeftInt16,
     BitShiftLeftInt32,
     BitShiftLeftInt64,
-    BitShiftLeftUInt16,
-    BitShiftLeftUInt32,
-    BitShiftLeftUInt64,
+    BitShiftLeftUint16,
+    BitShiftLeftUint32,
+    BitShiftLeftUint64,
     BitShiftRightInt16,
     BitShiftRightInt32,
     BitShiftRightInt64,
-    BitShiftRightUInt16,
-    BitShiftRightUInt32,
-    BitShiftRightUInt64,
+    BitShiftRightUint16,
+    BitShiftRightUint32,
+    BitShiftRightUint64,
     SubInt16,
     SubInt32,
     SubInt64,
-    SubUInt16,
-    SubUInt32,
-    SubUInt64,
+    SubUint16,
+    SubUint32,
+    SubUint64,
     SubFloat32,
     SubFloat64,
     SubInterval,
@@ -3019,9 +3019,9 @@ pub enum BinaryFunc {
     MulInt16,
     MulInt32,
     MulInt64,
-    MulUInt16,
-    MulUInt32,
-    MulUInt64,
+    MulUint16,
+    MulUint32,
+    MulUint64,
     MulFloat32,
     MulFloat64,
     MulNumeric,
@@ -3029,9 +3029,9 @@ pub enum BinaryFunc {
     DivInt16,
     DivInt32,
     DivInt64,
-    DivUInt16,
-    DivUInt32,
-    DivUInt64,
+    DivUint16,
+    DivUint32,
+    DivUint64,
     DivFloat32,
     DivFloat64,
     DivNumeric,
@@ -3039,9 +3039,9 @@ pub enum BinaryFunc {
     ModInt16,
     ModInt32,
     ModInt64,
-    ModUInt16,
-    ModUInt32,
-    ModUInt64,
+    ModUint16,
+    ModUint32,
+    ModUint64,
     ModFloat32,
     ModFloat64,
     ModNumeric,
@@ -3160,9 +3160,9 @@ impl BinaryFunc {
             BinaryFunc::AddInt16(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
             BinaryFunc::AddInt32(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
             BinaryFunc::AddInt64(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
-            BinaryFunc::AddUInt16(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
-            BinaryFunc::AddUInt32(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
-            BinaryFunc::AddUInt64(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
+            BinaryFunc::AddUint16(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
+            BinaryFunc::AddUint32(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
+            BinaryFunc::AddUint64(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
             BinaryFunc::AddFloat32(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
             BinaryFunc::AddFloat64(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
             _ => { /* fall through */ }
@@ -3177,9 +3177,9 @@ impl BinaryFunc {
             BinaryFunc::AddInt16(_)
             | BinaryFunc::AddInt32(_)
             | BinaryFunc::AddInt64(_)
-            | BinaryFunc::AddUInt16(_)
-            | BinaryFunc::AddUInt32(_)
-            | BinaryFunc::AddUInt64(_)
+            | BinaryFunc::AddUint16(_)
+            | BinaryFunc::AddUint32(_)
+            | BinaryFunc::AddUint64(_)
             | BinaryFunc::AddFloat32(_)
             | BinaryFunc::AddFloat64(_) => unreachable!(),
             BinaryFunc::AddTimestampInterval => {
@@ -3198,39 +3198,39 @@ impl BinaryFunc {
             BinaryFunc::BitAndInt16 => Ok(bit_and_int16(a, b)),
             BinaryFunc::BitAndInt32 => Ok(bit_and_int32(a, b)),
             BinaryFunc::BitAndInt64 => Ok(bit_and_int64(a, b)),
-            BinaryFunc::BitAndUInt16 => Ok(bit_and_uint16(a, b)),
-            BinaryFunc::BitAndUInt32 => Ok(bit_and_uint32(a, b)),
-            BinaryFunc::BitAndUInt64 => Ok(bit_and_uint64(a, b)),
+            BinaryFunc::BitAndUint16 => Ok(bit_and_uint16(a, b)),
+            BinaryFunc::BitAndUint32 => Ok(bit_and_uint32(a, b)),
+            BinaryFunc::BitAndUint64 => Ok(bit_and_uint64(a, b)),
             BinaryFunc::BitOrInt16 => Ok(bit_or_int16(a, b)),
             BinaryFunc::BitOrInt32 => Ok(bit_or_int32(a, b)),
             BinaryFunc::BitOrInt64 => Ok(bit_or_int64(a, b)),
-            BinaryFunc::BitOrUInt16 => Ok(bit_or_uint16(a, b)),
-            BinaryFunc::BitOrUInt32 => Ok(bit_or_uint32(a, b)),
-            BinaryFunc::BitOrUInt64 => Ok(bit_or_uint64(a, b)),
+            BinaryFunc::BitOrUint16 => Ok(bit_or_uint16(a, b)),
+            BinaryFunc::BitOrUint32 => Ok(bit_or_uint32(a, b)),
+            BinaryFunc::BitOrUint64 => Ok(bit_or_uint64(a, b)),
             BinaryFunc::BitXorInt16 => Ok(bit_xor_int16(a, b)),
             BinaryFunc::BitXorInt32 => Ok(bit_xor_int32(a, b)),
             BinaryFunc::BitXorInt64 => Ok(bit_xor_int64(a, b)),
-            BinaryFunc::BitXorUInt16 => Ok(bit_xor_uint16(a, b)),
-            BinaryFunc::BitXorUInt32 => Ok(bit_xor_uint32(a, b)),
-            BinaryFunc::BitXorUInt64 => Ok(bit_xor_uint64(a, b)),
+            BinaryFunc::BitXorUint16 => Ok(bit_xor_uint16(a, b)),
+            BinaryFunc::BitXorUint32 => Ok(bit_xor_uint32(a, b)),
+            BinaryFunc::BitXorUint64 => Ok(bit_xor_uint64(a, b)),
             BinaryFunc::BitShiftLeftInt16 => Ok(bit_shift_left_int16(a, b)),
             BinaryFunc::BitShiftLeftInt32 => Ok(bit_shift_left_int32(a, b)),
             BinaryFunc::BitShiftLeftInt64 => Ok(bit_shift_left_int64(a, b)),
-            BinaryFunc::BitShiftLeftUInt16 => Ok(bit_shift_left_uint16(a, b)),
-            BinaryFunc::BitShiftLeftUInt32 => Ok(bit_shift_left_uint32(a, b)),
-            BinaryFunc::BitShiftLeftUInt64 => Ok(bit_shift_left_uint64(a, b)),
+            BinaryFunc::BitShiftLeftUint16 => Ok(bit_shift_left_uint16(a, b)),
+            BinaryFunc::BitShiftLeftUint32 => Ok(bit_shift_left_uint32(a, b)),
+            BinaryFunc::BitShiftLeftUint64 => Ok(bit_shift_left_uint64(a, b)),
             BinaryFunc::BitShiftRightInt16 => Ok(bit_shift_right_int16(a, b)),
             BinaryFunc::BitShiftRightInt32 => Ok(bit_shift_right_int32(a, b)),
             BinaryFunc::BitShiftRightInt64 => Ok(bit_shift_right_int64(a, b)),
-            BinaryFunc::BitShiftRightUInt16 => Ok(bit_shift_right_uint16(a, b)),
-            BinaryFunc::BitShiftRightUInt32 => Ok(bit_shift_right_uint32(a, b)),
-            BinaryFunc::BitShiftRightUInt64 => Ok(bit_shift_right_uint64(a, b)),
+            BinaryFunc::BitShiftRightUint16 => Ok(bit_shift_right_uint16(a, b)),
+            BinaryFunc::BitShiftRightUint32 => Ok(bit_shift_right_uint32(a, b)),
+            BinaryFunc::BitShiftRightUint64 => Ok(bit_shift_right_uint64(a, b)),
             BinaryFunc::SubInt16 => sub_int16(a, b),
             BinaryFunc::SubInt32 => sub_int32(a, b),
             BinaryFunc::SubInt64 => sub_int64(a, b),
-            BinaryFunc::SubUInt16 => sub_uint16(a, b),
-            BinaryFunc::SubUInt32 => sub_uint32(a, b),
-            BinaryFunc::SubUInt64 => sub_uint64(a, b),
+            BinaryFunc::SubUint16 => sub_uint16(a, b),
+            BinaryFunc::SubUint32 => sub_uint32(a, b),
+            BinaryFunc::SubUint64 => sub_uint64(a, b),
             BinaryFunc::SubFloat32 => sub_float32(a, b),
             BinaryFunc::SubFloat64 => sub_float64(a, b),
             BinaryFunc::SubTimestamp => Ok(sub_timestamp(a, b)),
@@ -3248,9 +3248,9 @@ impl BinaryFunc {
             BinaryFunc::MulInt16 => mul_int16(a, b),
             BinaryFunc::MulInt32 => mul_int32(a, b),
             BinaryFunc::MulInt64 => mul_int64(a, b),
-            BinaryFunc::MulUInt16 => mul_uint16(a, b),
-            BinaryFunc::MulUInt32 => mul_uint32(a, b),
-            BinaryFunc::MulUInt64 => mul_uint64(a, b),
+            BinaryFunc::MulUint16 => mul_uint16(a, b),
+            BinaryFunc::MulUint32 => mul_uint32(a, b),
+            BinaryFunc::MulUint64 => mul_uint64(a, b),
             BinaryFunc::MulFloat32 => mul_float32(a, b),
             BinaryFunc::MulFloat64 => mul_float64(a, b),
             BinaryFunc::MulNumeric => mul_numeric(a, b),
@@ -3258,9 +3258,9 @@ impl BinaryFunc {
             BinaryFunc::DivInt16 => div_int16(a, b),
             BinaryFunc::DivInt32 => div_int32(a, b),
             BinaryFunc::DivInt64 => div_int64(a, b),
-            BinaryFunc::DivUInt16 => div_uint16(a, b),
-            BinaryFunc::DivUInt32 => div_uint32(a, b),
-            BinaryFunc::DivUInt64 => div_uint64(a, b),
+            BinaryFunc::DivUint16 => div_uint16(a, b),
+            BinaryFunc::DivUint32 => div_uint32(a, b),
+            BinaryFunc::DivUint64 => div_uint64(a, b),
             BinaryFunc::DivFloat32 => div_float32(a, b),
             BinaryFunc::DivFloat64 => div_float64(a, b),
             BinaryFunc::DivNumeric => div_numeric(a, b),
@@ -3268,9 +3268,9 @@ impl BinaryFunc {
             BinaryFunc::ModInt16 => mod_int16(a, b),
             BinaryFunc::ModInt32 => mod_int32(a, b),
             BinaryFunc::ModInt64 => mod_int64(a, b),
-            BinaryFunc::ModUInt16 => mod_uint16(a, b),
-            BinaryFunc::ModUInt32 => mod_uint32(a, b),
-            BinaryFunc::ModUInt64 => mod_uint64(a, b),
+            BinaryFunc::ModUint16 => mod_uint16(a, b),
+            BinaryFunc::ModUint32 => mod_uint32(a, b),
+            BinaryFunc::ModUint64 => mod_uint64(a, b),
             BinaryFunc::ModFloat32 => mod_float32(a, b),
             BinaryFunc::ModFloat64 => mod_float64(a, b),
             BinaryFunc::ModNumeric => mod_numeric(a, b),
@@ -3444,9 +3444,9 @@ impl BinaryFunc {
             AddInt16(s) => s.output_type(input1_type, input2_type),
             AddInt32(s) => s.output_type(input1_type, input2_type),
             AddInt64(s) => s.output_type(input1_type, input2_type),
-            AddUInt16(s) => s.output_type(input1_type, input2_type),
-            AddUInt32(s) => s.output_type(input1_type, input2_type),
-            AddUInt64(s) => s.output_type(input1_type, input2_type),
+            AddUint16(s) => s.output_type(input1_type, input2_type),
+            AddUint32(s) => s.output_type(input1_type, input2_type),
+            AddUint64(s) => s.output_type(input1_type, input2_type),
             AddFloat32(s) => s.output_type(input1_type, input2_type),
             AddFloat64(s) => s.output_type(input1_type, input2_type),
 
@@ -3487,18 +3487,18 @@ impl BinaryFunc {
                 SqlScalarType::Int64.nullable(in_nullable)
             }
 
-            SubUInt16 | MulUInt16 | DivUInt16 | ModUInt16 | BitAndUInt16
-            | BitOrUInt16 | BitXorUInt16 | BitShiftLeftUInt16 | BitShiftRightUInt16 => {
+            SubUint16 | MulUint16 | DivUint16 | ModUint16 | BitAndUint16
+            | BitOrUint16 | BitXorUint16 | BitShiftLeftUint16 | BitShiftRightUint16 => {
                 SqlScalarType::UInt16.nullable(in_nullable)
             }
 
-            SubUInt32 | MulUInt32 | DivUInt32 | ModUInt32 | BitAndUInt32
-            | BitOrUInt32 | BitXorUInt32 | BitShiftLeftUInt32 | BitShiftRightUInt32 => {
+            SubUint32 | MulUint32 | DivUint32 | ModUint32 | BitAndUint32
+            | BitOrUint32 | BitXorUint32 | BitShiftLeftUint32 | BitShiftRightUint32 => {
                 SqlScalarType::UInt32.nullable(in_nullable)
             }
 
-             SubUInt64 | MulUInt64 | DivUInt64 | ModUInt64 | BitAndUInt64
-            | BitOrUInt64 | BitXorUInt64 | BitShiftLeftUInt64 | BitShiftRightUInt64 => {
+             SubUint64 | MulUint64 | DivUint64 | ModUint64 | BitAndUint64
+            | BitOrUint64 | BitXorUint64 | BitShiftLeftUint64 | BitShiftRightUint64 => {
                 SqlScalarType::UInt64.nullable(in_nullable)
             }
 
@@ -3646,9 +3646,9 @@ impl BinaryFunc {
             BinaryFunc::AddInt16(s) => return s.propagates_nulls(),
             BinaryFunc::AddInt32(s) => return s.propagates_nulls(),
             BinaryFunc::AddInt64(s) => return s.propagates_nulls(),
-            BinaryFunc::AddUInt16(s) => return s.propagates_nulls(),
-            BinaryFunc::AddUInt32(s) => return s.propagates_nulls(),
-            BinaryFunc::AddUInt64(s) => return s.propagates_nulls(),
+            BinaryFunc::AddUint16(s) => return s.propagates_nulls(),
+            BinaryFunc::AddUint32(s) => return s.propagates_nulls(),
+            BinaryFunc::AddUint64(s) => return s.propagates_nulls(),
             BinaryFunc::AddFloat32(s) => return s.propagates_nulls(),
             BinaryFunc::AddFloat64(s) => return s.propagates_nulls(),
             _ => { /* fall through */ }
@@ -3677,9 +3677,9 @@ impl BinaryFunc {
             AddInt16(s) => s.introduces_nulls(),
             AddInt32(s) => s.introduces_nulls(),
             AddInt64(s) => s.introduces_nulls(),
-            AddUInt16(s) => s.introduces_nulls(),
-            AddUInt32(s) => s.introduces_nulls(),
-            AddUInt64(s) => s.introduces_nulls(),
+            AddUint16(s) => s.introduces_nulls(),
+            AddUint32(s) => s.introduces_nulls(),
+            AddUint64(s) => s.introduces_nulls(),
             AddFloat32(s) => s.introduces_nulls(),
             AddFloat64(s) => s.introduces_nulls(),
             AddInterval
@@ -3694,39 +3694,39 @@ impl BinaryFunc {
             | BitAndInt16
             | BitAndInt32
             | BitAndInt64
-            | BitAndUInt16
-            | BitAndUInt32
-            | BitAndUInt64
+            | BitAndUint16
+            | BitAndUint32
+            | BitAndUint64
             | BitOrInt16
             | BitOrInt32
             | BitOrInt64
-            | BitOrUInt16
-            | BitOrUInt32
-            | BitOrUInt64
+            | BitOrUint16
+            | BitOrUint32
+            | BitOrUint64
             | BitXorInt16
             | BitXorInt32
             | BitXorInt64
-            | BitXorUInt16
-            | BitXorUInt32
-            | BitXorUInt64
+            | BitXorUint16
+            | BitXorUint32
+            | BitXorUint64
             | BitShiftLeftInt16
             | BitShiftLeftInt32
             | BitShiftLeftInt64
-            | BitShiftLeftUInt16
-            | BitShiftLeftUInt32
-            | BitShiftLeftUInt64
+            | BitShiftLeftUint16
+            | BitShiftLeftUint32
+            | BitShiftLeftUint64
             | BitShiftRightInt16
             | BitShiftRightInt32
             | BitShiftRightInt64
-            | BitShiftRightUInt16
-            | BitShiftRightUInt32
-            | BitShiftRightUInt64
+            | BitShiftRightUint16
+            | BitShiftRightUint32
+            | BitShiftRightUint64
             | SubInt16
             | SubInt32
             | SubInt64
-            | SubUInt16
-            | SubUInt32
-            | SubUInt64
+            | SubUint16
+            | SubUint32
+            | SubUint64
             | SubFloat32
             | SubFloat64
             | SubInterval
@@ -3742,9 +3742,9 @@ impl BinaryFunc {
             | MulInt16
             | MulInt32
             | MulInt64
-            | MulUInt16
-            | MulUInt32
-            | MulUInt64
+            | MulUint16
+            | MulUint32
+            | MulUint64
             | MulFloat32
             | MulFloat64
             | MulNumeric
@@ -3752,9 +3752,9 @@ impl BinaryFunc {
             | DivInt16
             | DivInt32
             | DivInt64
-            | DivUInt16
-            | DivUInt32
-            | DivUInt64
+            | DivUint16
+            | DivUint32
+            | DivUint64
             | DivFloat32
             | DivFloat64
             | DivNumeric
@@ -3762,9 +3762,9 @@ impl BinaryFunc {
             | ModInt16
             | ModInt32
             | ModInt64
-            | ModUInt16
-            | ModUInt32
-            | ModUInt64
+            | ModUint16
+            | ModUint32
+            | ModUint64
             | ModFloat32
             | ModFloat64
             | ModNumeric
@@ -3879,9 +3879,9 @@ impl BinaryFunc {
             AddInt16(s) => s.is_infix_op(),
             AddInt32(s) => s.is_infix_op(),
             AddInt64(s) => s.is_infix_op(),
-            AddUInt16(s) => s.is_infix_op(),
-            AddUInt32(s) => s.is_infix_op(),
-            AddUInt64(s) => s.is_infix_op(),
+            AddUint16(s) => s.is_infix_op(),
+            AddUint32(s) => s.is_infix_op(),
+            AddUint64(s) => s.is_infix_op(),
             AddFloat32(s) => s.is_infix_op(),
             AddFloat64(s) => s.is_infix_op(),
             AddTimestampInterval
@@ -3893,33 +3893,33 @@ impl BinaryFunc {
             | BitAndInt16
             | BitAndInt32
             | BitAndInt64
-            | BitAndUInt16
-            | BitAndUInt32
-            | BitAndUInt64
+            | BitAndUint16
+            | BitAndUint32
+            | BitAndUint64
             | BitOrInt16
             | BitOrInt32
             | BitOrInt64
-            | BitOrUInt16
-            | BitOrUInt32
-            | BitOrUInt64
+            | BitOrUint16
+            | BitOrUint32
+            | BitOrUint64
             | BitXorInt16
             | BitXorInt32
             | BitXorInt64
-            | BitXorUInt16
-            | BitXorUInt32
-            | BitXorUInt64
+            | BitXorUint16
+            | BitXorUint32
+            | BitXorUint64
             | BitShiftLeftInt16
             | BitShiftLeftInt32
             | BitShiftLeftInt64
-            | BitShiftLeftUInt16
-            | BitShiftLeftUInt32
-            | BitShiftLeftUInt64
+            | BitShiftLeftUint16
+            | BitShiftLeftUint32
+            | BitShiftLeftUint64
             | BitShiftRightInt16
             | BitShiftRightInt32
             | BitShiftRightInt64
-            | BitShiftRightUInt16
-            | BitShiftRightUInt32
-            | BitShiftRightUInt64
+            | BitShiftRightUint16
+            | BitShiftRightUint32
+            | BitShiftRightUint64
             | SubInterval
             | MulInterval
             | DivInterval
@@ -3927,9 +3927,9 @@ impl BinaryFunc {
             | SubInt16
             | SubInt32
             | SubInt64
-            | SubUInt16
-            | SubUInt32
-            | SubUInt64
+            | SubUint16
+            | SubUint32
+            | SubUint64
             | SubFloat32
             | SubFloat64
             | SubTimestamp
@@ -3944,27 +3944,27 @@ impl BinaryFunc {
             | MulInt16
             | MulInt32
             | MulInt64
-            | MulUInt16
-            | MulUInt32
-            | MulUInt64
+            | MulUint16
+            | MulUint32
+            | MulUint64
             | MulFloat32
             | MulFloat64
             | MulNumeric
             | DivInt16
             | DivInt32
             | DivInt64
-            | DivUInt16
-            | DivUInt32
-            | DivUInt64
+            | DivUint16
+            | DivUint32
+            | DivUint64
             | DivFloat32
             | DivFloat64
             | DivNumeric
             | ModInt16
             | ModInt32
             | ModInt64
-            | ModUInt16
-            | ModUInt32
-            | ModUInt64
+            | ModUint16
+            | ModUint32
+            | ModUint64
             | ModFloat32
             | ModFloat64
             | ModNumeric
@@ -4080,9 +4080,9 @@ impl BinaryFunc {
             BinaryFunc::AddInt16(s) => s.negate(),
             BinaryFunc::AddInt32(s) => s.negate(),
             BinaryFunc::AddInt64(s) => s.negate(),
-            BinaryFunc::AddUInt16(s) => s.negate(),
-            BinaryFunc::AddUInt32(s) => s.negate(),
-            BinaryFunc::AddUInt64(s) => s.negate(),
+            BinaryFunc::AddUint16(s) => s.negate(),
+            BinaryFunc::AddUint32(s) => s.negate(),
+            BinaryFunc::AddUint64(s) => s.negate(),
             BinaryFunc::AddFloat32(s) => s.negate(),
             BinaryFunc::AddFloat64(s) => s.negate(),
 
@@ -4104,9 +4104,9 @@ impl BinaryFunc {
             BinaryFunc::AddInt16(s) => s.could_error(),
             BinaryFunc::AddInt32(s) => s.could_error(),
             BinaryFunc::AddInt64(s) => s.could_error(),
-            BinaryFunc::AddUInt16(s) => s.could_error(),
-            BinaryFunc::AddUInt32(s) => s.could_error(),
-            BinaryFunc::AddUInt64(s) => s.could_error(),
+            BinaryFunc::AddUint16(s) => s.could_error(),
+            BinaryFunc::AddUint32(s) => s.could_error(),
+            BinaryFunc::AddUint64(s) => s.could_error(),
             BinaryFunc::AddFloat32(s) => s.could_error(),
             BinaryFunc::AddFloat64(s) => s.could_error(),
             BinaryFunc::Eq
@@ -4118,33 +4118,33 @@ impl BinaryFunc {
             BinaryFunc::BitAndInt16
             | BinaryFunc::BitAndInt32
             | BinaryFunc::BitAndInt64
-            | BinaryFunc::BitAndUInt16
-            | BinaryFunc::BitAndUInt32
-            | BinaryFunc::BitAndUInt64
+            | BinaryFunc::BitAndUint16
+            | BinaryFunc::BitAndUint32
+            | BinaryFunc::BitAndUint64
             | BinaryFunc::BitOrInt16
             | BinaryFunc::BitOrInt32
             | BinaryFunc::BitOrInt64
-            | BinaryFunc::BitOrUInt16
-            | BinaryFunc::BitOrUInt32
-            | BinaryFunc::BitOrUInt64
+            | BinaryFunc::BitOrUint16
+            | BinaryFunc::BitOrUint32
+            | BinaryFunc::BitOrUint64
             | BinaryFunc::BitXorInt16
             | BinaryFunc::BitXorInt32
             | BinaryFunc::BitXorInt64
-            | BinaryFunc::BitXorUInt16
-            | BinaryFunc::BitXorUInt32
-            | BinaryFunc::BitXorUInt64
+            | BinaryFunc::BitXorUint16
+            | BinaryFunc::BitXorUint32
+            | BinaryFunc::BitXorUint64
             | BinaryFunc::BitShiftLeftInt16
             | BinaryFunc::BitShiftLeftInt32
             | BinaryFunc::BitShiftLeftInt64
-            | BinaryFunc::BitShiftLeftUInt16
-            | BinaryFunc::BitShiftLeftUInt32
-            | BinaryFunc::BitShiftLeftUInt64
+            | BinaryFunc::BitShiftLeftUint16
+            | BinaryFunc::BitShiftLeftUint32
+            | BinaryFunc::BitShiftLeftUint64
             | BinaryFunc::BitShiftRightInt16
             | BinaryFunc::BitShiftRightInt32
             | BinaryFunc::BitShiftRightInt64
-            | BinaryFunc::BitShiftRightUInt16
-            | BinaryFunc::BitShiftRightUInt32
-            | BinaryFunc::BitShiftRightUInt64 => false,
+            | BinaryFunc::BitShiftRightUint16
+            | BinaryFunc::BitShiftRightUint32
+            | BinaryFunc::BitShiftRightUint64 => false,
             BinaryFunc::JsonbGetInt64
             | BinaryFunc::JsonbGetInt64Stringify
             | BinaryFunc::JsonbGetString
@@ -4213,9 +4213,9 @@ impl BinaryFunc {
             BinaryFunc::AddInt16(s) => s.is_monotone(),
             BinaryFunc::AddInt32(s) => s.is_monotone(),
             BinaryFunc::AddInt64(s) => s.is_monotone(),
-            BinaryFunc::AddUInt16(s) => s.is_monotone(),
-            BinaryFunc::AddUInt32(s) => s.is_monotone(),
-            BinaryFunc::AddUInt64(s) => s.is_monotone(),
+            BinaryFunc::AddUint16(s) => s.is_monotone(),
+            BinaryFunc::AddUint32(s) => s.is_monotone(),
+            BinaryFunc::AddUint64(s) => s.is_monotone(),
             BinaryFunc::AddFloat32(s) => s.is_monotone(),
             BinaryFunc::AddFloat64(s) => s.is_monotone(),
             BinaryFunc::AddInterval
@@ -4229,40 +4229,40 @@ impl BinaryFunc {
             BinaryFunc::BitAndInt16
             | BinaryFunc::BitAndInt32
             | BinaryFunc::BitAndInt64
-            | BinaryFunc::BitAndUInt16
-            | BinaryFunc::BitAndUInt32
-            | BinaryFunc::BitAndUInt64
+            | BinaryFunc::BitAndUint16
+            | BinaryFunc::BitAndUint32
+            | BinaryFunc::BitAndUint64
             | BinaryFunc::BitOrInt16
             | BinaryFunc::BitOrInt32
             | BinaryFunc::BitOrInt64
-            | BinaryFunc::BitOrUInt16
-            | BinaryFunc::BitOrUInt32
-            | BinaryFunc::BitOrUInt64
+            | BinaryFunc::BitOrUint16
+            | BinaryFunc::BitOrUint32
+            | BinaryFunc::BitOrUint64
             | BinaryFunc::BitXorInt16
             | BinaryFunc::BitXorInt32
             | BinaryFunc::BitXorInt64
-            | BinaryFunc::BitXorUInt16
-            | BinaryFunc::BitXorUInt32
-            | BinaryFunc::BitXorUInt64 => (false, false),
+            | BinaryFunc::BitXorUint16
+            | BinaryFunc::BitXorUint32
+            | BinaryFunc::BitXorUint64 => (false, false),
             // The shift functions wrap, which means they are monotonic in neither argument.
             BinaryFunc::BitShiftLeftInt16
             | BinaryFunc::BitShiftLeftInt32
             | BinaryFunc::BitShiftLeftInt64
-            | BinaryFunc::BitShiftLeftUInt16
-            | BinaryFunc::BitShiftLeftUInt32
-            | BinaryFunc::BitShiftLeftUInt64
+            | BinaryFunc::BitShiftLeftUint16
+            | BinaryFunc::BitShiftLeftUint32
+            | BinaryFunc::BitShiftLeftUint64
             | BinaryFunc::BitShiftRightInt16
             | BinaryFunc::BitShiftRightInt32
             | BinaryFunc::BitShiftRightInt64
-            | BinaryFunc::BitShiftRightUInt16
-            | BinaryFunc::BitShiftRightUInt32
-            | BinaryFunc::BitShiftRightUInt64 => (false, false),
+            | BinaryFunc::BitShiftRightUint16
+            | BinaryFunc::BitShiftRightUint32
+            | BinaryFunc::BitShiftRightUint64 => (false, false),
             BinaryFunc::SubInt16
             | BinaryFunc::SubInt32
             | BinaryFunc::SubInt64
-            | BinaryFunc::SubUInt16
-            | BinaryFunc::SubUInt32
-            | BinaryFunc::SubUInt64
+            | BinaryFunc::SubUint16
+            | BinaryFunc::SubUint32
+            | BinaryFunc::SubUint64
             | BinaryFunc::SubFloat32
             | BinaryFunc::SubFloat64
             | BinaryFunc::SubInterval
@@ -4279,9 +4279,9 @@ impl BinaryFunc {
             BinaryFunc::MulInt16
             | BinaryFunc::MulInt32
             | BinaryFunc::MulInt64
-            | BinaryFunc::MulUInt16
-            | BinaryFunc::MulUInt32
-            | BinaryFunc::MulUInt64
+            | BinaryFunc::MulUint16
+            | BinaryFunc::MulUint32
+            | BinaryFunc::MulUint64
             | BinaryFunc::MulFloat32
             | BinaryFunc::MulFloat64
             | BinaryFunc::MulNumeric => (true, true),
@@ -4289,9 +4289,9 @@ impl BinaryFunc {
             BinaryFunc::DivInt16
             | BinaryFunc::DivInt32
             | BinaryFunc::DivInt64
-            | BinaryFunc::DivUInt16
-            | BinaryFunc::DivUInt32
-            | BinaryFunc::DivUInt64
+            | BinaryFunc::DivUint16
+            | BinaryFunc::DivUint32
+            | BinaryFunc::DivUint64
             | BinaryFunc::DivFloat32
             | BinaryFunc::DivFloat64
             | BinaryFunc::DivNumeric => (true, false),
@@ -4299,9 +4299,9 @@ impl BinaryFunc {
             BinaryFunc::ModInt16
             | BinaryFunc::ModInt32
             | BinaryFunc::ModInt64
-            | BinaryFunc::ModUInt16
-            | BinaryFunc::ModUInt32
-            | BinaryFunc::ModUInt64
+            | BinaryFunc::ModUint16
+            | BinaryFunc::ModUint32
+            | BinaryFunc::ModUint64
             | BinaryFunc::ModFloat32
             | BinaryFunc::ModFloat64
             | BinaryFunc::ModNumeric => (false, false),
@@ -4419,9 +4419,9 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::AddInt16(s) => s.fmt(f),
             BinaryFunc::AddInt32(s) => s.fmt(f),
             BinaryFunc::AddInt64(s) => s.fmt(f),
-            BinaryFunc::AddUInt16(s) => s.fmt(f),
-            BinaryFunc::AddUInt32(s) => s.fmt(f),
-            BinaryFunc::AddUInt64(s) => s.fmt(f),
+            BinaryFunc::AddUint16(s) => s.fmt(f),
+            BinaryFunc::AddUint32(s) => s.fmt(f),
+            BinaryFunc::AddUint64(s) => s.fmt(f),
             BinaryFunc::AddFloat32(s) => s.fmt(f),
             BinaryFunc::AddFloat64(s) => s.fmt(f),
             BinaryFunc::AddNumeric => f.write_str("+"),
@@ -4436,39 +4436,39 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::BitAndInt16 => f.write_str("&"),
             BinaryFunc::BitAndInt32 => f.write_str("&"),
             BinaryFunc::BitAndInt64 => f.write_str("&"),
-            BinaryFunc::BitAndUInt16 => f.write_str("&"),
-            BinaryFunc::BitAndUInt32 => f.write_str("&"),
-            BinaryFunc::BitAndUInt64 => f.write_str("&"),
+            BinaryFunc::BitAndUint16 => f.write_str("&"),
+            BinaryFunc::BitAndUint32 => f.write_str("&"),
+            BinaryFunc::BitAndUint64 => f.write_str("&"),
             BinaryFunc::BitOrInt16 => f.write_str("|"),
             BinaryFunc::BitOrInt32 => f.write_str("|"),
             BinaryFunc::BitOrInt64 => f.write_str("|"),
-            BinaryFunc::BitOrUInt16 => f.write_str("|"),
-            BinaryFunc::BitOrUInt32 => f.write_str("|"),
-            BinaryFunc::BitOrUInt64 => f.write_str("|"),
+            BinaryFunc::BitOrUint16 => f.write_str("|"),
+            BinaryFunc::BitOrUint32 => f.write_str("|"),
+            BinaryFunc::BitOrUint64 => f.write_str("|"),
             BinaryFunc::BitXorInt16 => f.write_str("#"),
             BinaryFunc::BitXorInt32 => f.write_str("#"),
             BinaryFunc::BitXorInt64 => f.write_str("#"),
-            BinaryFunc::BitXorUInt16 => f.write_str("#"),
-            BinaryFunc::BitXorUInt32 => f.write_str("#"),
-            BinaryFunc::BitXorUInt64 => f.write_str("#"),
+            BinaryFunc::BitXorUint16 => f.write_str("#"),
+            BinaryFunc::BitXorUint32 => f.write_str("#"),
+            BinaryFunc::BitXorUint64 => f.write_str("#"),
             BinaryFunc::BitShiftLeftInt16 => f.write_str("<<"),
             BinaryFunc::BitShiftLeftInt32 => f.write_str("<<"),
             BinaryFunc::BitShiftLeftInt64 => f.write_str("<<"),
-            BinaryFunc::BitShiftLeftUInt16 => f.write_str("<<"),
-            BinaryFunc::BitShiftLeftUInt32 => f.write_str("<<"),
-            BinaryFunc::BitShiftLeftUInt64 => f.write_str("<<"),
+            BinaryFunc::BitShiftLeftUint16 => f.write_str("<<"),
+            BinaryFunc::BitShiftLeftUint32 => f.write_str("<<"),
+            BinaryFunc::BitShiftLeftUint64 => f.write_str("<<"),
             BinaryFunc::BitShiftRightInt16 => f.write_str(">>"),
             BinaryFunc::BitShiftRightInt32 => f.write_str(">>"),
             BinaryFunc::BitShiftRightInt64 => f.write_str(">>"),
-            BinaryFunc::BitShiftRightUInt16 => f.write_str(">>"),
-            BinaryFunc::BitShiftRightUInt32 => f.write_str(">>"),
-            BinaryFunc::BitShiftRightUInt64 => f.write_str(">>"),
+            BinaryFunc::BitShiftRightUint16 => f.write_str(">>"),
+            BinaryFunc::BitShiftRightUint32 => f.write_str(">>"),
+            BinaryFunc::BitShiftRightUint64 => f.write_str(">>"),
             BinaryFunc::SubInt16 => f.write_str("-"),
             BinaryFunc::SubInt32 => f.write_str("-"),
             BinaryFunc::SubInt64 => f.write_str("-"),
-            BinaryFunc::SubUInt16 => f.write_str("-"),
-            BinaryFunc::SubUInt32 => f.write_str("-"),
-            BinaryFunc::SubUInt64 => f.write_str("-"),
+            BinaryFunc::SubUint16 => f.write_str("-"),
+            BinaryFunc::SubUint32 => f.write_str("-"),
+            BinaryFunc::SubUint64 => f.write_str("-"),
             BinaryFunc::SubFloat32 => f.write_str("-"),
             BinaryFunc::SubFloat64 => f.write_str("-"),
             BinaryFunc::SubNumeric => f.write_str("-"),
@@ -4484,9 +4484,9 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::MulInt16 => f.write_str("*"),
             BinaryFunc::MulInt32 => f.write_str("*"),
             BinaryFunc::MulInt64 => f.write_str("*"),
-            BinaryFunc::MulUInt16 => f.write_str("*"),
-            BinaryFunc::MulUInt32 => f.write_str("*"),
-            BinaryFunc::MulUInt64 => f.write_str("*"),
+            BinaryFunc::MulUint16 => f.write_str("*"),
+            BinaryFunc::MulUint32 => f.write_str("*"),
+            BinaryFunc::MulUint64 => f.write_str("*"),
             BinaryFunc::MulFloat32 => f.write_str("*"),
             BinaryFunc::MulFloat64 => f.write_str("*"),
             BinaryFunc::MulNumeric => f.write_str("*"),
@@ -4494,9 +4494,9 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::DivInt16 => f.write_str("/"),
             BinaryFunc::DivInt32 => f.write_str("/"),
             BinaryFunc::DivInt64 => f.write_str("/"),
-            BinaryFunc::DivUInt16 => f.write_str("/"),
-            BinaryFunc::DivUInt32 => f.write_str("/"),
-            BinaryFunc::DivUInt64 => f.write_str("/"),
+            BinaryFunc::DivUint16 => f.write_str("/"),
+            BinaryFunc::DivUint32 => f.write_str("/"),
+            BinaryFunc::DivUint64 => f.write_str("/"),
             BinaryFunc::DivFloat32 => f.write_str("/"),
             BinaryFunc::DivFloat64 => f.write_str("/"),
             BinaryFunc::DivNumeric => f.write_str("/"),
@@ -4504,9 +4504,9 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::ModInt16 => f.write_str("%"),
             BinaryFunc::ModInt32 => f.write_str("%"),
             BinaryFunc::ModInt64 => f.write_str("%"),
-            BinaryFunc::ModUInt16 => f.write_str("%"),
-            BinaryFunc::ModUInt32 => f.write_str("%"),
-            BinaryFunc::ModUInt64 => f.write_str("%"),
+            BinaryFunc::ModUint16 => f.write_str("%"),
+            BinaryFunc::ModUint32 => f.write_str("%"),
+            BinaryFunc::ModUint64 => f.write_str("%"),
             BinaryFunc::ModFloat32 => f.write_str("%"),
             BinaryFunc::ModFloat64 => f.write_str("%"),
             BinaryFunc::ModNumeric => f.write_str("%"),
@@ -4648,9 +4648,9 @@ impl Arbitrary for BinaryFunc {
             Just(BinaryFunc::AddInt16(AddInt16)).boxed(),
             Just(BinaryFunc::AddInt32(AddInt32)).boxed(),
             Just(BinaryFunc::AddInt64(AddInt64)).boxed(),
-            Just(BinaryFunc::AddUInt16(AddUint16)).boxed(),
-            Just(BinaryFunc::AddUInt32(AddUint32)).boxed(),
-            Just(BinaryFunc::AddUInt64(AddUint64)).boxed(),
+            Just(BinaryFunc::AddUint16(AddUint16)).boxed(),
+            Just(BinaryFunc::AddUint32(AddUint32)).boxed(),
+            Just(BinaryFunc::AddUint64(AddUint64)).boxed(),
             Just(BinaryFunc::AddFloat32(AddFloat32)).boxed(),
             Just(BinaryFunc::AddFloat64(AddFloat64)).boxed(),
             Just(BinaryFunc::AddInterval).boxed(),
@@ -4665,39 +4665,39 @@ impl Arbitrary for BinaryFunc {
             Just(BinaryFunc::BitAndInt16).boxed(),
             Just(BinaryFunc::BitAndInt32).boxed(),
             Just(BinaryFunc::BitAndInt64).boxed(),
-            Just(BinaryFunc::BitAndUInt16).boxed(),
-            Just(BinaryFunc::BitAndUInt32).boxed(),
-            Just(BinaryFunc::BitAndUInt64).boxed(),
+            Just(BinaryFunc::BitAndUint16).boxed(),
+            Just(BinaryFunc::BitAndUint32).boxed(),
+            Just(BinaryFunc::BitAndUint64).boxed(),
             Just(BinaryFunc::BitOrInt16).boxed(),
             Just(BinaryFunc::BitOrInt32).boxed(),
             Just(BinaryFunc::BitOrInt64).boxed(),
-            Just(BinaryFunc::BitOrUInt16).boxed(),
-            Just(BinaryFunc::BitOrUInt32).boxed(),
-            Just(BinaryFunc::BitOrUInt64).boxed(),
+            Just(BinaryFunc::BitOrUint16).boxed(),
+            Just(BinaryFunc::BitOrUint32).boxed(),
+            Just(BinaryFunc::BitOrUint64).boxed(),
             Just(BinaryFunc::BitXorInt16).boxed(),
             Just(BinaryFunc::BitXorInt32).boxed(),
             Just(BinaryFunc::BitXorInt64).boxed(),
-            Just(BinaryFunc::BitXorUInt16).boxed(),
-            Just(BinaryFunc::BitXorUInt32).boxed(),
-            Just(BinaryFunc::BitXorUInt64).boxed(),
+            Just(BinaryFunc::BitXorUint16).boxed(),
+            Just(BinaryFunc::BitXorUint32).boxed(),
+            Just(BinaryFunc::BitXorUint64).boxed(),
             Just(BinaryFunc::BitShiftLeftInt16).boxed(),
             Just(BinaryFunc::BitShiftLeftInt32).boxed(),
             Just(BinaryFunc::BitShiftLeftInt64).boxed(),
-            Just(BinaryFunc::BitShiftLeftUInt16).boxed(),
-            Just(BinaryFunc::BitShiftLeftUInt32).boxed(),
-            Just(BinaryFunc::BitShiftLeftUInt64).boxed(),
+            Just(BinaryFunc::BitShiftLeftUint16).boxed(),
+            Just(BinaryFunc::BitShiftLeftUint32).boxed(),
+            Just(BinaryFunc::BitShiftLeftUint64).boxed(),
             Just(BinaryFunc::BitShiftRightInt16).boxed(),
             Just(BinaryFunc::BitShiftRightInt32).boxed(),
             Just(BinaryFunc::BitShiftRightInt64).boxed(),
-            Just(BinaryFunc::BitShiftRightUInt16).boxed(),
-            Just(BinaryFunc::BitShiftRightUInt32).boxed(),
-            Just(BinaryFunc::BitShiftRightUInt64).boxed(),
+            Just(BinaryFunc::BitShiftRightUint16).boxed(),
+            Just(BinaryFunc::BitShiftRightUint32).boxed(),
+            Just(BinaryFunc::BitShiftRightUint64).boxed(),
             Just(BinaryFunc::SubInt16).boxed(),
             Just(BinaryFunc::SubInt32).boxed(),
             Just(BinaryFunc::SubInt64).boxed(),
-            Just(BinaryFunc::SubUInt16).boxed(),
-            Just(BinaryFunc::SubUInt32).boxed(),
-            Just(BinaryFunc::SubUInt64).boxed(),
+            Just(BinaryFunc::SubUint16).boxed(),
+            Just(BinaryFunc::SubUint32).boxed(),
+            Just(BinaryFunc::SubUint64).boxed(),
             Just(BinaryFunc::SubFloat32).boxed(),
             Just(BinaryFunc::SubFloat64).boxed(),
             Just(BinaryFunc::SubInterval).boxed(),
@@ -4713,9 +4713,9 @@ impl Arbitrary for BinaryFunc {
             Just(BinaryFunc::MulInt16).boxed(),
             Just(BinaryFunc::MulInt32).boxed(),
             Just(BinaryFunc::MulInt64).boxed(),
-            Just(BinaryFunc::MulUInt16).boxed(),
-            Just(BinaryFunc::MulUInt32).boxed(),
-            Just(BinaryFunc::MulUInt64).boxed(),
+            Just(BinaryFunc::MulUint16).boxed(),
+            Just(BinaryFunc::MulUint32).boxed(),
+            Just(BinaryFunc::MulUint64).boxed(),
             Just(BinaryFunc::MulFloat32).boxed(),
             Just(BinaryFunc::MulFloat64).boxed(),
             Just(BinaryFunc::MulNumeric).boxed(),
@@ -4723,9 +4723,9 @@ impl Arbitrary for BinaryFunc {
             Just(BinaryFunc::DivInt16).boxed(),
             Just(BinaryFunc::DivInt32).boxed(),
             Just(BinaryFunc::DivInt64).boxed(),
-            Just(BinaryFunc::DivUInt16).boxed(),
-            Just(BinaryFunc::DivUInt32).boxed(),
-            Just(BinaryFunc::DivUInt64).boxed(),
+            Just(BinaryFunc::DivUint16).boxed(),
+            Just(BinaryFunc::DivUint32).boxed(),
+            Just(BinaryFunc::DivUint64).boxed(),
             Just(BinaryFunc::DivFloat32).boxed(),
             Just(BinaryFunc::DivFloat64).boxed(),
             Just(BinaryFunc::DivNumeric).boxed(),
@@ -4733,9 +4733,9 @@ impl Arbitrary for BinaryFunc {
             Just(BinaryFunc::ModInt16).boxed(),
             Just(BinaryFunc::ModInt32).boxed(),
             Just(BinaryFunc::ModInt64).boxed(),
-            Just(BinaryFunc::ModUInt16).boxed(),
-            Just(BinaryFunc::ModUInt32).boxed(),
-            Just(BinaryFunc::ModUInt64).boxed(),
+            Just(BinaryFunc::ModUint16).boxed(),
+            Just(BinaryFunc::ModUint32).boxed(),
+            Just(BinaryFunc::ModUint64).boxed(),
             Just(BinaryFunc::ModFloat32).boxed(),
             Just(BinaryFunc::ModFloat64).boxed(),
             Just(BinaryFunc::ModNumeric).boxed(),
