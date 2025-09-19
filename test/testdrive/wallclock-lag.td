@@ -238,7 +238,6 @@ mv            r1      <null>
 mv            <null>  <null>
 snk           <null>  <null>
 src           <null>  <null>
-src_tbl       <null>  <null>
 
 > SELECT DISTINCT o.name, l.lag_seconds
   FROM mz_internal.mz_wallclock_global_lag_histogram l
@@ -248,7 +247,6 @@ idx     <null>
 mv      <null>
 snk     <null>
 src     <null>
-src_tbl <null>
 
 > DROP CLUSTER storage CASCADE
 > DROP CLUSTER compute CASCADE
