@@ -266,10 +266,7 @@ where
     sqlname = "+",
     propagates_nulls = true
 )]
-fn add_date_time<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let date = a.unwrap_date();
-    let time = b.unwrap_time();
-
+fn add_date_time<'a>(date: Date, time: chrono::NaiveTime) -> Result<Datum<'a>, EvalError> {
     let dt = NaiveDate::from(date)
         .and_hms_nano_opt(time.hour(), time.minute(), time.second(), time.nanosecond())
         .unwrap();
@@ -283,10 +280,7 @@ fn add_date_time<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError>
     sqlname = "+",
     propagates_nulls = true
 )]
-fn add_date_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let date = a.unwrap_date();
-    let interval = b.unwrap_interval();
-
+fn add_date_interval<'a>(date: Date, interval: Interval) -> Result<Datum<'a>, EvalError> {
     let dt = NaiveDate::from(date).and_hms_opt(0, 0, 0).unwrap();
     let dt = add_timestamp_months(&dt, interval.months)?;
     let dt = dt
@@ -303,11 +297,9 @@ fn add_date_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalEr
     sqlname = "+",
     propagates_nulls = true
 )]
-fn add_time_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    let time = a.unwrap_time();
-    let interval = b.unwrap_interval();
+fn add_time_interval<'a>(time: chrono::NaiveTime, interval: Interval) -> chrono::NaiveTime {
     let (t, _) = time.overflowing_add_signed(interval.duration_as_chrono());
-    Datum::Time(t)
+    t
 }
 
 #[sqlfunc(
@@ -316,9 +308,11 @@ fn add_time_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     sqlname = "round",
     propagates_nulls = true
 )]
-fn round_numeric_binary<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let mut a = a.unwrap_numeric().0;
-    let mut b = b.unwrap_int32();
+fn round_numeric_binary<'a>(
+    a: OrderedDecimal<Numeric>,
+    mut b: i32,
+) -> Result<Datum<'a>, EvalError> {
+    let mut a = a.0;
     let mut cx = numeric::cx_datum();
     let a_exp = a.exponent();
     if a_exp > 0 && b > 0 || a_exp < 0 && -a_exp < b {
@@ -369,25 +363,21 @@ fn round_numeric_binary<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, Eva
     sqlname = "convert_from",
     propagates_nulls = true
 )]
-fn convert_from<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+fn convert_from<'a>(a: &'a [u8], b: &str) -> Result<&'a str, EvalError> {
     // Convert PostgreSQL-style encoding names[1] to WHATWG-style encoding names[2],
     // which the encoding library uses[3].
     // [1]: https://www.postgresql.org/docs/9.5/multibyte.html
     // [2]: https://encoding.spec.whatwg.org/
     // [3]: https://github.com/lifthrasiir/rust-encoding/blob/4e79c35ab6a351881a86dbff565c4db0085cc113/src/label.rs
-    let encoding_name = b
-        .unwrap_str()
-        .to_lowercase()
-        .replace('_', "-")
-        .into_boxed_str();
+    let encoding_name = b.to_lowercase().replace('_', "-").into_boxed_str();
 
     // Supporting other encodings is tracked by database-issues#797.
     if encoding_from_whatwg_label(&encoding_name).map(|e| e.name()) != Some("utf-8") {
         return Err(EvalError::InvalidEncodingName(encoding_name));
     }
 
-    match str::from_utf8(a.unwrap_bytes()) {
-        Ok(from) => Ok(Datum::String(from)),
+    match str::from_utf8(a) {
+        Ok(from) => Ok(from),
         Err(e) => Err(EvalError::InvalidByteSequence {
             byte_sequence: e.to_string().into(),
             encoding_name,
@@ -397,45 +387,41 @@ fn convert_from<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> 
 
 #[sqlfunc(output_type = "String", propagates_nulls = true)]
 fn encode<'a>(
-    bytes: Datum<'a>,
-    format: Datum<'a>,
+    bytes: &[u8],
+    format: &str,
     temp_storage: &'a RowArena,
 ) -> Result<Datum<'a>, EvalError> {
-    let format = encoding::lookup_format(format.unwrap_str())?;
-    let out = format.encode(bytes.unwrap_bytes());
+    let format = encoding::lookup_format(format)?;
+    let out = format.encode(bytes);
     Ok(Datum::from(temp_storage.push_string(out)))
 }
 
 #[sqlfunc(output_type = "Vec<u8>", propagates_nulls = true)]
 fn decode<'a>(
-    string: Datum<'a>,
-    format: Datum<'a>,
+    string: &str,
+    format: &str,
     temp_storage: &'a RowArena,
 ) -> Result<Datum<'a>, EvalError> {
-    let format = encoding::lookup_format(format.unwrap_str())?;
-    let out = format.decode(string.unwrap_str())?;
+    let format = encoding::lookup_format(format)?;
+    let out = format.decode(string)?;
     Ok(Datum::from(temp_storage.push_bytes(out)))
 }
 
 #[sqlfunc(output_type = "i32", sqlname = "length", propagates_nulls = true)]
-fn encoded_bytes_char_length<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+fn encoded_bytes_char_length<'a>(a: &[u8], b: &str) -> Result<Datum<'a>, EvalError> {
     // Convert PostgreSQL-style encoding names[1] to WHATWG-style encoding names[2],
     // which the encoding library uses[3].
     // [1]: https://www.postgresql.org/docs/9.5/multibyte.html
     // [2]: https://encoding.spec.whatwg.org/
     // [3]: https://github.com/lifthrasiir/rust-encoding/blob/4e79c35ab6a351881a86dbff565c4db0085cc113/src/label.rs
-    let encoding_name = b
-        .unwrap_str()
-        .to_lowercase()
-        .replace('_', "-")
-        .into_boxed_str();
+    let encoding_name = b.to_lowercase().replace('_', "-").into_boxed_str();
 
     let enc = match encoding_from_whatwg_label(&encoding_name) {
         Some(enc) => enc,
         None => return Err(EvalError::InvalidEncodingName(encoding_name)),
     };
 
-    let decoded_string = match enc.decode(a.unwrap_bytes(), DecoderTrap::Strict) {
+    let decoded_string = match enc.decode(a, DecoderTrap::Strict) {
         Ok(s) => s,
         Err(e) => {
             return Err(EvalError::InvalidByteSequence {
@@ -510,14 +496,17 @@ pub fn add_timestamp_months<T: TimestampLike>(
     sqlname = "+",
     propagates_nulls = true
 )]
-fn add_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+fn add_numeric<'a>(
+    a: OrderedDecimal<Numeric>,
+    b: OrderedDecimal<Numeric>,
+) -> Result<Numeric, EvalError> {
     let mut cx = numeric::cx_datum();
-    let mut a = a.unwrap_numeric().0;
-    cx.add(&mut a, &b.unwrap_numeric().0);
+    let mut a = a.0;
+    cx.add(&mut a, &b.0);
     if cx.status().overflow() {
         Err(EvalError::FloatOverflow)
     } else {
-        Ok(Datum::from(a))
+        Ok(a)
     }
 }
 
@@ -532,258 +521,141 @@ fn add_interval(a: Interval, b: Interval) -> Result<Interval, EvalError> {
         .ok_or_else(|| EvalError::IntervalOutOfRange(format!("{a} + {b}").into()))
 }
 
-#[sqlfunc(
-    output_type = "i16",
-    is_infix_op = true,
-    sqlname = "&",
-    propagates_nulls = true
-)]
-fn bit_and_int16<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_int16() & b.unwrap_int16())
+#[sqlfunc(is_infix_op = true, sqlname = "&", propagates_nulls = true)]
+fn bit_and_int16(a: i16, b: i16) -> i16 {
+    a & b
 }
 
-#[sqlfunc(
-    output_type = "i32",
-    is_infix_op = true,
-    sqlname = "&",
-    propagates_nulls = true
-)]
-fn bit_and_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_int32() & b.unwrap_int32())
+#[sqlfunc(is_infix_op = true, sqlname = "&", propagates_nulls = true)]
+fn bit_and_int32(a: i32, b: i32) -> i32 {
+    a & b
 }
 
-#[sqlfunc(
-    output_type = "i64",
-    is_infix_op = true,
-    sqlname = "&",
-    propagates_nulls = true
-)]
-fn bit_and_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_int64() & b.unwrap_int64())
+#[sqlfunc(is_infix_op = true, sqlname = "&", propagates_nulls = true)]
+fn bit_and_int64(a: i64, b: i64) -> i64 {
+    a & b
 }
 
-#[sqlfunc(
-    output_type = "u16",
-    is_infix_op = true,
-    sqlname = "&",
-    propagates_nulls = true
-)]
-fn bit_and_uint16<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_uint16() & b.unwrap_uint16())
+#[sqlfunc(is_infix_op = true, sqlname = "&", propagates_nulls = true)]
+fn bit_and_uint16(a: u16, b: u16) -> u16 {
+    a & b
 }
 
-#[sqlfunc(
-    output_type = "u32",
-    is_infix_op = true,
-    sqlname = "&",
-    propagates_nulls = true
-)]
-fn bit_and_uint32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_uint32() & b.unwrap_uint32())
+#[sqlfunc(is_infix_op = true, sqlname = "&", propagates_nulls = true)]
+fn bit_and_uint32(a: u32, b: u32) -> u32 {
+    a & b
 }
 
-#[sqlfunc(
-    output_type = "u64",
-    is_infix_op = true,
-    sqlname = "&",
-    propagates_nulls = true
-)]
-fn bit_and_uint64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_uint64() & b.unwrap_uint64())
+#[sqlfunc(is_infix_op = true, sqlname = "&", propagates_nulls = true)]
+fn bit_and_uint64(a: u64, b: u64) -> u64 {
+    a & b
 }
 
-#[sqlfunc(
-    output_type = "i16",
-    is_infix_op = true,
-    sqlname = "|",
-    propagates_nulls = true
-)]
-fn bit_or_int16<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_int16() | b.unwrap_int16())
+#[sqlfunc(is_infix_op = true, sqlname = "|", propagates_nulls = true)]
+fn bit_or_int16(a: i16, b: i16) -> i16 {
+    a | b
 }
 
-#[sqlfunc(
-    output_type = "i32",
-    is_infix_op = true,
-    sqlname = "|",
-    propagates_nulls = true
-)]
-fn bit_or_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_int32() | b.unwrap_int32())
+#[sqlfunc(is_infix_op = true, sqlname = "|", propagates_nulls = true)]
+fn bit_or_int32(a: i32, b: i32) -> i32 {
+    a | b
 }
 
-#[sqlfunc(
-    output_type = "i64",
-    is_infix_op = true,
-    sqlname = "|",
-    propagates_nulls = true
-)]
-fn bit_or_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_int64() | b.unwrap_int64())
+#[sqlfunc(is_infix_op = true, sqlname = "|", propagates_nulls = true)]
+fn bit_or_int64(a: i64, b: i64) -> i64 {
+    a | b
 }
 
-#[sqlfunc(
-    output_type = "u16",
-    is_infix_op = true,
-    sqlname = "|",
-    propagates_nulls = true
-)]
-fn bit_or_uint16<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_uint16() | b.unwrap_uint16())
+#[sqlfunc(is_infix_op = true, sqlname = "|", propagates_nulls = true)]
+fn bit_or_uint16(a: u16, b: u16) -> u16 {
+    a | b
 }
 
-#[sqlfunc(
-    output_type = "u32",
-    is_infix_op = true,
-    sqlname = "|",
-    propagates_nulls = true
-)]
-fn bit_or_uint32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_uint32() | b.unwrap_uint32())
+#[sqlfunc(is_infix_op = true, sqlname = "|", propagates_nulls = true)]
+fn bit_or_uint32(a: u32, b: u32) -> u32 {
+    a | b
 }
 
-#[sqlfunc(
-    output_type = "u64",
-    is_infix_op = true,
-    sqlname = "|",
-    propagates_nulls = true
-)]
-fn bit_or_uint64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_uint64() | b.unwrap_uint64())
+#[sqlfunc(is_infix_op = true, sqlname = "|", propagates_nulls = true)]
+fn bit_or_uint64(a: u64, b: u64) -> u64 {
+    a | b
 }
 
-#[sqlfunc(
-    output_type = "i16",
-    is_infix_op = true,
-    sqlname = "#",
-    propagates_nulls = true
-)]
-fn bit_xor_int16<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_int16() ^ b.unwrap_int16())
+#[sqlfunc(is_infix_op = true, sqlname = "#", propagates_nulls = true)]
+fn bit_xor_int16(a: i16, b: i16) -> i16 {
+    a ^ b
 }
 
-#[sqlfunc(
-    output_type = "i32",
-    is_infix_op = true,
-    sqlname = "#",
-    propagates_nulls = true
-)]
-fn bit_xor_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_int32() ^ b.unwrap_int32())
+#[sqlfunc(is_infix_op = true, sqlname = "#", propagates_nulls = true)]
+fn bit_xor_int32(a: i32, b: i32) -> i32 {
+    a ^ b
 }
 
-#[sqlfunc(
-    output_type = "i64",
-    is_infix_op = true,
-    sqlname = "#",
-    propagates_nulls = true
-)]
-fn bit_xor_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_int64() ^ b.unwrap_int64())
+#[sqlfunc(is_infix_op = true, sqlname = "#", propagates_nulls = true)]
+fn bit_xor_int64(a: i64, b: i64) -> i64 {
+    a ^ b
 }
 
-#[sqlfunc(
-    output_type = "u16",
-    is_infix_op = true,
-    sqlname = "#",
-    propagates_nulls = true
-)]
-fn bit_xor_uint16<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_uint16() ^ b.unwrap_uint16())
+#[sqlfunc(is_infix_op = true, sqlname = "#", propagates_nulls = true)]
+fn bit_xor_uint16<'a>(a: u16, b: u16) -> u16 {
+    a ^ b
 }
 
-#[sqlfunc(
-    output_type = "u32",
-    is_infix_op = true,
-    sqlname = "#",
-    propagates_nulls = true
-)]
-fn bit_xor_uint32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_uint32() ^ b.unwrap_uint32())
+#[sqlfunc(is_infix_op = true, sqlname = "#", propagates_nulls = true)]
+fn bit_xor_uint32(a: u32, b: u32) -> u32 {
+    a ^ b
 }
 
-#[sqlfunc(
-    output_type = "u64",
-    is_infix_op = true,
-    sqlname = "#",
-    propagates_nulls = true
-)]
-fn bit_xor_uint64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_uint64() ^ b.unwrap_uint64())
+#[sqlfunc(is_infix_op = true, sqlname = "#", propagates_nulls = true)]
+fn bit_xor_uint64(a: u64, b: u64) -> u64 {
+    a ^ b
 }
 
-#[sqlfunc(
-    output_type = "i16",
-    is_infix_op = true,
-    sqlname = "<<",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_infix_op = true, sqlname = "<<", propagates_nulls = true)]
 // TODO(benesch): remove potentially dangerous usage of `as`.
 #[allow(clippy::as_conversions)]
-fn bit_shift_left_int16<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+fn bit_shift_left_int16(a: i16, b: i16) -> i16 {
     // widen to i32 and then cast back to i16 in order emulate the C promotion rules used in by Postgres
     // when the rhs in the 16-31 range, e.g. (1 << 17 should evaluate to 0)
     // see https://github.com/postgres/postgres/blob/REL_14_STABLE/src/backend/utils/adt/int.c#L1460-L1476
-    let lhs: i32 = a.unwrap_int16() as i32;
-    let rhs: u32 = b.unwrap_int32() as u32;
-    Datum::from(lhs.wrapping_shl(rhs) as i16)
+    let lhs: i32 = a as i32;
+    let rhs: u32 = b as u32;
+    lhs.wrapping_shl(rhs) as i16
 }
 
-#[sqlfunc(
-    output_type = "i32",
-    is_infix_op = true,
-    sqlname = "<<",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_infix_op = true, sqlname = "<<", propagates_nulls = true)]
 // TODO(benesch): remove potentially dangerous usage of `as`.
 #[allow(clippy::as_conversions)]
-fn bit_shift_left_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    let lhs = a.unwrap_int32();
-    let rhs = b.unwrap_int32() as u32;
-    Datum::from(lhs.wrapping_shl(rhs))
+fn bit_shift_left_int32(lhs: i32, rhs: i32) -> i32 {
+    let rhs = rhs as u32;
+    lhs.wrapping_shl(rhs)
 }
 
-#[sqlfunc(
-    output_type = "i64",
-    is_infix_op = true,
-    sqlname = "<<",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_infix_op = true, sqlname = "<<", propagates_nulls = true)]
 // TODO(benesch): remove potentially dangerous usage of `as`.
 #[allow(clippy::as_conversions)]
-fn bit_shift_left_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    let lhs = a.unwrap_int64();
-    let rhs = b.unwrap_int32() as u32;
-    Datum::from(lhs.wrapping_shl(rhs))
+fn bit_shift_left_int64(lhs: i64, rhs: i64) -> i64 {
+    let rhs = rhs as u32;
+    lhs.wrapping_shl(rhs)
 }
 
-#[sqlfunc(
-    output_type = "u16",
-    is_infix_op = true,
-    sqlname = "<<",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_infix_op = true, sqlname = "<<", propagates_nulls = true)]
 // TODO(benesch): remove potentially dangerous usage of `as`.
 #[allow(clippy::as_conversions)]
-fn bit_shift_left_uint16<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+fn bit_shift_left_uint16(a: u16, b: u32) -> u16 {
     // widen to u32 and then cast back to u16 in order emulate the C promotion rules used in by Postgres
     // when the rhs in the 16-31 range, e.g. (1 << 17 should evaluate to 0)
     // see https://github.com/postgres/postgres/blob/REL_14_STABLE/src/backend/utils/adt/int.c#L1460-L1476
-    let lhs: u32 = a.unwrap_uint16() as u32;
-    let rhs: u32 = b.unwrap_uint32();
-    Datum::from(lhs.wrapping_shl(rhs) as u16)
+    let lhs: u32 = a as u32;
+    let rhs: u32 = b;
+    lhs.wrapping_shl(rhs) as u16
 }
 
-#[sqlfunc(
-    output_type = "u32",
-    is_infix_op = true,
-    sqlname = "<<",
-    propagates_nulls = true
-)]
-fn bit_shift_left_uint32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    let lhs = a.unwrap_uint32();
-    let rhs = b.unwrap_uint32();
-    Datum::from(lhs.wrapping_shl(rhs))
+#[sqlfunc(is_infix_op = true, sqlname = "<<", propagates_nulls = true)]
+fn bit_shift_left_uint32<'a>(a: u32, b: u32) -> u32 {
+    let lhs = a;
+    let rhs = b;
+    lhs.wrapping_shl(rhs)
 }
 
 #[sqlfunc(
@@ -1011,14 +883,14 @@ fn sub_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     sqlname = "-",
     propagates_nulls = true
 )]
-fn sub_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+fn sub_numeric<'a>(a: OrderedDecimal<Numeric>, b: OrderedDecimal<Numeric>) -> Result<Numeric, EvalError> {
     let mut cx = numeric::cx_datum();
-    let mut a = a.unwrap_numeric().0;
-    cx.sub(&mut a, &b.unwrap_numeric().0);
+    let mut a = a.0;
+    cx.sub(&mut a, &b.0);
     if cx.status().overflow() {
         Err(EvalError::FloatOverflow)
     } else {
-        Ok(Datum::from(a))
+        Ok(a)
     }
 }
 
@@ -5403,7 +5275,6 @@ impl Arbitrary for BinaryFunc {
 #[sqlfunc(
     sqlname = "||",
     is_infix_op = true,
-    output_type = "String",
     propagates_nulls = true,
     // Text concatenation is monotonic in its second argument, because if I change the
     // second argument but don't change the first argument, then we won't find a difference
@@ -5413,27 +5284,22 @@ impl Arbitrary for BinaryFunc {
     // 'A' < 'AA' but 'AZ' > 'AAZ'.)
     is_monotone = (false, true),
 )]
-fn text_concat_binary<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
+fn text_concat_binary<'a>(a: &str, b: &str, temp_storage: &'a RowArena) -> &'a str {
     let mut buf = String::new();
-    buf.push_str(a.unwrap_str());
-    buf.push_str(b.unwrap_str());
-    Datum::String(temp_storage.push_string(buf))
+    buf.push_str(a);
+    buf.push_str(b);
+    temp_storage.push_string(buf)
 }
 
-#[sqlfunc(
-    output_type = "String",
-    propagates_nulls = true,
-    introduces_nulls = false
-)]
+#[sqlfunc(propagates_nulls = true, introduces_nulls = false)]
 fn like_escape<'a>(
-    a: Datum<'a>,
-    b: Datum<'a>,
+    pattern: &str,
+    b: &str,
     temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let pattern = a.unwrap_str();
-    let escape = like_pattern::EscapeBehavior::from_str(b.unwrap_str())?;
+) -> Result<&'a str, EvalError> {
+    let escape = like_pattern::EscapeBehavior::from_str(b)?;
     let normalized = like_pattern::normalize_pattern(pattern, escape)?;
-    Ok(Datum::String(temp_storage.push_string(normalized)))
+    Ok(temp_storage.push_string(normalized))
 }
 
 fn is_like_match_dynamic<'a>(
