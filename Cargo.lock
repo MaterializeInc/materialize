@@ -7574,15 +7574,8 @@ name = "mz-rocksdb-types"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "mz-build-tools",
  "mz-ore",
- "mz-proto",
- "proptest",
- "proptest-derive",
- "prost",
- "prost-build",
  "serde",
- "tonic-build",
  "uncased",
  "workspace-hack",
 ]
