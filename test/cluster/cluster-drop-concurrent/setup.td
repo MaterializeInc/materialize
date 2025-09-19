@@ -20,3 +20,4 @@ ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;
 
 > DROP SOURCE IF EXISTS counter CASCADE
 > CREATE SOURCE counter IN CLUSTER drop FROM LOAD GENERATOR COUNTER (TICK INTERVAL '10s');
+> CREATE TABLE counter_tbl FROM SOURCE counter;

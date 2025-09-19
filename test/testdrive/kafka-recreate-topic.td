@@ -140,7 +140,7 @@ $ kafka-create-topic topic=good-topic
 # so they already report as paused. With source2 online, we didn't yet do a
 # suspend-restart cycle.
 
-> SELECT name, status, error FROM mz_internal.mz_source_statuses WHERE type != 'progress'
+> SELECT name, status, error FROM mz_internal.mz_source_statuses
 name            status    error
 -------------------------------
 good_source     running   <null>

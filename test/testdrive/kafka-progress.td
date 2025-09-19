@@ -30,7 +30,7 @@ one
 > SELECT * from data_tbl
 one
 
-> SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'data';
+> SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'data_tbl';
 running
 
 # Ensure that we can select from automatically generated remap collection
