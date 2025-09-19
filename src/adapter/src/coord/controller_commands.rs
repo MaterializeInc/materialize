@@ -97,12 +97,13 @@ impl Coordinator {
                     entry.absorb(update);
                 }
                 ParsedStateUpdateKind::TemporaryItem {
-                    parsed_item,
+                    durable_item,
+                    parsed_item: _,
                     connection: _,
                     parsed_full_name: _,
                 } => {
                     let entry = controller_commands
-                        .entry(parsed_item.id.clone())
+                        .entry(durable_item.id.clone())
                         .or_insert_with(|| ControllerCommand::None);
                     entry.absorb(update);
                 }
@@ -1463,10 +1464,11 @@ impl ControllerCommand {
                 CatalogItem::Func(_) => {}
             },
             ParsedStateUpdateKind::TemporaryItem {
+                durable_item: _,
                 parsed_item,
                 connection,
                 parsed_full_name,
-            } => match parsed_item.item {
+            } => match parsed_item {
                 CatalogItem::Table(table) => self.absorb_table(
                     table,
                     Some(parsed_full_name),
