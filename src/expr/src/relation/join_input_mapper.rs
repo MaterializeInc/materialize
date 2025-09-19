@@ -447,6 +447,7 @@ impl JoinInputMapper {
 mod tests {
     use mz_repr::{Datum, SqlScalarType};
 
+    use crate::scalar::func;
     use crate::{BinaryFunc, MirScalarExpr, UnaryFunc};
 
     use super::*;
@@ -489,7 +490,7 @@ mod tests {
             expr: Box::new(MirScalarExpr::column(1)),
         };
         let key21 = MirScalarExpr::CallBinary {
-            func: BinaryFunc::AddInt32,
+            func: BinaryFunc::AddInt32(func::AddInt32),
             expr1: Box::new(MirScalarExpr::column(2)),
             expr2: Box::new(MirScalarExpr::literal(
                 Ok(Datum::Int32(4)),

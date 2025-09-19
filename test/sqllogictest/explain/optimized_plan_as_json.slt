@@ -159,7 +159,9 @@ SELECT 1, a + b as c FROM t WHERE a > 0 and b < 0 and a + b > 0
               "expressions": [
                 {
                   "CallBinary": {
-                    "func": "AddInt32",
+                    "func": {
+                      "AddInt32": null
+                    },
                     "expr1": {
                       "Column": [
                         0,
@@ -336,7 +338,9 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                   "scalars": [
                     {
                       "CallBinary": {
-                        "func": "AddInt32",
+                        "func": {
+                          "AddInt32": null
+                        },
                         "expr1": {
                           "Column": [
                             0,
@@ -533,7 +537,9 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                 "func": "Gt",
                 "expr1": {
                   "CallBinary": {
-                    "func": "AddInt32",
+                    "func": {
+                      "AddInt32": null
+                    },
                     "expr1": {
                       "Column": [
                         0,

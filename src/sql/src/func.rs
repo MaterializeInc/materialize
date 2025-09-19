@@ -4499,14 +4499,14 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
                 // to coerce unknown-type arguments as `Float64`.
                 typeconv::plan_coerce(ecx, exprs.into_element(), &SqlScalarType::Float64)
             }) => Any, oid::OP_UNARY_PLUS_OID;
-            params!(Int16, Int16) => AddInt16 => Int16, 550;
-            params!(Int32, Int32) => AddInt32 => Int32, 551;
-            params!(Int64, Int64) => AddInt64 => Int64, 684;
-            params!(UInt16, UInt16) => AddUInt16 => UInt16, oid::FUNC_ADD_UINT16;
-            params!(UInt32, UInt32) => AddUInt32 => UInt32, oid::FUNC_ADD_UINT32;
-            params!(UInt64, UInt64) => AddUInt64 => UInt64, oid::FUNC_ADD_UINT64;
-            params!(Float32, Float32) => AddFloat32 => Float32, 586;
-            params!(Float64, Float64) => AddFloat64 => Float64, 591;
+            params!(Int16, Int16) => AddInt16(func::AddInt16) => Int16, 550;
+            params!(Int32, Int32) => AddInt32(func::AddInt32) => Int32, 551;
+            params!(Int64, Int64) => AddInt64(func::AddInt64) => Int64, 684;
+            params!(UInt16, UInt16) => AddUInt16(func::AddUint16) => UInt16, oid::FUNC_ADD_UINT16;
+            params!(UInt32, UInt32) => AddUInt32(func::AddUint32) => UInt32, oid::FUNC_ADD_UINT32;
+            params!(UInt64, UInt64) => AddUInt64(func::AddUint64) => UInt64, oid::FUNC_ADD_UINT64;
+            params!(Float32, Float32) => AddFloat32(func::AddFloat32) => Float32, 586;
+            params!(Float64, Float64) => AddFloat64(func::AddFloat64) => Float64, 591;
             params!(Interval, Interval) => AddInterval => Interval, 1337;
             params!(Timestamp, Interval) => AddTimestampInterval => Timestamp, 2066;
             params!(Interval, Timestamp) => {

@@ -476,6 +476,7 @@ mod test {
                 old.output_type(column_a_ty.clone(), column_b_ty.clone()),
                 "{new:?} output_type mismatch"
             );
+            assert_eq!(new.negate(), old.negate(), "{new:?} negate mismatch");
             assert_eq!(
                 format!("{}", new),
                 format!("{}", old),
@@ -513,14 +514,54 @@ mod test {
         //   which works because most don't look at the type. We should fix this
         //   and pass expected column types.
 
-        check(func::AddInt16, BF::AddInt16, &i32_ty, &i32_ty);
-        check(func::AddInt32, BF::AddInt32, &i32_ty, &i32_ty);
-        check(func::AddInt64, BF::AddInt64, &i32_ty, &i32_ty);
-        check(func::AddUint16, BF::AddUInt16, &i32_ty, &i32_ty);
-        check(func::AddUint32, BF::AddUInt32, &i32_ty, &i32_ty);
-        check(func::AddUint64, BF::AddUInt64, &i32_ty, &i32_ty);
-        check(func::AddFloat32, BF::AddFloat32, &i32_ty, &i32_ty);
-        check(func::AddFloat64, BF::AddFloat64, &i32_ty, &i32_ty);
+        check(
+            func::AddInt16,
+            BF::AddInt16(func::AddInt16),
+            &i32_ty,
+            &i32_ty,
+        );
+        check(
+            func::AddInt32,
+            BF::AddInt32(func::AddInt32),
+            &i32_ty,
+            &i32_ty,
+        );
+        check(
+            func::AddInt64,
+            BF::AddInt64(func::AddInt64),
+            &i32_ty,
+            &i32_ty,
+        );
+        check(
+            func::AddUint16,
+            BF::AddUInt16(func::AddUint16),
+            &i32_ty,
+            &i32_ty,
+        );
+        check(
+            func::AddUint32,
+            BF::AddUInt32(func::AddUint32),
+            &i32_ty,
+            &i32_ty,
+        );
+        check(
+            func::AddUint64,
+            BF::AddUInt64(func::AddUint64),
+            &i32_ty,
+            &i32_ty,
+        );
+        check(
+            func::AddFloat32,
+            BF::AddFloat32(func::AddFloat32),
+            &i32_ty,
+            &i32_ty,
+        );
+        check(
+            func::AddFloat64,
+            BF::AddFloat64(func::AddFloat64),
+            &i32_ty,
+            &i32_ty,
+        );
         check(func::AddDateTime, BF::AddDateTime, &i32_ty, &i32_ty);
         check(func::AddDateInterval, BF::AddDateInterval, &i32_ty, &i32_ty);
         check(
