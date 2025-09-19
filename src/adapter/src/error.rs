@@ -245,6 +245,8 @@ pub enum AdapterError {
     /// enumerate users by spraying login attempts and differentiating
     /// between a "no such user" and "incorrect password" error.
     AuthenticationError,
+    /// An ALTER CLUSTER was attempted while a graceful cluster reconfiguration was in progress.
+    AlterClusterWhilePendingReplicas,
 }
 
 impl AdapterError {
@@ -577,6 +579,7 @@ impl AdapterError {
             AdapterError::ReadOnly => SqlState::READ_ONLY_SQL_TRANSACTION,
             AdapterError::AlterClusterTimeout => SqlState::QUERY_CANCELED,
             AdapterError::AuthenticationError => SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
+            AdapterError::AlterClusterWhilePendingReplicas => SqlState::OBJECT_IN_USE,
         }
     }
 
@@ -823,6 +826,9 @@ impl fmt::Display for AdapterError {
                     )?;
                 }
                 Ok(())
+            }
+            AdapterError::AlterClusterWhilePendingReplicas => {
+                write!(f, "cannot alter clusters with pending updates")
             }
         }
     }
