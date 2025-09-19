@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(sqlname = \"date_truncts\", propagates_nulls = true)]\n#[allow(dead_code)]\nfn date_trunc_units_timestamp(\n    units: &str,\n    ts: CheckedTimestamp<NaiveDateTime>,\n) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {\n    match units.parse() {\n        Ok(units) => Ok(date_trunc_inner(units, &*ts)?.try_into()?),\n        Err(_) => Err(EvalError::UnknownUnits(units.into())),\n    }\n}\n"
+expression: "#[sqlfunc(sqlname = \"date_truncts\", propagates_nulls = true)]\nfn date_trunc_units_timestamp(\n    units: &str,\n    ts: CheckedTimestamp<NaiveDateTime>,\n) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {\n    match units.parse() {\n        Ok(units) => Ok(date_trunc_inner(units, &*ts)?.try_into()?),\n        Err(_) => Err(EvalError::UnknownUnits(units.into())),\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -55,7 +55,6 @@ impl std::fmt::Display for DateTruncUnitsTimestamp {
         f.write_str("date_truncts")
     }
 }
-#[allow(dead_code)]
 fn date_trunc_units_timestamp(
     units: &str,
     ts: CheckedTimestamp<NaiveDateTime>,

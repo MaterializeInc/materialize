@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(output_type = \"String\", propagates_nulls = true)]\nfn left<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {\n    let string: &'a str = a.unwrap_str();\n    let n = i64::from(b.unwrap_int32());\n    let mut byte_indices = string.char_indices().map(|(i, _)| i);\n    let end_in_bytes = match n.cmp(&0) {\n        Ordering::Equal => 0,\n        Ordering::Greater => {\n            let n = usize::try_from(n)\n                .map_err(|_| {\n                    EvalError::InvalidParameterValue(\n                        format!(\"invalid parameter n: {:?}\", n).into(),\n                    )\n                })?;\n            byte_indices.nth(n).unwrap_or(string.len())\n        }\n        Ordering::Less => {\n            let n = usize::try_from(n.abs() - 1)\n                .map_err(|_| {\n                    EvalError::InvalidParameterValue(\n                        format!(\"invalid parameter n: {:?}\", n).into(),\n                    )\n                })?;\n            byte_indices.rev().nth(n).unwrap_or(0)\n        }\n    };\n    Ok(Datum::String(&string[..end_in_bytes]))\n}\n"
+expression: "#[sqlfunc(output_type = \"String\", propagates_nulls = true, is_monotone = (false, false))]\nfn left<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {\n    let string: &'a str = a.unwrap_str();\n    let n = i64::from(b.unwrap_int32());\n    let mut byte_indices = string.char_indices().map(|(i, _)| i);\n    let end_in_bytes = match n.cmp(&0) {\n        Ordering::Equal => 0,\n        Ordering::Greater => {\n            let n = usize::try_from(n)\n                .map_err(|_| {\n                    EvalError::InvalidParameterValue(\n                        format!(\"invalid parameter n: {:?}\", n).into(),\n                    )\n                })?;\n            byte_indices.nth(n).unwrap_or(string.len())\n        }\n        Ordering::Less => {\n            let n = usize::try_from(n.abs() - 1)\n                .map_err(|_| {\n                    EvalError::InvalidParameterValue(\n                        format!(\"invalid parameter n: {:?}\", n).into(),\n                    )\n                })?;\n            byte_indices.rev().nth(n).unwrap_or(0)\n        }\n    };\n    Ok(Datum::String(&string[..end_in_bytes]))\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -48,6 +48,9 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for Left {
     }
     fn introduces_nulls(&self) -> bool {
         <String as ::mz_repr::DatumType<'_, ()>>::nullable()
+    }
+    fn is_monotone(&self) -> (bool, bool) {
+        (false, false)
     }
     fn propagates_nulls(&self) -> bool {
         true

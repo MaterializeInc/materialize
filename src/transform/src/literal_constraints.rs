@@ -572,7 +572,7 @@ impl LiteralConstraints {
         for (_before, p) in mfp.predicates.iter() {
             p.visit_pre(|e| {
                 if let MirScalarExpr::CallBinary {
-                    func: BinaryFunc::Eq,
+                    func: BinaryFunc::Eq(_),
                     expr1,
                     expr2,
                 } = e

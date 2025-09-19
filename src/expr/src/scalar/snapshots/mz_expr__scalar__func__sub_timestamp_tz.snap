@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    is_monotone = \"(true, true)\",\n    output_type = \"Interval\",\n    sqlname = \"age\",\n    propagates_nulls = true\n)]\nfn age_timestamptz<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {\n    let a_ts = a.unwrap_timestamptz();\n    let b_ts = b.unwrap_timestamptz();\n    let age = a_ts.age(&b_ts)?;\n    Ok(Datum::from(age))\n}\n"
+expression: "#[sqlfunc(\n    is_monotone = \"(true, true)\",\n    output_type = \"Interval\",\n    is_infix_op = true,\n    sqlname = \"-\",\n    propagates_nulls = true\n)]\nfn sub_timestamp_tz<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {\n    Datum::from(a.unwrap_timestamptz() - b.unwrap_timestamptz())\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -15,18 +15,18 @@ expression: "#[sqlfunc(\n    is_monotone = \"(true, true)\",\n    output_type = 
     Hash,
     mz_lowertest::MzReflect
 )]
-pub struct AgeTimestamptz;
-impl<'a> crate::func::binary::EagerBinaryFunc<'a> for AgeTimestamptz {
+pub struct SubTimestampTz;
+impl<'a> crate::func::binary::EagerBinaryFunc<'a> for SubTimestampTz {
     type Input1 = Datum<'a>;
     type Input2 = Datum<'a>;
-    type Output = Result<Datum<'a>, EvalError>;
+    type Output = Datum<'a>;
     fn call(
         &self,
         a: Self::Input1,
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        age_timestamptz(a, b)
+        sub_timestamp_tz(a, b)
     }
     fn output_type(
         &self,
@@ -49,6 +49,9 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for AgeTimestamptz {
     fn introduces_nulls(&self) -> bool {
         <Interval as ::mz_repr::DatumType<'_, ()>>::nullable()
     }
+    fn is_infix_op(&self) -> bool {
+        true
+    }
     fn is_monotone(&self) -> (bool, bool) {
         (true, true)
     }
@@ -56,14 +59,11 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for AgeTimestamptz {
         true
     }
 }
-impl std::fmt::Display for AgeTimestamptz {
+impl std::fmt::Display for SubTimestampTz {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.write_str("age")
+        f.write_str("-")
     }
 }
-fn age_timestamptz<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let a_ts = a.unwrap_timestamptz();
-    let b_ts = b.unwrap_timestamptz();
-    let age = a_ts.age(&b_ts)?;
-    Ok(Datum::from(age))
+fn sub_timestamp_tz<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    Datum::from(a.unwrap_timestamptz() - b.unwrap_timestamptz())
 }

@@ -513,7 +513,7 @@ mod tests {
         // test that `try_map_to_input_with_bound_expr` will map multiple
         // subexpressions to the corresponding expressions bound to a different input
         let key_comp = MirScalarExpr::CallBinary {
-            func: BinaryFunc::MulInt32,
+            func: func::MulInt32.into(),
             expr1: Box::new(key12.clone()),
             expr2: Box::new(key22),
         };
@@ -521,7 +521,7 @@ mod tests {
         input_mapper.try_localize_to_input_with_bound_expr(&mut cloned, 0, &equivalences);
         assert_eq!(
             MirScalarExpr::CallBinary {
-                func: BinaryFunc::MulInt32,
+                func: func::MulInt32.into(),
                 expr1: Box::new(key10.clone()),
                 expr2: Box::new(key20.clone()),
             },
@@ -537,7 +537,7 @@ mod tests {
         );
 
         let key_comp_plus_non_key = MirScalarExpr::CallBinary {
-            func: BinaryFunc::Eq,
+            func: func::Eq.into(),
             expr1: Box::new(key_comp),
             expr2: Box::new(MirScalarExpr::column(7)),
         };
@@ -548,7 +548,7 @@ mod tests {
         );
 
         let key_comp_multi_input = MirScalarExpr::CallBinary {
-            func: BinaryFunc::Eq,
+            func: func::Eq.into(),
             expr1: Box::new(key12),
             expr2: Box::new(key21),
         };
@@ -558,7 +558,7 @@ mod tests {
         input_mapper.try_localize_to_input_with_bound_expr(&mut cloned, 2, &equivalences);
         assert_eq!(
             MirScalarExpr::CallBinary {
-                func: BinaryFunc::Eq,
+                func: func::Eq.into(),
                 expr1: Box::new(localized_key12),
                 expr2: Box::new(localized_key22),
             },
@@ -570,7 +570,7 @@ mod tests {
         input_mapper.try_localize_to_input_with_bound_expr(&mut cloned, 0, &equivalences);
         assert_eq!(
             MirScalarExpr::CallBinary {
-                func: BinaryFunc::Eq,
+                func: func::Eq.into(),
                 expr1: Box::new(key10),
                 expr2: Box::new(key20),
             },

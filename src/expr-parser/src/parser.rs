@@ -766,13 +766,13 @@ mod scalar {
                     // 02: logical conjunction
                     Op::Var(mz_expr::VariadicFunc::And) => Some(2),
                     // 04: equality, assignment
-                    Op::Bin(mz_expr::BinaryFunc::Eq) => Some(4),
-                    Op::Bin(mz_expr::BinaryFunc::NotEq) => Some(4),
+                    Op::Bin(mz_expr::BinaryFunc::Eq(_)) => Some(4),
+                    Op::Bin(mz_expr::BinaryFunc::NotEq(_)) => Some(4),
                     // 05: less than, greater than
-                    Op::Bin(mz_expr::BinaryFunc::Gt) => Some(5),
-                    Op::Bin(mz_expr::BinaryFunc::Gte) => Some(5),
-                    Op::Bin(mz_expr::BinaryFunc::Lt) => Some(5),
-                    Op::Bin(mz_expr::BinaryFunc::Lte) => Some(5),
+                    Op::Bin(mz_expr::BinaryFunc::Gt(_)) => Some(5),
+                    Op::Bin(mz_expr::BinaryFunc::Gte(_)) => Some(5),
+                    Op::Bin(mz_expr::BinaryFunc::Lt(_)) => Some(5),
+                    Op::Bin(mz_expr::BinaryFunc::Lte(_)) => Some(5),
                     // 13: test for TRUE, FALSE, UNKNOWN, NULL
                     Op::Unr(mz_expr::UnaryFunc::IsNull(_)) => Some(13),
                     Op::Neg(mz_expr::UnaryFunc::IsNull(_)) => Some(13),
@@ -783,9 +783,9 @@ mod scalar {
                     // 14: addition, subtraction
                     Op::Bin(mz_expr::BinaryFunc::AddInt64(_)) => Some(14),
                     // 14: multiplication, division, modulo
-                    Op::Bin(mz_expr::BinaryFunc::MulInt64) => Some(15),
-                    Op::Bin(mz_expr::BinaryFunc::DivInt64) => Some(15),
-                    Op::Bin(mz_expr::BinaryFunc::ModInt64) => Some(15),
+                    Op::Bin(mz_expr::BinaryFunc::MulInt64(_)) => Some(15),
+                    Op::Bin(mz_expr::BinaryFunc::DivInt64(_)) => Some(15),
+                    Op::Bin(mz_expr::BinaryFunc::ModInt64(_)) => Some(15),
                     // unsupported
                     _ => None,
                 }
@@ -814,40 +814,40 @@ mod scalar {
                 // Else it is an operand - append it to postfix and continue.
                 let op = if input.eat(syn::Token![=]) {
                     exp_opd = true;
-                    Op::Bin(mz_expr::BinaryFunc::Eq)
+                    Op::Bin(func::Eq.into())
                 } else if input.eat(syn::Token![!=]) {
                     exp_opd = true;
-                    Op::Bin(mz_expr::BinaryFunc::NotEq)
+                    Op::Bin(func::NotEq.into())
                 } else if input.eat(syn::Token![>=]) {
                     exp_opd = true;
-                    Op::Bin(mz_expr::BinaryFunc::Gte)
+                    Op::Bin(func::Gte.into())
                 } else if input.eat(syn::Token![>]) {
                     exp_opd = true;
-                    Op::Bin(mz_expr::BinaryFunc::Gt)
+                    Op::Bin(func::Gt.into())
                 } else if input.eat(syn::Token![<=]) {
                     exp_opd = true;
-                    Op::Bin(mz_expr::BinaryFunc::Lte)
+                    Op::Bin(func::Lte.into())
                 } else if input.eat(syn::Token![<]) {
                     exp_opd = true;
-                    Op::Bin(mz_expr::BinaryFunc::Lt)
+                    Op::Bin(func::Lt.into())
                 } else if input.eat(syn::Token![+]) {
                     exp_opd = true;
-                    Op::Bin(mz_expr::BinaryFunc::AddInt64(func::AddInt64)) // TODO: fix placeholder
+                    Op::Bin(func::AddInt64.into()) // TODO: fix placeholder
                 } else if input.eat(syn::Token![*]) {
                     exp_opd = true;
-                    Op::Bin(mz_expr::BinaryFunc::MulInt64) // TODO: fix placeholder
+                    Op::Bin(func::MulInt64.into()) // TODO: fix placeholder
                 } else if input.eat(syn::Token![/]) {
                     exp_opd = true;
-                    Op::Bin(mz_expr::BinaryFunc::DivInt64) // TODO: fix placeholder
+                    Op::Bin(func::DivInt64.into()) // TODO: fix placeholder
                 } else if input.eat(syn::Token![%]) {
                     exp_opd = true;
-                    Op::Bin(mz_expr::BinaryFunc::ModInt64) // TODO: fix placeholder
+                    Op::Bin(func::ModInt64.into()) // TODO: fix placeholder
                 } else if input.eat(kw::AND) {
                     exp_opd = true;
-                    Op::Var(mz_expr::VariadicFunc::And)
+                    Op::Var(VariadicFunc::And)
                 } else if input.eat(kw::OR) {
                     exp_opd = true;
-                    Op::Var(mz_expr::VariadicFunc::Or)
+                    Op::Var(VariadicFunc::Or)
                 } else if input.eat(kw::IS) {
                     let negate = input.eat(kw::NOT);
 
@@ -1137,10 +1137,10 @@ mod scalar {
             // Supported unmaterializable (a.k.a. nullary) functions:
             "mz_environment_id" => parse_nullary(UnmaterializableFunc::MzEnvironmentId),
             // Supported unary functions:
-            "abs" => parse_unary(mz_expr::func::AbsInt64.into()),
-            "not" => parse_unary(mz_expr::func::Not.into()),
+            "abs" => parse_unary(func::AbsInt64.into()),
+            "not" => parse_unary(func::Not.into()),
             // Supported binary functions:
-            "ltrim" => parse_binary(BinaryFunc::TrimLeading),
+            "ltrim" => parse_binary(func::TrimLeading.into()),
             // Supported variadic functions:
             "greatest" => parse_variadic(VariadicFunc::Greatest),
             _ => Err(Error::new(ident.span(), "unsupported function name")),
@@ -1157,7 +1157,7 @@ mod scalar {
                     // Be more lenient and support parenthesized equivalences,
                     // e.g. `... AND (x = u + v = z + 1) AND ...`.
                     if let MirScalarExpr::CallBinary {
-                        func: BinaryFunc::Eq,
+                        func: BinaryFunc::Eq(_),
                         expr1,
                         expr2,
                     } = operand
