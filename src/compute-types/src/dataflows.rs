@@ -126,23 +126,6 @@ impl<T> DataflowDescription<Plan<T>, (), mz_repr::Timestamp> {
 }
 
 impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
-    /// Creates a new dataflow description with a human-readable name.
-    pub fn new(name: String) -> Self {
-        Self {
-            source_imports: Default::default(),
-            index_imports: Default::default(),
-            objects_to_build: Vec::new(),
-            index_exports: Default::default(),
-            sink_exports: Default::default(),
-            as_of: Default::default(),
-            until: Antichain::new(),
-            initial_storage_as_of: None,
-            refresh_schedule: None,
-            debug_name: name,
-            time_dependence: None,
-        }
-    }
-
     /// Imports a previously exported index.
     ///
     /// This method makes available an index previously exported as `id`, identified
@@ -265,6 +248,23 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
 }
 
 impl<P, S, T> DataflowDescription<P, S, T> {
+    /// Creates a new dataflow description with a human-readable name.
+    pub fn new(name: String) -> Self {
+        Self {
+            source_imports: Default::default(),
+            index_imports: Default::default(),
+            objects_to_build: Vec::new(),
+            index_exports: Default::default(),
+            sink_exports: Default::default(),
+            as_of: Default::default(),
+            until: Antichain::new(),
+            initial_storage_as_of: None,
+            refresh_schedule: None,
+            debug_name: name,
+            time_dependence: None,
+        }
+    }
+
     /// Sets the `as_of` frontier to the supplied argument.
     ///
     /// This method allows the dataflow to indicate a frontier up through
@@ -562,15 +562,6 @@ where
             debug_name: self.debug_name.clone(),
             time_dependence: self.time_dependence.clone(),
         }
-    }
-}
-
-impl Arbitrary for DataflowDescription<OptimizedMirRelationExpr, (), mz_repr::Timestamp> {
-    type Strategy = BoxedStrategy<Self>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        any_dataflow_description(any_source_import()).boxed()
     }
 }
 
