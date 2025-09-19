@@ -113,7 +113,7 @@ fn test_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
 
             for (idx, dyncfgs) in dyncfgs.into_iter().enumerate() {
                 let debug = dyncfgs.updates.iter().map(|(name, val)| {
-                    format!(" {}={:?}", name, val.val.clone().unwrap())
+                    format!(" {}={:?}", name, val)
                 }).collect::<String>();
                 eprintln!("mz_persist_proc::test {}{}", idx, debug);
                 test_impl(dyncfgs)#await_
