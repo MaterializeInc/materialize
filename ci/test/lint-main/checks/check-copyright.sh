@@ -47,6 +47,7 @@ copyright_files=$(grep -vE \
     -e '^ci/builder/(ssh_known_hosts|crosstool-.+\.defconfig)$' \
     -e '^ci/www/public/_redirects$' \
     -e '^ci/test/lint-deps/' \
+    -e '^misc/bazel/c_deps/patches/snappy-config.patch' \
     -e '^misc/completions/.*' \
     -e '^misc/mcp-materialize/uv.lock' \
     -e '^misc/python/MANIFEST\.in' \
