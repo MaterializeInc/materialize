@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(output_type = \"bool\", propagates_nulls = true)]\nfn starts_with<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {\n    let a = a.unwrap_str();\n    let b = b.unwrap_str();\n    Datum::from(a.starts_with(b))\n}\n"
+expression: "#[sqlfunc(propagates_nulls = true)]\nfn starts_with(a: &str, b: &str) -> bool {\n    a.starts_with(b)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -17,9 +17,9 @@ expression: "#[sqlfunc(output_type = \"bool\", propagates_nulls = true)]\nfn sta
 )]
 pub struct StartsWith;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for StartsWith {
-    type Input1 = Datum<'a>;
-    type Input2 = Datum<'a>;
-    type Output = Datum<'a>;
+    type Input1 = &'a str;
+    type Input2 = &'a str;
+    type Output = bool;
     fn call(
         &self,
         a: Self::Input1,
@@ -34,7 +34,7 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for StartsWith {
         input_type_b: mz_repr::SqlColumnType,
     ) -> mz_repr::SqlColumnType {
         use mz_repr::AsColumnType;
-        let output = <bool>::as_column_type();
+        let output = Self::Output::as_column_type();
         let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
             self,
         );
@@ -46,9 +46,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for StartsWith {
                         && (input_type_a.nullable || input_type_b.nullable)),
             )
     }
-    fn introduces_nulls(&self) -> bool {
-        <bool as ::mz_repr::DatumType<'_, ()>>::nullable()
-    }
     fn propagates_nulls(&self) -> bool {
         true
     }
@@ -58,8 +55,6 @@ impl std::fmt::Display for StartsWith {
         f.write_str(stringify!(starts_with))
     }
 }
-fn starts_with<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    let a = a.unwrap_str();
-    let b = b.unwrap_str();
-    Datum::from(a.starts_with(b))
+fn starts_with(a: &str, b: &str) -> bool {
+    a.starts_with(b)
 }

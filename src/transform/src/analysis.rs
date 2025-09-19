@@ -1635,7 +1635,7 @@ mod cardinality {
                 },
                 MirScalarExpr::CallBinary { func, expr1, expr2 } => {
                     match func {
-                        BinaryFunc::Eq => {
+                        BinaryFunc::Eq(_) => {
                             match (index_selectivity(expr1), index_selectivity(expr2)) {
                                 (Some(isel1), Some(isel2)) => std::cmp::max(isel1, isel2),
                                 (Some(isel), None) | (None, Some(isel)) => isel,
@@ -1643,7 +1643,7 @@ mod cardinality {
                             }
                         }
                         // 1.0 - the Eq case
-                        BinaryFunc::NotEq => {
+                        BinaryFunc::NotEq(_) => {
                             match (index_selectivity(expr1), index_selectivity(expr2)) {
                                 (Some(isel1), Some(isel2)) => {
                                     OrderedFloat(1.0) - std::cmp::max(isel1, isel2)
@@ -1652,7 +1652,10 @@ mod cardinality {
                                 (None, None) => OrderedFloat(1.0) - WORST_CASE_SELECTIVITY,
                             }
                         }
-                        BinaryFunc::Lt | BinaryFunc::Lte | BinaryFunc::Gt | BinaryFunc::Gte => {
+                        BinaryFunc::Lt(_)
+                        | BinaryFunc::Lte(_)
+                        | BinaryFunc::Gt(_)
+                        | BinaryFunc::Gte(_) => {
                             // TODO(mgree) if we have high/low key values and one of the columns is an index, we can do better
                             OrderedFloat(0.33)
                         }

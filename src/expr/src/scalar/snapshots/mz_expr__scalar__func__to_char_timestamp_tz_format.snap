@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(output_type = \"String\", sqlname = \"tochartstz\", propagates_nulls = true)]\n#[allow(dead_code)]\nfn to_char_timestamp_tz_format<'a>(a: Datum<'a>, format: &str) -> String {\n    let ts = a.unwrap_timestamptz();\n    let fmt = DateTimeFormat::compile(format);\n    fmt.render(&*ts)\n}\n"
+expression: "#[sqlfunc(sqlname = \"tochartstz\", propagates_nulls = true)]\nfn to_char_timestamp_tz_format(\n    ts: CheckedTimestamp<chrono::DateTime<Utc>>,\n    format: &str,\n) -> String {\n    let fmt = DateTimeFormat::compile(format);\n    fmt.render(&*ts)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -17,7 +17,7 @@ expression: "#[sqlfunc(output_type = \"String\", sqlname = \"tochartstz\", propa
 )]
 pub struct ToCharTimestampTzFormat;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ToCharTimestampTzFormat {
-    type Input1 = Datum<'a>;
+    type Input1 = CheckedTimestamp<chrono::DateTime<Utc>>;
     type Input2 = &'a str;
     type Output = String;
     fn call(
@@ -34,7 +34,7 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ToCharTimestampTzFormat {
         input_type_b: mz_repr::SqlColumnType,
     ) -> mz_repr::SqlColumnType {
         use mz_repr::AsColumnType;
-        let output = <String>::as_column_type();
+        let output = Self::Output::as_column_type();
         let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
             self,
         );
@@ -46,9 +46,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ToCharTimestampTzFormat {
                         && (input_type_a.nullable || input_type_b.nullable)),
             )
     }
-    fn introduces_nulls(&self) -> bool {
-        <String as ::mz_repr::DatumType<'_, ()>>::nullable()
-    }
     fn propagates_nulls(&self) -> bool {
         true
     }
@@ -58,9 +55,10 @@ impl std::fmt::Display for ToCharTimestampTzFormat {
         f.write_str("tochartstz")
     }
 }
-#[allow(dead_code)]
-fn to_char_timestamp_tz_format<'a>(a: Datum<'a>, format: &str) -> String {
-    let ts = a.unwrap_timestamptz();
+fn to_char_timestamp_tz_format(
+    ts: CheckedTimestamp<chrono::DateTime<Utc>>,
+    format: &str,
+) -> String {
     let fmt = DateTimeFormat::compile(format);
     fmt.render(&*ts)
 }

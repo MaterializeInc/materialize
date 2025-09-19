@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(output_type = \"i32\", sqlname = \"length\", propagates_nulls = true)]\nfn encoded_bytes_char_length<'a>(\n    a: Datum<'a>,\n    b: Datum<'a>,\n) -> Result<Datum<'a>, EvalError> {\n    let encoding_name = b.unwrap_str().to_lowercase().replace('_', \"-\").into_boxed_str();\n    let enc = match encoding_from_whatwg_label(&encoding_name) {\n        Some(enc) => enc,\n        None => return Err(EvalError::InvalidEncodingName(encoding_name)),\n    };\n    let decoded_string = match enc.decode(a.unwrap_bytes(), DecoderTrap::Strict) {\n        Ok(s) => s,\n        Err(e) => {\n            return Err(EvalError::InvalidByteSequence {\n                byte_sequence: e.into(),\n                encoding_name,\n            });\n        }\n    };\n    let count = decoded_string.chars().count();\n    match i32::try_from(count) {\n        Ok(l) => Ok(Datum::from(l)),\n        Err(_) => Err(EvalError::Int32OutOfRange(count.to_string().into())),\n    }\n}\n"
+expression: "#[sqlfunc(sqlname = \"length\", propagates_nulls = true)]\nfn encoded_bytes_char_length(a: &[u8], b: &str) -> Result<i32, EvalError> {\n    let encoding_name = b.to_lowercase().replace('_', \"-\").into_boxed_str();\n    let enc = match encoding_from_whatwg_label(&encoding_name) {\n        Some(enc) => enc,\n        None => return Err(EvalError::InvalidEncodingName(encoding_name)),\n    };\n    let decoded_string = match enc.decode(a, DecoderTrap::Strict) {\n        Ok(s) => s,\n        Err(e) => {\n            return Err(EvalError::InvalidByteSequence {\n                byte_sequence: e.into(),\n                encoding_name,\n            });\n        }\n    };\n    let count = decoded_string.chars().count();\n    i32::try_from(count)\n        .map_err(|_| EvalError::Int32OutOfRange(count.to_string().into()))\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -17,9 +17,9 @@ expression: "#[sqlfunc(output_type = \"i32\", sqlname = \"length\", propagates_n
 )]
 pub struct EncodedBytesCharLength;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for EncodedBytesCharLength {
-    type Input1 = Datum<'a>;
-    type Input2 = Datum<'a>;
-    type Output = Result<Datum<'a>, EvalError>;
+    type Input1 = &'a [u8];
+    type Input2 = &'a str;
+    type Output = Result<i32, EvalError>;
     fn call(
         &self,
         a: Self::Input1,
@@ -34,7 +34,7 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for EncodedBytesCharLength {
         input_type_b: mz_repr::SqlColumnType,
     ) -> mz_repr::SqlColumnType {
         use mz_repr::AsColumnType;
-        let output = <i32>::as_column_type();
+        let output = Self::Output::as_column_type();
         let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
             self,
         );
@@ -46,9 +46,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for EncodedBytesCharLength {
                         && (input_type_a.nullable || input_type_b.nullable)),
             )
     }
-    fn introduces_nulls(&self) -> bool {
-        <i32 as ::mz_repr::DatumType<'_, ()>>::nullable()
-    }
     fn propagates_nulls(&self) -> bool {
         true
     }
@@ -58,16 +55,13 @@ impl std::fmt::Display for EncodedBytesCharLength {
         f.write_str("length")
     }
 }
-fn encoded_bytes_char_length<'a>(
-    a: Datum<'a>,
-    b: Datum<'a>,
-) -> Result<Datum<'a>, EvalError> {
-    let encoding_name = b.unwrap_str().to_lowercase().replace('_', "-").into_boxed_str();
+fn encoded_bytes_char_length(a: &[u8], b: &str) -> Result<i32, EvalError> {
+    let encoding_name = b.to_lowercase().replace('_', "-").into_boxed_str();
     let enc = match encoding_from_whatwg_label(&encoding_name) {
         Some(enc) => enc,
         None => return Err(EvalError::InvalidEncodingName(encoding_name)),
     };
-    let decoded_string = match enc.decode(a.unwrap_bytes(), DecoderTrap::Strict) {
+    let decoded_string = match enc.decode(a, DecoderTrap::Strict) {
         Ok(s) => s,
         Err(e) => {
             return Err(EvalError::InvalidByteSequence {
@@ -77,8 +71,6 @@ fn encoded_bytes_char_length<'a>(
         }
     };
     let count = decoded_string.chars().count();
-    match i32::try_from(count) {
-        Ok(l) => Ok(Datum::from(l)),
-        Err(_) => Err(EvalError::Int32OutOfRange(count.to_string().into())),
-    }
+    i32::try_from(count)
+        .map_err(|_| EvalError::Int32OutOfRange(count.to_string().into()))
 }

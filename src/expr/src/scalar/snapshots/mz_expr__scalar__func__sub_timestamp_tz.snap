@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    is_monotone = (true, true),\n    output_type = Interval,\n    is_infix_op = true,\n    sqlname = \"-\",\n    propagates_nulls = true\n)]\nfn sub_timestamptz<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {\n    Datum::from(a.unwrap_timestamptz() - b.unwrap_timestamptz())\n}\n"
+expression: "#[sqlfunc(\n    is_monotone = \"(true, true)\",\n    output_type = \"Interval\",\n    is_infix_op = true,\n    sqlname = \"-\",\n    propagates_nulls = true\n)]\nfn sub_timestamp_tz<'a>(\n    a: CheckedTimestamp<chrono::DateTime<Utc>>,\n    b: CheckedTimestamp<chrono::DateTime<Utc>>,\n) -> Datum<'a> {\n    Datum::from(a - b)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -15,10 +15,10 @@ expression: "#[sqlfunc(\n    is_monotone = (true, true),\n    output_type = Inte
     Hash,
     mz_lowertest::MzReflect
 )]
-pub struct SubTimestamptz;
-impl<'a> crate::func::binary::EagerBinaryFunc<'a> for SubTimestamptz {
-    type Input1 = Datum<'a>;
-    type Input2 = Datum<'a>;
+pub struct SubTimestampTz;
+impl<'a> crate::func::binary::EagerBinaryFunc<'a> for SubTimestampTz {
+    type Input1 = CheckedTimestamp<chrono::DateTime<Utc>>;
+    type Input2 = CheckedTimestamp<chrono::DateTime<Utc>>;
     type Output = Datum<'a>;
     fn call(
         &self,
@@ -26,7 +26,7 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for SubTimestamptz {
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        sub_timestamptz(a, b)
+        sub_timestamp_tz(a, b)
     }
     fn output_type(
         &self,
@@ -59,11 +59,14 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for SubTimestamptz {
         true
     }
 }
-impl std::fmt::Display for SubTimestamptz {
+impl std::fmt::Display for SubTimestampTz {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("-")
     }
 }
-fn sub_timestamptz<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_timestamptz() - b.unwrap_timestamptz())
+fn sub_timestamp_tz<'a>(
+    a: CheckedTimestamp<chrono::DateTime<Utc>>,
+    b: CheckedTimestamp<chrono::DateTime<Utc>>,
+) -> Datum<'a> {
+    Datum::from(a - b)
 }

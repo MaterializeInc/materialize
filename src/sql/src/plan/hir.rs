@@ -3231,9 +3231,9 @@ impl HirScalarExpr {
         }
     }
 
-    pub fn call_binary(self, other: Self, func: BinaryFunc) -> Self {
+    pub fn call_binary<B: Into<BinaryFunc>>(self, other: Self, func: B) -> Self {
         HirScalarExpr::CallBinary {
-            func,
+            func: func.into(),
             expr1: Box::new(self),
             expr2: Box::new(other),
             name: NameMetadata::default(),

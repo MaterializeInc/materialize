@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    output_type_expr = \"SqlScalarType::Jsonb.nullable(true)\",\n    is_infix_op = true,\n    sqlname = \"-\",\n    propagates_nulls = true,\n    introduces_nulls = true\n)]\nfn jsonb_delete_int64<'a>(\n    a: Datum<'a>,\n    b: Datum<'a>,\n    temp_storage: &'a RowArena,\n) -> Datum<'a> {\n    let i = b.unwrap_int64();\n    match a {\n        Datum::List(list) => {\n            let i = if i >= 0 {\n                usize::cast_from(i.unsigned_abs())\n            } else {\n                let i = usize::cast_from(i.unsigned_abs());\n                (list.iter().count()).wrapping_sub(i)\n            };\n            let elems = list\n                .iter()\n                .enumerate()\n                .filter(|(i2, _e)| i != *i2)\n                .map(|(_, e)| e);\n            temp_storage.make_datum(|packer| packer.push_list(elems))\n        }\n        _ => Datum::Null,\n    }\n}\n"
+expression: "#[sqlfunc(\n    output_type_expr = \"SqlScalarType::Jsonb.nullable(true)\",\n    is_infix_op = true,\n    sqlname = \"-\",\n    propagates_nulls = true,\n    introduces_nulls = true\n)]\nfn jsonb_delete_int64<'a>(\n    a: Datum<'a>,\n    i: i64,\n    temp_storage: &'a RowArena,\n) -> Datum<'a> {\n    match a {\n        Datum::List(list) => {\n            let i = if i >= 0 {\n                usize::cast_from(i.unsigned_abs())\n            } else {\n                let i = usize::cast_from(i.unsigned_abs());\n                (list.iter().count()).wrapping_sub(i)\n            };\n            let elems = list\n                .iter()\n                .enumerate()\n                .filter(|(i2, _e)| i != *i2)\n                .map(|(_, e)| e);\n            temp_storage.make_datum(|packer| packer.push_list(elems))\n        }\n        _ => Datum::Null,\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -18,7 +18,7 @@ expression: "#[sqlfunc(\n    output_type_expr = \"SqlScalarType::Jsonb.nullable(
 pub struct JsonbDeleteInt64;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for JsonbDeleteInt64 {
     type Input1 = Datum<'a>;
-    type Input2 = Datum<'a>;
+    type Input2 = i64;
     type Output = Datum<'a>;
     fn call(
         &self,
@@ -63,10 +63,9 @@ impl std::fmt::Display for JsonbDeleteInt64 {
 }
 fn jsonb_delete_int64<'a>(
     a: Datum<'a>,
-    b: Datum<'a>,
+    i: i64,
     temp_storage: &'a RowArena,
 ) -> Datum<'a> {
-    let i = b.unwrap_int64();
     match a {
         Datum::List(list) => {
             let i = if i >= 0 {

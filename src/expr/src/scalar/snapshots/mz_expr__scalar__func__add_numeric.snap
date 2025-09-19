@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    is_monotone = (true, true),\n    output_type = Numeric,\n    is_infix_op = true,\n    sqlname = \"+\",\n    propagates_nulls = true\n)]\nfn add_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {\n    let mut cx = numeric::cx_datum();\n    let mut a = a.unwrap_numeric().0;\n    cx.add(&mut a, &b.unwrap_numeric().0);\n    if cx.status().overflow() {\n        Err(EvalError::FloatOverflow)\n    } else {\n        Ok(Datum::from(a))\n    }\n}\n"
+expression: "#[sqlfunc(\n    is_monotone = \"(true, true)\",\n    is_infix_op = true,\n    sqlname = \"+\",\n    propagates_nulls = true\n)]\nfn add_numeric(\n    a: OrderedDecimal<Numeric>,\n    b: OrderedDecimal<Numeric>,\n) -> Result<Numeric, EvalError> {\n    let mut cx = numeric::cx_datum();\n    let mut a = a.0;\n    cx.add(&mut a, &b.0);\n    if cx.status().overflow() { Err(EvalError::FloatOverflow) } else { Ok(a) }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -17,9 +17,9 @@ expression: "#[sqlfunc(\n    is_monotone = (true, true),\n    output_type = Nume
 )]
 pub struct AddNumeric;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for AddNumeric {
-    type Input1 = Datum<'a>;
-    type Input2 = Datum<'a>;
-    type Output = Result<Datum<'a>, EvalError>;
+    type Input1 = OrderedDecimal<Numeric>;
+    type Input2 = OrderedDecimal<Numeric>;
+    type Output = Result<Numeric, EvalError>;
     fn call(
         &self,
         a: Self::Input1,
@@ -34,7 +34,7 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for AddNumeric {
         input_type_b: mz_repr::SqlColumnType,
     ) -> mz_repr::SqlColumnType {
         use mz_repr::AsColumnType;
-        let output = <Numeric>::as_column_type();
+        let output = Self::Output::as_column_type();
         let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
             self,
         );
@@ -45,9 +45,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for AddNumeric {
                     || (propagates_nulls
                         && (input_type_a.nullable || input_type_b.nullable)),
             )
-    }
-    fn introduces_nulls(&self) -> bool {
-        <Numeric as ::mz_repr::DatumType<'_, ()>>::nullable()
     }
     fn is_infix_op(&self) -> bool {
         true
@@ -64,13 +61,12 @@ impl std::fmt::Display for AddNumeric {
         f.write_str("+")
     }
 }
-fn add_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+fn add_numeric(
+    a: OrderedDecimal<Numeric>,
+    b: OrderedDecimal<Numeric>,
+) -> Result<Numeric, EvalError> {
     let mut cx = numeric::cx_datum();
-    let mut a = a.unwrap_numeric().0;
-    cx.add(&mut a, &b.unwrap_numeric().0);
-    if cx.status().overflow() {
-        Err(EvalError::FloatOverflow)
-    } else {
-        Ok(Datum::from(a))
-    }
+    let mut a = a.0;
+    cx.add(&mut a, &b.0);
+    if cx.status().overflow() { Err(EvalError::FloatOverflow) } else { Ok(a) }
 }

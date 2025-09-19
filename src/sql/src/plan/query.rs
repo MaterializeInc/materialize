@@ -3168,7 +3168,7 @@ fn plan_rows_from_internal<'a>(
         let on = HirScalarExpr::call_binary(
             HirScalarExpr::column(left_col),
             HirScalarExpr::column(right_col),
-            BinaryFunc::Eq,
+            expr_func::Eq,
         );
         left_expr = left_expr
             .join(right_expr, on, JoinKind::FullOuter)
@@ -3956,7 +3956,7 @@ fn plan_using_constraint(
             map_exprs.push(HirScalarExpr::named_column(lhs, Arc::clone(&lhs_name)));
         }
 
-        join_exprs.push(expr1.call_binary(expr2, BinaryFunc::Eq));
+        join_exprs.push(expr1.call_binary(expr2, expr_func::Eq));
     }
     both_scope.items.extend(new_items);
 
@@ -4483,7 +4483,7 @@ fn plan_like(
     if let Some(escape) = escape {
         pattern = pattern.call_binary(
             plan_expr(&ecx, escape)?.cast_to(&ecx, Implicit, &SqlScalarType::String)?,
-            BinaryFunc::LikeEscape,
+            expr_func::LikeEscape,
         );
     }
     let like = haystack.call_binary(pattern, BinaryFunc::IsLikeMatch { case_insensitive });
@@ -4571,7 +4571,7 @@ fn plan_list_subquery(
         |_| false,
         |elem_type| VariadicFunc::ListCreate { elem_type },
         |order_by| AggregateFunc::ListConcat { order_by },
-        BinaryFunc::ListListConcat,
+        expr_func::ListListConcat.into(),
         |elem_type| {
             HirScalarExpr::literal(
                 Datum::empty_list(),
@@ -4603,7 +4603,7 @@ fn plan_array_subquery(
         },
         |elem_type| VariadicFunc::ArrayCreate { elem_type },
         |order_by| AggregateFunc::ArrayConcat { order_by },
-        BinaryFunc::ArrayArrayConcat,
+        expr_func::ArrayArrayConcat.into(),
         |elem_type| {
             HirScalarExpr::literal(
                 Datum::empty_array(),
@@ -5644,7 +5644,7 @@ fn plan_is_expr<'a>(
             //
             // (a != b OR a IS NULL OR b IS NULL) AND (a IS NOT NULL OR b IS NOT NULL)
             let term1 = HirScalarExpr::variadic_or(vec![
-                expr1.clone().call_binary(expr2.clone(), BinaryFunc::NotEq),
+                expr1.clone().call_binary(expr2.clone(), expr_func::NotEq),
                 expr1.clone().call_is_null(),
                 expr2.clone().call_is_null(),
             ]);

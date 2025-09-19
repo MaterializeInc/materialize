@@ -68,7 +68,9 @@ SELECT a + 1, b, 4 FROM mv WHERE a > 0
             "predicates": [
               {
                 "CallBinary": {
-                  "func": "Gt",
+                  "func": {
+                    "Gt": null
+                  },
                   "expr1": {
                     "Column": [
                       {
@@ -406,7 +408,9 @@ SELECT abs(min(a) - max(a)) FROM t
               },
               "expr": {
                 "CallBinary": {
-                  "func": "SubInt32",
+                  "func": {
+                    "SubInt32": null
+                  },
                   "expr1": {
                     "Column": [
                       {
@@ -531,7 +535,9 @@ SELECT abs(min(a) - max(a)) FROM t GROUP BY b
               },
               "expr": {
                 "CallBinary": {
-                  "func": "SubInt32",
+                  "func": {
+                    "SubInt32": null
+                  },
                   "expr1": {
                     "Column": [
                       {
@@ -602,7 +608,9 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
         "predicates": [
           {
             "CallBinary": {
-              "func": "Gt",
+              "func": {
+                "Gt": null
+              },
               "expr1": {
                 "Column": [
                   {
@@ -658,7 +666,9 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
             "predicates": [
               {
                 "CallBinary": {
-                  "func": "Lt",
+                  "func": {
+                    "Lt": null
+                  },
                   "expr1": {
                     "Column": [
                       {
@@ -799,7 +809,9 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                     "predicates": [
                       {
                         "CallBinary": {
-                          "func": "Eq",
+                          "func": {
+                            "Eq": null
+                          },
                           "expr1": {
                             "Column": [
                               {
@@ -898,7 +910,9 @@ SELECT (SELECT v.a FROM v WHERE v.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHERE m
                         "predicates": [
                           {
                             "CallBinary": {
-                              "func": "Eq",
+                              "func": {
+                                "Eq": null
+                              },
                               "expr1": {
                                 "Column": [
                                   {
@@ -1237,7 +1251,9 @@ WHERE t1.b = t2.b AND t2.b = t3.b
               "exprs": [
                 {
                   "CallBinary": {
-                    "func": "Eq",
+                    "func": {
+                      "Eq": null
+                    },
                     "expr1": {
                       "Column": [
                         {
@@ -1261,7 +1277,9 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                 },
                 {
                   "CallBinary": {
-                    "func": "Eq",
+                    "func": {
+                      "Eq": null
+                    },
                     "expr1": {
                       "Column": [
                         {
@@ -1366,7 +1384,9 @@ WITH A AS (SELECT 1 AS a), B as (SELECT a as b FROM A WHERE a > 0) SELECT * FROM
             "predicates": [
               {
                 "CallBinary": {
-                  "func": "Gt",
+                  "func": {
+                    "Gt": null
+                  },
                   "expr1": {
                     "Column": [
                       {

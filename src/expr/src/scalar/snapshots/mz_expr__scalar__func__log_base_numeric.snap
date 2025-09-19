@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(output_type = \"Numeric\", sqlname = \"log\", propagates_nulls = true)]\nfn log_base_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {\n    let mut a = a.unwrap_numeric().0;\n    log_guard_numeric(&a, \"log\")?;\n    let mut b = b.unwrap_numeric().0;\n    log_guard_numeric(&b, \"log\")?;\n    let mut cx = numeric::cx_datum();\n    cx.ln(&mut a);\n    cx.ln(&mut b);\n    cx.div(&mut b, &a);\n    if a.is_zero() {\n        Err(EvalError::DivisionByZero)\n    } else {\n        cx.set_precision(usize::from(numeric::NUMERIC_DATUM_MAX_PRECISION - 1))\n            .expect(\"reducing precision below max always succeeds\");\n        let mut integral_check = b.clone();\n        cx.reduce(&mut integral_check);\n        let mut b = if integral_check.exponent() >= 0 { integral_check } else { b };\n        numeric::munge_numeric(&mut b).unwrap();\n        Ok(Datum::from(b))\n    }\n}\n"
+expression: "#[sqlfunc(sqlname = \"log\", propagates_nulls = true)]\nfn log_base_numeric(mut a: Numeric, mut b: Numeric) -> Result<Numeric, EvalError> {\n    log_guard_numeric(&a, \"log\")?;\n    log_guard_numeric(&b, \"log\")?;\n    let mut cx = numeric::cx_datum();\n    cx.ln(&mut a);\n    cx.ln(&mut b);\n    cx.div(&mut b, &a);\n    if a.is_zero() {\n        Err(EvalError::DivisionByZero)\n    } else {\n        cx.set_precision(usize::from(numeric::NUMERIC_DATUM_MAX_PRECISION - 1))\n            .expect(\"reducing precision below max always succeeds\");\n        let mut integral_check = b.clone();\n        cx.reduce(&mut integral_check);\n        let mut b = if integral_check.exponent() >= 0 { integral_check } else { b };\n        numeric::munge_numeric(&mut b).unwrap();\n        Ok(b)\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -17,9 +17,9 @@ expression: "#[sqlfunc(output_type = \"Numeric\", sqlname = \"log\", propagates_
 )]
 pub struct LogBaseNumeric;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for LogBaseNumeric {
-    type Input1 = Datum<'a>;
-    type Input2 = Datum<'a>;
-    type Output = Result<Datum<'a>, EvalError>;
+    type Input1 = Numeric;
+    type Input2 = Numeric;
+    type Output = Result<Numeric, EvalError>;
     fn call(
         &self,
         a: Self::Input1,
@@ -34,7 +34,7 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for LogBaseNumeric {
         input_type_b: mz_repr::SqlColumnType,
     ) -> mz_repr::SqlColumnType {
         use mz_repr::AsColumnType;
-        let output = <Numeric>::as_column_type();
+        let output = Self::Output::as_column_type();
         let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
             self,
         );
@@ -46,9 +46,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for LogBaseNumeric {
                         && (input_type_a.nullable || input_type_b.nullable)),
             )
     }
-    fn introduces_nulls(&self) -> bool {
-        <Numeric as ::mz_repr::DatumType<'_, ()>>::nullable()
-    }
     fn propagates_nulls(&self) -> bool {
         true
     }
@@ -58,10 +55,8 @@ impl std::fmt::Display for LogBaseNumeric {
         f.write_str("log")
     }
 }
-fn log_base_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let mut a = a.unwrap_numeric().0;
+fn log_base_numeric(mut a: Numeric, mut b: Numeric) -> Result<Numeric, EvalError> {
     log_guard_numeric(&a, "log")?;
-    let mut b = b.unwrap_numeric().0;
     log_guard_numeric(&b, "log")?;
     let mut cx = numeric::cx_datum();
     cx.ln(&mut a);
@@ -76,6 +71,6 @@ fn log_base_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalErr
         cx.reduce(&mut integral_check);
         let mut b = if integral_check.exponent() >= 0 { integral_check } else { b };
         numeric::munge_numeric(&mut b).unwrap();
-        Ok(Datum::from(b))
+        Ok(b)
     }
 }

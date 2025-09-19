@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    output_type = \"Numeric\",\n    is_infix_op = true,\n    sqlname = \"%\",\n    propagates_nulls = true\n)]\nfn mod_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {\n    let mut a = a.unwrap_numeric();\n    let b = b.unwrap_numeric();\n    if b.0.is_zero() {\n        return Err(EvalError::DivisionByZero);\n    }\n    let mut cx = numeric::cx_datum();\n    cx.rem(&mut a.0, &b.0);\n    numeric::munge_numeric(&mut a.0).unwrap();\n    Ok(Datum::Numeric(a))\n}\n"
+expression: "#[sqlfunc(is_infix_op = true, sqlname = \"%\", propagates_nulls = true)]\nfn mod_numeric(mut a: Numeric, b: Numeric) -> Result<Numeric, EvalError> {\n    if b.is_zero() {\n        return Err(EvalError::DivisionByZero);\n    }\n    let mut cx = numeric::cx_datum();\n    cx.rem(&mut a, &b);\n    numeric::munge_numeric(&mut a).unwrap();\n    Ok(a)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -17,9 +17,9 @@ expression: "#[sqlfunc(\n    output_type = \"Numeric\",\n    is_infix_op = true,
 )]
 pub struct ModNumeric;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ModNumeric {
-    type Input1 = Datum<'a>;
-    type Input2 = Datum<'a>;
-    type Output = Result<Datum<'a>, EvalError>;
+    type Input1 = Numeric;
+    type Input2 = Numeric;
+    type Output = Result<Numeric, EvalError>;
     fn call(
         &self,
         a: Self::Input1,
@@ -34,7 +34,7 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ModNumeric {
         input_type_b: mz_repr::SqlColumnType,
     ) -> mz_repr::SqlColumnType {
         use mz_repr::AsColumnType;
-        let output = <Numeric>::as_column_type();
+        let output = Self::Output::as_column_type();
         let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
             self,
         );
@@ -45,9 +45,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ModNumeric {
                     || (propagates_nulls
                         && (input_type_a.nullable || input_type_b.nullable)),
             )
-    }
-    fn introduces_nulls(&self) -> bool {
-        <Numeric as ::mz_repr::DatumType<'_, ()>>::nullable()
     }
     fn is_infix_op(&self) -> bool {
         true
@@ -61,14 +58,12 @@ impl std::fmt::Display for ModNumeric {
         f.write_str("%")
     }
 }
-fn mod_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let mut a = a.unwrap_numeric();
-    let b = b.unwrap_numeric();
-    if b.0.is_zero() {
+fn mod_numeric(mut a: Numeric, b: Numeric) -> Result<Numeric, EvalError> {
+    if b.is_zero() {
         return Err(EvalError::DivisionByZero);
     }
     let mut cx = numeric::cx_datum();
-    cx.rem(&mut a.0, &b.0);
-    numeric::munge_numeric(&mut a.0).unwrap();
-    Ok(Datum::Numeric(a))
+    cx.rem(&mut a, &b);
+    numeric::munge_numeric(&mut a).unwrap();
+    Ok(a)
 }

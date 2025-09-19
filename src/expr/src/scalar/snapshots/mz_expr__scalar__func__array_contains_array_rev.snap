@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    output_type = \"bool\",\n    is_infix_op = true,\n    sqlname = \"<@\",\n    propagates_nulls = true,\n    introduces_nulls = false\n)]\n#[allow(dead_code)]\nfn array_contains_array_rev<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {\n    array_contains_array(a, b)\n}\n"
+expression: "#[sqlfunc(\n    output_type = \"bool\",\n    is_infix_op = true,\n    sqlname = \"<@\",\n    propagates_nulls = true,\n    introduces_nulls = false\n)]\nfn array_contains_array_rev<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {\n    array_contains_array(a, b)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -61,7 +61,6 @@ impl std::fmt::Display for ArrayContainsArrayRev {
         f.write_str("<@")
     }
 }
-#[allow(dead_code)]
 fn array_contains_array_rev<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     array_contains_array(a, b)
 }

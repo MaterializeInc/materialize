@@ -710,7 +710,7 @@ impl MirRelationExpr {
 
                     for expr in predicates.iter() {
                         if let MirScalarExpr::CallBinary {
-                            func: crate::BinaryFunc::Eq,
+                            func: crate::BinaryFunc::Eq(_),
                             expr1,
                             expr2,
                         } = expr
@@ -3042,7 +3042,7 @@ impl AggregateExpr {
             .clone()
             .call_binary(
                 MirScalarExpr::literal_ok(Datum::Int32(0), SqlScalarType::Int32),
-                crate::BinaryFunc::Eq,
+                crate::func::Eq,
             )
             .if_then_else(expr, default_value);
         let result_expr = offset

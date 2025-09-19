@@ -218,7 +218,7 @@ impl PredicatePushdown {
                             for mut predicate in predicates.drain(..) {
                                 use mz_expr::{BinaryFunc, UnaryFunc};
                                 if let MirScalarExpr::CallBinary {
-                                    func: BinaryFunc::Eq,
+                                    func: BinaryFunc::Eq(_),
                                     expr1,
                                     expr2,
                                 } = &predicate
@@ -616,7 +616,7 @@ impl PredicatePushdown {
                                         }
                                     } else {
                                         MirScalarExpr::CallBinary {
-                                            func: mz_expr::BinaryFunc::Eq,
+                                            func: mz_expr::func::Eq.into(),
                                             expr1: Box::new(expr.clone()),
                                             expr2: Box::new(constant.clone()),
                                         }
@@ -734,7 +734,7 @@ impl PredicatePushdown {
 
                                         push_downs[input].push(
                                             MirScalarExpr::CallBinary {
-                                                func: mz_expr::BinaryFunc::Eq,
+                                                func: func::Eq.into(),
                                                 expr1: Box::new(expr2.clone()),
                                                 expr2: Box::new(expr1.clone()),
                                             }
@@ -1175,7 +1175,7 @@ impl PredicatePushdown {
     ) -> Option<(MirScalarExpr, MirScalarExpr)> {
         use mz_expr::BinaryFunc;
         if let MirScalarExpr::CallBinary {
-            func: BinaryFunc::Eq,
+            func: BinaryFunc::Eq(_),
             expr1: eq_lhs,
             expr2: eq_rhs,
         } = &or_arg2

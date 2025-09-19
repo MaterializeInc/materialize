@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(output_type = \"String\", sqlname = \"convert_from\", propagates_nulls = true)]\nfn convert_from<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {\n    let encoding_name = b.unwrap_str().to_lowercase().replace('_', \"-\").into_boxed_str();\n    if encoding_from_whatwg_label(&encoding_name).map(|e| e.name()) != Some(\"utf-8\") {\n        return Err(EvalError::InvalidEncodingName(encoding_name));\n    }\n    match str::from_utf8(a.unwrap_bytes()) {\n        Ok(from) => Ok(Datum::String(from)),\n        Err(e) => {\n            Err(EvalError::InvalidByteSequence {\n                byte_sequence: e.to_string().into(),\n                encoding_name,\n            })\n        }\n    }\n}\n"
+expression: "#[sqlfunc(sqlname = \"convert_from\", propagates_nulls = true)]\nfn convert_from<'a>(a: &'a [u8], b: &str) -> Result<&'a str, EvalError> {\n    let encoding_name = b.to_lowercase().replace('_', \"-\").into_boxed_str();\n    if encoding_from_whatwg_label(&encoding_name).map(|e| e.name()) != Some(\"utf-8\") {\n        return Err(EvalError::InvalidEncodingName(encoding_name));\n    }\n    match str::from_utf8(a) {\n        Ok(from) => Ok(from),\n        Err(e) => {\n            Err(EvalError::InvalidByteSequence {\n                byte_sequence: e.to_string().into(),\n                encoding_name,\n            })\n        }\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -17,9 +17,9 @@ expression: "#[sqlfunc(output_type = \"String\", sqlname = \"convert_from\", pro
 )]
 pub struct ConvertFrom;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ConvertFrom {
-    type Input1 = Datum<'a>;
-    type Input2 = Datum<'a>;
-    type Output = Result<Datum<'a>, EvalError>;
+    type Input1 = &'a [u8];
+    type Input2 = &'a str;
+    type Output = Result<&'a str, EvalError>;
     fn call(
         &self,
         a: Self::Input1,
@@ -34,7 +34,7 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ConvertFrom {
         input_type_b: mz_repr::SqlColumnType,
     ) -> mz_repr::SqlColumnType {
         use mz_repr::AsColumnType;
-        let output = <String>::as_column_type();
+        let output = Self::Output::as_column_type();
         let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
             self,
         );
@@ -46,9 +46,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ConvertFrom {
                         && (input_type_a.nullable || input_type_b.nullable)),
             )
     }
-    fn introduces_nulls(&self) -> bool {
-        <String as ::mz_repr::DatumType<'_, ()>>::nullable()
-    }
     fn propagates_nulls(&self) -> bool {
         true
     }
@@ -58,13 +55,13 @@ impl std::fmt::Display for ConvertFrom {
         f.write_str("convert_from")
     }
 }
-fn convert_from<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let encoding_name = b.unwrap_str().to_lowercase().replace('_', "-").into_boxed_str();
+fn convert_from<'a>(a: &'a [u8], b: &str) -> Result<&'a str, EvalError> {
+    let encoding_name = b.to_lowercase().replace('_', "-").into_boxed_str();
     if encoding_from_whatwg_label(&encoding_name).map(|e| e.name()) != Some("utf-8") {
         return Err(EvalError::InvalidEncodingName(encoding_name));
     }
-    match str::from_utf8(a.unwrap_bytes()) {
-        Ok(from) => Ok(Datum::String(from)),
+    match str::from_utf8(a) {
+        Ok(from) => Ok(from),
         Err(e) => {
             Err(EvalError::InvalidByteSequence {
                 byte_sequence: e.to_string().into(),

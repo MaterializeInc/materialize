@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(output_type = \"uuid::Uuid\", propagates_nulls = true)]\nfn uuid_generate_v5<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {\n    let a = a.unwrap_uuid();\n    let b = b.unwrap_str();\n    let res = uuid::Uuid::new_v5(&a, b.as_bytes());\n    Datum::Uuid(res)\n}\n"
+expression: "#[sqlfunc(propagates_nulls = true)]\nfn uuid_generate_v5(a: uuid::Uuid, b: &str) -> uuid::Uuid {\n    uuid::Uuid::new_v5(&a, b.as_bytes())\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -17,9 +17,9 @@ expression: "#[sqlfunc(output_type = \"uuid::Uuid\", propagates_nulls = true)]\n
 )]
 pub struct UuidGenerateV5;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for UuidGenerateV5 {
-    type Input1 = Datum<'a>;
-    type Input2 = Datum<'a>;
-    type Output = Datum<'a>;
+    type Input1 = uuid::Uuid;
+    type Input2 = &'a str;
+    type Output = uuid::Uuid;
     fn call(
         &self,
         a: Self::Input1,
@@ -34,7 +34,7 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for UuidGenerateV5 {
         input_type_b: mz_repr::SqlColumnType,
     ) -> mz_repr::SqlColumnType {
         use mz_repr::AsColumnType;
-        let output = <uuid::Uuid>::as_column_type();
+        let output = Self::Output::as_column_type();
         let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
             self,
         );
@@ -46,9 +46,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for UuidGenerateV5 {
                         && (input_type_a.nullable || input_type_b.nullable)),
             )
     }
-    fn introduces_nulls(&self) -> bool {
-        <uuid::Uuid as ::mz_repr::DatumType<'_, ()>>::nullable()
-    }
     fn propagates_nulls(&self) -> bool {
         true
     }
@@ -58,9 +55,6 @@ impl std::fmt::Display for UuidGenerateV5 {
         f.write_str(stringify!(uuid_generate_v5))
     }
 }
-fn uuid_generate_v5<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    let a = a.unwrap_uuid();
-    let b = b.unwrap_str();
-    let res = uuid::Uuid::new_v5(&a, b.as_bytes());
-    Datum::Uuid(res)
+fn uuid_generate_v5(a: uuid::Uuid, b: &str) -> uuid::Uuid {
+    uuid::Uuid::new_v5(&a, b.as_bytes())
 }

@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(sqlname = \"ltrim\", output_type = \"String\", propagates_nulls = true)]\nfn trim_leading<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {\n    let trim_chars = b.unwrap_str();\n    Datum::from(a.unwrap_str().trim_start_matches(|c| trim_chars.contains(c)))\n}\n"
+expression: "#[sqlfunc(sqlname = \"ltrim\", propagates_nulls = true)]\nfn trim_leading<'a>(a: &'a str, trim_chars: &str) -> &'a str {\n    a.trim_start_matches(|c| trim_chars.contains(c))\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -17,9 +17,9 @@ expression: "#[sqlfunc(sqlname = \"ltrim\", output_type = \"String\", propagates
 )]
 pub struct TrimLeading;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for TrimLeading {
-    type Input1 = Datum<'a>;
-    type Input2 = Datum<'a>;
-    type Output = Datum<'a>;
+    type Input1 = &'a str;
+    type Input2 = &'a str;
+    type Output = &'a str;
     fn call(
         &self,
         a: Self::Input1,
@@ -34,7 +34,7 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for TrimLeading {
         input_type_b: mz_repr::SqlColumnType,
     ) -> mz_repr::SqlColumnType {
         use mz_repr::AsColumnType;
-        let output = <String>::as_column_type();
+        let output = Self::Output::as_column_type();
         let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
             self,
         );
@@ -46,9 +46,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for TrimLeading {
                         && (input_type_a.nullable || input_type_b.nullable)),
             )
     }
-    fn introduces_nulls(&self) -> bool {
-        <String as ::mz_repr::DatumType<'_, ()>>::nullable()
-    }
     fn propagates_nulls(&self) -> bool {
         true
     }
@@ -58,7 +55,6 @@ impl std::fmt::Display for TrimLeading {
         f.write_str("ltrim")
     }
 }
-fn trim_leading<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    let trim_chars = b.unwrap_str();
-    Datum::from(a.unwrap_str().trim_start_matches(|c| trim_chars.contains(c)))
+fn trim_leading<'a>(a: &'a str, trim_chars: &str) -> &'a str {
+    a.trim_start_matches(|c| trim_chars.contains(c))
 }

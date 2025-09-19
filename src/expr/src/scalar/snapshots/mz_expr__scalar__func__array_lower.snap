@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    output_type = \"Option<i32>\",\n    is_infix_op = true,\n    sqlname = \"array_lower\",\n    propagates_nulls = true,\n    introduces_nulls = true\n)]\n#[allow(clippy::as_conversions)]\nfn array_lower<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {\n    let i = b.unwrap_int64();\n    if i < 1 {\n        return Datum::Null;\n    }\n    match a.unwrap_array().dims().into_iter().nth(i as usize - 1) {\n        Some(_) => Datum::Int32(1),\n        None => Datum::Null,\n    }\n}\n"
+expression: "#[sqlfunc(\n    output_type = \"Option<i32>\",\n    is_infix_op = true,\n    sqlname = \"array_lower\",\n    propagates_nulls = true,\n    introduces_nulls = true\n)]\n#[allow(clippy::as_conversions)]\nfn array_lower<'a>(a: Datum<'a>, i: i64) -> Option<i32> {\n    if a == Datum::Null {\n        return None;\n    }\n    if i < 1 {\n        return None;\n    }\n    match a.unwrap_array().dims().into_iter().nth(i as usize - 1) {\n        Some(_) => Some(1),\n        None => None,\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -18,8 +18,8 @@ expression: "#[sqlfunc(\n    output_type = \"Option<i32>\",\n    is_infix_op = t
 pub struct ArrayLower;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ArrayLower {
     type Input1 = Datum<'a>;
-    type Input2 = Datum<'a>;
-    type Output = Datum<'a>;
+    type Input2 = i64;
+    type Output = Option<i32>;
     fn call(
         &self,
         a: Self::Input1,
@@ -62,13 +62,15 @@ impl std::fmt::Display for ArrayLower {
     }
 }
 #[allow(clippy::as_conversions)]
-fn array_lower<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    let i = b.unwrap_int64();
+fn array_lower<'a>(a: Datum<'a>, i: i64) -> Option<i32> {
+    if a == Datum::Null {
+        return None;
+    }
     if i < 1 {
-        return Datum::Null;
+        return None;
     }
     match a.unwrap_array().dims().into_iter().nth(i as usize - 1) {
-        Some(_) => Datum::Int32(1),
-        None => Datum::Null,
+        Some(_) => Some(1),
+        None => None,
     }
 }

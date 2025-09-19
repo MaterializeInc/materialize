@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    is_monotone = \"(false, false)\",\n    output_type = \"CheckedTimestamp<chrono::DateTime<Utc>>\",\n    is_infix_op = true,\n    sqlname = \"+\",\n    propagates_nulls = true\n)]\nfn add_time_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {\n    let time = a.unwrap_time();\n    let interval = b.unwrap_interval();\n    let (t, _) = time.overflowing_add_signed(interval.duration_as_chrono());\n    Datum::Time(t)\n}\n"
+expression: "#[sqlfunc(\n    is_monotone = \"(false, false)\",\n    is_infix_op = true,\n    sqlname = \"+\",\n    propagates_nulls = true\n)]\nfn add_time_interval(time: chrono::NaiveTime, interval: Interval) -> chrono::NaiveTime {\n    let (t, _) = time.overflowing_add_signed(interval.duration_as_chrono());\n    t\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -17,9 +17,9 @@ expression: "#[sqlfunc(\n    is_monotone = \"(false, false)\",\n    output_type 
 )]
 pub struct AddTimeInterval;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for AddTimeInterval {
-    type Input1 = Datum<'a>;
-    type Input2 = Datum<'a>;
-    type Output = Datum<'a>;
+    type Input1 = chrono::NaiveTime;
+    type Input2 = Interval;
+    type Output = chrono::NaiveTime;
     fn call(
         &self,
         a: Self::Input1,
@@ -34,7 +34,7 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for AddTimeInterval {
         input_type_b: mz_repr::SqlColumnType,
     ) -> mz_repr::SqlColumnType {
         use mz_repr::AsColumnType;
-        let output = <CheckedTimestamp<chrono::DateTime<Utc>>>::as_column_type();
+        let output = Self::Output::as_column_type();
         let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
             self,
         );
@@ -45,11 +45,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for AddTimeInterval {
                     || (propagates_nulls
                         && (input_type_a.nullable || input_type_b.nullable)),
             )
-    }
-    fn introduces_nulls(&self) -> bool {
-        <CheckedTimestamp<
-            chrono::DateTime<Utc>,
-        > as ::mz_repr::DatumType<'_, ()>>::nullable()
     }
     fn is_infix_op(&self) -> bool {
         true
@@ -66,9 +61,7 @@ impl std::fmt::Display for AddTimeInterval {
         f.write_str("+")
     }
 }
-fn add_time_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    let time = a.unwrap_time();
-    let interval = b.unwrap_interval();
+fn add_time_interval(time: chrono::NaiveTime, interval: Interval) -> chrono::NaiveTime {
     let (t, _) = time.overflowing_add_signed(interval.duration_as_chrono());
-    Datum::Time(t)
+    t
 }

@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    output_type_expr = \"input_type_a.scalar_type.without_modifiers().nullable(true)\",\n    is_infix_op = true,\n    sqlname = \"||\",\n    propagates_nulls = false,\n    introduces_nulls = false\n)]\nfn element_list_concat<'a>(\n    a: Datum<'a>,\n    b: Datum<'a>,\n    temp_storage: &'a RowArena,\n) -> Datum<'a> {\n    temp_storage\n        .make_datum(|packer| {\n            packer\n                .push_list_with(|packer| {\n                    packer.push(a);\n                    if !b.is_null() {\n                        for elem in b.unwrap_list().iter() {\n                            packer.push(elem);\n                        }\n                    }\n                })\n        })\n}\n"
+expression: "#[sqlfunc(\n    output_type_expr = \"input_type_b.scalar_type.without_modifiers().nullable(true)\",\n    is_infix_op = true,\n    sqlname = \"||\",\n    propagates_nulls = false,\n    introduces_nulls = false\n)]\nfn element_list_concat<'a>(\n    a: Datum<'a>,\n    b: Datum<'a>,\n    temp_storage: &'a RowArena,\n) -> Datum<'a> {\n    temp_storage\n        .make_datum(|packer| {\n            packer\n                .push_list_with(|packer| {\n                    packer.push(a);\n                    if !b.is_null() {\n                        for elem in b.unwrap_list().iter() {\n                            packer.push(elem);\n                        }\n                    }\n                })\n        })\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -34,7 +34,7 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ElementListConcat {
         input_type_b: mz_repr::SqlColumnType,
     ) -> mz_repr::SqlColumnType {
         use mz_repr::AsColumnType;
-        let output = input_type_a.scalar_type.without_modifiers().nullable(true);
+        let output = input_type_b.scalar_type.without_modifiers().nullable(true);
         let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
             self,
         );

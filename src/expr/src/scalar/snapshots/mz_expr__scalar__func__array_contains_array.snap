@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    output_type = \"bool\",\n    is_infix_op = true,\n    sqlname = \"@>\",\n    propagates_nulls = true,\n    introduces_nulls = false\n)]\nfn array_contains_array<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {\n    let a = a.unwrap_array().elements();\n    let b = b.unwrap_array().elements();\n    if b.iter().contains(&Datum::Null) {\n        Datum::False\n    } else {\n        b.iter().all(|item_b| a.iter().any(|item_a| item_a == item_b)).into()\n    }\n}\n"
+expression: "#[sqlfunc(\n    output_type = \"bool\",\n    is_infix_op = true,\n    sqlname = \"@>\",\n    propagates_nulls = true,\n    introduces_nulls = false\n)]\nfn array_contains_array<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {\n    if a.is_null() || b.is_null() {\n        return Datum::Null;\n    }\n    let a = a.unwrap_array().elements();\n    let b = b.unwrap_array().elements();\n    if b.iter().contains(&Datum::Null) {\n        Datum::False\n    } else {\n        b.iter().all(|item_b| a.iter().any(|item_a| item_a == item_b)).into()\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -62,6 +62,9 @@ impl std::fmt::Display for ArrayContainsArray {
     }
 }
 fn array_contains_array<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    if a.is_null() || b.is_null() {
+        return Datum::Null;
+    }
     let a = a.unwrap_array().elements();
     let b = b.unwrap_array().elements();
     if b.iter().contains(&Datum::Null) {

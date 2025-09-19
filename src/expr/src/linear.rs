@@ -198,7 +198,7 @@ impl MapFilterProject {
     pub fn literal_constraint(&self, expr: &MirScalarExpr) -> Option<Datum<'_>> {
         for (_pos, predicate) in self.predicates.iter() {
             if let MirScalarExpr::CallBinary {
-                func: crate::BinaryFunc::Eq,
+                func: crate::BinaryFunc::Eq(_),
                 expr1,
                 expr2,
             } = predicate
@@ -645,9 +645,9 @@ impl MapFilterProject {
     ///
     /// // imagine an action on columns (a, b, c, d).
     /// let original = MapFilterProject::new(4).map(vec![
-    ///    MirScalarExpr::column(0).call_binary(MirScalarExpr::column(1), func::AddInt64.into()),
-    ///    MirScalarExpr::column(2).call_binary(MirScalarExpr::column(4), func::AddInt64.into()),
-    ///    MirScalarExpr::column(3).call_binary(MirScalarExpr::column(5), func::AddInt64.into()),
+    ///    MirScalarExpr::column(0).call_binary(MirScalarExpr::column(1), func::AddInt64),
+    ///    MirScalarExpr::column(2).call_binary(MirScalarExpr::column(4), func::AddInt64),
+    ///    MirScalarExpr::column(3).call_binary(MirScalarExpr::column(5), func::AddInt64),
     /// ]).project(vec![6]);
     ///
     /// // Imagine we start with columns (b, x, a, y, c).
@@ -666,13 +666,13 @@ impl MapFilterProject {
     ///
     /// // `before` sees all five input columns, and should append `a + b + c`.
     /// assert_eq!(before, MapFilterProject::new(5).map(vec![
-    ///    MirScalarExpr::column(2).call_binary(MirScalarExpr::column(0), func::AddInt64.into()),
-    ///    MirScalarExpr::column(4).call_binary(MirScalarExpr::column(5), func::AddInt64.into()),
+    ///    MirScalarExpr::column(2).call_binary(MirScalarExpr::column(0), func::AddInt64),
+    ///    MirScalarExpr::column(4).call_binary(MirScalarExpr::column(5), func::AddInt64),
     /// ]).project(vec![0, 1, 2, 3, 4, 6]));
     ///
     /// // `after` expects to see `(a, b, c, d, a + b + c)`.
     /// assert_eq!(after, MapFilterProject::new(5).map(vec![
-    ///    MirScalarExpr::column(3).call_binary(MirScalarExpr::column(4), func::AddInt64.into())
+    ///    MirScalarExpr::column(3).call_binary(MirScalarExpr::column(4), func::AddInt64)
     /// ]).project(vec![5]));
     ///
     /// // To reconstruct `self`, we must introduce the columns that are not present,
@@ -916,16 +916,16 @@ impl MapFilterProject {
     /// // Demonstrate extraction of common expressions (here: parsing strings).
     /// let mut map_filter_project = MapFilterProject::new(5)
     ///     .map(vec![
-    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)).call_binary(MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)), func::AddInt64.into()),
-    ///         MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)).call_binary(MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)), func::AddInt64.into()),
+    ///         MirScalarExpr::column(0).call_unary(func::CastStringToInt64).call_binary(MirScalarExpr::column(1).call_unary(func::CastStringToInt64), func::AddInt64),
+    ///         MirScalarExpr::column(1).call_unary(func::CastStringToInt64).call_binary(MirScalarExpr::column(2).call_unary(func::CastStringToInt64), func::AddInt64),
     ///     ])
     ///     .project(vec![3,4,5,6]);
     ///
     /// let mut expected_optimized = MapFilterProject::new(5)
     ///     .map(vec![
-    ///         MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)),
-    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)).call_binary(MirScalarExpr::column(5), func::AddInt64.into()),
-    ///         MirScalarExpr::column(5).call_binary(MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)), func::AddInt64.into()),
+    ///         MirScalarExpr::column(1).call_unary(func::CastStringToInt64),
+    ///         MirScalarExpr::column(0).call_unary(func::CastStringToInt64).call_binary(MirScalarExpr::column(5), func::AddInt64),
+    ///         MirScalarExpr::column(5).call_binary(MirScalarExpr::column(2).call_unary(func::CastStringToInt64), func::AddInt64),
     ///     ])
     ///     .project(vec![3,4,6,7]);
     ///
@@ -964,7 +964,7 @@ impl MapFilterProject {
                 // If `expr` matches a filter equating it to a column < index + input_arity, rewrite it
                 for (_, predicate) in self.predicates.iter() {
                     if let MirScalarExpr::CallBinary {
-                        func: crate::BinaryFunc::Eq,
+                        func: crate::BinaryFunc::Eq(_),
                         expr1,
                         expr2,
                     } = predicate
@@ -1033,19 +1033,19 @@ impl MapFilterProject {
     /// // Demonstrate extraction of common expressions (here: parsing strings).
     /// let mut map_filter_project = MapFilterProject::new(5)
     ///     .map(vec![
-    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)).call_binary(MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)), func::AddInt64.into()),
-    ///         MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)).call_binary(MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)), func::AddInt64.into()),
+    ///         MirScalarExpr::column(0).call_unary(func::CastStringToInt64).call_binary(MirScalarExpr::column(1).call_unary(func::CastStringToInt64), func::AddInt64),
+    ///         MirScalarExpr::column(1).call_unary(func::CastStringToInt64).call_binary(MirScalarExpr::column(2).call_unary(func::CastStringToInt64), func::AddInt64),
     ///     ])
     ///     .project(vec![3,4,5,6]);
     ///
     /// let mut expected_optimized = MapFilterProject::new(5)
     ///     .map(vec![
-    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)),
-    ///         MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)),
-    ///         MirScalarExpr::column(5).call_binary(MirScalarExpr::column(6), func::AddInt64.into()),
+    ///         MirScalarExpr::column(0).call_unary(func::CastStringToInt64),
+    ///         MirScalarExpr::column(1).call_unary(func::CastStringToInt64),
+    ///         MirScalarExpr::column(5).call_binary(MirScalarExpr::column(6), func::AddInt64),
     ///         MirScalarExpr::column(7),
-    ///         MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)),
-    ///         MirScalarExpr::column(6).call_binary(MirScalarExpr::column(9), func::AddInt64.into()),
+    ///         MirScalarExpr::column(2).call_unary(func::CastStringToInt64),
+    ///         MirScalarExpr::column(6).call_binary(MirScalarExpr::column(9), func::AddInt64),
     ///         MirScalarExpr::column(10),
     ///     ])
     ///     .project(vec![3,4,8,11]);
@@ -1069,30 +1069,30 @@ impl MapFilterProject {
     /// let mut map_filter_project = MapFilterProject::new(2)
     ///     .map(vec![
     ///         MirScalarExpr::If {
-    ///             cond: Box::new(MirScalarExpr::column(0).call_binary(MirScalarExpr::column(1), BinaryFunc::Lt)),
-    ///             then: Box::new(MirScalarExpr::column(0).call_binary(MirScalarExpr::column(1), BinaryFunc::DivInt64)),
-    ///             els:  Box::new(MirScalarExpr::column(1).call_binary(MirScalarExpr::column(0), BinaryFunc::DivInt64)),
+    ///             cond: Box::new(MirScalarExpr::column(0).call_binary(MirScalarExpr::column(1), func::Lt)),
+    ///             then: Box::new(MirScalarExpr::column(0).call_binary(MirScalarExpr::column(1), func::DivInt64)),
+    ///             els:  Box::new(MirScalarExpr::column(1).call_binary(MirScalarExpr::column(0), func::DivInt64)),
     ///         },
     ///         MirScalarExpr::If {
-    ///             cond: Box::new(MirScalarExpr::column(0).call_binary(MirScalarExpr::column(1), BinaryFunc::Lt)),
-    ///             then: Box::new(MirScalarExpr::column(1).call_binary(MirScalarExpr::column(0), BinaryFunc::DivInt64)),
-    ///             els:  Box::new(MirScalarExpr::column(0).call_binary(MirScalarExpr::column(1), BinaryFunc::DivInt64)),
+    ///             cond: Box::new(MirScalarExpr::column(0).call_binary(MirScalarExpr::column(1), func::Lt)),
+    ///             then: Box::new(MirScalarExpr::column(1).call_binary(MirScalarExpr::column(0), func::DivInt64)),
+    ///             els:  Box::new(MirScalarExpr::column(0).call_binary(MirScalarExpr::column(1), func::DivInt64)),
     ///         },
     ///     ]);
     ///
     /// let mut expected_optimized = MapFilterProject::new(2)
     ///     .map(vec![
-    ///         MirScalarExpr::column(0).call_binary(MirScalarExpr::column(1), BinaryFunc::Lt),
+    ///         MirScalarExpr::column(0).call_binary(MirScalarExpr::column(1), func::Lt),
     ///         MirScalarExpr::If {
     ///             cond: Box::new(MirScalarExpr::column(2)),
-    ///             then: Box::new(MirScalarExpr::column(0).call_binary(MirScalarExpr::column(1), BinaryFunc::DivInt64)),
-    ///             els:  Box::new(MirScalarExpr::column(1).call_binary(MirScalarExpr::column(0), BinaryFunc::DivInt64)),
+    ///             then: Box::new(MirScalarExpr::column(0).call_binary(MirScalarExpr::column(1), func::DivInt64)),
+    ///             els:  Box::new(MirScalarExpr::column(1).call_binary(MirScalarExpr::column(0), func::DivInt64)),
     ///         },
     ///         MirScalarExpr::column(3),
     ///         MirScalarExpr::If {
     ///             cond: Box::new(MirScalarExpr::column(2)),
-    ///             then: Box::new(MirScalarExpr::column(1).call_binary(MirScalarExpr::column(0), BinaryFunc::DivInt64)),
-    ///             els:  Box::new(MirScalarExpr::column(0).call_binary(MirScalarExpr::column(1), BinaryFunc::DivInt64)),
+    ///             then: Box::new(MirScalarExpr::column(1).call_binary(MirScalarExpr::column(0), func::DivInt64)),
+    ///             els:  Box::new(MirScalarExpr::column(0).call_binary(MirScalarExpr::column(1), func::DivInt64)),
     ///         },
     ///         MirScalarExpr::column(5),
     ///     ])
@@ -1190,25 +1190,25 @@ impl MapFilterProject {
     /// // Use the output from first `memoize_expression` example.
     /// let mut map_filter_project = MapFilterProject::new(5)
     ///     .map(vec![
-    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)),
-    ///         MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)),
-    ///         MirScalarExpr::column(5).call_binary(MirScalarExpr::column(6), func::AddInt64.into()),
+    ///         MirScalarExpr::column(0).call_unary(func::CastStringToInt64),
+    ///         MirScalarExpr::column(1).call_unary(func::CastStringToInt64),
+    ///         MirScalarExpr::column(5).call_binary(MirScalarExpr::column(6), func::AddInt64),
     ///         MirScalarExpr::column(7),
-    ///         MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)),
-    ///         MirScalarExpr::column(6).call_binary(MirScalarExpr::column(9), func::AddInt64.into()),
+    ///         MirScalarExpr::column(2).call_unary(func::CastStringToInt64),
+    ///         MirScalarExpr::column(6).call_binary(MirScalarExpr::column(9), func::AddInt64),
     ///         MirScalarExpr::column(10),
     ///     ])
     ///     .project(vec![3,4,8,11]);
     ///
     /// let mut expected_optimized = MapFilterProject::new(5)
     ///     .map(vec![
-    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)),
-    ///         MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)),
-    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)).call_binary(MirScalarExpr::column(6), func::AddInt64.into()),
-    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)).call_binary(MirScalarExpr::column(6), func::AddInt64.into()),
-    ///         MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)),
-    ///         MirScalarExpr::column(6).call_binary(MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)), func::AddInt64.into()),
-    ///         MirScalarExpr::column(6).call_binary(MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)), func::AddInt64.into()),
+    ///         MirScalarExpr::column(0).call_unary(func::CastStringToInt64),
+    ///         MirScalarExpr::column(1).call_unary(func::CastStringToInt64),
+    ///         MirScalarExpr::column(0).call_unary(func::CastStringToInt64).call_binary(MirScalarExpr::column(6), func::AddInt64),
+    ///         MirScalarExpr::column(0).call_unary(func::CastStringToInt64).call_binary(MirScalarExpr::column(6), func::AddInt64),
+    ///         MirScalarExpr::column(2).call_unary(func::CastStringToInt64),
+    ///         MirScalarExpr::column(6).call_binary(MirScalarExpr::column(2).call_unary(func::CastStringToInt64), func::AddInt64),
+    ///         MirScalarExpr::column(6).call_binary(MirScalarExpr::column(2).call_unary(func::CastStringToInt64), func::AddInt64),
     ///     ])
     ///     .project(vec![3,4,8,11]);
     ///
@@ -1323,21 +1323,21 @@ impl MapFilterProject {
     /// // Use the output from `inline_expression` example.
     /// let mut map_filter_project = MapFilterProject::new(5)
     ///     .map(vec![
-    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)),
-    ///         MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)),
-    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)).call_binary(MirScalarExpr::column(6), func::AddInt64.into()),
-    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)).call_binary(MirScalarExpr::column(6), func::AddInt64.into()),
-    ///         MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)),
-    ///         MirScalarExpr::column(6).call_binary(MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)), func::AddInt64.into()),
-    ///         MirScalarExpr::column(6).call_binary(MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)), func::AddInt64.into()),
+    ///         MirScalarExpr::column(0).call_unary(func::CastStringToInt64),
+    ///         MirScalarExpr::column(1).call_unary(func::CastStringToInt64),
+    ///         MirScalarExpr::column(0).call_unary(func::CastStringToInt64).call_binary(MirScalarExpr::column(6), func::AddInt64),
+    ///         MirScalarExpr::column(0).call_unary(func::CastStringToInt64).call_binary(MirScalarExpr::column(6), func::AddInt64),
+    ///         MirScalarExpr::column(2).call_unary(func::CastStringToInt64),
+    ///         MirScalarExpr::column(6).call_binary(MirScalarExpr::column(2).call_unary(func::CastStringToInt64), func::AddInt64),
+    ///         MirScalarExpr::column(6).call_binary(MirScalarExpr::column(2).call_unary(func::CastStringToInt64), func::AddInt64),
     ///     ])
     ///     .project(vec![3,4,8,11]);
     ///
     /// let mut expected_optimized = MapFilterProject::new(5)
     ///     .map(vec![
-    ///         MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)),
-    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)).call_binary(MirScalarExpr::column(5), func::AddInt64.into()),
-    ///         MirScalarExpr::column(5).call_binary(MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64(func::CastStringToInt64)), func::AddInt64.into()),
+    ///         MirScalarExpr::column(1).call_unary(func::CastStringToInt64),
+    ///         MirScalarExpr::column(0).call_unary(func::CastStringToInt64).call_binary(MirScalarExpr::column(5), func::AddInt64),
+    ///         MirScalarExpr::column(5).call_binary(MirScalarExpr::column(2).call_unary(func::CastStringToInt64), func::AddInt64),
     ///     ])
     ///     .project(vec![3,4,6,7]);
     ///
@@ -1752,26 +1752,26 @@ pub mod plan {
 
                 // LogicalTimestamp <OP> <EXPR2> for several supported operators.
                 match func {
-                    BinaryFunc::Eq => {
+                    BinaryFunc::Eq(_) => {
                         lower_bounds.push(expr2.clone());
                         upper_bounds.push(
                             expr2.call_unary(UnaryFunc::StepMzTimestamp(func::StepMzTimestamp)),
                         );
                     }
-                    BinaryFunc::Lt => {
+                    BinaryFunc::Lt(_) => {
                         upper_bounds.push(expr2.clone());
                     }
-                    BinaryFunc::Lte => {
+                    BinaryFunc::Lte(_) => {
                         upper_bounds.push(
                             expr2.call_unary(UnaryFunc::StepMzTimestamp(func::StepMzTimestamp)),
                         );
                     }
-                    BinaryFunc::Gt => {
+                    BinaryFunc::Gt(_) => {
                         lower_bounds.push(
                             expr2.call_unary(UnaryFunc::StepMzTimestamp(func::StepMzTimestamp)),
                         );
                     }
-                    BinaryFunc::Gte => {
+                    BinaryFunc::Gte(_) => {
                         lower_bounds.push(expr2.clone());
                     }
                     _ => {

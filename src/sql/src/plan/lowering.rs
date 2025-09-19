@@ -41,7 +41,7 @@ use std::iter::repeat;
 
 use itertools::Itertools;
 use mz_expr::visit::Visit;
-use mz_expr::{AccessStrategy, AggregateFunc, MirRelationExpr, MirScalarExpr};
+use mz_expr::{AccessStrategy, AggregateFunc, MirRelationExpr, MirScalarExpr, func};
 use mz_ore::collections::CollectionExt;
 use mz_ore::stack::maybe_grow;
 use mz_repr::*;
@@ -1096,9 +1096,7 @@ impl HirScalarExpr {
                             let mut else_inner = get_inner.filter(vec![SS::CallVariadic {
                                 func: mz_expr::VariadicFunc::Or,
                                 exprs: vec![
-                                    cond_expr
-                                        .clone()
-                                        .call_binary(SS::literal_false(), mz_expr::BinaryFunc::Eq),
+                                    cond_expr.clone().call_binary(SS::literal_false(), func::Eq),
                                     cond_expr.clone().call_is_null(),
                                 ],
                             }]);
@@ -1984,7 +1982,7 @@ fn apply_scalar_subquery(
                     counts
                         .filter(vec![MirScalarExpr::column(inner_arity).call_binary(
                             MirScalarExpr::literal_ok(Datum::Int64(1), SqlScalarType::Int64),
-                            mz_expr::BinaryFunc::Gt,
+                            func::Gt,
                         )])
                         .project((0..inner_arity).collect::<Vec<_>>())
                         .map_one(MirScalarExpr::literal(
@@ -2326,7 +2324,7 @@ impl OnPredicates {
                 // Treat predicates referencing an `on` subquery as Theta.
                 predicates.push(OnPredicate::Theta(predicate));
             } else if let MirScalarExpr::CallBinary {
-                func: Eq,
+                func: Eq(_),
                 expr1,
                 expr2,
             } = &mut predicate

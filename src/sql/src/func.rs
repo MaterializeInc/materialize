@@ -1837,7 +1837,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
         },
         "array_cat" => Scalar {
             params!(ArrayAnyCompatible, ArrayAnyCompatible) => Operation::binary(|_ecx, lhs, rhs| {
-                Ok(lhs.call_binary(rhs, BinaryFunc::ArrayArrayConcat))
+                Ok(lhs.call_binary(rhs, func::ArrayArrayConcat))
             }) => ArrayAnyCompatible, 383;
         },
         "array_fill" => Scalar {
@@ -1872,24 +1872,24 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             }) => ArrayAny, 1286;
         },
         "array_length" => Scalar {
-            params![ArrayAny, Int64] => BinaryFunc::ArrayLength => Int32, 2176;
+            params![ArrayAny, Int64] => BinaryFunc::from(func::ArrayLength) => Int32, 2176;
         },
         "array_lower" => Scalar {
-            params!(ArrayAny, Int64) => BinaryFunc::ArrayLower => Int32, 2091;
+            params!(ArrayAny, Int64) => BinaryFunc::from(func::ArrayLower) => Int32, 2091;
         },
         "array_position" => Scalar {
             params!(ArrayAnyCompatible, AnyCompatible) => VariadicFunc::ArrayPosition => Int32, 3277;
             params!(ArrayAnyCompatible, AnyCompatible, Int32) => VariadicFunc::ArrayPosition => Int32, 3278;
         },
         "array_remove" => Scalar {
-            params!(ArrayAnyCompatible, AnyCompatible) => BinaryFunc::ArrayRemove => ArrayAnyCompatible, 3167;
+            params!(ArrayAnyCompatible, AnyCompatible) => BinaryFunc::from(func::ArrayRemove) => ArrayAnyCompatible, 3167;
         },
         "array_to_string" => Scalar {
             params!(ArrayAny, String) => Operation::variadic(array_to_string) => String, 395;
             params!(ArrayAny, String, String) => Operation::variadic(array_to_string) => String, 384;
         },
         "array_upper" => Scalar {
-            params!(ArrayAny, Int64) => BinaryFunc::ArrayUpper => Int32, 2092;
+            params!(ArrayAny, Int64) => BinaryFunc::from(func::ArrayUpper) => Int32, 2092;
         },
         "ascii" => Scalar {
             params!(String) => UnaryFunc::Ascii(func::Ascii) => Int32, 1620;
@@ -1914,7 +1914,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
         },
         "btrim" => Scalar {
             params!(String) => UnaryFunc::TrimWhitespace(func::TrimWhitespace) => String, 885;
-            params!(String, String) => BinaryFunc::Trim => String, 884;
+            params!(String, String) => BinaryFunc::from(func::Trim) => String, 884;
         },
         "cbrt" => Scalar {
             params!(Float64) => UnaryFunc::CbrtFloat64(func::CbrtFloat64) => Float64, 1345;
@@ -1981,7 +1981,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             }) => String, 3059;
         },
         "convert_from" => Scalar {
-            params!(Bytes, String) => BinaryFunc::ConvertFrom => String, 1714;
+            params!(Bytes, String) => BinaryFunc::from(func::ConvertFrom) => String, 1714;
         },
         "cos" => Scalar {
             params!(Float64) => UnaryFunc::Cos(func::Cos) => Float64, 1605;
@@ -2056,32 +2056,32 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
         "date_bin" => Scalar {
             params!(Interval, Timestamp) => Operation::binary(|ecx, stride, source| {
                 ecx.require_feature_flag(&vars::ENABLE_BINARY_DATE_BIN)?;
-                Ok(stride.call_binary(source, BinaryFunc::DateBinTimestamp))
+                Ok(stride.call_binary(source, func::DateBinTimestamp))
             }) => Timestamp, oid::FUNC_MZ_DATE_BIN_UNIX_EPOCH_TS_OID;
             params!(Interval, TimestampTz) => Operation::binary(|ecx, stride, source| {
                 ecx.require_feature_flag(&vars::ENABLE_BINARY_DATE_BIN)?;
-                Ok(stride.call_binary(source, BinaryFunc::DateBinTimestampTz))
+                Ok(stride.call_binary(source, func::DateBinTimestampTz))
             }) => TimestampTz, oid::FUNC_MZ_DATE_BIN_UNIX_EPOCH_TSTZ_OID;
             params!(Interval, Timestamp, Timestamp) => VariadicFunc::DateBinTimestamp => Timestamp, 6177;
             params!(Interval, TimestampTz, TimestampTz) => VariadicFunc::DateBinTimestampTz => TimestampTz, 6178;
         },
         "extract" => Scalar {
-            params!(String, Interval) => BinaryFunc::ExtractInterval => Numeric, 6204;
-            params!(String, Time) => BinaryFunc::ExtractTime => Numeric, 6200;
-            params!(String, Timestamp) => BinaryFunc::ExtractTimestamp => Numeric, 6202;
-            params!(String, TimestampTz) => BinaryFunc::ExtractTimestampTz => Numeric, 6203;
-            params!(String, Date) => BinaryFunc::ExtractDate => Numeric, 6199;
+            params!(String, Interval) => BinaryFunc::from(func::DatePartIntervalNumeric) => Numeric, 6204;
+            params!(String, Time) => BinaryFunc::from(func::DatePartTimeNumeric) => Numeric, 6200;
+            params!(String, Timestamp) => BinaryFunc::from(func::DatePartTimestampTimestampNumeric) => Numeric, 6202;
+            params!(String, TimestampTz) => BinaryFunc::from(func::DatePartTimestampTimestampTzNumeric) => Numeric, 6203;
+            params!(String, Date) => BinaryFunc::from(func::ExtractDateUnits) => Numeric, 6199;
         },
         "date_part" => Scalar {
-            params!(String, Interval) => BinaryFunc::DatePartInterval => Float64, 1172;
-            params!(String, Time) => BinaryFunc::DatePartTime => Float64, 1385;
-            params!(String, Timestamp) => BinaryFunc::DatePartTimestamp => Float64, 2021;
-            params!(String, TimestampTz) => BinaryFunc::DatePartTimestampTz => Float64, 1171;
+            params!(String, Interval) => BinaryFunc::from(func::DatePartIntervalF64) => Float64, 1172;
+            params!(String, Time) => BinaryFunc::from(func::DatePartTimeF64) => Float64, 1385;
+            params!(String, Timestamp) => BinaryFunc::from(func::DatePartTimestampTimestampF64) => Float64, 2021;
+            params!(String, TimestampTz) => BinaryFunc::from(func::DatePartTimestampTimestampTzF64) => Float64, 1171;
         },
         "date_trunc" => Scalar {
-            params!(String, Timestamp) => BinaryFunc::DateTruncTimestamp => Timestamp, 2020;
-            params!(String, TimestampTz) => BinaryFunc::DateTruncTimestampTz => TimestampTz, 1217;
-            params!(String, Interval) => BinaryFunc::DateTruncInterval => Interval, 1218;
+            params!(String, Timestamp) => BinaryFunc::from(func::DateTruncUnitsTimestamp) => Timestamp, 2020;
+            params!(String, TimestampTz) => BinaryFunc::from(func::DateTruncUnitsTimestampTz) => TimestampTz, 1217;
+            params!(String, Interval) => BinaryFunc::from(func::DateTruncInterval) => Interval, 1218;
         },
         "daterange" => Scalar {
             params!(Date, Date) => Operation::variadic(|_ecx, mut exprs| {
@@ -2098,8 +2098,8 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(Float64) => UnaryFunc::Degrees(func::Degrees) => Float64, 1608;
         },
         "digest" => Scalar {
-            params!(String, String) => BinaryFunc::DigestString => Bytes, oid::FUNC_PG_DIGEST_STRING;
-            params!(Bytes, String) => BinaryFunc::DigestBytes => Bytes, oid::FUNC_PG_DIGEST_BYTES;
+            params!(String, String) => BinaryFunc::from(func::DigestString) => Bytes, oid::FUNC_PG_DIGEST_STRING;
+            params!(Bytes, String) => BinaryFunc::from(func::DigestBytes) => Bytes, oid::FUNC_PG_DIGEST_BYTES;
         },
         "exp" => Scalar {
             params!(Float64) => UnaryFunc::Exp(func::Exp) => Float64, 1347;
@@ -2124,10 +2124,10 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             ) => String, 1081;
         },
         "get_bit" => Scalar {
-            params!(Bytes, Int32) => BinaryFunc::GetBit => Int32, 723;
+            params!(Bytes, Int32) => BinaryFunc::from(func::GetBit) => Int32, 723;
         },
         "get_byte" => Scalar {
-            params!(Bytes, Int32) => BinaryFunc::GetByte => Int32, 721;
+            params!(Bytes, Int32) => BinaryFunc::from(func::GetByte) => Int32, 721;
         },
         "pg_get_ruledef" => Scalar {
             params!(Oid) => sql_impl_func("NULL::pg_catalog.text") => String, 1573;
@@ -2231,16 +2231,16 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(Interval) => UnaryFunc::JustifyInterval(func::JustifyInterval) => Interval, 2711;
         },
         "left" => Scalar {
-            params!(String, Int32) => BinaryFunc::Left => String, 3060;
+            params!(String, Int32) => BinaryFunc::from(func::Left) => String, 3060;
         },
         "length" => Scalar {
             params!(Bytes) => UnaryFunc::ByteLengthBytes(func::ByteLengthBytes) => Int32, 2010;
             // bpcharlen is redundant with automatic coercion to string, 1318.
             params!(String) => UnaryFunc::CharLength(func::CharLength) => Int32, 1317;
-            params!(Bytes, String) => BinaryFunc::EncodedBytesCharLength => Int32, 1713;
+            params!(Bytes, String) => BinaryFunc::from(func::EncodedBytesCharLength) => Int32, 1713;
         },
         "like_escape" => Scalar {
-            params!(String, String) => BinaryFunc::LikeEscape => String, 1637;
+            params!(String, String) => BinaryFunc::from(func::LikeEscape) => String, 1637;
         },
         "ln" => Scalar {
             params!(Float64) => UnaryFunc::Ln(func::Ln) => Float64, 1341;
@@ -2253,7 +2253,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
         "log" => Scalar {
             params!(Float64) => UnaryFunc::Log10(func::Log10) => Float64, 1340;
             params!(Numeric) => UnaryFunc::Log10Numeric(func::Log10Numeric) => Numeric, 1741;
-            params!(Numeric, Numeric) => BinaryFunc::LogNumeric => Numeric, 1736;
+            params!(Numeric, Numeric) => BinaryFunc::from(func::LogBaseNumeric) => Numeric, 1736;
         },
         "lower" => Scalar {
             params!(String) => UnaryFunc::Lower(func::Lower) => String, 870;
@@ -2271,7 +2271,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
         },
         "ltrim" => Scalar {
             params!(String) => UnaryFunc::TrimLeadingWhitespace(func::TrimLeadingWhitespace) => String, 881;
-            params!(String, String) => BinaryFunc::TrimLeading => String, 875;
+            params!(String, String) => BinaryFunc::from(func::TrimLeading) => String, 875;
         },
         "makeaclitem" => Scalar {
             params!(Oid, Oid, String, Bool) => VariadicFunc::MakeAclItem => AclItem, 1365;
@@ -2283,12 +2283,12 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(String) => Operation::unary(move |_ecx, input| {
                 let algorithm = HirScalarExpr::literal(Datum::String("md5"), SqlScalarType::String);
                 let encoding = HirScalarExpr::literal(Datum::String("hex"), SqlScalarType::String);
-                Ok(input.call_binary(algorithm, BinaryFunc::DigestString).call_binary(encoding, BinaryFunc::Encode))
+                Ok(input.call_binary(algorithm, func::DigestString).call_binary(encoding, func::Encode))
             }) => String, 2311;
             params!(Bytes) => Operation::unary(move |_ecx, input| {
                 let algorithm = HirScalarExpr::literal(Datum::String("md5"), SqlScalarType::String);
                 let encoding = HirScalarExpr::literal(Datum::String("hex"), SqlScalarType::String);
-                Ok(input.call_binary(algorithm, BinaryFunc::DigestBytes).call_binary(encoding, BinaryFunc::Encode))
+                Ok(input.call_binary(algorithm, func::DigestBytes).call_binary(encoding, func::Encode))
             }) => String, 2321;
         },
         "mod" => Scalar {
@@ -2358,10 +2358,10 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
         },
         "parse_ident" => Scalar {
             params!(String) => Operation::unary(|_ecx, ident| {
-                Ok(ident.call_binary(HirScalarExpr::literal_true(), BinaryFunc::ParseIdent))
+                Ok(ident.call_binary(HirScalarExpr::literal_true(), func::ParseIdent))
             }) => SqlScalarType::Array(Box::new(SqlScalarType::String)),
                 oid::FUNC_PARSE_IDENT_DEFAULT_STRICT;
-            params!(String, Bool) => BinaryFunc::ParseIdent
+            params!(String, Bool) => BinaryFunc::from(func::ParseIdent)
                 => SqlScalarType::Array(Box::new(SqlScalarType::String)), 1268;
         },
         "pg_encoding_to_char" => Scalar {
@@ -2560,14 +2560,14 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             }) => String, 1619;
         },
         "position" => Scalar {
-            params!(String, String) => BinaryFunc::Position => Int32, 849;
+            params!(String, String) => BinaryFunc::from(func::Position) => Int32, 849;
         },
         "pow" => Scalar {
             params!(Float64, Float64) => Operation::nullary(|_ecx| catalog_name_only!("pow")) => Float64, 1346;
         },
         "power" => Scalar {
-            params!(Float64, Float64) => BinaryFunc::Power => Float64, 1368;
-            params!(Numeric, Numeric) => BinaryFunc::PowerNumeric => Numeric, 2169;
+            params!(Float64, Float64) => BinaryFunc::from(func::Power) => Float64, 1368;
+            params!(Numeric, Numeric) => BinaryFunc::from(func::PowerNumeric) => Numeric, 2169;
         },
         "quote_ident" => Scalar {
             params!(String) => UnaryFunc::QuoteIdent(func::QuoteIdent) => String, 1282;
@@ -2586,17 +2586,17 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(String, String, String) => VariadicFunc::Replace => String, 2087;
         },
         "right" => Scalar {
-            params!(String, Int32) => BinaryFunc::Right => String, 3061;
+            params!(String, Int32) => BinaryFunc::from(func::Right) => String, 3061;
         },
         "round" => Scalar {
             params!(Float32) => UnaryFunc::RoundFloat32(func::RoundFloat32) => Float32, oid::FUNC_ROUND_F32_OID;
             params!(Float64) => UnaryFunc::RoundFloat64(func::RoundFloat64) => Float64, 1342;
             params!(Numeric) => UnaryFunc::RoundNumeric(func::RoundNumeric) => Numeric, 1708;
-            params!(Numeric, Int32) => BinaryFunc::RoundNumeric => Numeric, 1707;
+            params!(Numeric, Int32) => BinaryFunc::from(func::RoundNumericBinary) => Numeric, 1707;
         },
         "rtrim" => Scalar {
             params!(String) => UnaryFunc::TrimTrailingWhitespace(func::TrimTrailingWhitespace) => String, 882;
-            params!(String, String) => BinaryFunc::TrimTrailing => String, 876;
+            params!(String, String) => BinaryFunc::from(func::TrimTrailing) => String, 876;
         },
         "sha224" => Scalar {
             params!(Bytes) => digest("sha224") => Bytes, 3419;
@@ -2680,8 +2680,8 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(Float64) => UnaryFunc::Atanh(func::Atanh) => Float64, 2467;
         },
         "age" => Scalar {
-            params!(Timestamp, Timestamp) => BinaryFunc::AgeTimestamp => Interval, 2058;
-            params!(TimestampTz, TimestampTz) => BinaryFunc::AgeTimestampTz => Interval, 1199;
+            params!(Timestamp, Timestamp) => BinaryFunc::from(func::AgeTimestamp) => Interval, 2058;
+            params!(TimestampTz, TimestampTz) => BinaryFunc::from(func::AgeTimestampTz) => Interval, 1199;
         },
         "timezone" => Scalar {
             params!(String, Timestamp) => BinaryFunc::TimezoneTimestamp => TimestampTz, 2069;
@@ -2717,8 +2717,8 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(Interval, Time) => BinaryFunc::TimezoneIntervalTime => Time, 2038;
         },
         "to_char" => Scalar {
-            params!(Timestamp, String) => BinaryFunc::ToCharTimestamp => String, 2049;
-            params!(TimestampTz, String) => BinaryFunc::ToCharTimestampTz => String, 1770;
+            params!(Timestamp, String) => BinaryFunc::from(func::ToCharTimestampFormat) => String, 2049;
+            params!(TimestampTz, String) => BinaryFunc::from(func::ToCharTimestampTzFormat) => String, 1770;
         },
         // > Returns the value as json or jsonb. Arrays and composites
         // > are converted (recursively) to arrays and objects;
@@ -2784,7 +2784,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(RangeAny) => UnaryFunc::RangeUpperInf(func::RangeUpperInf) => Bool, 3854;
         },
         "uuid_generate_v5" => Scalar {
-            params!(Uuid, String) => BinaryFunc::UuidGenerateV5 => Uuid, oid::FUNC_PG_UUID_GENERATE_V5;
+            params!(Uuid, String) => BinaryFunc::from(func::UuidGenerateV5) => Uuid, oid::FUNC_PG_UUID_GENERATE_V5;
         },
         "variance" => Scalar {
             params!(Float32) => Operation::nullary(|_ecx| catalog_name_only!("variance")) => Float64, 2151;
@@ -3438,10 +3438,10 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                 ") => ReturnType::set_of(TimestampTz.into()), oid::FUNC_MZ_DATE_BIN_HOPPING_TSTZ_OID;
         },
         "encode" => Scalar {
-            params!(Bytes, String) => BinaryFunc::Encode => String, 1946;
+            params!(Bytes, String) => BinaryFunc::from(func::Encode) => String, 1946;
         },
         "decode" => Scalar {
-            params!(String, String) => BinaryFunc::Decode => Bytes, 1947;
+            params!(String, String) => BinaryFunc::from(func::Decode) => Bytes, 1947;
         },
         "regexp_split_to_array" => Scalar {
             params!(String, String) => VariadicFunc::RegexpSplitToArray => SqlScalarType::Array(Box::new(SqlScalarType::String)), 2767;
@@ -3540,8 +3540,8 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
     use ScalarBaseType::*;
     builtins! {
         "constant_time_eq" => Scalar {
-            params!(Bytes, Bytes) => BinaryFunc::ConstantTimeEqBytes => Bool, oid::FUNC_CONSTANT_TIME_EQ_BYTES_OID;
-            params!(String, String) => BinaryFunc::ConstantTimeEqString => Bool, oid::FUNC_CONSTANT_TIME_EQ_STRING_OID;
+            params!(Bytes, Bytes) => BinaryFunc::from(func::ConstantTimeEqBytes) => Bool, oid::FUNC_CONSTANT_TIME_EQ_BYTES_OID;
+            params!(String, String) => BinaryFunc::from(func::ConstantTimeEqString) => Bool, oid::FUNC_CONSTANT_TIME_EQ_STRING_OID;
         },
         // Note: this is the original version of the AVG(...) function, as it existed prior to
         // v0.66. We updated the internal type promotion used when summing values to increase
@@ -3730,10 +3730,10 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             }) => ListAnyCompatible,  oid::FUNC_LIST_AGG_OID;
         },
         "list_append" => Scalar {
-            vec![ListAnyCompatible, ListElementAnyCompatible] => BinaryFunc::ListElementConcat => ListAnyCompatible, oid::FUNC_LIST_APPEND_OID;
+            vec![ListAnyCompatible, ListElementAnyCompatible] => BinaryFunc::from(func::ListElementConcat) => ListAnyCompatible, oid::FUNC_LIST_APPEND_OID;
         },
         "list_cat" => Scalar {
-            vec![ListAnyCompatible, ListAnyCompatible] => BinaryFunc::ListListConcat => ListAnyCompatible, oid::FUNC_LIST_CAT_OID;
+            vec![ListAnyCompatible, ListAnyCompatible] => BinaryFunc::from(func::ListListConcat) => ListAnyCompatible, oid::FUNC_LIST_CAT_OID;
         },
         "list_n_layers" => Scalar {
             vec![ListAny] => Operation::unary(|ecx, e| {
@@ -3757,12 +3757,12 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             }) => Int32, oid::FUNC_LIST_LENGTH_MAX_OID;
         },
         "list_prepend" => Scalar {
-            vec![ListElementAnyCompatible, ListAnyCompatible] => BinaryFunc::ElementListConcat => ListAnyCompatible, oid::FUNC_LIST_PREPEND_OID;
+            vec![ListElementAnyCompatible, ListAnyCompatible] => BinaryFunc::from(func::ElementListConcat) => ListAnyCompatible, oid::FUNC_LIST_PREPEND_OID;
         },
         "list_remove" => Scalar {
             vec![ListAnyCompatible, ListElementAnyCompatible] => Operation::binary(|ecx, lhs, rhs| {
                 ecx.require_feature_flag(&crate::session::vars::ENABLE_LIST_REMOVE)?;
-                Ok(lhs.call_binary(rhs, BinaryFunc::ListRemove))
+                Ok(lhs.call_binary(rhs, func::ListRemove))
             }) => ListAnyCompatible, oid::FUNC_LIST_REMOVE_OID;
         },
         "map_agg" => Aggregate {
@@ -3852,10 +3852,10 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!() => UnmaterializableFunc::MzVersionNum => Int32, oid::FUNC_MZ_VERSION_NUM_OID;
         },
         "pretty_sql" => Scalar {
-            params!(String, Int32) => BinaryFunc::PrettySql => String, oid::FUNC_PRETTY_SQL;
+            params!(String, Int32) => BinaryFunc::from(func::PrettySql) => String, oid::FUNC_PRETTY_SQL;
             params!(String) => Operation::unary(|_ecx, s| {
                 let width = HirScalarExpr::literal(Datum::Int32(mz_sql_pretty::DEFAULT_WIDTH.try_into().expect("must fit")), SqlScalarType::Int32);
-                Ok(s.call_binary(width, BinaryFunc::PrettySql))
+                Ok(s.call_binary(width, func::PrettySql))
             }) => String, oid::FUNC_PRETTY_SQL_NOWIDTH;
         },
         "regexp_extract" => Table {
@@ -3899,10 +3899,10 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(Bytes) => UnaryFunc::SeahashBytes(func::SeahashBytes) => UInt32, oid::FUNC_SEAHASH_BYTES_OID;
         },
         "starts_with" => Scalar {
-            params!(String, String) => BinaryFunc::StartsWith => Bool, 3696;
+            params!(String, String) => BinaryFunc::from(func::StartsWith) => Bool, 3696;
         },
         "timezone_offset" => Scalar {
-            params!(String, TimestampTz) => BinaryFunc::TimezoneOffset => RecordAny, oid::FUNC_TIMEZONE_OFFSET;
+            params!(String, TimestampTz) => BinaryFunc::from(func::TimezoneOffset) => RecordAny, oid::FUNC_TIMEZONE_OFFSET;
         },
         "try_parse_monotonic_iso8601_timestamp" => Scalar {
             params!(String) => Operation::unary(move |_ecx, e| {
@@ -3970,7 +3970,7 @@ pub static MZ_INTERNAL_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLo
             params!(String, String, String) => VariadicFunc::MakeMzAclItem => MzAclItem, oid::FUNC_MAKE_MZ_ACL_ITEM_OID;
         },
         "mz_acl_item_contains_privilege" => Scalar {
-            params!(MzAclItem, String) => BinaryFunc::MzAclItemContainsPrivilege => Bool, oid::FUNC_MZ_ACL_ITEM_CONTAINS_PRIVILEGE_OID;
+            params!(MzAclItem, String) => BinaryFunc::from(func::MzAclItemContainsPrivilege) => Bool, oid::FUNC_MZ_ACL_ITEM_CONTAINS_PRIVILEGE_OID;
         },
         "mz_aclexplode" => Table {
             params!(SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem))) =>  Operation::unary(move |_ecx, mz_aclitems| {
@@ -4239,7 +4239,7 @@ pub static MZ_INTERNAL_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLo
             )") => SqlScalarType::Array(Box::new(SqlScalarType::String)), oid::FUNC_MZ_NORMALIZE_SCHEMA_NAME;
         },
         "mz_render_typmod" => Scalar {
-            params!(Oid, Int32) => BinaryFunc::MzRenderTypmod => String, oid::FUNC_MZ_RENDER_TYPMOD_OID;
+            params!(Oid, Int32) => BinaryFunc::from(func::MzRenderTypmod) => String, oid::FUNC_MZ_RENDER_TYPMOD_OID;
         },
         "mz_role_oid_memberships" => Scalar {
             params!() => UnmaterializableFunc::MzRoleOidMemberships => SqlScalarType::Map{ value_type: Box::new(SqlScalarType::Array(Box::new(SqlScalarType::String))), custom_id: None }, oid::FUNC_MZ_ROLE_OID_MEMBERSHIPS;
@@ -4437,7 +4437,7 @@ pub static MZ_UNSAFE_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock
 fn digest(algorithm: &'static str) -> Operation<HirScalarExpr> {
     Operation::unary(move |_ecx, input| {
         let algorithm = HirScalarExpr::literal(Datum::String(algorithm), SqlScalarType::String);
-        Ok(input.call_binary(algorithm, BinaryFunc::DigestBytes))
+        Ok(input.call_binary(algorithm, BinaryFunc::from(func::DigestBytes)))
     })
 }
 
@@ -4457,7 +4457,7 @@ fn array_to_string(
 
 /// Correlates an operator with all of its implementations.
 pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
-    use BinaryFunc::*;
+    use BinaryFunc as BF;
     use ParamType::*;
     use ScalarBaseType::*;
     builtins! {
@@ -4499,37 +4499,37 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
                 // to coerce unknown-type arguments as `Float64`.
                 typeconv::plan_coerce(ecx, exprs.into_element(), &SqlScalarType::Float64)
             }) => Any, oid::OP_UNARY_PLUS_OID;
-            params!(Int16, Int16) => AddInt16(func::AddInt16) => Int16, 550;
-            params!(Int32, Int32) => AddInt32(func::AddInt32) => Int32, 551;
-            params!(Int64, Int64) => AddInt64(func::AddInt64) => Int64, 684;
-            params!(UInt16, UInt16) => AddUint16(func::AddUint16) => UInt16, oid::FUNC_ADD_UINT16;
-            params!(UInt32, UInt32) => AddUint32(func::AddUint32) => UInt32, oid::FUNC_ADD_UINT32;
-            params!(UInt64, UInt64) => AddUint64(func::AddUint64) => UInt64, oid::FUNC_ADD_UINT64;
-            params!(Float32, Float32) => AddFloat32(func::AddFloat32) => Float32, 586;
-            params!(Float64, Float64) => AddFloat64(func::AddFloat64) => Float64, 591;
-            params!(Interval, Interval) => AddInterval(func::AddInterval) => Interval, 1337;
-            params!(Timestamp, Interval) => AddTimestampInterval => Timestamp, 2066;
+            params!(Int16, Int16) => BF::from(func::AddInt16) => Int16, 550;
+            params!(Int32, Int32) => BF::from(func::AddInt32) => Int32, 551;
+            params!(Int64, Int64) => BF::from(func::AddInt64) => Int64, 684;
+            params!(UInt16, UInt16) => BF::from(func::AddUint16) => UInt16, oid::FUNC_ADD_UINT16;
+            params!(UInt32, UInt32) => BF::from(func::AddUint32) => UInt32, oid::FUNC_ADD_UINT32;
+            params!(UInt64, UInt64) => BF::from(func::AddUint64) => UInt64, oid::FUNC_ADD_UINT64;
+            params!(Float32, Float32) => BF::from(func::AddFloat32) => Float32, 586;
+            params!(Float64, Float64) => BF::from(func::AddFloat64) => Float64, 591;
+            params!(Interval, Interval) => BF::from(func::AddInterval) => Interval, 1337;
+            params!(Timestamp, Interval) => BF::from(func::AddTimestampInterval) => Timestamp, 2066;
             params!(Interval, Timestamp) => {
-                Operation::binary(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, AddTimestampInterval)))
+                Operation::binary(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, func::AddTimestampInterval)))
             } => Timestamp, 2553;
-            params!(TimestampTz, Interval) => AddTimestampTzInterval => TimestampTz, 1327;
+            params!(TimestampTz, Interval) => BF::from(func::AddTimestampTzInterval) => TimestampTz, 1327;
             params!(Interval, TimestampTz) => {
-                Operation::binary(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, AddTimestampTzInterval)))
+                Operation::binary(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, func::AddTimestampTzInterval)))
             } => TimestampTz, 2554;
-            params!(Date, Interval) => AddDateInterval => Timestamp, 1076;
+            params!(Date, Interval) => BF::from(func::AddDateInterval) => Timestamp, 1076;
             params!(Interval, Date) => {
-                Operation::binary(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, AddDateInterval)))
+                Operation::binary(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, func::AddDateInterval)))
             } => Timestamp, 2551;
-            params!(Date, Time) => AddDateTime => Timestamp, 1360;
+            params!(Date, Time) => BF::from(func::AddDateTime) => Timestamp, 1360;
             params!(Time, Date) => {
-                Operation::binary(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, AddDateTime)))
+                Operation::binary(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, func::AddDateTime)))
             } => Timestamp, 1363;
-            params!(Time, Interval) => AddTimeInterval => Time, 1800;
+            params!(Time, Interval) => BF::from(func::AddTimeInterval) => Time, 1800;
             params!(Interval, Time) => {
-                Operation::binary(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, AddTimeInterval)))
+                Operation::binary(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, func::AddTimeInterval)))
             } => Time, 1849;
-            params!(Numeric, Numeric) => AddNumeric => Numeric, 1758;
-            params!(RangeAny, RangeAny) => RangeUnion => RangeAny, 3898;
+            params!(Numeric, Numeric) => BF::from(func::AddNumeric) => Numeric, 1758;
+            params!(RangeAny, RangeAny) => BF::from(func::RangeUnion) => RangeAny, 3898;
         },
         "-" => Scalar {
             params!(Int16) => UnaryFunc::NegInt16(func::NegInt16) => Int16, 559;
@@ -4539,131 +4539,131 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
             params!(Float64) => UnaryFunc::NegFloat64(func::NegFloat64) => Float64, 585;
             params!(Numeric) => UnaryFunc::NegNumeric(func::NegNumeric) => Numeric, 17510;
             params!(Interval) => UnaryFunc::NegInterval(func::NegInterval) => Interval, 1336;
-            params!(Int32, Int32) => SubInt32 => Int32, 555;
-            params!(Int64, Int64) => SubInt64 => Int64, 685;
-            params!(UInt16, UInt16) => SubUint16 => UInt16, oid::FUNC_SUB_UINT16;
-            params!(UInt32, UInt32) => SubUint32 => UInt32, oid::FUNC_SUB_UINT32;
-            params!(UInt64, UInt64) => SubUint64 => UInt64, oid::FUNC_SUB_UINT64;
-            params!(Float32, Float32) => SubFloat32 => Float32, 587;
-            params!(Float64, Float64) => SubFloat64 => Float64, 592;
-            params!(Numeric, Numeric) => SubNumeric => Numeric, 17590;
-            params!(Interval, Interval) => SubInterval => Interval, 1338;
-            params!(Timestamp, Timestamp) => SubTimestamp => Interval, 2067;
-            params!(TimestampTz, TimestampTz) => SubTimestampTz => Interval, 1328;
-            params!(Timestamp, Interval) => SubTimestampInterval => Timestamp, 2068;
-            params!(TimestampTz, Interval) => SubTimestampTzInterval => TimestampTz, 1329;
-            params!(Date, Date) => SubDate => Int32, 1099;
-            params!(Date, Interval) => SubDateInterval => Timestamp, 1077;
-            params!(Time, Time) => SubTime => Interval, 1399;
-            params!(Time, Interval) => SubTimeInterval => Time, 1801;
-            params!(Jsonb, Int64) => JsonbDeleteInt64 => Jsonb, 3286;
-            params!(Jsonb, String) => JsonbDeleteString => Jsonb, 3285;
-            params!(RangeAny, RangeAny) => RangeDifference => RangeAny, 3899;
+            params!(Int32, Int32) => BF::from(func::SubInt32) => Int32, 555;
+            params!(Int64, Int64) => BF::from(func::SubInt64) => Int64, 685;
+            params!(UInt16, UInt16) => BF::from(func::SubUint16) => UInt16, oid::FUNC_SUB_UINT16;
+            params!(UInt32, UInt32) => BF::from(func::SubUint32) => UInt32, oid::FUNC_SUB_UINT32;
+            params!(UInt64, UInt64) => BF::from(func::SubUint64) => UInt64, oid::FUNC_SUB_UINT64;
+            params!(Float32, Float32) => BF::from(func::SubFloat32) => Float32, 587;
+            params!(Float64, Float64) => BF::from(func::SubFloat64) => Float64, 592;
+            params!(Numeric, Numeric) => BF::from(func::SubNumeric) => Numeric, 17590;
+            params!(Interval, Interval) => BF::from(func::SubInterval) => Interval, 1338;
+            params!(Timestamp, Timestamp) => BF::from(func::SubTimestamp) => Interval, 2067;
+            params!(TimestampTz, TimestampTz) => BF::from(func::SubTimestampTz) => Interval, 1328;
+            params!(Timestamp, Interval) => BF::from(func::SubTimestampInterval) => Timestamp, 2068;
+            params!(TimestampTz, Interval) => BF::from(func::SubTimestampTzInterval) => TimestampTz, 1329;
+            params!(Date, Date) => BF::from(func::SubDate) => Int32, 1099;
+            params!(Date, Interval) => BF::from(func::SubDateInterval) => Timestamp, 1077;
+            params!(Time, Time) => BF::from(func::SubTime) => Interval, 1399;
+            params!(Time, Interval) => BF::from(func::SubTimeInterval) => Time, 1801;
+            params!(Jsonb, Int64) => BF::from(func::JsonbDeleteInt64) => Jsonb, 3286;
+            params!(Jsonb, String) => BF::from(func::JsonbDeleteString) => Jsonb, 3285;
+            params!(RangeAny, RangeAny) => BF::from(func::RangeDifference) => RangeAny, 3899;
             // TODO(jamii) there should be corresponding overloads for
             // Array(Int64) and Array(String)
         },
         "*" => Scalar {
-            params!(Int16, Int16) => MulInt16 => Int16, 526;
-            params!(Int32, Int32) => MulInt32 => Int32, 514;
-            params!(Int64, Int64) => MulInt64 => Int64, 686;
-            params!(UInt16, UInt16) => MulUint16 => UInt16, oid::FUNC_MUL_UINT16;
-            params!(UInt32, UInt32) => MulUint32 => UInt32, oid::FUNC_MUL_UINT32;
-            params!(UInt64, UInt64) => MulUint64 => UInt64, oid::FUNC_MUL_UINT64;
-            params!(Float32, Float32) => MulFloat32 => Float32, 589;
-            params!(Float64, Float64) => MulFloat64 => Float64, 594;
-            params!(Interval, Float64) => MulInterval => Interval, 1583;
+            params!(Int16, Int16) => BF::from(func::MulInt16) => Int16, 526;
+            params!(Int32, Int32) => BF::from(func::MulInt32) => Int32, 514;
+            params!(Int64, Int64) => BF::from(func::MulInt64) => Int64, 686;
+            params!(UInt16, UInt16) => BF::from(func::MulUint16) => UInt16, oid::FUNC_MUL_UINT16;
+            params!(UInt32, UInt32) => BF::from(func::MulUint32) => UInt32, oid::FUNC_MUL_UINT32;
+            params!(UInt64, UInt64) => BF::from(func::MulUint64) => UInt64, oid::FUNC_MUL_UINT64;
+            params!(Float32, Float32) => BF::from(func::MulFloat32) => Float32, 589;
+            params!(Float64, Float64) => BF::from(func::MulFloat64) => Float64, 594;
+            params!(Interval, Float64) => BF::from(func::MulInterval) => Interval, 1583;
             params!(Float64, Interval) => {
-                Operation::binary(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, MulInterval)))
+                Operation::binary(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, func::MulInterval)))
             } => Interval, 1584;
-            params!(Numeric, Numeric) => MulNumeric => Numeric, 1760;
-            params!(RangeAny, RangeAny) => RangeIntersection => RangeAny, 3900;
+            params!(Numeric, Numeric) => BF::from(func::MulNumeric) => Numeric, 1760;
+            params!(RangeAny, RangeAny) => BF::from(func::RangeIntersection) => RangeAny, 3900;
         },
         "/" => Scalar {
-            params!(Int16, Int16) => DivInt16 => Int16, 527;
-            params!(Int32, Int32) => DivInt32 => Int32, 528;
-            params!(Int64, Int64) => DivInt64 => Int64, 687;
-            params!(UInt16, UInt16) => DivUint16 => UInt16, oid::FUNC_DIV_UINT16;
-            params!(UInt32, UInt32) => DivUint32 => UInt32, oid::FUNC_DIV_UINT32;
-            params!(UInt64, UInt64) => DivUint64 => UInt64, oid::FUNC_DIV_UINT64;
-            params!(Float32, Float32) => DivFloat32 => Float32, 588;
-            params!(Float64, Float64) => DivFloat64 => Float64, 593;
-            params!(Interval, Float64) => DivInterval => Interval, 1585;
-            params!(Numeric, Numeric) => DivNumeric => Numeric, 1761;
+            params!(Int16, Int16) => BF::from(func::DivInt16) => Int16, 527;
+            params!(Int32, Int32) => BF::from(func::DivInt32) => Int32, 528;
+            params!(Int64, Int64) => BF::from(func::DivInt64) => Int64, 687;
+            params!(UInt16, UInt16) => BF::from(func::DivUint16) => UInt16, oid::FUNC_DIV_UINT16;
+            params!(UInt32, UInt32) => BF::from(func::DivUint32) => UInt32, oid::FUNC_DIV_UINT32;
+            params!(UInt64, UInt64) => BF::from(func::DivUint64) => UInt64, oid::FUNC_DIV_UINT64;
+            params!(Float32, Float32) => BF::from(func::DivFloat32) => Float32, 588;
+            params!(Float64, Float64) => BF::from(func::DivFloat64) => Float64, 593;
+            params!(Interval, Float64) => BF::from(func::DivInterval) => Interval, 1585;
+            params!(Numeric, Numeric) => BF::from(func::DivNumeric) => Numeric, 1761;
         },
         "%" => Scalar {
-            params!(Int16, Int16) => ModInt16 => Int16, 529;
-            params!(Int32, Int32) => ModInt32 => Int32, 530;
-            params!(Int64, Int64) => ModInt64 => Int64, 439;
-            params!(UInt16, UInt16) => ModUint16 => UInt16, oid::FUNC_MOD_UINT16;
-            params!(UInt32, UInt32) => ModUint32 => UInt32, oid::FUNC_MOD_UINT32;
-            params!(UInt64, UInt64) => ModUint64 => UInt64, oid::FUNC_MOD_UINT64;
-            params!(Float32, Float32) => ModFloat32 => Float32, oid::OP_MOD_F32_OID;
-            params!(Float64, Float64) => ModFloat64 => Float64, oid::OP_MOD_F64_OID;
-            params!(Numeric, Numeric) => ModNumeric => Numeric, 1762;
+            params!(Int16, Int16) => BF::from(func::ModInt16) => Int16, 529;
+            params!(Int32, Int32) => BF::from(func::ModInt32) => Int32, 530;
+            params!(Int64, Int64) => BF::from(func::ModInt64) => Int64, 439;
+            params!(UInt16, UInt16) => BF::from(func::ModUint16) => UInt16, oid::FUNC_MOD_UINT16;
+            params!(UInt32, UInt32) => BF::from(func::ModUint32) => UInt32, oid::FUNC_MOD_UINT32;
+            params!(UInt64, UInt64) => BF::from(func::ModUint64) => UInt64, oid::FUNC_MOD_UINT64;
+            params!(Float32, Float32) => BF::from(func::ModFloat32) => Float32, oid::OP_MOD_F32_OID;
+            params!(Float64, Float64) => BF::from(func::ModFloat64) => Float64, oid::OP_MOD_F64_OID;
+            params!(Numeric, Numeric) => BF::from(func::ModNumeric) => Numeric, 1762;
         },
         "&" => Scalar {
-            params!(Int16, Int16) => BitAndInt16 => Int16, 1874;
-            params!(Int32, Int32) => BitAndInt32 => Int32, 1880;
-            params!(Int64, Int64) => BitAndInt64 => Int64, 1886;
-            params!(UInt16, UInt16) => BitAndUint16 => UInt16, oid::FUNC_AND_UINT16;
-            params!(UInt32, UInt32) => BitAndUint32 => UInt32, oid::FUNC_AND_UINT32;
-            params!(UInt64, UInt64) => BitAndUint64 => UInt64, oid::FUNC_AND_UINT64;
+            params!(Int16, Int16) => BF::from(func::BitAndInt16) => Int16, 1874;
+            params!(Int32, Int32) => BF::from(func::BitAndInt32) => Int32, 1880;
+            params!(Int64, Int64) => BF::from(func::BitAndInt64) => Int64, 1886;
+            params!(UInt16, UInt16) => BF::from(func::BitAndUint16) => UInt16, oid::FUNC_AND_UINT16;
+            params!(UInt32, UInt32) => BF::from(func::BitAndUint32) => UInt32, oid::FUNC_AND_UINT32;
+            params!(UInt64, UInt64) => BF::from(func::BitAndUint64) => UInt64, oid::FUNC_AND_UINT64;
         },
         "|" => Scalar {
-            params!(Int16, Int16) => BitOrInt16 => Int16, 1875;
-            params!(Int32, Int32) => BitOrInt32 => Int32, 1881;
-            params!(Int64, Int64) => BitOrInt64 => Int64, 1887;
-            params!(UInt16, UInt16) => BitOrUint16 => UInt16, oid::FUNC_OR_UINT16;
-            params!(UInt32, UInt32) => BitOrUint32 => UInt32, oid::FUNC_OR_UINT32;
-            params!(UInt64, UInt64) => BitOrUint64 => UInt64, oid::FUNC_OR_UINT64;
+            params!(Int16, Int16) => BF::from(func::BitOrInt16) => Int16, 1875;
+            params!(Int32, Int32) => BF::from(func::BitOrInt32) => Int32, 1881;
+            params!(Int64, Int64) => BF::from(func::BitOrInt64) => Int64, 1887;
+            params!(UInt16, UInt16) => BF::from(func::BitOrUint16) => UInt16, oid::FUNC_OR_UINT16;
+            params!(UInt32, UInt32) => BF::from(func::BitOrUint32) => UInt32, oid::FUNC_OR_UINT32;
+            params!(UInt64, UInt64) => BF::from(func::BitOrUint64) => UInt64, oid::FUNC_OR_UINT64;
         },
         "#" => Scalar {
-            params!(Int16, Int16) => BitXorInt16 => Int16, 1876;
-            params!(Int32, Int32) => BitXorInt32 => Int32, 1882;
-            params!(Int64, Int64) => BitXorInt64 => Int64, 1888;
-            params!(UInt16, UInt16) => BitXorUint16 => UInt16, oid::FUNC_XOR_UINT16;
-            params!(UInt32, UInt32) => BitXorUint32 => UInt32, oid::FUNC_XOR_UINT32;
-            params!(UInt64, UInt64) => BitXorUint64 => UInt64, oid::FUNC_XOR_UINT64;
+            params!(Int16, Int16) => BF::from(func::BitXorInt16) => Int16, 1876;
+            params!(Int32, Int32) => BF::from(func::BitXorInt32) => Int32, 1882;
+            params!(Int64, Int64) => BF::from(func::BitXorInt64) => Int64, 1888;
+            params!(UInt16, UInt16) => BF::from(func::BitXorUint16) => UInt16, oid::FUNC_XOR_UINT16;
+            params!(UInt32, UInt32) => BF::from(func::BitXorUint32) => UInt32, oid::FUNC_XOR_UINT32;
+            params!(UInt64, UInt64) => BF::from(func::BitXorUint64) => UInt64, oid::FUNC_XOR_UINT64;
         },
         "<<" => Scalar {
-            params!(Int16, Int32) => BitShiftLeftInt16 => Int16, 1878;
-            params!(Int32, Int32) => BitShiftLeftInt32 => Int32, 1884;
-            params!(Int64, Int32) => BitShiftLeftInt64 => Int64, 1890;
-            params!(UInt16, UInt32) => BitShiftLeftUint16 => UInt16, oid::FUNC_SHIFT_LEFT_UINT16;
-            params!(UInt32, UInt32) => BitShiftLeftUint32 => UInt32, oid::FUNC_SHIFT_LEFT_UINT32;
-            params!(UInt64, UInt32) => BitShiftLeftUint64 => UInt64, oid::FUNC_SHIFT_LEFT_UINT64;
-            params!(RangeAny, RangeAny) => RangeBefore => Bool, 3893;
+            params!(Int16, Int32) => BF::from(func::BitShiftLeftInt16) => Int16, 1878;
+            params!(Int32, Int32) => BF::from(func::BitShiftLeftInt32) => Int32, 1884;
+            params!(Int64, Int32) => BF::from(func::BitShiftLeftInt64) => Int64, 1890;
+            params!(UInt16, UInt32) => BF::from(func::BitShiftLeftUint16) => UInt16, oid::FUNC_SHIFT_LEFT_UINT16;
+            params!(UInt32, UInt32) => BF::from(func::BitShiftLeftUint32) => UInt32, oid::FUNC_SHIFT_LEFT_UINT32;
+            params!(UInt64, UInt32) => BF::from(func::BitShiftLeftUint64) => UInt64, oid::FUNC_SHIFT_LEFT_UINT64;
+            params!(RangeAny, RangeAny) => BF::from(func::RangeBefore) => Bool, 3893;
         },
         ">>" => Scalar {
-            params!(Int16, Int32) => BitShiftRightInt16 => Int16, 1879;
-            params!(Int32, Int32) => BitShiftRightInt32 => Int32, 1885;
-            params!(Int64, Int32) => BitShiftRightInt64 => Int64, 1891;
-            params!(UInt16, UInt32) => BitShiftRightUint16 => UInt16, oid::FUNC_SHIFT_RIGHT_UINT16;
-            params!(UInt32, UInt32) => BitShiftRightUint32 => UInt32, oid::FUNC_SHIFT_RIGHT_UINT32;
-            params!(UInt64, UInt32) => BitShiftRightUint64 => UInt64, oid::FUNC_SHIFT_RIGHT_UINT64;
-            params!(RangeAny, RangeAny) => RangeAfter => Bool, 3894;
+            params!(Int16, Int32) => BF::from(func::BitShiftRightInt16) => Int16, 1879;
+            params!(Int32, Int32) => BF::from(func::BitShiftRightInt32) => Int32, 1885;
+            params!(Int64, Int32) => BF::from(func::BitShiftRightInt64) => Int64, 1891;
+            params!(UInt16, UInt32) => BF::from(func::BitShiftRightUint16) => UInt16, oid::FUNC_SHIFT_RIGHT_UINT16;
+            params!(UInt32, UInt32) => BF::from(func::BitShiftRightUint32) => UInt32, oid::FUNC_SHIFT_RIGHT_UINT32;
+            params!(UInt64, UInt32) => BF::from(func::BitShiftRightUint64) => UInt64, oid::FUNC_SHIFT_RIGHT_UINT64;
+            params!(RangeAny, RangeAny) => BF::from(func::RangeAfter) => Bool, 3894;
         },
 
         // ILIKE
         "~~*" => Scalar {
-            params!(String, String) => IsLikeMatch { case_insensitive: true } => Bool, 1627;
+            params!(String, String) => BF::IsLikeMatch { case_insensitive: true } => Bool, 1627;
             params!(Char, String) => Operation::binary(|ecx, lhs, rhs| {
                 let length = ecx.scalar_type(&lhs).unwrap_char_length();
                 Ok(lhs.call_unary(UnaryFunc::PadChar(func::PadChar { length }))
-                    .call_binary(rhs, IsLikeMatch { case_insensitive: true })
+                    .call_binary(rhs, BF::IsLikeMatch { case_insensitive: true })
                 )
             }) => Bool, 1629;
         },
         "!~~*" => Scalar {
             params!(String, String) => Operation::binary(|_ecx, lhs, rhs| {
                 Ok(lhs
-                    .call_binary(rhs, IsLikeMatch { case_insensitive: true })
+                    .call_binary(rhs, BF::IsLikeMatch { case_insensitive: true })
                     .call_unary(UnaryFunc::Not(func::Not)))
             }) => Bool, 1628;
             params!(Char, String) => Operation::binary(|ecx, lhs, rhs| {
                 let length = ecx.scalar_type(&lhs).unwrap_char_length();
                 Ok(lhs.call_unary(UnaryFunc::PadChar(func::PadChar { length }))
-                    .call_binary(rhs, IsLikeMatch { case_insensitive: true })
+                    .call_binary(rhs, BF::IsLikeMatch { case_insensitive: true })
                     .call_unary(UnaryFunc::Not(func::Not))
                 )
             }) => Bool, 1630;
@@ -4672,24 +4672,24 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
 
         // LIKE
         "~~" => Scalar {
-            params!(String, String) => IsLikeMatch { case_insensitive: false } => Bool, 1209;
+            params!(String, String) => BF::IsLikeMatch { case_insensitive: false } => Bool, 1209;
             params!(Char, String) => Operation::binary(|ecx, lhs, rhs| {
                 let length = ecx.scalar_type(&lhs).unwrap_char_length();
                 Ok(lhs.call_unary(UnaryFunc::PadChar(func::PadChar { length }))
-                    .call_binary(rhs, IsLikeMatch { case_insensitive: false })
+                    .call_binary(rhs, BF::IsLikeMatch { case_insensitive: false })
                 )
             }) => Bool, 1211;
         },
         "!~~" => Scalar {
             params!(String, String) => Operation::binary(|_ecx, lhs, rhs| {
                 Ok(lhs
-                    .call_binary(rhs, IsLikeMatch { case_insensitive: false })
+                    .call_binary(rhs, BF::IsLikeMatch { case_insensitive: false })
                     .call_unary(UnaryFunc::Not(func::Not)))
             }) => Bool, 1210;
             params!(Char, String) => Operation::binary(|ecx, lhs, rhs| {
                 let length = ecx.scalar_type(&lhs).unwrap_char_length();
                 Ok(lhs.call_unary(UnaryFunc::PadChar(func::PadChar { length }))
-                    .call_binary(rhs, IsLikeMatch { case_insensitive: false })
+                    .call_binary(rhs, BF::IsLikeMatch { case_insensitive: false })
                     .call_unary(UnaryFunc::Not(func::Not))
                 )
             }) => Bool, 1212;
@@ -4703,35 +4703,35 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
             params!(UInt16) => UnaryFunc::BitNotUint16(func::BitNotUint16) => UInt16, oid::FUNC_BIT_NOT_UINT16_OID;
             params!(UInt32) => UnaryFunc::BitNotUint32(func::BitNotUint32) => UInt32, oid::FUNC_BIT_NOT_UINT32_OID;
             params!(UInt64) => UnaryFunc::BitNotUint64(func::BitNotUint64) => UInt64, oid::FUNC_BIT_NOT_UINT64_OID;
-            params!(String, String) => IsRegexpMatch { case_insensitive: false } => Bool, 641;
+            params!(String, String) => BinaryFunc::IsRegexpMatch { case_insensitive: false } => Bool, 641;
             params!(Char, String) => Operation::binary(|ecx, lhs, rhs| {
                 let length = ecx.scalar_type(&lhs).unwrap_char_length();
                 Ok(lhs.call_unary(UnaryFunc::PadChar(func::PadChar { length }))
-                    .call_binary(rhs, IsRegexpMatch { case_insensitive: false })
+                    .call_binary(rhs, BinaryFunc::IsRegexpMatch { case_insensitive: false })
                 )
             }) => Bool, 1055;
         },
         "~*" => Scalar {
             params!(String, String) => Operation::binary(|_ecx, lhs, rhs| {
-                Ok(lhs.call_binary(rhs, IsRegexpMatch { case_insensitive: true }))
+                Ok(lhs.call_binary(rhs, BinaryFunc::IsRegexpMatch { case_insensitive: true }))
             }) => Bool, 1228;
             params!(Char, String) => Operation::binary(|ecx, lhs, rhs| {
                 let length = ecx.scalar_type(&lhs).unwrap_char_length();
                 Ok(lhs.call_unary(UnaryFunc::PadChar(func::PadChar { length }))
-                    .call_binary(rhs, IsRegexpMatch { case_insensitive: true })
+                    .call_binary(rhs, BinaryFunc::IsRegexpMatch { case_insensitive: true })
                 )
             }) => Bool, 1234;
         },
         "!~" => Scalar {
             params!(String, String) => Operation::binary(|_ecx, lhs, rhs| {
                 Ok(lhs
-                    .call_binary(rhs, IsRegexpMatch { case_insensitive: false })
+                    .call_binary(rhs, BinaryFunc::IsRegexpMatch { case_insensitive: false })
                     .call_unary(UnaryFunc::Not(func::Not)))
             }) => Bool, 642;
             params!(Char, String) => Operation::binary(|ecx, lhs, rhs| {
                 let length = ecx.scalar_type(&lhs).unwrap_char_length();
                 Ok(lhs.call_unary(UnaryFunc::PadChar(func::PadChar { length }))
-                    .call_binary(rhs, IsRegexpMatch { case_insensitive: false })
+                    .call_binary(rhs, BinaryFunc::IsRegexpMatch { case_insensitive: false })
                     .call_unary(UnaryFunc::Not(func::Not))
                 )
             }) => Bool, 1056;
@@ -4739,13 +4739,13 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
         "!~*" => Scalar {
             params!(String, String) => Operation::binary(|_ecx, lhs, rhs| {
                 Ok(lhs
-                    .call_binary(rhs, IsRegexpMatch { case_insensitive: true })
+                    .call_binary(rhs, BinaryFunc::IsRegexpMatch { case_insensitive: true })
                     .call_unary(UnaryFunc::Not(func::Not)))
             }) => Bool, 1229;
             params!(Char, String) => Operation::binary(|ecx, lhs, rhs| {
                 let length = ecx.scalar_type(&lhs).unwrap_char_length();
                 Ok(lhs.call_unary(UnaryFunc::PadChar(func::PadChar { length }))
-                    .call_binary(rhs, IsRegexpMatch { case_insensitive: true })
+                    .call_binary(rhs, BinaryFunc::IsRegexpMatch { case_insensitive: true })
                     .call_unary(UnaryFunc::Not(func::Not))
                 )
             }) => Bool, 1235;
@@ -4760,7 +4760,7 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
                     rhs,
                     &SqlScalarType::String,
                 )?;
-                Ok(lhs.call_binary(rhs, TextConcat))
+                Ok(lhs.call_binary(rhs, func::TextConcatBinary))
             }) => String, 2779;
             params!(NonVecAny, String) => Operation::binary(|ecx, lhs, rhs| {
                 let lhs = typeconv::plan_cast(
@@ -4769,45 +4769,45 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
                     lhs,
                     &SqlScalarType::String,
                 )?;
-                Ok(lhs.call_binary(rhs, TextConcat))
+                Ok(lhs.call_binary(rhs, func::TextConcatBinary))
             }) => String, 2780;
-            params!(String, String) => TextConcat => String, 654;
-            params!(Jsonb, Jsonb) => JsonbConcat => Jsonb, 3284;
-            params!(ArrayAnyCompatible, ArrayAnyCompatible) => ArrayArrayConcat => ArrayAnyCompatible, 375;
-            params!(ListAnyCompatible, ListAnyCompatible) => ListListConcat => ListAnyCompatible, oid::OP_CONCAT_LIST_LIST_OID;
-            params!(ListAnyCompatible, ListElementAnyCompatible) => ListElementConcat => ListAnyCompatible, oid::OP_CONCAT_LIST_ELEMENT_OID;
-            params!(ListElementAnyCompatible, ListAnyCompatible) => ElementListConcat => ListAnyCompatible, oid::OP_CONCAT_ELEMENY_LIST_OID;
+            params!(String, String) => BF::from(func::TextConcatBinary) => String, 654;
+            params!(Jsonb, Jsonb) => BF::from(func::JsonbConcat) => Jsonb, 3284;
+            params!(ArrayAnyCompatible, ArrayAnyCompatible) => BF::from(func::ArrayArrayConcat) => ArrayAnyCompatible, 375;
+            params!(ListAnyCompatible, ListAnyCompatible) => BF::from(func::ListListConcat) => ListAnyCompatible, oid::OP_CONCAT_LIST_LIST_OID;
+            params!(ListAnyCompatible, ListElementAnyCompatible) => BF::from(func::ListElementConcat) => ListAnyCompatible, oid::OP_CONCAT_LIST_ELEMENT_OID;
+            params!(ListElementAnyCompatible, ListAnyCompatible) => BF::from(func::ElementListConcat) => ListAnyCompatible, oid::OP_CONCAT_ELEMENY_LIST_OID;
         },
 
         // JSON, MAP, RANGE, LIST, ARRAY
         "->" => Scalar {
-            params!(Jsonb, Int64) => JsonbGetInt64 => Jsonb, 3212;
-            params!(Jsonb, String) => JsonbGetString => Jsonb, 3211;
-            params!(MapAny, String) => MapGetValue => Any, oid::OP_GET_VALUE_MAP_OID;
+            params!(Jsonb, Int64) => BinaryFunc::JsonbGetInt64 => Jsonb, 3212;
+            params!(Jsonb, String) => BinaryFunc::JsonbGetString => Jsonb, 3211;
+            params!(MapAny, String) => BF::from(func::MapGetValue) => Any, oid::OP_GET_VALUE_MAP_OID;
         },
         "->>" => Scalar {
-            params!(Jsonb, Int64) => JsonbGetInt64Stringify => String, 3481;
-            params!(Jsonb, String) => JsonbGetStringStringify => String, 3477;
+            params!(Jsonb, Int64) => BinaryFunc::JsonbGetInt64Stringify => String, 3481;
+            params!(Jsonb, String) => BinaryFunc::JsonbGetStringStringify => String, 3477;
         },
         "#>" => Scalar {
-            params!(Jsonb, SqlScalarType::Array(Box::new(SqlScalarType::String))) => JsonbGetPath => Jsonb, 3213;
+            params!(Jsonb, SqlScalarType::Array(Box::new(SqlScalarType::String))) => BinaryFunc::JsonbGetPath => Jsonb, 3213;
         },
         "#>>" => Scalar {
-            params!(Jsonb, SqlScalarType::Array(Box::new(SqlScalarType::String))) => JsonbGetPathStringify => String, 3206;
+            params!(Jsonb, SqlScalarType::Array(Box::new(SqlScalarType::String))) => BinaryFunc::JsonbGetPathStringify => String, 3206;
         },
         "@>" => Scalar {
-            params!(Jsonb, Jsonb) => JsonbContainsJsonb => Bool, 3246;
+            params!(Jsonb, Jsonb) => BF::from(func::JsonbContainsJsonb) => Bool, 3246;
             params!(Jsonb, String) => Operation::binary(|_ecx, lhs, rhs| {
                 Ok(lhs.call_binary(
                     rhs.call_unary(UnaryFunc::CastStringToJsonb(func::CastStringToJsonb)),
-                    JsonbContainsJsonb,
+                    BinaryFunc::from(func::JsonbContainsJsonb),
                 ))
             }) => Bool, oid::OP_CONTAINS_JSONB_STRING_OID;
             params!(String, Jsonb) => Operation::binary(|_ecx, lhs, rhs| {
                 Ok(lhs.call_unary(UnaryFunc::CastStringToJsonb(func::CastStringToJsonb))
-                      .call_binary(rhs, JsonbContainsJsonb))
+                      .call_binary(rhs, func::JsonbContainsJsonb))
             }) => Bool, oid::OP_CONTAINS_STRING_JSONB_OID;
-            params!(MapAnyCompatible, MapAnyCompatible) => MapContainsMap => Bool, oid::OP_CONTAINS_MAP_MAP_OID;
+            params!(MapAnyCompatible, MapAnyCompatible) => BF::from(func::MapContainsMap) => Bool, oid::OP_CONTAINS_MAP_MAP_OID;
             params!(RangeAny, AnyElement) => Operation::binary(|ecx, lhs, rhs| {
                 let elem_type = ecx.scalar_type(&lhs).unwrap_range_element_type().clone();
                 Ok(lhs.call_binary(rhs, BinaryFunc::RangeContainsElem { elem_type, rev: false }))
@@ -4826,175 +4826,175 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
             params!(Jsonb, Jsonb) => Operation::binary(|_ecx, lhs, rhs| {
                 Ok(rhs.call_binary(
                     lhs,
-                    JsonbContainsJsonb
+                    func::JsonbContainsJsonb
                 ))
             }) => Bool, 3250;
             params!(Jsonb, String) => Operation::binary(|_ecx, lhs, rhs| {
                 Ok(rhs.call_unary(UnaryFunc::CastStringToJsonb(func::CastStringToJsonb))
-                      .call_binary(lhs, BinaryFunc::JsonbContainsJsonb))
+                      .call_binary(lhs, func::JsonbContainsJsonb))
             }) => Bool, oid::OP_CONTAINED_JSONB_STRING_OID;
             params!(String, Jsonb) => Operation::binary(|_ecx, lhs, rhs| {
                 Ok(rhs.call_binary(
                     lhs.call_unary(UnaryFunc::CastStringToJsonb(func::CastStringToJsonb)),
-                    BinaryFunc::JsonbContainsJsonb,
+                    func::JsonbContainsJsonb,
                 ))
             }) => Bool, oid::OP_CONTAINED_STRING_JSONB_OID;
             params!(MapAnyCompatible, MapAnyCompatible) => Operation::binary(|_ecx, lhs, rhs| {
-                Ok(rhs.call_binary(lhs, MapContainsMap))
+                Ok(rhs.call_binary(lhs, func::MapContainsMap))
             }) => Bool, oid::OP_CONTAINED_MAP_MAP_OID;
             params!(AnyElement, RangeAny) => Operation::binary(|ecx, lhs, rhs| {
                 let elem_type = ecx.scalar_type(&rhs).unwrap_range_element_type().clone();
-                Ok(rhs.call_binary(lhs, BinaryFunc::RangeContainsElem { elem_type, rev: true }))
+                Ok(rhs.call_binary(lhs, BF::RangeContainsElem { elem_type, rev: true }))
             }) => Bool, 3891;
             params!(RangeAny, RangeAny) => Operation::binary(|_ecx, lhs, rhs| {
-                Ok(rhs.call_binary(lhs, BinaryFunc::RangeContainsRange { rev: true }))
+                Ok(rhs.call_binary(lhs, BF::RangeContainsRange { rev: true }))
             }) => Bool, 3892;
             params!(ArrayAny, ArrayAny) => Operation::binary(|_ecx, lhs, rhs| {
-                Ok(lhs.call_binary(rhs, BinaryFunc::ArrayContainsArray { rev: true }))
+                Ok(lhs.call_binary(rhs, BF::ArrayContainsArray { rev: true }))
             }) => Bool, 2752;
             params!(ListAny, ListAny) => Operation::binary(|_ecx, lhs, rhs| {
-                Ok(lhs.call_binary(rhs, BinaryFunc::ListContainsList { rev: true }))
+                Ok(lhs.call_binary(rhs, BF::ListContainsList { rev: true }))
             }) => Bool, oid::OP_IS_CONTAINED_LIST_LIST_OID;
         },
         "?" => Scalar {
-            params!(Jsonb, String) => JsonbContainsString => Bool, 3247;
-            params!(MapAny, String) => MapContainsKey => Bool, oid::OP_CONTAINS_KEY_MAP_OID;
+            params!(Jsonb, String) => BF::from(func::JsonbContainsString) => Bool, 3247;
+            params!(MapAny, String) => BF::from(func::MapContainsKey) => Bool, oid::OP_CONTAINS_KEY_MAP_OID;
         },
         "?&" => Scalar {
-            params!(MapAny, SqlScalarType::Array(Box::new(SqlScalarType::String))) => MapContainsAllKeys => Bool, oid::OP_CONTAINS_ALL_KEYS_MAP_OID;
+            params!(MapAny, SqlScalarType::Array(Box::new(SqlScalarType::String))) => BF::from(func::MapContainsAllKeys) => Bool, oid::OP_CONTAINS_ALL_KEYS_MAP_OID;
         },
         "?|" => Scalar {
-            params!(MapAny, SqlScalarType::Array(Box::new(SqlScalarType::String))) => MapContainsAnyKeys => Bool, oid::OP_CONTAINS_ANY_KEYS_MAP_OID;
+            params!(MapAny, SqlScalarType::Array(Box::new(SqlScalarType::String))) => BF::from(func::MapContainsAnyKeys) => Bool, oid::OP_CONTAINS_ANY_KEYS_MAP_OID;
         },
         "&&" => Scalar {
-            params!(RangeAny, RangeAny) => BinaryFunc::RangeOverlaps => Bool, 3888;
+            params!(RangeAny, RangeAny) => BF::from(func::RangeOverlaps) => Bool, 3888;
         },
         "&<" => Scalar {
-            params!(RangeAny, RangeAny) => BinaryFunc::RangeOverleft => Bool, 3895;
+            params!(RangeAny, RangeAny) => BF::from(func::RangeOverleft) => Bool, 3895;
         },
         "&>" => Scalar {
-            params!(RangeAny, RangeAny) => BinaryFunc::RangeOverright => Bool, 3896;
+            params!(RangeAny, RangeAny) => BF::from(func::RangeOverright) => Bool, 3896;
         },
         "-|-" => Scalar {
-            params!(RangeAny, RangeAny) => BinaryFunc::RangeAdjacent => Bool, 3897;
+            params!(RangeAny, RangeAny) => BF::from(func::RangeAdjacent) => Bool, 3897;
         },
 
         // COMPARISON OPS
         "<" => Scalar {
-            params!(Numeric, Numeric) => BinaryFunc::Lt => Bool, 1754;
-            params!(Bool, Bool) => BinaryFunc::Lt => Bool, 58;
-            params!(Int16, Int16) => BinaryFunc::Lt => Bool, 95;
-            params!(Int32, Int32) => BinaryFunc::Lt => Bool, 97;
-            params!(Int64, Int64) => BinaryFunc::Lt => Bool, 412;
-            params!(UInt16, UInt16) => BinaryFunc::Lt => Bool, oid::FUNC_LT_UINT16_OID;
-            params!(UInt32, UInt32) => BinaryFunc::Lt => Bool, oid::FUNC_LT_UINT32_OID;
-            params!(UInt64, UInt64) => BinaryFunc::Lt => Bool, oid::FUNC_LT_UINT64_OID;
-            params!(Float32, Float32) => BinaryFunc::Lt => Bool, 622;
-            params!(Float64, Float64) => BinaryFunc::Lt => Bool, 672;
-            params!(Oid, Oid) => BinaryFunc::Lt => Bool, 609;
-            params!(Date, Date) => BinaryFunc::Lt => Bool, 1095;
-            params!(Time, Time) => BinaryFunc::Lt => Bool, 1110;
-            params!(Timestamp, Timestamp) => BinaryFunc::Lt => Bool, 2062;
-            params!(TimestampTz, TimestampTz) => BinaryFunc::Lt => Bool, 1322;
-            params!(Uuid, Uuid) => BinaryFunc::Lt => Bool, 2974;
-            params!(Interval, Interval) => BinaryFunc::Lt => Bool, 1332;
-            params!(Bytes, Bytes) => BinaryFunc::Lt => Bool, 1957;
-            params!(String, String) => BinaryFunc::Lt => Bool, 664;
-            params!(Char, Char) => BinaryFunc::Lt => Bool, 1058;
-            params!(PgLegacyChar, PgLegacyChar) => BinaryFunc::Lt => Bool, 631;
-            params!(PgLegacyName, PgLegacyName) => BinaryFunc::Lt => Bool, 660;
-            params!(Jsonb, Jsonb) => BinaryFunc::Lt => Bool, 3242;
-            params!(ArrayAny, ArrayAny) => BinaryFunc::Lt => Bool, 1072;
-            params!(RecordAny, RecordAny) => BinaryFunc::Lt => Bool, 2990;
-            params!(MzTimestamp, MzTimestamp)=>BinaryFunc::Lt =>Bool, oid::FUNC_MZ_TIMESTAMP_LT_MZ_TIMESTAMP_OID;
-            params!(RangeAny, RangeAny) => BinaryFunc::Lt => Bool, 3884;
+            params!(Numeric, Numeric) => BF::from(func::Lt) => Bool, 1754;
+            params!(Bool, Bool) => BF::from(func::Lt) => Bool, 58;
+            params!(Int16, Int16) => BF::from(func::Lt) => Bool, 95;
+            params!(Int32, Int32) => BF::from(func::Lt) => Bool, 97;
+            params!(Int64, Int64) => BF::from(func::Lt) => Bool, 412;
+            params!(UInt16, UInt16) => BF::from(func::Lt) => Bool, oid::FUNC_LT_UINT16_OID;
+            params!(UInt32, UInt32) => BF::from(func::Lt) => Bool, oid::FUNC_LT_UINT32_OID;
+            params!(UInt64, UInt64) => BF::from(func::Lt) => Bool, oid::FUNC_LT_UINT64_OID;
+            params!(Float32, Float32) => BF::from(func::Lt) => Bool, 622;
+            params!(Float64, Float64) => BF::from(func::Lt) => Bool, 672;
+            params!(Oid, Oid) => BF::from(func::Lt) => Bool, 609;
+            params!(Date, Date) => BF::from(func::Lt) => Bool, 1095;
+            params!(Time, Time) => BF::from(func::Lt) => Bool, 1110;
+            params!(Timestamp, Timestamp) => BF::from(func::Lt) => Bool, 2062;
+            params!(TimestampTz, TimestampTz) => BF::from(func::Lt) => Bool, 1322;
+            params!(Uuid, Uuid) => BF::from(func::Lt) => Bool, 2974;
+            params!(Interval, Interval) => BF::from(func::Lt) => Bool, 1332;
+            params!(Bytes, Bytes) => BF::from(func::Lt) => Bool, 1957;
+            params!(String, String) => BF::from(func::Lt) => Bool, 664;
+            params!(Char, Char) => BF::from(func::Lt) => Bool, 1058;
+            params!(PgLegacyChar, PgLegacyChar) => BF::from(func::Lt) => Bool, 631;
+            params!(PgLegacyName, PgLegacyName) => BF::from(func::Lt) => Bool, 660;
+            params!(Jsonb, Jsonb) => BF::from(func::Lt) => Bool, 3242;
+            params!(ArrayAny, ArrayAny) => BF::from(func::Lt) => Bool, 1072;
+            params!(RecordAny, RecordAny) => BF::from(func::Lt) => Bool, 2990;
+            params!(MzTimestamp, MzTimestamp) => BF::from(func::Lt) => Bool, oid::FUNC_MZ_TIMESTAMP_LT_MZ_TIMESTAMP_OID;
+            params!(RangeAny, RangeAny) => BF::from(func::Lt) => Bool, 3884;
         },
         "<=" => Scalar {
-            params!(Numeric, Numeric) => BinaryFunc::Lte => Bool, 1755;
-            params!(Bool, Bool) => BinaryFunc::Lte => Bool, 1694;
-            params!(Int16, Int16) => BinaryFunc::Lte => Bool, 522;
-            params!(Int32, Int32) => BinaryFunc::Lte => Bool, 523;
-            params!(Int64, Int64) => BinaryFunc::Lte => Bool, 414;
-            params!(UInt16, UInt16) => BinaryFunc::Lte => Bool, oid::FUNC_LTE_UINT16_OID;
-            params!(UInt32, UInt32) => BinaryFunc::Lte => Bool, oid::FUNC_LTE_UINT32_OID;
-            params!(UInt64, UInt64) => BinaryFunc::Lte => Bool, oid::FUNC_LTE_UINT64_OID;
-            params!(Float32, Float32) => BinaryFunc::Lte => Bool, 624;
-            params!(Float64, Float64) => BinaryFunc::Lte => Bool, 673;
-            params!(Oid, Oid) => BinaryFunc::Lte => Bool, 611;
-            params!(Date, Date) => BinaryFunc::Lte => Bool, 1096;
-            params!(Time, Time) => BinaryFunc::Lte => Bool, 1111;
-            params!(Timestamp, Timestamp) => BinaryFunc::Lte => Bool, 2063;
-            params!(TimestampTz, TimestampTz) => BinaryFunc::Lte => Bool, 1323;
-            params!(Uuid, Uuid) => BinaryFunc::Lte => Bool, 2976;
-            params!(Interval, Interval) => BinaryFunc::Lte => Bool, 1333;
-            params!(Bytes, Bytes) => BinaryFunc::Lte => Bool, 1958;
-            params!(String, String) => BinaryFunc::Lte => Bool, 665;
-            params!(Char, Char) => BinaryFunc::Lte => Bool, 1059;
-            params!(PgLegacyChar, PgLegacyChar) => BinaryFunc::Lte => Bool, 632;
-            params!(PgLegacyName, PgLegacyName) => BinaryFunc::Lte => Bool, 661;
-            params!(Jsonb, Jsonb) => BinaryFunc::Lte => Bool, 3244;
-            params!(ArrayAny, ArrayAny) => BinaryFunc::Lte => Bool, 1074;
-            params!(RecordAny, RecordAny) => BinaryFunc::Lte => Bool, 2992;
-            params!(MzTimestamp, MzTimestamp)=>BinaryFunc::Lte =>Bool, oid::FUNC_MZ_TIMESTAMP_LTE_MZ_TIMESTAMP_OID;
-            params!(RangeAny, RangeAny) => BinaryFunc::Lte => Bool, 3885;
+            params!(Numeric, Numeric) => BF::from(func::Lte) => Bool, 1755;
+            params!(Bool, Bool) => BF::from(func::Lte) => Bool, 1694;
+            params!(Int16, Int16) => BF::from(func::Lte) => Bool, 522;
+            params!(Int32, Int32) => BF::from(func::Lte) => Bool, 523;
+            params!(Int64, Int64) => BF::from(func::Lte) => Bool, 414;
+            params!(UInt16, UInt16) => BF::from(func::Lte) => Bool, oid::FUNC_LTE_UINT16_OID;
+            params!(UInt32, UInt32) => BF::from(func::Lte) => Bool, oid::FUNC_LTE_UINT32_OID;
+            params!(UInt64, UInt64) => BF::from(func::Lte) => Bool, oid::FUNC_LTE_UINT64_OID;
+            params!(Float32, Float32) => BF::from(func::Lte) => Bool, 624;
+            params!(Float64, Float64) => BF::from(func::Lte) => Bool, 673;
+            params!(Oid, Oid) => BF::from(func::Lte) => Bool, 611;
+            params!(Date, Date) => BF::from(func::Lte) => Bool, 1096;
+            params!(Time, Time) => BF::from(func::Lte) => Bool, 1111;
+            params!(Timestamp, Timestamp) => BF::from(func::Lte) => Bool, 2063;
+            params!(TimestampTz, TimestampTz) => BF::from(func::Lte) => Bool, 1323;
+            params!(Uuid, Uuid) => BF::from(func::Lte) => Bool, 2976;
+            params!(Interval, Interval) => BF::from(func::Lte) => Bool, 1333;
+            params!(Bytes, Bytes) => BF::from(func::Lte) => Bool, 1958;
+            params!(String, String) => BF::from(func::Lte) => Bool, 665;
+            params!(Char, Char) => BF::from(func::Lte) => Bool, 1059;
+            params!(PgLegacyChar, PgLegacyChar) => BF::from(func::Lte) => Bool, 632;
+            params!(PgLegacyName, PgLegacyName) => BF::from(func::Lte) => Bool, 661;
+            params!(Jsonb, Jsonb) => BF::from(func::Lte) => Bool, 3244;
+            params!(ArrayAny, ArrayAny) => BF::from(func::Lte) => Bool, 1074;
+            params!(RecordAny, RecordAny) => BF::from(func::Lte) => Bool, 2992;
+            params!(MzTimestamp, MzTimestamp) => BF::from(func::Lte) => Bool, oid::FUNC_MZ_TIMESTAMP_LTE_MZ_TIMESTAMP_OID;
+            params!(RangeAny, RangeAny) => BF::from(func::Lte) => Bool, 3885;
         },
         ">" => Scalar {
-            params!(Numeric, Numeric) => BinaryFunc::Gt => Bool, 1756;
-            params!(Bool, Bool) => BinaryFunc::Gt => Bool, 59;
-            params!(Int16, Int16) => BinaryFunc::Gt => Bool, 520;
-            params!(Int32, Int32) => BinaryFunc::Gt => Bool, 521;
-            params!(Int64, Int64) => BinaryFunc::Gt => Bool, 413;
-            params!(UInt16, UInt16) => BinaryFunc::Gt => Bool, oid::FUNC_GT_UINT16_OID;
-            params!(UInt32, UInt32) => BinaryFunc::Gt => Bool, oid::FUNC_GT_UINT32_OID;
-            params!(UInt64, UInt64) => BinaryFunc::Gt => Bool, oid::FUNC_GT_UINT64_OID;
-            params!(Float32, Float32) => BinaryFunc::Gt => Bool, 623;
-            params!(Float64, Float64) => BinaryFunc::Gt => Bool, 674;
-            params!(Oid, Oid) => BinaryFunc::Gt => Bool, 610;
-            params!(Date, Date) => BinaryFunc::Gt => Bool, 1097;
-            params!(Time, Time) => BinaryFunc::Gt => Bool, 1112;
-            params!(Timestamp, Timestamp) => BinaryFunc::Gt => Bool, 2064;
-            params!(TimestampTz, TimestampTz) => BinaryFunc::Gt => Bool, 1324;
-            params!(Uuid, Uuid) => BinaryFunc::Gt => Bool, 2975;
-            params!(Interval, Interval) => BinaryFunc::Gt => Bool, 1334;
-            params!(Bytes, Bytes) => BinaryFunc::Gt => Bool, 1959;
-            params!(String, String) => BinaryFunc::Gt => Bool, 666;
-            params!(Char, Char) => BinaryFunc::Gt => Bool, 1060;
-            params!(PgLegacyChar, PgLegacyChar) => BinaryFunc::Gt => Bool, 633;
-            params!(PgLegacyName, PgLegacyName) => BinaryFunc::Gt => Bool, 662;
-            params!(Jsonb, Jsonb) => BinaryFunc::Gt => Bool, 3243;
-            params!(ArrayAny, ArrayAny) => BinaryFunc::Gt => Bool, 1073;
-            params!(RecordAny, RecordAny) => BinaryFunc::Gt => Bool, 2991;
-            params!(MzTimestamp, MzTimestamp)=>BinaryFunc::Gt =>Bool, oid::FUNC_MZ_TIMESTAMP_GT_MZ_TIMESTAMP_OID;
-            params!(RangeAny, RangeAny) => BinaryFunc::Gt => Bool, 3887;
+            params!(Numeric, Numeric) => BF::from(func::Gt) => Bool, 1756;
+            params!(Bool, Bool) => BF::from(func::Gt) => Bool, 59;
+            params!(Int16, Int16) => BF::from(func::Gt) => Bool, 520;
+            params!(Int32, Int32) => BF::from(func::Gt) => Bool, 521;
+            params!(Int64, Int64) => BF::from(func::Gt) => Bool, 413;
+            params!(UInt16, UInt16) => BF::from(func::Gt) => Bool, oid::FUNC_GT_UINT16_OID;
+            params!(UInt32, UInt32) => BF::from(func::Gt) => Bool, oid::FUNC_GT_UINT32_OID;
+            params!(UInt64, UInt64) => BF::from(func::Gt) => Bool, oid::FUNC_GT_UINT64_OID;
+            params!(Float32, Float32) => BF::from(func::Gt) => Bool, 623;
+            params!(Float64, Float64) => BF::from(func::Gt) => Bool, 674;
+            params!(Oid, Oid) => BF::from(func::Gt) => Bool, 610;
+            params!(Date, Date) => BF::from(func::Gt) => Bool, 1097;
+            params!(Time, Time) => BF::from(func::Gt) => Bool, 1112;
+            params!(Timestamp, Timestamp) => BF::from(func::Gt) => Bool, 2064;
+            params!(TimestampTz, TimestampTz) => BF::from(func::Gt) => Bool, 1324;
+            params!(Uuid, Uuid) => BF::from(func::Gt) => Bool, 2975;
+            params!(Interval, Interval) => BF::from(func::Gt) => Bool, 1334;
+            params!(Bytes, Bytes) => BF::from(func::Gt) => Bool, 1959;
+            params!(String, String) => BF::from(func::Gt) => Bool, 666;
+            params!(Char, Char) => BF::from(func::Gt) => Bool, 1060;
+            params!(PgLegacyChar, PgLegacyChar) => BF::from(func::Gt) => Bool, 633;
+            params!(PgLegacyName, PgLegacyName) => BF::from(func::Gt) => Bool, 662;
+            params!(Jsonb, Jsonb) => BF::from(func::Gt) => Bool, 3243;
+            params!(ArrayAny, ArrayAny) => BF::from(func::Gt) => Bool, 1073;
+            params!(RecordAny, RecordAny) => BF::from(func::Gt) => Bool, 2991;
+            params!(MzTimestamp, MzTimestamp) => BF::from(func::Gt) => Bool, oid::FUNC_MZ_TIMESTAMP_GT_MZ_TIMESTAMP_OID;
+            params!(RangeAny, RangeAny) => BF::from(func::Gt) => Bool, 3887;
         },
         ">=" => Scalar {
-            params!(Numeric, Numeric) => BinaryFunc::Gte => Bool, 1757;
-            params!(Bool, Bool) => BinaryFunc::Gte => Bool, 1695;
-            params!(Int16, Int16) => BinaryFunc::Gte => Bool, 524;
-            params!(Int32, Int32) => BinaryFunc::Gte => Bool, 525;
-            params!(Int64, Int64) => BinaryFunc::Gte => Bool, 415;
-            params!(UInt16, UInt16) => BinaryFunc::Gte => Bool, oid::FUNC_GTE_UINT16_OID;
-            params!(UInt32, UInt32) => BinaryFunc::Gte => Bool, oid::FUNC_GTE_UINT32_OID;
-            params!(UInt64, UInt64) => BinaryFunc::Gte => Bool, oid::FUNC_GTE_UINT64_OID;
-            params!(Float32, Float32) => BinaryFunc::Gte => Bool, 625;
-            params!(Float64, Float64) => BinaryFunc::Gte => Bool, 675;
-            params!(Oid, Oid) => BinaryFunc::Gte => Bool, 612;
-            params!(Date, Date) => BinaryFunc::Gte => Bool, 1098;
-            params!(Time, Time) => BinaryFunc::Gte => Bool, 1113;
-            params!(Timestamp, Timestamp) => BinaryFunc::Gte => Bool, 2065;
-            params!(TimestampTz, TimestampTz) => BinaryFunc::Gte => Bool, 1325;
-            params!(Uuid, Uuid) => BinaryFunc::Gte => Bool, 2977;
-            params!(Interval, Interval) => BinaryFunc::Gte => Bool, 1335;
-            params!(Bytes, Bytes) => BinaryFunc::Gte => Bool, 1960;
-            params!(String, String) => BinaryFunc::Gte => Bool, 667;
-            params!(Char, Char) => BinaryFunc::Gte => Bool, 1061;
-            params!(PgLegacyChar, PgLegacyChar) => BinaryFunc::Gte => Bool, 634;
-            params!(PgLegacyName, PgLegacyName) => BinaryFunc::Gte => Bool, 663;
-            params!(Jsonb, Jsonb) => BinaryFunc::Gte => Bool, 3245;
-            params!(ArrayAny, ArrayAny) => BinaryFunc::Gte => Bool, 1075;
-            params!(RecordAny, RecordAny) => BinaryFunc::Gte => Bool, 2993;
-            params!(MzTimestamp, MzTimestamp)=>BinaryFunc::Gte =>Bool, oid::FUNC_MZ_TIMESTAMP_GTE_MZ_TIMESTAMP_OID;
-            params!(RangeAny, RangeAny) => BinaryFunc::Gte => Bool, 3886;
+            params!(Numeric, Numeric) => BF::from(func::Gte) => Bool, 1757;
+            params!(Bool, Bool) => BF::from(func::Gte) => Bool, 1695;
+            params!(Int16, Int16) => BF::from(func::Gte) => Bool, 524;
+            params!(Int32, Int32) => BF::from(func::Gte) => Bool, 525;
+            params!(Int64, Int64) => BF::from(func::Gte) => Bool, 415;
+            params!(UInt16, UInt16) => BF::from(func::Gte) => Bool, oid::FUNC_GTE_UINT16_OID;
+            params!(UInt32, UInt32) => BF::from(func::Gte) => Bool, oid::FUNC_GTE_UINT32_OID;
+            params!(UInt64, UInt64) => BF::from(func::Gte) => Bool, oid::FUNC_GTE_UINT64_OID;
+            params!(Float32, Float32) => BF::from(func::Gte) => Bool, 625;
+            params!(Float64, Float64) => BF::from(func::Gte) => Bool, 675;
+            params!(Oid, Oid) => BF::from(func::Gte) => Bool, 612;
+            params!(Date, Date) => BF::from(func::Gte) => Bool, 1098;
+            params!(Time, Time) => BF::from(func::Gte) => Bool, 1113;
+            params!(Timestamp, Timestamp) => BF::from(func::Gte) => Bool, 2065;
+            params!(TimestampTz, TimestampTz) => BF::from(func::Gte) => Bool, 1325;
+            params!(Uuid, Uuid) => BF::from(func::Gte) => Bool, 2977;
+            params!(Interval, Interval) => BF::from(func::Gte) => Bool, 1335;
+            params!(Bytes, Bytes) => BF::from(func::Gte) => Bool, 1960;
+            params!(String, String) => BF::from(func::Gte) => Bool, 667;
+            params!(Char, Char) => BF::from(func::Gte) => Bool, 1061;
+            params!(PgLegacyChar, PgLegacyChar) => BF::from(func::Gte) => Bool, 634;
+            params!(PgLegacyName, PgLegacyName) => BF::from(func::Gte) => Bool, 663;
+            params!(Jsonb, Jsonb) => BF::from(func::Gte) => Bool, 3245;
+            params!(ArrayAny, ArrayAny) => BF::from(func::Gte) => Bool, 1075;
+            params!(RecordAny, RecordAny) => BF::from(func::Gte) => Bool, 2993;
+            params!(MzTimestamp, MzTimestamp) => BF::from(func::Gte) => Bool, oid::FUNC_MZ_TIMESTAMP_GTE_MZ_TIMESTAMP_OID;
+            params!(RangeAny, RangeAny) => BF::from(func::Gte) => Bool, 3886;
         },
         // Warning!
         // - If you are writing functions here that do not simply use
@@ -5007,66 +5007,66 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
         //   made in the optimizer.
         // - Null inputs are handled by `BinaryFunc::eval` checking `propagates_nulls`.
         "=" => Scalar {
-            params!(Numeric, Numeric) => BinaryFunc::Eq => Bool, 1752;
-            params!(Bool, Bool) => BinaryFunc::Eq => Bool, 91;
-            params!(Int16, Int16) => BinaryFunc::Eq => Bool, 94;
-            params!(Int32, Int32) => BinaryFunc::Eq => Bool, 96;
-            params!(Int64, Int64) => BinaryFunc::Eq => Bool, 410;
-            params!(UInt16, UInt16) => BinaryFunc::Eq => Bool, oid::FUNC_EQ_UINT16_OID;
-            params!(UInt32, UInt32) => BinaryFunc::Eq => Bool, oid::FUNC_EQ_UINT32_OID;
-            params!(UInt64, UInt64) => BinaryFunc::Eq => Bool, oid::FUNC_EQ_UINT64_OID;
-            params!(Float32, Float32) => BinaryFunc::Eq => Bool, 620;
-            params!(Float64, Float64) => BinaryFunc::Eq => Bool, 670;
-            params!(Oid, Oid) => BinaryFunc::Eq => Bool, 607;
-            params!(Date, Date) => BinaryFunc::Eq => Bool, 1093;
-            params!(Time, Time) => BinaryFunc::Eq => Bool, 1108;
-            params!(Timestamp, Timestamp) => BinaryFunc::Eq => Bool, 2060;
-            params!(TimestampTz, TimestampTz) => BinaryFunc::Eq => Bool, 1320;
-            params!(Uuid, Uuid) => BinaryFunc::Eq => Bool, 2972;
-            params!(Interval, Interval) => BinaryFunc::Eq => Bool, 1330;
-            params!(Bytes, Bytes) => BinaryFunc::Eq => Bool, 1955;
-            params!(String, String) => BinaryFunc::Eq => Bool, 98;
-            params!(Char, Char) => BinaryFunc::Eq => Bool, 1054;
-            params!(PgLegacyChar, PgLegacyChar) => BinaryFunc::Eq => Bool, 92;
-            params!(PgLegacyName, PgLegacyName) => BinaryFunc::Eq => Bool, 93;
-            params!(Jsonb, Jsonb) => BinaryFunc::Eq => Bool, 3240;
-            params!(ListAny, ListAny) => BinaryFunc::Eq => Bool, oid::FUNC_LIST_EQ_OID;
-            params!(ArrayAny, ArrayAny) => BinaryFunc::Eq => Bool, 1070;
-            params!(RecordAny, RecordAny) => BinaryFunc::Eq => Bool, 2988;
-            params!(MzTimestamp, MzTimestamp) => BinaryFunc::Eq => Bool, oid::FUNC_MZ_TIMESTAMP_EQ_MZ_TIMESTAMP_OID;
-            params!(RangeAny, RangeAny) => BinaryFunc::Eq => Bool, 3882;
-            params!(MzAclItem, MzAclItem) => BinaryFunc::Eq => Bool, oid::FUNC_MZ_ACL_ITEM_EQ_MZ_ACL_ITEM_OID;
-            params!(AclItem, AclItem) => BinaryFunc::Eq => Bool, 974;
+            params!(Numeric, Numeric) => BF::from(func::Eq) => Bool, 1752;
+            params!(Bool, Bool) => BF::from(func::Eq) => Bool, 91;
+            params!(Int16, Int16) => BF::from(func::Eq) => Bool, 94;
+            params!(Int32, Int32) => BF::from(func::Eq) => Bool, 96;
+            params!(Int64, Int64) => BF::from(func::Eq) => Bool, 410;
+            params!(UInt16, UInt16) => BF::from(func::Eq) => Bool, oid::FUNC_EQ_UINT16_OID;
+            params!(UInt32, UInt32) => BF::from(func::Eq) => Bool, oid::FUNC_EQ_UINT32_OID;
+            params!(UInt64, UInt64) => BF::from(func::Eq) => Bool, oid::FUNC_EQ_UINT64_OID;
+            params!(Float32, Float32) => BF::from(func::Eq) => Bool, 620;
+            params!(Float64, Float64) => BF::from(func::Eq) => Bool, 670;
+            params!(Oid, Oid) => BF::from(func::Eq) => Bool, 607;
+            params!(Date, Date) => BF::from(func::Eq) => Bool, 1093;
+            params!(Time, Time) => BF::from(func::Eq) => Bool, 1108;
+            params!(Timestamp, Timestamp) => BF::from(func::Eq) => Bool, 2060;
+            params!(TimestampTz, TimestampTz) => BF::from(func::Eq) => Bool, 1320;
+            params!(Uuid, Uuid) => BF::from(func::Eq) => Bool, 2972;
+            params!(Interval, Interval) => BF::from(func::Eq) => Bool, 1330;
+            params!(Bytes, Bytes) => BF::from(func::Eq) => Bool, 1955;
+            params!(String, String) => BF::from(func::Eq) => Bool, 98;
+            params!(Char, Char) => BF::from(func::Eq) => Bool, 1054;
+            params!(PgLegacyChar, PgLegacyChar) => BF::from(func::Eq) => Bool, 92;
+            params!(PgLegacyName, PgLegacyName) => BF::from(func::Eq) => Bool, 93;
+            params!(Jsonb, Jsonb) => BF::from(func::Eq) => Bool, 3240;
+            params!(ListAny, ListAny) => BF::from(func::Eq) => Bool, oid::FUNC_LIST_EQ_OID;
+            params!(ArrayAny, ArrayAny) => BF::from(func::Eq) => Bool, 1070;
+            params!(RecordAny, RecordAny) => BF::from(func::Eq) => Bool, 2988;
+            params!(MzTimestamp, MzTimestamp) => BF::from(func::Eq) => Bool, oid::FUNC_MZ_TIMESTAMP_EQ_MZ_TIMESTAMP_OID;
+            params!(RangeAny, RangeAny) => BF::from(func::Eq) => Bool, 3882;
+            params!(MzAclItem, MzAclItem) => BF::from(func::Eq) => Bool, oid::FUNC_MZ_ACL_ITEM_EQ_MZ_ACL_ITEM_OID;
+            params!(AclItem, AclItem) => BF::from(func::Eq) => Bool, 974;
         },
         "<>" => Scalar {
-            params!(Numeric, Numeric) => BinaryFunc::NotEq => Bool, 1753;
-            params!(Bool, Bool) => BinaryFunc::NotEq => Bool, 85;
-            params!(Int16, Int16) => BinaryFunc::NotEq => Bool, 519;
-            params!(Int32, Int32) => BinaryFunc::NotEq => Bool, 518;
-            params!(Int64, Int64) => BinaryFunc::NotEq => Bool, 411;
-            params!(UInt16, UInt16) => BinaryFunc::NotEq => Bool, oid::FUNC_NOT_EQ_UINT16_OID;
-            params!(UInt32, UInt32) => BinaryFunc::NotEq => Bool, oid::FUNC_NOT_EQ_UINT32_OID;
-            params!(UInt64, UInt64) => BinaryFunc::NotEq => Bool, oid::FUNC_NOT_EQ_UINT64_OID;
-            params!(Float32, Float32) => BinaryFunc::NotEq => Bool, 621;
-            params!(Float64, Float64) => BinaryFunc::NotEq => Bool, 671;
-            params!(Oid, Oid) => BinaryFunc::NotEq => Bool, 608;
-            params!(Date, Date) => BinaryFunc::NotEq => Bool, 1094;
-            params!(Time, Time) => BinaryFunc::NotEq => Bool, 1109;
-            params!(Timestamp, Timestamp) => BinaryFunc::NotEq => Bool, 2061;
-            params!(TimestampTz, TimestampTz) => BinaryFunc::NotEq => Bool, 1321;
-            params!(Uuid, Uuid) => BinaryFunc::NotEq => Bool, 2973;
-            params!(Interval, Interval) => BinaryFunc::NotEq => Bool, 1331;
-            params!(Bytes, Bytes) => BinaryFunc::NotEq => Bool, 1956;
-            params!(String, String) => BinaryFunc::NotEq => Bool, 531;
-            params!(Char, Char) => BinaryFunc::NotEq => Bool, 1057;
-            params!(PgLegacyChar, PgLegacyChar) => BinaryFunc::NotEq => Bool, 630;
-            params!(PgLegacyName, PgLegacyName) => BinaryFunc::NotEq => Bool, 643;
-            params!(Jsonb, Jsonb) => BinaryFunc::NotEq => Bool, 3241;
-            params!(ArrayAny, ArrayAny) => BinaryFunc::NotEq => Bool, 1071;
-            params!(RecordAny, RecordAny) => BinaryFunc::NotEq => Bool, 2989;
-            params!(MzTimestamp, MzTimestamp) => BinaryFunc::NotEq => Bool, oid::FUNC_MZ_TIMESTAMP_NOT_EQ_MZ_TIMESTAMP_OID;
-            params!(RangeAny, RangeAny) => BinaryFunc::NotEq => Bool, 3883;
-            params!(MzAclItem, MzAclItem) => BinaryFunc::NotEq => Bool, oid::FUNC_MZ_ACL_ITEM_NOT_EQ_MZ_ACL_ITEM_OID;
+            params!(Numeric, Numeric) => BF::from(func::NotEq) => Bool, 1753;
+            params!(Bool, Bool) => BF::from(func::NotEq) => Bool, 85;
+            params!(Int16, Int16) => BF::from(func::NotEq) => Bool, 519;
+            params!(Int32, Int32) => BF::from(func::NotEq) => Bool, 518;
+            params!(Int64, Int64) => BF::from(func::NotEq) => Bool, 411;
+            params!(UInt16, UInt16) => BF::from(func::NotEq) => Bool, oid::FUNC_NOT_EQ_UINT16_OID;
+            params!(UInt32, UInt32) => BF::from(func::NotEq) => Bool, oid::FUNC_NOT_EQ_UINT32_OID;
+            params!(UInt64, UInt64) => BF::from(func::NotEq) => Bool, oid::FUNC_NOT_EQ_UINT64_OID;
+            params!(Float32, Float32) => BF::from(func::NotEq) => Bool, 621;
+            params!(Float64, Float64) => BF::from(func::NotEq) => Bool, 671;
+            params!(Oid, Oid) => BF::from(func::NotEq) => Bool, 608;
+            params!(Date, Date) => BF::from(func::NotEq) => Bool, 1094;
+            params!(Time, Time) => BF::from(func::NotEq) => Bool, 1109;
+            params!(Timestamp, Timestamp) => BF::from(func::NotEq) => Bool, 2061;
+            params!(TimestampTz, TimestampTz) => BF::from(func::NotEq) => Bool, 1321;
+            params!(Uuid, Uuid) => BF::from(func::NotEq) => Bool, 2973;
+            params!(Interval, Interval) => BF::from(func::NotEq) => Bool, 1331;
+            params!(Bytes, Bytes) => BF::from(func::NotEq) => Bool, 1956;
+            params!(String, String) => BF::from(func::NotEq) => Bool, 531;
+            params!(Char, Char) => BF::from(func::NotEq) => Bool, 1057;
+            params!(PgLegacyChar, PgLegacyChar) => BF::from(func::NotEq) => Bool, 630;
+            params!(PgLegacyName, PgLegacyName) => BF::from(func::NotEq) => Bool, 643;
+            params!(Jsonb, Jsonb) => BF::from(func::NotEq) => Bool, 3241;
+            params!(ArrayAny, ArrayAny) => BF::from(func::NotEq) => Bool, 1071;
+            params!(RecordAny, RecordAny) => BF::from(func::NotEq) => Bool, 2989;
+            params!(MzTimestamp, MzTimestamp) => BF::from(func::NotEq) => Bool, oid::FUNC_MZ_TIMESTAMP_NOT_EQ_MZ_TIMESTAMP_OID;
+            params!(RangeAny, RangeAny) => BF::from(func::NotEq) => Bool, 3883;
+            params!(MzAclItem, MzAclItem) => BF::from(func::NotEq) => Bool, oid::FUNC_MZ_ACL_ITEM_NOT_EQ_MZ_ACL_ITEM_OID;
         }
     }
 });
@@ -5099,7 +5099,7 @@ fn current_settings(
     let expr = HirScalarExpr::call_binary(
         HirScalarExpr::call_unmaterializable(UnmaterializableFunc::ViewableVariables),
         HirScalarExpr::call_unary(name, UnaryFunc::Lower(func::Lower)),
-        BinaryFunc::MapGetValue,
+        func::MapGetValue,
     );
     let expr = HirScalarExpr::if_then_else(
         missing_ok,

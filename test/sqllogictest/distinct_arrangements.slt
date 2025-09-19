@@ -866,7 +866,7 @@ Arrange ReduceMinsMaxes
 ArrangeAccumulable [val: empty]
 ArrangeAccumulable [val: empty]
 ArrangeAccumulable [val: empty]
-ArrangeBy[[CallBinary(ModInt64, Column(0, "data"), Literal(Ok(Row{[Int64(2)]}), SqlColumnType { scalar_type: Int64, nullable: false }))]]
+ArrangeBy[[CallBinary(ModInt64(ModInt64), Column(0, "data"), Literal(Ok(Row{[Int64(<#>)]}), SqlColumnType { scalar_type: Int64, nullable: false }))]]
 ArrangeBy[[CallUnary(CastInt32ToInt64(CastInt32ToInt64), Column(0, "id"))]]
 ArrangeBy[[Column(0)]]
 ArrangeBy[[Column(0, "data")]]
@@ -984,8 +984,8 @@ Arrange␠export␠iterative  2
 Arrange␠export␠iterative␠err  2
 Arrange␠recursive␠err  3
 ArrangeAccumulable␠[val:␠empty]  11
-ArrangeBy[[CallBinary(JsonbGetStringStringify,␠Column(1,␠"details"),␠Literal(Ok(Row{[String("id")]}),␠SqlColumnType␠{␠scalar_type:␠String,␠nullable:␠false␠}))]]  2
-ArrangeBy[[CallBinary(JsonbGetStringStringify,␠Column(2,␠"details"),␠Literal(Ok(Row{[String("id")]}),␠SqlColumnType␠{␠scalar_type:␠String,␠nullable:␠false␠}))]]  1
+ArrangeBy[[CallBinary(JsonbGetStringStringify,␠Column(1,␠"details"),␠Literal(Ok(Row{[String(<"XX">)]}),␠SqlColumnType␠{␠scalar_type:␠String,␠nullable:␠false␠}))]]  2
+ArrangeBy[[CallBinary(JsonbGetStringStringify,␠Column(2,␠"details"),␠Literal(Ok(Row{[String(<"XX">)]}),␠SqlColumnType␠{␠scalar_type:␠String,␠nullable:␠false␠}))]]  1
 ArrangeBy[[CallVariadic(Coalesce,␠[Column(2,␠"parent"),␠Column(3,␠"parent")])]]  2
 ArrangeBy[[Column(0),␠Column(1),␠Column(2),␠Column(3),␠Column(4),␠Column(5),␠Column(6),␠Column(7),␠Column(8),␠Column(9),␠Column(10),␠Column(11),␠Column(12),␠Column(13),␠Column(14),␠Column(15),␠Column(16),␠Column(17),␠Column(18),␠Column(19),␠Column(20),␠Column(21),␠Column(22),␠Column(23),␠Column(24),␠Column(25),␠Column(26),␠Column(27)]]  2
 ArrangeBy[[Column(0),␠Column(1),␠Column(2),␠Column(3),␠Column(4),␠Column(5),␠Column(6),␠Column(7),␠Column(8),␠Column(9),␠Column(10),␠Column(11),␠Column(12),␠Column(13),␠Column(14),␠Column(15),␠Column(16),␠Column(17),␠Column(18),␠Column(19)]]  2

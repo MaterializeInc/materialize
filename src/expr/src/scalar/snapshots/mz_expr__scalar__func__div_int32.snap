@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    is_monotone = \"(true, false)\",\n    output_type = \"i32\",\n    is_infix_op = true,\n    sqlname = \"/\",\n    propagates_nulls = true\n)]\nfn div_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {\n    let b = b.unwrap_int32();\n    if b == 0 {\n        Err(EvalError::DivisionByZero)\n    } else {\n        a.unwrap_int32()\n            .checked_div(b)\n            .map(Datum::from)\n            .ok_or_else(|| EvalError::Int32OutOfRange(format!(\"{a} / {b}\").into()))\n    }\n}\n"
+expression: "#[sqlfunc(\n    is_monotone = \"(true, false)\",\n    is_infix_op = true,\n    sqlname = \"/\",\n    propagates_nulls = true\n)]\nfn div_int32(a: i32, b: i32) -> Result<i32, EvalError> {\n    if b == 0 {\n        Err(EvalError::DivisionByZero)\n    } else {\n        a.checked_div(b)\n            .ok_or_else(|| EvalError::Int32OutOfRange(format!(\"{a} / {b}\").into()))\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -17,9 +17,9 @@ expression: "#[sqlfunc(\n    is_monotone = \"(true, false)\",\n    output_type =
 )]
 pub struct DivInt32;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for DivInt32 {
-    type Input1 = Datum<'a>;
-    type Input2 = Datum<'a>;
-    type Output = Result<Datum<'a>, EvalError>;
+    type Input1 = i32;
+    type Input2 = i32;
+    type Output = Result<i32, EvalError>;
     fn call(
         &self,
         a: Self::Input1,
@@ -34,7 +34,7 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for DivInt32 {
         input_type_b: mz_repr::SqlColumnType,
     ) -> mz_repr::SqlColumnType {
         use mz_repr::AsColumnType;
-        let output = <i32>::as_column_type();
+        let output = Self::Output::as_column_type();
         let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
             self,
         );
@@ -45,9 +45,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for DivInt32 {
                     || (propagates_nulls
                         && (input_type_a.nullable || input_type_b.nullable)),
             )
-    }
-    fn introduces_nulls(&self) -> bool {
-        <i32 as ::mz_repr::DatumType<'_, ()>>::nullable()
     }
     fn is_infix_op(&self) -> bool {
         true
@@ -64,14 +61,11 @@ impl std::fmt::Display for DivInt32 {
         f.write_str("/")
     }
 }
-fn div_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let b = b.unwrap_int32();
+fn div_int32(a: i32, b: i32) -> Result<i32, EvalError> {
     if b == 0 {
         Err(EvalError::DivisionByZero)
     } else {
-        a.unwrap_int32()
-            .checked_div(b)
-            .map(Datum::from)
+        a.checked_div(b)
             .ok_or_else(|| EvalError::Int32OutOfRange(format!("{a} / {b}").into()))
     }
 }

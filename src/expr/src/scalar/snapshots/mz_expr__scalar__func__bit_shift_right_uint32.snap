@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    output_type = \"u32\",\n    is_infix_op = true,\n    sqlname = \">>\",\n    propagates_nulls = true\n)]\nfn bit_shift_right_uint32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {\n    let lhs = a.unwrap_uint32();\n    let rhs = b.unwrap_uint32();\n    Datum::from(lhs.wrapping_shr(rhs))\n}\n"
+expression: "#[sqlfunc(is_infix_op = true, sqlname = \">>\", propagates_nulls = true)]\nfn bit_shift_right_uint32(lhs: u32, rhs: u32) -> u32 {\n    lhs.wrapping_shr(rhs)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -17,9 +17,9 @@ expression: "#[sqlfunc(\n    output_type = \"u32\",\n    is_infix_op = true,\n  
 )]
 pub struct BitShiftRightUint32;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for BitShiftRightUint32 {
-    type Input1 = Datum<'a>;
-    type Input2 = Datum<'a>;
-    type Output = Datum<'a>;
+    type Input1 = u32;
+    type Input2 = u32;
+    type Output = u32;
     fn call(
         &self,
         a: Self::Input1,
@@ -34,7 +34,7 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for BitShiftRightUint32 {
         input_type_b: mz_repr::SqlColumnType,
     ) -> mz_repr::SqlColumnType {
         use mz_repr::AsColumnType;
-        let output = <u32>::as_column_type();
+        let output = Self::Output::as_column_type();
         let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
             self,
         );
@@ -45,9 +45,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for BitShiftRightUint32 {
                     || (propagates_nulls
                         && (input_type_a.nullable || input_type_b.nullable)),
             )
-    }
-    fn introduces_nulls(&self) -> bool {
-        <u32 as ::mz_repr::DatumType<'_, ()>>::nullable()
     }
     fn is_infix_op(&self) -> bool {
         true
@@ -61,8 +58,6 @@ impl std::fmt::Display for BitShiftRightUint32 {
         f.write_str(">>")
     }
 }
-fn bit_shift_right_uint32<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    let lhs = a.unwrap_uint32();
-    let rhs = b.unwrap_uint32();
-    Datum::from(lhs.wrapping_shr(rhs))
+fn bit_shift_right_uint32(lhs: u32, rhs: u32) -> u32 {
+    lhs.wrapping_shr(rhs)
 }

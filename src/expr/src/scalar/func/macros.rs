@@ -422,22 +422,22 @@ macro_rules! derive_unary {
     }
 }
 
-/// Temporary macro that generates the equivalent of what enum_dispatch will do in the future. We
-/// need this manual macro implementation to delegate to the previous manual implementation for
-/// variants that use the old definitions.
-///
-/// Once everything is handled by this macro we can remove it and replace it with `enum_dispatch`
-///
 /// This is not complete yet, pending conversion of all binary funcs to an implementation of
 /// `LazyBinaryFunc`.
-macro_rules! derive_binary {
-    ($($name:ident),* $(,)?) => {
+macro_rules! derive_binary_from {
+    ($($name:ident $( ( $variant:ident ) )?),* $(,)?) => {
         $(
-            impl From<$name> for crate::BinaryFunc {
-                fn from(variant: $name) -> Self {
-                    Self::$name(variant)
-                }
-            }
+            derive_binary_from!(from @ $name $( ( $variant ) )?);
         )*
-    }
+    };
+    (from @ $name:ident ( $variant:ident ) ) => {
+        impl From<$variant> for crate::BinaryFunc {
+            fn from(variant: $variant) -> Self {
+                Self::$name(variant)
+            }
+        }
+    };
+    (from @ $name:ident) => {
+        derive_binary_from!(from @ $name ( $name ) );
+    };
 }

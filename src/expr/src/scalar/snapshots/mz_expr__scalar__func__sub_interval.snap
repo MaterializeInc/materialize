@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    is_monotone = \"(true, true)\",\n    output_type = \"Interval\",\n    is_infix_op = true,\n    sqlname = \"-\",\n    propagates_nulls = true\n)]\nfn sub_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {\n    b.unwrap_interval()\n        .checked_neg()\n        .and_then(|b| b.checked_add(&a.unwrap_interval()))\n        .ok_or_else(|| EvalError::IntervalOutOfRange(format!(\"{a} - {b}\").into()))\n        .map(Datum::from)\n}\n"
+expression: "#[sqlfunc(\n    is_monotone = \"(true, true)\",\n    output_type = \"Interval\",\n    is_infix_op = true,\n    sqlname = \"-\",\n    propagates_nulls = true\n)]\nfn sub_interval(a: Interval, b: Interval) -> Result<Interval, EvalError> {\n    b.checked_neg()\n        .and_then(|b| b.checked_add(&a))\n        .ok_or_else(|| EvalError::IntervalOutOfRange(format!(\"{a} - {b}\").into()))\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -17,9 +17,9 @@ expression: "#[sqlfunc(\n    is_monotone = \"(true, true)\",\n    output_type = 
 )]
 pub struct SubInterval;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for SubInterval {
-    type Input1 = Datum<'a>;
-    type Input2 = Datum<'a>;
-    type Output = Result<Datum<'a>, EvalError>;
+    type Input1 = Interval;
+    type Input2 = Interval;
+    type Output = Result<Interval, EvalError>;
     fn call(
         &self,
         a: Self::Input1,
@@ -64,10 +64,8 @@ impl std::fmt::Display for SubInterval {
         f.write_str("-")
     }
 }
-fn sub_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    b.unwrap_interval()
-        .checked_neg()
-        .and_then(|b| b.checked_add(&a.unwrap_interval()))
+fn sub_interval(a: Interval, b: Interval) -> Result<Interval, EvalError> {
+    b.checked_neg()
+        .and_then(|b| b.checked_add(&a))
         .ok_or_else(|| EvalError::IntervalOutOfRange(format!("{a} - {b}").into()))
-        .map(Datum::from)
 }

@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    is_monotone = (true, true),\n    output_type = f32,\n    is_infix_op = true,\n    sqlname = \"-\",\n    propagates_nulls = true\n)]\nfn sub_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {\n    let a = a.unwrap_float32();\n    let b = b.unwrap_float32();\n    let difference = a - b;\n    if difference.is_infinite() && !a.is_infinite() && !b.is_infinite() {\n        Err(EvalError::FloatOverflow)\n    } else {\n        Ok(Datum::from(difference))\n    }\n}\n"
+expression: "#[sqlfunc(\n    is_monotone = \"(true, true)\",\n    is_infix_op = true,\n    sqlname = \"-\",\n    propagates_nulls = true\n)]\nfn sub_float32(a: f32, b: f32) -> Result<f32, EvalError> {\n    let difference = a - b;\n    if difference.is_infinite() && !a.is_infinite() && !b.is_infinite() {\n        Err(EvalError::FloatOverflow)\n    } else {\n        Ok(difference)\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -17,9 +17,9 @@ expression: "#[sqlfunc(\n    is_monotone = (true, true),\n    output_type = f32,
 )]
 pub struct SubFloat32;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for SubFloat32 {
-    type Input1 = Datum<'a>;
-    type Input2 = Datum<'a>;
-    type Output = Result<Datum<'a>, EvalError>;
+    type Input1 = f32;
+    type Input2 = f32;
+    type Output = Result<f32, EvalError>;
     fn call(
         &self,
         a: Self::Input1,
@@ -34,7 +34,7 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for SubFloat32 {
         input_type_b: mz_repr::SqlColumnType,
     ) -> mz_repr::SqlColumnType {
         use mz_repr::AsColumnType;
-        let output = <f32>::as_column_type();
+        let output = Self::Output::as_column_type();
         let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
             self,
         );
@@ -45,9 +45,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for SubFloat32 {
                     || (propagates_nulls
                         && (input_type_a.nullable || input_type_b.nullable)),
             )
-    }
-    fn introduces_nulls(&self) -> bool {
-        <f32 as ::mz_repr::DatumType<'_, ()>>::nullable()
     }
     fn is_infix_op(&self) -> bool {
         true
@@ -64,13 +61,11 @@ impl std::fmt::Display for SubFloat32 {
         f.write_str("-")
     }
 }
-fn sub_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let a = a.unwrap_float32();
-    let b = b.unwrap_float32();
+fn sub_float32(a: f32, b: f32) -> Result<f32, EvalError> {
     let difference = a - b;
     if difference.is_infinite() && !a.is_infinite() && !b.is_infinite() {
         Err(EvalError::FloatOverflow)
     } else {
-        Ok(Datum::from(difference))
+        Ok(difference)
     }
 }

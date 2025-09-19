@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    output_type = \"bool\",\n    is_infix_op = true,\n    sqlname = \"?\",\n    propagates_nulls = true\n)]\nfn map_contains_key<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {\n    let map = a.unwrap_map();\n    let k = b.unwrap_str();\n    map.iter().any(|(k2, _v)| k == k2).into()\n}\n"
+expression: "#[sqlfunc(is_infix_op = true, sqlname = \"?\", propagates_nulls = true)]\nfn map_contains_key<'a>(map: DatumMap<'a>, k: &str) -> bool {\n    map.iter().any(|(k2, _v)| k == k2)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -17,9 +17,9 @@ expression: "#[sqlfunc(\n    output_type = \"bool\",\n    is_infix_op = true,\n 
 )]
 pub struct MapContainsKey;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for MapContainsKey {
-    type Input1 = Datum<'a>;
-    type Input2 = Datum<'a>;
-    type Output = Datum<'a>;
+    type Input1 = DatumMap<'a>;
+    type Input2 = &'a str;
+    type Output = bool;
     fn call(
         &self,
         a: Self::Input1,
@@ -34,7 +34,7 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for MapContainsKey {
         input_type_b: mz_repr::SqlColumnType,
     ) -> mz_repr::SqlColumnType {
         use mz_repr::AsColumnType;
-        let output = <bool>::as_column_type();
+        let output = Self::Output::as_column_type();
         let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
             self,
         );
@@ -45,9 +45,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for MapContainsKey {
                     || (propagates_nulls
                         && (input_type_a.nullable || input_type_b.nullable)),
             )
-    }
-    fn introduces_nulls(&self) -> bool {
-        <bool as ::mz_repr::DatumType<'_, ()>>::nullable()
     }
     fn is_infix_op(&self) -> bool {
         true
@@ -61,8 +58,6 @@ impl std::fmt::Display for MapContainsKey {
         f.write_str("?")
     }
 }
-fn map_contains_key<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    let map = a.unwrap_map();
-    let k = b.unwrap_str();
-    map.iter().any(|(k2, _v)| k == k2).into()
+fn map_contains_key<'a>(map: DatumMap<'a>, k: &str) -> bool {
+    map.iter().any(|(k2, _v)| k == k2)
 }

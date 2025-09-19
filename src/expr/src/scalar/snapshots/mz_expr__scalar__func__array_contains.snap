@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    output_type = \"bool\",\n    is_infix_op = true,\n    sqlname = \"array_contains\",\n    propagates_nulls = true,\n    introduces_nulls = false\n)]\nfn array_contains<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {\n    let array = Datum::unwrap_array(&b);\n    Datum::from(array.elements().iter().any(|e| e == a))\n}\n"
+expression: "#[sqlfunc(\n    output_type = \"bool\",\n    is_infix_op = true,\n    sqlname = \"array_contains\",\n    propagates_nulls = true,\n    introduces_nulls = false\n)]\nfn array_contains<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {\n    if b.is_null() {\n        return Datum::Null;\n    }\n    let array = b.unwrap_array();\n    Datum::from(array.elements().iter().any(|e| e == a))\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -62,6 +62,9 @@ impl std::fmt::Display for ArrayContains {
     }
 }
 fn array_contains<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    let array = Datum::unwrap_array(&b);
+    if b.is_null() {
+        return Datum::Null;
+    }
+    let array = b.unwrap_array();
     Datum::from(array.elements().iter().any(|e| e == a))
 }

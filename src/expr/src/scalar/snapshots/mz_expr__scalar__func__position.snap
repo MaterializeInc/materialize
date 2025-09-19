@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(output_type = \"i32\", propagates_nulls = true)]\nfn position<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {\n    let substring: &'a str = a.unwrap_str();\n    let string = b.unwrap_str();\n    let char_index = string.find(substring);\n    if let Some(char_index) = char_index {\n        let string_prefix = &string[0..char_index];\n        let num_prefix_chars = string_prefix.chars().count();\n        let num_prefix_chars = i32::try_from(num_prefix_chars)\n            .map_err(|_| EvalError::Int32OutOfRange(\n                num_prefix_chars.to_string().into(),\n            ))?;\n        Ok(Datum::Int32(num_prefix_chars + 1))\n    } else {\n        Ok(Datum::Int32(0))\n    }\n}\n"
+expression: "#[sqlfunc(propagates_nulls = true)]\nfn position(substring: &str, string: &str) -> Result<i32, EvalError> {\n    let char_index = string.find(substring);\n    if let Some(char_index) = char_index {\n        let string_prefix = &string[0..char_index];\n        let num_prefix_chars = string_prefix.chars().count();\n        let num_prefix_chars = i32::try_from(num_prefix_chars)\n            .map_err(|_| EvalError::Int32OutOfRange(\n                num_prefix_chars.to_string().into(),\n            ))?;\n        Ok(num_prefix_chars + 1)\n    } else {\n        Ok(0)\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -17,9 +17,9 @@ expression: "#[sqlfunc(output_type = \"i32\", propagates_nulls = true)]\nfn posi
 )]
 pub struct Position;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for Position {
-    type Input1 = Datum<'a>;
-    type Input2 = Datum<'a>;
-    type Output = Result<Datum<'a>, EvalError>;
+    type Input1 = &'a str;
+    type Input2 = &'a str;
+    type Output = Result<i32, EvalError>;
     fn call(
         &self,
         a: Self::Input1,
@@ -34,7 +34,7 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for Position {
         input_type_b: mz_repr::SqlColumnType,
     ) -> mz_repr::SqlColumnType {
         use mz_repr::AsColumnType;
-        let output = <i32>::as_column_type();
+        let output = Self::Output::as_column_type();
         let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
             self,
         );
@@ -46,9 +46,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for Position {
                         && (input_type_a.nullable || input_type_b.nullable)),
             )
     }
-    fn introduces_nulls(&self) -> bool {
-        <i32 as ::mz_repr::DatumType<'_, ()>>::nullable()
-    }
     fn propagates_nulls(&self) -> bool {
         true
     }
@@ -58,9 +55,7 @@ impl std::fmt::Display for Position {
         f.write_str(stringify!(position))
     }
 }
-fn position<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let substring: &'a str = a.unwrap_str();
-    let string = b.unwrap_str();
+fn position(substring: &str, string: &str) -> Result<i32, EvalError> {
     let char_index = string.find(substring);
     if let Some(char_index) = char_index {
         let string_prefix = &string[0..char_index];
@@ -69,8 +64,8 @@ fn position<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
             .map_err(|_| EvalError::Int32OutOfRange(
                 num_prefix_chars.to_string().into(),
             ))?;
-        Ok(Datum::Int32(num_prefix_chars + 1))
+        Ok(num_prefix_chars + 1)
     } else {
-        Ok(Datum::Int32(0))
+        Ok(0)
     }
 }

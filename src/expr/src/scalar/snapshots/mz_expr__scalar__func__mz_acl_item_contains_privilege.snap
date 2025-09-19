@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    sqlname = \"mz_aclitem_contains_privilege\",\n    output_type = \"bool\",\n    propagates_nulls = true\n)]\n/// Determines if an mz_aclitem contains one of the specified privileges. This will return true if\n/// any of the listed privileges are contained in the mz_aclitem.\nfn mz_acl_item_contains_privilege<'a>(\n    a: Datum<'a>,\n    b: Datum<'a>,\n) -> Result<Datum<'a>, EvalError> {\n    let mz_acl_item = a.unwrap_mz_acl_item();\n    let privileges = b.unwrap_str();\n    let acl_mode = AclMode::parse_multiple_privileges(privileges)\n        .map_err(|e: anyhow::Error| EvalError::InvalidPrivileges(e.to_string().into()))?;\n    let contains = !mz_acl_item.acl_mode.intersection(acl_mode).is_empty();\n    Ok(contains.into())\n}\n"
+expression: "#[sqlfunc(\n    sqlname = \"mz_aclitem_contains_privilege\",\n    output_type = \"bool\",\n    propagates_nulls = true\n)]\n/// Determines if an mz_aclitem contains one of the specified privileges. This will return true if\n/// any of the listed privileges are contained in the mz_aclitem.\nfn mz_acl_item_contains_privilege(\n    mz_acl_item: MzAclItem,\n    privileges: &str,\n) -> Result<bool, EvalError> {\n    let acl_mode = AclMode::parse_multiple_privileges(privileges)\n        .map_err(|e: anyhow::Error| EvalError::InvalidPrivileges(e.to_string().into()))?;\n    let contains = !mz_acl_item.acl_mode.intersection(acl_mode).is_empty();\n    Ok(contains)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -17,9 +17,9 @@ expression: "#[sqlfunc(\n    sqlname = \"mz_aclitem_contains_privilege\",\n    o
 )]
 pub struct MzAclItemContainsPrivilege;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for MzAclItemContainsPrivilege {
-    type Input1 = Datum<'a>;
-    type Input2 = Datum<'a>;
-    type Output = Result<Datum<'a>, EvalError>;
+    type Input1 = MzAclItem;
+    type Input2 = &'a str;
+    type Output = Result<bool, EvalError>;
     fn call(
         &self,
         a: Self::Input1,
@@ -60,14 +60,12 @@ impl std::fmt::Display for MzAclItemContainsPrivilege {
 }
 /// Determines if an mz_aclitem contains one of the specified privileges. This will return true if
 /// any of the listed privileges are contained in the mz_aclitem.
-fn mz_acl_item_contains_privilege<'a>(
-    a: Datum<'a>,
-    b: Datum<'a>,
-) -> Result<Datum<'a>, EvalError> {
-    let mz_acl_item = a.unwrap_mz_acl_item();
-    let privileges = b.unwrap_str();
+fn mz_acl_item_contains_privilege(
+    mz_acl_item: MzAclItem,
+    privileges: &str,
+) -> Result<bool, EvalError> {
     let acl_mode = AclMode::parse_multiple_privileges(privileges)
         .map_err(|e: anyhow::Error| EvalError::InvalidPrivileges(e.to_string().into()))?;
     let contains = !mz_acl_item.acl_mode.intersection(acl_mode).is_empty();
-    Ok(contains.into())
+    Ok(contains)
 }

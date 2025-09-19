@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    output_type_expr = \"SqlScalarType::Jsonb.nullable(true)\",\n    is_infix_op = true,\n    sqlname = \"-\",\n    propagates_nulls = true,\n    introduces_nulls = true\n)]\nfn jsonb_delete_string<'a>(\n    a: Datum<'a>,\n    b: Datum<'a>,\n    temp_storage: &'a RowArena,\n) -> Datum<'a> {\n    match a {\n        Datum::List(list) => {\n            let elems = list.iter().filter(|e| b != *e);\n            temp_storage.make_datum(|packer| packer.push_list(elems))\n        }\n        Datum::Map(dict) => {\n            let k = b.unwrap_str();\n            let pairs = dict.iter().filter(|(k2, _v)| k != *k2);\n            temp_storage.make_datum(|packer| packer.push_dict(pairs))\n        }\n        _ => Datum::Null,\n    }\n}\n"
+expression: "#[sqlfunc(\n    output_type_expr = \"SqlScalarType::Jsonb.nullable(true)\",\n    is_infix_op = true,\n    sqlname = \"-\",\n    propagates_nulls = true,\n    introduces_nulls = true\n)]\nfn jsonb_delete_string<'a>(\n    a: Datum<'a>,\n    k: &str,\n    temp_storage: &'a RowArena,\n) -> Datum<'a> {\n    match a {\n        Datum::List(list) => {\n            let elems = list.iter().filter(|e| Datum::from(k) != *e);\n            temp_storage.make_datum(|packer| packer.push_list(elems))\n        }\n        Datum::Map(dict) => {\n            let pairs = dict.iter().filter(|(k2, _v)| k != *k2);\n            temp_storage.make_datum(|packer| packer.push_dict(pairs))\n        }\n        _ => Datum::Null,\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -18,7 +18,7 @@ expression: "#[sqlfunc(\n    output_type_expr = \"SqlScalarType::Jsonb.nullable(
 pub struct JsonbDeleteString;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for JsonbDeleteString {
     type Input1 = Datum<'a>;
-    type Input2 = Datum<'a>;
+    type Input2 = &'a str;
     type Output = Datum<'a>;
     fn call(
         &self,
@@ -63,16 +63,15 @@ impl std::fmt::Display for JsonbDeleteString {
 }
 fn jsonb_delete_string<'a>(
     a: Datum<'a>,
-    b: Datum<'a>,
+    k: &str,
     temp_storage: &'a RowArena,
 ) -> Datum<'a> {
     match a {
         Datum::List(list) => {
-            let elems = list.iter().filter(|e| b != *e);
+            let elems = list.iter().filter(|e| Datum::from(k) != *e);
             temp_storage.make_datum(|packer| packer.push_list(elems))
         }
         Datum::Map(dict) => {
-            let k = b.unwrap_str();
             let pairs = dict.iter().filter(|(k2, _v)| k != *k2);
             temp_storage.make_datum(|packer| packer.push_dict(pairs))
         }

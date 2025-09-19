@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(output_type = \"Numeric\", propagates_nulls = true)]\nfn power_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {\n    let mut a = a.unwrap_numeric().0;\n    let b = b.unwrap_numeric().0;\n    if a.is_zero() {\n        if b.is_zero() {\n            return Ok(Datum::from(Numeric::from(1)));\n        }\n        if b.is_negative() {\n            return Err(EvalError::Undefined(\"zero raised to a negative power\".into()));\n        }\n    }\n    if a.is_negative() && b.exponent() < 0 {\n        return Err(EvalError::ComplexOutOfRange(\"pow\".into()));\n    }\n    let mut cx = numeric::cx_datum();\n    cx.pow(&mut a, &b);\n    let cx_status = cx.status();\n    if cx_status.overflow() || (cx_status.invalid_operation() && !b.is_negative()) {\n        Err(EvalError::FloatOverflow)\n    } else if cx_status.subnormal() || cx_status.invalid_operation() {\n        Err(EvalError::FloatUnderflow)\n    } else {\n        numeric::munge_numeric(&mut a).unwrap();\n        Ok(Datum::from(a))\n    }\n}\n"
+expression: "#[sqlfunc(output_type = \"Numeric\", propagates_nulls = true)]\nfn power_numeric(mut a: Numeric, b: Numeric) -> Result<Numeric, EvalError> {\n    if a.is_zero() {\n        if b.is_zero() {\n            return Ok(Numeric::from(1));\n        }\n        if b.is_negative() {\n            return Err(EvalError::Undefined(\"zero raised to a negative power\".into()));\n        }\n    }\n    if a.is_negative() && b.exponent() < 0 {\n        return Err(EvalError::ComplexOutOfRange(\"pow\".into()));\n    }\n    let mut cx = numeric::cx_datum();\n    cx.pow(&mut a, &b);\n    let cx_status = cx.status();\n    if cx_status.overflow() || (cx_status.invalid_operation() && !b.is_negative()) {\n        Err(EvalError::FloatOverflow)\n    } else if cx_status.subnormal() || cx_status.invalid_operation() {\n        Err(EvalError::FloatUnderflow)\n    } else {\n        numeric::munge_numeric(&mut a).unwrap();\n        Ok(a)\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -17,9 +17,9 @@ expression: "#[sqlfunc(output_type = \"Numeric\", propagates_nulls = true)]\nfn 
 )]
 pub struct PowerNumeric;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for PowerNumeric {
-    type Input1 = Datum<'a>;
-    type Input2 = Datum<'a>;
-    type Output = Result<Datum<'a>, EvalError>;
+    type Input1 = Numeric;
+    type Input2 = Numeric;
+    type Output = Result<Numeric, EvalError>;
     fn call(
         &self,
         a: Self::Input1,
@@ -58,12 +58,10 @@ impl std::fmt::Display for PowerNumeric {
         f.write_str(stringify!(power_numeric))
     }
 }
-fn power_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let mut a = a.unwrap_numeric().0;
-    let b = b.unwrap_numeric().0;
+fn power_numeric(mut a: Numeric, b: Numeric) -> Result<Numeric, EvalError> {
     if a.is_zero() {
         if b.is_zero() {
-            return Ok(Datum::from(Numeric::from(1)));
+            return Ok(Numeric::from(1));
         }
         if b.is_negative() {
             return Err(EvalError::Undefined("zero raised to a negative power".into()));
@@ -81,6 +79,6 @@ fn power_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError>
         Err(EvalError::FloatUnderflow)
     } else {
         numeric::munge_numeric(&mut a).unwrap();
-        Ok(Datum::from(a))
+        Ok(a)
     }
 }

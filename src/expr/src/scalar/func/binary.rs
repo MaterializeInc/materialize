@@ -178,16 +178,202 @@ impl<T: for<'a> EagerBinaryFunc<'a>> LazyBinaryFunc for T {
 mod derive {
     use crate::scalar::func::*;
 
-    derive_binary! {
+    derive_binary_from! {
+        AddDateInterval,
+        AddDateTime,
+        AddFloat32,
+        AddFloat64,
         AddInt16,
         AddInt32,
         AddInt64,
+        AddInterval,
+        AddNumeric,
+        AddTimeInterval,
+        AddTimestampInterval,
+        AddTimestampTzInterval,
         AddUint16,
         AddUint32,
         AddUint64,
-        AddFloat32,
-        AddFloat64,
-        AddInterval,
+        AgeTimestamp,
+        AgeTimestampTz,
+        ArrayArrayConcat,
+        ArrayContains,
+        // ArrayContainsArray { rev: bool },
+        ArrayLength,
+        ArrayLower,
+        ArrayRemove,
+        ArrayUpper,
+        BitAndInt16,
+        BitAndInt32,
+        BitAndInt64,
+        BitAndUint16,
+        BitAndUint32,
+        BitAndUint64,
+        BitOrInt16,
+        BitOrInt32,
+        BitOrInt64,
+        BitOrUint16,
+        BitOrUint32,
+        BitOrUint64,
+        BitShiftLeftInt16,
+        BitShiftLeftInt32,
+        BitShiftLeftInt64,
+        BitShiftLeftUint16,
+        BitShiftLeftUint32,
+        BitShiftLeftUint64,
+        BitShiftRightInt16,
+        BitShiftRightInt32,
+        BitShiftRightInt64,
+        BitShiftRightUint16,
+        BitShiftRightUint32,
+        BitShiftRightUint64,
+        BitXorInt16,
+        BitXorInt32,
+        BitXorInt64,
+        BitXorUint16,
+        BitXorUint32,
+        BitXorUint64,
+        ConstantTimeEqBytes,
+        ConstantTimeEqString,
+        ConvertFrom,
+        DateBinTimestamp,
+        DateBinTimestampTz,
+        DatePartInterval(DatePartIntervalF64),
+        DatePartTime(DatePartTimeF64),
+        DatePartTimestamp(DatePartTimestampTimestampF64),
+        DatePartTimestampTz(DatePartTimestampTimestampTzF64),
+        DateTruncInterval,
+        DateTruncTimestamp(DateTruncUnitsTimestamp),
+        DateTruncTimestampTz(DateTruncUnitsTimestampTz),
+        Decode,
+        DigestBytes,
+        DigestString,
+        DivFloat32,
+        DivFloat64,
+        DivInt16,
+        DivInt32,
+        DivInt64,
+        DivInterval,
+        DivNumeric,
+        DivUint16,
+        DivUint32,
+        DivUint64,
+        ElementListConcat,
+        Encode,
+        EncodedBytesCharLength,
+        Eq,
+        ExtractDate(ExtractDateUnits),
+        ExtractInterval(DatePartIntervalNumeric),
+        ExtractTime(DatePartTimeNumeric),
+        ExtractTimestamp(DatePartTimestampTimestampNumeric),
+        ExtractTimestampTz(DatePartTimestampTimestampTzNumeric),
+        GetBit,
+        GetByte,
+        Gt,
+        Gte,
+        // IsLikeMatch
+        // IsRegexpMatch
+        JsonbConcat,
+        JsonbContainsJsonb,
+        JsonbContainsString,
+        JsonbDeleteInt64,
+        JsonbDeleteString,
+        // JsonbGetInt64,
+        // JsonbGetInt64Stringify,
+        // JsonbGetPath,
+        // JsonbGetPathStringify,
+        // JsonbGetString,
+        // JsonbGetStringStringify,
+        Left,
+        LikeEscape,
+        // ListContainsList
+        ListElementConcat,
+        // ListLengthMax
+        ListListConcat,
+        ListRemove,
+        LogNumeric(LogBaseNumeric),
+        Lt,
+        Lte,
+        MapContainsAllKeys,
+        MapContainsAnyKeys,
+        MapContainsKey,
+        MapContainsMap,
+        MapGetValue,
+        ModFloat32,
+        ModFloat64,
+        ModInt16,
+        ModInt32,
+        ModInt64,
+        ModNumeric,
+        ModUint16,
+        ModUint32,
+        ModUint64,
+        MulFloat32,
+        MulFloat64,
+        MulInt16,
+        MulInt32,
+        MulInt64,
+        MulInterval,
+        MulNumeric,
+        MulUint16,
+        MulUint32,
+        MulUint64,
+        MzAclItemContainsPrivilege,
+        MzRenderTypmod,
+        // Normalize,
+        NotEq,
+        ParseIdent,
+        Position,
+        Power,
+        PowerNumeric,
+        PrettySql,
+        RangeAdjacent,
+        RangeAfter,
+        RangeBefore,
+        // RangeContainsElem
+        // RangeContainsRange
+        RangeDifference,
+        RangeIntersection,
+        RangeOverlaps,
+        RangeOverleft,
+        RangeOverright,
+        RangeUnion,
+        // RegexpReplace
+        // RepeatString,
+        Right,
+        RoundNumeric(RoundNumericBinary),
+        StartsWith,
+        SubDate,
+        SubDateInterval,
+        SubFloat32,
+        SubFloat64,
+        SubInt16,
+        SubInt32,
+        SubInt64,
+        SubInterval,
+        SubNumeric,
+        SubTime,
+        SubTimeInterval,
+        SubTimestamp,
+        SubTimestampInterval,
+        SubTimestampTz,
+        SubTimestampTzInterval,
+        SubUint16,
+        SubUint32,
+        SubUint64,
+        TextConcat(TextConcatBinary),
+        // TimezoneIntervalTime,
+        // TimezoneIntervalTimestamp,
+        // TimezoneIntervalTimestampTz,
+        TimezoneOffset,
+        // TimezoneTimestamp,
+        // TimezoneTimestampTz,
+        ToCharTimestamp(ToCharTimestampFormat),
+        ToCharTimestampTz(ToCharTimestampTzFormat),
+        Trim,
+        TrimLeading,
+        TrimTrailing,
+        UuidGenerateV5,
     }
 }
 
@@ -504,256 +690,12 @@ mod test {
             nullable: input_nullable,
             scalar_type: SqlScalarType::Int32,
         };
-        let ts_ty = SqlColumnType {
-            nullable: input_nullable,
-            scalar_type: SqlScalarType::Timestamp { precision: None },
-        };
-        let ts_tz_ty = SqlColumnType {
-            nullable: input_nullable,
-            scalar_type: SqlScalarType::TimestampTz { precision: None },
-        };
-        let time_ty = SqlColumnType {
-            nullable: input_nullable,
-            scalar_type: SqlScalarType::Time,
-        };
-        let interval_ty = SqlColumnType {
-            nullable: input_nullable,
-            scalar_type: SqlScalarType::Interval,
-        };
-        let i32_map_ty = SqlColumnType {
-            nullable: input_nullable,
-            scalar_type: SqlScalarType::Map {
-                value_type: Box::new(SqlScalarType::Int32),
-                custom_id: None,
-            },
-        };
 
         use BinaryFunc as BF;
 
         // TODO: We're passing unexpected column types to the functions here,
         //   which works because most don't look at the type. We should fix this
         //   and pass expected column types.
-
-        check(
-            func::AddTimestampInterval,
-            BF::AddTimestampInterval,
-            &ts_ty,
-            &interval_ty,
-        );
-        check(
-            func::AddTimestampTzInterval,
-            BF::AddTimestampTzInterval,
-            &ts_tz_ty,
-            &interval_ty,
-        );
-        check(func::AddDateInterval, BF::AddDateInterval, &i32_ty, &i32_ty);
-        check(
-            func::AddTimeInterval,
-            BF::AddTimeInterval,
-            &ts_tz_ty,
-            &i32_ty,
-        );
-        check(func::RoundNumericBinary, BF::RoundNumeric, &i32_ty, &i32_ty);
-        check(func::ConvertFrom, BF::ConvertFrom, &i32_ty, &i32_ty);
-        check(func::Left, BF::Left, &i32_ty, &i32_ty);
-        check(func::Right, BF::Right, &i32_ty, &i32_ty);
-        check(func::Trim, BF::Trim, &i32_ty, &i32_ty);
-        check(func::TrimLeading, BF::TrimLeading, &i32_ty, &i32_ty);
-        check(func::TrimTrailing, BF::TrimTrailing, &i32_ty, &i32_ty);
-        check(func::Encode, BF::Encode, &i32_ty, &i32_ty);
-        check(func::Decode, BF::Decode, &i32_ty, &i32_ty);
-        check(
-            func::EncodedBytesCharLength,
-            BF::EncodedBytesCharLength,
-            &i32_ty,
-            &i32_ty,
-        );
-        check(func::AddNumeric, BF::AddNumeric, &i32_ty, &i32_ty);
-        check(func::BitAndInt16, BF::BitAndInt16, &i32_ty, &i32_ty);
-        check(func::BitAndInt32, BF::BitAndInt32, &i32_ty, &i32_ty);
-        check(func::BitAndInt64, BF::BitAndInt64, &i32_ty, &i32_ty);
-        check(func::BitAndUint16, BF::BitAndUint16, &i32_ty, &i32_ty);
-        check(func::BitAndUint32, BF::BitAndUint32, &i32_ty, &i32_ty);
-        check(func::BitAndUint64, BF::BitAndUint64, &i32_ty, &i32_ty);
-        check(func::BitOrInt16, BF::BitOrInt16, &i32_ty, &i32_ty);
-        check(func::BitOrInt32, BF::BitOrInt32, &i32_ty, &i32_ty);
-        check(func::BitOrInt64, BF::BitOrInt64, &i32_ty, &i32_ty);
-        check(func::BitOrUint16, BF::BitOrUint16, &i32_ty, &i32_ty);
-        check(func::BitOrUint32, BF::BitOrUint32, &i32_ty, &i32_ty);
-        check(func::BitOrUint64, BF::BitOrUint64, &i32_ty, &i32_ty);
-        check(func::BitXorInt16, BF::BitXorInt16, &i32_ty, &i32_ty);
-        check(func::BitXorInt32, BF::BitXorInt32, &i32_ty, &i32_ty);
-        check(func::BitXorInt64, BF::BitXorInt64, &i32_ty, &i32_ty);
-        check(func::BitXorUint16, BF::BitXorUint16, &i32_ty, &i32_ty);
-        check(func::BitXorUint32, BF::BitXorUint32, &i32_ty, &i32_ty);
-        check(func::BitXorUint64, BF::BitXorUint64, &i32_ty, &i32_ty);
-
-        check(
-            func::BitShiftLeftInt16,
-            BF::BitShiftLeftInt16,
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::BitShiftLeftInt32,
-            BF::BitShiftLeftInt32,
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::BitShiftLeftInt64,
-            BF::BitShiftLeftInt64,
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::BitShiftLeftUint16,
-            BF::BitShiftLeftUint16,
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::BitShiftLeftUint32,
-            BF::BitShiftLeftUint32,
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::BitShiftLeftUint64,
-            BF::BitShiftLeftUint64,
-            &i32_ty,
-            &i32_ty,
-        );
-
-        check(
-            func::BitShiftRightInt16,
-            BF::BitShiftRightInt16,
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::BitShiftRightInt32,
-            BF::BitShiftRightInt32,
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::BitShiftRightInt64,
-            BF::BitShiftRightInt64,
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::BitShiftRightUint16,
-            BF::BitShiftRightUint16,
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::BitShiftRightUint32,
-            BF::BitShiftRightUint32,
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::BitShiftRightUint64,
-            BF::BitShiftRightUint64,
-            &i32_ty,
-            &i32_ty,
-        );
-
-        check(func::SubInt16, BF::SubInt16, &i32_ty, &i32_ty);
-        check(func::SubInt32, BF::SubInt32, &i32_ty, &i32_ty);
-        check(func::SubInt64, BF::SubInt64, &i32_ty, &i32_ty);
-        check(func::SubUint16, BF::SubUint16, &i32_ty, &i32_ty);
-        check(func::SubUint32, BF::SubUint32, &i32_ty, &i32_ty);
-        check(func::SubUint64, BF::SubUint64, &i32_ty, &i32_ty);
-        check(func::SubFloat32, BF::SubFloat32, &i32_ty, &i32_ty);
-        check(func::SubFloat64, BF::SubFloat64, &i32_ty, &i32_ty);
-        check(func::SubNumeric, BF::SubNumeric, &i32_ty, &i32_ty);
-        check(
-            func::SubTimestampInterval,
-            BF::SubTimestampInterval,
-            &ts_ty,
-            &interval_ty,
-        );
-        check(
-            func::SubTimestampTzInterval,
-            BF::SubTimestampTzInterval,
-            &ts_tz_ty,
-            &interval_ty,
-        );
-
-        check(func::AgeTimestamp, BF::AgeTimestamp, &i32_ty, &i32_ty);
-        check(func::AgeTimestamptz, BF::AgeTimestampTz, &i32_ty, &i32_ty);
-
-        check(func::SubTimestamp, BF::SubTimestamp, &ts_tz_ty, &i32_ty);
-        check(func::SubTimestamptz, BF::SubTimestampTz, &ts_tz_ty, &i32_ty);
-        check(func::SubDate, BF::SubDate, &i32_ty, &i32_ty);
-        check(func::SubTime, BF::SubTime, &i32_ty, &i32_ty);
-        check(func::SubInterval, BF::SubInterval, &i32_ty, &i32_ty);
-        check(func::SubDateInterval, BF::SubDateInterval, &i32_ty, &i32_ty);
-        check(
-            func::SubTimeInterval,
-            BF::SubTimeInterval,
-            &time_ty,
-            &interval_ty,
-        );
-
-        check(func::MulInt16, BF::MulInt16, &i32_ty, &i32_ty);
-        check(func::MulInt32, BF::MulInt32, &i32_ty, &i32_ty);
-        check(func::MulInt64, BF::MulInt64, &i32_ty, &i32_ty);
-        check(func::MulUint16, BF::MulUint16, &i32_ty, &i32_ty);
-        check(func::MulUint32, BF::MulUint32, &i32_ty, &i32_ty);
-        check(func::MulUint64, BF::MulUint64, &i32_ty, &i32_ty);
-        check(func::MulFloat32, BF::MulFloat32, &i32_ty, &i32_ty);
-        check(func::MulFloat64, BF::MulFloat64, &i32_ty, &i32_ty);
-        check(func::MulNumeric, BF::MulNumeric, &i32_ty, &i32_ty);
-        check(func::MulInterval, BF::MulInterval, &i32_ty, &i32_ty);
-
-        check(func::DivInt16, BF::DivInt16, &i32_ty, &i32_ty);
-        check(func::DivInt32, BF::DivInt32, &i32_ty, &i32_ty);
-        check(func::DivInt64, BF::DivInt64, &i32_ty, &i32_ty);
-        check(func::DivUint16, BF::DivUint16, &i32_ty, &i32_ty);
-        check(func::DivUint32, BF::DivUint32, &i32_ty, &i32_ty);
-        check(func::DivUint64, BF::DivUint64, &i32_ty, &i32_ty);
-        check(func::DivFloat32, BF::DivFloat32, &i32_ty, &i32_ty);
-        check(func::DivFloat64, BF::DivFloat64, &i32_ty, &i32_ty);
-        check(func::DivNumeric, BF::DivNumeric, &i32_ty, &i32_ty);
-        check(func::DivInterval, BF::DivInterval, &i32_ty, &i32_ty);
-
-        check(func::ModInt16, BF::ModInt16, &i32_ty, &i32_ty);
-        check(func::ModInt32, BF::ModInt32, &i32_ty, &i32_ty);
-        check(func::ModInt64, BF::ModInt64, &i32_ty, &i32_ty);
-        check(func::ModUint16, BF::ModUint16, &i32_ty, &i32_ty);
-        check(func::ModUint32, BF::ModUint32, &i32_ty, &i32_ty);
-        check(func::ModUint64, BF::ModUint64, &i32_ty, &i32_ty);
-        check(func::ModFloat32, BF::ModFloat32, &i32_ty, &i32_ty);
-        check(func::ModFloat64, BF::ModFloat64, &i32_ty, &i32_ty);
-        check(func::ModNumeric, BF::ModNumeric, &i32_ty, &i32_ty);
-
-        check(func::LogBaseNumeric, BF::LogNumeric, &i32_ty, &i32_ty);
-        check(func::Power, BF::Power, &i32_ty, &i32_ty);
-        check(func::PowerNumeric, BF::PowerNumeric, &i32_ty, &i32_ty);
-
-        check(func::UuidGenerateV5, BF::UuidGenerateV5, &i32_ty, &i32_ty);
-
-        check(func::GetBit, BF::GetBit, &i32_ty, &i32_ty);
-        check(func::GetByte, BF::GetByte, &i32_ty, &i32_ty);
-
-        check(
-            func::ConstantTimeEqBytes,
-            BF::ConstantTimeEqBytes,
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::ConstantTimeEqString,
-            BF::ConstantTimeEqString,
-            &i32_ty,
-            &i32_ty,
-        );
-
         check(
             func::RangeContainsI32,
             BF::RangeContainsElem {
@@ -875,71 +817,11 @@ mod test {
             &i32_ty,
             &i32_ty,
         );
-        check(func::RangeOverlaps, BF::RangeOverlaps, &i32_ty, &i32_ty);
-        check(func::RangeAfter, BF::RangeAfter, &i32_ty, &i32_ty);
-        check(func::RangeBefore, BF::RangeBefore, &i32_ty, &i32_ty);
-        check(func::RangeOverleft, BF::RangeOverleft, &i32_ty, &i32_ty);
-        check(func::RangeOverright, BF::RangeOverright, &i32_ty, &i32_ty);
-        check(func::RangeAdjacent, BF::RangeAdjacent, &i32_ty, &i32_ty);
-
-        check(func::RangeUnion, BF::RangeUnion, &i32_ty, &i32_ty);
-        check(
-            func::RangeIntersection,
-            BF::RangeIntersection,
-            &i32_ty,
-            &i32_ty,
-        );
-        check(func::RangeDifference, BF::RangeDifference, &i32_ty, &i32_ty);
-
-        check(func::Eq, BF::Eq, &i32_ty, &i32_ty);
-        check(func::NotEq, BF::NotEq, &i32_ty, &i32_ty);
-        check(func::Lt, BF::Lt, &i32_ty, &i32_ty);
-        check(func::Lte, BF::Lte, &i32_ty, &i32_ty);
-        check(func::Gt, BF::Gt, &i32_ty, &i32_ty);
-        check(func::Gte, BF::Gte, &i32_ty, &i32_ty);
-
-        check(func::LikeEscape, BF::LikeEscape, &i32_ty, &i32_ty);
-        check(func::TimezoneOffset, BF::TimezoneOffset, &i32_ty, &i32_ty);
-        check(func::TextConcatBinary, BF::TextConcat, &i32_ty, &i32_ty);
-
-        check(
-            func::ToCharTimestampFormat,
-            BF::ToCharTimestamp,
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::ToCharTimestampTzFormat,
-            BF::ToCharTimestampTz,
-            &i32_ty,
-            &i32_ty,
-        );
 
         // JsonbGet* have a `stringify` parameter that doesn't work with the sqlfunc macro.
         // check(func::JsonbGetInt64, BF::JsonbGetInt64, &i32_ty, &i32_ty);
         // check(func::JsonbGetString, BF::JsonbGetString, &i32_ty, &i32_ty);
         // check(func::JsonbGetPath, BF::JsonbGetPath, &i32_ty, &i32_ty);
-        check(
-            func::JsonbContainsString,
-            BF::JsonbContainsString,
-            &i32_ty,
-            &i32_ty,
-        );
-        check(func::MapContainsKey, BF::MapContainsKey, &i32_ty, &i32_ty);
-        check(
-            func::MapContainsAllKeys,
-            BF::MapContainsAllKeys,
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::MapContainsAnyKeys,
-            BF::MapContainsAnyKeys,
-            &i32_ty,
-            &i32_ty,
-        );
-        check(func::MapContainsMap, BF::MapContainsMap, &i32_ty, &i32_ty);
-        check(func::MapGetValue, BF::MapGetValue, &i32_map_ty, &i32_ty);
         check(
             func::ListContainsList,
             BF::ListContainsList { rev: false },
@@ -953,103 +835,7 @@ mod test {
             &i32_ty,
         );
 
-        check(
-            func::JsonbContainsJsonb,
-            BF::JsonbContainsJsonb,
-            &i32_ty,
-            &i32_ty,
-        );
-        check(func::JsonbConcat, BF::JsonbConcat, &i32_ty, &i32_ty);
-        check(
-            func::JsonbDeleteInt64,
-            BF::JsonbDeleteInt64,
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::JsonbDeleteString,
-            BF::JsonbDeleteString,
-            &i32_ty,
-            &i32_ty,
-        );
-
-        check(
-            func::DateBinTimestamp,
-            BF::DateBinTimestamp,
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::DateBinTimestampTz,
-            BF::DateBinTimestampTz,
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::DatePartIntervalNumeric,
-            BF::ExtractInterval,
-            &i32_ty,
-            &i32_ty,
-        );
-        check(func::DatePartTimeNumeric, BF::ExtractTime, &i32_ty, &i32_ty);
-        check(
-            func::DatePartTimestampTimestampNumeric,
-            BF::ExtractTimestamp,
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::DatePartTimestampTimestampTzNumeric,
-            BF::ExtractTimestampTz,
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::DatePartIntervalF64,
-            BF::DatePartInterval,
-            &i32_ty,
-            &i32_ty,
-        );
-        check(func::DatePartTimeF64, BF::DatePartTime, &i32_ty, &i32_ty);
-        check(
-            func::DatePartTimestampTimestampF64,
-            BF::DatePartTimestamp,
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::DatePartTimestampTimestampTzF64,
-            BF::DatePartTimestampTz,
-            &i32_ty,
-            &i32_ty,
-        );
-
-        check(func::ExtractDateUnits, BF::ExtractDate, &i32_ty, &i32_ty);
-        check(
-            func::DateTruncUnitsTimestamp,
-            BF::DateTruncTimestamp,
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::DateTruncUnitsTimestampTz,
-            BF::DateTruncTimestampTz,
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::DateTruncInterval,
-            BF::DateTruncInterval,
-            &i32_ty,
-            &i32_ty,
-        );
-
-        check(func::ArrayLength, BF::ArrayLength, &i32_ty, &i32_ty);
-        check(func::ArrayLower, BF::ArrayLower, &i32_ty, &i32_ty);
-        check(func::ArrayRemove, BF::ArrayRemove, &i32_ty, &i32_ty);
-        check(func::ArrayUpper, BF::ArrayUpper, &i32_ty, &i32_ty);
         // check(func::ListLength, BF::ListLength, &i32_ty, &i32_ty);
-        check(func::ArrayContains, BF::ArrayContains, &i32_ty, &i32_ty);
         check(
             func::ArrayContainsArray,
             BF::ArrayContainsArray { rev: false },
@@ -1062,37 +848,5 @@ mod test {
             &i32_ty,
             &i32_ty,
         );
-        check(
-            func::ArrayArrayConcat,
-            BF::ArrayArrayConcat,
-            &i32_ty,
-            &i32_ty,
-        );
-        check(func::ListListConcat, BF::ListListConcat, &i32_ty, &i32_ty);
-        check(
-            func::ListElementConcat,
-            BF::ListElementConcat,
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::ElementListConcat,
-            BF::ElementListConcat,
-            &i32_ty,
-            &i32_ty,
-        );
-        check(func::ListRemove, BF::ListRemove, &i32_ty, &i32_ty);
-        check(func::DigestString, BF::DigestString, &i32_ty, &i32_ty);
-        check(func::DigestBytes, BF::DigestBytes, &i32_ty, &i32_ty);
-        check(func::MzRenderTypmod, BF::MzRenderTypmod, &i32_ty, &i32_ty);
-        check(
-            func::MzAclItemContainsPrivilege,
-            BF::MzAclItemContainsPrivilege,
-            &i32_ty,
-            &i32_ty,
-        );
-        check(func::ParseIdent, BF::ParseIdent, &i32_ty, &i32_ty);
-        check(func::StartsWith, BF::StartsWith, &i32_ty, &i32_ty);
-        check(func::PrettySql, BF::PrettySql, &i32_ty, &i32_ty);
     }
 }

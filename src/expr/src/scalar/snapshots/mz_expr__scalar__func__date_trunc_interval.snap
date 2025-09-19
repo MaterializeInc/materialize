@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(output_type = \"Interval\", sqlname = \"date_trunciv\", propagates_nulls = true)]\nfn date_trunc_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {\n    let mut interval = b.unwrap_interval();\n    let units = a.unwrap_str();\n    let dtf = units.parse().map_err(|_| EvalError::UnknownUnits(units.into()))?;\n    interval\n        .truncate_low_fields(dtf, Some(0), RoundBehavior::Truncate)\n        .expect(\n            \"truncate_low_fields should not fail with max_precision 0 and RoundBehavior::Truncate\",\n        );\n    Ok(interval.into())\n}\n"
+expression: "#[sqlfunc(sqlname = \"date_trunciv\", propagates_nulls = true)]\nfn date_trunc_interval(\n    units: &str,\n    mut interval: Interval,\n) -> Result<Interval, EvalError> {\n    let dtf = units.parse().map_err(|_| EvalError::UnknownUnits(units.into()))?;\n    interval\n        .truncate_low_fields(dtf, Some(0), RoundBehavior::Truncate)\n        .expect(\n            \"truncate_low_fields should not fail with max_precision 0 and RoundBehavior::Truncate\",\n        );\n    Ok(interval)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -17,9 +17,9 @@ expression: "#[sqlfunc(output_type = \"Interval\", sqlname = \"date_trunciv\", p
 )]
 pub struct DateTruncInterval;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for DateTruncInterval {
-    type Input1 = Datum<'a>;
-    type Input2 = Datum<'a>;
-    type Output = Result<Datum<'a>, EvalError>;
+    type Input1 = &'a str;
+    type Input2 = Interval;
+    type Output = Result<Interval, EvalError>;
     fn call(
         &self,
         a: Self::Input1,
@@ -34,7 +34,7 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for DateTruncInterval {
         input_type_b: mz_repr::SqlColumnType,
     ) -> mz_repr::SqlColumnType {
         use mz_repr::AsColumnType;
-        let output = <Interval>::as_column_type();
+        let output = Self::Output::as_column_type();
         let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
             self,
         );
@@ -46,9 +46,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for DateTruncInterval {
                         && (input_type_a.nullable || input_type_b.nullable)),
             )
     }
-    fn introduces_nulls(&self) -> bool {
-        <Interval as ::mz_repr::DatumType<'_, ()>>::nullable()
-    }
     fn propagates_nulls(&self) -> bool {
         true
     }
@@ -58,14 +55,15 @@ impl std::fmt::Display for DateTruncInterval {
         f.write_str("date_trunciv")
     }
 }
-fn date_trunc_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let mut interval = b.unwrap_interval();
-    let units = a.unwrap_str();
+fn date_trunc_interval(
+    units: &str,
+    mut interval: Interval,
+) -> Result<Interval, EvalError> {
     let dtf = units.parse().map_err(|_| EvalError::UnknownUnits(units.into()))?;
     interval
         .truncate_low_fields(dtf, Some(0), RoundBehavior::Truncate)
         .expect(
             "truncate_low_fields should not fail with max_precision 0 and RoundBehavior::Truncate",
         );
-    Ok(interval.into())
+    Ok(interval)
 }

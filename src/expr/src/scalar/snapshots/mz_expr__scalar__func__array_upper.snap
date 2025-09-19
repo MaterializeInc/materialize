@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    output_type = \"Option<i32>\",\n    is_infix_op = true,\n    sqlname = \"array_upper\",\n    propagates_nulls = true,\n    introduces_nulls = true\n)]\n#[allow(clippy::as_conversions)]\nfn array_upper<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {\n    let i = b.unwrap_int64();\n    if i < 1 {\n        return Ok(Datum::Null);\n    }\n    Ok(\n        match a.unwrap_array().dims().into_iter().nth(i as usize - 1) {\n            Some(dim) => {\n                Datum::Int32(\n                    dim\n                        .length\n                        .try_into()\n                        .map_err(|_| EvalError::Int32OutOfRange(\n                            dim.length.to_string().into(),\n                        ))?,\n                )\n            }\n            None => Datum::Null,\n        },\n    )\n}\n"
+expression: "#[sqlfunc(\n    output_type = \"Option<i32>\",\n    is_infix_op = true,\n    sqlname = \"array_upper\",\n    propagates_nulls = true,\n    introduces_nulls = true\n)]\n#[allow(clippy::as_conversions)]\nfn array_upper<'a>(a: Datum<'a>, i: i64) -> Result<Datum<'a>, EvalError> {\n    if a.is_null() || i < 1 {\n        return Ok(Datum::Null);\n    }\n    Ok(\n        match a.unwrap_array().dims().into_iter().nth(i as usize - 1) {\n            Some(dim) => {\n                Datum::Int32(\n                    dim\n                        .length\n                        .try_into()\n                        .map_err(|_| EvalError::Int32OutOfRange(\n                            dim.length.to_string().into(),\n                        ))?,\n                )\n            }\n            None => Datum::Null,\n        },\n    )\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -18,7 +18,7 @@ expression: "#[sqlfunc(\n    output_type = \"Option<i32>\",\n    is_infix_op = t
 pub struct ArrayUpper;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ArrayUpper {
     type Input1 = Datum<'a>;
-    type Input2 = Datum<'a>;
+    type Input2 = i64;
     type Output = Result<Datum<'a>, EvalError>;
     fn call(
         &self,
@@ -62,9 +62,8 @@ impl std::fmt::Display for ArrayUpper {
     }
 }
 #[allow(clippy::as_conversions)]
-fn array_upper<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let i = b.unwrap_int64();
-    if i < 1 {
+fn array_upper<'a>(a: Datum<'a>, i: i64) -> Result<Datum<'a>, EvalError> {
+    if a.is_null() || i < 1 {
         return Ok(Datum::Null);
     }
     Ok(
