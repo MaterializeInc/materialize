@@ -31,13 +31,12 @@ use mz_repr::GlobalId;
 use mz_repr::optimize::OptimizerFeatures;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::OptimizerNotice;
-use proptest_derive::Arbitrary;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Arbitrary)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 enum ExpressionType {
     Local,
     Global,
@@ -68,7 +67,7 @@ impl GlobalExpressions {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Arbitrary)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 struct CacheKey {
     build_version: String,
     id: GlobalId,
@@ -421,145 +420,22 @@ impl ExpressionCacheHandle {
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
-    use std::marker::PhantomData;
-    use std::sync::Arc;
-    use std::time::{Duration, Instant};
 
     use bytes::Bytes;
-    use mz_compute_types::dataflows::DataflowDescription;
+    use mz_compute_types::dataflows::{DataflowDescription, IndexDesc, IndexImport};
     use mz_durable_cache::DurableCacheCodec;
     use mz_dyncfg::ConfigSet;
-    use mz_expr::OptimizedMirRelationExpr;
-    use mz_ore::test::timeout;
+    use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
     use mz_persist_client::PersistClient;
     use mz_persist_types::ShardId;
-    use mz_repr::GlobalId;
-    use mz_repr::optimize::OptimizerFeatures;
-    use mz_transform::dataflow::DataflowMetainfo;
-    use mz_transform::notice::OptimizerNotice;
-    use proptest::arbitrary::{Arbitrary, any};
-    use proptest::prelude::{BoxedStrategy, ProptestConfig};
-    use proptest::proptest;
-    use proptest::strategy::{Strategy, ValueTree};
-    use proptest::test_runner::{RngAlgorithm, TestRng, TestRunner};
+    use mz_repr::{Datum, GlobalId, SqlRelationType, SqlScalarType};
     use semver::Version;
-    use tracing::info;
 
-    use crate::expr_cache::{
-        CacheKey, ExpressionCacheConfig, ExpressionCacheHandle, ExpressionCodec, GlobalExpressions,
-        LocalExpressions,
-    };
-
-    impl Arbitrary for LocalExpressions {
-        type Parameters = ();
-
-        fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
-            (
-                any::<OptimizedMirRelationExpr>(),
-                any::<OptimizerFeatures>(),
-            )
-                .prop_map(|(local_mir, optimizer_features)| LocalExpressions {
-                    local_mir,
-                    optimizer_features,
-                })
-                .boxed()
-        }
-
-        type Strategy = BoxedStrategy<Self>;
-    }
-
-    impl Arbitrary for GlobalExpressions {
-        type Parameters = ();
-        fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
-            (
-                any::<DataflowDescription<OptimizedMirRelationExpr>>(),
-                any::<DataflowDescription<mz_compute_types::plan::Plan>>(),
-                any::<DataflowMetainfo<Arc<OptimizerNotice>>>(),
-                any::<OptimizerFeatures>(),
-            )
-                .prop_map(
-                    |(global_mir, physical_plan, dataflow_metainfos, optimizer_features)| {
-                        GlobalExpressions {
-                            global_mir,
-                            physical_plan,
-                            dataflow_metainfos,
-                            optimizer_features,
-                        }
-                    },
-                )
-                .boxed()
-        }
-
-        type Strategy = BoxedStrategy<Self>;
-    }
-
-    /// The expressions can be extremely slow to generate, so we have this hacky struct that bails
-    /// if an expression is taking to long to generate and tries to generate a new one. Of course
-    /// this means that we will never test expressions above a certain complexity. This is a
-    /// worthwhile trade-off to prevent timeouts in CI.
-    struct ArbitraryTimeout<T: Arbitrary + Send + 'static> {
-        _phantom: PhantomData<T>,
-    }
-
-    impl<T: Arbitrary + Send> ArbitraryTimeout<T> {
-        // Number of attempts to generate a value before panicking. The maximum time spent
-        // generating a value is `GENERATE_ATTEMPTS` * `TIMEOUT_SECS`.
-        const GENERATE_ATTEMPTS: u64 = 10;
-        // Amount of time in seconds before we give up trying to generate a single value.
-        const TIMEOUT_SECS: u64 = 10;
-
-        fn new() -> Self {
-            Self {
-                _phantom: Default::default(),
-            }
-        }
-
-        fn new_tree() -> Box<dyn ValueTree<Value = T>>
-        where
-            T: 'static,
-        {
-            // Important to update the RNG each time, or we'll end up generating the same struct
-            // each time.
-            let seed: [u8; 32] = rand::random();
-            let mut test_runner = TestRunner::deterministic();
-            let rng = test_runner.rng();
-            *rng = TestRng::from_seed(RngAlgorithm::ChaCha, &seed);
-            Box::new(T::arbitrary().new_tree(&mut test_runner).expect("valid"))
-        }
-
-        fn generate(&self) -> T {
-            for _ in 0..Self::GENERATE_ATTEMPTS {
-                if let Ok(val) = self.try_generate() {
-                    return val;
-                }
-            }
-            panic!("timed out generating a value");
-        }
-
-        fn try_generate(&self) -> Result<T, ()> {
-            // Note it's very important to use the thread based version of `timeout` and not the
-            // async task based version. Generating a value in a task will never await and therefore
-            // always run to completion while ignoring the timeout.
-            match timeout(Duration::from_secs(Self::TIMEOUT_SECS), || {
-                // TODO(jkosh44) It would be nice to re-use this tree on success, instead of having
-                // to re-generate a new tree every call.
-                Ok(Self::new_tree().current())
-            }) {
-                Ok(val) => Ok(val),
-                Err(_) => {
-                    info!("timed out generating a value");
-                    Err(())
-                }
-            }
-        }
-    }
+    use super::*;
 
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn expression_cache() {
-        let local_tree: ArbitraryTimeout<LocalExpressions> = ArbitraryTimeout::new();
-        let global_tree: ArbitraryTimeout<GlobalExpressions> = ArbitraryTimeout::new();
-
         let first_version = Version::new(0, 1, 0);
         let second_version = Version::new(0, 2, 0);
         let persist = PersistClient::new_for_tests().await;
@@ -594,10 +470,8 @@ mod tests {
             let mut global_exps = BTreeMap::new();
             for _ in 0..4 {
                 let id = GlobalId::User(next_id);
-                let start = Instant::now();
-                let local_exp = local_tree.generate();
-                let global_exp = global_tree.generate();
-                info!("Generating exps took: {:?}", start.elapsed());
+                let local_exp = gen_local_expressions();
+                let global_exp = gen_global_expressions();
 
                 cache
                     .update(
@@ -678,7 +552,7 @@ mod tests {
             let dependency_to_remove = removed_global_exp
                 .index_imports()
                 .next()
-                .expect("arbitrary impl always makes non-empty vecs");
+                .expect("generator always makes non-empty index imports");
             current_ids.remove(dependency_to_remove);
 
             // If the dependency is also tracked in the cache remove it.
@@ -741,10 +615,8 @@ mod tests {
             let mut global_exps = BTreeMap::new();
             for _ in 0..2 {
                 let id = GlobalId::User(next_id);
-                let start = Instant::now();
-                let local_exp = local_tree.generate();
-                let global_exp = global_tree.generate();
-                info!("Generating exps took: {:?}", start.elapsed());
+                let local_exp = gen_local_expressions();
+                let global_exp = gen_global_expressions();
 
                 cache
                     .update(
@@ -837,39 +709,92 @@ mod tests {
         }
     }
 
-    proptest! {
-        // Generating the expression structs can take an extremely long amount of time because
-        // they are recursive, which can cause test timeouts.
-        #![proptest_config(ProptestConfig::with_cases(1))]
+    #[mz_ore::test]
+    fn local_expr_cache_roundtrip() {
+        let key = CacheKey {
+            id: GlobalId::User(1),
+            build_version: "1.2.3".into(),
+            expr_type: ExpressionType::Local,
+        };
+        let val = gen_local_expressions();
 
-        #[mz_ore::test]
-        #[cfg_attr(miri, ignore)]
-        fn local_expr_cache_roundtrip(key in any::<CacheKey>()) {
-            let local_tree: ArbitraryTimeout<LocalExpressions> = ArbitraryTimeout::new();
-            let val = local_tree.generate();
+        let bincode_val = Bytes::from(bincode::serialize(&val).expect("must serialize"));
+        let (encoded_key, encoded_val) = ExpressionCodec::encode(&key, &bincode_val);
+        let (decoded_key, decoded_val) = ExpressionCodec::decode(&encoded_key, &encoded_val);
+        let decoded_val: LocalExpressions =
+            bincode::deserialize(&decoded_val).expect("local expressions should roundtrip");
 
-            let bincode_val = Bytes::from(bincode::serialize(&val).expect("must serialize"));
-            let (encoded_key, encoded_val) = ExpressionCodec::encode(&key, &bincode_val);
-            let (decoded_key, decoded_val) = ExpressionCodec::decode(&encoded_key, &encoded_val);
-            let decoded_val: LocalExpressions = bincode::deserialize(&decoded_val).expect("local expressions should roundtrip");
+        assert_eq!(key, decoded_key);
+        assert_eq!(val, decoded_val);
+    }
 
-            assert_eq!(key, decoded_key);
-            assert_eq!(val, decoded_val);
+    #[mz_ore::test]
+    fn global_expr_cache_roundtrip() {
+        let key = CacheKey {
+            id: GlobalId::User(1),
+            build_version: "1.2.3".into(),
+            expr_type: ExpressionType::Global,
+        };
+        let val = gen_global_expressions();
+
+        let bincode_val = Bytes::from(bincode::serialize(&val).expect("must serialize"));
+        let (encoded_key, encoded_val) = ExpressionCodec::encode(&key, &bincode_val);
+        let (decoded_key, decoded_val) = ExpressionCodec::decode(&encoded_key, &encoded_val);
+        let decoded_val: GlobalExpressions =
+            bincode::deserialize(&decoded_val).expect("global expressions should roundtrip");
+
+        assert_eq!(key, decoded_key);
+        assert_eq!(val, decoded_val);
+    }
+
+    /// Generate a random [`LocalExpressions`] value.
+    ///
+    /// The returned values are mostly hardcoded and only differ in a single randomized number.
+    /// That's sufficient for the expr cache tests, since the cache mostly treats expressions as
+    /// opaque objects.
+    fn gen_local_expressions() -> LocalExpressions {
+        let datum = Datum::UInt64(rand::random());
+
+        LocalExpressions {
+            local_mir: OptimizedMirRelationExpr(MirRelationExpr::constant(
+                vec![vec![datum]],
+                SqlRelationType::new(vec![SqlScalarType::UInt64.nullable(false)]),
+            )),
+            optimizer_features: Default::default(),
         }
+    }
 
-        #[mz_ore::test]
-        #[cfg_attr(miri, ignore)]
-        fn global_expr_cache_roundtrip(key in any::<CacheKey>()) {
-            let global_tree: ArbitraryTimeout<GlobalExpressions> = ArbitraryTimeout::new();
-            let val = global_tree.generate();
+    /// Generate a random [`GlobalExpressions`] value.
+    ///
+    /// The returned values are mostly hardcoded and only differ in a single randomized string.
+    /// That's sufficient for the expr cache tests, since the cache mostly treats expressions as
+    /// opaque objects.
+    fn gen_global_expressions() -> GlobalExpressions {
+        let name = format!("test-{}", rand::random::<u64>());
 
-            let bincode_val = Bytes::from(bincode::serialize(&val).expect("must serialize"));
-            let (encoded_key, encoded_val) = ExpressionCodec::encode(&key, &bincode_val);
-            let (decoded_key, decoded_val) = ExpressionCodec::decode(&encoded_key, &encoded_val);
-            let decoded_val: GlobalExpressions = bincode::deserialize(&decoded_val).expect("global expressions should roundtrip");
+        let mut global_mir = DataflowDescription::new(name.clone());
+        let mut physical_plan = DataflowDescription::new(name);
 
-            assert_eq!(key, decoded_key);
-            assert_eq!(val, decoded_val);
+        // Add pieces expected by tests.
+        let index_imports = BTreeMap::from_iter([(
+            GlobalId::User(2),
+            IndexImport {
+                desc: IndexDesc {
+                    on_id: GlobalId::User(1),
+                    key: Default::default(),
+                },
+                typ: SqlRelationType::empty(),
+                monotonic: false,
+            },
+        )]);
+        global_mir.index_imports = index_imports.clone();
+        physical_plan.index_imports = index_imports;
+
+        GlobalExpressions {
+            global_mir,
+            physical_plan,
+            dataflow_metainfos: Default::default(),
+            optimizer_features: Default::default(),
         }
     }
 }

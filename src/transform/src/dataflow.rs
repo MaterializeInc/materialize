@@ -1243,7 +1243,7 @@ pub struct DataflowMetainfo<Notice = RawOptimizerNotice> {
     pub index_usage_types: BTreeMap<GlobalId, Vec<IndexUsageType>>,
 }
 
-impl Default for DataflowMetainfo {
+impl<Notice> Default for DataflowMetainfo<Notice> {
     fn default() -> Self {
         DataflowMetainfo {
             optimizer_notices: Vec::new(),
