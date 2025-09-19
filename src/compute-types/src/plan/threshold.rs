@@ -24,13 +24,12 @@
 //!     if a potential downstream operator does not expect its input to be arranged.
 
 use mz_expr::{MirScalarExpr, permutation_for_arrangement};
-use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use crate::plan::AvailableCollections;
 
 /// A plan describing how to compute a threshold operation.
-#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub enum ThresholdPlan {
     /// Basic threshold maintains all positive inputs.
     Basic(BasicThresholdPlan),
@@ -54,7 +53,7 @@ impl ThresholdPlan {
 }
 
 /// A plan to maintain all inputs with positive counts.
-#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct BasicThresholdPlan {
     /// Description of how the input has been arranged, and how to arrange the output
     pub ensure_arrangement: (Vec<MirScalarExpr>, Vec<usize>, Vec<usize>),

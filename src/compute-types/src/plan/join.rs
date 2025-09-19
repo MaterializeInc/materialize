@@ -31,8 +31,6 @@ use std::collections::BTreeMap;
 
 use mz_expr::{MapFilterProject, MirScalarExpr};
 use mz_repr::{Datum, Row, RowArena};
-use proptest::prelude::*;
-use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 pub mod delta_join;
@@ -42,7 +40,7 @@ pub use delta_join::DeltaJoinPlan;
 pub use linear_join::LinearJoinPlan;
 
 /// A complete enumeration of possible join plans to render.
-#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub enum JoinPlan {
     /// A join implemented by a linear join.
     Linear(LinearJoinPlan),
@@ -62,23 +60,6 @@ pub struct JoinClosure {
     pub ready_equivalences: Vec<Vec<MirScalarExpr>>,
     /// TODO(database-issues#7533): Add documentation.
     pub before: mz_expr::SafeMfpPlan,
-}
-
-impl Arbitrary for JoinClosure {
-    type Parameters = ();
-    type Strategy = BoxedStrategy<Self>;
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        (
-            prop::collection::vec(prop::collection::vec(any::<MirScalarExpr>(), 0..3), 0..3),
-            any::<mz_expr::SafeMfpPlan>(),
-        )
-            .prop_map(|(ready_equivalences, before)| JoinClosure {
-                ready_equivalences,
-                before,
-            })
-            .boxed()
-    }
 }
 
 impl JoinClosure {

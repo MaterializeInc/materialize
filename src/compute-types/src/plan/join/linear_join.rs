@@ -13,9 +13,6 @@ use mz_expr::{
     JoinInputCharacteristics, MapFilterProject, MirScalarExpr, join_permutations,
     permutation_for_arrangement,
 };
-use proptest::prelude::*;
-use proptest::result::Probability;
-use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use crate::plan::AvailableCollections;
@@ -43,39 +40,12 @@ pub struct LinearJoinPlan {
     pub final_closure: Option<JoinClosure>,
 }
 
-impl Arbitrary for LinearJoinPlan {
-    type Parameters = ();
-    type Strategy = BoxedStrategy<Self>;
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        (
-            any::<usize>(),
-            any_with::<Option<Vec<MirScalarExpr>>>((Probability::default(), ((0..3).into(), ()))),
-            any::<Option<JoinClosure>>(),
-            prop::collection::vec(any::<LinearStagePlan>(), 0..3),
-            any::<Option<JoinClosure>>(),
-        )
-            .prop_map(
-                |(source_relation, source_key, initial_closure, stage_plans, final_closure)| {
-                    LinearJoinPlan {
-                        source_relation,
-                        source_key,
-                        initial_closure,
-                        stage_plans,
-                        final_closure,
-                    }
-                },
-            )
-            .boxed()
-    }
-}
-
 /// A plan for the execution of one stage of a linear join.
 ///
 /// Each stage is a binary join between the current accumulated
 /// join results, and a new collection. The former is referred to
 /// as the "stream" and the latter the "lookup".
-#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct LinearStagePlan {
     /// The index of the relation into which we will look up.
     pub lookup_relation: usize,

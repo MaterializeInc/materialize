@@ -24,10 +24,6 @@ use mz_repr::explain::text::text_string_at;
 use mz_repr::explain::{DummyHumanizer, ExplainConfig, ExprHumanizer, PlanRenderingContext};
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::{Diff, GlobalId, Row};
-use proptest::arbitrary::Arbitrary;
-use proptest::prelude::*;
-use proptest::strategy::Strategy;
-use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use crate::dataflows::DataflowDescription;
@@ -58,9 +54,7 @@ pub mod transform;
 /// columns not explicitly captured by the key, and how to return to the original
 /// row from the concatenation of key and value. Further explanation is available
 /// in the documentation for `KeyValRowMapping`.
-#[derive(
-    Arbitrary, Clone, Debug, Default, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize,
-)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct AvailableCollections {
     /// Whether the collection exists in unarranged form.
     pub raw: bool,
@@ -437,201 +431,8 @@ impl Plan {
     }
 }
 
-impl Arbitrary for LirId {
-    type Strategy = BoxedStrategy<LirId>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        let lir_id = u64::arbitrary();
-        lir_id.prop_map(LirId).boxed()
-    }
-}
-
-impl Arbitrary for Plan {
-    type Strategy = BoxedStrategy<Plan>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        let row_diff = prop::collection::vec(
-            (
-                Row::arbitrary_with((1..5).into()),
-                mz_repr::Timestamp::arbitrary(),
-                Diff::arbitrary(),
-            ),
-            0..2,
-        );
-        let rows = prop::result::maybe_ok(row_diff, EvalError::arbitrary());
-        let constant = (rows, any::<LirId>()).prop_map(|(rows, lir_id)| {
-            PlanNode::<mz_repr::Timestamp>::Constant { rows }.as_plan(lir_id)
-        });
-
-        let get = (
-            any::<GlobalId>(),
-            any::<AvailableCollections>(),
-            any::<GetPlan>(),
-            any::<LirId>(),
-        )
-            .prop_map(|(id, keys, plan, lir_id)| {
-                PlanNode::<mz_repr::Timestamp>::Get {
-                    id: Id::Global(id),
-                    keys,
-                    plan,
-                }
-                .as_plan(lir_id)
-            });
-
-        let leaf = prop::strategy::Union::new(vec![constant.boxed(), get.boxed()]).boxed();
-
-        leaf.prop_recursive(2, 4, 5, |inner| {
-            prop::strategy::Union::new(vec![
-                //Plan::Let
-                (
-                    any::<LocalId>(),
-                    inner.clone(),
-                    inner.clone(),
-                    any::<LirId>(),
-                )
-                    .prop_map(|(id, value, body, lir_id)| {
-                        PlanNode::<mz_repr::Timestamp>::Let {
-                            id,
-                            value: value.into(),
-                            body: body.into(),
-                        }
-                        .as_plan(lir_id)
-                    })
-                    .boxed(),
-                //Plan::Mfp
-                (
-                    inner.clone(),
-                    any::<MapFilterProject>(),
-                    any::<Option<(Vec<MirScalarExpr>, Option<Row>)>>(),
-                    any::<LirId>(),
-                )
-                    .prop_map(|(input, mfp, input_key_val, lir_id)| {
-                        PlanNode::Mfp {
-                            input: input.into(),
-                            mfp,
-                            input_key_val,
-                        }
-                        .as_plan(lir_id)
-                    })
-                    .boxed(),
-                //Plan::FlatMap
-                (
-                    inner.clone(),
-                    any::<TableFunc>(),
-                    any::<Vec<MirScalarExpr>>(),
-                    any::<MapFilterProject>(),
-                    any::<Option<Vec<MirScalarExpr>>>(),
-                    any::<LirId>(),
-                )
-                    .prop_map(|(input, func, exprs, mfp, input_key, lir_id)| {
-                        PlanNode::FlatMap {
-                            input_key,
-                            input: input.into(),
-                            exprs,
-                            func,
-                            mfp_after: mfp,
-                        }
-                        .as_plan(lir_id)
-                    })
-                    .boxed(),
-                //Plan::Join
-                (
-                    prop::collection::vec(inner.clone(), 0..2),
-                    any::<JoinPlan>(),
-                    any::<LirId>(),
-                )
-                    .prop_map(|(inputs, plan, lir_id)| {
-                        PlanNode::Join { inputs, plan }.as_plan(lir_id)
-                    })
-                    .boxed(),
-                //Plan::Reduce
-                (
-                    inner.clone(),
-                    any::<KeyValPlan>(),
-                    any::<ReducePlan>(),
-                    any::<Option<Vec<MirScalarExpr>>>(),
-                    any::<MapFilterProject>(),
-                    any::<LirId>(),
-                )
-                    .prop_map(
-                        |(input, key_val_plan, plan, input_key, mfp_after, lir_id)| {
-                            PlanNode::Reduce {
-                                input_key,
-                                input: input.into(),
-                                key_val_plan,
-                                plan,
-                                mfp_after,
-                            }
-                            .as_plan(lir_id)
-                        },
-                    )
-                    .boxed(),
-                //Plan::TopK
-                (inner.clone(), any::<TopKPlan>(), any::<LirId>())
-                    .prop_map(|(input, top_k_plan, lir_id)| {
-                        PlanNode::TopK {
-                            input: input.into(),
-                            top_k_plan,
-                        }
-                        .as_plan(lir_id)
-                    })
-                    .boxed(),
-                //Plan::Negate
-                (inner.clone(), any::<LirId>())
-                    .prop_map(|(x, lir_id)| PlanNode::Negate { input: x.into() }.as_plan(lir_id))
-                    .boxed(),
-                //Plan::Threshold
-                (inner.clone(), any::<ThresholdPlan>(), any::<LirId>())
-                    .prop_map(|(input, threshold_plan, lir_id)| {
-                        PlanNode::Threshold {
-                            input: input.into(),
-                            threshold_plan,
-                        }
-                        .as_plan(lir_id)
-                    })
-                    .boxed(),
-                // Plan::Union
-                (
-                    prop::collection::vec(inner.clone(), 0..2),
-                    any::<bool>(),
-                    any::<LirId>(),
-                )
-                    .prop_map(|(x, b, lir_id)| {
-                        PlanNode::Union {
-                            inputs: x,
-                            consolidate_output: b,
-                        }
-                        .as_plan(lir_id)
-                    })
-                    .boxed(),
-                //Plan::ArrangeBy
-                (
-                    inner,
-                    any::<AvailableCollections>(),
-                    any::<Option<Vec<MirScalarExpr>>>(),
-                    any::<MapFilterProject>(),
-                    any::<LirId>(),
-                )
-                    .prop_map(|(input, forms, input_key, input_mfp, lir_id)| {
-                        PlanNode::ArrangeBy {
-                            input_key,
-                            input: input.into(),
-                            input_mfp,
-                            forms,
-                        }
-                        .as_plan(lir_id)
-                    })
-                    .boxed(),
-            ])
-        })
-        .boxed()
-    }
-}
-
 /// How a `Get` stage will be rendered.
-#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub enum GetPlan {
     /// Simply pass input arrangements on to the next stage.
     PassArrangements,

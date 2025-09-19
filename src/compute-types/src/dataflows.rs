@@ -17,9 +17,6 @@ use mz_ore::soft_assert_or_log;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{GlobalId, SqlRelationType};
 use mz_storage_types::time_dependence::TimeDependence;
-use proptest::prelude::{Arbitrary, any};
-use proptest::strategy::{BoxedStrategy, Strategy};
-use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
 
@@ -565,128 +562,12 @@ where
     }
 }
 
-impl Arbitrary for DataflowDescription<Plan, (), mz_repr::Timestamp> {
-    type Strategy = BoxedStrategy<Self>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        any_dataflow_description(any_source_import()).boxed()
-    }
-}
-
-fn any_dataflow_description<P, S, T>(
-    any_source_import: impl Strategy<Value = (GlobalId, (SourceInstanceDesc<S>, bool, Antichain<T>))>,
-) -> impl Strategy<Value = DataflowDescription<P, S, T>>
-where
-    P: Arbitrary,
-    S: 'static + Arbitrary,
-    T: Arbitrary + timely::PartialOrder,
-    ComputeSinkDesc<S, T>: Arbitrary,
-{
-    // `prop_map` is only implemented for tuples of 12 elements or less, so we need to use nested
-    // tuples.
-    (
-        (
-            proptest::collection::vec(any_source_import, 1..3),
-            proptest::collection::vec(any_dataflow_index_import(), 1..3),
-            proptest::collection::vec(any::<BuildDesc<P>>(), 1..3),
-            proptest::collection::vec(any_dataflow_index_export(), 1..3),
-            proptest::collection::vec(any::<(GlobalId, ComputeSinkDesc<S, T>)>(), 1..3),
-            any::<bool>(),
-            proptest::collection::vec(any::<T>(), 1..5),
-            any::<bool>(),
-            proptest::collection::vec(any::<T>(), 1..5),
-            any::<bool>(),
-            any::<RefreshSchedule>(),
-            proptest::string::string_regex(".*").unwrap(),
-        ),
-        any::<Option<TimeDependence>>(),
-    )
-        .prop_map(
-            |(
-                (
-                    source_imports,
-                    index_imports,
-                    objects_to_build,
-                    index_exports,
-                    sink_descs,
-                    as_of_some,
-                    as_of,
-                    initial_storage_as_of_some,
-                    initial_as_of,
-                    refresh_schedule_some,
-                    refresh_schedule,
-                    debug_name,
-                ),
-                time_dependence,
-            )| DataflowDescription {
-                source_imports: BTreeMap::from_iter(source_imports),
-                index_imports: BTreeMap::from_iter(index_imports),
-                objects_to_build,
-                index_exports: BTreeMap::from_iter(index_exports),
-                sink_exports: BTreeMap::from_iter(sink_descs),
-                as_of: if as_of_some {
-                    Some(Antichain::from(as_of))
-                } else {
-                    None
-                },
-                until: Antichain::new(),
-                initial_storage_as_of: if initial_storage_as_of_some {
-                    Some(Antichain::from(initial_as_of))
-                } else {
-                    None
-                },
-                refresh_schedule: if refresh_schedule_some {
-                    Some(refresh_schedule)
-                } else {
-                    None
-                },
-                debug_name,
-                time_dependence,
-            },
-        )
-}
-
-fn any_source_import() -> impl Strategy<
-    Value = (
-        GlobalId,
-        (SourceInstanceDesc<()>, bool, Antichain<mz_repr::Timestamp>),
-    ),
-> {
-    (any::<GlobalId>(), any::<(SourceInstanceDesc<()>, bool)>()).prop_map(
-        |(id, (source_instance_desc, monotonic))| {
-            (id, (source_instance_desc, monotonic, Antichain::new()))
-        },
-    )
-}
-
-proptest::prop_compose! {
-    fn any_dataflow_index_import()(
-        id in any::<GlobalId>(),
-        desc in any::<IndexDesc>(),
-        typ in any::<SqlRelationType>(),
-        monotonic in any::<bool>(),
-    ) -> (GlobalId, IndexImport) {
-        (id, IndexImport {desc, typ, monotonic})
-    }
-}
-
-proptest::prop_compose! {
-    fn any_dataflow_index_export()(
-        id in any::<GlobalId>(),
-        index in any::<IndexDesc>(),
-        typ in any::<SqlRelationType>(),
-    ) -> (GlobalId, (IndexDesc, SqlRelationType)) {
-        (id, (index, typ))
-    }
-}
-
 /// A commonly used name for dataflows contain MIR expressions.
 pub type DataflowDesc = DataflowDescription<OptimizedMirRelationExpr, ()>;
 
 /// An index storing processed updates so they can be queried
 /// or reused in other computations
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct IndexDesc {
     /// Identity of the collection the index is on.
     pub on_id: GlobalId,
@@ -706,7 +587,7 @@ pub struct IndexImport {
 }
 
 /// An association of a global identifier to an expression.
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct BuildDesc<P> {
     /// TODO(database-issues#7533): Add documentation.
     pub id: GlobalId,

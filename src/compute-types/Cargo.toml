@@ -19,8 +19,6 @@ mz-expr = { path = "../expr" }
 mz-ore = { path = "../ore", features = ["tracing", "metrics"] }
 mz-repr = { path = "../repr", features = ["tracing"] }
 mz-storage-types = { path = "../storage-types" }
-proptest = { version = "1.7.0", default-features = false, features = ["std"] }
-proptest-derive = { version = "0.5.1", features = ["boxed_union"] }
 serde = { version = "1.0.219", features = ["derive"] }
 timely = "0.24.0"
 tracing = "0.1.37"
