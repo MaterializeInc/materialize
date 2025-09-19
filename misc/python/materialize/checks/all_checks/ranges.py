@@ -107,7 +107,7 @@ class Range(Check):
                     i8_range + '[3,20]'::INT8RANGE AS i8_merge,
                     i8_range * '[8,20]'::INT8RANGE AS i8_intersec,
                     i8_range - '[8,120]'::INT8RANGE AS i8_diff,
-                    (SELECT partition FROM range_source_progress LIMIT 1) AS progress_range
+                    (SELECT partition FROM range_source LIMIT 1) AS progress_range
                   FROM range_table;
 
                 > INSERT INTO range_table SELECT * FROM range_table WHERE index = 1;

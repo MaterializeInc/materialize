@@ -97,7 +97,7 @@ class MultiplePartitions(Check):
         return Testdrive(
             dedent(
                 """
-                > SELECT partition FROM multiple_partitions_source_src_progress;
+                > SELECT partition FROM multiple_partitions_source_src;
                 (3,)
                 [0,0]
                 [1,1]
@@ -105,7 +105,7 @@ class MultiplePartitions(Check):
                 [3,3]
 
                 # alias is needed to avoid error due to reserved keyword
-                > SELECT SUM(p.offset) FROM multiple_partitions_source_src_progress p;
+                > SELECT SUM(p.offset) FROM multiple_partitions_source_src p;
                 420
 
                 > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'multiple_partitions_source';
