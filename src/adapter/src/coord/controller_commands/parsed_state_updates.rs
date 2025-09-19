@@ -41,7 +41,8 @@ pub enum ParsedStateUpdateKind {
         parsed_full_name: String,
     },
     TemporaryItem {
-        parsed_item: memory::objects::TemporaryItem,
+        durable_item: memory::objects::TemporaryItem,
+        parsed_item: memory::objects::CatalogItem,
         connection: Option<GenericSourceConnection>,
         parsed_full_name: String,
     },
@@ -221,15 +222,17 @@ fn parse_item_update(
 
 fn parse_temporary_item_update(
     catalog: &CatalogState,
-    parsed_item: memory::objects::TemporaryItem,
+    durable_item: memory::objects::TemporaryItem,
     _diff: StateDiff,
 ) -> ParsedStateUpdateKind {
-    let entry = catalog.get_entry(&parsed_item.id);
+    let entry = catalog.get_entry(&durable_item.id);
+
+    let parsed_item = entry.item().clone();
     let parsed_full_name = catalog
         .resolve_full_name(entry.name(), entry.conn_id())
         .to_string();
 
-    let connection = match &parsed_item.item {
+    let connection = match &parsed_item {
         memory::objects::CatalogItem::Source(source) => {
             if let DataSourceDesc::Ingestion { desc, .. }
             | DataSourceDesc::OldSyntaxIngestion { desc, .. } = &source.data_source
@@ -249,6 +252,7 @@ fn parse_temporary_item_update(
     };
 
     ParsedStateUpdateKind::TemporaryItem {
+        durable_item,
         parsed_item,
         connection,
         parsed_full_name,
