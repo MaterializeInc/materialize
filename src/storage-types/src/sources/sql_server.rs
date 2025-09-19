@@ -86,16 +86,16 @@ pub static SQL_SERVER_PROGRESS_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
 
 /// Details about how to create a Materialize Source that reads from Microsoft SQL Server.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct SqlServerSource<C: ConnectionAccess = InlinedConnection> {
-    /// ID of this SQL `SOURCE` object in the Catalog.
-    pub catalog_id: CatalogItemId,
+pub struct SqlServerSourceConnection<C: ConnectionAccess = InlinedConnection> {
+    /// The ID of the Connection object this source is using.
+    pub connection_id: CatalogItemId,
     /// Configuration for connecting to SQL Server.
     pub connection: C::SqlServer,
     /// SQL Server specific information that is relevant to creating a source.
     pub extras: SqlServerSourceExtras,
 }
 
-impl SqlServerSource<InlinedConnection> {
+impl SqlServerSourceConnection<InlinedConnection> {
     pub async fn fetch_write_frontier(
         self,
         storage_configuration: &crate::configuration::StorageConfiguration,
@@ -115,25 +115,25 @@ impl SqlServerSource<InlinedConnection> {
     }
 }
 
-impl<R: ConnectionResolver> IntoInlineConnection<SqlServerSource, R>
-    for SqlServerSource<ReferencedConnection>
+impl<R: ConnectionResolver> IntoInlineConnection<SqlServerSourceConnection, R>
+    for SqlServerSourceConnection<ReferencedConnection>
 {
-    fn into_inline_connection(self, r: R) -> SqlServerSource {
-        let SqlServerSource {
-            catalog_id,
+    fn into_inline_connection(self, r: R) -> SqlServerSourceConnection {
+        let SqlServerSourceConnection {
+            connection_id,
             connection,
             extras,
         } = self;
 
-        SqlServerSource {
-            catalog_id,
+        SqlServerSourceConnection {
+            connection_id,
             connection: r.resolve_connection(connection).unwrap_sql_server(),
             extras,
         }
     }
 }
 
-impl<C: ConnectionAccess> SourceConnection for SqlServerSource<C> {
+impl<C: ConnectionAccess> SourceConnection for SqlServerSourceConnection<C> {
     fn name(&self) -> &'static str {
         "sql-server"
     }
@@ -157,7 +157,7 @@ impl<C: ConnectionAccess> SourceConnection for SqlServerSource<C> {
     }
 
     fn connection_id(&self) -> Option<CatalogItemId> {
-        Some(self.catalog_id)
+        Some(self.connection_id)
     }
 
     fn supports_read_only(&self) -> bool {
@@ -169,20 +169,20 @@ impl<C: ConnectionAccess> SourceConnection for SqlServerSource<C> {
     }
 }
 
-impl<C: ConnectionAccess> AlterCompatible for SqlServerSource<C> {
+impl<C: ConnectionAccess> AlterCompatible for SqlServerSourceConnection<C> {
     fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
         if self == other {
             return Ok(());
         }
 
-        let SqlServerSource {
-            catalog_id,
+        let SqlServerSourceConnection {
+            connection_id,
             connection,
             extras,
         } = self;
 
         let compatibility_checks = [
-            (catalog_id == &other.catalog_id, "catalog_id"),
+            (connection_id == &other.connection_id, "connection_id"),
             (
                 connection.alter_compatible(id, &other.connection).is_ok(),
                 "connection",

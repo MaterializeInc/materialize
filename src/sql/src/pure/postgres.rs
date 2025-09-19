@@ -13,7 +13,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use mz_expr::MirScalarExpr;
-use mz_postgres_util::Config;
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_proto::RustType;
 use mz_repr::{SqlColumnType, SqlRelationType, SqlScalarType};
@@ -44,11 +43,10 @@ use super::{PartialItemName, PurifiedExportDetails, PurifiedSourceExport, Source
 /// start snapshotting because if we discover we cannot `COPY` from a table while
 /// snapshotting, we break the entire source.
 pub(super) async fn validate_requested_references_privileges(
-    config: &Config,
     client: &Client,
     table_oids: &[Oid],
 ) -> Result<(), PlanError> {
-    privileges::check_table_privileges(config, client, table_oids).await?;
+    privileges::check_table_privileges(client, table_oids).await?;
     replica_identity::check_replica_identity_full(client, table_oids).await?;
 
     Ok(())
@@ -337,7 +335,6 @@ pub(super) struct PurifiedSourceExports {
 // fields necessary to generate relevant statements and update statement options
 pub(super) async fn purify_source_exports(
     client: &Client,
-    config: &mz_postgres_util::Config,
     retrieved_references: &RetrievedSourceReferences,
     requested_references: &Option<ExternalReferences>,
     mut text_columns: Vec<UnresolvedItemName>,
@@ -389,7 +386,7 @@ pub(super) async fn purify_source_exports(
         .map(|r| r.meta.postgres_desc().expect("is postgres").oid)
         .collect();
 
-    validate_requested_references_privileges(config, client, &table_oids).await?;
+    validate_requested_references_privileges(client, &table_oids).await?;
 
     let mut text_column_map = generate_text_columns(retrieved_references, &mut text_columns)?;
 
@@ -598,17 +595,13 @@ pub(crate) fn generate_column_casts(
 }
 
 mod privileges {
-    use mz_postgres_util::{Config, PostgresError};
+    use mz_postgres_util::PostgresError;
 
     use super::*;
     use crate::plan::PlanError;
     use crate::pure::PgSourcePurificationError;
 
-    async fn check_schema_privileges(
-        config: &Config,
-        client: &Client,
-        table_oids: &[Oid],
-    ) -> Result<(), PlanError> {
+    async fn check_schema_privileges(client: &Client, table_oids: &[Oid]) -> Result<(), PlanError> {
         let invalid_schema_privileges_rows = client
             .query(
                 "
@@ -622,11 +615,8 @@ mod privileges {
                 SELECT d.schema_name
                 FROM distinct_namespace AS d
                 WHERE
-                    NOT has_schema_privilege($2::TEXT, d.oid, 'usage')",
-                &[
-                    &table_oids,
-                    &config.get_user().expect("connection specifies user"),
-                ],
+                    NOT has_schema_privilege(CURRENT_USER::TEXT, d.oid, 'usage')",
+                &[&table_oids],
             )
             .await
             .map_err(PostgresError::from)?;
@@ -641,10 +631,6 @@ mod privileges {
         } else {
             invalid_schema_privileges.sort();
             Err(PgSourcePurificationError::UserLacksUsageOnSchemas {
-                user: config
-                    .get_user()
-                    .expect("connection specifies user")
-                    .to_string(),
                 schemas: invalid_schema_privileges,
             })?
         }
@@ -661,11 +647,10 @@ mod privileges {
     /// # Panics
     /// If `config` does not specify a user.
     pub async fn check_table_privileges(
-        config: &Config,
         client: &Client,
         table_oids: &[Oid],
     ) -> Result<(), PlanError> {
-        check_schema_privileges(config, client, table_oids).await?;
+        check_schema_privileges(client, table_oids).await?;
 
         let invalid_table_privileges_rows = client
             .query(
@@ -677,11 +662,8 @@ mod privileges {
                  pg_class c ON c.oid = oids.oid
              JOIN
                  pg_namespace n ON c.relnamespace = n.oid
-             WHERE NOT has_table_privilege($2::text, c.oid, 'select')",
-                &[
-                    &table_oids,
-                    &config.get_user().expect("connection specifies user"),
-                ],
+             WHERE NOT has_table_privilege(CURRENT_USER::text, c.oid, 'select')",
+                &[&table_oids],
             )
             .await
             .map_err(PostgresError::from)?;
@@ -696,10 +678,6 @@ mod privileges {
         } else {
             invalid_table_privileges.sort();
             Err(PgSourcePurificationError::UserLacksSelectOnTables {
-                user: config
-                    .get_user()
-                    .expect("connection must specify user")
-                    .to_string(),
                 tables: invalid_table_privileges,
             })?
         }

@@ -519,9 +519,19 @@ impl AdapterError {
             AdapterError::SafeModeViolation(_) => SqlState::INTERNAL_ERROR,
             AdapterError::SubscribeOnlyTransaction => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::Optimizer(e) => match e {
-                OptimizerError::PlanError(e) => {
-                    AdapterError::PlanError(e.clone()).code() // Delegate to outer
+                OptimizerError::PlanError(PlanError::InvalidSchemaName) => {
+                    SqlState::INVALID_SCHEMA_NAME
                 }
+                OptimizerError::PlanError(PlanError::ColumnAlreadyExists { .. }) => {
+                    SqlState::DUPLICATE_COLUMN
+                }
+                OptimizerError::PlanError(PlanError::UnknownParameter(_)) => {
+                    SqlState::UNDEFINED_PARAMETER
+                }
+                OptimizerError::PlanError(PlanError::ParameterNotAllowed(_)) => {
+                    SqlState::UNDEFINED_PARAMETER
+                }
+                OptimizerError::PlanError(_) => SqlState::INTERNAL_ERROR,
                 OptimizerError::RecursionLimitError(e) => {
                     AdapterError::RecursionLimit(e.clone()).code() // Delegate to outer
                 }
@@ -836,9 +846,9 @@ impl fmt::Display for AdapterError {
 
 impl From<anyhow::Error> for AdapterError {
     fn from(e: anyhow::Error) -> AdapterError {
-        match e.downcast_ref::<PlanError>() {
-            Some(plan_error) => AdapterError::PlanError(plan_error.clone()),
-            None => AdapterError::Unstructured(e),
+        match e.downcast::<PlanError>() {
+            Ok(plan_error) => AdapterError::PlanError(plan_error),
+            Err(e) => AdapterError::Unstructured(e),
         }
     }
 }

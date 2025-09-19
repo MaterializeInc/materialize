@@ -2357,7 +2357,6 @@ where
                 persist_location: self.persist_location.clone(),
                 relation_desc: collection_desc.desc.clone(),
                 data_shard,
-                // TODO(alter_table): Support changes to sources.
                 txns_shard: Some(self.txns_read.txns_id().clone()),
             };
             let collection_state = CollectionState::new(

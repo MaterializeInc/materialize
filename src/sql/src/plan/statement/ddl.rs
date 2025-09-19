@@ -115,8 +115,8 @@ use mz_storage_types::sources::sql_server::{
 use mz_storage_types::sources::{
     GenericSourceConnection, MySqlSourceExportDetails, PostgresSourceExportDetails,
     ProtoSourceExportStatementDetails, SourceConnection, SourceDesc, SourceExportDataConfig,
-    SourceExportDetails, SourceExportStatementDetails, SqlServerSource, SqlServerSourceExtras,
-    Timeline,
+    SourceExportDetails, SourceExportStatementDetails, SqlServerSourceConnection,
+    SqlServerSourceExtras, Timeline,
 };
 use prost::Message;
 
@@ -802,265 +802,19 @@ pub fn plan_create_source(
         bail_unsupported!("INCLUDE metadata with non-Kafka sources");
     }
 
-    let external_connection = match source_connection {
-        CreateSourceConnection::Kafka {
-            connection: connection_name,
-            options,
-        } => {
-            let connection_item = scx.get_item_by_resolved_name(connection_name)?;
-            if !matches!(connection_item.connection()?, Connection::Kafka(_)) {
-                sql_bail!(
-                    "{} is not a kafka connection",
-                    scx.catalog.resolve_full_name(connection_item.name())
-                )
-            }
+    if !include_metadata.is_empty()
+        && !matches!(
+            envelope,
+            ast::SourceEnvelope::Upsert { .. }
+                | ast::SourceEnvelope::None
+                | ast::SourceEnvelope::Debezium
+        )
+    {
+        sql_bail!("INCLUDE <metadata> requires ENVELOPE (NONE|UPSERT|DEBEZIUM)");
+    }
 
-            let KafkaSourceConfigOptionExtracted {
-                group_id_prefix,
-                topic,
-                topic_metadata_refresh_interval,
-                start_timestamp: _, // purified into `start_offset`
-                start_offset,
-                seen: _,
-            }: KafkaSourceConfigOptionExtracted = options.clone().try_into()?;
-
-            let topic = topic.expect("validated exists during purification");
-
-            let mut start_offsets = BTreeMap::new();
-            if let Some(offsets) = start_offset {
-                for (part, offset) in offsets.iter().enumerate() {
-                    if *offset < 0 {
-                        sql_bail!("START OFFSET must be a nonnegative integer");
-                    }
-                    start_offsets.insert(i32::try_from(part)?, *offset);
-                }
-            }
-
-            if !start_offsets.is_empty() && envelope.requires_all_input() {
-                sql_bail!("START OFFSET is not supported with ENVELOPE {}", envelope)
-            }
-
-            if topic_metadata_refresh_interval > Duration::from_secs(60 * 60) {
-                // This is a librdkafka-enforced restriction that, if violated,
-                // would result in a runtime error for the source.
-                sql_bail!("TOPIC METADATA REFRESH INTERVAL cannot be greater than 1 hour");
-            }
-
-            if !include_metadata.is_empty()
-                && !matches!(
-                    envelope,
-                    ast::SourceEnvelope::Upsert { .. }
-                        | ast::SourceEnvelope::None
-                        | ast::SourceEnvelope::Debezium
-                )
-            {
-                // TODO(guswynn): should this be `bail_unsupported!`?
-                sql_bail!("INCLUDE <metadata> requires ENVELOPE (NONE|UPSERT|DEBEZIUM)");
-            }
-
-            // This defines the metadata columns for the primary export of this kafka source,
-            // not any tables that are created from it.
-            // TODO: Remove this when we stop outputting to the primary export of a source.
-            let metadata_columns = include_metadata
-                .into_iter()
-                .flat_map(|item| match item {
-                    SourceIncludeMetadata::Timestamp { alias } => {
-                        let name = match alias {
-                            Some(name) => name.to_string(),
-                            None => "timestamp".to_owned(),
-                        };
-                        Some((name, KafkaMetadataKind::Timestamp))
-                    }
-                    SourceIncludeMetadata::Partition { alias } => {
-                        let name = match alias {
-                            Some(name) => name.to_string(),
-                            None => "partition".to_owned(),
-                        };
-                        Some((name, KafkaMetadataKind::Partition))
-                    }
-                    SourceIncludeMetadata::Offset { alias } => {
-                        let name = match alias {
-                            Some(name) => name.to_string(),
-                            None => "offset".to_owned(),
-                        };
-                        Some((name, KafkaMetadataKind::Offset))
-                    }
-                    SourceIncludeMetadata::Headers { alias } => {
-                        let name = match alias {
-                            Some(name) => name.to_string(),
-                            None => "headers".to_owned(),
-                        };
-                        Some((name, KafkaMetadataKind::Headers))
-                    }
-                    SourceIncludeMetadata::Header {
-                        alias,
-                        key,
-                        use_bytes,
-                    } => Some((
-                        alias.to_string(),
-                        KafkaMetadataKind::Header {
-                            key: key.clone(),
-                            use_bytes: *use_bytes,
-                        },
-                    )),
-                    SourceIncludeMetadata::Key { .. } => {
-                        // handled below
-                        None
-                    }
-                })
-                .collect();
-
-            let connection = KafkaSourceConnection::<ReferencedConnection> {
-                connection: connection_item.id(),
-                connection_id: connection_item.id(),
-                topic,
-                start_offsets,
-                group_id_prefix,
-                topic_metadata_refresh_interval,
-                metadata_columns,
-            };
-
-            GenericSourceConnection::Kafka(connection)
-        }
-        CreateSourceConnection::Postgres {
-            connection,
-            options,
-        } => {
-            let connection_item = scx.get_item_by_resolved_name(connection)?;
-
-            let PgConfigOptionExtracted {
-                details,
-                publication,
-                // text columns are already part of the source-exports and are only included
-                // in these options for round-tripping of a `CREATE SOURCE` statement. This should
-                // be removed once we drop support for implicitly created subsources.
-                text_columns: _,
-                seen: _,
-            } = options.clone().try_into()?;
-
-            let details = details
-                .as_ref()
-                .ok_or_else(|| sql_err!("internal error: Postgres source missing details"))?;
-            let details = hex::decode(details).map_err(|e| sql_err!("{}", e))?;
-            let details = ProtoPostgresSourcePublicationDetails::decode(&*details)
-                .map_err(|e| sql_err!("{}", e))?;
-
-            let publication_details = PostgresSourcePublicationDetails::from_proto(details)
-                .map_err(|e| sql_err!("{}", e))?;
-
-            let connection =
-                GenericSourceConnection::<ReferencedConnection>::from(PostgresSourceConnection {
-                    connection: connection_item.id(),
-                    connection_id: connection_item.id(),
-                    publication: publication.expect("validated exists during purification"),
-                    publication_details,
-                });
-
-            connection
-        }
-        CreateSourceConnection::SqlServer {
-            connection,
-            options,
-        } => {
-            let connection_item = scx.get_item_by_resolved_name(connection)?;
-            match connection_item.connection()? {
-                Connection::SqlServer(connection) => connection,
-                _ => sql_bail!(
-                    "{} is not a SQL Server connection",
-                    scx.catalog.resolve_full_name(connection_item.name())
-                ),
-            };
-
-            let SqlServerConfigOptionExtracted { details, .. } = options.clone().try_into()?;
-            let details = details
-                .as_ref()
-                .ok_or_else(|| sql_err!("internal error: SQL Server source missing details"))?;
-            let extras = hex::decode(details)
-                .map_err(|e| sql_err!("{e}"))
-                .and_then(|raw| {
-                    ProtoSqlServerSourceExtras::decode(&*raw).map_err(|e| sql_err!("{e}"))
-                })
-                .and_then(|proto| {
-                    SqlServerSourceExtras::from_proto(proto).map_err(|e| sql_err!("{e}"))
-                })?;
-
-            let connection =
-                GenericSourceConnection::<ReferencedConnection>::from(SqlServerSource {
-                    catalog_id: connection_item.id(),
-                    connection: connection_item.id(),
-                    extras,
-                });
-
-            connection
-        }
-        CreateSourceConnection::MySql {
-            connection,
-            options,
-        } => {
-            let connection_item = scx.get_item_by_resolved_name(connection)?;
-            match connection_item.connection()? {
-                Connection::MySql(connection) => connection,
-                _ => sql_bail!(
-                    "{} is not a MySQL connection",
-                    scx.catalog.resolve_full_name(connection_item.name())
-                ),
-            };
-            let MySqlConfigOptionExtracted {
-                details,
-                // text/exclude columns are already part of the source-exports and are only included
-                // in these options for round-tripping of a `CREATE SOURCE` statement. This should
-                // be removed once we drop support for implicitly created subsources.
-                text_columns: _,
-                exclude_columns: _,
-                seen: _,
-            } = options.clone().try_into()?;
-
-            let details = details
-                .as_ref()
-                .ok_or_else(|| sql_err!("internal error: MySQL source missing details"))?;
-            let details = hex::decode(details).map_err(|e| sql_err!("{}", e))?;
-            let details =
-                ProtoMySqlSourceDetails::decode(&*details).map_err(|e| sql_err!("{}", e))?;
-            let details = MySqlSourceDetails::from_proto(details).map_err(|e| sql_err!("{}", e))?;
-
-            let connection =
-                GenericSourceConnection::<ReferencedConnection>::from(MySqlSourceConnection {
-                    connection: connection_item.id(),
-                    connection_id: connection_item.id(),
-                    details,
-                });
-
-            connection
-        }
-        CreateSourceConnection::LoadGenerator { generator, options } => {
-            let load_generator =
-                load_generator_ast_to_generator(scx, generator, options, include_metadata)?;
-
-            let LoadGeneratorOptionExtracted {
-                tick_interval,
-                as_of,
-                up_to,
-                ..
-            } = options.clone().try_into()?;
-            let tick_micros = match tick_interval {
-                Some(interval) => Some(interval.as_micros().try_into()?),
-                None => None,
-            };
-
-            if up_to < as_of {
-                sql_bail!("UP TO cannot be less than AS OF");
-            }
-
-            let connection = GenericSourceConnection::from(LoadGeneratorSourceConnection {
-                load_generator,
-                tick_micros,
-                as_of,
-                up_to,
-            });
-
-            connection
-        }
-    };
+    let external_connection =
+        plan_generic_source_connection(scx, source_connection, include_metadata)?;
 
     let CreateSourceOptionExtracted {
         timestamp_interval,
@@ -1249,6 +1003,268 @@ pub fn plan_create_source(
         timeline,
         in_cluster: Some(in_cluster.id()),
     }))
+}
+
+pub fn plan_generic_source_connection(
+    scx: &StatementContext<'_>,
+    source_connection: &CreateSourceConnection<Aug>,
+    include_metadata: &Vec<SourceIncludeMetadata>,
+) -> Result<GenericSourceConnection<ReferencedConnection>, PlanError> {
+    Ok(match source_connection {
+        CreateSourceConnection::Kafka {
+            connection,
+            options,
+        } => GenericSourceConnection::Kafka(plan_kafka_source_connection(
+            scx,
+            connection,
+            options,
+            include_metadata,
+        )?),
+        CreateSourceConnection::Postgres {
+            connection,
+            options,
+        } => GenericSourceConnection::Postgres(plan_postgres_source_connection(
+            scx, connection, options,
+        )?),
+        CreateSourceConnection::SqlServer {
+            connection,
+            options,
+        } => GenericSourceConnection::SqlServer(plan_sqlserver_source_connection(
+            scx, connection, options,
+        )?),
+        CreateSourceConnection::MySql {
+            connection,
+            options,
+        } => {
+            GenericSourceConnection::MySql(plan_mysql_source_connection(scx, connection, options)?)
+        }
+        CreateSourceConnection::LoadGenerator { generator, options } => {
+            GenericSourceConnection::LoadGenerator(plan_load_generator_source_connection(
+                scx,
+                generator,
+                options,
+                include_metadata,
+            )?)
+        }
+    })
+}
+
+fn plan_load_generator_source_connection(
+    scx: &StatementContext<'_>,
+    generator: &ast::LoadGenerator,
+    options: &Vec<LoadGeneratorOption<Aug>>,
+    include_metadata: &Vec<SourceIncludeMetadata>,
+) -> Result<LoadGeneratorSourceConnection, PlanError> {
+    let load_generator =
+        load_generator_ast_to_generator(scx, generator, options, include_metadata)?;
+    let LoadGeneratorOptionExtracted {
+        tick_interval,
+        as_of,
+        up_to,
+        ..
+    } = options.clone().try_into()?;
+    let tick_micros = match tick_interval {
+        Some(interval) => Some(interval.as_micros().try_into()?),
+        None => None,
+    };
+    if up_to < as_of {
+        sql_bail!("UP TO cannot be less than AS OF");
+    }
+    Ok(LoadGeneratorSourceConnection {
+        load_generator,
+        tick_micros,
+        as_of,
+        up_to,
+    })
+}
+
+fn plan_mysql_source_connection(
+    scx: &StatementContext<'_>,
+    connection: &ResolvedItemName,
+    options: &Vec<MySqlConfigOption<Aug>>,
+) -> Result<MySqlSourceConnection<ReferencedConnection>, PlanError> {
+    let connection_item = scx.get_item_by_resolved_name(connection)?;
+    match connection_item.connection()? {
+        Connection::MySql(connection) => connection,
+        _ => sql_bail!(
+            "{} is not a MySQL connection",
+            scx.catalog.resolve_full_name(connection_item.name())
+        ),
+    };
+    let MySqlConfigOptionExtracted {
+        details,
+        // text/exclude columns are already part of the source-exports and are only included
+        // in these options for round-tripping of a `CREATE SOURCE` statement. This should
+        // be removed once we drop support for implicitly created subsources.
+        text_columns: _,
+        exclude_columns: _,
+        seen: _,
+    } = options.clone().try_into()?;
+    let details = details
+        .as_ref()
+        .ok_or_else(|| sql_err!("internal error: MySQL source missing details"))?;
+    let details = hex::decode(details).map_err(|e| sql_err!("{}", e))?;
+    let details = ProtoMySqlSourceDetails::decode(&*details).map_err(|e| sql_err!("{}", e))?;
+    let details = MySqlSourceDetails::from_proto(details).map_err(|e| sql_err!("{}", e))?;
+    Ok(MySqlSourceConnection {
+        connection: connection_item.id(),
+        connection_id: connection_item.id(),
+        details,
+    })
+}
+
+fn plan_sqlserver_source_connection(
+    scx: &StatementContext<'_>,
+    connection: &ResolvedItemName,
+    options: &Vec<SqlServerConfigOption<Aug>>,
+) -> Result<SqlServerSourceConnection<ReferencedConnection>, PlanError> {
+    let connection_item = scx.get_item_by_resolved_name(connection)?;
+    match connection_item.connection()? {
+        Connection::SqlServer(connection) => connection,
+        _ => sql_bail!(
+            "{} is not a SQL Server connection",
+            scx.catalog.resolve_full_name(connection_item.name())
+        ),
+    };
+    let SqlServerConfigOptionExtracted { details, .. } = options.clone().try_into()?;
+    let details = details
+        .as_ref()
+        .ok_or_else(|| sql_err!("internal error: SQL Server source missing details"))?;
+    let extras = hex::decode(details)
+        .map_err(|e| sql_err!("{e}"))
+        .and_then(|raw| ProtoSqlServerSourceExtras::decode(&*raw).map_err(|e| sql_err!("{e}")))
+        .and_then(|proto| SqlServerSourceExtras::from_proto(proto).map_err(|e| sql_err!("{e}")))?;
+    Ok(SqlServerSourceConnection {
+        connection_id: connection_item.id(),
+        connection: connection_item.id(),
+        extras,
+    })
+}
+
+fn plan_postgres_source_connection(
+    scx: &StatementContext<'_>,
+    connection: &ResolvedItemName,
+    options: &Vec<PgConfigOption<Aug>>,
+) -> Result<PostgresSourceConnection<ReferencedConnection>, PlanError> {
+    let connection_item = scx.get_item_by_resolved_name(connection)?;
+    let PgConfigOptionExtracted {
+        details,
+        publication,
+        // text columns are already part of the source-exports and are only included
+        // in these options for round-tripping of a `CREATE SOURCE` statement. This should
+        // be removed once we drop support for implicitly created subsources.
+        text_columns: _,
+        seen: _,
+    } = options.clone().try_into()?;
+    let details = details
+        .as_ref()
+        .ok_or_else(|| sql_err!("internal error: Postgres source missing details"))?;
+    let details = hex::decode(details).map_err(|e| sql_err!("{}", e))?;
+    let details =
+        ProtoPostgresSourcePublicationDetails::decode(&*details).map_err(|e| sql_err!("{}", e))?;
+    let publication_details =
+        PostgresSourcePublicationDetails::from_proto(details).map_err(|e| sql_err!("{}", e))?;
+    Ok(PostgresSourceConnection {
+        connection: connection_item.id(),
+        connection_id: connection_item.id(),
+        publication: publication.expect("validated exists during purification"),
+        publication_details,
+    })
+}
+
+fn plan_kafka_source_connection(
+    scx: &StatementContext<'_>,
+    connection_name: &ResolvedItemName,
+    options: &Vec<ast::KafkaSourceConfigOption<Aug>>,
+    include_metadata: &Vec<SourceIncludeMetadata>,
+) -> Result<KafkaSourceConnection<ReferencedConnection>, PlanError> {
+    let connection_item = scx.get_item_by_resolved_name(connection_name)?;
+    if !matches!(connection_item.connection()?, Connection::Kafka(_)) {
+        sql_bail!(
+            "{} is not a kafka connection",
+            scx.catalog.resolve_full_name(connection_item.name())
+        )
+    }
+    let KafkaSourceConfigOptionExtracted {
+        group_id_prefix,
+        topic,
+        topic_metadata_refresh_interval,
+        start_timestamp: _, // purified into `start_offset`
+        start_offset,
+        seen: _,
+    }: KafkaSourceConfigOptionExtracted = options.clone().try_into()?;
+    let topic = topic.expect("validated exists during purification");
+    let mut start_offsets = BTreeMap::new();
+    if let Some(offsets) = start_offset {
+        for (part, offset) in offsets.iter().enumerate() {
+            if *offset < 0 {
+                sql_bail!("START OFFSET must be a nonnegative integer");
+            }
+            start_offsets.insert(i32::try_from(part)?, *offset);
+        }
+    }
+    if topic_metadata_refresh_interval > Duration::from_secs(60 * 60) {
+        // This is a librdkafka-enforced restriction that, if violated,
+        // would result in a runtime error for the source.
+        sql_bail!("TOPIC METADATA REFRESH INTERVAL cannot be greater than 1 hour");
+    }
+    let metadata_columns = include_metadata
+        .into_iter()
+        .flat_map(|item| match item {
+            SourceIncludeMetadata::Timestamp { alias } => {
+                let name = match alias {
+                    Some(name) => name.to_string(),
+                    None => "timestamp".to_owned(),
+                };
+                Some((name, KafkaMetadataKind::Timestamp))
+            }
+            SourceIncludeMetadata::Partition { alias } => {
+                let name = match alias {
+                    Some(name) => name.to_string(),
+                    None => "partition".to_owned(),
+                };
+                Some((name, KafkaMetadataKind::Partition))
+            }
+            SourceIncludeMetadata::Offset { alias } => {
+                let name = match alias {
+                    Some(name) => name.to_string(),
+                    None => "offset".to_owned(),
+                };
+                Some((name, KafkaMetadataKind::Offset))
+            }
+            SourceIncludeMetadata::Headers { alias } => {
+                let name = match alias {
+                    Some(name) => name.to_string(),
+                    None => "headers".to_owned(),
+                };
+                Some((name, KafkaMetadataKind::Headers))
+            }
+            SourceIncludeMetadata::Header {
+                alias,
+                key,
+                use_bytes,
+            } => Some((
+                alias.to_string(),
+                KafkaMetadataKind::Header {
+                    key: key.clone(),
+                    use_bytes: *use_bytes,
+                },
+            )),
+            SourceIncludeMetadata::Key { .. } => {
+                // handled below
+                None
+            }
+        })
+        .collect();
+    Ok(KafkaSourceConnection {
+        connection: connection_item.id(),
+        connection_id: connection_item.id(),
+        topic,
+        start_offsets,
+        group_id_prefix,
+        topic_metadata_refresh_interval,
+        metadata_columns,
+    })
 }
 
 fn apply_source_envelope_encoding(

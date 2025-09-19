@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Code to render the ingestion dataflow of a [`SqlServerSource`].
+//! Code to render the ingestion dataflow of a [`SqlServerSourceConnection`].
 
 use std::collections::BTreeMap;
 use std::convert::Infallible;
@@ -25,7 +25,7 @@ use mz_repr::{Diff, GlobalId, Row, RowArena};
 use mz_sql_server_util::cdc::{CdcEvent, Lsn, Operation as CdcOperation};
 use mz_sql_server_util::inspect::get_latest_restore_history_id;
 use mz_storage_types::errors::{DataflowError, DecodeError, DecodeErrorKind};
-use mz_storage_types::sources::SqlServerSource;
+use mz_storage_types::sources::SqlServerSourceConnection;
 use mz_storage_types::sources::sql_server::{
     CDC_POLL_INTERVAL, MAX_LSN_WAIT, SNAPSHOT_PROGRESS_REPORT_INTERVAL,
 };
@@ -56,7 +56,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
     scope: G,
     config: RawSourceCreationConfig,
     outputs: BTreeMap<GlobalId, SourceOutputInfo>,
-    source: SqlServerSource,
+    source: SqlServerSourceConnection,
 ) -> (
     StackedCollection<G, (u64, Result<SourceMessage, DataflowError>)>,
     TimelyStream<G, Infallible>,
