@@ -19,7 +19,7 @@ mz-repr = { path = "../repr" }
 mz-proto = { path = "../proto", features = ["tokio-postgres"] }
 prost = { version = "0.13.5", features = ["no-recursion-limit"] }
 proptest = { version = "1.7.0", default-features = false, features = ["std"] }
-serde = { version = "1.0.219", features = ["derive"] }
+serde = { version = "1.0.225", features = ["derive"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [build-dependencies]

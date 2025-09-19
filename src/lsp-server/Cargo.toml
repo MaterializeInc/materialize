@@ -11,15 +11,15 @@ workspace = true
 
 [dependencies]
 ropey = "1.6.1"
-serde_json = "1.0.127"
+serde_json = "1.0.145"
 tokio = { version = "1.44.1", features = ["sync"] }
 tower-lsp = { version = "0.20.0", features = ["proposed"]}
-serde = { version = "1.0.219", features = ["derive"] }
+serde = { version = "1.0.225", features = ["derive"] }
 mz-build-info = { path = "../build-info" }
 mz-sql-parser = { path = "../sql-parser", default-features = false  }
 mz-sql-lexer = { path = "../sql-lexer", default-features = false }
 mz-ore = { path = "../ore", default-features = false, features = ["async", "test"] }
-regex = "1.11.1"
+regex = "1.11.2"
 mz-sql-pretty = { path = "../sql-pretty" }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 

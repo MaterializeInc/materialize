@@ -13,7 +13,7 @@ workspace = true
 buildid = "1.0.3"
 compile-time-run = "0.2.12"
 hex = "0.4.3"
-semver = { version = "1.0.26", optional = true }
+semver = { version = "1.0.27", optional = true }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [features]
