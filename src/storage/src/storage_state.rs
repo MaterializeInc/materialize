@@ -101,7 +101,7 @@ use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::dyncfgs::STORAGE_SERVER_MAINTENANCE_INTERVAL;
 use mz_storage_types::oneshot_sources::OneshotIngestionDescription;
 use mz_storage_types::sinks::StorageSinkDesc;
-use mz_storage_types::sources::{IngestionDescription, SourceEnvelope};
+use mz_storage_types::sources::IngestionDescription;
 use mz_timely_util::builder_async::PressOnDropButton;
 use mz_txn_wal::operator::TxnsContext;
 use timely::communication::Allocate;
@@ -672,24 +672,6 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     "worker {}/{} trying to (re-)start ingestion {ingestion_id}",
                     self.timely_worker.index(),
                     self.timely_worker.peers(),
-                );
-
-                // These statistics are used for reporting aggregated values but we should instead
-                // only report per-export statistics and do the aggregation in a SQL view.
-                self.storage_state.aggregated_statistics.initialize_source(
-                    ingestion_id,
-                    Antichain::new(),
-                    || {
-                        SourceStatistics::new(
-                            ingestion_id,
-                            self.storage_state.timely_worker_index,
-                            &self.storage_state.metrics.source_statistics,
-                            ingestion_id,
-                            &ingestion_description.remap_metadata.data_shard,
-                            SourceEnvelope::CdcV2,
-                            Antichain::new(),
-                        )
-                    },
                 );
 
                 // We initialize statistics before we prune finished exports. We
