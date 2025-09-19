@@ -1695,24 +1695,8 @@ impl Coordinator {
                 MAX_REPLICAS_PER_CLUSTER.name(),
             )?;
         }
-        let current_credit_consumption_rate = self
-            .catalog()
-            .user_cluster_replicas()
-            .filter_map(|replica| match &replica.config.location {
-                ReplicaLocation::Managed(location) => Some(location.size_for_billing()),
-                ReplicaLocation::Unmanaged(_) => None,
-            })
-            .map(|size| {
-                self.catalog()
-                    .cluster_replica_sizes()
-                    .0
-                    .get(size)
-                    .expect("location size is validated against the cluster replica sizes")
-                    .credits_per_hour
-            })
-            .sum();
         self.validate_resource_limit_numeric(
-            current_credit_consumption_rate,
+            self.current_credit_consumption_rate(),
             new_credit_consumption_rate,
             |system_vars| {
                 self.license_key
@@ -1830,7 +1814,7 @@ impl Coordinator {
     /// Validate a specific type of float resource limit and return an error if that limit is exceeded.
     ///
     /// This is very similar to [`Self::validate_resource_limit`] but for numerics.
-    fn validate_resource_limit_numeric<F>(
+    pub(crate) fn validate_resource_limit_numeric<F>(
         &self,
         current_amount: Numeric,
         new_amount: Numeric,
