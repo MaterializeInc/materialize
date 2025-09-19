@@ -64,6 +64,7 @@ def main():
         "--environment-name",
         default="12345678-1234-1234-1234-123456789012",
     )
+    parser_environment.add_argument("--environment-id", required=False)
     parser_environment.add_argument("--postgres-url", default=DEFAULT_POSTGRES)
     parser_environment.add_argument("--s3-bucket", default=DEFAULT_MINIO)
     parser_environment.add_argument("--license-key-file")
@@ -206,7 +207,10 @@ def environment(args: argparse.Namespace):
             cluster=args.kind_cluster_name,
         )
 
-    environment_id = str(uuid4())
+    if args.environment_id is None:
+        environment_id = str(uuid4())
+    else:
+        environment_id = args.environment_id
 
     def root_psql(cmd: str):
         env_kubectl(
