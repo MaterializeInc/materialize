@@ -187,6 +187,7 @@ mod derive {
         AddUint64,
         AddFloat32,
         AddFloat64,
+        AddInterval,
     }
 }
 
@@ -552,7 +553,6 @@ mod test {
             &i32_ty,
         );
         check(func::AddNumeric, BF::AddNumeric, &i32_ty, &i32_ty);
-        check(func::AddInterval, BF::AddInterval, &i32_ty, &i32_ty);
         check(func::BitAndInt16, BF::BitAndInt16, &i32_ty, &i32_ty);
         check(func::BitAndInt32, BF::BitAndInt32, &i32_ty, &i32_ty);
         check(func::BitAndInt64, BF::BitAndInt64, &i32_ty, &i32_ty);

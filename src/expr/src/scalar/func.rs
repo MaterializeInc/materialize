@@ -472,16 +472,13 @@ fn add_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
 
 #[sqlfunc(
     is_monotone = "(true, true)",
-    output_type = "Interval",
     is_infix_op = true,
     sqlname = "+",
     propagates_nulls = true
 )]
-fn add_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    a.unwrap_interval()
-        .checked_add(&b.unwrap_interval())
+fn add_interval(a: Interval, b: Interval) -> Result<Interval, EvalError> {
+    a.checked_add(&b)
         .ok_or_else(|| EvalError::IntervalOutOfRange(format!("{a} + {b}").into()))
-        .map(Datum::from)
 }
 
 #[sqlfunc(
@@ -2959,7 +2956,7 @@ pub enum BinaryFunc {
     AddUint64(AddUint64),
     AddFloat32(AddFloat32),
     AddFloat64(AddFloat64),
-    AddInterval,
+    AddInterval(AddInterval),
     AddTimestampInterval,
     AddTimestampTzInterval,
     AddDateInterval,
@@ -3165,6 +3162,7 @@ impl BinaryFunc {
             BinaryFunc::AddUint64(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
             BinaryFunc::AddFloat32(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
             BinaryFunc::AddFloat64(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
+            BinaryFunc::AddInterval(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
             _ => { /* fall through */ }
         }
 
@@ -3181,7 +3179,8 @@ impl BinaryFunc {
             | BinaryFunc::AddUint32(_)
             | BinaryFunc::AddUint64(_)
             | BinaryFunc::AddFloat32(_)
-            | BinaryFunc::AddFloat64(_) => unreachable!(),
+            | BinaryFunc::AddFloat64(_)
+            | BinaryFunc::AddInterval(_) => unreachable!(),
             BinaryFunc::AddTimestampInterval => {
                 add_timestamplike_interval(a.unwrap_timestamp(), b.unwrap_interval())
             }
@@ -3192,7 +3191,6 @@ impl BinaryFunc {
             BinaryFunc::AddDateInterval => add_date_interval(a, b),
             BinaryFunc::AddTimeInterval => Ok(add_time_interval(a, b)),
             BinaryFunc::AddNumeric => add_numeric(a, b),
-            BinaryFunc::AddInterval => add_interval(a, b),
             BinaryFunc::AgeTimestamp => age_timestamp(a, b),
             BinaryFunc::AgeTimestampTz => age_timestamptz(a, b),
             BinaryFunc::BitAndInt16 => Ok(bit_and_int16(a, b)),
@@ -3449,6 +3447,7 @@ impl BinaryFunc {
             AddUint64(s) => s.output_type(input1_type, input2_type),
             AddFloat32(s) => s.output_type(input1_type, input2_type),
             AddFloat64(s) => s.output_type(input1_type, input2_type),
+            AddInterval(s) => s.output_type(input1_type, input2_type),
 
             Eq
             | NotEq
@@ -3510,7 +3509,7 @@ impl BinaryFunc {
                 SqlScalarType::Float64.nullable(in_nullable)
             }
 
-            AddInterval | SubInterval | SubTimestamp | SubTimestampTz | MulInterval
+            SubInterval | SubTimestamp | SubTimestampTz | MulInterval
             | DivInterval => SqlScalarType::Interval.nullable(in_nullable),
 
             AgeTimestamp | AgeTimestampTz => SqlScalarType::Interval.nullable(in_nullable),
@@ -3682,8 +3681,8 @@ impl BinaryFunc {
             AddUint64(s) => s.introduces_nulls(),
             AddFloat32(s) => s.introduces_nulls(),
             AddFloat64(s) => s.introduces_nulls(),
-            AddInterval
-            | AddTimestampInterval
+            AddInterval(s) => s.introduces_nulls(),
+            AddTimestampInterval
             | AddTimestampTzInterval
             | AddDateInterval
             | AddDateTime
@@ -3884,12 +3883,12 @@ impl BinaryFunc {
             AddUint64(s) => s.is_infix_op(),
             AddFloat32(s) => s.is_infix_op(),
             AddFloat64(s) => s.is_infix_op(),
+            AddInterval(s) => s.is_infix_op(),
             AddTimestampInterval
             | AddTimestampTzInterval
             | AddDateTime
             | AddDateInterval
             | AddTimeInterval
-            | AddInterval
             | BitAndInt16
             | BitAndInt32
             | BitAndInt64
@@ -4218,8 +4217,8 @@ impl BinaryFunc {
             BinaryFunc::AddUint64(s) => s.is_monotone(),
             BinaryFunc::AddFloat32(s) => s.is_monotone(),
             BinaryFunc::AddFloat64(s) => s.is_monotone(),
-            BinaryFunc::AddInterval
-            | BinaryFunc::AddTimestampInterval
+            BinaryFunc::AddInterval(s) => s.is_monotone(),
+            BinaryFunc::AddTimestampInterval
             | BinaryFunc::AddTimestampTzInterval
             | BinaryFunc::AddDateInterval
             | BinaryFunc::AddDateTime
@@ -4425,7 +4424,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::AddFloat32(s) => s.fmt(f),
             BinaryFunc::AddFloat64(s) => s.fmt(f),
             BinaryFunc::AddNumeric => f.write_str("+"),
-            BinaryFunc::AddInterval => f.write_str("+"),
+            BinaryFunc::AddInterval(s) => s.fmt(f),
             BinaryFunc::AddTimestampInterval => f.write_str("+"),
             BinaryFunc::AddTimestampTzInterval => f.write_str("+"),
             BinaryFunc::AddDateTime => f.write_str("+"),
@@ -4653,7 +4652,7 @@ impl Arbitrary for BinaryFunc {
             Just(BinaryFunc::AddUint64(AddUint64)).boxed(),
             Just(BinaryFunc::AddFloat32(AddFloat32)).boxed(),
             Just(BinaryFunc::AddFloat64(AddFloat64)).boxed(),
-            Just(BinaryFunc::AddInterval).boxed(),
+            Just(BinaryFunc::AddInterval(AddInterval)).boxed(),
             Just(BinaryFunc::AddTimestampInterval).boxed(),
             Just(BinaryFunc::AddTimestampTzInterval).boxed(),
             Just(BinaryFunc::AddDateInterval).boxed(),

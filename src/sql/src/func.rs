@@ -4507,7 +4507,7 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
             params!(UInt64, UInt64) => AddUint64(func::AddUint64) => UInt64, oid::FUNC_ADD_UINT64;
             params!(Float32, Float32) => AddFloat32(func::AddFloat32) => Float32, 586;
             params!(Float64, Float64) => AddFloat64(func::AddFloat64) => Float64, 591;
-            params!(Interval, Interval) => AddInterval => Interval, 1337;
+            params!(Interval, Interval) => AddInterval(func::AddInterval) => Interval, 1337;
             params!(Timestamp, Interval) => AddTimestampInterval => Timestamp, 2066;
             params!(Interval, Timestamp) => {
                 Operation::binary(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, AddTimestampInterval)))
