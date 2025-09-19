@@ -28,6 +28,9 @@ from materialize.mzcompose import (
 from materialize.mzcompose.service import (
     Service,
     ServiceConfig,
+    ServiceDeploy,
+    ServiceDeployResources,
+    ServiceDeployResourceLimits,
     ServiceDependency,
 )
 from materialize.mzcompose.services.azurite import azure_blob_uri
@@ -298,12 +301,14 @@ class Materialized(Service):
         # ignored with a warning. Unfortunately no portable way of setting the
         # memory limit is known.
         if memory or cpu:
-            limits = {}
+            limits: ServiceDeployResourceLimits = {}
             if memory:
                 limits["memory"] = memory
             if cpu:
                 limits["cpus"] = cpu
-            config["deploy"] = {"resources": {"limits": limits}}
+            resources: ServiceDeployResources = {"limits": limits}
+            deploy: ServiceDeploy = {"resources": resources}
+            config["deploy"] = deploy
 
         if sanity_restart:
             # Workaround for https://github.com/docker/compose/issues/11133
