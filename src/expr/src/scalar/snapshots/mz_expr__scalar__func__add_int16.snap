@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    is_monotone = \"(true, true)\",\n    output_type = \"i16\",\n    is_infix_op = true,\n    sqlname = \"+\",\n    propagates_nulls = true\n)]\nfn add_int16<'a>(a: i16, b: i16) -> Result<Datum<'a>, EvalError> {\n    a.checked_add(b).ok_or(EvalError::NumericFieldOverflow).map(Datum::from)\n}\n"
+expression: "#[sqlfunc(\n    is_monotone = \"(true, true)\",\n    is_infix_op = true,\n    sqlname = \"+\",\n    propagates_nulls = true\n)]\nfn add_int16(a: i16, b: i16) -> Result<i16, EvalError> {\n    a.checked_add(b).ok_or(EvalError::NumericFieldOverflow)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -19,7 +19,7 @@ pub struct AddInt16;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for AddInt16 {
     type Input1 = i16;
     type Input2 = i16;
-    type Output = Result<Datum<'a>, EvalError>;
+    type Output = Result<i16, EvalError>;
     fn call(
         &self,
         a: Self::Input1,
@@ -34,7 +34,7 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for AddInt16 {
         input_type_b: mz_repr::SqlColumnType,
     ) -> mz_repr::SqlColumnType {
         use mz_repr::AsColumnType;
-        let output = <i16>::as_column_type();
+        let output = Self::Output::as_column_type();
         let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
             self,
         );
@@ -45,9 +45,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for AddInt16 {
                     || (propagates_nulls
                         && (input_type_a.nullable || input_type_b.nullable)),
             )
-    }
-    fn introduces_nulls(&self) -> bool {
-        <i16 as ::mz_repr::DatumType<'_, ()>>::nullable()
     }
     fn is_infix_op(&self) -> bool {
         true
@@ -64,6 +61,6 @@ impl std::fmt::Display for AddInt16 {
         f.write_str("+")
     }
 }
-fn add_int16<'a>(a: i16, b: i16) -> Result<Datum<'a>, EvalError> {
-    a.checked_add(b).ok_or(EvalError::NumericFieldOverflow).map(Datum::from)
+fn add_int16(a: i16, b: i16) -> Result<i16, EvalError> {
+    a.checked_add(b).ok_or(EvalError::NumericFieldOverflow)
 }

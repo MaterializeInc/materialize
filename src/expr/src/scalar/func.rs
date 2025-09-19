@@ -93,112 +93,94 @@ pub fn jsonb_stringify<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a
 
 #[sqlfunc(
     is_monotone = "(true, true)",
-    output_type = "i16",
     is_infix_op = true,
     sqlname = "+",
     propagates_nulls = true
 )]
-fn add_int16<'a>(a: i16, b: i16) -> Result<Datum<'a>, EvalError> {
-    a.checked_add(b)
-        .ok_or(EvalError::NumericFieldOverflow)
-        .map(Datum::from)
+fn add_int16(a: i16, b: i16) -> Result<i16, EvalError> {
+    a.checked_add(b).ok_or(EvalError::NumericFieldOverflow)
 }
 
 #[sqlfunc(
     is_monotone = "(true, true)",
-    output_type = "i32",
     is_infix_op = true,
     sqlname = "+",
     propagates_nulls = true
 )]
-fn add_int32<'a>(a: i32, b: i32) -> Result<Datum<'a>, EvalError> {
-    a.checked_add(b)
-        .ok_or(EvalError::NumericFieldOverflow)
-        .map(Datum::from)
+fn add_int32(a: i32, b: i32) -> Result<i32, EvalError> {
+    a.checked_add(b).ok_or(EvalError::NumericFieldOverflow)
 }
 
 #[sqlfunc(
     is_monotone = "(true, true)",
-    output_type = "i64",
     is_infix_op = true,
     sqlname = "+",
     propagates_nulls = true
 )]
-fn add_int64<'a>(a: i64, b: i64) -> Result<Datum<'a>, EvalError> {
-    a.checked_add(b)
-        .ok_or(EvalError::NumericFieldOverflow)
-        .map(Datum::from)
+fn add_int64(a: i64, b: i64) -> Result<i64, EvalError> {
+    a.checked_add(b).ok_or(EvalError::NumericFieldOverflow)
 }
 
 #[sqlfunc(
     is_monotone = "(true, true)",
-    output_type = "u16",
     is_infix_op = true,
     sqlname = "+",
     propagates_nulls = true
 )]
-fn add_uint16<'a>(a: u16, b: u16) -> Result<Datum<'a>, EvalError> {
+fn add_uint16(a: u16, b: u16) -> Result<u16, EvalError> {
     a.checked_add(b)
         .ok_or_else(|| EvalError::UInt16OutOfRange(format!("{a} + {b}").into()))
-        .map(Datum::from)
 }
 
 #[sqlfunc(
     is_monotone = "(true, true)",
-    output_type = "u32",
     is_infix_op = true,
     sqlname = "+",
     propagates_nulls = true
 )]
-fn add_uint32<'a>(a: u32, b: u32) -> Result<Datum<'a>, EvalError> {
+fn add_uint32(a: u32, b: u32) -> Result<u32, EvalError> {
     a.checked_add(b)
         .ok_or_else(|| EvalError::UInt32OutOfRange(format!("{a} + {b}").into()))
-        .map(Datum::from)
 }
 
 #[sqlfunc(
     is_monotone = "(true, true)",
-    output_type = "u64",
     is_infix_op = true,
     sqlname = "+",
     propagates_nulls = true
 )]
-fn add_uint64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    a.unwrap_uint64()
-        .checked_add(b.unwrap_uint64())
+fn add_uint64(a: u64, b: u64) -> Result<u64, EvalError> {
+    a.checked_add(b)
         .ok_or_else(|| EvalError::UInt64OutOfRange(format!("{a} + {b}").into()))
-        .map(Datum::from)
 }
 
 #[sqlfunc(
     is_monotone = "(true, true)",
-    output_type = "f32",
     is_infix_op = true,
     sqlname = "+",
     propagates_nulls = true
 )]
-fn add_float32<'a>(a: f32, b: f32) -> Result<Datum<'a>, EvalError> {
+fn add_float32(a: f32, b: f32) -> Result<f32, EvalError> {
     let sum = a + b;
     if sum.is_infinite() && !a.is_infinite() && !b.is_infinite() {
         Err(EvalError::FloatOverflow)
     } else {
-        Ok(Datum::from(sum))
+        Ok(sum)
     }
 }
 
 #[sqlfunc(
     is_monotone = "(true, true)",
-    output_type = "f64",
     is_infix_op = true,
     sqlname = "+",
     propagates_nulls = true
 )]
-fn add_float64<'a>(a: f64, b: f64) -> Result<Datum<'a>, EvalError> {
+fn add_float64(a: f64, b: f64) -> Result<f64, EvalError> {
     let sum = a + b;
     if sum.is_infinite() && !a.is_infinite() && !b.is_infinite() {
         Err(EvalError::FloatOverflow)
     } else {
-        Ok(Datum::from(sum))
+        Ok(sum)
     }
 }
 
@@ -4103,6 +4085,9 @@ impl BinaryFunc {
             BinaryFunc::AddUInt64(s) => s.negate(),
             BinaryFunc::AddFloat32(s) => s.negate(),
             BinaryFunc::AddFloat64(s) => s.negate(),
+
+            // The following functions are specifically declared for legacy reasons.
+            // TODO: Pending conversion to `LazyBinaryFunc`, these can be removed.
             BinaryFunc::Eq => Some(BinaryFunc::NotEq),
             BinaryFunc::NotEq => Some(BinaryFunc::Eq),
             BinaryFunc::Lt => Some(BinaryFunc::Gte),
