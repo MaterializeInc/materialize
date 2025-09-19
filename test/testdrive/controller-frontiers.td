@@ -125,6 +125,8 @@ ct1
   IN CLUSTER test_source
   FROM LOAD GENERATOR COUNTER (UP TO 100)
 
+> CREATE TABLE source1_tbl FROM SOURCE source1;
+
 > SELECT
     sources.name,
     replicas.name
@@ -232,6 +234,7 @@ r2
     frontiers.object_id LIKE 'u%' AND
     frontiers.read_frontier > 0 AND
     frontiers.write_frontier > 0
+source1_tbl
 t1
 
 # Test that the frontiers of storage-managed collections are reported.
