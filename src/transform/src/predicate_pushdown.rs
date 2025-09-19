@@ -27,7 +27,7 @@
 //! errors). See <https://github.com/MaterializeInc/database-issues/issues/4972#issuecomment-1547391011>
 //!
 //! ```rust
-//! use mz_expr::{BinaryFunc, MirRelationExpr, MirScalarExpr};
+//! use mz_expr::{BinaryFunc, MirRelationExpr, MirScalarExpr, func};
 //! use mz_ore::id_gen::IdGen;
 //! use mz_repr::{SqlColumnType, Datum, SqlRelationType, SqlScalarType};
 //! use mz_repr::optimize::OptimizerFeatures;
@@ -52,7 +52,7 @@
 //!
 //! let predicate0 = MirScalarExpr::column(0);
 //! let predicate1 = MirScalarExpr::column(1);
-//! let predicate01 = MirScalarExpr::column(0).call_binary(MirScalarExpr::column(2), BinaryFunc::AddInt64);
+//! let predicate01 = MirScalarExpr::column(0).call_binary(MirScalarExpr::column(2), func::AddInt64.into());
 //! let predicate012 = MirScalarExpr::literal_false();
 //!
 //! let mut expr = join.filter(
@@ -70,7 +70,7 @@
 //!
 //! PredicatePushdown::default().transform(&mut expr, &mut transform_ctx);
 //!
-//! let predicate00 = MirScalarExpr::column(0).call_binary(MirScalarExpr::column(0), BinaryFunc::AddInt64);
+//! let predicate00 = MirScalarExpr::column(0).call_binary(MirScalarExpr::column(0), func::AddInt64.into());
 //! let expected_expr = MirRelationExpr::join(
 //!     vec![
 //!         input1.clone().filter(vec![predicate0.clone(), predicate00.clone()]),
