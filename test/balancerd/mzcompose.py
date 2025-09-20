@@ -102,7 +102,7 @@ SERVICES = [
             "--https-sni-resolver-template=materialized:6876",
             # This will be turned off until we can resolve perf issues
             # https://github.com/MaterializeInc/database-issues/issues/9700
-            # "--pgwire-sni-resolver-template=materialized:6875",
+            "--pgwire-sni-resolver-template=materialized:6875",
             "--tls-key=/secrets/balancerd.key",
             "--tls-cert=/secrets/balancerd.crt",
             "--internal-tls",

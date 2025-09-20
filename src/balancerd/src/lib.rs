@@ -1319,16 +1319,17 @@ impl Resolver {
                         }),
                     ) => {
                         let sni_addr = sni_addr_template.replace("{}", servername);
-                        let tenant = stub_resolver.tenant(&sni_addr).await;
+                        // let tenant = stub_resolver.tenant(&sni_addr).await;
                         let sni_addr = format!("{sni_addr}:{port}");
                         let addr = lookup(&sni_addr).await?;
-                        if tenant.is_some() {
-                            debug!("SNI header found for tenant {:?}", tenant);
-                        }
+                        // if tenant.is_some() {
+                        //     debug!("SNI header found for tenant {:?}", tenant);
+                        // }
                         ResolvedAddr {
                             addr,
                             password: None,
-                            tenant,
+                            tenant: None,
+                            // tenant,
                         }
                     }
                     _ => {
