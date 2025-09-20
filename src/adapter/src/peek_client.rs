@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use differential_dataflow::consolidation::consolidate;
-use mz_compute_client::controller::error::{CollectionMissing, InstanceMissing};
+use mz_compute_client::controller::error::CollectionMissing;
 use mz_compute_client::protocol::command::PeekTarget;
 use mz_compute_client::protocol::response::PeekResponse;
 use mz_compute_types::ComputeInstanceId;
@@ -33,7 +33,6 @@ use uuid::Uuid;
 
 use crate::{CollectionIdBundle, ReadHolds};
 use crate::coord::peek::FastPathPlan;
-use crate::optimize::dataflows::ComputeInstanceSnapshot;
 
 /// Storage collections trait alias we need to consult for since/frontiers.
 pub type StorageCollectionsHandle = Arc<
@@ -47,8 +46,6 @@ pub type StorageCollectionsHandle = Arc<
 #[derive(Debug)]
 pub struct PeekClient {
     /// Channels to talk to each compute Instance task directly.
-    /// ////////////// todo: we'll need to update this somehow when instances come and go
-    /// ////// todo: do we want to make this generic, like instance::Client?
     pub compute_instances:
         BTreeMap<ComputeInstanceId, mz_compute_client::controller::instance::Client<Timestamp>>,
     /// Handle to storage collections for reading frontiers and policies.
@@ -56,35 +53,14 @@ pub struct PeekClient {
     /// A generator for transient [`GlobalId`]s, shared with Coordinator.
     pub transient_id_gen: Arc<TransientIdGen>,
     pub optimizer_metrics: OptimizerMetrics,
-    ///// todo: generic timestamp?
     pub oracles: BTreeMap<Timeline, Arc<dyn TimestampOracle<Timestamp> + Send + Sync>>,
-    ////////// todo: This is initialized only at session startup. We'll be able to properly check
+    // TODO: This is initialized only at session startup. We'll be able to properly check
     // the actual feature flag value (without a Coordinator call) once we'll always have a catalog
     // snapshot at hand.
     pub enable_frontend_peek_sequencing: bool,
 }
 
 impl PeekClient {
-    ///////// todo: This is a temporary thing.
-    // We should refactor stuff to make a snapshot optional, and rather than panicking in the
-    // Controller when we try to do something with a non-existent collection, return a graceful
-    // error, which we can handle in the peek sequencing code.
-    pub async fn snapshot(
-        &self,
-        compute_instance: ComputeInstanceId,
-    ) -> Result<ComputeInstanceSnapshot, InstanceMissing> {
-        self.compute_instances
-            .get(&compute_instance)
-            .expect("/////// todo: return proper error")
-            .call_sync(move |i| {
-                Ok(ComputeInstanceSnapshot::new_from_parts(
-                    compute_instance,
-                    i.snapshot(),
-                ))
-            })
-            .await
-    }
-
     /// Acquire read holds on the given compute/storage collections, and
     /// determine the smallest common valid write frontier among the specified collections.
     ///

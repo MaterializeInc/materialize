@@ -1031,16 +1031,11 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
     }
 
     /// Reports the current write frontier for the identified compute collection.
-    pub fn collection_write_frontier(
+    fn collection_write_frontier(
         &self,
         id: GlobalId,
     ) -> Result<Antichain<T>, CollectionMissing> {
         Ok(self.collection(id)?.write_frontier())
-    }
-
-    //////// todo: temporary thing: only needed for PeekClient::snapshot
-    pub fn snapshot(&self) -> BTreeSet<GlobalId> {
-        self.collections.keys().cloned().collect()
     }
 }
 
