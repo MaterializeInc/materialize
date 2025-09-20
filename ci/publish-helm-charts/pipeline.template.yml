@@ -69,3 +69,14 @@ steps:
     timeout_in_minutes: 30
     agents:
       queue: linux-aarch64-small
+
+  - wait: ~
+
+  - id: docker-tag
+    label: Tag Versions on DockerHub
+    command: bin/ci-builder run stable bin/pyactivate -m ci.deploy.docker
+    timeout_in_minutes: 30
+    agents:
+      queue: linux-x86_64-small
+    concurrency: 1
+    concurrency_group: deploy/linux
