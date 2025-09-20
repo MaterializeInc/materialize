@@ -51,7 +51,9 @@ use crate::ast::{
 use crate::catalog::CatalogItemType;
 use crate::names::{Aug, ResolvedItemName};
 use crate::normalize;
-use crate::plan::query::{ExprContext, QueryLifetime, offset_into_value, plan_expr, plan_up_to};
+use crate::plan::query::{
+    ExprContext, QueryLifetime, offset_into_value, plan_as_of_or_up_to, plan_expr,
+};
 use crate::plan::scope::Scope;
 use crate::plan::statement::show::ShowSelect;
 use crate::plan::statement::{StatementContext, StatementDesc, ddl};
@@ -1216,7 +1218,9 @@ pub fn plan_subscribe(
     };
 
     let when = query::plan_as_of(scx, as_of)?;
-    let up_to = up_to.map(|up_to| plan_up_to(scx, up_to)).transpose()?;
+    let up_to = up_to
+        .map(|up_to| plan_as_of_or_up_to(scx, up_to))
+        .transpose()?;
 
     let qcx = QueryContext::root(scx, QueryLifetime::Subscribe);
     let ecx = ExprContext {

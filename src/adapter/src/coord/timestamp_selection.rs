@@ -19,11 +19,9 @@ use itertools::Itertools;
 use mz_adapter_types::dyncfgs::CONSTRAINT_BASED_TIMESTAMP_SELECTION;
 use mz_adapter_types::timestamp_selection::ConstraintBasedTimestampSelection;
 use mz_compute_types::ComputeInstanceId;
-use mz_expr::MirScalarExpr;
 use mz_ore::cast::CastLossy;
 use mz_ore::soft_assert_eq_or_log;
-use mz_repr::explain::ExprHumanizer;
-use mz_repr::{GlobalId, RowArena, SqlScalarType, Timestamp, TimestampManipulation};
+use mz_repr::{GlobalId, Timestamp, TimestampManipulation};
 use mz_sql::plan::QueryWhen;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::vars::IsolationLevel;
@@ -38,7 +36,6 @@ use crate::coord::Coordinator;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::read_policy::ReadHolds;
 use crate::coord::timeline::TimelineContext;
-use crate::optimize::dataflows::{ExprPrepStyle, prep_scalar_expr};
 use crate::session::Session;
 
 /// The timeline and timestamp context of a read.
@@ -249,7 +246,6 @@ pub trait TimestampProvider {
 
     /// Determines the timestamp for a query using the classical logic (as opposed to constraint-based).
     fn determine_timestamp_classical(
-        &self,
         session: &Session,
         read_holds: &ReadHolds<Timestamp>,
         id_bundle: &CollectionIdBundle,
@@ -298,9 +294,7 @@ pub trait TimestampProvider {
         // Initialize candidate to the minimum correct time.
         let mut candidate = Timestamp::minimum();
 
-        if let Some(timestamp) = when.advance_to_timestamp() {
-            let catalog_state = self.catalog_state();
-            let ts = Coordinator::evaluate_when(catalog_state, timestamp, session)?;
+        if let Some(ts) = when.advance_to_timestamp() {
             candidate.join_assign(&ts);
         }
 
@@ -409,7 +403,6 @@ pub trait TimestampProvider {
     /// Returns the determined timestamp, the constraints that were applied, and
     /// session_oracle_read_ts.
     fn determine_timestamp_via_constraints(
-        &self,
         session: &Session,
         read_holds: &ReadHolds<Timestamp>,
         id_bundle: &CollectionIdBundle,
@@ -459,9 +452,7 @@ pub trait TimestampProvider {
             }
 
             // The query's `when` may indicates a specific timestamp we must advance to, or a specific value we must use.
-            if let Some(timestamp) = when.advance_to_timestamp() {
-                let catalog_state = self.catalog_state();
-                let ts = Coordinator::evaluate_when(catalog_state, timestamp, session)?;
+            if let Some(ts) = when.advance_to_timestamp() {
                 constraints
                     .lower
                     .push((Antichain::from_elem(ts), Reason::QueryAsOf));
@@ -610,27 +601,51 @@ pub trait TimestampProvider {
         compute_instance: ComputeInstanceId,
         timeline_context: &TimelineContext,
         oracle_read_ts: Option<Timestamp>,
-        real_time_recency_ts: Option<mz_repr::Timestamp>,
+        real_time_recency_ts: Option<Timestamp>,
         isolation_level: &IsolationLevel,
         constraint_based: &ConstraintBasedTimestampSelection,
-    ) -> Result<
-        (
-            TimestampDetermination<mz_repr::Timestamp>,
-            ReadHolds<mz_repr::Timestamp>,
-        ),
-        AdapterError,
-    > {
+    ) -> Result<(TimestampDetermination<Timestamp>, ReadHolds<Timestamp>), AdapterError> {
         // First, we acquire read holds that will ensure the queried collections
         // stay queryable at the chosen timestamp.
         let read_holds = self.acquire_read_holds(id_bundle);
-        let timeline = Self::get_timeline(timeline_context);
 
-        let since = read_holds.least_valid_read();
         let upper = self.least_valid_write(id_bundle);
+
+        Self::determine_timestamp_for_inner(
+            session,
+            id_bundle,
+            when,
+            compute_instance,
+            timeline_context,
+            oracle_read_ts,
+            real_time_recency_ts,
+            isolation_level,
+            constraint_based,
+            read_holds,
+            upper,
+        )
+    }
+
+    /// Same as determine_timestamp_for, but read_holds and least_valid_write are already passed in.
+    fn determine_timestamp_for_inner(
+        session: &Session,
+        id_bundle: &CollectionIdBundle,
+        when: &QueryWhen,
+        compute_instance: ComputeInstanceId,
+        timeline_context: &TimelineContext,
+        oracle_read_ts: Option<Timestamp>,
+        real_time_recency_ts: Option<Timestamp>,
+        isolation_level: &IsolationLevel,
+        constraint_based: &ConstraintBasedTimestampSelection,
+        read_holds: ReadHolds<Timestamp>,
+        upper: Antichain<Timestamp>,
+    ) -> Result<(TimestampDetermination<Timestamp>, ReadHolds<Timestamp>), AdapterError> {
+        let timeline = Self::get_timeline(timeline_context);
         let largest_not_in_advance_of_upper = Coordinator::largest_not_in_advance_of_upper(&upper);
+        let since = read_holds.least_valid_read();
 
         let raw_determination = match constraint_based {
-            ConstraintBasedTimestampSelection::Disabled => self.determine_timestamp_classical(
+            ConstraintBasedTimestampSelection::Disabled => Self::determine_timestamp_classical(
                 session,
                 &read_holds,
                 id_bundle,
@@ -643,8 +658,8 @@ pub trait TimestampProvider {
                 largest_not_in_advance_of_upper,
                 &since,
             )?,
-            ConstraintBasedTimestampSelection::Enabled => self
-                .determine_timestamp_via_constraints(
+            ConstraintBasedTimestampSelection::Enabled => {
+                Self::determine_timestamp_via_constraints(
                     session,
                     &read_holds,
                     id_bundle,
@@ -655,9 +670,10 @@ pub trait TimestampProvider {
                     isolation_level,
                     &timeline,
                     largest_not_in_advance_of_upper,
-                )?,
+                )?
+            }
             ConstraintBasedTimestampSelection::Verify => {
-                let classical_determination = self.determine_timestamp_classical(
+                let classical_determination = Self::determine_timestamp_classical(
                     session,
                     &read_holds,
                     id_bundle,
@@ -671,7 +687,7 @@ pub trait TimestampProvider {
                     &since,
                 )?;
 
-                match self.determine_timestamp_via_constraints(
+                match Self::determine_timestamp_via_constraints(
                     session,
                     &read_holds,
                     id_bundle,
@@ -927,47 +943,6 @@ impl Coordinator {
             // are known to have completed (non-tailed files for example).
             Timestamp::MAX
         }
-    }
-
-    pub(crate) fn evaluate_when(
-        catalog: &CatalogState,
-        mut timestamp: MirScalarExpr,
-        session: &Session,
-    ) -> Result<mz_repr::Timestamp, AdapterError> {
-        let temp_storage = RowArena::new();
-        prep_scalar_expr(&mut timestamp, ExprPrepStyle::AsOfUpTo)?;
-        let evaled = timestamp.eval(&[], &temp_storage)?;
-        if evaled.is_null() {
-            coord_bail!("can't use {} as a mz_timestamp for AS OF or UP TO", evaled);
-        }
-        let ty = timestamp.typ(&[]);
-        Ok(match ty.scalar_type {
-            SqlScalarType::MzTimestamp => evaled.unwrap_mz_timestamp(),
-            SqlScalarType::Numeric { .. } => {
-                let n = evaled.unwrap_numeric().0;
-                n.try_into()?
-            }
-            SqlScalarType::Int16 => i64::from(evaled.unwrap_int16()).try_into()?,
-            SqlScalarType::Int32 => i64::from(evaled.unwrap_int32()).try_into()?,
-            SqlScalarType::Int64 => evaled.unwrap_int64().try_into()?,
-            SqlScalarType::UInt16 => u64::from(evaled.unwrap_uint16()).into(),
-            SqlScalarType::UInt32 => u64::from(evaled.unwrap_uint32()).into(),
-            SqlScalarType::UInt64 => evaled.unwrap_uint64().into(),
-            SqlScalarType::TimestampTz { .. } => {
-                evaled.unwrap_timestamptz().timestamp_millis().try_into()?
-            }
-            SqlScalarType::Timestamp { .. } => evaled
-                .unwrap_timestamp()
-                .and_utc()
-                .timestamp_millis()
-                .try_into()?,
-            _ => coord_bail!(
-                "can't use {} as a mz_timestamp for AS OF or UP TO",
-                catalog
-                    .for_session(session)
-                    .humanize_column_type(&ty, false)
-            ),
-        })
     }
 }
 

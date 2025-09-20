@@ -17,8 +17,7 @@ use mz_adapter::catalog::CatalogState;
 use mz_adapter::session::Session;
 use mz_adapter::{CollectionIdBundle, TimelineContext, TimestampProvider};
 use mz_compute_types::ComputeInstanceId;
-use mz_expr::MirScalarExpr;
-use mz_repr::{Datum, GlobalId, SqlScalarType, Timestamp};
+use mz_repr::{GlobalId, Timestamp};
 use mz_sql::plan::QueryWhen;
 use mz_sql::session::vars::IsolationLevel;
 use mz_sql_parser::ast::TransactionIsolationLevel;
@@ -177,11 +176,10 @@ fn parse_query_when(s: &str) -> QueryWhen {
     let s = s.to_lowercase();
     match s.split_once(':') {
         Some((when, ts)) => {
-            let ts: i64 = ts.parse().unwrap();
-            let expr = MirScalarExpr::literal_ok(Datum::Int64(ts), SqlScalarType::Int64);
+            let ts = ts.parse().unwrap();
             match when {
-                "attimestamp" => QueryWhen::AtTimestamp(expr),
-                "atleasttimestamp" => QueryWhen::AtLeastTimestamp(expr),
+                "attimestamp" => QueryWhen::AtTimestamp(ts),
+                "atleasttimestamp" => QueryWhen::AtLeastTimestamp(ts),
                 _ => panic!("bad when {s}"),
             }
         }
