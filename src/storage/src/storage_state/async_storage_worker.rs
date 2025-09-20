@@ -106,7 +106,6 @@ where
     IntoTime: Timestamp + TotalOrder + Lattice + Codec64 + Display + Sync,
 {
     let remap_metadata = &ingestion_description.remap_metadata;
-
     let persist_client = persist_clients
         .open(remap_metadata.persist_location.clone())
         .await

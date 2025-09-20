@@ -156,9 +156,10 @@ impl RawSourceCreationConfig {
 
     /// Returns a `SourceStatistics` for the source.
     pub fn source_statistics(&self) -> &SourceStatistics {
-        self.statistics
-            .get(&self.id)
-            .expect("statistics exist for the source")
+        match self.statistics.get(&self.id) {
+            Some(s) => s,
+            None => panic!("missing statistics for {}", self.id),
+        }
     }
 }
 

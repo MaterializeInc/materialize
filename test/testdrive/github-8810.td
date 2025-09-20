@@ -20,26 +20,27 @@ $ kafka-create-topic topic=data
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
+> BEGIN
 > CREATE SOURCE src
   IN CLUSTER ${arg.single-replica-cluster}
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
+> CREATE TABLE src_tbl FROM SOURCE src
+> COMMIT
 
 > SELECT rehydration_latency < '5' FROM mz_internal.mz_source_statistics
-  JOIN mz_sources USING (id)
-  WHERE name = 'src'
+  JOIN mz_tables USING (id)
+  WHERE name = 'src_tbl'
 true
 
 # Wait for some time to ensure a regression would increase the rehydration
 # latency to a noticeable amount.
 $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="5s"
 
-> CREATE TABLE tbl FROM SOURCE src
-
 # Wait for the source statistics to be refreshed. This happens every 1s, so
 # waiting for 2s should be safe.
 $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="2s"
 
 > SELECT rehydration_latency < '5' FROM mz_internal.mz_source_statistics
-  JOIN mz_sources USING (id)
-  WHERE name = 'src'
+  JOIN mz_tables USING (id)
+  WHERE name = 'src_tbl'
 true

@@ -153,18 +153,18 @@ class DebeziumPostgres(Check):
                 $ set-regex match="FORMAT .*? ENVELOPE DEBEZIUM " replacement=""
 
                 >[version>=14000] SHOW CREATE SOURCE debezium_source1;
-                materialize.public.debezium_source1 "CREATE SOURCE materialize.public.debezium_source1\nIN CLUSTER quickstart\nFROM KAFKA CONNECTION materialize.public.kafka_conn (TOPIC = 'postgres.public.debezium_table')\nEXPOSE PROGRESS AS materialize.public.debezium_source1_progress;"
+                materialize.public.debezium_source1 "CREATE SOURCE materialize.public.debezium_source1\nIN CLUSTER quickstart\nFROM KAFKA CONNECTION materialize.public.kafka_conn (TOPIC = 'postgres.public.debezium_table');"
                 >[version>=14000] SHOW CREATE SOURCE debezium_source2;
-                materialize.public.debezium_source2 "CREATE SOURCE materialize.public.debezium_source2\nIN CLUSTER quickstart\nFROM KAFKA CONNECTION materialize.public.kafka_conn (TOPIC = 'postgres.public.debezium_table')\nEXPOSE PROGRESS AS materialize.public.debezium_source2_progress;"
+                materialize.public.debezium_source2 "CREATE SOURCE materialize.public.debezium_source2\nIN CLUSTER quickstart\nFROM KAFKA CONNECTION materialize.public.kafka_conn (TOPIC = 'postgres.public.debezium_table');"
                 >[version>=14000] SHOW CREATE SOURCE debezium_source3;
-                materialize.public.debezium_source3 "CREATE SOURCE materialize.public.debezium_source3\nIN CLUSTER quickstart\nFROM KAFKA CONNECTION materialize.public.kafka_conn (TOPIC = 'postgres.public.debezium_table')\nEXPOSE PROGRESS AS materialize.public.debezium_source3_progress;"
+                materialize.public.debezium_source3 "CREATE SOURCE materialize.public.debezium_source3\nIN CLUSTER quickstart\nFROM KAFKA CONNECTION materialize.public.kafka_conn (TOPIC = 'postgres.public.debezium_table');"
 
                 >[version<14000] SHOW CREATE SOURCE debezium_source1;
-                materialize.public.debezium_source1 "CREATE SOURCE \"materialize\".\"public\".\"debezium_source1\" IN CLUSTER \"quickstart\" FROM KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'postgres.public.debezium_table') EXPOSE PROGRESS AS \"materialize\".\"public\".\"debezium_source1_progress\""
+                materialize.public.debezium_source1 "CREATE SOURCE \"materialize\".\"public\".\"debezium_source1\" IN CLUSTER \"quickstart\" FROM KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'postgres.public.debezium_table')"
                 >[version<14000] SHOW CREATE SOURCE debezium_source2;
-                materialize.public.debezium_source2 "CREATE SOURCE \"materialize\".\"public\".\"debezium_source2\" IN CLUSTER \"quickstart\" FROM KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'postgres.public.debezium_table') EXPOSE PROGRESS AS \"materialize\".\"public\".\"debezium_source2_progress\""
+                materialize.public.debezium_source2 "CREATE SOURCE \"materialize\".\"public\".\"debezium_source2\" IN CLUSTER \"quickstart\" FROM KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'postgres.public.debezium_table')"
                 >[version<14000] SHOW CREATE SOURCE debezium_source3;
-                materialize.public.debezium_source3 "CREATE SOURCE \"materialize\".\"public\".\"debezium_source3\" IN CLUSTER \"quickstart\" FROM KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'postgres.public.debezium_table') EXPOSE PROGRESS AS \"materialize\".\"public\".\"debezium_source3_progress\""
+                materialize.public.debezium_source3 "CREATE SOURCE \"materialize\".\"public\".\"debezium_source3\" IN CLUSTER \"quickstart\" FROM KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'postgres.public.debezium_table')"
                 """
                     if not self.is_running_as_cloudtest()
                     else ""

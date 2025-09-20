@@ -101,7 +101,7 @@ use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::dyncfgs::STORAGE_SERVER_MAINTENANCE_INTERVAL;
 use mz_storage_types::oneshot_sources::OneshotIngestionDescription;
 use mz_storage_types::sinks::StorageSinkDesc;
-use mz_storage_types::sources::IngestionDescription;
+use mz_storage_types::sources::{IngestionDescription, SourceEnvelope};
 use mz_timely_util::builder_async::PressOnDropButton;
 use mz_txn_wal::operator::TxnsContext;
 use timely::communication::Allocate;
@@ -673,6 +673,44 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     self.timely_worker.index(),
                     self.timely_worker.peers(),
                 );
+
+                if ingestion_id == ingestion_description.remap_collection_id {
+                    let min_resume_upper = Antichain::from_iter(
+                        resume_uppers.values().flat_map(|f| f.iter()).cloned(),
+                    );
+                    self.storage_state.aggregated_statistics.initialize_source(
+                        ingestion_id,
+                        min_resume_upper.clone(),
+                        || {
+                            SourceStatistics::new(
+                                ingestion_id,
+                                self.storage_state.timely_worker_index,
+                                &self.storage_state.metrics.source_statistics,
+                                ingestion_id,
+                                &ingestion_description.remap_metadata.data_shard,
+                                SourceEnvelope::CdcV2,
+                                min_resume_upper,
+                            )
+                        },
+                    );
+
+                    // XXX: this is an ugly hack. The ingestion pipeline used to rely on the
+                    // persist_sink writing an empty collection for the main source and also on the
+                    // fact that all frontiers of each source output move in lockstep to report a
+                    // somewhat accurate rehydration latency summary. This is brittle and also
+                    // incompatible with the `CREATE TABLE FROM SOURCE` world where such "main
+                    // output" doesn't exist. Source implementations use the "main source"
+                    // statistics to report overall data, but unless we fake a rehydration here the
+                    // statistics will never be sent to the controller.
+                    let stats = self
+                        .storage_state
+                        .aggregated_statistics
+                        .get_source(&ingestion_id)
+                        .unwrap();
+                    stats.initialize_rehydration_latency_ms();
+                    stats.initialize_snapshot_committed(&Antichain::new());
+                    stats.update_rehydration_latency_ms(&Antichain::new());
+                }
 
                 // We initialize statistics before we prune finished exports. We
                 // still want to export statistics for these, plus the rendering
