@@ -8,11 +8,12 @@
 // by the Apache License, Version 2.0.
 
 use crate::catalog::CatalogState;
+use crate::coord;
 use crate::coord::peek::{FastPathPlan, PeekPlan};
 use crate::coord::timestamp_selection::TimestampDetermination;
 use crate::coord::{
     Coordinator, ExplainContext,
-    TargetCluster, catalog_serving,
+    TargetCluster,
 };
 use crate::optimize::Optimize;
 use crate::optimize::dataflows::{ComputeInstanceSnapshot, DataflowBuilder};
@@ -121,13 +122,11 @@ impl SessionClient {
         // We have checked the plan kind above.
         assert!(plan.allowed_in_read_only());
 
-        ///////// todo: definitely do the waiting_on_startup_appends check
-
         let target_cluster = match session.transaction().cluster() {
             // Use the current transaction's cluster.
             Some(cluster_id) => TargetCluster::Transaction(cluster_id),
             // If there isn't a current cluster set for a transaction, then try to auto route.
-            None => crate::coord::catalog_serving::auto_run_on_catalog_server(
+            None => coord::catalog_serving::auto_run_on_catalog_server(
                 &conn_catalog,
                 &session,
                 &plan,
@@ -142,7 +141,7 @@ impl SessionClient {
         ////// todo: statement logging: set_statement_execution_cluster
 
         if let Err(e) =
-            catalog_serving::check_cluster_restrictions(&target_cluster_name, &conn_catalog, &plan)
+            coord::catalog_serving::check_cluster_restrictions(&target_cluster_name, &conn_catalog, &plan)
         {
             return Err(e);
         }
@@ -160,6 +159,18 @@ impl SessionClient {
             &resolved_ids,
         ) {
             return Err(e.into());
+        }
+
+        // Check if we're still waiting for any of the builtin table appends from when we
+        // started the Session to complete.
+        //
+        // (This is done slightly earlier in the normal peek sequencing, but we have to be past the
+        // last use of `conn_catalog` here.)
+        if let Some(_) =
+            coord::appends::waiting_on_startup_appends(&*catalog, session, &plan)
+        {
+            // TODO: Don't fall back to the coordinator's peek sequencing here, but call `defer_op`.
+            return Ok(None);
         }
 
         let max_query_result_size = Some(session.vars().max_query_result_size());
@@ -230,7 +241,7 @@ impl SessionClient {
             timeline_context = TimelineContext::TimestampDependent;
         }
 
-        let notices = crate::coord::sequencer::inner::check_log_reads(
+        let notices = coord::sequencer::inner::check_log_reads(
             &catalog,
             cluster,
             &source_ids,
