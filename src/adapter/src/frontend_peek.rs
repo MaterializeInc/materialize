@@ -118,7 +118,8 @@ impl SessionClient {
 
         // # From sequence_plan
 
-        ///////// todo: maybe do the plan.allowed_in_read_only() check just to be safe
+        // We have checked the plan kind above.
+        assert!(plan.allowed_in_read_only());
 
         ///////// todo: definitely do the waiting_on_startup_appends check
 
