@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    is_monotone = (true, true),\n    output_type = Numeric,\n    is_infix_op = true,\n    sqlname = \"-\",\n    propagates_nulls = true\n)]\nfn sub_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {\n    let mut cx = numeric::cx_datum();\n    let mut a = a.unwrap_numeric().0;\n    cx.sub(&mut a, &b.unwrap_numeric().0);\n    if cx.status().overflow() {\n        Err(EvalError::FloatOverflow)\n    } else {\n        Ok(Datum::from(a))\n    }\n}\n"
+expression: "#[sqlfunc(\n    is_monotone = \"(true, true)\",\n    output_type = \"Numeric\",\n    is_infix_op = true,\n    sqlname = \"-\",\n    propagates_nulls = true\n)]\nfn sub_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {\n    let mut cx = numeric::cx_datum();\n    let mut a = a.unwrap_numeric().0;\n    cx.sub(&mut a, &b.unwrap_numeric().0);\n    if cx.status().overflow() {\n        Err(EvalError::FloatOverflow)\n    } else {\n        Ok(Datum::from(a))\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,

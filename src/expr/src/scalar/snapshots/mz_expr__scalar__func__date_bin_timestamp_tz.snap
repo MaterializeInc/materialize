@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    is_monotone = \"(true, true)\",\n    output_type = \"CheckedTimestamp<DateTime<Utc>>\",\n    sqlname = \"bin_unix_epoch_timestamptz\",\n    propagates_nulls = true\n)]\n#[allow(dead_code)]\nfn date_bin_timestamp_tz<'a>(\n    stride: Interval,\n    source: CheckedTimestamp<DateTime<Utc>>,\n) -> Result<Datum<'a>, EvalError> {\n    let origin = CheckedTimestamp::from_timestamplike(\n            DateTime::from_timestamp(0, 0).unwrap(),\n        )\n        .expect(\"must fit\");\n    date_bin(stride, source, origin)\n}\n"
+expression: "#[sqlfunc(\n    is_monotone = \"(true, true)\",\n    output_type = \"CheckedTimestamp<DateTime<Utc>>\",\n    sqlname = \"bin_unix_epoch_timestamptz\",\n    propagates_nulls = true\n)]\nfn date_bin_timestamp_tz<'a>(\n    stride: Interval,\n    source: CheckedTimestamp<DateTime<Utc>>,\n) -> Result<Datum<'a>, EvalError> {\n    let origin = CheckedTimestamp::from_timestamplike(\n            DateTime::from_timestamp(0, 0).unwrap(),\n        )\n        .expect(\"must fit\");\n    date_bin(stride, source, origin)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -61,7 +61,6 @@ impl std::fmt::Display for DateBinTimestampTz {
         f.write_str("bin_unix_epoch_timestamptz")
     }
 }
-#[allow(dead_code)]
 fn date_bin_timestamp_tz<'a>(
     stride: Interval,
     source: CheckedTimestamp<DateTime<Utc>>,

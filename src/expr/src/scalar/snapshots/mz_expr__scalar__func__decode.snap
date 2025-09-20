@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(output_type = \"Vec<u8>\", propagates_nulls = true)]\nfn decode<'a>(\n    string: Datum<'a>,\n    format: Datum<'a>,\n    temp_storage: &'a RowArena,\n) -> Result<Datum<'a>, EvalError> {\n    let format = encoding::lookup_format(format.unwrap_str())?;\n    let out = format.decode(string.unwrap_str())?;\n    Ok(Datum::from(temp_storage.push_bytes(out)))\n}\n"
+expression: "#[sqlfunc(output_type = \"Vec<u8>\", propagates_nulls = true)]\nfn decode<'a>(\n    string: &str,\n    format: &str,\n    temp_storage: &'a RowArena,\n) -> Result<Datum<'a>, EvalError> {\n    let format = encoding::lookup_format(format)?;\n    let out = format.decode(string)?;\n    Ok(Datum::from(temp_storage.push_bytes(out)))\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -17,8 +17,8 @@ expression: "#[sqlfunc(output_type = \"Vec<u8>\", propagates_nulls = true)]\nfn 
 )]
 pub struct Decode;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for Decode {
-    type Input1 = Datum<'a>;
-    type Input2 = Datum<'a>;
+    type Input1 = &'a str;
+    type Input2 = &'a str;
     type Output = Result<Datum<'a>, EvalError>;
     fn call(
         &self,
@@ -59,11 +59,11 @@ impl std::fmt::Display for Decode {
     }
 }
 fn decode<'a>(
-    string: Datum<'a>,
-    format: Datum<'a>,
+    string: &str,
+    format: &str,
     temp_storage: &'a RowArena,
 ) -> Result<Datum<'a>, EvalError> {
-    let format = encoding::lookup_format(format.unwrap_str())?;
-    let out = format.decode(string.unwrap_str())?;
+    let format = encoding::lookup_format(format)?;
+    let out = format.decode(string)?;
     Ok(Datum::from(temp_storage.push_bytes(out)))
 }

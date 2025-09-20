@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(output_type = \"String\", propagates_nulls = true, introduces_nulls = false)]\nfn like_escape<'a>(\n    a: Datum<'a>,\n    b: Datum<'a>,\n    temp_storage: &'a RowArena,\n) -> Result<Datum<'a>, EvalError> {\n    let pattern = a.unwrap_str();\n    let escape = like_pattern::EscapeBehavior::from_str(b.unwrap_str())?;\n    let normalized = like_pattern::normalize_pattern(pattern, escape)?;\n    Ok(Datum::String(temp_storage.push_string(normalized)))\n}\n"
+expression: "#[sqlfunc(propagates_nulls = true, introduces_nulls = false)]\nfn like_escape<'a>(\n    pattern: &str,\n    b: &str,\n    temp_storage: &'a RowArena,\n) -> Result<&'a str, EvalError> {\n    let escape = like_pattern::EscapeBehavior::from_str(b)?;\n    let normalized = like_pattern::normalize_pattern(pattern, escape)?;\n    Ok(temp_storage.push_string(normalized))\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -17,9 +17,9 @@ expression: "#[sqlfunc(output_type = \"String\", propagates_nulls = true, introd
 )]
 pub struct LikeEscape;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for LikeEscape {
-    type Input1 = Datum<'a>;
-    type Input2 = Datum<'a>;
-    type Output = Result<Datum<'a>, EvalError>;
+    type Input1 = &'a str;
+    type Input2 = &'a str;
+    type Output = Result<&'a str, EvalError>;
     fn call(
         &self,
         a: Self::Input1,
@@ -34,7 +34,7 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for LikeEscape {
         input_type_b: mz_repr::SqlColumnType,
     ) -> mz_repr::SqlColumnType {
         use mz_repr::AsColumnType;
-        let output = <String>::as_column_type();
+        let output = Self::Output::as_column_type();
         let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
             self,
         );
@@ -59,12 +59,11 @@ impl std::fmt::Display for LikeEscape {
     }
 }
 fn like_escape<'a>(
-    a: Datum<'a>,
-    b: Datum<'a>,
+    pattern: &str,
+    b: &str,
     temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let pattern = a.unwrap_str();
-    let escape = like_pattern::EscapeBehavior::from_str(b.unwrap_str())?;
+) -> Result<&'a str, EvalError> {
+    let escape = like_pattern::EscapeBehavior::from_str(b)?;
     let normalized = like_pattern::normalize_pattern(pattern, escape)?;
-    Ok(Datum::String(temp_storage.push_string(normalized)))
+    Ok(temp_storage.push_string(normalized))
 }

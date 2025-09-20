@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use itertools::Itertools;
-use mz_expr::{MirRelationExpr, MirScalarExpr};
+use mz_expr::{MirRelationExpr, MirScalarExpr, func};
 use mz_ore::soft_assert_eq_or_log;
 use mz_repr::Diff;
 
@@ -406,7 +406,7 @@ fn decompose_equations(predicate: &MirScalarExpr) -> Option<Vec<(usize, usize)>>
                 todo.extend(exprs.iter());
             }
             MirScalarExpr::CallBinary {
-                func: BinaryFunc::Eq,
+                func: BinaryFunc::Eq(_),
                 expr1,
                 expr2,
             } => {
@@ -450,7 +450,7 @@ fn recompose_equations(pairs: Vec<(usize, usize)>) -> Vec<MirScalarExpr> {
             func: VariadicFunc::Or,
             exprs: vec![
                 MirScalarExpr::CallBinary {
-                    func: BinaryFunc::Eq,
+                    func: func::Eq.into(),
                     expr1: Box::new(MirScalarExpr::column(*x)),
                     expr2: Box::new(MirScalarExpr::column(*y)),
                 },

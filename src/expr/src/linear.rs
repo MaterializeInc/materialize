@@ -224,7 +224,7 @@ impl MapFilterProject {
     pub fn literal_constraint(&self, expr: &MirScalarExpr) -> Option<Datum<'_>> {
         for (_pos, predicate) in self.predicates.iter() {
             if let MirScalarExpr::CallBinary {
-                func: crate::BinaryFunc::Eq,
+                func: crate::BinaryFunc::Eq(_),
                 expr1,
                 expr2,
             } = predicate
@@ -990,7 +990,7 @@ impl MapFilterProject {
                 // If `expr` matches a filter equating it to a column < index + input_arity, rewrite it
                 for (_, predicate) in self.predicates.iter() {
                     if let MirScalarExpr::CallBinary {
-                        func: crate::BinaryFunc::Eq,
+                        func: crate::BinaryFunc::Eq(_),
                         expr1,
                         expr2,
                     } = predicate
@@ -1780,26 +1780,26 @@ pub mod plan {
 
                 // LogicalTimestamp <OP> <EXPR2> for several supported operators.
                 match func {
-                    BinaryFunc::Eq => {
+                    BinaryFunc::Eq(_) => {
                         lower_bounds.push(expr2.clone());
                         upper_bounds.push(
                             expr2.call_unary(UnaryFunc::StepMzTimestamp(func::StepMzTimestamp)),
                         );
                     }
-                    BinaryFunc::Lt => {
+                    BinaryFunc::Lt(_) => {
                         upper_bounds.push(expr2.clone());
                     }
-                    BinaryFunc::Lte => {
+                    BinaryFunc::Lte(_) => {
                         upper_bounds.push(
                             expr2.call_unary(UnaryFunc::StepMzTimestamp(func::StepMzTimestamp)),
                         );
                     }
-                    BinaryFunc::Gt => {
+                    BinaryFunc::Gt(_) => {
                         lower_bounds.push(
                             expr2.call_unary(UnaryFunc::StepMzTimestamp(func::StepMzTimestamp)),
                         );
                     }
-                    BinaryFunc::Gte => {
+                    BinaryFunc::Gte(_) => {
                         lower_bounds.push(expr2.clone());
                     }
                     _ => {
