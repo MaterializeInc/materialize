@@ -134,14 +134,14 @@ impl SessionClient {
         };
         let (cluster, target_cluster_id, target_cluster_name) = {
             let cluster = catalog.resolve_target_cluster(target_cluster, &session)?;
-            (cluster, cluster.id.clone(), cluster.name.clone()) /////// todo: or just refs instead of clones?
+            (cluster, cluster.id, &cluster.name)
         };
         self.ensure_compute_instance_client(target_cluster_id).await?;
 
         ////// todo: statement logging: set_statement_execution_cluster
 
         if let Err(e) =
-            coord::catalog_serving::check_cluster_restrictions(&target_cluster_name, &conn_catalog, &plan)
+            coord::catalog_serving::check_cluster_restrictions(target_cluster_name.as_str(), &conn_catalog, &plan)
         {
             return Err(e);
         }
