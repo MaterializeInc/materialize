@@ -87,6 +87,10 @@ pub enum AdapterNotice {
     QueryTrace {
         trace_id: opentelemetry::trace::TraceId,
     },
+    /// Like QueryTrace, but for the frontend peek sequencing.
+    FrontendQueryTrace {
+        trace_id: opentelemetry::trace::TraceId,
+    },
     UnimplementedIsolationLevel {
         isolation_level: String,
     },
@@ -177,6 +181,7 @@ impl AdapterNotice {
             AdapterNotice::QueryTimestamp { .. } => Severity::Notice,
             AdapterNotice::EqualSubscribeBounds { .. } => Severity::Notice,
             AdapterNotice::QueryTrace { .. } => Severity::Notice,
+            AdapterNotice::FrontendQueryTrace { .. } => Severity::Notice,
             AdapterNotice::UnimplementedIsolationLevel { .. } => Severity::Notice,
             AdapterNotice::StrongSessionSerializable => Severity::Notice,
             AdapterNotice::BadStartupSetting { .. } => Severity::Notice,
@@ -279,6 +284,7 @@ impl AdapterNotice {
             AdapterNotice::QueryTimestamp { .. } => SqlState::SUCCESSFUL_COMPLETION,
             AdapterNotice::EqualSubscribeBounds { .. } => SqlState::SUCCESSFUL_COMPLETION,
             AdapterNotice::QueryTrace { .. } => SqlState::SUCCESSFUL_COMPLETION,
+            AdapterNotice::FrontendQueryTrace { .. } => SqlState::SUCCESSFUL_COMPLETION,
             AdapterNotice::UnimplementedIsolationLevel { .. } => SqlState::SUCCESSFUL_COMPLETION,
             AdapterNotice::StrongSessionSerializable => SqlState::SUCCESSFUL_COMPLETION,
             AdapterNotice::BadStartupSetting { .. } => SqlState::SUCCESSFUL_COMPLETION,
@@ -388,6 +394,9 @@ impl fmt::Display for AdapterNotice {
             }
             AdapterNotice::QueryTrace { trace_id } => {
                 write!(f, "trace id: {}", trace_id)
+            }
+            AdapterNotice::FrontendQueryTrace { trace_id } => {
+                write!(f, "frontend trace id: {}", trace_id)
             }
             AdapterNotice::UnimplementedIsolationLevel { isolation_level } => {
                 write!(

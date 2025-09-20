@@ -17,10 +17,7 @@ use crate::coord::{
 use crate::optimize::Optimize;
 use crate::optimize::dataflows::{ComputeInstanceSnapshot, DataflowBuilder};
 use crate::session::{Session, TransactionOps, TransactionStatus};
-use crate::{
-    AdapterError, CollectionIdBundle, ExecuteResponse, ReadHolds, SessionClient,
-    TimelineContext, TimestampContext, TimestampProvider, optimize,
-};
+use crate::{AdapterError, CollectionIdBundle, ExecuteResponse, ReadHolds, SessionClient, TimelineContext, TimestampContext, TimestampProvider, optimize, AdapterNotice};
 use mz_adapter_types::dyncfgs::{
     CONSTRAINT_BASED_TIMESTAMP_SELECTION,
 };
@@ -37,8 +34,10 @@ use mz_sql::session::vars::IsolationLevel;
 use mz_transform::EmptyStatisticsOracle;
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use opentelemetry::trace::TraceContextExt;
 use timely::progress::Antichain;
 use tracing::Span;
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 use mz_compute_client::controller::error::CollectionMissing;
 use mz_ore::collections::CollectionExt;
 ////// todo: separate crate imports
@@ -51,7 +50,19 @@ impl SessionClient {
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
         // # From handle_execute
 
-        /////// todo: if session.vars().emit_trace_id_notice()
+        if session.vars().emit_trace_id_notice() {
+            let span_context = tracing::Span::current()
+                .context()
+                .span()
+                .span_context()
+                .clone();
+            if span_context.is_valid() {
+                // We emit a slightly different notice here than in handle_execute.
+                session.add_notice(AdapterNotice::FrontendQueryTrace {
+                    trace_id: span_context.trace_id(),
+                });
+            }
+        }
 
         /////// todo: I think we don't need the verify_portal here, but we need to verify things later
 
@@ -97,7 +108,7 @@ impl SessionClient {
                 return Ok(None);
             }
         };
-        let explain_ctx = ExplainContext::None; // EXPLAIN won't be handled here, only SELECT
+        let explain_ctx = ExplainContext::None; // EXPLAIN is handled here for now, only SELECT
 
         // # From sequence_plan
 
