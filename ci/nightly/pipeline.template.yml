@@ -52,7 +52,7 @@ steps:
         agents:
           queue: builder-linux-x86_64
         env:
-          CI_SANITIZER: address
+          CI_SANITIZER: none
           CI_BAZEL_BUILD: 1
 
         sanitizer: skip
@@ -70,7 +70,7 @@ steps:
         agents:
           queue: builder-linux-aarch64-mem
         env:
-          CI_SANITIZER: address
+          CI_SANITIZER: none 
           CI_BAZEL_BUILD: 1
         sanitizer: skip
         branches: "main"

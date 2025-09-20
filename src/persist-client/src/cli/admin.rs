@@ -773,6 +773,7 @@ pub async fn dangerous_force_compaction_and_break_pushdown<K, V, T, D>(
                 &machine,
                 req,
                 write.write_schemas.clone(),
+                true,
             )
             .await;
             let apply_maintenance = match res {
