@@ -713,7 +713,7 @@ impl Coordinator {
             }
         }
 
-        if let Err(err) = self.verify_portal(&mut session, &portal_name) {
+        if let Err(err) = Self::verify_portal(self.catalog(), &mut session, &portal_name) {
             // If statement logging hasn't started yet, we don't need
             // to add any "end" event, so just make up a no-op
             // `ExecuteContextExtra` here, via `Default::default`.

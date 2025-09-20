@@ -64,19 +64,25 @@ impl SessionClient {
             }
         }
 
-        /////// todo: I think we don't need the verify_portal here, but we need to verify things later
-
-        //////let portal = self.session().get_portal_unverified(portal_name).expect("known to exist");
-
-        // This is from handle_execute_inner, but we do it already here because of lifetime issues.
-        //////// todo: would be good to not do this if this is not a SELECT
+        // This is from handle_execute_inner, but we do it already here because of lifetime issues,
+        // and also to be able to give a catalog to `verify_portal`.
+        //
+        // TODO: This snapshot is wasted when we end up bailing out from the frontend peek
+        // sequencing. I think the best way to solve this is with that optimization where we
+        // continuously keep a catalog snapshot in the session, and only get a new one when the
+        // catalog revision has changed, which we could see with an atomic read.
         let catalog = self.catalog_snapshot("try_frontend_peek").await;
+
+        if let Err(_) = Coordinator::verify_portal(&*catalog, session, &portal_name) {
+            // TODO: Don't fall back to the coordinator's peek sequencing here, but retire already.
+            return Ok(None);
+        }
 
         ///////// todo: statement logging
         let (stmt, params) = {
             let portal = session
                 .get_portal_unverified(&portal_name)
-                .expect("known to exist");
+                .expect("called verify_portal above");
             let params = portal.parameters.clone();
             let stmt = portal.stmt.clone();
             (stmt, params)
