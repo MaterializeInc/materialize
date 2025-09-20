@@ -17,6 +17,7 @@ import json
 import socket
 import ssl
 import struct
+import time
 import uuid
 from collections.abc import Callable
 from textwrap import dedent
@@ -99,11 +100,14 @@ SERVICES = [
             f"--frontegg-api-token-url={FRONTEGG_URL}/identity/resources/auth/v1/api-token",
             f"--frontegg-admin-role={ADMIN_ROLE}",
             "--https-sni-resolver-template=materialized:6876",
-            "--pgwire-sni-resolver-template=materialized:6875",
+            # This will be turned off until we can resolve perf issues
+            # https://github.com/MaterializeInc/database-issues/issues/9700
+            # "--pgwire-sni-resolver-template=materialized:6875",
             "--tls-key=/secrets/balancerd.key",
             "--tls-cert=/secrets/balancerd.crt",
-            "--default-config=balancerd_inject_proxy_protocol_header_http=true",
             "--internal-tls",
+            "--tls-mode=require",
+            "--default-config=balancerd_inject_proxy_protocol_header_http=true",
             # Nonsensical but we don't need cancellations here
             "--cancellation-resolver-dir=/secrets/",
         ],
@@ -248,7 +252,6 @@ def workflow_plaintext(c: Composition) -> None:
                 f"--frontegg-api-token-url={FRONTEGG_URL}/identity/resources/auth/v1/api-token",
                 f"--frontegg-admin-role={ADMIN_ROLE}",
                 "--https-resolver-template=materialized:6876",
-                "--pgwire-sni-resolver-template=materialized:6876",
                 "--tls-key=/secrets/balancerd.key",
                 "--tls-cert=/secrets/balancerd.crt",
                 "--default-config=balancerd_inject_proxy_protocol_header_http=true",
@@ -593,6 +596,7 @@ def workflow_mz_not_running(c: Composition) -> None:
                 "failure in name resolution",
                 "failed to lookup address information",
                 "Name or service not known",
+                "SSL connection has been closed unexpectedly",
             ]
         )
     except:
@@ -605,24 +609,55 @@ def workflow_mz_not_running(c: Composition) -> None:
 
 def workflow_user(c: Composition) -> None:
     """Test that the user is passed all the way to Mz itself."""
-    c.up("balancerd", "frontegg-mock", "materialized")
+    with c.override(
+        Balancerd(
+            command=[
+                "--startup-log-filter=debug",
+                "service",
+                "--pgwire-listen-addr=0.0.0.0:6875",
+                "--https-listen-addr=0.0.0.0:6876",
+                "--internal-http-listen-addr=0.0.0.0:6878",
+                "--frontegg-resolver-template=materialized:6875",
+                "--frontegg-jwk-file=/secrets/frontegg-mock.crt",
+                f"--frontegg-api-token-url={FRONTEGG_URL}/identity/resources/auth/v1/api-token",
+                f"--frontegg-admin-role={ADMIN_ROLE}",
+                "--https-sni-resolver-template=materialized:6876",
+                # Same defaults but we want to remove the pgwire-sni-resolver
+                # In order for SNI to do tenant resoluition we need an extra CNAME rec to be added
+                # which we can't do in docker compose
+                # "--pgwire-sni-resolver-template=materialized:6875",
+                "--tls-key=/secrets/balancerd.key",
+                "--tls-cert=/secrets/balancerd.crt",
+                "--internal-tls",
+                "--tls-mode=require",
+                "--default-config=balancerd_inject_proxy_protocol_header_http=true",
+                # Nonsensical but we don't need cancellations here
+                "--cancellation-resolver-dir=/secrets/",
+            ],
+            depends_on=["test-certs"],
+            volumes=[
+                "secrets:/secrets",
+            ],
+        ),
+    ):
+        c.up("balancerd", "frontegg-mock", "materialized")
+        # Non-admin user.
+        cursor = sql_cursor(c, email=OTHER_USER)
 
-    # Non-admin user.
-    cursor = sql_cursor(c, email=OTHER_USER)
+        try:
+            cursor.execute("DROP DATABASE materialize CASCADE")
+            raise RuntimeError("execute() expected to fail")
+        except ProgrammingError as e:
+            assert "must be owner of DATABASE materialize" in str(e)
+        except:
+            raise RuntimeError("execute() threw an unexpected exception")
 
-    try:
-        cursor.execute("DROP DATABASE materialize CASCADE")
-        raise RuntimeError("execute() expected to fail")
-    except ProgrammingError as e:
-        assert "must be owner of DATABASE materialize" in str(e)
-    except:
-        raise RuntimeError("execute() threw an unexpected exception")
+        cursor.execute("SELECT current_user()")
+        assert OTHER_USER in str(cursor.fetchall())
+        cursor.close()
 
-    cursor.execute("SELECT current_user()")
-    assert OTHER_USER in str(cursor.fetchall())
-
-    assert_metrics(c, 'mz_balancer_tenant_connection_active{source="pgwire"')
-    assert_metrics(c, 'mz_balancer_tenant_connection_rx{source="pgwire"')
+        assert_metrics(c, 'mz_balancer_tenant_connection_active{source="pgwire"')
+        assert_metrics(c, 'mz_balancer_tenant_connection_rx{source="pgwire"')
 
 
 def workflow_many_connections(c: Composition) -> None:
@@ -631,9 +666,14 @@ def workflow_many_connections(c: Composition) -> None:
     cursors = []
     connections = 1000 - 10  #  Go almost to the limit, but not above
     print(f"Opening {connections} connections.")
-    for i in range(connections):
+    start = time.time()
+    for _ in range(connections):
         cursor = sql_cursor(c)
         cursors.append(cursor)
+    duration = time.time() - start
+    print(
+        f"{connections} connections opened in {duration} seconds, {duration/float(connections)} avg connection time"
+    )
 
     for cursor in cursors:
         cursor.execute("SELECT 'abc'")
