@@ -135,6 +135,7 @@ pub mod kafka_util;
 pub mod names;
 #[macro_use]
 pub mod normalize;
+pub mod iceberg;
 pub mod optimizer_metrics;
 pub mod parse;
 pub mod plan;
