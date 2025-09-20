@@ -85,81 +85,16 @@ impl PeekClient {
             .await
     }
 
-    /// Acquire read holds on the required compute/storage collections.
-    /// Similar to Coordinator::acquire_read_holds.
-    pub async fn acquire_read_holds(
-        &self,
-        id_bundle: &CollectionIdBundle,
-    ) -> crate::ReadHolds<Timestamp> {
-        let mut read_holds = crate::ReadHolds::new();
-
-        // Acquire storage read holds via StorageCollections.
-        let desired_storage: Vec<_> = id_bundle.storage_ids.iter().copied().collect();
-        let storage_read_holds = self
-            .storage_collections
-            .acquire_read_holds(desired_storage)
-            .expect("missing storage collections");
-        read_holds.storage_holds = storage_read_holds
-            .into_iter()
-            .map(|hold| (hold.id(), hold))
-            .collect();
-
-        // Acquire compute read holds by calling into the appropriate instance tasks.
-        for (&instance_id, collection_ids) in &id_bundle.compute_ids {
-            let client = self
-                .compute_instances
-                .get(&instance_id)
-                .expect("missing compute instance client");
-            for &id in collection_ids {
-                let hold = client
-                    .acquire_read_hold(id)
-                    .await
-                    .expect("missing compute collection");
-                let prev = read_holds.compute_holds.insert((instance_id, id), hold);
-                assert!(
-                    prev.is_none(),
-                    "duplicate compute ID in id_bundle {id_bundle:?}"
-                );
-            }
-        }
-
-        read_holds
-    }
-
-    /// Determine the smallest common valid write frontier among the specified collections.
+    /// Acquire read holds on the given compute/storage collections, and
+    /// determine the smallest common valid write frontier among the specified collections.
     ///
-    /// Note: Unlike the old Coordinator/StorageController `least_valid_write` that treated sinks
-    /// specially when fetching storage frontiers, we intentionally do not special‑case sinks here
-    /// because peeks never read from sinks. Therefore, using
-    /// `StorageCollections::collections_frontiers` is sufficient. //////// todo: verify
-    pub async fn least_valid_write(
-        &self,
-        id_bundle: &CollectionIdBundle,
-    ) -> Antichain<Timestamp> {
-        let mut upper = Antichain::new();
-        if !id_bundle.storage_ids.is_empty() {
-            let storage_ids: Vec<_> = id_bundle.storage_ids.iter().copied().collect();
-            for f in self
-                .storage_collections
-                .collections_frontiers(storage_ids)
-                .expect("missing collections")
-            {
-                upper.extend(f.write_frontier);
-            }
-        }
-        for (instance_id, ids) in &id_bundle.compute_ids {
-            let client = self
-                .compute_instances
-                .get(instance_id)
-                .expect("PeekClient is missing a compute instance client");
-            for id in ids {
-                let wf = client.collection_write_frontier(*id).await;
-                upper.extend(wf);
-            }
-        }
-        upper
-    }
-
+    /// Similar to `Coordinator::acquire_read_holds` and `TimestampProvider::least_valid_write`
+    /// combined.
+    ///
+    /// Note: Unlike the Coordinator/StorageController's `least_valid_write` that treats sinks
+    /// specially when fetching storage frontiers (see `mz_storage_controller::collections_frontiers`),
+    /// we intentionally do not special‑case sinks here because peeks never read from sinks.
+    /// Therefore, using `StorageCollections::collections_frontiers` is sufficient.
     pub async fn acquire_read_holds_and_collection_write_frontiers(&self, id_bundle: &CollectionIdBundle) -> Result<(ReadHolds<Timestamp>, Antichain<Timestamp>), CollectionMissing> {
         let mut read_holds = ReadHolds::new();
         let mut upper = Antichain::new();

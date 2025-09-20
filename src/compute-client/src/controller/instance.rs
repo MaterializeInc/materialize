@@ -177,22 +177,8 @@ where
     T: ComputeControllerTimestamp,
 {
     //////// todo: move these new fns down in the file
-    /// Acquire a compute read hold by asking the instance task.
-    pub async fn acquire_read_hold(&self, id: GlobalId) -> Result<ReadHold<T>, CollectionMissing> {
-        self.call_sync(move |i| i.acquire_read_hold(id)).await
-    }
-
     pub async fn acquire_read_holds_and_collection_write_frontiers(&self, ids: Vec<GlobalId>) -> Result<Vec<(GlobalId, ReadHold<T>, Antichain<T>)>, CollectionMissing> {
         self.call_sync(move |i| i.acquire_read_holds_and_collection_write_frontiers(ids)).await
-    }
-
-    /// Fetch the write frontier for the identified compute collection by asking the instance task.
-    pub async fn collection_write_frontier(&self, id: GlobalId) -> Antichain<T> {
-        self.call_sync(move |i| {
-            i.collection_write_frontier(id)
-                .expect("missing compute collection")
-        })
-        .await
     }
 
     /// Issue a peek by calling into the instance task synchronously, letting the instance acquire
