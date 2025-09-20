@@ -174,7 +174,7 @@ impl PeekNotification {
 
 /// A controller for the compute layer.
 pub struct ComputeController<T: ComputeControllerTimestamp> {
-    pub instances: BTreeMap<ComputeInstanceId, InstanceState<T>>,
+    instances: BTreeMap<ComputeInstanceId, InstanceState<T>>,
     /// A map from an instance ID to an arbitrary string that describes the
     /// class of the workload that compute instance is running (e.g.,
     /// `production` or `staging`).
@@ -332,6 +332,11 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
     /// Return a reference to the indicated compute instance.
     fn instance(&self, id: ComputeInstanceId) -> Result<&InstanceState<T>, InstanceMissing> {
         self.instances.get(&id).ok_or(InstanceMissing(id))
+    }
+
+    /// Return an `instance::Client` for the indicated compute instance.
+    pub fn thin_instance_client(&self, id: ComputeInstanceId) -> Result<instance::Client<T>, InstanceMissing> {
+        self.instance(id).map(|instance| instance.client.clone())
     }
 
     /// Return a mutable reference to the indicated compute instance.
@@ -1044,8 +1049,8 @@ where
 }
 
 #[derive(Debug)]
-pub struct InstanceState<T: ComputeControllerTimestamp> {
-    pub client: instance::Client<T>,
+struct InstanceState<T: ComputeControllerTimestamp> {
+    client: instance::Client<T>,
     replicas: BTreeSet<ReplicaId>,
     collections: BTreeMap<GlobalId, Collection<T>>,
 }

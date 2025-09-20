@@ -141,15 +141,16 @@ pub struct Client<T: ComputeControllerTimestamp> {
 }
 
 impl<T: ComputeControllerTimestamp> Client<T> {
-    pub fn send(&self, command: Command<T>) -> Result<(), SendError<Command<T>>> {
+    pub(crate) fn send(&self, command: Command<T>) -> Result<(), SendError<Command<T>>> {
         self.command_tx.send(command)
     }
 
-    pub fn read_hold_tx(&self) -> read_holds::ChangeTx<T> {
+    pub(crate) fn read_hold_tx(&self) -> read_holds::ChangeTx<T> {
         Arc::clone(&self.read_hold_tx)
     }
 
-    ///////// todo: can we avoid pub?
+    /// Call a method to be run on the instance task, by sending a message to the instance and
+    /// waiting for a response message.
     pub async fn call_sync<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut Instance<T>) -> R + Send + 'static,

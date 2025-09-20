@@ -274,12 +274,8 @@ impl Coordinator {
                     let _ = tx.send(self
                         .controller
                         .compute
-                        .instances
-                        .get(&instance_id)
-                        .map_or_else(
-                            || {Err(AdapterError::ConcurrentClusterDrop)},
-                            |instance_state| Ok(instance_state.client.clone())
-                        )
+                        .thin_instance_client(instance_id)
+                        .map_err(|_| AdapterError::ConcurrentClusterDrop)
                     );
                 }
             }
