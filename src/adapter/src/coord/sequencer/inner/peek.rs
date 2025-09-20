@@ -39,7 +39,7 @@ use crate::active_compute_sink::{ActiveComputeSink, ActiveCopyTo};
 use crate::command::ExecuteResponse;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::{self, PeekDataflowPlan, PeekPlan, PlannedPeek};
-use crate::coord::sequencer::inner::{check_log_reads, return_if_err};
+use crate::coord::sequencer::inner::return_if_err;
 use crate::coord::timeline::TimelineContext;
 use crate::coord::timestamp_selection::{
     TimestampContext, TimestampDetermination, TimestampProvider,
@@ -50,6 +50,7 @@ use crate::coord::{
     PeekStageLinearizeTimestamp, PeekStageOptimize, PeekStageRealTimeRecency,
     PeekStageTimestampReadHold, PlanValidity, StageResult, Staged, TargetCluster, WatchSetResponse,
 };
+use crate::coord::sequencer::check_log_reads;
 use crate::error::AdapterError;
 use crate::explain::insights::PlanInsightsContext;
 use crate::explain::optimizer_trace::OptimizerTrace;

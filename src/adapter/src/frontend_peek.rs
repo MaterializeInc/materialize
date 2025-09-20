@@ -241,7 +241,7 @@ impl SessionClient {
             timeline_context = TimelineContext::TimestampDependent;
         }
 
-        let notices = coord::sequencer::inner::check_log_reads(
+        let notices = coord::sequencer::check_log_reads(
             &catalog,
             cluster,
             &source_ids,

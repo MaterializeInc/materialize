@@ -17,7 +17,7 @@ use tracing::Span;
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveSubscribe};
 use crate::command::ExecuteResponse;
-use crate::coord::sequencer::inner::{check_log_reads, return_if_err};
+use crate::coord::sequencer::inner::return_if_err;
 use crate::coord::{
     Coordinator, Message, PlanValidity, StageResult, Staged, SubscribeFinish, SubscribeOptimizeMir,
     SubscribeStage, SubscribeTimestampOptimizeLir, TargetCluster,
@@ -26,6 +26,7 @@ use crate::error::AdapterError;
 use crate::optimize::Optimize;
 use crate::session::{Session, TransactionOps};
 use crate::{AdapterNotice, ExecuteContext, TimelineContext, optimize};
+use crate::coord::sequencer::check_log_reads;
 
 impl Staged for SubscribeStage {
     type Ctx = ExecuteContext;

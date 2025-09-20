@@ -34,7 +34,9 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use tokio::sync::oneshot;
 use tracing::{Instrument, Level, Span, event};
-
+use mz_catalog::memory::objects::Cluster;
+use mz_controller_types::ReplicaId;
+use mz_sql::session::vars::SessionVars;
 use crate::ExecuteContext;
 use crate::catalog::Catalog;
 use crate::command::{Command, ExecuteResponse, Response};
@@ -66,8 +68,7 @@ use crate::util::ClientTransmitter;
 // - Methods that continue the execution of some plan that was being run asynchronously, such as
 // `sequence_peek_stage` and `sequence_create_connection_stage_finish`.
 
-////////// todo: can we avoid pub?
-pub(crate) mod inner;
+mod inner;
 
 impl Coordinator {
     /// BOXED FUTURE: As of Nov 2023 the returned Future from this function was 34KB. This would
@@ -900,4 +901,57 @@ impl Coordinator {
             MutationKind::Update => ExecuteResponse::Updated(affected_rows / 2),
         })
     }
+}
+
+/// Checks whether we should emit diagnostic
+/// information associated with reading per-replica sources.
+///
+/// If an unrecoverable error is found (today: an untargeted read on a
+/// cluster with a non-1 number of replicas), return that.  Otherwise,
+/// return a list of associated notices (today: we always emit exactly
+/// one notice if there are any per-replica log dependencies and if
+/// `emit_introspection_query_notice` is set, and none otherwise.)
+pub(crate) fn check_log_reads(
+    catalog: &Catalog,
+    cluster: &Cluster,
+    source_ids: &BTreeSet<GlobalId>,
+    target_replica: &mut Option<ReplicaId>,
+    vars: &SessionVars,
+) -> Result<impl IntoIterator<Item = AdapterNotice>, AdapterError>
+where
+{
+    let log_names = source_ids
+        .iter()
+        .map(|gid| catalog.resolve_item_id(gid))
+        .flat_map(|item_id| catalog.introspection_dependencies(item_id))
+        .map(|item_id| catalog.get_entry(&item_id).name().item.clone())
+        .collect::<Vec<_>>();
+
+    if log_names.is_empty() {
+        return Ok(None);
+    }
+
+    // Reading from log sources on replicated clusters is only allowed if a
+    // target replica is selected. Otherwise, we have no way of knowing which
+    // replica we read the introspection data from.
+    let num_replicas = cluster.replicas().count();
+    if target_replica.is_none() {
+        if num_replicas == 1 {
+            *target_replica = cluster.replicas().map(|r| r.replica_id).next();
+        } else {
+            return Err(AdapterError::UntargetedLogRead { log_names });
+        }
+    }
+
+    // Ensure that logging is initialized for the target replica, lest
+    // we try to read from a non-existing arrangement.
+    let replica_id = target_replica.expect("set to `Some` above");
+    let replica = &cluster.replica(replica_id).expect("Replica must exist");
+    if !replica.config.compute.logging.enabled() {
+        return Err(AdapterError::IntrospectionDisabled { log_names });
+    }
+
+    Ok(vars
+        .emit_introspection_query_notice()
+        .then_some(AdapterNotice::PerReplicaLogRead { log_names }))
 }
