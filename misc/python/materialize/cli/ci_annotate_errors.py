@@ -109,6 +109,7 @@ ERROR_RE = re.compile(
     | Rewrite\ SLT\ files\ locally\ with:\ [\s\S]*? ^EOF$
     # rdkafka assertions
     | Assertion\ `.*'\ failed\.
+    | Invalid\ data\ in\ source\ errors,\ saw\ retractions
     )
     .* $
     """,
