@@ -20,12 +20,9 @@ use std::fmt;
 
 use mz_lowertest::MzReflect;
 use mz_repr::{SqlColumnType, SqlScalarType};
-use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
-#[derive(
-    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
-)]
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub enum UnmaterializableFunc {
     CurrentDatabase,
     CurrentSchema,

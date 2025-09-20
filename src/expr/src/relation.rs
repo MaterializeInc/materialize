@@ -38,9 +38,6 @@ use mz_repr::{
     ColumnName, Datum, Diff, GlobalId, IntoRowIterator, Row, RowIterator, SqlColumnType,
     SqlRelationType, SqlScalarType,
 };
-use proptest::prelude::{Arbitrary, BoxedStrategy, any};
-use proptest::strategy::{Strategy, Union};
-use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use crate::Id::Local;
@@ -322,194 +319,6 @@ impl PartialEq for MirRelationExpr {
     }
 }
 impl Eq for MirRelationExpr {}
-
-impl Arbitrary for MirRelationExpr {
-    type Parameters = ();
-
-    fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
-        const VEC_LEN: usize = 2;
-
-        // A strategy for generating the leaf cases.
-        let leaf = Union::new([
-            (
-                any::<Result<Vec<(Row, Diff)>, EvalError>>(),
-                any::<SqlRelationType>(),
-            )
-                .prop_map(|(rows, typ)| MirRelationExpr::Constant { rows, typ })
-                .boxed(),
-            (
-                any::<Id>(),
-                any::<SqlRelationType>(),
-                any::<AccessStrategy>(),
-            )
-                .prop_map(|(id, typ, access_strategy)| MirRelationExpr::Get {
-                    id,
-                    typ,
-                    access_strategy,
-                })
-                .boxed(),
-        ])
-        .boxed();
-
-        leaf.prop_recursive(2, 2, 2, |inner| {
-            Union::new([
-                // Let
-                (any::<LocalId>(), inner.clone(), inner.clone())
-                    .prop_map(|(id, value, body)| MirRelationExpr::Let {
-                        id,
-                        value: Box::new(value),
-                        body: Box::new(body),
-                    })
-                    .boxed(),
-                // LetRec
-                (
-                    any::<Vec<LocalId>>(),
-                    proptest::collection::vec(inner.clone(), 1..VEC_LEN),
-                    any::<Vec<Option<LetRecLimit>>>(),
-                    inner.clone(),
-                )
-                    .prop_map(|(ids, values, limits, body)| MirRelationExpr::LetRec {
-                        ids,
-                        values,
-                        limits,
-                        body: Box::new(body),
-                    })
-                    .boxed(),
-                // Project
-                (inner.clone(), any::<Vec<usize>>())
-                    .prop_map(|(input, outputs)| MirRelationExpr::Project {
-                        input: Box::new(input),
-                        outputs,
-                    })
-                    .boxed(),
-                // Map
-                (inner.clone(), any::<Vec<MirScalarExpr>>())
-                    .prop_map(|(input, scalars)| MirRelationExpr::Map {
-                        input: Box::new(input),
-                        scalars,
-                    })
-                    .boxed(),
-                // FlatMap
-                (
-                    inner.clone(),
-                    any::<TableFunc>(),
-                    any::<Vec<MirScalarExpr>>(),
-                )
-                    .prop_map(|(input, func, exprs)| MirRelationExpr::FlatMap {
-                        input: Box::new(input),
-                        func,
-                        exprs,
-                    })
-                    .boxed(),
-                // Filter
-                (inner.clone(), any::<Vec<MirScalarExpr>>())
-                    .prop_map(|(input, predicates)| MirRelationExpr::Filter {
-                        input: Box::new(input),
-                        predicates,
-                    })
-                    .boxed(),
-                // Join
-                (
-                    proptest::collection::vec(inner.clone(), 1..VEC_LEN),
-                    any::<Vec<Vec<MirScalarExpr>>>(),
-                    any::<JoinImplementation>(),
-                )
-                    .prop_map(
-                        |(inputs, equivalences, implementation)| MirRelationExpr::Join {
-                            inputs,
-                            equivalences,
-                            implementation,
-                        },
-                    )
-                    .boxed(),
-                // Reduce
-                (
-                    inner.clone(),
-                    any::<Vec<MirScalarExpr>>(),
-                    any::<Vec<AggregateExpr>>(),
-                    any::<bool>(),
-                    any::<Option<u64>>(),
-                )
-                    .prop_map(
-                        |(input, group_key, aggregates, monotonic, expected_group_size)| {
-                            MirRelationExpr::Reduce {
-                                input: Box::new(input),
-                                group_key,
-                                aggregates,
-                                monotonic,
-                                expected_group_size,
-                            }
-                        },
-                    )
-                    .boxed(),
-                // TopK
-                (
-                    inner.clone(),
-                    any::<Vec<usize>>(),
-                    any::<Vec<ColumnOrder>>(),
-                    any::<Option<MirScalarExpr>>(),
-                    any::<usize>(),
-                    any::<bool>(),
-                    any::<Option<u64>>(),
-                )
-                    .prop_map(
-                        |(
-                            input,
-                            group_key,
-                            order_key,
-                            limit,
-                            offset,
-                            monotonic,
-                            expected_group_size,
-                        )| MirRelationExpr::TopK {
-                            input: Box::new(input),
-                            group_key,
-                            order_key,
-                            limit,
-                            offset,
-                            monotonic,
-                            expected_group_size,
-                        },
-                    )
-                    .boxed(),
-                // Negate
-                inner
-                    .clone()
-                    .prop_map(|input| MirRelationExpr::Negate {
-                        input: Box::new(input),
-                    })
-                    .boxed(),
-                // Threshold
-                inner
-                    .clone()
-                    .prop_map(|input| MirRelationExpr::Threshold {
-                        input: Box::new(input),
-                    })
-                    .boxed(),
-                // Union
-                (
-                    inner.clone(),
-                    proptest::collection::vec(inner.clone(), 1..VEC_LEN),
-                )
-                    .prop_map(|(base, inputs)| MirRelationExpr::Union {
-                        base: Box::new(base),
-                        inputs,
-                    })
-                    .boxed(),
-                // ArrangeBy
-                (inner.clone(), any::<Vec<Vec<MirScalarExpr>>>())
-                    .prop_map(|(input, keys)| MirRelationExpr::ArrangeBy {
-                        input: Box::new(input),
-                        keys,
-                    })
-                    .boxed(),
-            ])
-        })
-        .boxed()
-    }
-
-    type Strategy = BoxedStrategy<Self>;
-}
 
 impl MirRelationExpr {
     /// Reports the schema of the relation.
@@ -2569,18 +2378,7 @@ impl VisitChildren<Self> for MirRelationExpr {
 
 /// Specification for an ordering by a column.
 #[derive(
-    Arbitrary,
-    Debug,
-    Clone,
-    Copy,
-    Eq,
-    PartialEq,
-    Ord,
-    PartialOrd,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect,
+    Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect,
 )]
 pub struct ColumnOrder {
     /// The column index.
@@ -2618,9 +2416,7 @@ where
 }
 
 /// Describes an aggregation expression.
-#[derive(
-    Arbitrary, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect,
-)]
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect)]
 pub struct AggregateExpr {
     /// Names the aggregation function.
     pub func: AggregateFunc,
@@ -3312,9 +3108,7 @@ impl AggregateExpr {
 }
 
 /// Describe a join implementation in dataflow.
-#[derive(
-    Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect, Arbitrary,
-)]
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect)]
 pub enum JoinImplementation {
     /// Perform a sequence of binary differential dataflow joins.
     ///
@@ -3398,9 +3192,7 @@ impl JoinImplementation {
 ///
 /// This has more than one version. `new` instantiates the appropriate version based on a
 /// feature flag.
-#[derive(
-    Eq, PartialEq, Ord, PartialOrd, Debug, Clone, Serialize, Deserialize, Hash, MzReflect, Arbitrary,
-)]
+#[derive(Eq, PartialEq, Ord, PartialOrd, Debug, Clone, Serialize, Deserialize, Hash, MzReflect)]
 pub enum JoinInputCharacteristics {
     /// Old version, with `enable_join_prioritize_arranged` turned off.
     V1(JoinInputCharacteristicsV1),
@@ -3466,9 +3258,7 @@ impl JoinInputCharacteristics {
 }
 
 /// Newer version of `JoinInputCharacteristics`, with `enable_join_prioritize_arranged` turned on.
-#[derive(
-    Eq, PartialEq, Ord, PartialOrd, Debug, Clone, Serialize, Deserialize, Hash, MzReflect, Arbitrary,
-)]
+#[derive(Eq, PartialEq, Ord, PartialOrd, Debug, Clone, Serialize, Deserialize, Hash, MzReflect)]
 pub struct JoinInputCharacteristicsV2 {
     /// An excellent indication that record count will not increase.
     pub unique_key: bool,
@@ -3535,9 +3325,7 @@ impl JoinInputCharacteristicsV2 {
 }
 
 /// Old version of `JoinInputCharacteristics`, with `enable_join_prioritize_arranged` turned off.
-#[derive(
-    Eq, PartialEq, Ord, PartialOrd, Debug, Clone, Serialize, Deserialize, Hash, MzReflect, Arbitrary,
-)]
+#[derive(Eq, PartialEq, Ord, PartialOrd, Debug, Clone, Serialize, Deserialize, Hash, MzReflect)]
 pub struct JoinInputCharacteristicsV1 {
     /// An excellent indication that record count will not increase.
     pub unique_key: bool,
@@ -3604,7 +3392,7 @@ impl JoinInputCharacteristicsV1 {
 /// The generic parameters are for accommodating prepared statement parameters in
 /// `limit` and `offset`: the planner can hold these fields as HirScalarExpr long enough to call
 /// `bind_parameters` on them.
-#[derive(Arbitrary, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RowSetFinishing<L = NonNeg<i64>, O = usize> {
     /// Order rows by the given columns.
     pub order_by: Vec<ColumnOrder>,
@@ -3893,9 +3681,7 @@ where
 ///
 /// Window frames define a subset of the partition , and only a subset of
 /// window functions make use of the window frame.
-#[derive(
-    Arbitrary, Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect,
-)]
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect)]
 pub struct WindowFrame {
     /// ROWS, RANGE or GROUPS
     pub units: WindowFrameUnits,
@@ -3975,9 +3761,7 @@ impl WindowFrame {
 }
 
 /// Describe how frame bounds are interpreted
-#[derive(
-    Arbitrary, Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect,
-)]
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect)]
 pub enum WindowFrameUnits {
     /// Each row is treated as the unit of work for bounds
     Rows,
@@ -4003,9 +3787,7 @@ impl Display for WindowFrameUnits {
 ///
 /// The order between frame bounds is significant, as Postgres enforces
 /// some restrictions there.
-#[derive(
-    Arbitrary, Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, MzReflect, PartialOrd, Ord,
-)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, MzReflect, PartialOrd, Ord)]
 pub enum WindowFrameBound {
     /// `UNBOUNDED PRECEDING`
     UnboundedPreceding,
@@ -4032,9 +3814,7 @@ impl Display for WindowFrameBound {
 }
 
 /// Maximum iterations for a LetRec.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Arbitrary,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct LetRecLimit {
     /// Maximum number of iterations to evaluate.
     pub max_iters: NonZeroU64,
@@ -4069,7 +3849,7 @@ impl Display for LetRecLimit {
 
 /// For a global Get, this indicates whether we are going to read from Persist or from an index.
 /// (See comment in MirRelationExpr::Get.)
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, Arbitrary)]
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash)]
 pub enum AccessStrategy {
     /// It's either a local Get (a CTE), or unknown at the time.
     /// `prune_and_annotate_dataflow_index_imports` decides it for global Gets, and thus switches to

@@ -13,19 +13,15 @@ use std::io;
 use bytes::BytesMut;
 use csv::{ByteRecord, ReaderBuilder};
 use itertools::Itertools;
-use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::{
     Datum, RelationDesc, Row, RowArena, RowRef, SharedRow, SqlColumnType, SqlRelationType,
     SqlScalarType,
 };
-use proptest::prelude::{Arbitrary, Just, any};
-use proptest::strategy::{BoxedStrategy, Strategy, Union};
-use serde::Deserialize;
-use serde::Serialize;
+use proptest::prelude::{Arbitrary, any};
+use proptest::strategy::{BoxedStrategy, Strategy};
+use serde::{Deserialize, Serialize};
 
 static END_OF_COPY_MARKER: &[u8] = b"\\.";
-
-include!(concat!(env!("OUT_DIR"), "/mz_pgcopy.copy.rs"));
 
 fn encode_copy_row_binary(
     row: &RowRef,
@@ -440,46 +436,6 @@ pub enum CopyFormatParams<'a> {
     Parquet,
 }
 
-impl RustType<ProtoCopyFormatParams> for CopyFormatParams<'static> {
-    fn into_proto(&self) -> ProtoCopyFormatParams {
-        use proto_copy_format_params::Kind;
-        ProtoCopyFormatParams {
-            kind: Some(match self {
-                Self::Text(f) => Kind::Text(f.into_proto()),
-                Self::Csv(f) => Kind::Csv(f.into_proto()),
-                Self::Binary => Kind::Binary(()),
-                Self::Parquet => Kind::Parquet(ProtoCopyParquetFormatParams::default()),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoCopyFormatParams) -> Result<Self, TryFromProtoError> {
-        use proto_copy_format_params::Kind;
-        match proto.kind {
-            Some(Kind::Text(f)) => Ok(Self::Text(f.into_rust()?)),
-            Some(Kind::Csv(f)) => Ok(Self::Csv(f.into_rust()?)),
-            Some(Kind::Binary(())) => Ok(Self::Binary),
-            Some(Kind::Parquet(ProtoCopyParquetFormatParams {})) => Ok(Self::Parquet),
-            None => Err(TryFromProtoError::missing_field(
-                "ProtoCopyFormatParams::kind",
-            )),
-        }
-    }
-}
-
-impl Arbitrary for CopyFormatParams<'static> {
-    type Parameters = ();
-    type Strategy = Union<BoxedStrategy<Self>>;
-
-    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
-        Union::new(vec![
-            any::<CopyTextFormatParams>().prop_map(Self::Text).boxed(),
-            any::<CopyCsvFormatParams>().prop_map(Self::Csv).boxed(),
-            Just(Self::Binary).boxed(),
-        ])
-    }
-}
-
 impl CopyFormatParams<'static> {
     pub fn file_extension(&self) -> &str {
         match self {
@@ -582,36 +538,6 @@ impl<'a> Default for CopyTextFormatParams<'a> {
     }
 }
 
-impl RustType<ProtoCopyTextFormatParams> for CopyTextFormatParams<'static> {
-    fn into_proto(&self) -> ProtoCopyTextFormatParams {
-        ProtoCopyTextFormatParams {
-            null: self.null.into_proto(),
-            delimiter: self.delimiter.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoCopyTextFormatParams) -> Result<Self, TryFromProtoError> {
-        Ok(Self {
-            null: Cow::Owned(proto.null.into_rust()?),
-            delimiter: proto.delimiter.into_rust()?,
-        })
-    }
-}
-
-impl Arbitrary for CopyTextFormatParams<'static> {
-    type Parameters = ();
-    type Strategy = BoxedStrategy<Self>;
-
-    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
-        (any::<String>(), any::<u8>())
-            .prop_map(|(null, delimiter)| Self {
-                null: Cow::Owned(null),
-                delimiter,
-            })
-            .boxed()
-    }
-}
-
 pub fn decode_copy_format_text(
     data: &[u8],
     column_types: &[mz_pgrepr::Type],
@@ -667,28 +593,6 @@ impl<'a> CopyCsvFormatParams<'a> {
             header: self.header,
             null: Cow::Owned(self.null.to_string()),
         }
-    }
-}
-
-impl RustType<ProtoCopyCsvFormatParams> for CopyCsvFormatParams<'static> {
-    fn into_proto(&self) -> ProtoCopyCsvFormatParams {
-        ProtoCopyCsvFormatParams {
-            delimiter: self.delimiter.into(),
-            quote: self.quote.into(),
-            escape: self.escape.into(),
-            header: self.header,
-            null: self.null.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoCopyCsvFormatParams) -> Result<Self, TryFromProtoError> {
-        Ok(Self {
-            delimiter: proto.delimiter.into_rust()?,
-            quote: proto.quote.into_rust()?,
-            escape: proto.escape.into_rust()?,
-            header: proto.header,
-            null: Cow::Owned(proto.null.into_rust()?),
-        })
     }
 }
 
@@ -852,7 +756,7 @@ pub fn decode_copy_format_csv(
 #[cfg(test)]
 mod tests {
     use mz_ore::collections::CollectionExt;
-    use mz_repr::{SqlColumnType, SqlScalarType};
+    use mz_repr::SqlColumnType;
     use proptest::prelude::*;
 
     use super::*;

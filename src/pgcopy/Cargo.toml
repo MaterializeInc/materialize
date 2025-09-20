@@ -16,19 +16,12 @@ itertools = "0.14.0"
 mz-ore = { path = "../ore", features = [] }
 mz-pgrepr = { path = "../pgrepr" }
 mz-repr = { path = "../repr" }
-mz-proto = { path = "../proto", features = ["tokio-postgres"] }
-prost = { version = "0.13.5", features = ["no-recursion-limit"] }
 proptest = { version = "1.7.0", default-features = false, features = ["std"] }
 serde = { version = "1.0.219", features = ["derive"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
-[build-dependencies]
-mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
-prost-build = "0.13.5"
-tonic-build = "0.12.3"
-
 [features]
-default = ["mz-build-tools/default", "workspace-hack"]
+default = ["workspace-hack"]
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

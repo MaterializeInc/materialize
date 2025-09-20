@@ -14,7 +14,6 @@ use derivative::Derivative;
 use mz_lowertest::MzReflect;
 use mz_ore::fmt::FormatBuffer;
 use mz_repr::adt::regex::Regex;
-use proptest::prelude::{Arbitrary, Strategy};
 use serde::{Deserialize, Serialize};
 
 use crate::scalar::EvalError;
@@ -159,28 +158,6 @@ pub fn compile(pattern: &str, case_insensitive: bool) -> Result<Matcher, EvalErr
         case_insensitive,
         matcher_impl,
     })
-}
-
-pub fn any_matcher() -> impl Strategy<Value = Matcher> {
-    // Generates a string out of a pool of characters. The pool has at least one
-    // representative from the following classes of the characters (listed in
-    // order of its appearance in the regex):
-    // * Alphanumeric characters, both upper and lower-case.
-    // * Control characters.
-    // * Punctuation minus the escape character.
-    // * Space characters.
-    // * Multi-byte characters.
-    // * _ and %, which are special characters for a like pattern.
-    // * Escaped _ and %, plus the escape character itself. This implementation
-    //   will have to be modified if we support choosing a different escape character.
-    //
-    // Syntax reference for LIKE here:
-    // https://www.postgresql.org/docs/current/functions-matching.html#FUNCTIONS-LIKE
-    (
-        r"([[:alnum:]]|[[:cntrl:]]|([[[:punct:]]&&[^\\]])|[[:space:]]|华|_|%|(\\_)|(\\%)|(\\\\)){0, 50}",
-        bool::arbitrary(),
-    )
-        .prop_map(|(pattern, case_insensitive)| compile(&pattern, case_insensitive).unwrap())
 }
 
 // The algorithm below is based on the observation that any LIKE pattern can be

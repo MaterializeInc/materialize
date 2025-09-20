@@ -27,7 +27,6 @@ use mz_repr::adt::system::{Oid, PgLegacyChar};
 use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampPrecision};
 use mz_repr::adt::varchar::{VarChar, VarCharMaxLength};
 use mz_repr::{Datum, RowArena, SqlColumnType, SqlScalarType, strconv};
-use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -160,9 +159,7 @@ sqlfunc!(
     }
 );
 
-#[derive(
-    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
-)]
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastStringToNumeric(pub Option<NumericMaxScale>);
 
 impl<'a> EagerUnaryFunc<'a> for CastStringToNumeric {
@@ -212,9 +209,7 @@ sqlfunc!(
     }
 );
 
-#[derive(
-    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
-)]
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastStringToTimestamp(pub Option<TimestampPrecision>);
 
 impl<'a> EagerUnaryFunc<'a> for CastStringToTimestamp {
@@ -259,9 +254,7 @@ sqlfunc!(
     }
 );
 
-#[derive(
-    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
-)]
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastStringToTimestampTz(pub Option<TimestampPrecision>);
 
 impl<'a> EagerUnaryFunc<'a> for CastStringToTimestampTz {
@@ -544,9 +537,7 @@ impl fmt::Display for CastStringToMap {
     }
 }
 
-#[derive(
-    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
-)]
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastStringToChar {
     pub length: Option<mz_repr::adt::char::CharLength>,
     pub fail_on_len: bool,
@@ -677,9 +668,7 @@ impl fmt::Display for CastStringToRange {
     }
 }
 
-#[derive(
-    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
-)]
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastStringToVarChar {
     pub length: Option<VarCharMaxLength>,
     pub fail_on_len: bool,
@@ -745,9 +734,7 @@ static INT2VECTOR_CAST_EXPR: LazyLock<MirScalarExpr> = LazyLock::new(|| MirScala
     expr: Box::new(MirScalarExpr::column(0)),
 });
 
-#[derive(
-    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
-)]
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastStringToInt2Vector;
 
 impl LazyUnaryFunc for CastStringToInt2Vector {
@@ -1106,9 +1093,7 @@ sqlfunc!(
     }
 );
 
-#[derive(
-    Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect, Arbitrary,
-)]
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct QuoteIdent;
 
 impl LazyUnaryFunc for QuoteIdent {

@@ -7,17 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::str::FromStr;
-
 use mz_ore::tracing::TracingHandle;
-use mz_proto::{ProtoType, RustType, TryFromProtoError};
-use proptest::prelude::{Arbitrary, BoxedStrategy, Strategy, any};
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
 use crate::{CloneableEnvFilter, SerializableDirective};
-
-include!(concat!(env!("OUT_DIR"), "/mz_tracing.params.rs"));
 
 /// Parameters related to `tracing`.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,37 +26,6 @@ pub struct TracingParameters {
     pub opentelemetry_filter_defaults: Vec<SerializableDirective>,
     /// Additional directives on top of the `info` filter for `sentry`.
     pub sentry_filters: Vec<SerializableDirective>,
-}
-
-impl Arbitrary for TracingParameters {
-    type Strategy = BoxedStrategy<Self>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        (
-            any::<Option<CloneableEnvFilter>>(),
-            any::<Option<CloneableEnvFilter>>(),
-            any::<Vec<SerializableDirective>>(),
-            any::<Vec<SerializableDirective>>(),
-            any::<Vec<SerializableDirective>>(),
-        )
-            .prop_map(
-                |(
-                    log_filter,
-                    opentelemetry_filter,
-                    log_filter_defaults,
-                    opentelemetry_filter_defaults,
-                    sentry_filters,
-                )| Self {
-                    log_filter,
-                    opentelemetry_filter,
-                    log_filter_defaults,
-                    opentelemetry_filter_defaults,
-                    sentry_filters,
-                },
-            )
-            .boxed()
-    }
 }
 
 impl TracingParameters {
@@ -135,55 +98,5 @@ impl TracingParameters {
         *log_filter_defaults = other_log_filter_defaults;
         *opentelemetry_filter_defaults = other_opentelemetry_filter_defaults;
         *sentry_filters = other_sentry_filters;
-    }
-}
-
-impl RustType<String> for CloneableEnvFilter {
-    fn into_proto(&self) -> String {
-        format!("{}", self)
-    }
-
-    fn from_proto(proto: String) -> Result<Self, TryFromProtoError> {
-        CloneableEnvFilter::from_str(&proto)
-            // this isn't an accurate enum for this error, but it seems preferable
-            // to adding in a dependency on mz_tracing / tracing to mz_proto just
-            // to improve the error message here
-            .map_err(|x| TryFromProtoError::UnknownEnumVariant(x.to_string()))
-    }
-}
-
-impl RustType<String> for SerializableDirective {
-    fn into_proto(&self) -> String {
-        format!("{}", self)
-    }
-
-    fn from_proto(proto: String) -> Result<Self, TryFromProtoError> {
-        SerializableDirective::from_str(&proto)
-            // this isn't an accurate enum for this error, but it seems preferable
-            // to adding in a dependency on mz_tracing / tracing to mz_proto just
-            // to improve the error message here
-            .map_err(|x| TryFromProtoError::UnknownEnumVariant(x.to_string()))
-    }
-}
-
-impl RustType<ProtoTracingParameters> for TracingParameters {
-    fn into_proto(&self) -> ProtoTracingParameters {
-        ProtoTracingParameters {
-            log_filter: self.log_filter.into_proto(),
-            opentelemetry_filter: self.opentelemetry_filter.into_proto(),
-            log_filter_defaults: self.log_filter_defaults.into_proto(),
-            opentelemetry_filter_defaults: self.opentelemetry_filter_defaults.into_proto(),
-            sentry_filters: self.sentry_filters.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoTracingParameters) -> Result<Self, TryFromProtoError> {
-        Ok(Self {
-            log_filter: proto.log_filter.into_rust()?,
-            opentelemetry_filter: proto.opentelemetry_filter.into_rust()?,
-            log_filter_defaults: proto.log_filter_defaults.into_rust()?,
-            opentelemetry_filter_defaults: proto.opentelemetry_filter_defaults.into_rust()?,
-            sentry_filters: proto.sentry_filters.into_rust()?,
-        })
     }
 }

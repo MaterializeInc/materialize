@@ -17,7 +17,6 @@ use mz_repr::adt::interval::Interval;
 use mz_repr::adt::numeric::{DecimalLike, Numeric};
 use mz_repr::adt::timestamp::TimeLike;
 use mz_repr::{SqlColumnType, SqlScalarType, strconv};
-use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use crate::EvalError;
@@ -87,9 +86,7 @@ where
     }
 }
 
-#[derive(
-    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
-)]
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct ExtractTime(pub DateTimeUnits);
 
 impl<'a> EagerUnaryFunc<'a> for ExtractTime {
@@ -111,9 +108,7 @@ impl fmt::Display for ExtractTime {
     }
 }
 
-#[derive(
-    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
-)]
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct DatePartTime(pub DateTimeUnits);
 
 impl<'a> EagerUnaryFunc<'a> for DatePartTime {
@@ -145,12 +140,9 @@ pub fn timezone_time(tz: Timezone, t: NaiveTime, wall_time: &NaiveDateTime) -> N
     t + offset
 }
 
-#[derive(
-    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
-)]
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct TimezoneTime {
     pub tz: Timezone,
-    #[proptest(strategy = "mz_proto::chrono::any_naive_datetime()")]
     pub wall_time: NaiveDateTime,
 }
 

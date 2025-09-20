@@ -62,11 +62,8 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
 use tracing::error;
-
-use mz_proto::{ProtoType, RustType};
-
-include!(concat!(env!("OUT_DIR"), "/mz_dyncfg.rs"));
 
 /// A handle to a dynamically updatable configuration value.
 ///
@@ -316,7 +313,7 @@ impl<T: ConfigType> ConfigValHandle<T> {
 
 /// A type-erased configuration value for when set of different types are stored
 /// in a collection.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ConfigVal {
     /// A `bool` value.
     Bool(bool),
@@ -333,7 +330,30 @@ pub enum ConfigVal {
     /// A `Duration` value.
     Duration(Duration),
     /// A JSON value.
+    #[serde(with = "serde_json_string")]
     Json(serde_json::Value),
+}
+
+/// To make `ConfigVal` compatible with non-self-describing serialization formats like bincode,
+/// serialize JSON values as strings.
+mod serde_json_string {
+    use serde::de::{Deserialize, Deserializer, Error};
+    use serde::ser::Serializer;
+
+    pub fn serialize<S>(value: &serde_json::Value, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&value.to_string())
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<serde_json::Value, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        serde_json::from_str(&s).map_err(D::Error::custom)
+    }
 }
 
 /// An atomic version of [`ConfigVal`] to allow configuration values to be
@@ -419,6 +439,15 @@ impl ConfigValAtomic {
     }
 }
 
+/// A batch of value updates to [Config]s in a [ConfigSet].
+///
+/// This may be sent across processes to apply the same value updates, but may not be durably
+/// written down.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ConfigUpdates {
+    pub updates: BTreeMap<String, ConfigVal>,
+}
+
 impl ConfigUpdates {
     /// Adds an update for the given config and value.
     ///
@@ -440,12 +469,7 @@ impl ConfigUpdates {
     /// If a value of the same config has previously been added to these
     /// updates, replaces it.
     pub fn add_dynamic(&mut self, name: &str, val: ConfigVal) {
-        self.updates.insert(
-            name.to_owned(),
-            ProtoConfigVal {
-                val: val.into_proto(),
-            },
-        );
+        self.updates.insert(name.to_owned(), val);
     }
 
     /// Adds the entries in `other` to `self`, with `other` taking precedence.
@@ -463,19 +487,12 @@ impl ConfigUpdates {
     /// Ditto for config type mismatches. However, this is unexpected usage at
     /// present and so is logged to Sentry.
     pub fn apply(&self, set: &ConfigSet) {
-        for (name, ProtoConfigVal { val }) in self.updates.iter() {
+        for (name, val) in self.updates.iter() {
             let Some(config) = set.configs.get(name) else {
                 error!("config update {} {:?} not known set: {:?}", name, val, set);
                 continue;
             };
-            let val = match (val.clone()).into_rust() {
-                Ok(x) => x,
-                Err(err) => {
-                    error!("config update {} decode error: {}", name, err);
-                    continue;
-                }
-            };
-            config.val.store(val);
+            config.val.store(val.clone());
         }
     }
 }
@@ -485,12 +502,7 @@ mod impls {
     use std::str::ParseBoolError;
     use std::time::Duration;
 
-    use mz_ore::cast::CastFrom;
-    use mz_proto::{ProtoType, RustType, TryFromProtoError};
-
-    use crate::{
-        ConfigDefault, ConfigSet, ConfigType, ConfigVal, ProtoOptionU64, proto_config_val,
-    };
+    use crate::{ConfigDefault, ConfigSet, ConfigType, ConfigVal};
 
     impl ConfigType for bool {
         fn from_val(val: ConfigVal) -> Self {
@@ -659,46 +671,6 @@ mod impls {
     impl From<serde_json::Value> for ConfigVal {
         fn from(val: serde_json::Value) -> ConfigVal {
             ConfigVal::Json(val)
-        }
-    }
-
-    impl RustType<Option<proto_config_val::Val>> for ConfigVal {
-        fn into_proto(&self) -> Option<proto_config_val::Val> {
-            use crate::proto_config_val::Val;
-            let val = match self {
-                ConfigVal::Bool(x) => Val::Bool(*x),
-                ConfigVal::U32(x) => Val::U32(*x),
-                ConfigVal::Usize(x) => Val::Usize(u64::cast_from(*x)),
-                ConfigVal::OptUsize(x) => Val::OptUsize(ProtoOptionU64 {
-                    val: x.map(u64::cast_from),
-                }),
-                ConfigVal::F64(x) => Val::F64(*x),
-                ConfigVal::String(x) => Val::String(x.into_proto()),
-                ConfigVal::Duration(x) => Val::Duration(x.into_proto()),
-                ConfigVal::Json(x) => Val::Json(x.to_string()),
-            };
-            Some(val)
-        }
-
-        fn from_proto(proto: Option<proto_config_val::Val>) -> Result<Self, TryFromProtoError> {
-            let val = match proto {
-                Some(proto_config_val::Val::Bool(x)) => ConfigVal::Bool(x),
-                Some(proto_config_val::Val::U32(x)) => ConfigVal::U32(x),
-                Some(proto_config_val::Val::Usize(x)) => ConfigVal::Usize(usize::cast_from(x)),
-                Some(proto_config_val::Val::OptUsize(ProtoOptionU64 { val })) => {
-                    ConfigVal::OptUsize(val.map(usize::cast_from))
-                }
-                Some(proto_config_val::Val::F64(x)) => ConfigVal::F64(x),
-                Some(proto_config_val::Val::String(x)) => ConfigVal::String(x),
-                Some(proto_config_val::Val::Duration(x)) => ConfigVal::Duration(x.into_rust()?),
-                Some(proto_config_val::Val::Json(x)) => ConfigVal::Json(serde_json::from_str(&x)?),
-                None => {
-                    return Err(TryFromProtoError::unknown_enum_variant(
-                        "ProtoConfigVal::Val",
-                    ));
-                }
-            };
-            Ok(val)
         }
     }
 

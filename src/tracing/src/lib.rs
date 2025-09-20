@@ -9,8 +9,6 @@
 
 //! Mz-specific library for interacting with `tracing`.
 
-use proptest::arbitrary::Arbitrary;
-use proptest::prelude::{BoxedStrategy, Strategy};
 use serde::{Deserialize, Serializer, de};
 use std::fmt::Formatter;
 use std::str::FromStr;
@@ -84,19 +82,6 @@ impl std::fmt::Debug for CloneableEnvFilter {
     }
 }
 
-impl Arbitrary for CloneableEnvFilter {
-    type Strategy = BoxedStrategy<Self>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        // there are much more complex EnvFilters we could try building if that seems
-        // worthwhile to explore
-        proptest::sample::select(vec!["info", "debug", "warn", "error", "off"])
-            .prop_map(|x| CloneableEnvFilter::from_str(x).expect("valid EnvFilter"))
-            .boxed()
-    }
-}
-
 impl serde::Serialize for CloneableEnvFilter {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -145,19 +130,6 @@ impl FromStr for SerializableDirective {
 impl std::fmt::Display for SerializableDirective {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
-    }
-}
-
-impl Arbitrary for SerializableDirective {
-    type Strategy = BoxedStrategy<Self>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        // there are much more complex EnvFilters we could try building if that seems
-        // worthwhile to explore
-        proptest::sample::select(vec!["info", "debug", "warn", "error", "off"])
-            .prop_map(|x| SerializableDirective::from_str(x).expect("valid Directive"))
-            .boxed()
     }
 }
 

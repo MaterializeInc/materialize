@@ -11,24 +11,12 @@ use std::fmt;
 
 use mz_lowertest::MzReflect;
 use mz_repr::GlobalId;
-use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 /// An opaque identifier for a dataflow component. In other words, identifies
 /// the target of a [`MirRelationExpr::Get`](crate::MirRelationExpr::Get).
 #[derive(
-    Arbitrary,
-    Clone,
-    Copy,
-    Debug,
-    Eq,
-    PartialEq,
-    Ord,
-    PartialOrd,
-    Hash,
-    Serialize,
-    Deserialize,
-    MzReflect,
+    Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, MzReflect,
 )]
 pub enum Id {
     /// An identifier that refers to a local component of a dataflow.
@@ -48,18 +36,7 @@ impl fmt::Display for Id {
 
 /// The identifier for a local component of a dataflow.
 #[derive(
-    Arbitrary,
-    Clone,
-    Copy,
-    Debug,
-    Eq,
-    PartialEq,
-    Ord,
-    PartialOrd,
-    Hash,
-    Serialize,
-    Deserialize,
-    MzReflect,
+    Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, MzReflect,
 )]
 pub struct LocalId(pub(crate) u64);
 

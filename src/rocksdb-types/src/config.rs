@@ -41,19 +41,13 @@ use std::fmt::Debug;
 use std::str::FromStr;
 use std::time::Duration;
 
-use mz_ore::cast::CastFrom;
-use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
-
-use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use uncased::UncasedStr;
-
-include!(concat!(env!("OUT_DIR"), "/mz_rocksdb_types.config.rs"));
 
 /// A set of parameters to tune RocksDB. This struct is plain-old-data, and is
 /// used to update `RocksDBConfig`, which contains some dynamic value for some
 /// parameters.
-#[derive(Serialize, Deserialize, PartialEq, Clone, Debug, Arbitrary)]
+#[derive(Serialize, Deserialize, PartialEq, Clone, Debug)]
 pub struct RocksDBTuningParameters {
     /// RocksDB has 2 primary styles of compaction:
     /// - The default, usually referred to as "level" compaction
@@ -240,7 +234,7 @@ impl RocksDBTuningParameters {
 
 /// The 2 primary compaction styles in RocksDB`. See `RocksDBTuningParameters::compaction_style`
 /// for more information.
-#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Arbitrary)]
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum CompactionStyle {
     Level,
     Universal,
@@ -272,7 +266,7 @@ impl std::fmt::Display for CompactionStyle {
 
 /// Mz-supported compression types in RocksDB`. See `RocksDBTuningParameters::compression_type`
 /// for more information.
-#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Arbitrary)]
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum CompressionType {
     Zstd,
     Snappy,
@@ -307,128 +301,6 @@ impl std::fmt::Display for CompressionType {
             CompressionType::Lz4 => write!(f, "lz4"),
             CompressionType::None => write!(f, "none"),
         }
-    }
-}
-
-impl RustType<ProtoRocksDbTuningParameters> for RocksDBTuningParameters {
-    fn into_proto(&self) -> ProtoRocksDbTuningParameters {
-        use proto_rocks_db_tuning_parameters::{
-            ProtoCompactionStyle, ProtoCompressionType, proto_compaction_style,
-            proto_compression_type,
-        };
-
-        fn compression_into_proto(compression_type: &CompressionType) -> ProtoCompressionType {
-            ProtoCompressionType {
-                kind: Some(match compression_type {
-                    CompressionType::Zstd => proto_compression_type::Kind::Zstd(()),
-                    CompressionType::Snappy => proto_compression_type::Kind::Snappy(()),
-                    CompressionType::Lz4 => proto_compression_type::Kind::Lz4(()),
-                    CompressionType::None => proto_compression_type::Kind::None(()),
-                }),
-            }
-        }
-        ProtoRocksDbTuningParameters {
-            compaction_style: Some(ProtoCompactionStyle {
-                kind: Some(match self.compaction_style {
-                    CompactionStyle::Level => proto_compaction_style::Kind::Level(()),
-                    CompactionStyle::Universal => proto_compaction_style::Kind::Universal(()),
-                }),
-            }),
-            optimize_compaction_memtable_budget: u64::cast_from(
-                self.optimize_compaction_memtable_budget,
-            ),
-            level_compaction_dynamic_level_bytes: self.level_compaction_dynamic_level_bytes,
-            universal_compaction_target_ratio: self.universal_compaction_target_ratio,
-            parallelism: self.parallelism,
-            compression_type: Some(compression_into_proto(&self.compression_type)),
-            bottommost_compression_type: Some(compression_into_proto(
-                &self.bottommost_compression_type,
-            )),
-            batch_size: u64::cast_from(self.batch_size),
-            retry_max_duration: Some(self.retry_max_duration.into_proto()),
-            stats_log_interval_seconds: self.stats_log_interval_seconds,
-            stats_persist_interval_seconds: self.stats_persist_interval_seconds,
-            point_lookup_block_cache_size_mb: self.point_lookup_block_cache_size_mb,
-            shrink_buffers_by_ratio: u64::cast_from(self.shrink_buffers_by_ratio),
-            write_buffer_manager_memory_bytes: self
-                .write_buffer_manager_memory_bytes
-                .map(u64::cast_from),
-            write_buffer_manager_memory_fraction: self.write_buffer_manager_memory_fraction,
-            write_buffer_manager_allow_stall: self.write_buffer_manager_allow_stall,
-        }
-    }
-
-    fn from_proto(proto: ProtoRocksDbTuningParameters) -> Result<Self, TryFromProtoError> {
-        use proto_rocks_db_tuning_parameters::{
-            ProtoCompactionStyle, ProtoCompressionType, proto_compaction_style,
-            proto_compression_type,
-        };
-
-        fn compression_from_proto(
-            compression_type: Option<ProtoCompressionType>,
-        ) -> Result<CompressionType, TryFromProtoError> {
-            match compression_type {
-                Some(ProtoCompressionType {
-                    kind: Some(proto_compression_type::Kind::Zstd(())),
-                }) => Ok(CompressionType::Zstd),
-                Some(ProtoCompressionType {
-                    kind: Some(proto_compression_type::Kind::Snappy(())),
-                }) => Ok(CompressionType::Snappy),
-                Some(ProtoCompressionType {
-                    kind: Some(proto_compression_type::Kind::Lz4(())),
-                }) => Ok(CompressionType::Lz4),
-                Some(ProtoCompressionType {
-                    kind: Some(proto_compression_type::Kind::None(())),
-                }) => Ok(CompressionType::None),
-                Some(ProtoCompressionType { kind: None }) => Err(TryFromProtoError::MissingField(
-                    "ProtoRocksDbTuningParameters::compression_type::kind".into(),
-                )),
-                None => Err(TryFromProtoError::MissingField(
-                    "ProtoRocksDbTuningParameters::compression_type".into(),
-                )),
-            }
-        }
-        Ok(Self {
-            compaction_style: match proto.compaction_style {
-                Some(ProtoCompactionStyle {
-                    kind: Some(proto_compaction_style::Kind::Level(())),
-                }) => CompactionStyle::Level,
-                Some(ProtoCompactionStyle {
-                    kind: Some(proto_compaction_style::Kind::Universal(())),
-                }) => CompactionStyle::Universal,
-                Some(ProtoCompactionStyle { kind: None }) => {
-                    return Err(TryFromProtoError::MissingField(
-                        "ProtoRocksDbTuningParameters::compaction_style::kind".into(),
-                    ));
-                }
-                None => {
-                    return Err(TryFromProtoError::MissingField(
-                        "ProtoRocksDbTuningParameters::compaction_style".into(),
-                    ));
-                }
-            },
-            optimize_compaction_memtable_budget: usize::cast_from(
-                proto.optimize_compaction_memtable_budget,
-            ),
-            level_compaction_dynamic_level_bytes: proto.level_compaction_dynamic_level_bytes,
-            universal_compaction_target_ratio: proto.universal_compaction_target_ratio,
-            parallelism: proto.parallelism,
-            compression_type: compression_from_proto(proto.compression_type)?,
-            bottommost_compression_type: compression_from_proto(proto.bottommost_compression_type)?,
-            batch_size: usize::cast_from(proto.batch_size),
-            retry_max_duration: proto
-                .retry_max_duration
-                .into_rust_if_some("ProtoRocksDbTuningParameters::retry_max_duration")?,
-            stats_log_interval_seconds: proto.stats_log_interval_seconds,
-            stats_persist_interval_seconds: proto.stats_persist_interval_seconds,
-            point_lookup_block_cache_size_mb: proto.point_lookup_block_cache_size_mb,
-            shrink_buffers_by_ratio: usize::cast_from(proto.shrink_buffers_by_ratio),
-            write_buffer_manager_memory_bytes: proto
-                .write_buffer_manager_memory_bytes
-                .map(usize::cast_from),
-            write_buffer_manager_memory_fraction: proto.write_buffer_manager_memory_fraction,
-            write_buffer_manager_allow_stall: proto.write_buffer_manager_allow_stall,
-        })
     }
 }
 
@@ -493,10 +365,6 @@ pub mod defaults {
 
 #[cfg(test)]
 mod tests {
-    use mz_ore::assert_ok;
-    use mz_proto::protobuf_roundtrip;
-    use proptest::prelude::*;
-
     use super::*;
 
     #[mz_ore::test]
@@ -522,16 +390,5 @@ mod tests {
         .unwrap();
 
         assert_eq!(r, RocksDBTuningParameters::default());
-    }
-
-    #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // too slow
-    fn rocksdb_tuning_roundtrip() {
-        proptest!(|(expect in any::<RocksDBTuningParameters>())| {
-            let actual = protobuf_roundtrip::<_, ProtoRocksDbTuningParameters>(&expect);
-            assert_ok!(actual);
-            assert_eq!(actual.unwrap(), expect);
-
-        });
     }
 }
