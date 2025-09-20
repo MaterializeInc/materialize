@@ -139,8 +139,10 @@ pub struct K8sDumper<'n> {
     context: &'n Context,
     /// The kubernetes client to use.
     client: Client,
-    /// A list of namespaces to dump.
-    k8s_namespaces: Vec<String>,
+    /// The k8s namespace to dump.
+    k8s_namespace: String,
+    /// A list of additional k8s namespaces to dump.
+    k8s_additional_namespaces: Option<Vec<String>>,
     /// The kubernetes context to use.
     k8s_context: Option<String>,
     /// If true, the tool will dump the values of secrets in the Kubernetes cluster.
@@ -151,14 +153,16 @@ impl<'n> K8sDumper<'n> {
     pub fn new(
         context: &'n Context,
         client: Client,
-        k8s_namespaces: Vec<String>,
+        k8s_namespace: String,
+        k8s_additional_namespaces: Option<Vec<String>>,
         k8s_context: Option<String>,
         k8s_dump_secret_values: bool,
     ) -> Self {
         Self {
             context,
             client,
-            k8s_namespaces,
+            k8s_namespace,
+            k8s_additional_namespaces,
             k8s_context,
             k8s_dump_secret_values,
         }
@@ -496,7 +500,10 @@ impl<'n> ContainerDumper for K8sDumper<'n> {
     async fn dump_container_resources(&self) {
         let mut futs: Vec<Pin<Box<dyn Future<Output = ()>>>> = vec![];
 
-        for namespace in &self.k8s_namespaces {
+        let k8s_namespaces_iter = std::iter::once(&self.k8s_namespace)
+            .chain(self.k8s_additional_namespaces.iter().flatten());
+
+        for namespace in k8s_namespaces_iter.clone() {
             futs.push(Box::pin(self.dump_kubectl_describe::<Pod>(Some(namespace))));
             futs.push(Box::pin(
                 self.dump_kubectl_describe::<Service>(Some(namespace)),
@@ -558,8 +565,8 @@ impl<'n> ContainerDumper for K8sDumper<'n> {
             self.dump_kubectl_describe::<CustomResourceDefinition>(None),
         ));
 
-        for namespace in self.k8s_namespaces.clone() {
-            futs.push(Box::pin(self.dump_namespaced_resources(namespace)));
+        for namespace in k8s_namespaces_iter.clone() {
+            futs.push(Box::pin(self.dump_namespaced_resources(namespace.clone())));
         }
         futs.push(Box::pin(self.dump_cluster_resources()));
 
