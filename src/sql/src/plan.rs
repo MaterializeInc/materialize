@@ -893,7 +893,7 @@ pub struct SubscribePlan {
     pub from: SubscribeFrom,
     pub with_snapshot: bool,
     pub when: QueryWhen,
-    pub up_to: Option<MirScalarExpr>,
+    pub up_to: Option<Timestamp>,
     pub copy_to: Option<CopyFormat>,
     pub emit_progress: bool,
     pub output: SubscribeOutput,
@@ -1849,15 +1849,15 @@ pub enum QueryWhen {
     /// expression.
     ///
     /// The expression may have any type.
-    AtTimestamp(MirScalarExpr),
+    AtTimestamp(Timestamp),
     /// Same as Immediately, but will also advance to at least the specified
     /// expression.
-    AtLeastTimestamp(MirScalarExpr),
+    AtLeastTimestamp(Timestamp),
 }
 
 impl QueryWhen {
     /// Returns a timestamp to which the candidate must be advanced.
-    pub fn advance_to_timestamp(&self) -> Option<MirScalarExpr> {
+    pub fn advance_to_timestamp(&self) -> Option<Timestamp> {
         match self {
             QueryWhen::AtTimestamp(t) | QueryWhen::AtLeastTimestamp(t) => Some(t.clone()),
             QueryWhen::Immediately | QueryWhen::FreshestTableWrite => None,

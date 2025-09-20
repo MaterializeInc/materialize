@@ -287,7 +287,7 @@ pub enum PlanError {
     Replan(String),
     NetworkPolicyLockoutError,
     NetworkPolicyInUse,
-    // Expected a constant expression that evaluates without an error to a non-null value.
+    /// Expected a constant expression that evaluates without an error to a non-null value.
     ConstantExpressionSimplificationFailed(String),
     InvalidOffset(String),
     /// The named cursor does not exist.
@@ -295,6 +295,8 @@ pub enum PlanError {
     CopyFromTargetTableDropped {
         target_name: String,
     },
+    /// AS OF or UP TO should be an expression that is castable and simplifiable to a non-null mz_timestamp value.
+    InvalidAsOfUpTo,
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -825,6 +827,7 @@ impl fmt::Display for PlanError {
                 write!(f, "cursor {} does not exist", name.quoted())
             }
             Self::CopyFromTargetTableDropped { target_name: name } => write!(f, "COPY FROM's target table {} was dropped", name.quoted()),
+            Self::InvalidAsOfUpTo => write!(f, "AS OF or UP TO should be castable to a (non-null) mz_timestamp value")
         }
     }
 }
