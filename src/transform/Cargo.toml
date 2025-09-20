@@ -27,7 +27,7 @@ tracing = "0.1.37"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
-anyhow = "1.0.98"
+anyhow = "1.0.99"
 datadriven = "0.8.0"
 mz-expr-parser = { path = "../expr-parser" }
 mz-expr-test-util = { path = "../expr-test-util" }
