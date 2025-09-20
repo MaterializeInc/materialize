@@ -176,45 +176,6 @@ impl<T> Client<T>
 where
     T: ComputeControllerTimestamp,
 {
-    //////// todo: move these new fns down in the file
-    pub async fn acquire_read_holds_and_collection_write_frontiers(&self, ids: Vec<GlobalId>) -> Result<Vec<(GlobalId, ReadHold<T>, Antichain<T>)>, CollectionMissing> {
-        self.call_sync(move |i| i.acquire_read_holds_and_collection_write_frontiers(ids)).await
-    }
-
-    /// Issue a peek by calling into the instance task synchronously, letting the instance acquire
-    /// read holds if none are provided. This ensures the read holds are established before
-    /// returning to the caller.
-    pub async fn peek_call_sync(
-        &self,
-        peek_target: PeekTarget,
-        literal_constraints: Option<Vec<Row>>,
-        uuid: Uuid,
-        timestamp: T,
-        result_desc: RelationDesc,
-        finishing: RowSetFinishing,
-        map_filter_project: mz_expr::SafeMfpPlan,
-        read_hold: Option<ReadHold<T>>,
-        target_replica: Option<ReplicaId>,
-        peek_response_tx: oneshot::Sender<PeekResponse>,
-    ) {
-        self.call_sync(move |i| {
-            i.peek(
-                peek_target,
-                literal_constraints,
-                uuid,
-                timestamp,
-                result_desc,
-                finishing,
-                map_filter_project,
-                read_hold,
-                target_replica,
-                peek_response_tx,
-            )
-            .expect("validated by instance");
-        })
-        .await
-    }
-
     pub fn spawn(
         id: ComputeInstanceId,
         build_info: &'static BuildInfo,
@@ -264,6 +225,46 @@ where
             command_tx,
             read_hold_tx,
         }
+    }
+
+    /// Acquires a `ReadHold` and collection write frontier for each of the identified compute
+    /// collections.
+    pub async fn acquire_read_holds_and_collection_write_frontiers(&self, ids: Vec<GlobalId>) -> Result<Vec<(GlobalId, ReadHold<T>, Antichain<T>)>, CollectionMissing> {
+        self.call_sync(move |i| i.acquire_read_holds_and_collection_write_frontiers(ids)).await
+    }
+
+    /// Issue a peek by calling into the instance task synchronously, letting the instance acquire
+    /// read holds if none are provided. This ensures the read holds are established before
+    /// returning to the caller.
+    pub async fn peek_call_sync(
+        &self,
+        peek_target: PeekTarget,
+        literal_constraints: Option<Vec<Row>>,
+        uuid: Uuid,
+        timestamp: T,
+        result_desc: RelationDesc,
+        finishing: RowSetFinishing,
+        map_filter_project: mz_expr::SafeMfpPlan,
+        read_hold: Option<ReadHold<T>>,
+        target_replica: Option<ReplicaId>,
+        peek_response_tx: oneshot::Sender<PeekResponse>,
+    ) {
+        self.call_sync(move |i| {
+            i.peek(
+                peek_target,
+                literal_constraints,
+                uuid,
+                timestamp,
+                result_desc,
+                finishing,
+                map_filter_project,
+                read_hold,
+                target_replica,
+                peek_response_tx,
+            )
+                .expect("validated by instance");
+        })
+            .await
     }
 }
 
@@ -1048,7 +1049,9 @@ where
     T: ComputeControllerTimestamp,
 {
     /////////// todo: IntoIter instead of Vec
-    pub fn acquire_read_holds_and_collection_write_frontiers(&self, ids: Vec<GlobalId>) -> Result<Vec<(GlobalId, ReadHold<T>, Antichain<T>)>, CollectionMissing> {
+    /// Acquires a `ReadHold` and collection write frontier for each of the identified compute
+    /// collections.
+    fn acquire_read_holds_and_collection_write_frontiers(&self, ids: Vec<GlobalId>) -> Result<Vec<(GlobalId, ReadHold<T>, Antichain<T>)>, CollectionMissing> {
         let mut result = Vec::new();
         for id in ids.into_iter() {
             result.push((id, self.acquire_read_hold(id)?, self.collection_write_frontier(id)?));
@@ -1060,7 +1063,7 @@ where
     ///
     /// This mirrors the logic used by the controller-side `InstanceState::acquire_read_hold`,
     /// but executes on the instance task itself.
-    pub fn acquire_read_hold(&self, id: GlobalId) -> Result<ReadHold<T>, CollectionMissing> {
+    fn acquire_read_hold(&self, id: GlobalId) -> Result<ReadHold<T>, CollectionMissing> {
         ///////// todo: place this fn further down in the file
         ///////// todo: refactor to take a collection of ids, so that we need just one call_sync in PeekClient::acquire_read_hold
         // We acquire read holds at the earliest possible time rather than returning a copy
@@ -1076,6 +1079,7 @@ where
         let hold = ReadHold::new(id, since, Arc::clone(&self.read_hold_tx));
         Ok(hold)
     }
+
     fn new(
         build_info: &'static BuildInfo,
         storage: StorageCollections<T>,
