@@ -253,11 +253,11 @@ impl Coordinator {
         role_name: String,
         password: Option<Password>,
     ) {
-        let Some(password) = password else {
-            // The user did not provide a password.
-            let _ = tx.send(Err(AdapterError::AuthenticationError));
-            return;
-        };
+        // let Some(password) = password else {
+        //     // The user did not provide a password.
+        //     let _ = tx.send(Err(AdapterError::AuthenticationError));
+        //     return;
+        // };
 
         if let Some(role) = self.catalog().try_get_role_by_name(role_name.as_str()) {
             if !role.attributes.login.unwrap_or(false) {
@@ -267,14 +267,21 @@ impl Coordinator {
             }
             if let Some(auth) = self.catalog().try_get_role_auth_by_id(&role.id) {
                 if let Some(hash) = &auth.password_hash {
-                    let _ = match mz_auth::hash::scram256_verify(&password, hash) {
-                        Ok(_) => tx.send(Ok(AuthResponse {
-                            role_id: role.id,
-                            superuser: role.attributes.superuser.unwrap_or(false),
-                        })),
-                        Err(_) => tx.send(Err(AdapterError::AuthenticationError)),
-                    };
+                    let _ = tx.send(Ok(AuthResponse {
+                        role_id: role.id,
+                        superuser: role.attributes.superuser.unwrap_or(false),
+                        password_hash: hash.clone(),
+                    }));
                     return;
+                    // let _ = match mz_auth::hash::scram256_verify(&password, hash) {
+                    //     Ok(_) => tx.send(Ok(AuthResponse {
+                    //         role_id: role.id,
+                    //         superuser: role.attributes.superuser.unwrap_or(false),
+                    //         password_hash: hash,
+                    //     })),
+                    //     Err(_) => tx.send(Err(AdapterError::AuthenticationError)),
+                    // };
+                    // return;
                 }
             }
             // Authentication failed due to incorrect password or missing password hash.
