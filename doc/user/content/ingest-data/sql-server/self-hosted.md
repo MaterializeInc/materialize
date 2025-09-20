@@ -241,8 +241,7 @@ scenarios, we recommend separating your workloads into multiple clusters for
 {{< note >}}
 For a new SQL Server source, if none of the replicating tables
 are receiving write queries, snapshotting may take up to an additional 5 minutes
-to complete. For details, see [Snapshot latency for inactive
-databases](#considerations).
+to complete. For details, see [snapshot latency for inactive databases](#snapshot-latency-for-inactive-databases)
 {{</ note >}}
 
 Now that you've configured your database network, you can connect Materialize to
