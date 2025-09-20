@@ -178,8 +178,8 @@ impl SessionClient {
         // # From sequence_peek
 
         if session.vars().emit_plan_insights_notice() {
-            /////////// todo: later
-            println!("Bailing out from try_frontend_peek_inner, because emit_plan_insights_notice");
+            // TODO: We'll need to do this when we want the frontend peek sequencing to take over
+            // from the old sequencing code.
             return Ok(None);
         }
 
@@ -272,7 +272,8 @@ impl SessionClient {
 
         // # From peek_real_time_recency
 
-        /////// todo: do we want to handle the real-time recency case?
+        // TODO: Real-time recency is slow anyhow, so we don't handle it in frontend peek sequencing
+        // for now.
         let vars = session.vars();
         if vars.real_time_recency()
             && vars.transaction_isolation() == &IsolationLevel::StrictSerializable
@@ -362,7 +363,7 @@ impl SessionClient {
         let now = catalog.config().now.clone();
         let select_plan = select_plan.clone(); /////// todo: can we avoid cloning?
 
-        ///////// todo: if explain_ctx.needs_plan_insights() ...
+        // TODO: if explain_ctx.needs_plan_insights() ...
 
         let span = Span::current();
 
@@ -382,7 +383,7 @@ impl SessionClient {
 
                     let optimization_finished_at = now();
 
-                    ///// todo: plan_insights stuff
+                    // TODO: plan_insights stuff
 
                     Ok::<_, AdapterError>((global_lir_plan, optimization_finished_at))
                 })
@@ -402,7 +403,7 @@ impl SessionClient {
 
         ////// todo: emit_optimizer_notices
 
-        ////// todo: plan_insights stuff
+        // TODO: plan_insights stuff
 
         let fast_path_plan = match peek_plan {
             PeekPlan::SlowPath(_) => {
