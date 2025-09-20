@@ -1442,6 +1442,10 @@ where
         &self,
         ids: Vec<GlobalId>,
     ) -> Result<Vec<CollectionFrontiers<Self::Timestamp>>, StorageError<Self::Timestamp>> {
+        if ids.is_empty() {
+            return Ok(vec![]);
+        }
+
         let collections = self.collections.lock().expect("lock poisoned");
 
         let res = ids
@@ -2499,6 +2503,10 @@ where
         &self,
         desired_holds: Vec<GlobalId>,
     ) -> Result<Vec<ReadHold<Self::Timestamp>>, ReadHoldError> {
+        if desired_holds.is_empty() {
+            return Ok(vec![]);
+        }
+
         let mut collections = self.collections.lock().expect("lock poisoned");
 
         let mut advanced_holds = Vec::new();
