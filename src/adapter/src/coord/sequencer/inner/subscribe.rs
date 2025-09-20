@@ -26,7 +26,7 @@ use crate::error::AdapterError;
 use crate::optimize::Optimize;
 use crate::session::{Session, TransactionOps};
 use crate::{AdapterNotice, ExecuteContext, TimelineContext, optimize};
-use crate::coord::sequencer::check_log_reads;
+use crate::coord::sequencer::{check_log_reads, emit_optimizer_notices};
 
 impl Staged for SubscribeStage {
     type Ctx = ExecuteContext;
@@ -357,7 +357,7 @@ impl Coordinator {
         let (df_desc, df_meta) = global_lir_plan.unapply();
 
         // Emit notices.
-        self.emit_optimizer_notices(ctx.session(), &df_meta.optimizer_notices);
+        emit_optimizer_notices(&*self.catalog, ctx.session(), &df_meta.optimizer_notices);
 
         // Add metadata for the new SUBSCRIBE.
         let write_notify_fut = self

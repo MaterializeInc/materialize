@@ -37,6 +37,7 @@ use tracing::{Instrument, Level, Span, event};
 use mz_catalog::memory::objects::Cluster;
 use mz_controller_types::ReplicaId;
 use mz_sql::session::vars::SessionVars;
+use mz_transform::notice::{OptimizerNoticeApi, OptimizerNoticeKind, RawOptimizerNotice};
 use crate::ExecuteContext;
 use crate::catalog::Catalog;
 use crate::command::{Command, ExecuteResponse, Response};
@@ -954,4 +955,43 @@ where
     Ok(vars
         .emit_introspection_query_notice()
         .then_some(AdapterNotice::PerReplicaLogRead { log_names }))
+}
+
+/// Forward notices that we got from the optimizer.
+pub(crate) fn emit_optimizer_notices(catalog: &Catalog, session: &Session, notices: &Vec<RawOptimizerNotice>) {
+    // `for_session` below is expensive, so return early if there's nothing to do.
+    if notices.is_empty() {
+        return;
+    }
+    let humanizer = catalog.for_session(session);
+    let system_vars = catalog.system_config();
+    for notice in notices {
+        let kind = OptimizerNoticeKind::from(notice);
+        let notice_enabled = match kind {
+            OptimizerNoticeKind::IndexAlreadyExists => {
+                system_vars.enable_notices_for_index_already_exists()
+            }
+            OptimizerNoticeKind::IndexTooWideForLiteralConstraints => {
+                system_vars.enable_notices_for_index_too_wide_for_literal_constraints()
+            }
+            OptimizerNoticeKind::IndexKeyEmpty => {
+                system_vars.enable_notices_for_index_empty_key()
+            }
+        };
+        if notice_enabled {
+            // We don't need to redact the notice parts because
+            // `emit_optimizer_notices` is only called by the `sequence_~`
+            // method for the statement that produces that notice.
+            session.add_notice(AdapterNotice::OptimizerNotice {
+                notice: notice.message(&humanizer, false).to_string(),
+                hint: notice.hint(&humanizer, false).to_string(),
+            });
+        }
+        ////// todo: pass in optimization_notices and re-enable this when we have metrics in
+        // the frontend peek sequencing.
+        // self.metrics
+        //     .optimization_notices
+        //     .with_label_values(&[kind.metric_label()])
+        //     .inc_by(1);
+    }
 }

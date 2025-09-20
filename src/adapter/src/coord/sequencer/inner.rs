@@ -142,6 +142,7 @@ macro_rules! return_if_err {
 }
 
 pub(super) use return_if_err;
+use crate::coord::sequencer::emit_optimizer_notices;
 
 struct DropOps {
     ops: Vec<catalog::Op>,
@@ -5252,43 +5253,6 @@ impl Coordinator {
 }
 
 impl Coordinator {
-    /// Forward notices that we got from the optimizer.
-    fn emit_optimizer_notices(&self, session: &Session, notices: &Vec<RawOptimizerNotice>) {
-        // `for_session` below is expensive, so return early if there's nothing to do.
-        if notices.is_empty() {
-            return;
-        }
-        let humanizer = self.catalog.for_session(session);
-        let system_vars = self.catalog.system_config();
-        for notice in notices {
-            let kind = OptimizerNoticeKind::from(notice);
-            let notice_enabled = match kind {
-                OptimizerNoticeKind::IndexAlreadyExists => {
-                    system_vars.enable_notices_for_index_already_exists()
-                }
-                OptimizerNoticeKind::IndexTooWideForLiteralConstraints => {
-                    system_vars.enable_notices_for_index_too_wide_for_literal_constraints()
-                }
-                OptimizerNoticeKind::IndexKeyEmpty => {
-                    system_vars.enable_notices_for_index_empty_key()
-                }
-            };
-            if notice_enabled {
-                // We don't need to redact the notice parts because
-                // `emit_optimizer_notices` is only called by the `sequence_~`
-                // method for the statement that produces that notice.
-                session.add_notice(AdapterNotice::OptimizerNotice {
-                    notice: notice.message(&humanizer, false).to_string(),
-                    hint: notice.hint(&humanizer, false).to_string(),
-                });
-            }
-            self.metrics
-                .optimization_notices
-                .with_label_values(&[kind.metric_label()])
-                .inc_by(1);
-        }
-    }
-
     /// Process the metainfo from a newly created non-transient dataflow.
     async fn process_dataflow_metainfo(
         &mut self,
@@ -5299,7 +5263,7 @@ impl Coordinator {
     ) -> Option<BuiltinTableAppendNotify> {
         // Emit raw notices to the user.
         if let Some(ctx) = ctx {
-            self.emit_optimizer_notices(ctx.session(), &df_meta.optimizer_notices);
+            emit_optimizer_notices(&*self.catalog, ctx.session(), &df_meta.optimizer_notices);
         }
 
         // Create a metainfo with rendered notices.

@@ -50,7 +50,7 @@ use crate::coord::{
     PeekStageLinearizeTimestamp, PeekStageOptimize, PeekStageRealTimeRecency,
     PeekStageTimestampReadHold, PlanValidity, StageResult, Staged, TargetCluster, WatchSetResponse,
 };
-use crate::coord::sequencer::check_log_reads;
+use crate::coord::sequencer::{check_log_reads, emit_optimizer_notices};
 use crate::error::AdapterError;
 use crate::explain::insights::PlanInsightsContext;
 use crate::explain::optimizer_trace::OptimizerTrace;
@@ -839,7 +839,7 @@ impl Coordinator {
         let (peek_plan, df_meta, typ) = global_lir_plan.unapply();
         let source_arity = typ.arity();
 
-        self.emit_optimizer_notices(&*session, &df_meta.optimizer_notices);
+        emit_optimizer_notices(&*self.catalog, &*session, &df_meta.optimizer_notices);
 
         if let Some(trace) = plan_insights_optimizer_trace {
             let target_cluster = self.catalog().get_cluster(cluster_id);
@@ -1015,7 +1015,7 @@ impl Coordinator {
 
         let (df_desc, df_meta) = global_lir_plan.unapply();
 
-        self.emit_optimizer_notices(ctx.session(), &df_meta.optimizer_notices);
+        emit_optimizer_notices(&*self.catalog, ctx.session(), &df_meta.optimizer_notices);
 
         // Callback for the active copy to.
         let (tx, rx) = oneshot::channel();

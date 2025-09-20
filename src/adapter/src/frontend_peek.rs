@@ -401,7 +401,7 @@ impl SessionClient {
         let (peek_plan, df_meta, typ) = global_lir_plan.unapply();
         let source_arity = typ.arity();
 
-        ////// todo: emit_optimizer_notices
+        coord::sequencer::emit_optimizer_notices(&*catalog, session, &df_meta.optimizer_notices);
 
         // TODO: plan_insights stuff
 
