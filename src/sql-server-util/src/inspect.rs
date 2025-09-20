@@ -23,7 +23,9 @@ use std::time::Duration;
 use tiberius::numeric::Numeric;
 
 use crate::cdc::{Lsn, RowFilterOption};
-use crate::desc::{SqlServerCaptureInstanceRaw, SqlServerColumnRaw, SqlServerTableRaw};
+use crate::desc::{
+    SqlServerCaptureInstanceRaw, SqlServerColumnRaw, SqlServerQualifiedTableName, SqlServerTableRaw,
+};
 use crate::{Client, SqlServerError};
 
 /// Returns the minimum log sequence number for the specified `capture_instance`.
@@ -441,6 +443,48 @@ pub async fn get_tables_for_capture_instance<'a>(
     Ok(tables)
 }
 
+/// Retrieves column metdata from the CDC table maintained by the provided capture instance. The
+/// resulting column information collection is similar to the information collected for the
+/// upstream table, with the exclusion of nullability and primary key constraints, which contain
+/// static values for CDC columns. CDC table schema is automatically generated and does not attempt
+/// to enforce the same constraints on the data as the upstream table.
+pub async fn get_cdc_table_columns(
+    client: &mut Client,
+    capture_instance: &str,
+) -> Result<BTreeMap<Arc<str>, SqlServerColumnRaw>, SqlServerError> {
+    static CDC_COLUMNS_QUERY: &str = "SELECT \
+        c.name AS col_name, \
+        t.name AS col_type, \
+        c.max_length AS col_max_length, \
+        c.precision AS col_precision, \
+        c.scale AS col_scale \
+    FROM \
+        sys.columns AS c \
+    JOIN sys.types AS t ON c.system_type_id = t.system_type_id AND c.user_type_id = t.user_type_id \
+    WHERE \
+        c.object_id = OBJECT_ID(@P1) AND c.name NOT LIKE '__$%' \
+    ORDER BY c.column_id;";
+    let cdc_table_name = format!("cdc.{capture_instance}_CT");
+    let result = client.query(CDC_COLUMNS_QUERY, &[&cdc_table_name]).await?;
+    let mut columns = BTreeMap::new();
+    for row in result.iter() {
+        let column_name: Arc<str> = get_value::<&str>(row, "col_name")?.into();
+        // Reusing this struct even though some of the fields aren't needed because it simplifies
+        // comparison with the upstream table metadata
+        let column = SqlServerColumnRaw {
+            name: Arc::clone(&column_name),
+            data_type: get_value::<&str>(row, "col_type")?.into(),
+            is_nullable: true,
+            primary_key_constraint: None,
+            max_length: get_value(row, "col_max_length")?,
+            precision: get_value(row, "col_precision")?,
+            scale: get_value(row, "col_scale")?,
+        };
+        columns.insert(column_name, column);
+    }
+    Ok(columns)
+}
+
 /// Ensure change data capture (CDC) is enabled for the database the provided
 /// `client` is currently connected to.
 ///
@@ -478,6 +522,111 @@ pub async fn get_latest_restore_history_id(
     }
 }
 
+/// A DDL event collected from the `cdc.ddl_history` table.
+#[derive(Debug)]
+pub struct DDLEvent {
+    pub lsn: Lsn,
+    pub ddl_command: Arc<str>,
+}
+
+impl DDLEvent {
+    /// Returns true if the DDL event is a compatible change, or false if it is not.
+    /// This performs a naive parsing of the DDL command looking for modification of columns
+    ///  1. ALTER TABLE .. ALTER COLUMN
+    ///  2. ALTER TABLE .. DROP COLUMN
+    ///
+    /// See <https://learn.microsoft.com/en-us/sql/t-sql/statements/alter-table-transact-sql?view=sql-server-ver17>
+    pub fn is_compatible(&self) -> bool {
+        let mut words = self.ddl_command.split_ascii_whitespace();
+        match (
+            words.next().map(str::to_ascii_lowercase).as_deref(),
+            words.next().map(str::to_ascii_lowercase).as_deref(),
+        ) {
+            (Some("alter"), Some("table")) => {
+                let mut peekable = words.peekable();
+                let mut compatible = true;
+                while compatible && let Some(token) = peekable.next() {
+                    compatible = match token.to_ascii_lowercase().as_str() {
+                        "alter" | "drop" => peekable
+                            .peek()
+                            .is_some_and(|next_tok| !next_tok.eq_ignore_ascii_case("column")),
+                        _ => true,
+                    }
+                }
+                compatible
+            }
+            _ => true,
+        }
+    }
+}
+
+/// Returns DDL changes made to the source table for the given capture instance.  This follows the
+/// same convention as `cdc.fn_cdc_get_all_changes_<capture_instance>`, in that the range is
+/// inclusive, i.e. `[from_lsn, to_lsn]`. The events are returned in ascending order of
+/// LSN.
+pub async fn get_ddl_history(
+    client: &mut Client,
+    capture_instance: &str,
+    from_lsn: &Lsn,
+    to_lsn: &Lsn,
+) -> Result<BTreeMap<SqlServerQualifiedTableName, Vec<DDLEvent>>, SqlServerError> {
+    // We query the ddl_history table instead of using the stored procedure as there doesn't
+    // appear to be a way to apply filters or projections against output of the stored procedure
+    // without an intermediate table.
+    static DDL_HISTORY_QUERY: &str = "SELECT \
+                s.name AS schema_name, \
+                t.name AS table_name, \
+                dh.ddl_lsn, \
+                dh.ddl_command
+            FROM \
+                cdc.change_tables ct \
+            JOIN cdc.ddl_history dh ON dh.object_id = ct.object_id \
+            JOIN sys.tables t ON t.object_id = dh.source_object_id \
+            JOIN sys.schemas s ON s.schema_id = t.schema_id \
+            WHERE \
+                ct.capture_instance = @P1 \
+                AND dh.ddl_lsn >= @P2 \
+                AND dh.ddl_lsn <= @P3 \
+            ORDER BY ddl_lsn;";
+
+    let result = client
+        .query(
+            DDL_HISTORY_QUERY,
+            &[
+                &capture_instance,
+                &from_lsn.as_bytes().as_slice(),
+                &to_lsn.as_bytes().as_slice(),
+            ],
+        )
+        .await?;
+
+    // SQL server doesn't support array types, and using string_agg to collect LSN
+    // would require more parsing, so we opt for a BTreeMap to accumulate the results.
+    let mut collector: BTreeMap<_, Vec<_>> = BTreeMap::new();
+    for row in result.iter() {
+        let schema_name: Arc<str> = get_value::<&str>(row, "schema_name")?.into();
+        let table_name: Arc<str> = get_value::<&str>(row, "table_name")?.into();
+        let lsn: &[u8] = get_value::<&[u8]>(row, "ddl_lsn")?;
+        let ddl_command: Arc<str> = get_value::<&str>(row, "ddl_command")?.into();
+
+        let qualified_table_name = SqlServerQualifiedTableName {
+            schema_name,
+            table_name,
+        };
+        let lsn = Lsn::try_from(lsn).map_err(|lsn_err| SqlServerError::InvalidData {
+            column_name: "ddl_lsn".to_string(),
+            error: lsn_err,
+        })?;
+
+        collector
+            .entry(qualified_table_name)
+            .or_default()
+            .push(DDLEvent { lsn, ddl_command });
+    }
+
+    Ok(collector)
+}
+
 /// Ensure the `SNAPSHOT` transaction isolation level is enabled for the
 /// database the provided `client` is currently connected to.
 ///
@@ -501,17 +650,18 @@ pub async fn get_tables(client: &mut Client) -> Result<Vec<SqlServerTableRaw>, S
     Ok(tables)
 }
 
+// Helper function to retrieve value from a row.
+fn get_value<'a, T: tiberius::FromSql<'a>>(
+    row: &'a tiberius::Row,
+    name: &'static str,
+) -> Result<T, SqlServerError> {
+    row.try_get(name)?
+        .ok_or(SqlServerError::MissingColumn(name))
+}
+
 fn deserialize_table_columns_to_raw_tables(
     rows: &[tiberius::Row],
 ) -> Result<Vec<SqlServerTableRaw>, SqlServerError> {
-    fn get_value<'a, T: tiberius::FromSql<'a>>(
-        row: &'a tiberius::Row,
-        name: &'static str,
-    ) -> Result<T, SqlServerError> {
-        row.try_get(name)?
-            .ok_or(SqlServerError::MissingColumn(name))
-    }
-
     // Group our columns by (schema, name).
     let mut tables = BTreeMap::default();
     for row in rows {

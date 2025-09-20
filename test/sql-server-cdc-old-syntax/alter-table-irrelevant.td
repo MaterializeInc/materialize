@@ -65,8 +65,19 @@ INSERT INTO irrelevant_table VALUES ('ab');
 1
 2
 
-# Recreate the source and views to verify the irrelevant_table is part of the publication
+# Recreate the source and views to verify the irrelevant_table is part of the publication,
+# which will fail due to extra columns in the upstream for irrelevant_table.
 > DROP SOURCE mz_source CASCADE;
+! CREATE SOURCE mz_source
+  FROM SQL SERVER CONNECTION sql_server_test_connection
+  FOR ALL TABLES;
+contains:missing column
+
+# recreate the capture instance to contain the f3 column
+$ sql-server-execute name=sql-server
+EXEC sys.sp_cdc_disable_table @source_schema = 'dbo', @source_name = 'irrelevant_table', @capture_instance = 'all';
+EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'irrelevant_table', @role_name = 'SA', @supports_net_changes = 0;
+
 > CREATE SOURCE mz_source
   FROM SQL SERVER CONNECTION sql_server_test_connection
   FOR ALL TABLES;
@@ -90,16 +101,18 @@ INSERT INTO irrelevant_table VALUES ('bc', 'de');
 1
 2
 
-# TODO: Fails with: Decode error: column 'f2' was invalid when getting as type 'varchar' (original text: Row { columns: [Column { name: "__$start_lsn", column_type: BigBinary }, Column { name: "__$seqval", column_type: BigBinary }, Column { name: "__$operation", column_type: Int4 }, Column { name: "__$update_mask", column_type: BigVarBin }, Column { name: "f1", column_type: Int4 }], data: TokenRow { data: [Binary(Some([0, 0, 0, 44, 0, 0, 5, 232, 0, 3])), Binary(Some([0, 0, 0, 44, 0, 0, 5, 232, 0, 2])), I32(Some(2)), Binary(Some([1])), I32(None)] }, result_index: 0 }
-# > SELECT * FROM irrelevant_table
-# <null>
-# ab
-# bc
+> SELECT * FROM irrelevant_table
+<null>
+ab
+bc
 
 # Alter in an incompatible way and ensure replication error does not occur
 $ sql-server-execute name=sql-server
 ALTER TABLE irrelevant_table DROP COLUMN f2;
 INSERT INTO irrelevant_table VALUES ('gh');
+
+! SELECT * FROM irrelevant_table
+contains:Incompatible schema change
 
 > SELECT * FROM base_table;
 1

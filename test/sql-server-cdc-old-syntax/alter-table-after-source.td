@@ -126,10 +126,8 @@ ALTER TABLE remove_column DROP COLUMN f2;
 
 INSERT INTO remove_column VALUES (3);
 
-# TODO: This should fail
-#> SELECT * from remove_column;
-#2
-#3
+! SELECT * from remove_column;
+contains:Incompatible schema change
 
 
 #
@@ -142,11 +140,8 @@ $ sql-server-execute name=sql-server
 ALTER TABLE alter_column ALTER COLUMN f2 CHAR(2);
 INSERT INTO alter_column VALUES (3, 'cd');
 
-# TODO: This should fail
-> SELECT * from alter_column;
-2 ab
-3 cd
-
+! SELECT * from alter_column;
+contains:Incompatible schema change
 
 #
 # Drop NOT NULL
@@ -157,9 +152,8 @@ INSERT INTO alter_column VALUES (3, 'cd');
 $ sql-server-execute name=sql-server
 ALTER TABLE alter_drop_nullability ALTER COLUMN f1 INTEGER NULL;
 
-# TODO: This should fail
-# ! SELECT * FROM alter_drop_nullability WHERE f1 IS NOT NULL;
-# contains:altered
+! SELECT * FROM alter_drop_nullability WHERE f1 IS NOT NULL;
+contains:Incompatible schema change
 
 # We have guaranteed that this column is not null so the optimizer eagerly
 # returns the empty set.
@@ -176,10 +170,8 @@ $ sql-server-execute name=sql-server
 ALTER TABLE alter_add_nullability ALTER COLUMN f1 INTEGER NOT NULL;
 INSERT INTO alter_add_nullability VALUES (1);
 
-> SELECT * FROM alter_add_nullability;
-1
-1
-
+! SELECT * FROM alter_add_nullability;
+contains:Incompatible schema change
 
 #
 # Add PK
@@ -234,9 +226,9 @@ ab
 $ sql-server-execute name=sql-server
 ALTER TABLE alter_extend_column ALTER COLUMN f1 VARCHAR(20);
 
-# TODO: This should fail
-# ! SELECT * FROM alter_extend_column;
-# contains:altered
+
+! SELECT * FROM alter_extend_column;
+contains:Incompatible schema change
 
 
 #
@@ -247,9 +239,8 @@ ALTER TABLE alter_extend_column ALTER COLUMN f1 VARCHAR(20);
 $ sql-server-execute name=sql-server
 ALTER TABLE alter_decimal ALTER COLUMN f1 DECIMAL(6,1);
 
-# TODO: This should fail
-# ! SELECT * FROM alter_decimal;
-# contains:altered
+! SELECT * FROM alter_decimal;
+contains:Incompatible schema change
 
 
 #
@@ -276,9 +267,8 @@ $ sql-server-execute name=sql-server
 ALTER TABLE alter_table_change_attnum DROP COLUMN f2;
 ALTER TABLE alter_table_change_attnum ADD f2 VARCHAR(10);
 
-# TODO: Should fail
-# ! SELECT * FROM alter_table_change_attnum;
-# contains:altered
+! SELECT * FROM alter_table_change_attnum;
+contains:Incompatible schema change
 
 > SELECT * from alter_table_supported;
 1 1
@@ -295,18 +285,14 @@ $ sql-server-execute name=sql-server
 ALTER TABLE alter_table_supported DROP COLUMN f3;
 INSERT INTO alter_table_supported (f1, f2) VALUES (3, 3);
 
-> SELECT * from alter_table_supported;
-1 1
-2 2
-3 3
+! SELECT * from alter_table_supported;
+contains:Incompatible schema change
 
 $ sql-server-execute name=sql-server
 ALTER TABLE alter_table_supported DROP COLUMN f2;
 
-# TODO: This should fail
-# ! SELECT * from alter_table_supported;
-# contains:altered
-
+! SELECT * from alter_table_supported;
+contains:Incompatible schema change
 
 #
 # Drop table
@@ -317,7 +303,13 @@ ALTER TABLE alter_table_supported DROP COLUMN f2;
 $ sql-server-execute name=sql-server
 DROP TABLE drop_table;
 
-# Table is dropped
-# TODO: This should fail
-# ! SELECT * FROM drop_table;
-# regex:(table was dropped|incompatible schema change)
+# Table is dropped, but detected as a transient error with a poor error message, we should improve
+# this test once database-issues#9703 is fixed.
+> SELECT
+    status,
+    error like '%Invalid object name%' as invalid_object_error
+  FROM mz_internal.mz_source_statuses
+  WHERE name = 'drop_table';
+stalled true
+
+> DROP SOURCE mz_source CASCADE;
