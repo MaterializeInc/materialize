@@ -1018,6 +1018,7 @@ impl CatalogState {
                         privileges,
                     },
                 };
+                tracing::info!(?entry, "insert temp item");
                 self.insert_entry(entry);
             }
             StateDiff::Retraction => {
