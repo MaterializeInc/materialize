@@ -562,7 +562,6 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "persist_enable_incremental_compaction",
     "storage_statistics_retention_duration",
     "enable_paused_cluster_readhold_downgrade",
-    "force_swap_for_cc_sizes",
 ]
 
 
