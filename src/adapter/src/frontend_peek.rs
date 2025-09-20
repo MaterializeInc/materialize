@@ -19,6 +19,7 @@ use crate::optimize::Optimize;
 use crate::optimize::dataflows::{ComputeInstanceSnapshot, DataflowBuilder};
 use crate::session::{Session, TransactionOps, TransactionStatus};
 use crate::{AdapterError, CollectionIdBundle, ExecuteResponse, ReadHolds, SessionClient, TimelineContext, TimestampContext, TimestampProvider, optimize, AdapterNotice};
+
 use mz_adapter_types::dyncfgs::{
     CONSTRAINT_BASED_TIMESTAMP_SELECTION,
 };
@@ -26,21 +27,17 @@ use mz_adapter_types::timestamp_selection::ConstraintBasedTimestampSelection;
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::CollectionPlan;
 use mz_repr::optimize::OverrideFrom;
-use mz_repr::{GlobalId, Timestamp};
+use mz_repr::Timestamp;
 use mz_sql::catalog::CatalogCluster;
 use mz_sql::plan::{Plan, QueryWhen};
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::vars::IsolationLevel;
 use mz_transform::EmptyStatisticsOracle;
-use std::collections::BTreeMap;
 use std::sync::Arc;
 use opentelemetry::trace::TraceContextExt;
-use timely::progress::Antichain;
 use tracing::Span;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
-use mz_compute_client::controller::error::CollectionMissing;
-use mz_ore::collections::CollectionExt;
 ////// todo: separate crate imports
 
 impl SessionClient {

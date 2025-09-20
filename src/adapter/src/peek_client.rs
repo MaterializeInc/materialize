@@ -21,7 +21,7 @@ use mz_compute_client::protocol::response::PeekResponse;
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::row::RowCollection;
 use mz_ore::cast::CastFrom;
-use mz_repr::{GlobalId, Timestamp};
+use mz_repr::Timestamp;
 use mz_repr::global_id::TransientIdGen;
 use mz_repr::{RelationDesc, Row};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
@@ -30,7 +30,7 @@ use mz_timestamp_oracle::TimestampOracle;
 use timely::progress::Antichain;
 use tokio::sync::oneshot;
 use uuid::Uuid;
-use mz_storage_types::read_holds::ReadHold;
+
 use crate::{CollectionIdBundle, ReadHolds};
 use crate::coord::peek::FastPathPlan;
 use crate::optimize::dataflows::ComputeInstanceSnapshot;
