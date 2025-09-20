@@ -3893,6 +3893,13 @@ fn kafka_sink_builder(
             )?;
             let expr = expr.lower_uncorrelated()?;
 
+            let function_type = expr.typ(&value_desc.typ().column_types);
+
+            if function_type.nullable {
+                scx.catalog
+                    .add_notice(PlanNotice::KafkaSinkNullablePartitionByExpr);
+            }
+
             Some(expr)
         }
         _ => None,
