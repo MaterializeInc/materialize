@@ -38,6 +38,7 @@ use std::sync::Arc;
 use opentelemetry::trace::TraceContextExt;
 use tracing::Span;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
+use mz_sql_parser::ast::Statement;
 ////// todo: separate crate imports
 
 impl SessionClient {
@@ -100,6 +101,10 @@ impl SessionClient {
                 return Ok(Some(ExecuteResponse::EmptyQuery));
             }
         };
+
+        if !matches!(*stmt, Statement::Select(_)) {
+            return Ok(None);
+        }
 
         ////// todo: metrics .query_total  (but only if we won't bail out somewhere below to the old code)
 
