@@ -223,7 +223,6 @@ pub struct Response<T> {
 }
 
 /// The response to [`Client::startup`](crate::Client::startup).
-/// /////// todo: should this be generic in the timestamp type, like e.g. TimelineState
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub struct StartupResponse {
@@ -235,17 +234,13 @@ pub struct StartupResponse {
     /// Map of (name, VarInput::Flat) tuples of session default variables that should be set.
     pub session_defaults: BTreeMap<String, OwnedVarInput>,
     pub catalog: Arc<Catalog>,
-    ///////// todo: encapsulate the below into PeekClient?
-    /// Handle to storage collections for reading since/frontiers and policies.
     pub storage_collections: Arc<
         dyn mz_storage_client::storage_collections::StorageCollections<
                 Timestamp = mz_repr::Timestamp,
             > + Send
             + Sync,
     >,
-    /////// todo: comment
     pub transient_id_gen: Arc<TransientIdGen>,
-    /////// todo: comment
     pub optimizer_metrics: OptimizerMetrics,
 }
 
