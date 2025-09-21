@@ -230,7 +230,7 @@ Explained Query:
   Union
     Project (#1, #0)
       Map (1)
-        Reduce aggregates=[sum(#0{b})]
+        Reduce aggregates=[sum(#0{b})] monotonic
           Project (#1)
             Filter (#0 = 1)
               ReadStorage materialize.public.data_tbl

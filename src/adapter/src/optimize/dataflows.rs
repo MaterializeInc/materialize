@@ -20,7 +20,7 @@ use chrono::{DateTime, Utc};
 use maplit::{btreemap, btreeset};
 use tracing::warn;
 
-use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, Index, Source, View};
+use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, Index, TableDataSource, View};
 use mz_compute_client::controller::error::InstanceMissing;
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::{DataflowDesc, DataflowDescription, IndexDesc};
@@ -297,8 +297,8 @@ impl<'a> DataflowBuilder<'a> {
     }
 
     /// Determine the given source's monotonicity.
-    fn monotonic_source(&self, source: &Source) -> bool {
-        match &source.data_source {
+    fn monotonic_source(&self, data_source: &DataSourceDesc) -> bool {
+        match data_source {
             DataSourceDesc::Ingestion { .. } => false,
             DataSourceDesc::OldSyntaxIngestion {
                 desc, data_config, ..
@@ -352,7 +352,13 @@ impl<'a> DataflowBuilder<'a> {
 
         let monotonic = self.checked_recur(|_| {
             match self.catalog.get_entry(&id).item() {
-                CatalogItem::Source(source) => Ok(self.monotonic_source(source)),
+                CatalogItem::Source(source) => Ok(self.monotonic_source(&source.data_source)),
+                CatalogItem::Table(table) => match &table.data_source {
+                    TableDataSource::TableWrites { .. } => Ok(false),
+                    TableDataSource::DataSource { desc, timeline: _ } => {
+                        Ok(self.monotonic_source(desc))
+                    }
+                },
                 CatalogItem::View(View { optimized_expr, .. }) => {
                     let view_expr = optimized_expr.as_ref().clone().into_inner();
 
@@ -393,7 +399,6 @@ impl<'a> DataflowBuilder<'a> {
                 CatalogItem::Secret(_)
                 | CatalogItem::Type(_)
                 | CatalogItem::Connection(_)
-                | CatalogItem::Table(_)
                 | CatalogItem::Log(_)
                 | CatalogItem::MaterializedView(_)
                 | CatalogItem::Sink(_)

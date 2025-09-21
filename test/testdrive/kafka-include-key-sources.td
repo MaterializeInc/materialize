@@ -432,7 +432,7 @@ Target cluster: quickstart
 
 ? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT DISTINCT named FROM envelope_none_with_key_tbl;
 Explained Query:
-  Distinct project=[#0]
+  Distinct project=[#0] monotonic
     Project (#0)
       ReadStorage materialize.public.envelope_none_with_key_tbl
 
@@ -444,7 +444,7 @@ Target cluster: quickstart
 
 ? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT DISTINCT named FROM envelope_none_with_key_tbl;
 Explained Query:
-  Distinct project=[#0]
+  Distinct project=[#0] monotonic
     Project (#0)
       ReadIndex on=envelope_none_with_key_tbl envelope_none_with_key_tbl_primary_idx=[*** full scan ***]
 

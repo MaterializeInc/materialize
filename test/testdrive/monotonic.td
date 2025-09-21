@@ -116,7 +116,7 @@ Target cluster: quickstart
 
 ? EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR SELECT * FROM v3
 Explained Query:
-  TopK::MonotonicTopK order_by=[#1 asc nulls_last] limit=3 must_consolidate
+  TopK::MonotonicTopK order_by=[#1 asc nulls_last] limit=3
     Get::PassArrangements materialize.public.non_dbz_data_indexed_tbl
       raw=true
 
@@ -218,68 +218,12 @@ Target cluster: quickstart
   JOIN mz_introspection.mz_dataflow_operator_dataflows mdod ON mash.operator_id = mdod.id
   JOIN mz_introspection.mz_compute_exports USING (dataflow_id)
   WHERE export_id LIKE 'u%'
-"Dataflow: materialize.public.i6_primary_idx" "Arranged TopK input"
-"Dataflow: materialize.public.i6_primary_idx" "Arranged TopK input"
-"Dataflow: materialize.public.i6_primary_idx" "Arranged TopK input"
-"Dataflow: materialize.public.i6_primary_idx" "Arranged TopK input"
-"Dataflow: materialize.public.i6_primary_idx" "Arranged TopK input"
-"Dataflow: materialize.public.i6_primary_idx" "Arranged TopK input"
-"Dataflow: materialize.public.i6_primary_idx" "Arranged TopK input"
-"Dataflow: materialize.public.i6_primary_idx" "Reduced TopK input"
-"Dataflow: materialize.public.i6_primary_idx" "Reduced TopK input"
-"Dataflow: materialize.public.i6_primary_idx" "Reduced TopK input"
-"Dataflow: materialize.public.i6_primary_idx" "Reduced TopK input"
-"Dataflow: materialize.public.i6_primary_idx" "Reduced TopK input"
-"Dataflow: materialize.public.i6_primary_idx" "Reduced TopK input"
-"Dataflow: materialize.public.i6_primary_idx" "Reduced TopK input"
-"Dataflow: materialize.public.monotonic_fused" "Arrange ReduceMinsMaxes"
-"Dataflow: materialize.public.monotonic_fused" "Arranged MinsMaxesHierarchical input"
-"Dataflow: materialize.public.monotonic_fused" "Arranged MinsMaxesHierarchical input"
-"Dataflow: materialize.public.monotonic_fused" "Arranged MinsMaxesHierarchical input"
-"Dataflow: materialize.public.monotonic_fused" "Arranged MinsMaxesHierarchical input"
-"Dataflow: materialize.public.monotonic_fused" "Arranged MinsMaxesHierarchical input"
-"Dataflow: materialize.public.monotonic_fused" "Arranged MinsMaxesHierarchical input"
-"Dataflow: materialize.public.monotonic_fused" "Arranged MinsMaxesHierarchical input"
-"Dataflow: materialize.public.monotonic_fused" ReduceMinsMaxes
-"Dataflow: materialize.public.monotonic_fused" "Reduced Fallibly MinsMaxesHierarchical"
-"Dataflow: materialize.public.monotonic_fused" "Reduced Fallibly MinsMaxesHierarchical"
-"Dataflow: materialize.public.monotonic_fused" "Reduced Fallibly MinsMaxesHierarchical"
-"Dataflow: materialize.public.monotonic_fused" "Reduced Fallibly MinsMaxesHierarchical"
-"Dataflow: materialize.public.monotonic_fused" "Reduced Fallibly MinsMaxesHierarchical"
-"Dataflow: materialize.public.monotonic_fused" "Reduced Fallibly MinsMaxesHierarchical"
-"Dataflow: materialize.public.monotonic_fused" "Reduced Fallibly MinsMaxesHierarchical"
-"Dataflow: materialize.public.monotonic_max" "Arrange ReduceMinsMaxes"
-"Dataflow: materialize.public.monotonic_max" "Arranged MinsMaxesHierarchical input"
-"Dataflow: materialize.public.monotonic_max" "Arranged MinsMaxesHierarchical input"
-"Dataflow: materialize.public.monotonic_max" "Arranged MinsMaxesHierarchical input"
-"Dataflow: materialize.public.monotonic_max" "Arranged MinsMaxesHierarchical input"
-"Dataflow: materialize.public.monotonic_max" "Arranged MinsMaxesHierarchical input"
-"Dataflow: materialize.public.monotonic_max" "Arranged MinsMaxesHierarchical input"
-"Dataflow: materialize.public.monotonic_max" "Arranged MinsMaxesHierarchical input"
-"Dataflow: materialize.public.monotonic_max" ReduceMinsMaxes
-"Dataflow: materialize.public.monotonic_max" "Reduced Fallibly MinsMaxesHierarchical"
-"Dataflow: materialize.public.monotonic_max" "Reduced Fallibly MinsMaxesHierarchical"
-"Dataflow: materialize.public.monotonic_max" "Reduced Fallibly MinsMaxesHierarchical"
-"Dataflow: materialize.public.monotonic_max" "Reduced Fallibly MinsMaxesHierarchical"
-"Dataflow: materialize.public.monotonic_max" "Reduced Fallibly MinsMaxesHierarchical"
-"Dataflow: materialize.public.monotonic_max" "Reduced Fallibly MinsMaxesHierarchical"
-"Dataflow: materialize.public.monotonic_max" "Reduced Fallibly MinsMaxesHierarchical"
-"Dataflow: materialize.public.monotonic_min" "Arrange ReduceMinsMaxes"
-"Dataflow: materialize.public.monotonic_min" "Arranged MinsMaxesHierarchical input"
-"Dataflow: materialize.public.monotonic_min" "Arranged MinsMaxesHierarchical input"
-"Dataflow: materialize.public.monotonic_min" "Arranged MinsMaxesHierarchical input"
-"Dataflow: materialize.public.monotonic_min" "Arranged MinsMaxesHierarchical input"
-"Dataflow: materialize.public.monotonic_min" "Arranged MinsMaxesHierarchical input"
-"Dataflow: materialize.public.monotonic_min" "Arranged MinsMaxesHierarchical input"
-"Dataflow: materialize.public.monotonic_min" "Arranged MinsMaxesHierarchical input"
-"Dataflow: materialize.public.monotonic_min" ReduceMinsMaxes
-"Dataflow: materialize.public.monotonic_min" "Reduced Fallibly MinsMaxesHierarchical"
-"Dataflow: materialize.public.monotonic_min" "Reduced Fallibly MinsMaxesHierarchical"
-"Dataflow: materialize.public.monotonic_min" "Reduced Fallibly MinsMaxesHierarchical"
-"Dataflow: materialize.public.monotonic_min" "Reduced Fallibly MinsMaxesHierarchical"
-"Dataflow: materialize.public.monotonic_min" "Reduced Fallibly MinsMaxesHierarchical"
-"Dataflow: materialize.public.monotonic_min" "Reduced Fallibly MinsMaxesHierarchical"
-"Dataflow: materialize.public.monotonic_min" "Reduced Fallibly MinsMaxesHierarchical"
+"Dataflow: materialize.public.monotonic_fused" "ArrangeMonotonic [val: empty]"
+"Dataflow: materialize.public.monotonic_fused" "ReduceMonotonic"
+"Dataflow: materialize.public.monotonic_max" "ArrangeMonotonic [val: empty]"
+"Dataflow: materialize.public.monotonic_max" "ReduceMonotonic"
+"Dataflow: materialize.public.monotonic_min" "ArrangeMonotonic [val: empty]"
+"Dataflow: materialize.public.monotonic_min" "ReduceMonotonic"
 "Dataflow: materialize.public.non_dbz_data_indexed_primary_idx" "ArrangeBy[[Column(0, \"value\")]]"
 "Dataflow: materialize.public.non_dbz_data_indexed_primary_idx" "ArrangeBy[[Column(0, \"value\")]]-errors"
 "Dataflow: materialize.public.i1_primary_idx" "ArrangeBy[[Column(0, \"b\")]]"
