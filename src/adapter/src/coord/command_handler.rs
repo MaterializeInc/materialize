@@ -278,6 +278,16 @@ impl Coordinator {
                         .map_err(|_| AdapterError::ConcurrentClusterDrop)
                     );
                 }
+
+                Command::GetOracle { timeline, tx} => {
+                    let oracle = self
+                        .global_timelines
+                        .get(&timeline)
+                        .map(|timeline_state| {
+                            timeline_state.oracle.clone()
+                        }).expect("////////////// todo");
+                    let _ = tx.send(Ok(oracle));
+                }
             }
         }
         .instrument(debug_span!("handle_command"))
@@ -539,13 +549,6 @@ impl Coordinator {
                     storage_collections: Arc::clone(&self.controller.storage_collections),
                     transient_id_gen: self.transient_id_gen.clone(),
                     optimizer_metrics: self.optimizer_metrics.clone(),
-                    oracles: self
-                        .global_timelines
-                        .iter()
-                        .map(|(timeline, timeline_state)| {
-                            (timeline.clone(), timeline_state.oracle.clone())
-                        })
-                        .collect(),
                 });
                 if tx.send(resp).is_err() {
                     // Failed to send to adapter, but everything is setup so we can terminate

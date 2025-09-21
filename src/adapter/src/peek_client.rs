@@ -57,7 +57,7 @@ pub struct PeekClient {
     pub optimizer_metrics: OptimizerMetrics,
     ///////// todo: also fetch lazily (some tests in CI are failing, e.g., Testdrive 1 / github-8809.td)   and make this private
     /// Per-timeline oracles from the coordinator. Lazily populated.
-    pub oracles: BTreeMap<Timeline, Arc<dyn TimestampOracle<Timestamp> + Send + Sync>>,
+    oracles: BTreeMap<Timeline, Arc<dyn TimestampOracle<Timestamp> + Send + Sync>>,
     // TODO: This is initialized only at session startup. We'll be able to properly check
     // the actual feature flag value (without a Coordinator call) once we'll always have a catalog
     // snapshot at hand.
@@ -72,20 +72,20 @@ impl PeekClient {
         storage_collections: StorageCollectionsHandle,
         transient_id_gen: Arc<TransientIdGen>,
         optimizer_metrics: OptimizerMetrics,
-        oracles: BTreeMap<Timeline, Arc<dyn TimestampOracle<Timestamp> + Send + Sync>>,
     ) -> Self {
         Self {
             coordinator_client,
-            compute_instances: Default::default(),
+            compute_instances: Default::default(), // lazily populated
             storage_collections,
             transient_id_gen,
             optimizer_metrics,
-            oracles,
-            enable_frontend_peek_sequencing: false,
+            oracles: Default::default(), // lazily populated
+            enable_frontend_peek_sequencing: false, // should be filled in later!
         }
     }
 
     /////// todo: can we use or_insert_with? Seems non-trivial because of the error handling.
+    //////////// (and also in get_oracle)
     pub async fn get_compute_instance_client(&mut self, compute_instance: ComputeInstanceId) -> Result<&mut mz_compute_client::controller::instance::Client<Timestamp>, AdapterError> {
         if !self.compute_instances.contains_key(&compute_instance) {
             let client = self
@@ -97,6 +97,19 @@ impl PeekClient {
             self.compute_instances.insert(compute_instance, client);
         }
         Ok(self.compute_instances.get_mut(&compute_instance).expect("ensured above"))
+    }
+
+    pub async fn get_oracle(&mut self, timeline: Timeline) -> Result<&mut Arc<dyn TimestampOracle<Timestamp> + Send + Sync>, AdapterError> {
+        if !self.oracles.contains_key(&timeline) {
+            let oracle = self
+                .send_to_coordinator(|tx| Command::GetOracle {
+                    timeline: timeline.clone(),
+                    tx,
+                })
+                .await?;
+            self.oracles.insert(timeline.clone(), oracle);
+        }
+        Ok(self.oracles.get_mut(&timeline).expect("ensured above"))
     }
 
     async fn send_to_coordinator<T, F>(&self, f: F) -> T

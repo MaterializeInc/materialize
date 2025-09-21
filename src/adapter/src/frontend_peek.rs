@@ -273,10 +273,9 @@ impl SessionClient {
         let oracle_read_ts = match timeline {
             Some(timeline) if needs_linearized_read_ts => {
                 let oracle = self
-                    .peek_client()
-                    .oracles
-                    .get(&timeline)
-                    .expect("/////// todo");
+                    .peek_client_mut()
+                    .get_oracle(timeline)
+                    .await?;
                 let oracle_read_ts = oracle.read_ts().await;
                 Some(oracle_read_ts)
             }

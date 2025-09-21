@@ -261,7 +261,6 @@ impl Client {
             storage_collections,
             transient_id_gen,
             optimizer_metrics,
-            oracles,
         } = response;
 
         let peek_client = PeekClient::new(
@@ -269,7 +268,6 @@ impl Client {
             storage_collections,
             transient_id_gen,
             optimizer_metrics,
-            oracles,
             // enable_frontend_peek_sequencing is initialized below
         );
 
@@ -1009,7 +1007,8 @@ impl SessionClient {
                 | Command::RetireExecute { .. }
                 | Command::CheckConsistency { .. }
                 | Command::Dump { .. }
-                | Command::GetComputeInstanceClient { .. } => {}
+                | Command::GetComputeInstanceClient { .. }
+                | Command::GetOracle { .. } => {}
             };
             cmd
         });

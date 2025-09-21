@@ -24,7 +24,7 @@ use mz_ore::tracing::OpenTelemetryContext;
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::global_id::TransientIdGen;
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, ColumnIndex, RowIterator};
+use mz_repr::{CatalogItemId, ColumnIndex, RowIterator, Timestamp};
 use mz_sql::ast::{FetchDirection, Raw, Statement};
 use mz_sql::catalog::ObjectType;
 use mz_sql::optimizer_metrics::OptimizerMetrics;
@@ -161,6 +161,11 @@ pub enum Command {
     GetComputeInstanceClient {
         instance_id: ComputeInstanceId,
         tx: oneshot::Sender<Result<mz_compute_client::controller::instance::Client<mz_repr::Timestamp>, AdapterError>>,
+    },
+
+    GetOracle {
+        timeline: Timeline,
+        tx: oneshot::Sender<Result<Arc<dyn TimestampOracle<Timestamp> + Send + Sync>, AdapterError>>,
     }
 }
 
@@ -182,7 +187,8 @@ impl Command {
             | Command::RetireExecute { .. }
             | Command::CheckConsistency { .. }
             | Command::Dump { .. }
-            | Command::GetComputeInstanceClient { .. } => None,
+            | Command::GetComputeInstanceClient { .. }
+            | Command::GetOracle { .. } => None,
         }
     }
 
@@ -203,7 +209,8 @@ impl Command {
             | Command::RetireExecute { .. }
             | Command::CheckConsistency { .. }
             | Command::Dump { .. }
-            | Command::GetComputeInstanceClient { .. } => None,
+            | Command::GetComputeInstanceClient { .. }
+            | Command::GetOracle { .. } => None,
         }
     }
 }
@@ -240,8 +247,6 @@ pub struct StartupResponse {
     pub transient_id_gen: Arc<TransientIdGen>,
     /////// todo: comment
     pub optimizer_metrics: OptimizerMetrics,
-    /////// todo: comment
-    pub oracles: BTreeMap<Timeline, Arc<dyn TimestampOracle<mz_repr::Timestamp> + Send + Sync>>,
 }
 
 /// The response to [`Client::authenticate`](crate::Client::authenticate).
