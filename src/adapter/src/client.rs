@@ -704,7 +704,7 @@ impl SessionClient {
             //println!("++++++ try_frontend_peek succeeded");
             return Ok((resp, execute_started));
         } else {
-            //println!("------ try_frontend_peek failed");
+            //println!("------ try_frontend_peek didn't happen");
         }
 
         let response = self

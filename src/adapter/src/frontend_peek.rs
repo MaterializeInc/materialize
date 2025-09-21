@@ -46,6 +46,13 @@ impl SessionClient {
         portal_name: &str,
         session: &mut Session,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
+
+        if session.transaction().is_in_multi_statement_transaction() {
+            // TODO: handle multi-statement transactions
+            println!("Bailing out from try_frontend_peek_inner, because is_in_multi_statement_transaction");
+            return Ok(None);
+        }
+
         // # From handle_execute
 
         if session.vars().emit_trace_id_notice() {
@@ -304,7 +311,8 @@ impl SessionClient {
             ) if in_immediate_multi_stmt_txn => (determination, None),
             _ => {
                 let determine_bundle = if in_immediate_multi_stmt_txn {
-                    ////////// todo: needs timedomain_for, which needs DataflowBuilder / index oracle / sufficient_collections
+                    // TODO: handle multi-statement transactions
+                    // needs timedomain_for, which needs DataflowBuilder / index oracle / sufficient_collections
                     println!(
                         "Bailing out from try_frontend_peek_inner, because of in_immediate_multi_stmt_txn"
                     );
@@ -424,6 +432,7 @@ impl SessionClient {
 
         //////// todo: txn_read_holds stuff. Work with SessionClient::txn_read_holds.
 
+        // (This TODO is copied from the old peek sequencing.)
         // TODO: Checking for only `InTransaction` and not `Implied` (also `Started`?) seems
         // arbitrary and we don't recall why we did it (possibly an error!). Change this to always
         // set the transaction ops. Decide and document what our policy should be on AS OF queries.
