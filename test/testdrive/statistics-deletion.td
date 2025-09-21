@@ -114,13 +114,13 @@ sink_cluster 1 1 true true
 > SELECT s.name,
   SUM(u.updates_committed) > 0
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('upsert_size', 'upsert_cluster', 's', 'bids')
   GROUP BY s.id, s.name
 upsert_size true
 upsert_cluster true
-s false
-s false
+s true
+s true
 
 # We have to obtain these before we delete the sink.
 $ set-from-sql var=sink-size-id

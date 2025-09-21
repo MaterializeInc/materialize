@@ -120,7 +120,7 @@ $ kafka-ingest format=avro topic=dbz-no-before key-format=avro key-schema=${keys
     SUM(u.bytes_indexed) > 0,
     SUM(u.records_indexed)
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('dbz_no_before')
   GROUP BY s.name
   ORDER BY s.name
@@ -139,7 +139,7 @@ id creature
     SUM(u.bytes_indexed) > 0,
     SUM(u.records_indexed)
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('dbz_no_before')
   GROUP BY s.name
   ORDER BY s.name
@@ -158,7 +158,7 @@ $ kafka-ingest format=avro topic=dbz-no-before key-format=avro key-schema=${keys
     SUM(u.bytes_indexed) > 0,
     SUM(u.records_indexed)
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('dbz_no_before')
   GROUP BY s.name
   ORDER BY s.name

@@ -266,7 +266,7 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
     let busy_signal = Arc::clone(&config.busy_signal);
     let source_resume_uppers = config.source_resume_uppers.clone();
     let is_active_worker = config.responsible_for(());
-    let source_statistics = config.source_statistics().clone();
+    let source_statistics = config.statistics.clone();
     let button = builder.build(move |caps| {
         SignaledFuture::new(busy_signal, async move {
             let [mut cap, mut progress_cap, health_cap] = caps.try_into().unwrap();
@@ -276,8 +276,10 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
 
             if !is_active_worker {
                 // Emit 0, to mark this worker as having started up correctly.
-                source_statistics.set_offset_known(0);
-                source_statistics.set_offset_committed(0);
+                for stats in source_statistics.values() {
+                    stats.set_offset_known(0);
+                    stats.set_offset_committed(0);
+                }
                 return;
             }
 
@@ -420,12 +422,14 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
                             // we are not going to implement snapshot progress statistics for them
                             // right now, but will come back to it.
                             if let Some(offset_committed) = offset_committed {
-                                source_statistics.set_offset_committed(offset_committed);
-                                // technically we could have _known_ a larger offset
-                                // than the one that has been committed, but we can
-                                // never recover that known amount on restart, so we
-                                // just advance these in lock step.
-                                source_statistics.set_offset_known(offset_committed);
+                                for stats in source_statistics.values() {
+                                    stats.set_offset_committed(offset_committed);
+                                    // technically we could have _known_ a larger offset
+                                    // than the one that has been committed, but we can
+                                    // never recover that known amount on restart, so we
+                                    // just advance these in lock step.
+                                    stats.set_offset_known(offset_committed);
+                                }
                             }
                         }
                     }

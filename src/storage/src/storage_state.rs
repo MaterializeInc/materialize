@@ -682,6 +682,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     let resume_upper = resume_uppers[export_id].clone();
                     self.storage_state.aggregated_statistics.initialize_source(
                         *export_id,
+                        ingestion_id,
                         resume_upper.clone(),
                         || {
                             SourceStatistics::new(

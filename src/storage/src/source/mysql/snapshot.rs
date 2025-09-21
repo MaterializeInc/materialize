@@ -186,7 +186,6 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
 
                 let id = config.id;
                 let worker_id = config.worker_id;
-                let source_statistics = config.source_statistics();
 
                 if !all_outputs.is_empty() {
                     // A worker *must* emit a count even if not responsible for snapshotting a table
@@ -400,9 +399,6 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                     metrics,
                 )
                 .await?;
-                // statistics for each export were set when fetching the size, updates the source with the total.
-                source_statistics.set_snapshot_records_known(snapshot_total);
-                source_statistics.set_snapshot_records_staged(0);
 
                 // This worker has nothing else to do
                 if reader_snapshot_table_info.is_empty() {
@@ -454,13 +450,11 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                             for statistics in export_statistics.get(table).unwrap() {
                                 statistics.set_snapshot_records_staged(snapshot_staged);
                             }
-                            source_statistics.set_snapshot_records_staged(snapshot_staged_total);
                         }
                     }
                     for statistics in export_statistics.get(table).unwrap() {
                         statistics.set_snapshot_records_staged(snapshot_staged);
                     }
-                    source_statistics.set_snapshot_records_staged(snapshot_staged_total);
                     trace!(%id, "timely-{worker_id} snapshotted {} records from \
                                  table '{table}'", snapshot_staged * u64::cast_from(outputs.len()));
                 }
@@ -488,11 +482,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 if snapshot_staged_total < snapshot_total {
                     error!(%id, "timely-{worker_id} snapshot size {snapshot_total} is somehow \
                                  bigger than records staged {snapshot_staged_total}");
-                    snapshot_staged_total = snapshot_total;
                 }
-
-                // Match the postgresql behavior for setting the metrics
-                source_statistics.set_snapshot_records_known(snapshot_staged_total);
 
                 Ok(())
             }))

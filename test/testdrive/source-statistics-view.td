@@ -35,7 +35,7 @@ ALTER SYSTEM SET storage_statistics_interval = 2000
     u.offset_known > 0,
     u.offset_committed > 0
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('counter')
 counter true true true true true true true true true true true true
 

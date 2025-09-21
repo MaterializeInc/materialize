@@ -56,7 +56,7 @@ true
     SUM(u.snapshot_records_known),
     SUM(u.snapshot_records_staged)
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('mz_source')
   GROUP BY s.name
   ORDER BY s.name
@@ -66,7 +66,7 @@ $ set-from-sql var=previous-offset-committed
 SELECT
     (SUM(u.offset_committed))::text
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('mz_source')
 
 $ sql-server-execute name=sql-server
@@ -79,7 +79,7 @@ INSERT INTO t1 VALUES ('three');
     SUM(u.snapshot_records_known),
     SUM(u.snapshot_records_staged)
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('mz_source')
   GROUP BY s.name
   ORDER BY s.name
@@ -89,7 +89,7 @@ $ set-from-sql var=pre-restart-offset-committed
 SELECT
     (SUM(u.offset_committed))::text
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('mz_source')
 
 # capture the current replica_id for the source statistics
@@ -98,7 +98,7 @@ $ set-regex match=u\d+ replacement="<REPLICAID>"
   FROM
     mz_clusters c,
     mz_cluster_replicas cr,
-    mz_internal.mz_source_statistics_raw u,
+    mz_internal.mz_source_statistics u,
     mz_sources s
   WHERE
     c.name = 'stats_cluster' AND c.id = cr.cluster_id AND cr.id = u.replica_id
@@ -112,7 +112,7 @@ SELECT cr.id
   FROM
     mz_clusters c,
     mz_cluster_replicas cr,
-    mz_internal.mz_source_statistics_raw u,
+    mz_internal.mz_source_statistics u,
     mz_sources s
   WHERE
     c.name = 'stats_cluster' AND c.id = cr.cluster_id AND cr.id = u.replica_id
@@ -135,7 +135,7 @@ $ set-regex match=u\d+ replacement="<REPLICAID>"
   FROM
     mz_clusters c,
     mz_cluster_replicas cr,
-    mz_internal.mz_source_statistics_raw u,
+    mz_internal.mz_source_statistics u,
     mz_sources s
   WHERE
     c.name = 'stats_cluster' AND c.id = cr.cluster_id AND cr.id = u.replica_id
@@ -149,7 +149,7 @@ SELECT cr.id
   FROM
     mz_clusters c,
     mz_cluster_replicas cr,
-    mz_internal.mz_source_statistics_raw u,
+    mz_internal.mz_source_statistics u,
     mz_sources s
   WHERE
     c.name = 'stats_cluster' AND c.id = cr.cluster_id AND cr.id = u.replica_id
@@ -169,7 +169,7 @@ $ unset-regex
     SUM(u.snapshot_records_known),
     SUM(u.snapshot_records_staged)
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('mz_source')
   GROUP BY s.name, u.replica_id
   ORDER BY s.name, u.replica_id
@@ -192,7 +192,7 @@ true
      SUM(u.snapshot_records_known),
      SUM(u.snapshot_records_staged)
    FROM mz_sources s
-   JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+   JOIN mz_internal.mz_source_statistics u ON s.id = u.id
    WHERE s.name IN ('mz_source') AND u.replica_id = '${replica_id}'
    GROUP BY s.name
    ORDER BY s.name
@@ -203,7 +203,7 @@ true
     s.name,
     SUM(u.updates_committed) > 0
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('alt') AND u.replica_id = '${replica_id}'
   GROUP BY s.name
   ORDER BY s.name
@@ -214,6 +214,6 @@ alt true
 > SELECT
     count(*)
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('alt') AND u.replica_id = '${replica_id}'
 0

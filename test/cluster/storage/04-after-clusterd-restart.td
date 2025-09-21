@@ -46,7 +46,7 @@ five
   SUM(u.offset_known),
   SUM(u.offset_committed)
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('remote1', 'remote2')
   GROUP BY s.id, s.name
 remote1 5 5

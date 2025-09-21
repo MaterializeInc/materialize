@@ -27,7 +27,7 @@ two
   SUM(u.offset_known),
   SUM(u.offset_committed)
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('remote1', 'remote2')
   GROUP BY s.id, s.name
 remote1 true true 2 2
@@ -36,7 +36,7 @@ remote2 true true 2 2
 > SELECT s.name,
   SUM(u.updates_committed)
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('webhook_text')
   GROUP BY s.id, s.name
 webhook_text 1
@@ -64,7 +64,7 @@ three
   SUM(u.offset_known),
   SUM(u.offset_committed)
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('remote1', 'remote2')
   GROUP BY s.id, s.name
 remote1 true true 3 3
@@ -73,7 +73,7 @@ remote2 true true 3 3
 > SELECT s.name,
   SUM(u.updates_committed)
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('webhook_text')
   GROUP BY s.id, s.name
 webhook_text 2

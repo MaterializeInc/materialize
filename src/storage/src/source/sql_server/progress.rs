@@ -70,7 +70,6 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
         Box::pin(async move {
             let [probe_cap]: &mut [_; 1] = caps.try_into().unwrap();
 
-            let source_statistics = config.source_statistics().clone();
             let emit_probe = |cap, probe: Probe<Lsn>| {
                 probe_output.give(cap, probe);
             };
@@ -78,8 +77,10 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
             // Only a single worker is responsible for processing progress.
             if !config.responsible_for(PROGRESS_WORKER) {
                 // Emit 0 to mark this worker as having started up correctly.
-                source_statistics.set_offset_known(0);
-                source_statistics.set_offset_committed(0);
+                for stat in config.statistics.values() {
+                    stat.set_offset_known(0);
+                    stat.set_offset_committed(0);
+                }
             }
             let conn_config = connection
                 .resolve_config(
@@ -126,7 +127,9 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                         // as no longer subject to change. If we don't increment the LSN before emitting
                         // the probe then data will not be queryable in the tables produced by the Source.
                         let known_lsn = max_lsn.increment();
-                        source_statistics.set_offset_known(known_lsn.abbreviate());
+                        for stat in config.statistics.values() {
+                            stat.set_offset_known(known_lsn.abbreviate());
+                        }
 
 
                         // The DB should never go backwards, but it's good to know if it does.
@@ -175,7 +178,9 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                                 }
                             }
                         }
-                        source_statistics.set_offset_committed(committed_upper.abbreviate());
+                        for stat in config.statistics.values() {
+                            stat.set_offset_committed(committed_upper.abbreviate());
+                        }
                     }
                 };
             }

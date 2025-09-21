@@ -106,7 +106,7 @@ $ set-sql-timeout duration=2minutes
   bool_and(u.snapshot_committed),
   SUM(u.messages_received), SUM(u.updates_staged), SUM(u.updates_committed), SUM(u.bytes_received) > 0, bool_and(u.rehydration_latency IS NOT NULL)
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('metrics_test_source')
   GROUP BY s.name
   ORDER BY s.name
@@ -114,18 +114,17 @@ metrics_test_source true 2 2 2 true true
 
 > DROP SOURCE metrics_test_source CASCADE
 
-# Note that only the base-source has `messages_received`, but the sub-sources have `messages_committed`.
 # Committed will usually, for auction sources, add up to received, but we don't test this (right now) because of
 # jitter on when metrics are produced for each sub-source.
 > SELECT s.name,
   bool_and(u.snapshot_committed),
   SUM(u.messages_received) > 0, SUM(u.updates_staged) > 0, SUM(u.updates_committed) > 0, SUM(u.bytes_received) > 0, bool_and(u.rehydration_latency IS NOT NULL)
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('accounts', 'auction_house_in_source_statistics_td', 'auctions', 'bids', 'organizations', 'users')
   GROUP BY s.name
   ORDER BY s.name
-auction_house_in_source_statistics_td true true false false true true
+auction_house_in_source_statistics_td true true true true true true
 
 
 # Assert that the codepath that ensures a 0-value as the first value in `mz_source_statistics` occurs, using a `SUBSCRIBE`.
@@ -165,7 +164,7 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
     SUM(u.records_indexed),
     bool_and(u.rehydration_latency IS NOT NULL)
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('upsert')
   GROUP BY s.name
   ORDER BY s.name
@@ -179,7 +178,7 @@ $ set-from-sql var=updates-committed
 SELECT
     (SUM(u.updates_committed) + 1)::text
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('upsert')
 
 $ set-from-sql var=state-bytes
@@ -201,7 +200,7 @@ $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} 
     SUM(u.bytes_indexed) < ${state-bytes},
     SUM(u.records_indexed)
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('upsert')
   GROUP BY s.name
   ORDER BY s.name

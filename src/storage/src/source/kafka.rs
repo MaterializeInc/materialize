@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
 use std::convert::Infallible;
 use std::str::{self};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -69,6 +69,7 @@ use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespac
 use crate::metrics::source::kafka::KafkaSourceMetrics;
 use crate::source::types::{Probe, SignaledFuture, SourceRender, StackedCollection};
 use crate::source::{RawSourceCreationConfig, SourceMessage, probe};
+use crate::statistics::SourceStatistics;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 struct HealthStatus {
@@ -116,21 +117,10 @@ pub struct KafkaSourceReader {
     start_offsets: BTreeMap<PartitionId, i64>,
     /// Channel to receive Kafka statistics JSON blobs from the stats callback.
     stats_rx: crossbeam_channel::Receiver<Jsonb>,
-    /// Progress statistics as collected from the `resume_uppers` stream and the partition metadata
-    /// thread.
-    progress_statistics: Arc<Mutex<PartialProgressStatistics>>,
     /// A handle to the partition specific metrics
     partition_metrics: KafkaSourceMetrics,
     /// Per partition capabilities used to produce messages
     partition_capabilities: BTreeMap<PartitionId, PartitionCapability>,
-}
-
-/// A partially-filled version of `ProgressStatisticsUpdate`. This allows us to
-/// only emit updates when `offset_known` is updated by the metadata thread.
-#[derive(Default)]
-struct PartialProgressStatistics {
-    offset_known: Option<u64>,
-    offset_committed: Option<u64>,
 }
 
 struct PartitionCapability {
@@ -151,7 +141,7 @@ pub struct KafkaResumeUpperProcessor {
     config: RawSourceCreationConfig,
     topic_name: String,
     consumer: Arc<BaseConsumer<TunnelingClientContext<GlueConsumerContext>>>,
-    progress_statistics: Arc<Mutex<PartialProgressStatistics>>,
+    statistics: Vec<SourceStatistics>,
 }
 
 /// Computes whether this worker is responsible for consuming a partition. It assigns partitions to
@@ -258,6 +248,7 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
     let mut outputs = vec![];
 
     // Contains the `SourceStatistics` entries for exports that require a snapshot.
+    let mut all_export_stats = vec![];
     let mut snapshot_export_stats = vec![];
     for (idx, (id, export)) in config.source_exports.iter().enumerate() {
         let SourceExport {
@@ -283,15 +274,16 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
             _ => panic!("unexpected source export details: {:?}", details),
         };
 
+        let statistics = config
+            .statistics
+            .get(id)
+            .expect("statistics have been initialized")
+            .clone();
         // export requires snapshot
         if resume_upper.as_ref() == &[Partitioned::minimum()] {
-            let statistics = config
-                .statistics
-                .get(id)
-                .expect("statistics have been initialized")
-                .clone();
-            snapshot_export_stats.push(statistics);
+            snapshot_export_stats.push(statistics.clone());
         }
+        all_export_stats.push(statistics);
 
         let output = SourceOutputInfo {
             id: *id,
@@ -306,7 +298,6 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
     let button = builder.build(move |caps| {
         SignaledFuture::new(busy_signal, async move {
             let [mut data_cap, mut progress_cap, health_cap] = caps.try_into().unwrap();
-            let source_statistics = config.source_statistics();
 
             let client_id = connection.client_id(
                 config.config.config_set(),
@@ -485,7 +476,6 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
                     .collect(),
                 start_offsets,
                 stats_rx,
-                progress_statistics: Default::default(),
                 partition_metrics: config.metrics.get_kafka_source_metrics(
                     partition_ids,
                     topic.clone(),
@@ -498,7 +488,7 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
                 config: config.clone(),
                 topic_name: topic.clone(),
                 consumer,
-                progress_statistics: Arc::clone(&reader.progress_statistics),
+                statistics: all_export_stats.clone(),
             };
 
             // Seed the progress metrics with `0` if we are snapshotting.
@@ -547,8 +537,6 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
             };
             tokio::pin!(resume_uppers_process_loop);
 
-            let mut prev_offset_known = None;
-            let mut prev_offset_committed = None;
             let mut metadata_update: Option<MetadataUpdate> = None;
             let mut snapshot_total = None;
 
@@ -594,10 +582,10 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
                             MzOffset::from(0),
                         );
 
-                        let mut upstream_stat = 0;
+                        let mut offset_known = 0;
                         for (&pid, &high_watermark) in &partitions {
                             if responsible_for_pid(&config, pid) {
-                                upstream_stat += high_watermark;
+                                offset_known += high_watermark;
                                 reader.ensure_partition(pid);
                                 if let Entry::Vacant(entry) =
                                     reader.partition_capabilities.entry(pid)
@@ -638,7 +626,7 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
                             // Note that we want to represent the _number of offsets_, which
                             // means the watermark's frontier semantics is correct, without
                             // subtracting (Kafka offsets start at 0).
-                            snapshot_total = Some(upstream_stat);
+                            snapshot_total = Some(offset_known);
                         }
 
                         // Clear all the health namespaces we know about.
@@ -657,9 +645,10 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
                             }
                         }
 
-                        let mut progress_statistics =
-                            reader.progress_statistics.lock().expect("poisoned");
-                        progress_statistics.offset_known = Some(upstream_stat);
+                        for export_stat in all_export_stats.iter() {
+                            export_stat.set_offset_known(offset_known);
+                        }
+
                         data_cap.downgrade(&future_ts);
                         progress_cap.downgrade(&future_ts);
                     }
@@ -899,26 +888,9 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
                     }
                 }
 
-                // If we have a new `offset_known` from the partition metadata thread, and
-                // `committed` from reading the `resume_uppers` stream, we can emit a
-                // progress stats update.
-                let mut stats =
-                    { std::mem::take(&mut *reader.progress_statistics.lock().expect("poisoned")) };
-
-                let offset_committed = stats.offset_committed.take().or(prev_offset_committed);
-                let offset_known = stats.offset_known.take().or(prev_offset_known);
-                if let Some((offset_known, offset_committed)) = offset_known.zip(offset_committed) {
-                    source_statistics.set_offset_known(offset_known);
-                    source_statistics.set_offset_committed(offset_committed);
-                }
-                prev_offset_committed = offset_committed;
-                prev_offset_known = offset_known;
-
                 if let (Some(snapshot_total), true) =
                     (snapshot_total, !snapshot_export_stats.is_empty())
                 {
-                    source_statistics.set_snapshot_records_known(snapshot_total);
-                    source_statistics.set_snapshot_records_staged(snapshot_staged);
                     for export_stat in snapshot_export_stats.iter() {
                         export_stat.set_snapshot_records_known(snapshot_total);
                         export_stat.set_snapshot_records_staged(snapshot_staged);
@@ -948,7 +920,7 @@ impl KafkaResumeUpperProcessor {
 
         // Generate a list of partitions that this worker is responsible for
         let mut offsets = vec![];
-        let mut progress_stat = 0;
+        let mut offset_committed = 0;
         for ts in frontier.iter() {
             if let Some(pid) = ts.interval().singleton() {
                 let pid = pid.unwrap_exact();
@@ -959,14 +931,14 @@ impl KafkaResumeUpperProcessor {
                     // that frontier is 2 for this pid. That means we have
                     // full processed offset 0 and offset 1, which means we have
                     // processed _2_ offsets.
-                    progress_stat += ts.timestamp().offset;
+                    offset_committed += ts.timestamp().offset;
                 }
             }
         }
-        self.progress_statistics
-            .lock()
-            .expect("poisoned")
-            .offset_committed = Some(progress_stat);
+
+        for export_stat in self.statistics.iter() {
+            export_stat.set_offset_committed(offset_committed);
+        }
 
         if !offsets.is_empty() {
             let mut tpl = TopicPartitionList::new();
