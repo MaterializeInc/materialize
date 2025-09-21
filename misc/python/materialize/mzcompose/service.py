@@ -53,6 +53,39 @@ class ServiceDependency(TypedDict, total=False):
     """Condition under which a dependency is considered satisfied."""
 
 
+class ServiceDeployResourceLimits(TypedDict, total=False):
+    """Resource limits for a service deployment."""
+
+    memory: str
+    """Memory limit (e.g., '6G', '512M')."""
+
+    cpus: str
+    """CPU limit (e.g., '0.5', '2')."""
+
+
+class ServiceDeployResources(TypedDict, total=False):
+    """Resource configuration for a service deployment."""
+
+    limits: ServiceDeployResourceLimits
+    """Resource limits."""
+
+    reservations: ServiceDeployResourceLimits
+    """Resource reservations."""
+
+
+class ServiceDeploy(TypedDict, total=False):
+    """Deployment configuration for a service."""
+
+    resources: ServiceDeployResources
+    """Resource configuration."""
+
+    replicas: int
+    """Number of container replicas to deploy."""
+
+    restart_policy: dict[str, Any]
+    """Restart policy configuration."""
+
+
 class ServiceConfig(TypedDict, total=False):
     """The definition of a service in Docker Compose.
 
@@ -141,11 +174,8 @@ class ServiceConfig(TypedDict, total=False):
     TODO(benesch): this should use a nested TypedDict.
     """
 
-    deploy: dict[str, dict[str, dict[str, str]]]
-    """Additional deployment configuration, like resource limits.
-
-    TODO(benesch): this should use a nested TypedDict.
-    """
+    deploy: ServiceDeploy
+    """Deployment configuration, including resource limits."""
 
     ulimits: dict[str, Any]
     """Override the default ulimits for a container."""
@@ -177,6 +207,9 @@ class ServiceConfig(TypedDict, total=False):
 
     user: str | None
     """The user for the container."""
+
+    cap_add: list[str] | None
+    """cap_add specifies additional container capabilities as strings."""
 
 
 class Service:

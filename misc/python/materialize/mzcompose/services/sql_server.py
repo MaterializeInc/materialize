@@ -37,6 +37,7 @@ class SqlServer(Service):
                     "MSSQL_PID=Developer",
                     "MSSQL_AGENT_ENABLED=True",
                     f"SA_PASSWORD={sa_password}",
+                    "MSSQL_MEMORY_LIMIT_MB=2500",
                     *environment_extra,
                 ],
                 "healthcheck": {
@@ -44,6 +45,8 @@ class SqlServer(Service):
                     "interval": "1s",
                     "start_period": "60s",
                 },
+                "deploy": {"resources": {"limits": {"memory": "3G"}}},
+                "cap_add": ["SYS_PTRACE"],
             },
         )
         self.sa_password = sa_password
