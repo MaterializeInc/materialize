@@ -89,7 +89,7 @@ impl SessionClient {
             return Ok(None);
         }
 
-        ///////// todo: statement logging
+        // TODO: statement logging (and then re-enable it in workflow_statement_logging)
         let (stmt, params) = {
             let portal = session
                 .get_portal_unverified(&portal_name)
@@ -152,7 +152,7 @@ impl SessionClient {
         };
         self.ensure_compute_instance_client(target_cluster_id).await?;
 
-        ////// todo: statement logging: set_statement_execution_cluster
+        // TODO: statement logging: set_statement_execution_cluster
 
         if let Err(e) =
             coord::catalog_serving::check_cluster_restrictions(target_cluster_name.as_str(), &conn_catalog, &plan)
@@ -382,7 +382,7 @@ impl SessionClient {
 
         let span = Span::current();
 
-        let (global_lir_plan, optimization_finished_at) = mz_ore::task::spawn_blocking(
+        let (global_lir_plan, _optimization_finished_at) = mz_ore::task::spawn_blocking(
             || "optimize peek",
             move || {
                 span.in_scope(|| {
@@ -409,12 +409,9 @@ impl SessionClient {
 
         // # From peek_finish
 
-        ///////// todo: statement logging
-
-        let conn_id = session.conn_id().clone();
+        // TODO: statement logging
 
         let (peek_plan, df_meta, typ) = global_lir_plan.unapply();
-        let source_arity = typ.arity();
 
         coord::sequencer::emit_optimizer_notices(&*catalog, session, &df_meta.optimizer_notices);
 
@@ -476,7 +473,7 @@ impl SessionClient {
 
         // # Now back to peek_finish
 
-        //////// todo: statement logging
+        // TODO: statement logging
 
         let max_result_size = catalog.system_config().max_result_size();
 
