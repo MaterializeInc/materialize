@@ -124,7 +124,7 @@ impl SessionClient {
                 return Ok(None);
             }
         };
-        let explain_ctx = ExplainContext::None; // EXPLAIN is handled here for now, only SELECT
+        let explain_ctx = ExplainContext::None; // EXPLAIN is not handled here for now, only SELECT
 
         // # From sequence_plan
 
@@ -492,6 +492,7 @@ impl SessionClient {
 
         if session.vars().emit_timestamp_notice() {
             ////////// todo call Coordinator::explain_timestamp
+            ////// Or just fall back to the old code (at the beginning of the function) when this is set.
             // let explanation =
             //     self.explain_timestamp(session, target_cluster_id, &input_id_bundle, determination);
             // session
