@@ -504,10 +504,6 @@ mod test {
             nullable: input_nullable,
             scalar_type: SqlScalarType::Int32,
         };
-        let ts_ty = SqlColumnType {
-            nullable: input_nullable,
-            scalar_type: SqlScalarType::Timestamp { precision: None },
-        };
         let ts_tz_ty = SqlColumnType {
             nullable: input_nullable,
             scalar_type: SqlScalarType::TimestampTz { precision: None },
@@ -534,18 +530,6 @@ mod test {
         //   which works because most don't look at the type. We should fix this
         //   and pass expected column types.
 
-        check(
-            func::AddTimestampInterval,
-            BF::AddTimestampInterval,
-            &ts_ty,
-            &interval_ty,
-        );
-        check(
-            func::AddTimestampTzInterval,
-            BF::AddTimestampTzInterval,
-            &ts_tz_ty,
-            &interval_ty,
-        );
         check(func::AddDateInterval, BF::AddDateInterval, &i32_ty, &i32_ty);
         check(
             func::AddTimeInterval,
@@ -671,18 +655,6 @@ mod test {
         check(func::SubFloat32, BF::SubFloat32, &i32_ty, &i32_ty);
         check(func::SubFloat64, BF::SubFloat64, &i32_ty, &i32_ty);
         check(func::SubNumeric, BF::SubNumeric, &i32_ty, &i32_ty);
-        check(
-            func::SubTimestampInterval,
-            BF::SubTimestampInterval,
-            &ts_ty,
-            &interval_ty,
-        );
-        check(
-            func::SubTimestampTzInterval,
-            BF::SubTimestampTzInterval,
-            &ts_tz_ty,
-            &interval_ty,
-        );
 
         check(func::AgeTimestamp, BF::AgeTimestamp, &i32_ty, &i32_ty);
         check(func::AgeTimestamptz, BF::AgeTimestampTz, &i32_ty, &i32_ty);

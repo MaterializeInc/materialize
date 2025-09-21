@@ -184,32 +184,6 @@ fn add_float64(a: f64, b: f64) -> Result<f64, EvalError> {
     }
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    output_type = "CheckedTimestamp<NaiveDateTime>",
-    is_infix_op = true,
-    sqlname = "+"
-)]
-fn add_timestamp_interval<'a>(
-    a: CheckedTimestamp<NaiveDateTime>,
-    b: Interval,
-) -> Result<Datum<'a>, EvalError> {
-    add_timestamplike_interval(a, b)
-}
-
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    output_type = "CheckedTimestamp<DateTime<Utc>>",
-    is_infix_op = true,
-    sqlname = "+"
-)]
-fn add_timestamp_tz_interval<'a>(
-    a: CheckedTimestamp<DateTime<Utc>>,
-    b: Interval,
-) -> Result<Datum<'a>, EvalError> {
-    add_timestamplike_interval(a, b)
-}
-
 fn add_timestamplike_interval<'a, T>(
     a: CheckedTimestamp<T>,
     b: Interval,
@@ -225,35 +199,9 @@ where
     T::from_date_time(dt).try_into().err_into()
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    output_type = "CheckedTimestamp<NaiveDateTime>",
-    is_infix_op = true,
-    sqlname = "-"
-)]
-fn sub_timestamp_interval<'a>(
-    a: CheckedTimestamp<NaiveDateTime>,
-    b: Interval,
-) -> Result<Datum<'a>, EvalError> {
-    sub_timestamplike_interval(a, b)
-}
-
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    output_type = "CheckedTimestamp<DateTime<Utc>>",
-    is_infix_op = true,
-    sqlname = "-"
-)]
-fn sub_timestamp_tz_interval<'a>(
-    a: CheckedTimestamp<DateTime<Utc>>,
-    b: Interval,
-) -> Result<Datum<'a>, EvalError> {
-    sub_timestamplike_interval(a, b)
-}
-
 fn sub_timestamplike_interval<'a, T>(
     a: CheckedTimestamp<T>,
-    b: Interval,
+    b: Datum,
 ) -> Result<Datum<'a>, EvalError>
 where
     T: TimestampLike,
@@ -1647,8 +1595,9 @@ fn mod_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     Ok(Datum::Numeric(a))
 }
 
-fn neg_interval_inner(a: Interval) -> Result<Interval, EvalError> {
-    a.checked_neg()
+fn neg_interval_inner(a: Datum) -> Result<Interval, EvalError> {
+    a.unwrap_interval()
+        .checked_neg()
         .ok_or_else(|| EvalError::IntervalOutOfRange(a.to_string().into()))
 }
 
@@ -3284,11 +3233,9 @@ impl BinaryFunc {
             BinaryFunc::SubFloat64 => sub_float64(a, b),
             BinaryFunc::SubTimestamp => Ok(sub_timestamp(a, b)),
             BinaryFunc::SubTimestampTz => Ok(sub_timestamptz(a, b)),
-            BinaryFunc::SubTimestampInterval => {
-                sub_timestamplike_interval(a.unwrap_timestamp(), b.unwrap_interval())
-            }
+            BinaryFunc::SubTimestampInterval => sub_timestamplike_interval(a.unwrap_timestamp(), b),
             BinaryFunc::SubTimestampTzInterval => {
-                sub_timestamplike_interval(a.unwrap_timestamptz(), b.unwrap_interval())
+                sub_timestamplike_interval(a.unwrap_timestamptz(), b)
             }
             BinaryFunc::SubInterval => sub_interval(a, b),
             BinaryFunc::SubDate => Ok(sub_date(a, b)),
