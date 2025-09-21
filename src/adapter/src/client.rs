@@ -264,14 +264,14 @@ impl Client {
             oracles,
         } = response;
 
-        let peek_client = PeekClient {
-            compute_instances: Default::default(),
+        let peek_client = PeekClient::new(
+            self.clone(),
             storage_collections,
             transient_id_gen,
             optimizer_metrics,
             oracles,
-            enable_frontend_peek_sequencing: false, // initialized below
-        };
+            // enable_frontend_peek_sequencing is initialized below
+        );
 
         let mut client = SessionClient {
             inner: Some(self.clone()),
@@ -521,7 +521,7 @@ Issue a SQL query to get started. Need help?
     }
 
     #[instrument(level = "debug")]
-    fn send(&self, cmd: Command) {
+    pub fn send(&self, cmd: Command) {
         self.inner_cmd_tx
             .send((OpenTelemetryContext::obtain(), cmd))
             .expect("coordinator unexpectedly gone");
@@ -788,30 +788,6 @@ impl SessionClient {
             .with_label_values(&[context])
             .observe(start.elapsed().as_secs_f64());
         catalog
-    }
-
-    /// Gets a compute instance client from the Coordinator.
-    //////// todo: this is on SessionClient for consistency with the above catalog_snapshot, but it's
-    // not clear to me why is catalog_snapshot and send_without_session on SessionClient, and not
-    // simply on the inner Client? I don't see anything session-specific.
-    pub async fn get_compute_instance_client(&self, instance_id: ComputeInstanceId) -> Result<mz_compute_client::controller::instance::Client<mz_repr::Timestamp>, AdapterError> {
-        self
-            .send_without_session(|tx| Command::GetComputeInstanceClient {
-                instance_id,
-                tx,
-            })
-            .await
-    }
-
-    /// If our PeekClient doesn't already have a client for the specified compute instance, then
-    /// request a client from the Coordinator.
-    ///////////// todo: is it ok that this reaches into the innards of PeekClient?
-    /////// todo: also, can we use or_insert_with? Seems non-trivial because of the error handling.
-    pub async fn ensure_compute_instance_client(&mut self, compute_instance: ComputeInstanceId) -> Result<(), AdapterError> {
-        if !self.peek_client.compute_instances.contains_key(&compute_instance) {
-            self.peek_client.compute_instances.insert(compute_instance, self.get_compute_instance_client(compute_instance).await?);
-        }
-        Ok(())
     }
 
     /// Dumps the catalog to a JSON string.
@@ -1109,6 +1085,11 @@ impl SessionClient {
     /// Returns a reference to the PeekClient used for fast-path peek sequencing.
     pub fn peek_client(&self) -> &PeekClient {
         &self.peek_client
+    }
+
+    /// Returns a reference to the PeekClient used for fast-path peek sequencing.
+    pub fn peek_client_mut(&mut self) -> &mut PeekClient {
+        &mut self.peek_client
     }
 
     /// Attempt to execute a fast-path peek from the session task.

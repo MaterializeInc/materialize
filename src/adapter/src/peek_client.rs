@@ -31,7 +31,8 @@ use timely::progress::Antichain;
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
-use crate::{CollectionIdBundle, ReadHolds};
+use crate::{AdapterError, Client, CollectionIdBundle, ReadHolds};
+use crate::command::Command;
 use crate::coord::peek::FastPathPlan;
 
 /// Storage collections trait alias we need to consult for since/frontiers.
@@ -45,14 +46,17 @@ pub type StorageCollectionsHandle = Arc<
 /// session task.
 #[derive(Debug)]
 pub struct PeekClient {
-    /// Channels to talk to each compute Instance task directly.
-    pub compute_instances:
+    coordinator_client: Client,
+    /// Channels to talk to each compute Instance task directly. Lazily populated.
+    compute_instances:
         BTreeMap<ComputeInstanceId, mz_compute_client::controller::instance::Client<Timestamp>>,
     /// Handle to storage collections for reading frontiers and policies.
     pub storage_collections: StorageCollectionsHandle,
     /// A generator for transient [`GlobalId`]s, shared with Coordinator.
     pub transient_id_gen: Arc<TransientIdGen>,
     pub optimizer_metrics: OptimizerMetrics,
+    ///////// todo: also fetch lazily (some tests in CI are failing, e.g., Testdrive 1 / github-8809.td)   and make this private
+    /// Per-timeline oracles from the coordinator. Lazily populated.
     pub oracles: BTreeMap<Timeline, Arc<dyn TimestampOracle<Timestamp> + Send + Sync>>,
     // TODO: This is initialized only at session startup. We'll be able to properly check
     // the actual feature flag value (without a Coordinator call) once we'll always have a catalog
@@ -61,6 +65,49 @@ pub struct PeekClient {
 }
 
 impl PeekClient {
+    /// Creates a PeekClient. Leaves `enable_frontend_peek_sequencing` false! This should be filled
+    /// in later.
+    pub fn new(
+        coordinator_client: Client,
+        storage_collections: StorageCollectionsHandle,
+        transient_id_gen: Arc<TransientIdGen>,
+        optimizer_metrics: OptimizerMetrics,
+        oracles: BTreeMap<Timeline, Arc<dyn TimestampOracle<Timestamp> + Send + Sync>>,
+    ) -> Self {
+        Self {
+            coordinator_client,
+            compute_instances: Default::default(),
+            storage_collections,
+            transient_id_gen,
+            optimizer_metrics,
+            oracles,
+            enable_frontend_peek_sequencing: false,
+        }
+    }
+
+    /////// todo: can we use or_insert_with? Seems non-trivial because of the error handling.
+    pub async fn get_compute_instance_client(&mut self, compute_instance: ComputeInstanceId) -> Result<&mut mz_compute_client::controller::instance::Client<Timestamp>, AdapterError> {
+        if !self.compute_instances.contains_key(&compute_instance) {
+            let client = self
+                .send_to_coordinator(|tx| Command::GetComputeInstanceClient {
+                    instance_id: compute_instance,
+                    tx,
+                })
+                .await?;
+            self.compute_instances.insert(compute_instance, client);
+        }
+        Ok(self.compute_instances.get_mut(&compute_instance).expect("ensured above"))
+    }
+
+    async fn send_to_coordinator<T, F>(&self, f: F) -> T
+    where
+        F: FnOnce(oneshot::Sender<T>) -> Command,
+    {
+        let (tx, rx) = oneshot::channel();
+        self.coordinator_client.send(f(tx));
+        rx.await.expect("sender dropped")
+    }
+
     /// Acquire read holds on the given compute/storage collections, and
     /// determine the smallest common valid write frontier among the specified collections.
     ///
@@ -71,7 +118,9 @@ impl PeekClient {
     /// specially when fetching storage frontiers (see `mz_storage_controller::collections_frontiers`),
     /// we intentionally do not special‑case sinks here because peeks never read from sinks.
     /// Therefore, using `StorageCollections::collections_frontiers` is sufficient.
-    pub async fn acquire_read_holds_and_collection_write_frontiers(&self, id_bundle: &CollectionIdBundle) -> Result<(ReadHolds<Timestamp>, Antichain<Timestamp>), CollectionMissing> {
+    ///
+    /// Note: self is taken &mut because of the lazy fetching in `get_compute_instance_client`.
+    pub async fn acquire_read_holds_and_collection_write_frontiers(&mut self, id_bundle: &CollectionIdBundle) -> Result<(ReadHolds<Timestamp>, Antichain<Timestamp>), CollectionMissing> {
         let mut read_holds = ReadHolds::new();
         let mut upper = Antichain::new();
 
@@ -98,8 +147,8 @@ impl PeekClient {
 
         for (&instance_id, collection_ids) in &id_bundle.compute_ids {
             let client = self
-                .compute_instances
-                .get(&instance_id)
+                .get_compute_instance_client(instance_id)
+                .await
                 .expect("missing compute instance client");
 
             for (id, read_hold, write_frontier) in client.acquire_read_holds_and_collection_write_frontiers(collection_ids.iter().copied().collect()).await? {
@@ -123,9 +172,12 @@ impl PeekClient {
     /// - FastPathPlan::PeekExisting (PeekTarget::Index only)
     ///
     /// Note: FastPathPlan::PeekPersist is not yet supported here; we may add this later.
+    ///
+    /// Note: self is taken &mut because of the lazy fetching in `get_compute_instance_client`.
+    ///
     /// ////////// todo: add statement logging, pending_peeks/client_pending_peeks wiring, and metrics.row_set_finishing_seconds.
     pub async fn implement_fast_path_peek_plan(
-        &self,
+        &mut self,
         fast_path: FastPathPlan,
         timestamp: Timestamp,
         finishing: mz_expr::RowSetFinishing,
@@ -201,8 +253,8 @@ impl PeekClient {
 
                 // Issue peek to the instance
                 let client = self
-                    .compute_instances
-                    .get(&compute_instance)
+                    .get_compute_instance_client(compute_instance)
+                    .await
                     .expect("missing compute instance client");
                 let peek_target = PeekTarget::Index { id: idx_id };
                 let literal_vec: Option<Vec<Row>> = literal_constraints;

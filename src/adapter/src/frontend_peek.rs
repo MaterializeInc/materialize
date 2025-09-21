@@ -150,7 +150,6 @@ impl SessionClient {
             let cluster = catalog.resolve_target_cluster(target_cluster, &session)?;
             (cluster, cluster.id, &cluster.name)
         };
-        self.ensure_compute_instance_client(target_cluster_id).await?;
 
         // TODO: statement logging: set_statement_execution_cluster
 
@@ -479,7 +478,7 @@ impl SessionClient {
 
         // Implement the peek, and capture the response.
         let resp = self
-            .peek_client()
+            .peek_client_mut()
             .implement_fast_path_peek_plan(
                 fast_path_plan,
                 determination.timestamp_context.timestamp_or_default(),
@@ -495,8 +494,10 @@ impl SessionClient {
         Ok(Some(resp))
     }
 
+    //////// todo: comment
+    /// Note: self is taken &mut because of the lazy fetching in `get_compute_instance_client`.
     pub(crate) async fn frontend_determine_timestamp(
-        &self,
+        &mut self,
         catalog_state: &CatalogState,
         session: &Session,
         id_bundle: &CollectionIdBundle,
@@ -574,9 +575,9 @@ impl SessionClient {
         Ok((det, read_holds))
     }
 
-    async fn frontend_determine_timestamp_for(&self, session: &Session, id_bundle: &CollectionIdBundle, when: &QueryWhen, compute_instance: ComputeInstanceId, timeline_context: &TimelineContext, oracle_read_ts: Option<Timestamp>, real_time_recency_ts: Option<Timestamp>, isolation_level: &IsolationLevel, constraint_based: &ConstraintBasedTimestampSelection) -> Result<(TimestampDetermination<Timestamp>, ReadHolds<Timestamp>), AdapterError> {
+    async fn frontend_determine_timestamp_for(&mut self, session: &Session, id_bundle: &CollectionIdBundle, when: &QueryWhen, compute_instance: ComputeInstanceId, timeline_context: &TimelineContext, oracle_read_ts: Option<Timestamp>, real_time_recency_ts: Option<Timestamp>, isolation_level: &IsolationLevel, constraint_based: &ConstraintBasedTimestampSelection) -> Result<(TimestampDetermination<Timestamp>, ReadHolds<Timestamp>), AdapterError> {
 
-        let (read_holds, upper) = self.peek_client().acquire_read_holds_and_collection_write_frontiers(id_bundle).await.expect("missing collection");
+        let (read_holds, upper) = self.peek_client_mut().acquire_read_holds_and_collection_write_frontiers(id_bundle).await.expect("missing collection");
 
         <Coordinator as TimestampProvider>::determine_timestamp_for_inner(
             session,
