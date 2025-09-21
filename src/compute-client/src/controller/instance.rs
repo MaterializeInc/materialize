@@ -176,7 +176,7 @@ impl<T> Client<T>
 where
     T: ComputeControllerTimestamp,
 {
-    pub fn spawn(
+    pub(super) fn spawn(
         id: ComputeInstanceId,
         build_info: &'static BuildInfo,
         storage: StorageCollections<T>,
