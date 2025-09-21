@@ -54,6 +54,11 @@ impl SessionClient {
             return Ok(None);
         }
 
+        if session.vars().emit_timestamp_notice() {
+            // TODO: implement this. See end of peek_finish
+            return Ok(None);
+        }
+
         // # From handle_execute
 
         if session.vars().emit_trace_id_notice() {
@@ -489,15 +494,6 @@ impl SessionClient {
                 max_query_result_size,
             )
             .await?;
-
-        if session.vars().emit_timestamp_notice() {
-            ////////// todo call Coordinator::explain_timestamp
-            ////// Or just fall back to the old code (at the beginning of the function) when this is set.
-            // let explanation =
-            //     self.explain_timestamp(session, target_cluster_id, &input_id_bundle, determination);
-            // session
-            //     .add_notice(AdapterNotice::QueryTimestamp { explanation });
-        }
 
         Ok(Some(resp))
     }
