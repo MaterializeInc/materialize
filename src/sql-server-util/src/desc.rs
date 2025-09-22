@@ -149,7 +149,7 @@ pub struct SqlServerQualifiedTableName {
 
 impl ToString for SqlServerQualifiedTableName {
     fn to_string(&self) -> String {
-        format!("{}.{}", self.schema_name, self.table_name)
+        format!("[{}].[{}]", self.schema_name, self.table_name)
     }
 }
 

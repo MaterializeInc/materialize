@@ -537,6 +537,8 @@ impl DDLEvent {
     ///
     /// See <https://learn.microsoft.com/en-us/sql/t-sql/statements/alter-table-transact-sql?view=sql-server-ver17>
     pub fn is_compatible(&self) -> bool {
+        // TODO (maz): This is currently a basic check that doesn't take into account type changes.
+        // At some point, we will need to move this to SqlServerTableDesc and expand it.
         let mut words = self.ddl_command.split_ascii_whitespace();
         match (
             words.next().map(str::to_ascii_lowercase).as_deref(),
