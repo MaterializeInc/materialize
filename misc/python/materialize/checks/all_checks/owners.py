@@ -487,7 +487,9 @@ class Owners(Check):
 
                 > SELECT name, unnest(privileges)::text FROM mz_sources WHERE name LIKE 'owner_source%' AND type = 'load-generator'
                 owner_source1 owner_role_01=r/owner_role_01
+                owner_source1 mz_support=r/owner_role_01
                 owner_source2 other_owner=r/other_owner
+                owner_source2 mz_support=r/other_owner
 
                 ! SELECT name, unnest(privileges)::text FROM mz_sinks WHERE name LIKE 'owner_sink%'
                 contains: column "privileges" does not exist
