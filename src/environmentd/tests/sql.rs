@@ -2094,8 +2094,12 @@ fn test_load_generator() {
         .batch_execute("CREATE SOURCE counter FROM LOAD GENERATOR COUNTER (TICK INTERVAL '1ms')")
         .unwrap();
 
+    client
+        .batch_execute("CREATE TABLE counter_tbl FROM SOURCE counter")
+        .unwrap();
+
     let row = client
-        .query_one("SELECT count(*), mz_now()::text FROM counter", &[])
+        .query_one("SELECT count(*), mz_now()::text FROM counter_tbl", &[])
         .unwrap();
     let initial_count: i64 = row.get(0);
     let timestamp_millis: String = row.get(1);
@@ -2107,7 +2111,7 @@ fn test_load_generator() {
         .retry(|_| {
             let row = client
                 .query_one(
-                    &format!("SELECT count(*) FROM counter AS OF AT LEAST {next}"),
+                    &format!("SELECT count(*) FROM counter_tbl AS OF AT LEAST {next}"),
                     &[],
                 )
                 .unwrap();

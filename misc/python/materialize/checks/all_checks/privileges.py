@@ -257,6 +257,7 @@ class Privileges(Check):
 
                 > SELECT name, unnest(privileges)::text FROM mz_sources WHERE name LIKE 'privilege_source%' AND type = 'load-generator'
                 privilege_source1 materialize=r/materialize
+                privilege_source1 mz_support=r/materialize
                 privilege_source1 role_1=r/materialize
 
                 ! SELECT name, unnest(privileges)::text FROM mz_sinks WHERE name LIKE 'privilege_sink%'
