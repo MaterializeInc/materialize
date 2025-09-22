@@ -475,20 +475,21 @@ impl<T: timely::progress::Timestamp> Plan<T> {
             let monotonic_ids = dataflow
                 .source_imports
                 .iter()
-                .filter_map(|(id, (_, monotonic, _upper))| if *monotonic { Some(id) } else { None })
+                .filter_map(
+                    |(id, (_, monotonic, _upper))| if *monotonic { Some(*id) } else { None },
+                )
                 .chain(
                     dataflow
                         .index_imports
                         .iter()
-                        .filter_map(|(id, index_import)| {
+                        .filter_map(|(_id, index_import)| {
                             if index_import.monotonic {
-                                Some(id)
+                                Some(index_import.desc.on_id)
                             } else {
                                 None
                             }
                         }),
                 )
-                .cloned()
                 .collect::<BTreeSet<_>>();
 
             let config = TransformConfig { monotonic_ids };

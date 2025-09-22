@@ -85,7 +85,7 @@ $ set-regex match=(.User.:\s\d+|\(u\d+\)) replacement=UID
 
 ? EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR SELECT * FROM v2
 Explained Query:
-  TopK::MonotonicTopK order_by=[#0 asc nulls_last] limit=3 must_consolidate
+  TopK::MonotonicTopK order_by=[#0 asc nulls_last] limit=3
     ArrangeBy
       input_key=[#0{b}]
       raw=true
@@ -108,7 +108,7 @@ Target cluster: quickstart
   ENVELOPE NONE
 > COMMIT
 
-> CREATE DEFAULT INDEX ON non_dbz_data_indexed
+> CREATE DEFAULT INDEX ON non_dbz_data_indexed_tbl
 
 # Propagating monotonicity analysis from an indexed source
 
@@ -117,10 +117,15 @@ Target cluster: quickstart
 ? EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR SELECT * FROM v3
 Explained Query:
   TopK::MonotonicTopK order_by=[#1 asc nulls_last] limit=3
-    Get::PassArrangements materialize.public.non_dbz_data_indexed_tbl
+    ArrangeBy
+      input_key=[#0{a}, #1{b}]
       raw=true
+      Get::PassArrangements materialize.public.non_dbz_data_indexed_tbl
+        raw=false
+        arrangements[0]={ key=[#0{a}, #1{b}], permutation=id, thinning=() }
 
-Source materialize.public.non_dbz_data_indexed_tbl
+Used Indexes:
+  - materialize.public.non_dbz_data_indexed_tbl_primary_idx (*** full scan ***)
 
 Target cluster: quickstart
 
@@ -133,7 +138,7 @@ Target cluster: quickstart
 
 ? EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR SELECT * FROM v5;
 Explained Query:
-  TopK::MonotonicTopK order_by=[#0 asc nulls_last] limit=2 must_consolidate
+  TopK::MonotonicTopK order_by=[#0 asc nulls_last] limit=2
     ArrangeBy
       input_key=[#0{c}]
       raw=true
@@ -180,7 +185,7 @@ Target cluster: quickstart
 
 ? EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR SELECT * FROM v10;
 Explained Query:
-  TopK::MonotonicTopK order_by=[#0 asc nulls_last] limit=2 must_consolidate
+  TopK::MonotonicTopK order_by=[#0 asc nulls_last] limit=2
     ArrangeBy
       input_key=[#0{b}]
       raw=true
@@ -224,8 +229,8 @@ Target cluster: quickstart
 "Dataflow: materialize.public.monotonic_max" "ReduceMonotonic"
 "Dataflow: materialize.public.monotonic_min" "ArrangeMonotonic [val: empty]"
 "Dataflow: materialize.public.monotonic_min" "ReduceMonotonic"
-"Dataflow: materialize.public.non_dbz_data_indexed_primary_idx" "ArrangeBy[[Column(0, \"value\")]]"
-"Dataflow: materialize.public.non_dbz_data_indexed_primary_idx" "ArrangeBy[[Column(0, \"value\")]]-errors"
+"Dataflow: materialize.public.non_dbz_data_indexed_tbl_primary_idx" "ArrangeBy[[Column(0, \"a\"), Column(1, \"b\")]]"
+"Dataflow: materialize.public.non_dbz_data_indexed_tbl_primary_idx" "ArrangeBy[[Column(0, \"a\"), Column(1, \"b\")]]-errors"
 "Dataflow: materialize.public.i1_primary_idx" "ArrangeBy[[Column(0, \"b\")]]"
 "Dataflow: materialize.public.i1_primary_idx" "ArrangeBy[[Column(0, \"b\")]]-errors"
 "Dataflow: materialize.public.i4_primary_idx" "ArrangeBy[[Column(0, \"c\")]]"
