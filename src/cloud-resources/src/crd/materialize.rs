@@ -99,6 +99,10 @@ pub mod v1alpha1 {
         pub balancerd_resource_requirements: Option<ResourceRequirements>,
         // Resource requirements for the console pod
         pub console_resource_requirements: Option<ResourceRequirements>,
+        // Number of balancerd pods to create
+        pub balancerd_replicas: Option<i32>,
+        // Number of console pods to create
+        pub console_replicas: Option<i32>,
 
         // Name of the kubernetes service account to use.
         // If not set, we will create one with the same name as this Materialize object.
@@ -266,6 +270,14 @@ pub mod v1alpha1 {
 
         pub fn balancerd_external_certificate_secret_name(&self) -> String {
             self.name_prefixed("balancerd-external-tls")
+        }
+
+        pub fn balancerd_replicas(&self) -> i32 {
+            self.spec.balancerd_replicas.unwrap_or(2)
+        }
+
+        pub fn console_replicas(&self) -> i32 {
+            self.spec.console_replicas.unwrap_or(2)
         }
 
         pub fn console_configmap_name(&self) -> String {

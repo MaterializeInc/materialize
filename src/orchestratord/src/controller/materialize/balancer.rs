@@ -320,7 +320,7 @@ fn create_balancerd_deployment_object(
     };
 
     let deployment_spec = DeploymentSpec {
-        replicas: Some(1),
+        replicas: Some(mz.balancerd_replicas()),
         selector: LabelSelector {
             match_labels: Some(pod_template_labels.clone()),
             ..Default::default()
