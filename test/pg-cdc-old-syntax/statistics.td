@@ -56,7 +56,7 @@ $ set-regex match=u\d+ replacement="<REPLICAID>"
   FROM
     mz_clusters c,
     mz_cluster_replicas cr,
-    mz_internal.mz_source_statistics_raw u,
+    mz_internal.mz_source_statistics u,
     mz_sources s
   WHERE
     c.name = 'stats_cluster' AND c.id = cr.cluster_id AND cr.id = u.replica_id
@@ -73,7 +73,7 @@ SELECT cr.id
   FROM
     mz_clusters c,
     mz_cluster_replicas cr,
-    mz_internal.mz_source_statistics_raw u,
+    mz_internal.mz_source_statistics u,
     mz_sources s
   WHERE
     c.name = 'stats_cluster' AND c.id = cr.cluster_id AND cr.id = u.replica_id
@@ -88,7 +88,7 @@ SELECT cr.id
     u.snapshot_records_known,
     u.snapshot_records_staged
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('mz_source') AND u.replica_id = '${replica_id}'
 mz_source true true 2 2
 
@@ -96,7 +96,7 @@ $ set-from-sql var=previous-offset-committed
 SELECT
     (u.offset_committed)::text
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('mz_source') AND u.replica_id = '${replica_id}'
 
 
@@ -111,7 +111,7 @@ INSERT INTO t1 VALUES ('three');
     u.snapshot_records_known,
     u.snapshot_records_staged
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('mz_source') AND u.replica_id = '${replica_id}'
 mz_source true true 2 2
 
@@ -119,7 +119,7 @@ $ set-from-sql var=pre-restart-offset-committed
 SELECT
     (u.offset_committed)::text
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('mz_source') AND u.replica_id = '${replica_id}'
 
 > ALTER CLUSTER stats_cluster SET (REPLICATION FACTOR 0)
@@ -137,7 +137,7 @@ INSERT INTO t1 VALUES ('four');
     u.snapshot_records_known,
     u.snapshot_records_staged
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('mz_source') AND u.replica_id = '${replica_id}'
 mz_source true true 2 2
 
@@ -146,7 +146,7 @@ $ set-regex match=u\d+ replacement="<REPLICAID>"
   FROM
     mz_clusters c,
     mz_cluster_replicas cr,
-    mz_internal.mz_source_statistics_raw u,
+    mz_internal.mz_source_statistics u,
     mz_sources s
   WHERE
     c.name = 'stats_cluster' AND c.id = cr.cluster_id AND cr.id = u.replica_id
@@ -160,7 +160,7 @@ SELECT cr.id
   FROM
     mz_clusters c,
     mz_cluster_replicas cr,
-    mz_internal.mz_source_statistics_raw u,
+    mz_internal.mz_source_statistics u,
     mz_sources s
   WHERE
     c.name = 'stats_cluster' AND c.id = cr.cluster_id AND cr.id = u.replica_id
@@ -177,7 +177,7 @@ SELECT cr.id
     u.snapshot_records_known,
     u.snapshot_records_staged
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('mz_source') AND u.replica_id = '${replica_id}'
 mz_source true true <null> <null>
 
@@ -198,7 +198,7 @@ true
     u.snapshot_records_known,
     u.snapshot_records_staged
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('mz_source') AND u.replica_id = '${replica_id}'
 mz_source 1 1
 
@@ -207,7 +207,7 @@ mz_source 1 1
     u.snapshot_records_known,
     u.snapshot_records_staged
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('mz_source') AND u.replica_id = '${replica_id}'
 mz_source 1 1
 
@@ -216,7 +216,7 @@ mz_source 1 1
     s.name,
     u.updates_committed > 0
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('alt') AND u.replica_id = '${replica_id}'
 alt true
 
@@ -225,7 +225,7 @@ alt true
 > SELECT
     count(*)
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('alt')
 0
 

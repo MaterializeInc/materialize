@@ -153,13 +153,6 @@ impl RawSourceCreationConfig {
     pub fn responsible_for<P: Hash>(&self, partition: P) -> bool {
         self.responsible_worker(partition) == self.worker_id
     }
-
-    /// Returns a `SourceStatistics` for the source.
-    pub fn source_statistics(&self) -> &SourceStatistics {
-        self.statistics
-            .get(&self.id)
-            .expect("statistics exist for the source")
-    }
 }
 
 /// Creates a source dataflow operator graph from a source connection. The type of SourceConnection
@@ -309,7 +302,6 @@ where
 {
     let source_id = config.id;
     let worker_id = config.worker_id;
-    let source_statistics = config.source_statistics().clone();
     let now_fn = config.now_fn.clone();
     let timestamp_interval = config.timestamp_interval;
 
@@ -352,7 +344,11 @@ where
         export_collections.insert(id, new_export.as_collection());
 
         let bytes_read_counter = config.metrics.source_defs.bytes_read.clone();
-        let source_statistics = source_statistics.clone();
+        let source_statistics = config
+            .statistics
+            .get(&id)
+            .expect("statistics initialized")
+            .clone();
 
         builder.build(move |mut caps| {
             let mut health_cap = Some(caps.remove(0));

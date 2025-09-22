@@ -120,7 +120,6 @@ use crate::source::postgres::verify_schema;
 use crate::source::postgres::{DefiniteError, ReplicationError, SourceOutputInfo, TransientError};
 use crate::source::probe;
 use crate::source::types::{Probe, SignaledFuture, SourceMessage, StackedCollection};
-use crate::statistics::SourceStatistics;
 
 /// Postgres epoch is 2000-01-01T00:00:00Z
 static PG_EPOCH: LazyLock<SystemTime> =
@@ -196,12 +195,12 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 probe_cap,
             ]: &mut [_; 4] = caps.try_into().unwrap();
 
-            let source_statistics = config.source_statistics();
-
             if !config.responsible_for("slot") {
                 // Emit 0, to mark this worker as having started up correctly.
-                source_statistics.set_offset_known(0);
-                source_statistics.set_offset_committed(0);
+                for stat in config.statistics.values() {
+                    stat.set_offset_known(0);
+                    stat.set_offset_committed(0);
+                }
                 return Ok(());
             }
 
@@ -387,7 +386,6 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 committed_uppers.as_mut(),
                 &probe_output,
                 &probe_cap[0],
-                source_statistics,
             )
             .await?;
 
@@ -633,7 +631,6 @@ async fn raw_stream<'a>(
         Tee<MzOffset, Vec<Probe<MzOffset>>>,
     >,
     probe_cap: &'a Capability<MzOffset>,
-    source_statistics: &'a SourceStatistics,
 ) -> Result<
     Result<
         impl AsyncStream<Item = Result<ReplicationMessage<LogicalReplicationMessage>, TransientError>>
@@ -811,7 +808,9 @@ async fn raw_stream<'a>(
                     Some(lsn) => {
                         if last_committed_upper < lsn {
                             last_committed_upper = lsn;
-                            source_statistics.set_offset_committed(last_committed_upper.offset);
+                            for stat in config.statistics.values() {
+                                stat.set_offset_committed(last_committed_upper.offset);
+                            }
                         }
                         Ok(())
                     }
@@ -820,7 +819,9 @@ async fn raw_stream<'a>(
                 Ok(()) = probe_rx.changed() => match &*probe_rx.borrow() {
                     Some(Ok(probe)) => {
                         if let Some(offset_known) = probe.upstream_frontier.as_option() {
-                            source_statistics.set_offset_known(offset_known.offset);
+                            for stat in config.statistics.values() {
+                                stat.set_offset_known(offset_known.offset);
+                            }
                         }
                         probe_output.give(probe_cap, probe);
                         Ok(())

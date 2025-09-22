@@ -13037,8 +13037,46 @@ pub static MZ_SOURCE_STATISTICS_WITH_HISTORY: LazyLock<BuiltinView> =
             .finish(),
         column_comments: BTreeMap::new(),
         sql: "
+WITH
+    -- For each subsource, statistics are reported as its parent source
+    subsource_to_parent AS
+    (
+        SELECT subsource.id AS id, parent.id AS report_id
+        FROM mz_catalog.mz_sources AS subsource
+            JOIN mz_internal.mz_object_dependencies AS dep ON subsource.id = dep.object_id
+            JOIN mz_catalog.mz_sources AS parent ON parent.id = dep.referenced_object_id
+        WHERE subsource.type = 'subsource'
+    ),
+    -- For each table from source, statistics are reported as its parent source
+    table_to_parent AS
+    (
+        SELECT id, source_id AS report_id
+        FROM mz_catalog.mz_tables
+        WHERE source_id IS NOT NULL
+    ),
+    -- For each source and subsource, statistics are reported as itself
+    source_refl AS
+    (
+        SELECT id, id AS report_id
+        FROM mz_catalog.mz_sources
+        WHERE type NOT IN ('progress', 'log')
+    ),
+    -- For each table from source, statistics are reported as itself
+    table_refl AS
+    (
+        SELECT id, id AS report_id
+        FROM mz_catalog.mz_tables
+        WHERE source_id IS NOT NULL
+    ),
+    report_paths AS
+    (
+        SELECT id, report_id FROM subsource_to_parent
+        UNION ALL SELECT id, report_id FROM table_to_parent
+        UNION ALL SELECT id, report_id FROM source_refl
+        UNION ALL SELECT id, report_id FROM table_refl
+    )
 SELECT
-    id,
+    report_paths.report_id AS id,
     replica_id,
     -- Counters
     SUM(messages_received)::uint8 AS messages_received,
@@ -13057,10 +13095,11 @@ SELECT
     SUM(snapshot_records_staged)::uint8 AS snapshot_records_staged,
     bool_and(snapshot_committed) as snapshot_committed,
     -- Gauges
-    SUM(offset_known)::uint8 AS offset_known,
-    SUM(offset_committed)::uint8 AS offset_committed
+    MAX(offset_known)::uint8 AS offset_known,
+    MIN(offset_committed)::uint8 AS offset_committed
 FROM mz_internal.mz_source_statistics_raw
-GROUP BY id, replica_id",
+    JOIN report_paths USING (id)
+GROUP BY report_paths.report_id, replica_id",
         access: vec![PUBLIC_SELECT],
     });
 

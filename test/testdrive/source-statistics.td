@@ -71,13 +71,6 @@ goofus,gallant
 jack   jill    0
 goofus gallant 1
 
-# The `CREATE TABLE ... FROM SOURCE` command caused a recreation of the source
-# dataflow, during which we might have lost the statistics about committed
-# updates from the snapshot. Ingest some more data to ensure we see some
-# `updates_committed`.
-$ kafka-ingest topic=metrics-test format=bytes
-calvin,hobbes
-
 > SELECT
       s.name,
       bool_and(u.snapshot_committed),
@@ -87,7 +80,7 @@ calvin,hobbes
       SUM(u.bytes_received) > 0,
       bool_and(u.rehydration_latency IS NOT NULL)
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('metrics_test_source')
   GROUP BY s.name
   ORDER BY s.name
@@ -133,9 +126,6 @@ mammalmore    moosemoose   2
 > CREATE TABLE users FROM SOURCE auction_house_in_source_statistics_td (REFERENCE users);
 > COMMIT
 
-# Note that only the base-source has `messages_received`, but the sub-sources have `messages_committed`.
-# Committed will usually, for auction sources, add up to received, but we don't test this (right now) because of
-# jitter on when metrics are produced for each sub-source.
 > SELECT
       s.name,
       bool_and(u.snapshot_committed),
@@ -145,11 +135,11 @@ mammalmore    moosemoose   2
       SUM(u.bytes_received) > 0,
       bool_and(u.rehydration_latency IS NOT NULL)
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('accounts', 'auction_house_in_source_statistics_td', 'auctions', 'bids', 'organizations', 'users')
   GROUP BY s.name
   ORDER BY s.name
-auction_house_in_source_statistics_td true true false false true true
+auction_house_in_source_statistics_td true true true true true true
 
 
 # Assert that the codepath that ensures a 0-value as the first value in `mz_source_statistics` occurs, using a `SUBSCRIBE`.
@@ -183,7 +173,7 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
     SUM(u.messages_received) >= 18,
     SUM(u.bytes_received) > 0
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('upsert')
   GROUP BY s.name
   ORDER BY s.name
@@ -199,7 +189,7 @@ upsert true true
     SUM(u.records_indexed),
     bool_and(u.rehydration_latency IS NOT NULL)
   FROM mz_tables t
-  JOIN mz_internal.mz_source_statistics_raw u ON t.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON t.id = u.id
   WHERE t.name IN ('upsert_tbl')
   GROUP BY t.name
   ORDER BY t.name
@@ -213,7 +203,7 @@ $ set-from-sql var=updates-committed
 SELECT
     (SUM(u.updates_committed) + 1)::text
   FROM mz_tables t
-  JOIN mz_internal.mz_source_statistics_raw u ON t.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON t.id = u.id
   WHERE t.name IN ('upsert_tbl')
 
 $ set-from-sql var=state-bytes
@@ -230,7 +220,7 @@ $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} 
     SUM(u.messages_received) >= 20,
     SUM(u.bytes_received) > 0
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('upsert')
   GROUP BY s.name
   ORDER BY s.name
@@ -243,7 +233,7 @@ upsert true true
     SUM(u.bytes_indexed) < ${state-bytes},
     SUM(u.records_indexed)
   FROM mz_tables t
-  JOIN mz_internal.mz_source_statistics_raw u ON t.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON t.id = u.id
   WHERE t.name IN ('upsert_tbl')
   GROUP BY t.name
   ORDER BY t.name

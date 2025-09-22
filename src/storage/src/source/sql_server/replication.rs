@@ -82,8 +82,6 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                 definite_error_cap_set,
             ]: &mut [_; 3] = caps.try_into().unwrap();
 
-            let source_statistics = config.source_statistics();
-
             let connection_config = source
                 .connection
                 .resolve_config(
@@ -173,27 +171,16 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                 return Ok(());
             }
 
-            let mut snapshot_total = 0;
-            let mut snapshot_staged_total = 0u64;
-
             // We first calculate all the total rows we need to fetch across all tables. Since this
             // happens outside the snapshot transaction the totals might be off, so we won't assert
             // that we get exactly this many rows later.
             for table in &snapshot_tables {
                 let table_total = mz_sql_server_util::inspect::snapshot_size(&mut client, &table.schema_name, &table.name).await?;
-                snapshot_total += table_total;
                 for export_stat in export_statistics.get(&table.capture_instance.name).unwrap() {
                     export_stat.set_snapshot_records_known(u64::cast_from(table_total));
                     export_stat.set_snapshot_records_staged(0);
                 }
             }
-
-            // Only emit if there was a snapshot to avoid clearing previous snapshot stats.
-            if !capture_instance_to_snapshot.is_empty() {
-                source_statistics.set_snapshot_records_known(u64::cast_from(snapshot_total));
-                source_statistics.set_snapshot_records_staged(0);
-            }
-
 
             let mut cdc_handle = client
                 .cdc(capture_instances.keys().cloned())
@@ -243,7 +230,6 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                             for export_stat in export_statistics.get(&table.capture_instance.name).unwrap() {
                                 export_stat.set_snapshot_records_staged(snapshot_staged);
                             }
-                            source_statistics.set_snapshot_records_staged(snapshot_staged_total);
                         }
 
                         for (partition_idx, _) in partition_indexes {
@@ -276,7 +262,6 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                                 .await;
                         }
                         snapshot_staged += 1;
-                        snapshot_staged_total += u64::cast_from(partition_indexes.len());
                     }
 
                     tracing::info!(%config.id, %table.name, %table.schema_name, %snapshot_lsn, "timely-{worker_id} snapshot complete");
@@ -286,12 +271,6 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                         export_stat.set_snapshot_records_staged(snapshot_staged);
                         export_stat.set_snapshot_records_known(snapshot_staged);
                     }
-                }
-
-                // Only emit if there was a snapshot to avoid clearing previous snapshot stats.
-                if !capture_instance_to_snapshot.is_empty() {
-                    source_statistics.set_snapshot_records_staged(snapshot_staged_total);
-                    source_statistics.set_snapshot_records_known(snapshot_staged_total);
                 }
 
                 snapshot_lsns

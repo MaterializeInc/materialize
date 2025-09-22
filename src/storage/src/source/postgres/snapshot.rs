@@ -252,7 +252,6 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
         Box::pin(SignaledFuture::new(busy_signal, async move {
             let id = config.id;
             let worker_id = config.worker_id;
-            let source_statistics = config.source_statistics();
             let [
                 data_cap_set,
                 rewind_cap_set,
@@ -430,12 +429,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 })
                 .collect();
 
-            let snapshot_total =
-                fetch_snapshot_size(&client, worker_tables, metrics, &config).await?;
-
-            let mut snapshot_staged_total = 0;
-            source_statistics.set_snapshot_records_known(snapshot_total);
-            source_statistics.set_snapshot_records_staged(0);
+            report_snapshot_size(&client, worker_tables, metrics, &config).await?;
 
             for (&oid, outputs) in reader_table_info.iter() {
                 let mut table_name = None;
@@ -501,12 +495,10 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                         raw_handle.give_fueled(&data_cap_set[0], &update).await;
                     }
                     snapshot_staged += 1;
-                    snapshot_staged_total += u64::cast_from(output_indexes.len());
                     if snapshot_staged % 1000 == 0 {
                         for export_stat in export_statistics.get(&oid).unwrap() {
                             export_stat.set_snapshot_records_staged(snapshot_staged);
                         }
-                        source_statistics.set_snapshot_records_staged(snapshot_staged_total);
                     }
                 }
                 // final update for snapshot_staged, using the staged values as the total is an estimate
@@ -530,9 +522,6 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 }
             }
             *rewind_cap_set = CapabilitySet::new();
-
-            source_statistics.set_snapshot_records_known(snapshot_staged_total);
-            source_statistics.set_snapshot_records_staged(snapshot_staged_total);
 
             // Failure scenario after we have produced the snapshot, but before a successful COMMIT
             fail::fail_point!("pg_snapshot_failure", |_| Err(
@@ -707,27 +696,25 @@ fn decode_copy_row(data: &[u8], col_len: usize, row: &mut Row) -> Result<(), Def
 }
 
 /// Record the sizes of the tables being snapshotted in `PgSnapshotMetrics` and emit snapshot statistics for each export.
-async fn fetch_snapshot_size(
+async fn report_snapshot_size(
     client: &Client,
     // The table names, oids, number of outputs, and export_ids for this table owned by this worker.
     tables: Vec<(String, Oid, usize, &Vec<SourceStatistics>)>,
     metrics: PgSnapshotMetrics,
     config: &RawSourceCreationConfig,
-) -> Result<u64, anyhow::Error> {
+) -> Result<(), anyhow::Error> {
     // TODO(guswynn): delete unused configs
     let snapshot_config = config.config.parameters.pg_snapshot_config;
 
-    let mut total = 0;
-    for (table, oid, output_count, export_stats) in tables {
+    for (table, oid, _, export_stats) in tables {
         let stats = collect_table_statistics(client, snapshot_config, &table, oid).await?;
         metrics.record_table_count_latency(table, stats.count_latency);
         for export_stat in export_stats {
             export_stat.set_snapshot_records_known(stats.count);
             export_stat.set_snapshot_records_staged(0);
         }
-        total += stats.count * u64::cast_from(output_count);
     }
-    Ok(total)
+    Ok(())
 }
 
 #[derive(Default)]

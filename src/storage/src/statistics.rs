@@ -904,10 +904,11 @@ impl SinkStatistics {
 pub struct AggregatedStatistics {
     worker_id: usize,
     worker_count: usize,
-    local_source_statistics: BTreeMap<GlobalId, (usize, SourceStatistics)>,
+    local_source_statistics: BTreeMap<GlobalId, (usize, GlobalId, SourceStatistics)>,
     local_sink_statistics: BTreeMap<GlobalId, (usize, SinkStatistics)>,
 
-    global_source_statistics: BTreeMap<GlobalId, (usize, Vec<Option<SourceStatisticsUpdate>>)>,
+    global_source_statistics:
+        BTreeMap<GlobalId, (usize, GlobalId, Vec<Option<SourceStatisticsUpdate>>)>,
     global_sink_statistics: BTreeMap<GlobalId, (usize, Vec<Option<SinkStatisticsUpdate>>)>,
 }
 
@@ -924,17 +925,23 @@ impl AggregatedStatistics {
         }
     }
 
-    /// Get a collection of `SourceStatistics` for all known ids.
-    pub fn get_local_source_stats(&self) -> BTreeMap<GlobalId, SourceStatistics> {
-        self.local_source_statistics
-            .iter()
-            .map(|(id, (_epoch, stats))| (id.clone(), stats.clone()))
-            .collect()
+    /// Get a collection of `SourceStatistics` for the ingestion `ingestion_id`.
+    pub fn get_ingestion_stats(
+        &self,
+        ingestion_id: &GlobalId,
+    ) -> BTreeMap<GlobalId, SourceStatistics> {
+        let mut ingestion_stats = BTreeMap::new();
+        for (id, (_epoch, ingestion_id2, stats)) in self.local_source_statistics.iter() {
+            if ingestion_id == ingestion_id2 {
+                ingestion_stats.insert(id.clone(), stats.clone());
+            }
+        }
+        ingestion_stats
     }
 
     /// Get a `SourceStatistics` for an id, if it exists.
     pub fn get_source(&self, id: &GlobalId) -> Option<&SourceStatistics> {
-        self.local_source_statistics.get(id).map(|(_, s)| s)
+        self.local_source_statistics.get(id).map(|(_, _, s)| s)
     }
 
     /// Get a `SinkStatistics` for an id, if it exists.
@@ -956,7 +963,7 @@ impl AggregatedStatistics {
     /// Gauge values from previous epochs will be ignored. Counter values from previous epochs will
     /// still be applied as usual.
     pub fn advance_global_epoch(&mut self, id: GlobalId) {
-        if let Some((epoch, stats)) = self.global_source_statistics.get_mut(&id) {
+        if let Some((epoch, _ingestion_id, stats)) = self.global_source_statistics.get_mut(&id) {
             *epoch += 1;
             for worker_stats in stats {
                 if let Some(update) = worker_stats {
@@ -978,22 +985,24 @@ impl AggregatedStatistics {
     pub fn initialize_source<F: FnOnce() -> SourceStatistics>(
         &mut self,
         id: GlobalId,
+        ingestion_id: GlobalId,
         resume_upper: Antichain<Timestamp>,
         stats: F,
     ) {
         self.local_source_statistics
             .entry(id)
-            .and_modify(|(epoch, stats)| {
+            .and_modify(|(epoch, ingestion_id2, stats)| {
+                assert_eq!(ingestion_id, *ingestion_id2);
                 *epoch += 1;
                 stats.reset_gauges();
                 stats.meta = SourceStatisticsMetadata::new(resume_upper);
             })
-            .or_insert_with(|| (0, stats()));
+            .or_insert_with(|| (0, ingestion_id, stats()));
 
         if self.worker_id == 0 {
             self.global_source_statistics
                 .entry(id)
-                .or_insert_with(|| (0, vec![None; self.worker_count]));
+                .or_insert_with(|| (0, ingestion_id, vec![None; self.worker_count]));
         }
     }
 
@@ -1025,7 +1034,8 @@ impl AggregatedStatistics {
         }
 
         for (epoch, stat) in source_statistics {
-            if let Some((global_epoch, stats)) = self.global_source_statistics.get_mut(&stat.id) {
+            if let Some((global_epoch, _, stats)) = self.global_source_statistics.get_mut(&stat.id)
+            {
                 // The record might be from a previous incarnation of the source. If that's the
                 // case, we only incorporate its counter values and ignore its gauge values.
                 let epoch_match = epoch >= *global_epoch;
@@ -1070,7 +1080,7 @@ impl AggregatedStatistics {
         let sources = self
             .local_source_statistics
             .values_mut()
-            .flat_map(|(epoch, s)| s.snapshot().map(|v| (*epoch, v)))
+            .flat_map(|(epoch, _, s)| s.snapshot().map(|v| (*epoch, v)))
             .collect();
 
         let sinks = self
@@ -1111,7 +1121,7 @@ impl AggregatedStatistics {
         let sources = self
             .global_source_statistics
             .iter_mut()
-            .filter_map(|(_, (_, s))| {
+            .filter_map(|(_, (_, _, s))| {
                 if s.iter().all(|s| s.is_some()) {
                     let ret = Some(SourceStatisticsUpdate::summarize(|| {
                         s.iter().filter_map(Option::as_ref)

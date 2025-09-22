@@ -121,7 +121,6 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
     let button = builder.build(move |caps| {
         SignaledFuture::new(busy_signal, async move {
             let [mut cap, mut progress_cap]: [_; 2] = caps.try_into().unwrap();
-            let source_statistics = config.source_statistics();
             let stats_worker = config.responsible_for(0);
             let resume_upper = Antichain::from_iter(
                 config
@@ -138,9 +137,7 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
             // as statistic summarization will return null if any worker hasn't set a value.
             // This will also reset snapshot stats for any exports not snapshotting.
             if snapshotting {
-                source_statistics.set_snapshot_records_known(0);
-                source_statistics.set_snapshot_records_staged(0);
-                for stats in all_export_stats {
+                for stats in all_export_stats.iter() {
                     stats.set_snapshot_records_known(0);
                     stats.set_snapshot_records_staged(0);
                 }
@@ -179,15 +176,15 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
             let mut upper_offset = if snapshotting {
                 let snapshot_rounds = key_value.transactional_snapshot_rounds();
                 if stats_worker {
-                    source_statistics.set_offset_known(snapshot_rounds);
+                    for stats in all_export_stats.iter() {
+                        stats.set_offset_known(snapshot_rounds);
+                    }
                 }
 
                 // Downgrade to the snapshot frontier.
                 progress_cap.downgrade(&MzOffset::from(snapshot_rounds));
 
-                let mut emitted_total = 0;
                 let mut emitted = 0;
-                source_statistics.set_snapshot_records_known(local_snapshot_size);
                 for stats in snapshot_export_stats.iter() {
                     stats.set_snapshot_records_known(local_snapshot_size);
                 }
@@ -202,9 +199,7 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
                         }
                         // emitted_all_indexes is going to be some multiple of num_outputs;
                         emitted += emitted_all_exports / num_outputs;
-                        emitted_total += emitted_all_exports;
                     }
-                    source_statistics.set_snapshot_records_staged(emitted_total);
                     for stats in snapshot_export_stats.iter() {
                         stats.set_snapshot_records_staged(emitted);
                     }
@@ -551,13 +546,15 @@ pub fn render_statistics_operator<G: Scope<Timestamp = MzOffset>>(
     let builder =
         AsyncOperatorBuilder::new(format!("key_value_loadgen_statistics:{id}"), scope.clone());
     let offset_worker = config.responsible_for(0);
-    let source_statistics = config.source_statistics().clone();
+    let source_statistics = config.statistics.clone();
     let button = builder.build(move |caps| async move {
         drop(caps);
         if !offset_worker {
             // Emit 0, to mark this worker as having started up correctly.
-            source_statistics.set_offset_committed(0);
-            source_statistics.set_offset_known(0);
+            for stat in source_statistics.values() {
+                stat.set_offset_committed(0);
+                stat.set_offset_known(0);
+            }
             return;
         }
         tokio::pin!(committed_uppers);
@@ -565,8 +562,10 @@ pub fn render_statistics_operator<G: Scope<Timestamp = MzOffset>>(
             match committed_uppers.next().await {
                 Some(frontier) => {
                     if let Some(offset) = frontier.as_option() {
-                        source_statistics.set_offset_committed(offset.offset);
-                        source_statistics.set_offset_known(offset.offset);
+                        for stat in source_statistics.values() {
+                            stat.set_offset_committed(offset.offset);
+                            stat.set_offset_known(offset.offset);
+                        }
                     }
                 }
                 None => return,

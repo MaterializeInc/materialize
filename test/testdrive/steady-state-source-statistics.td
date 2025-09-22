@@ -83,10 +83,10 @@ mammalmore    moose   2
 
 > SELECT
     s.name,
-    SUM(u.offset_known) > 0,
-    SUM(u.offset_known) = SUM(u.offset_committed)
+    MAX(u.offset_known) > 0,
+    MAX(u.offset_known) = MAX(u.offset_committed)
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('upsert')
   GROUP BY s.name
   ORDER BY s.name
@@ -94,10 +94,10 @@ upsert true true
 
 > SELECT
     s.name,
-    SUM(u.offset_known) > 0,
-    SUM(u.offset_committed) > 0
+    MAX(u.offset_known) > 0,
+    MAX(u.offset_committed) > 0
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('counter')
   GROUP BY s.name
   ORDER BY s.name
@@ -105,9 +105,9 @@ counter true true
 
 $ set-from-sql var=previous-offset-known
 SELECT
-    (SUM(u.offset_known))::text
+    (MAX(u.offset_known))::text
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('upsert')
 
 
@@ -122,10 +122,10 @@ birdmore      geese   56
 
 > SELECT
     s.name,
-    SUM(u.offset_known) > ${previous-offset-known},
-    SUM(u.offset_known) = SUM(u.offset_committed)
+    MAX(u.offset_known) > ${previous-offset-known},
+    MAX(u.offset_known) = MAX(u.offset_committed)
   FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics_raw u ON s.id = u.id
+  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('upsert')
   GROUP BY s.name
   ORDER BY s.name

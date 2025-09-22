@@ -31,7 +31,7 @@ static STATISTICS: &str = "statistics";
 /// Renders the statistics dataflow.
 pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
     scope: G,
-    mut config: RawSourceCreationConfig,
+    config: RawSourceCreationConfig,
     connection: MySqlSourceConnection,
     resume_uppers: impl futures::Stream<Item = Antichain<GtidPartition>> + 'static,
 ) -> (
@@ -48,19 +48,15 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
     let (button, transient_errors) = builder.build_fallible::<TransientError, _>(move |caps| {
         Box::pin(async move {
             let worker_id = config.worker_id;
-            // Unable to take a reference to a `SourceStatistics` because it will prevent moving now_fn further down.
-            // It's ok to remove because we are passed a clone of config, and this operator is simple.
-            let source_statistics = config
-                .statistics
-                .remove(&config.id)
-                .expect("statistics are initialized");
             let [probe_cap]: &mut [_; 1] = caps.try_into().unwrap();
 
             // Only run the replication reader on the worker responsible for it.
             if !config.responsible_for(STATISTICS) {
                 // Emit 0, to mark this worker as having started up correctly.
-                source_statistics.set_offset_known(0);
-                source_statistics.set_offset_committed(0);
+                for stat in config.statistics.values() {
+                    stat.set_offset_known(0);
+                    stat.set_offset_committed(0);
+                }
                 return Ok(());
             }
 
@@ -98,7 +94,9 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                         gtid_set_frontier(&gtid_executed).map_err(TransientError::from)?;
 
                     let offset_known = aggregate_mysql_frontier(&upstream_frontier);
-                    source_statistics.set_offset_known(offset_known);
+                    for stat in config.statistics.values() {
+                        stat.set_offset_known(offset_known);
+                    }
                     probe_output.give(
                         &probe_cap[0],
                         Probe {
@@ -111,7 +109,9 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
             let commit_loop = async {
                 while let Some(committed_frontier) = resume_uppers.next().await {
                     let offset_committed = aggregate_mysql_frontier(&committed_frontier);
-                    source_statistics.set_offset_committed(offset_committed);
+                    for stat in config.statistics.values() {
+                        stat.set_offset_committed(offset_committed);
+                    }
                 }
             };
 
