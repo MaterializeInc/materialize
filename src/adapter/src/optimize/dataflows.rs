@@ -119,8 +119,6 @@ pub enum ExprPrepStyle<'a> {
         session: &'a dyn SessionMetadata,
         catalog_state: &'a CatalogState,
     },
-    /// The expression is being prepared for evaluation in an AS OF or UP TO clause.
-    AsOfUpTo,
     /// The expression is being prepared for evaluation in a CHECK expression of a webhook source.
     WebhookValidation {
         /// Time at which this expression is being evaluated.
@@ -447,9 +445,7 @@ pub fn prep_relation_expr(
                 }
             })
         }
-        ExprPrepStyle::OneShot { .. }
-        | ExprPrepStyle::AsOfUpTo
-        | ExprPrepStyle::WebhookValidation { .. } => expr
+        ExprPrepStyle::OneShot { .. } | ExprPrepStyle::WebhookValidation { .. } => expr
             .0
             .try_visit_scalars_mut(&mut |s| prep_scalar_expr(s, style)),
     }
@@ -485,7 +481,7 @@ pub fn prep_scalar_expr(
         }),
 
         // Reject the query if it contains any unmaterializable function calls.
-        ExprPrepStyle::Maintained | ExprPrepStyle::AsOfUpTo => {
+        ExprPrepStyle::Maintained => {
             let mut last_observed_unmaterializable_func = None;
             expr.visit_mut_post(&mut |e| {
                 if let MirScalarExpr::CallUnmaterializable(f) = e {
@@ -496,10 +492,6 @@ pub fn prep_scalar_expr(
             if let Some(f) = last_observed_unmaterializable_func {
                 let err = match style {
                     ExprPrepStyle::Maintained => OptimizerError::UnmaterializableFunction(f),
-                    ExprPrepStyle::AsOfUpTo => OptimizerError::UncallableFunction {
-                        func: f,
-                        context: "AS OF or UP TO",
-                    },
                     _ => unreachable!(),
                 };
                 return Err(err);

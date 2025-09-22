@@ -23,7 +23,7 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 > DECLARE c CURSOR FOR SUBSCRIBE t1 AS OF -1;
 
 ! FETCH 1 c;
-contains:out of range integral type conversion attempted
+contains:AS OF or UP TO should be castable to a (non-null) mz_timestamp value
 
 > COMMIT
 

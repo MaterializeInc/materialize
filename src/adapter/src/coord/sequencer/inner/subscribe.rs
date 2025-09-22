@@ -194,10 +194,6 @@ impl Coordinator {
         let (_, view_id) = self.allocate_transient_id();
         let (_, sink_id) = self.allocate_transient_id();
         let conn_id = session.conn_id().clone();
-        let up_to = up_to
-            .as_ref()
-            .map(|expr| Coordinator::evaluate_when(self.catalog().state(), expr.clone(), session))
-            .transpose()?;
         let debug_name = format!("subscribe-{}", sink_id);
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
             .override_from(&self.catalog.get_cluster(cluster_id).config.features());
@@ -210,7 +206,7 @@ impl Coordinator {
             sink_id,
             Some(conn_id),
             *with_snapshot,
-            up_to,
+            *up_to,
             debug_name,
             optimizer_config,
             self.optimizer_metrics(),

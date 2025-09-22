@@ -2272,6 +2272,17 @@ impl HirRelationExpr {
         })?;
         Ok(contains)
     }
+
+    /// Whether the expression contains any [`UnmaterializableFunc`] call.
+    pub fn contains_unmaterializable(&self) -> Result<bool, RecursionLimitError> {
+        let mut contains = false;
+        self.visit_post(&mut |expr| {
+            expr.visit_children(|expr: &HirScalarExpr| {
+                contains = contains || expr.contains_unmaterializable()
+            })
+        })?;
+        Ok(contains)
+    }
 }
 
 impl CollectionPlan for HirRelationExpr {
@@ -3061,6 +3072,18 @@ impl HirScalarExpr {
         contains
     }
 
+    /// Whether the expression contains any [`UnmaterializableFunc`] call.
+    pub fn contains_unmaterializable(&self) -> bool {
+        let mut contains = false;
+        #[allow(deprecated)]
+        self.visit_post_nolimit(&mut |e| {
+            if let Self::CallUnmaterializable(_, _) = e {
+                contains = true;
+            }
+        });
+        contains
+    }
+
     /// Constructs an unnamed column reference in the current scope.
     /// Use [`HirScalarExpr::named_column`] when a name is known.
     /// Use [`HirScalarExpr::unnamed_column`] for a `ColumnRef`.
@@ -3538,6 +3561,7 @@ impl HirScalarExpr {
     ///
     /// TODO: Make this (and the other similar fns above) return Result, so that we can show the
     /// error when it fails. (E.g., there can be non-trivial cast errors.)
+    /// See `try_into_literal_int64` as an example.
     ///
     /// # Panics
     ///

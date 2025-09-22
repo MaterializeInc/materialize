@@ -153,9 +153,13 @@ subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention
 If `AS OF` is unspecified, the system automatically chooses an `AS OF`
 timestamp.
 
+The value in the `AS OF` clause is automatically [cast to `mz_timestamp`](../../sql/types/mz_timestamp/#valid-casts) with an assignment or implicit cast.
+
 ### `UP TO`
 
 The `UP TO` clause allows specifying a timestamp at which the `SUBSCRIBE` will cease running. If `UP TO` is specified, no rows whose timestamp is greater than or equal to the specified timestamp will be returned.
+
+The value in the `UP TO` clause is automatically [cast to `mz_timestamp`](../../sql/types/mz_timestamp/#valid-casts) with an assignment or implicit cast.
 
 ### Interaction of `AS OF` and `UP TO`
 
