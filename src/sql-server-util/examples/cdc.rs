@@ -131,6 +131,16 @@ async fn main() -> Result<(), anyhow::Error> {
                     tracing::info!(?result, "cleanup: {instance} data < {next_lsn}");
                 }
             }
+            CdcEvent::SchemaUpdate {
+                capture_instance,
+                table,
+                ddl_event,
+            } => {
+                tracing::info!(
+                    "Schema updated for table {table:?} capture instance {capture_instance} at LSN {:?}",
+                    ddl_event.lsn
+                );
+            }
         }
     }
 

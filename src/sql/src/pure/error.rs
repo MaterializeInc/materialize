@@ -388,6 +388,11 @@ pub enum SqlServerSourcePurificationError {
     ProgrammingError(String),
     #[error("No start_lsn found for capture instance {0}")]
     NoStartLsn(String),
+    #[error("Capture instance {capture_instance} has missing columns: {col_names:?}")]
+    CdcMissingColumns {
+        capture_instance: Arc<str>,
+        col_names: Vec<Arc<str>>,
+    },
 }
 
 impl SqlServerSourcePurificationError {
