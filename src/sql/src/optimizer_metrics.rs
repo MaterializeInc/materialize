@@ -9,7 +9,6 @@
 
 //! Metrics collected by the optimizer.
 
-use std::cell::RefCell;
 use std::time::Duration;
 
 use mz_ore::metric;
@@ -27,13 +26,8 @@ pub struct OptimizerMetrics {
     transform_total: IntCounterVec,
     /// Local storage of transform times; these are emitted as part of the
     /// log-line when end-to-end optimization times exceed the configured threshold.
-    transform_time_seconds: RefCell<std::collections::BTreeMap<String, Vec<Duration>>>,
+    transform_time_seconds: std::collections::BTreeMap<String, Vec<Duration>>,
 }
-
-///////////////// todo: this is of course not true!
-// (But should be fine for the prototype, because we clone OptimizerMetrics in try_frontend_peek_inner,
-// and then don't have actual multi-threaded optimization under try_frontend_peek_inner.)
-unsafe impl Sync for OptimizerMetrics {}
 
 impl OptimizerMetrics {
     pub fn register_into(
@@ -63,7 +57,7 @@ impl OptimizerMetrics {
                 help: "How many times a given transform was applied.",
                 var_labels: ["transform"],
             )),
-            transform_time_seconds: RefCell::new(std::collections::BTreeMap::new()),
+            transform_time_seconds: std::collections::BTreeMap::new(),
         }
     }
 
@@ -86,8 +80,7 @@ impl OptimizerMetrics {
         if duration > threshold {
             let transform_times = self
                 .transform_time_seconds
-                .take()
-                .into_iter()
+                .iter()
                 .map(|(k, v)| {
                     (
                         k,
@@ -126,8 +119,8 @@ impl OptimizerMetrics {
         self.transform_total.with_label_values(&[transform]).inc();
     }
 
-    pub fn observe_transform_time(&self, transform: &str, duration: Duration) {
-        let mut transform_time_seconds = self.transform_time_seconds.borrow_mut();
+    pub fn observe_transform_time(&mut self, transform: &str, duration: Duration) {
+        let transform_time_seconds = &mut self.transform_time_seconds;
         if let Some(times) = transform_time_seconds.get_mut(transform) {
             times.push(duration);
         } else {
