@@ -73,7 +73,8 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use tiberius::numeric::Numeric;
 
-use crate::desc::SqlServerTableRaw;
+use crate::desc::{SqlServerQualifiedTableName, SqlServerTableRaw};
+use crate::inspect::DDLEvent;
 use crate::{Client, SqlServerError, TransactionIsolationLevel};
 
 /// A stream of changes from a table in SQL Server that has CDC enabled.
@@ -280,40 +281,54 @@ impl<'a> CdcStream<'a> {
                             continue;
                         }
 
-                        // Get a stream of all the changes for the current instance.
-                        let changes = crate::inspect::get_changes_asc(
-                            self.client,
-                            &*instance,
-                            *instance_lsn,
-                            db_max_lsn,
-                            RowFilterOption::AllUpdateOld,
-                        )
-                        // TODO(sql_server3): Make this chunk size configurable.
-                        .ready_chunks(64);
-                        let mut changes = std::pin::pin!(changes);
+                        {
+                            // Get a stream of all the changes for the current instance.
+                            let changes = crate::inspect::get_changes_asc(
+                                self.client,
+                                &*instance,
+                                *instance_lsn,
+                                db_max_lsn,
+                                RowFilterOption::AllUpdateOld,
+                            )
+                            // TODO(sql_server3): Make this chunk size configurable.
+                            .ready_chunks(64);
+                            let mut changes = std::pin::pin!(changes);
 
-                        // Map and stream all the rows to our listener.
-                        while let Some(chunk) = changes.next().await {
-                            // Group events by LSN.
-                            //
-                            // TODO(sql_server3): Can we maybe re-use this BTreeMap or these Vec
-                            // allocations? Something to be careful of is shrinking the allocations
-                            // if/when they grow to large, e.g. from a large spike of changes.
-                            // Alternatively we could also use a single Vec here since we know the
-                            // changes are ordered by LSN.
-                            let mut events: BTreeMap<Lsn, Vec<Operation>> = BTreeMap::default();
-                            for change in chunk {
-                                let (lsn, operation) = change.and_then(Operation::try_parse)?;
-                                events.entry(lsn).or_default().push(operation);
+                            // Map and stream all the rows to our listener.
+                            while let Some(chunk) = changes.next().await {
+                                // Group events by LSN.
+                                //
+                                // TODO(sql_server3): Can we maybe re-use this BTreeMap or these Vec
+                                // allocations? Something to be careful of is shrinking the allocations
+                                // if/when they grow to large, e.g. from a large spike of changes.
+                                // Alternatively we could also use a single Vec here since we know the
+                                // changes are ordered by LSN.
+                                let mut events: BTreeMap<Lsn, Vec<Operation>> = BTreeMap::default();
+                                for change in chunk {
+                                    let (lsn, operation) = change.and_then(Operation::try_parse)?;
+                                    events.entry(lsn).or_default().push(operation);
+                                }
+
+                                // Emit the groups of events.
+                                for (lsn, changes) in events {
+                                    yield CdcEvent::Data {
+                                        capture_instance: Arc::clone(instance),
+                                        lsn,
+                                        changes,
+                                    };
+                                }
                             }
+                        }
 
-                            // Emit the groups of events.
-                            for (lsn, changes) in events {
-                                yield CdcEvent::Data {
+                        let ddl_history = crate::inspect::get_ddl_history(self.client, instance, instance_lsn, &db_max_lsn)
+                            .await?;
+                        for (table, ddl_events) in ddl_history {
+                            for ddl_event in ddl_events {
+                                yield CdcEvent::SchemaUpdate {
                                     capture_instance: Arc::clone(instance),
-                                    lsn,
-                                    changes,
-                                };
+                                    table: table.clone(),
+                                    ddl_event
+                                }
                             }
                         }
                     }
@@ -414,6 +429,15 @@ pub enum CdcEvent {
     Progress {
         /// We've received all of the data for [`Lsn`]s __less than__ this one.
         next_lsn: Lsn,
+    },
+    /// DDL change has occured for the upstream table.
+    SchemaUpdate {
+        /// The capture instance.
+        capture_instance: Arc<str>,
+        /// The upstream table that was updated.
+        table: SqlServerQualifiedTableName,
+        /// DDL event
+        ddl_event: DDLEvent,
     },
 }
 
