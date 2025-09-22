@@ -211,20 +211,20 @@ pub(crate) mod peek;
 pub(crate) mod statement_logging;
 pub(crate) mod timeline;
 pub(crate) mod timestamp_selection;
+pub(crate) mod catalog_serving;
+pub(crate) mod cluster_scheduling;
+pub(crate) mod consistency;
+pub(crate) mod sequencer;
+pub(crate) mod appends;
+pub(crate) mod read_policy;
 
-pub mod appends;
-pub mod catalog_serving; ////////// todo: can we avoid pub?
 mod caught_up;
-pub mod cluster_scheduling;
 mod command_handler;
-pub mod consistency;
 mod ddl;
 mod indexes;
 mod introspection;
 mod message_handler;
 mod privatelink_status;
-pub mod read_policy;
-pub(crate) mod sequencer; ////////// todo: can we avoid pub?
 mod sql;
 mod validity;
 
