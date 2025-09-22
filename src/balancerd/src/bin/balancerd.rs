@@ -18,6 +18,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::Context;
+use domain::resolv::StubResolver;
 use jsonwebtoken::DecodingKey;
 use mz_balancerd::{
     BUILD_INFO, BackendResolverConfig, BalancerConfig, BalancerService, CancellationResolver,
@@ -210,7 +211,8 @@ pub async fn run(args: ServiceArgs, tracing_handle: TracingHandle) -> Result<(),
     // Build the resolver configuration
     let static_resolver_addr = args.static_resolver_addr.clone();
     let resolver_config = BackendResolverConfig {
-        static_resolver: static_resolver_addr.clone(),
+        pgwire_static_resolver: static_resolver_addr.clone(),
+        https_static_resolver: static_resolver_addr.clone(),
         sni_resolver: args.sni_resolver_template.map(|template|
             // to make sni_http_resolver compatible with https_resolver_template
             // we must strip any potential ports
@@ -288,6 +290,7 @@ pub async fn run(args: ServiceArgs, tracing_handle: TracingHandle) -> Result<(),
         args.https_listen_addr,
         cancellation_resolver,
         resolver_config,
+        StubResolver::new(),
         args.tls.into_config()?,
         args.internal_tls,
         metrics_registry,

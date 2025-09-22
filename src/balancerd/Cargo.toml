@@ -59,6 +59,9 @@ mz-environmentd = { path = "../environmentd", default-features = false, features
 mz-frontegg-mock = { path = "../frontegg-mock" }
 postgres = "0.19.5"
 reqwest = "0.11.24"
+sentry-tracing = "0.38.1"
+opentelemetry_sdk = { version = "0.24.1", features = ["rt-tokio"] }
+http = "1.2.0"
 tempfile = "3.20.0"
 
 [features]

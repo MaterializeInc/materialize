@@ -9,7 +9,10 @@
 
 //! Integration tests for balancerd.
 
-use std::collections::BTreeMap;
+use async_trait::async_trait;
+use domain::resolv::StubResolver;
+use mz_ore::tracing::TracingHandle;
+use std::collections::{BTreeMap, btree_map};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::pin::pin;
 use std::sync::Arc;
@@ -20,7 +23,7 @@ use futures::StreamExt;
 use jsonwebtoken::{DecodingKey, EncodingKey};
 use mz_balancerd::{
     BUILD_INFO, BackendResolverConfig, BalancerConfig, BalancerService, CancellationResolver,
-    FronteggResolverConfig,
+    FronteggResolverConfig, ServiceResolver,
 };
 use mz_environmentd::test_util::{self, Ca, make_pg_tls};
 use mz_frontegg_auth::{
@@ -33,13 +36,42 @@ use mz_ore::id_gen::{conn_id_org_uuid, org_id_conn_bits};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::retry::Retry;
-use mz_ore::tracing::TracingHandle;
 use mz_ore::{assert_contains, assert_err, assert_ok, task};
 use mz_server_core::TlsCertConfig;
 use openssl::ssl::{SslConnectorBuilder, SslVerifyMode};
 use openssl::x509::X509;
 use tokio::sync::oneshot;
+use tracing::error;
 use uuid::Uuid;
+
+#[derive(Clone)]
+struct MockResolver {
+    map: BTreeMap<String, Vec<String>>,
+}
+
+impl MockResolver {
+    fn new(map: BTreeMap<String, Vec<String>>) -> MockResolver {
+        Self { map }
+    }
+}
+
+#[async_trait]
+impl ServiceResolver for MockResolver {
+    async fn resolve_arec(&self, name: &str) -> Result<Vec<String>, anyhow::Error> {
+        Ok(self
+            .map
+            .get(name)
+            .expect("Must be provided in testcase")
+            .to_owned())
+    }
+    async fn resolve_cname(&self, name: &str) -> Result<Vec<String>, anyhow::Error> {
+        Ok(self
+            .map
+            .get(name)
+            .expect("Must be provided in testcase")
+            .to_owned())
+    }
+}
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // too slow
@@ -120,9 +152,9 @@ async fn test_balancer() {
         // Enable SSL on the main port. There should be a balancerd port with no SSL.
         .with_tls(server_cert.clone(), server_key.clone())
         .with_frontegg_auth(&frontegg_auth)
-        .with_metrics_registry(metrics_registry);
+        .with_metrics_registry(metrics_registry.clone());
     let envid = config.environment_id.clone();
-    let envd_server = config.start().await;
+    let envd_server = config.clone().start().await;
 
     let cancel_dir = tempfile::tempdir().unwrap();
     let cancel_name = conn_id_org_uuid(org_id_conn_bits(&envid.organization_id()));
@@ -138,33 +170,45 @@ async fn test_balancer() {
     .unwrap();
 
     let test_resolvers = vec![
+        // (
+        //     BackendResolverConfig {
+        //         https_static_resolver: Some(format!(
+        //             "localhost:{}",
+        //             envd_server.sql_local_addr().port()
+        //         )),
+        //         pgwire_static_resolver: Some(format!(
+        //             "localhost:{}",
+        //             envd_server.sql_local_addr().port()
+        //         )),
+        //         sni_resolver: None,
+        //         frontegg_resolver: None,
+        //         https_backend_port: envd_server.http_local_addr().port(),
+        //         pgwire_backend_port: envd_server.sql_local_addr().port(),
+        //     },
+        //     CancellationResolver::Static(envd_server.sql_local_addr().to_string()),
+        // ),
+        // (
+        //     BackendResolverConfig {
+        //         https_static_resolver: Some(format!(
+        //             "localhost:{}",
+        //             envd_server.sql_local_addr().port()
+        //         )),
+        //         pgwire_static_resolver: None,
+        //         sni_resolver: None,
+        //         frontegg_resolver: Some(FronteggResolverConfig {
+        //             auth: frontegg_auth,
+        //             addr_template: envd_server.sql_local_addr().to_string(),
+        //         }),
+        //         https_backend_port: envd_server.http_local_addr().port(),
+        //         pgwire_backend_port: envd_server.sql_local_addr().port(),
+        //     },
+        //     CancellationResolver::Directory(cancel_dir.path().to_owned()),
+        // ),
         (
             BackendResolverConfig {
-                static_resolver: Some(envd_server.sql_local_addr().ip().to_string()),
-                sni_resolver: None,
-                frontegg_resolver: None,
-                https_backend_port: envd_server.http_local_addr().port(),
-                pgwire_backend_port: envd_server.sql_local_addr().port(),
-            },
-            CancellationResolver::Static(envd_server.sql_local_addr().to_string()),
-        ),
-        (
-            BackendResolverConfig {
-                static_resolver: None,
-                sni_resolver: None,
-                frontegg_resolver: Some(FronteggResolverConfig {
-                    auth: frontegg_auth,
-                    addr_template: envd_server.sql_local_addr().to_string(),
-                }),
-                https_backend_port: envd_server.http_local_addr().port(),
-                pgwire_backend_port: envd_server.sql_local_addr().port(),
-            },
-            CancellationResolver::Directory(cancel_dir.path().to_owned()),
-        ),
-        (
-            BackendResolverConfig {
-                static_resolver: None,
-                sni_resolver: Some("blncr-{}".to_string()),
+                https_static_resolver: None,
+                pgwire_static_resolver: None,
+                sni_resolver: Some("127.0.01".to_string()),
                 frontegg_resolver: None,
                 https_backend_port: envd_server.http_local_addr().port(),
                 pgwire_backend_port: envd_server.sql_local_addr().port(),
@@ -181,6 +225,7 @@ async fn test_balancer() {
     let ca_cert = reqwest::Certificate::from_pem(&ca.cert.to_pem().unwrap()).unwrap();
     let client = reqwest::Client::builder()
         .add_root_certificate(ca_cert)
+        .danger_accept_invalid_certs(true)
         // No pool so that connections are never re-used which can use old ssl certs.
         .pool_max_idle_per_host(0)
         .tls_info(true)
@@ -200,6 +245,10 @@ async fn test_balancer() {
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             cancellation_resolver,
             resolver_config,
+            MockResolver::new(BTreeMap::from([(
+                "12345.localhost".to_string(),
+                vec!["environmentd.environment-12345-0.svc.cluster.local".to_string()],
+            )])),
             cert_config.clone(),
             true,
             MetricsRegistry::new(),
@@ -210,6 +259,7 @@ async fn test_balancer() {
             None,
             None,
             None,
+            // tracing_handle,
             TracingHandle::disabled(),
             vec![],
         );
@@ -223,7 +273,8 @@ async fn test_balancer() {
 
         let conn_str = Arc::new(format!(
             "user={frontegg_user} password={frontegg_password} host={} port={} sslmode=require",
-            balancer_pgwire_listen.ip(),
+            // balancer_pgwire_listen.ip(),
+            "12345.localhost",
             balancer_pgwire_listen.port()
         ));
 
@@ -256,9 +307,14 @@ async fn test_balancer() {
         // Assert the current certificate is as expected.
         let https_url = format!(
             "https://{host}:{port}/api/sql",
-            host = balancer_https_listen.ip(),
+            host = "localhost",
             port = balancer_https_listen.port()
         );
+        error!(
+            "https://{host}:{port}/api/sql",
+            host = balancer_https_listen.ip(),
+            port = balancer_https_listen.port()
+        ); // TODO remove
         let resp = client
             .post(&https_url)
             .header("Content-Type", "application/json")

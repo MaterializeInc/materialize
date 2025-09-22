@@ -128,7 +128,7 @@ pub struct TestHarness {
     internal_console_redirect_url: Option<String>,
     metrics_registry: Option<MetricsRegistry>,
     code_version: semver::Version,
-    capture: Option<SharedStorage>,
+    pub capture: Option<SharedStorage>,
     pub environment_id: EnvironmentId,
 }
 

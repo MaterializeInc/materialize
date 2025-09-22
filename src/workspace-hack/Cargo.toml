@@ -85,6 +85,7 @@ lru = { version = "0.12.5" }
 memchr = { version = "2.7.5" }
 mime_guess = { version = "2.0.5" }
 minimal-lexical = { version = "0.2.1", default-features = false, features = ["std"] }
+moka = { version = "0.12.10", features = ["future", "sync"] }
 mysql_async = { version = "0.36.1", default-features = false, features = ["binlog", "minimal", "native-tls-tls", "tracing"] }
 mysql_common = { version = "0.35.4", default-features = false, features = ["binlog", "chrono"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["alpn"] }
@@ -226,6 +227,7 @@ lru = { version = "0.12.5" }
 memchr = { version = "2.7.5" }
 mime_guess = { version = "2.0.5" }
 minimal-lexical = { version = "0.2.1", default-features = false, features = ["std"] }
+moka = { version = "0.12.10", features = ["future", "sync"] }
 mysql_async = { version = "0.36.1", default-features = false, features = ["binlog", "minimal", "native-tls-tls", "tracing"] }
 mysql_common = { version = "0.35.4", default-features = false, features = ["binlog", "chrono"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["alpn"] }

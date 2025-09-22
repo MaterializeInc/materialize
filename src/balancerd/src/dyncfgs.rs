@@ -71,13 +71,6 @@ pub const TENANT_RESOLUTION_NEGATIVE_CACHING: Config<bool> = Config::new(
     "Whether to cache negative DNS results for tennant/addr lookups.",
 );
 
-/// TTL for DNS address resolution cache entries.
-pub const ADDR_CACHE_TTL: Config<Duration> = Config::new(
-    "balancerd_addr_cache_ttl",
-    Duration::from_secs(1), // 1 second for fast rollover - DOS prevention
-    "TTL for DNS address resolution cache entries.",
-);
-
 /// Sets the filter to apply to stderr logging.
 pub const LOGGING_FILTER: Config<&str> = Config::new(
     "balancerd_log_filter",
@@ -136,7 +129,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&PGWIRE_SNI_TENANT_RESOLUTION)
         .add(&PGWIRE_FRONTEGG_TENANT_RESOLUTION)
         .add(&TENANT_CACHE_TTL)
-        .add(&ADDR_CACHE_TTL)
         .add(&TENANT_RESOLUTION_NEGATIVE_CACHING)
         .add(&LOGGING_FILTER)
         .add(&OPENTELEMETRY_FILTER)
