@@ -544,7 +544,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: zippy
-              args: [--scenario=PostgresCdc, --actions=10000, --max-execution-time=30m, --azurite]
+              args: [--scenario=PostgresCdc, --actions=10000, --max-execution-time=30m]
 
       - id: zippy-mysql-cdc
         label: "Zippy MySQL CDC"
