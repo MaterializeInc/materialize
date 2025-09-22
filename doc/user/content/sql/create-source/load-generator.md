@@ -118,20 +118,6 @@ The organizations, users, and accounts are fixed at the time the source
 is created. Each tick interval, either a new auction is started, or a new bid
 is placed in the currently ongoing auction.
 
-### Clock
-
-{{< private-preview />}}
-
-The clock load generator tracks the system clock time, and can be used in
-contexts where the [`now()` function cannot](/sql/functions/now_and_mz_now/#limitations).
-On each tick interval, the source emits the system clock time. For example,
-configuring this load generator with `TICK INTERVAL '1 minute'` will cause the
-source to update every minute.
-
-Field | Type                         | Description
-----  | ---------------------------- | -------------
-time  | `timestamp with time zone`   | The system clock time.
-
 
 ### Marketing
 
@@ -317,43 +303,6 @@ SELECT * from bids;
  10 |  3844 |          1 |     59 | 2022-09-16 23:24:07.332+00
  11 |  1861 |          1 |     40 | 2022-09-16 23:24:08.332+00
  12 |  3338 |          1 |     97 | 2022-09-16 23:24:09.332+00
-```
-
-### Creating a clock load generator
-
-{{< private-preview />}}
-
-To create a load generator source that ticks over to a new time every second:
-
-```mzsql
-CREATE SOURCE clock
-  FROM LOAD GENERATOR CLOCK
-  (TICK INTERVAL '1s');
-```
-
-To display the created source:
-
-```mzsql
-SHOW SOURCES;
-```
-
-```nofmt
-      name      |      type      | size |  cluster
-----------------+----------------+------+-----------
- clock          | load-generator | 1    | mz_system
- clock_progress | progress       |      |
-```
-
-To check the current clock time:
-
-```mzsql
-SELECT * FROM clock;
-```
-
-```nofmt
-          time
-------------------------
- 2024-07-02 16:25:06+00
 ```
 
 ### Creating a marketing load generator
