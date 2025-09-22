@@ -145,7 +145,7 @@ def workflow_replication_slots(c: Composition, parser: WorkflowArgumentParser) -
     pg_version = get_targeted_pg_version(parser)
     with c.override(
         create_postgres(
-            pg_version=pg_version, extra_command=["-c", "max_replication_slots=3"]
+            pg_version=pg_version, extra_command=["-c", "max_replication_slots=2"]
         )
     ):
         c.up("materialized", "postgres")
