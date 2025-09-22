@@ -551,13 +551,13 @@ impl Catalog {
             // separately for updating state and builtin tables.
             // TODO(jkosh44) Some more thought needs to be given as to how temporary tables work
             // in a multi-subscriber catalog world.
-            let op_id = tx.op_id().into();
+            let upper = tx.upper();
             let temporary_item_updates =
                 temporary_item_updates
                     .into_iter()
                     .map(|(item, diff)| StateUpdate {
                         kind: StateUpdateKind::TemporaryItem(item),
-                        ts: op_id,
+                        ts: upper,
                         diff,
                     });
 
