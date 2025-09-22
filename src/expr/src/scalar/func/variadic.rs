@@ -30,8 +30,6 @@ use mz_repr::adt::system::Oid;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::role_id::RoleId;
 use mz_repr::{ColumnName, Datum, Row, RowArena, SqlColumnType, SqlScalarType};
-use proptest::prelude::*;
-use proptest::strategy::Union;
 use serde::{Deserialize, Serialize};
 use sha1::Sha1;
 use sha2::{Sha224, Sha256, Sha384, Sha512};
@@ -1644,75 +1642,5 @@ impl std::fmt::Display for VariadicFunc {
             VariadicFunc::RegexpReplace => f.write_str("regexp_replace"),
             VariadicFunc::StringToArray => f.write_str("string_to_array"),
         }
-    }
-}
-
-/// An explicit [`Arbitrary`] implementation needed here because of a known
-/// `proptest` issue.
-///
-/// Revert to the derive-macro impementation once the issue[^1] is fixed.
-///
-/// [^1]: <https://github.com/AltSysrq/proptest/issues/152>
-impl Arbitrary for VariadicFunc {
-    type Parameters = ();
-
-    type Strategy = Union<BoxedStrategy<Self>>;
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        Union::new(vec![
-            Just(VariadicFunc::Coalesce).boxed(),
-            Just(VariadicFunc::Greatest).boxed(),
-            Just(VariadicFunc::Least).boxed(),
-            Just(VariadicFunc::Concat).boxed(),
-            Just(VariadicFunc::ConcatWs).boxed(),
-            Just(VariadicFunc::MakeTimestamp).boxed(),
-            Just(VariadicFunc::PadLeading).boxed(),
-            Just(VariadicFunc::Substr).boxed(),
-            Just(VariadicFunc::Replace).boxed(),
-            Just(VariadicFunc::JsonbBuildArray).boxed(),
-            Just(VariadicFunc::JsonbBuildObject).boxed(),
-            SqlScalarType::arbitrary()
-                .prop_map(|value_type| VariadicFunc::MapBuild { value_type })
-                .boxed(),
-            Just(VariadicFunc::MakeAclItem).boxed(),
-            Just(VariadicFunc::MakeMzAclItem).boxed(),
-            SqlScalarType::arbitrary()
-                .prop_map(|elem_type| VariadicFunc::ArrayCreate { elem_type })
-                .boxed(),
-            SqlScalarType::arbitrary()
-                .prop_map(|elem_type| VariadicFunc::ArrayToString { elem_type })
-                .boxed(),
-            i64::arbitrary()
-                .prop_map(|offset| VariadicFunc::ArrayIndex { offset })
-                .boxed(),
-            SqlScalarType::arbitrary()
-                .prop_map(|elem_type| VariadicFunc::ListCreate { elem_type })
-                .boxed(),
-            Vec::<ColumnName>::arbitrary()
-                .prop_map(|field_names| VariadicFunc::RecordCreate { field_names })
-                .boxed(),
-            Just(VariadicFunc::ListIndex).boxed(),
-            Just(VariadicFunc::ListSliceLinear).boxed(),
-            Just(VariadicFunc::SplitPart).boxed(),
-            Just(VariadicFunc::RegexpMatch).boxed(),
-            Just(VariadicFunc::HmacString).boxed(),
-            Just(VariadicFunc::HmacBytes).boxed(),
-            Just(VariadicFunc::ErrorIfNull).boxed(),
-            Just(VariadicFunc::DateBinTimestamp).boxed(),
-            Just(VariadicFunc::DateBinTimestampTz).boxed(),
-            Just(VariadicFunc::DateDiffTimestamp).boxed(),
-            Just(VariadicFunc::DateDiffTimestampTz).boxed(),
-            Just(VariadicFunc::DateDiffDate).boxed(),
-            Just(VariadicFunc::DateDiffTime).boxed(),
-            Just(VariadicFunc::And).boxed(),
-            Just(VariadicFunc::Or).boxed(),
-            mz_repr::arb_range_type()
-                .prop_map(|elem_type| VariadicFunc::RangeCreate { elem_type })
-                .boxed(),
-            Just(VariadicFunc::ArrayPosition).boxed(),
-            SqlScalarType::arbitrary()
-                .prop_map(|elem_type| VariadicFunc::ArrayFill { elem_type })
-                .boxed(),
-        ])
     }
 }

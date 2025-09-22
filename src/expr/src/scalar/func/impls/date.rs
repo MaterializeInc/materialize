@@ -16,7 +16,6 @@ use mz_repr::adt::datetime::DateTimeUnits;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::adt::timestamp::{CheckedTimestamp, DateLike, TimestampPrecision};
 use mz_repr::{SqlColumnType, SqlScalarType, strconv};
-use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use crate::EvalError;
@@ -34,9 +33,7 @@ sqlfunc!(
     }
 );
 
-#[derive(
-    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
-)]
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastDateToTimestamp(pub Option<TimestampPrecision>);
 
 impl<'a> EagerUnaryFunc<'a> for CastDateToTimestamp {
@@ -73,9 +70,7 @@ impl fmt::Display for CastDateToTimestamp {
     }
 }
 
-#[derive(
-    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
-)]
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastDateToTimestampTz(pub Option<TimestampPrecision>);
 
 impl<'a> EagerUnaryFunc<'a> for CastDateToTimestampTz {
@@ -147,9 +142,7 @@ pub fn extract_date_inner(units: DateTimeUnits, date: NaiveDate) -> Result<Numer
     }
 }
 
-#[derive(
-    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
-)]
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct ExtractDate(pub DateTimeUnits);
 
 impl<'a> EagerUnaryFunc<'a> for ExtractDate {

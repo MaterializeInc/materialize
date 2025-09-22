@@ -35,9 +35,6 @@ use mz_repr::{
 };
 use num::{CheckedAdd, Integer, Signed, ToPrimitive};
 use ordered_float::OrderedFloat;
-use proptest::prelude::{Arbitrary, Just};
-use proptest::strategy::{BoxedStrategy, Strategy, Union};
-use proptest_derive::Arbitrary;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
@@ -1787,9 +1784,7 @@ impl OneByOneAggr for NaiveOneByOneAggr {
 
 /// Identify whether the given aggregate function is Lag or Lead, since they share
 /// implementations.
-#[derive(
-    Arbitrary, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect,
-)]
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect)]
 pub enum LagLeadType {
     Lag,
     Lead,
@@ -1925,133 +1920,6 @@ pub enum AggregateFunc {
     /// Useful for removing an expensive aggregation while maintaining the shape
     /// of a reduce operator.
     Dummy,
-}
-
-/// An explicit [`Arbitrary`] implementation needed here because of a known
-/// `proptest` issue.
-///
-/// Revert to the derive-macro implementation once the issue[^1] is fixed.
-///
-/// [^1]: <https://github.com/AltSysrq/proptest/issues/152>
-impl Arbitrary for AggregateFunc {
-    type Parameters = ();
-
-    type Strategy = Union<BoxedStrategy<Self>>;
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        use proptest::collection::vec;
-        use proptest::prelude::any as proptest_any;
-        Union::new(vec![
-            Just(AggregateFunc::MaxNumeric).boxed(),
-            Just(AggregateFunc::MaxInt16).boxed(),
-            Just(AggregateFunc::MaxInt32).boxed(),
-            Just(AggregateFunc::MaxInt64).boxed(),
-            Just(AggregateFunc::MaxUInt16).boxed(),
-            Just(AggregateFunc::MaxUInt32).boxed(),
-            Just(AggregateFunc::MaxUInt64).boxed(),
-            Just(AggregateFunc::MaxMzTimestamp).boxed(),
-            Just(AggregateFunc::MaxFloat32).boxed(),
-            Just(AggregateFunc::MaxFloat64).boxed(),
-            Just(AggregateFunc::MaxBool).boxed(),
-            Just(AggregateFunc::MaxString).boxed(),
-            Just(AggregateFunc::MaxTimestamp).boxed(),
-            Just(AggregateFunc::MaxDate).boxed(),
-            Just(AggregateFunc::MaxTimestampTz).boxed(),
-            Just(AggregateFunc::MaxInterval).boxed(),
-            Just(AggregateFunc::MaxTime).boxed(),
-            Just(AggregateFunc::MinNumeric).boxed(),
-            Just(AggregateFunc::MinInt16).boxed(),
-            Just(AggregateFunc::MinInt32).boxed(),
-            Just(AggregateFunc::MinInt64).boxed(),
-            Just(AggregateFunc::MinUInt16).boxed(),
-            Just(AggregateFunc::MinUInt32).boxed(),
-            Just(AggregateFunc::MinUInt64).boxed(),
-            Just(AggregateFunc::MinMzTimestamp).boxed(),
-            Just(AggregateFunc::MinFloat32).boxed(),
-            Just(AggregateFunc::MinFloat64).boxed(),
-            Just(AggregateFunc::MinBool).boxed(),
-            Just(AggregateFunc::MinString).boxed(),
-            Just(AggregateFunc::MinDate).boxed(),
-            Just(AggregateFunc::MinTimestamp).boxed(),
-            Just(AggregateFunc::MinTimestampTz).boxed(),
-            Just(AggregateFunc::MinInterval).boxed(),
-            Just(AggregateFunc::MinTime).boxed(),
-            Just(AggregateFunc::SumInt16).boxed(),
-            Just(AggregateFunc::SumInt32).boxed(),
-            Just(AggregateFunc::SumInt64).boxed(),
-            Just(AggregateFunc::SumUInt16).boxed(),
-            Just(AggregateFunc::SumUInt32).boxed(),
-            Just(AggregateFunc::SumUInt64).boxed(),
-            Just(AggregateFunc::SumFloat32).boxed(),
-            Just(AggregateFunc::SumFloat64).boxed(),
-            Just(AggregateFunc::SumNumeric).boxed(),
-            Just(AggregateFunc::Count).boxed(),
-            Just(AggregateFunc::Any).boxed(),
-            Just(AggregateFunc::All).boxed(),
-            vec(proptest_any::<ColumnOrder>(), 1..4)
-                .prop_map(|order_by| AggregateFunc::JsonbAgg { order_by })
-                .boxed(),
-            vec(proptest_any::<ColumnOrder>(), 1..4)
-                .prop_map(|order_by| AggregateFunc::JsonbObjectAgg { order_by })
-                .boxed(),
-            (
-                vec(proptest_any::<ColumnOrder>(), 1..4),
-                proptest_any::<SqlScalarType>(),
-            )
-                .prop_map(|(order_by, value_type)| AggregateFunc::MapAgg {
-                    order_by,
-                    value_type,
-                })
-                .boxed(),
-            vec(proptest_any::<ColumnOrder>(), 1..4)
-                .prop_map(|order_by| AggregateFunc::ArrayConcat { order_by })
-                .boxed(),
-            vec(proptest_any::<ColumnOrder>(), 1..4)
-                .prop_map(|order_by| AggregateFunc::ListConcat { order_by })
-                .boxed(),
-            vec(proptest_any::<ColumnOrder>(), 1..4)
-                .prop_map(|order_by| AggregateFunc::StringAgg { order_by })
-                .boxed(),
-            vec(proptest_any::<ColumnOrder>(), 1..4)
-                .prop_map(|order_by| AggregateFunc::RowNumber { order_by })
-                .boxed(),
-            vec(proptest_any::<ColumnOrder>(), 1..4)
-                .prop_map(|order_by| AggregateFunc::DenseRank { order_by })
-                .boxed(),
-            (
-                vec(proptest_any::<ColumnOrder>(), 1..4),
-                proptest_any::<LagLeadType>(),
-                proptest_any::<bool>(),
-            )
-                .prop_map(
-                    |(order_by, lag_lead, ignore_nulls)| AggregateFunc::LagLead {
-                        order_by,
-                        lag_lead,
-                        ignore_nulls,
-                    },
-                )
-                .boxed(),
-            (
-                vec(proptest_any::<ColumnOrder>(), 1..4),
-                proptest_any::<WindowFrame>(),
-            )
-                .prop_map(|(order_by, window_frame)| AggregateFunc::FirstValue {
-                    order_by,
-                    window_frame,
-                })
-                .boxed(),
-            (
-                vec(proptest_any::<ColumnOrder>(), 1..4),
-                proptest_any::<WindowFrame>(),
-            )
-                .prop_map(|(order_by, window_frame)| AggregateFunc::LastValue {
-                    order_by,
-                    window_frame,
-                })
-                .boxed(),
-            Just(AggregateFunc::Dummy).boxed(),
-        ])
-    }
 }
 
 impl AggregateFunc {
@@ -3208,9 +3076,7 @@ where
     }
 }
 
-#[derive(
-    Arbitrary, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect,
-)]
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CaptureGroupDesc {
     pub index: u32,
     pub name: Option<String>,
@@ -3218,7 +3084,6 @@ pub struct CaptureGroupDesc {
 }
 
 #[derive(
-    Arbitrary,
     Clone,
     Copy,
     Debug,
@@ -3253,14 +3118,8 @@ impl FromStr for AnalyzedRegexOpts {
     }
 }
 
-#[derive(
-    Arbitrary, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect,
-)]
-pub struct AnalyzedRegex(
-    #[proptest(strategy = "mz_repr::adt::regex::any_regex()")] ReprRegex,
-    Vec<CaptureGroupDesc>,
-    AnalyzedRegexOpts,
-);
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect)]
+pub struct AnalyzedRegex(ReprRegex, Vec<CaptureGroupDesc>, AnalyzedRegexOpts);
 
 impl AnalyzedRegex {
     pub fn new(s: &str, opts: AnalyzedRegexOpts) -> Result<Self, regex::Error> {
@@ -3497,39 +3356,6 @@ impl TableFunc {
             // `WithOrdinality::eval` will panic if the inner table function emits a negative diff.
             _ => None,
         }
-    }
-}
-
-/// Manual `Arbitrary`, because proptest-derive is choking on the recursive `WithOrdinality`
-/// variant.
-impl Arbitrary for TableFunc {
-    type Parameters = ();
-    type Strategy = BoxedStrategy<Self>;
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        let leaf = Union::new(vec![
-            Just(TableFunc::AclExplode),
-            Just(TableFunc::MzAclExplode),
-            Just(TableFunc::JsonbObjectKeys),
-            Just(TableFunc::GenerateSeriesInt32),
-            Just(TableFunc::GenerateSeriesInt64),
-            Just(TableFunc::GenerateSeriesTimestamp),
-            Just(TableFunc::GenerateSeriesTimestampTz),
-            Just(TableFunc::Repeat),
-            Just(TableFunc::GenerateSubscriptsArray),
-            Just(TableFunc::RegexpMatches),
-        ])
-        .boxed();
-
-        // recursive WithOrdinality variant
-        leaf.prop_recursive(2, 256, 2, |inner| {
-            inner.clone().prop_map(|tf| {
-                TableFunc::WithOrdinality(WithOrdinality {
-                    inner: Box::new(tf),
-                })
-            })
-        })
-        .boxed()
     }
 }
 

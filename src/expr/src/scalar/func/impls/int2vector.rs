@@ -11,15 +11,12 @@ use std::fmt;
 
 use mz_lowertest::MzReflect;
 use mz_repr::{Datum, RowArena, SqlColumnType, SqlScalarType};
-use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use crate::scalar::func::{LazyUnaryFunc, stringify_datum};
 use crate::{EvalError, MirScalarExpr};
 
-#[derive(
-    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
-)]
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastInt2VectorToArray;
 
 // This could be simplified to an EagerUnaryFunc once we have
@@ -69,9 +66,7 @@ impl fmt::Display for CastInt2VectorToArray {
     }
 }
 
-#[derive(
-    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
-)]
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastInt2VectorToString;
 
 impl LazyUnaryFunc for CastInt2VectorToString {

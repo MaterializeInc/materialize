@@ -31,7 +31,7 @@ use mz_repr::adt::range::InvalidRangeError;
 use mz_repr::adt::regex::Regex;
 use mz_repr::adt::timestamp::TimestampError;
 use mz_repr::strconv::{ParseError, ParseHexError};
-use mz_repr::{Datum, Row, RowArena, SqlColumnType, SqlScalarType, arb_datum};
+use mz_repr::{Datum, Row, RowArena, SqlColumnType, SqlScalarType};
 use proptest::prelude::*;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -116,57 +116,6 @@ impl std::fmt::Debug for MirScalarExpr {
                 write!(f, "If({cond:?}, {then:?}, {els:?})")
             }
         }
-    }
-}
-
-impl Arbitrary for MirScalarExpr {
-    type Parameters = ();
-    type Strategy = BoxedStrategy<MirScalarExpr>;
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        let leaf = prop::strategy::Union::new(vec![
-            (0..10_usize).prop_map(MirScalarExpr::column).boxed(),
-            (arb_datum(), any::<SqlScalarType>())
-                .prop_map(|(datum, typ)| MirScalarExpr::literal(Ok((&datum).into()), typ))
-                .boxed(),
-            (any::<EvalError>(), any::<SqlScalarType>())
-                .prop_map(|(err, typ)| MirScalarExpr::literal(Err(err), typ))
-                .boxed(),
-            any::<UnmaterializableFunc>()
-                .prop_map(MirScalarExpr::CallUnmaterializable)
-                .boxed(),
-        ]);
-        leaf.prop_recursive(3, 6, 7, |inner| {
-            prop::strategy::Union::new(vec![
-                (
-                    any::<VariadicFunc>(),
-                    prop::collection::vec(inner.clone(), 1..5),
-                )
-                    .prop_map(|(func, exprs)| MirScalarExpr::CallVariadic { func, exprs })
-                    .boxed(),
-                (any::<BinaryFunc>(), inner.clone(), inner.clone())
-                    .prop_map(|(func, expr1, expr2)| MirScalarExpr::CallBinary {
-                        func,
-                        expr1: Box::new(expr1),
-                        expr2: Box::new(expr2),
-                    })
-                    .boxed(),
-                (inner.clone(), inner.clone(), inner.clone())
-                    .prop_map(|(cond, then, els)| MirScalarExpr::If {
-                        cond: Box::new(cond),
-                        then: Box::new(then),
-                        els: Box::new(els),
-                    })
-                    .boxed(),
-                (any::<UnaryFunc>(), inner)
-                    .prop_map(|(func, expr)| MirScalarExpr::CallUnary {
-                        func,
-                        expr: Box::new(expr),
-                    })
-                    .boxed(),
-            ])
-        })
-        .boxed()
     }
 }
 
@@ -2329,9 +2278,7 @@ impl MirScalarExpr {
 /// The fields are ordered based on heuristic assumptions about their typical selectivity, so that
 /// Ord gives the right ordering for join inputs. Bigger is better, i.e., will tend to come earlier
 /// than other inputs.
-#[derive(
-    Eq, PartialEq, Ord, PartialOrd, Debug, Clone, Serialize, Deserialize, Hash, MzReflect, Arbitrary,
-)]
+#[derive(Eq, PartialEq, Ord, PartialOrd, Debug, Clone, Serialize, Deserialize, Hash, MzReflect)]
 pub struct FilterCharacteristics {
     // `<expr> = <literal>` appears in the filter.
     // Excludes cases where NOT appears anywhere above the literal equality.

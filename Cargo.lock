@@ -3077,18 +3077,18 @@ dependencies = [
 
 [[package]]
 name = "enum-iterator"
-version = "2.1.0"
+version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c280b9e6b3ae19e152d8e31cf47f18389781e119d4013a2a2bb0180e5facc635"
+checksum = "a4549325971814bda7a44061bf3fe7e487d447cba01e4220a4b454d630d7a016"
 dependencies = [
  "enum-iterator-derive",
 ]
 
 [[package]]
 name = "enum-iterator-derive"
-version = "1.4.0"
+version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a1ab991c1362ac86c61ab6f556cff143daa22e5a15e4e189df818b2fd19fe65b"
+checksum = "685adfa4d6f3d765a26bc5dbc936577de9abf756c1feeb3089b01dd395034842"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -6173,13 +6173,7 @@ name = "mz-dyncfg"
 version = "0.0.0"
 dependencies = [
  "humantime",
- "mz-build-tools",
  "mz-ore",
- "mz-proto",
- "proptest",
- "proptest-derive",
- "prost",
- "prost-build",
  "serde",
  "serde_json",
  "tracing",
@@ -7220,16 +7214,11 @@ dependencies = [
  "bytes",
  "csv",
  "itertools 0.14.0",
- "mz-build-tools",
  "mz-ore",
  "mz-pgrepr",
- "mz-proto",
  "mz-repr",
  "proptest",
- "prost",
- "prost-build",
  "serde",
- "tonic-build",
  "workspace-hack",
 ]
 
@@ -7580,15 +7569,8 @@ name = "mz-rocksdb-types"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "mz-build-tools",
  "mz-ore",
- "mz-proto",
- "proptest",
- "proptest-derive",
- "prost",
- "prost-build",
  "serde",
- "tonic-build",
  "uncased",
  "workspace-hack",
 ]
@@ -7675,36 +7657,23 @@ dependencies = [
  "clap",
  "crossbeam-channel",
  "futures",
- "http 1.2.0",
- "hyper-util",
  "itertools 0.14.0",
  "mz-aws-secrets-controller",
  "mz-build-info",
- "mz-build-tools",
  "mz-orchestrator-kubernetes",
  "mz-orchestrator-process",
  "mz-ore",
- "mz-proto",
- "mz-repr",
  "mz-secrets",
  "os_info",
  "pin-project",
  "prometheus",
- "proptest",
- "proptest-derive",
- "prost",
- "prost-build",
  "rand 0.8.5",
  "semver",
  "sentry-tracing",
  "serde",
  "sysinfo",
- "timely",
  "tokio",
  "tokio-stream",
- "tonic",
- "tonic-build",
- "tower 0.5.2",
  "tracing",
  "tracing-subscriber",
  "turmoil",
@@ -8411,14 +8380,8 @@ dependencies = [
 name = "mz-tracing"
 version = "0.0.0"
 dependencies = [
- "mz-build-tools",
  "mz-ore",
- "mz-proto",
- "proptest",
- "prost",
- "prost-build",
  "serde",
- "tonic-build",
  "tracing",
  "tracing-subscriber",
  "workspace-hack",

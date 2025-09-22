@@ -12,21 +12,12 @@ workspace = true
 [dependencies]
 anyhow = "1.0.98"
 mz-ore = { path = "../ore", features = ["async", "metrics", "test"] }
-mz-proto = { path = "../proto" }
-prost = { version = "0.13.5", features = ["no-recursion-limit"] }
-proptest = { version = "1.7.0", default-features = false, features = ["std"] }
-proptest-derive = { version = "0.5.1", features = ["boxed_union"] }
 serde = { version = "1.0.219", features = ["derive"] }
 uncased = "0.9.7"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
-[build-dependencies]
-mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
-prost-build = "0.13.5"
-tonic-build = "0.12.3"
-
 [features]
-default = ["mz-build-tools/default", "workspace-hack"]
+default = ["workspace-hack"]
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

@@ -18,7 +18,6 @@ use mz_expr::MirScalarExpr;
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::bytes::ByteSize;
 use mz_repr::{CatalogItemId, GlobalId, RelationDesc};
-use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::PartialOrder;
 use timely::progress::frontier::Antichain;
@@ -587,7 +586,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkFormatType, R>
     }
 }
 
-#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub enum S3SinkFormat {
     /// Encoded using the PG `COPY` protocol, with one of its supported formats.
     PgCopy(CopyFormatParams<'static>),
@@ -596,7 +595,7 @@ pub enum S3SinkFormat {
 }
 
 /// Info required to copy the data to s3.
-#[derive(Arbitrary, Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct S3UploadInfo {
     /// The s3 uri path to write the data to.
     pub uri: String,
