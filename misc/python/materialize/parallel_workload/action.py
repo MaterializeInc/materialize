@@ -1287,6 +1287,9 @@ class FlipFlagsAction(Action):
         self.flags_with_values["persist_encoding_enable_dictionary"] = (
             BOOLEAN_FLAG_VALUES
         )
+        self.flags_with_values["persist_enable_incremental_compaction"] = (
+            BOOLEAN_FLAG_VALUES
+        )
         self.flags_with_values["persist_stats_audit_percent"] = [
             "0",
             "1",
@@ -1508,7 +1511,6 @@ class FlipFlagsAction(Action):
             "compute_peek_response_stash_batch_max_runs",
             "compute_peek_response_stash_read_batch_size_bytes",
             "compute_peek_response_stash_read_memory_budget_bytes",
-            "persist_enable_incremental_compaction",
             "storage_statistics_retention_duration",
             "enable_paused_cluster_readhold_downgrade",
             "enable_mz_join_core_v2",
