@@ -257,12 +257,30 @@ impl Coordinator {
 
         let mut all_caught_up = true;
 
+        let active_storage_collections: BTreeMap<_, _> = self
+            .controller
+            .storage_collections
+            .active_collection_frontiers()
+            .into_iter()
+            .map(|c| (c.id, c))
+            .collect();
+
         let storage_frontiers = self
             .controller
             .storage
             .active_ingestion_exports(cluster.id)
             .copied()
             .filter(|id| !id.is_transient() && !exclude_collections.contains(id))
+            .filter(|id| {
+                let frontiers = active_storage_collections.get(id);
+                match frontiers {
+                    Some(frontiers) => !frontiers.write_frontier.is_empty(),
+                    None => {
+                        // Not "active", so we don't care here.
+                        false
+                    }
+                }
+            })
             .map(|id| {
                 let (_read_frontier, write_frontier) =
                     self.controller.storage.collection_frontiers(id)?;
