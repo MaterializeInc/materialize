@@ -2916,7 +2916,7 @@ def workflow_test_storage_controller_metrics(c: Composition) -> None:
     c.sql(
         """
         DROP sink snk;
-        DROP SOURCE src;
+        DROP SOURCE src CASCADE;
         DROP MATERIALIZED VIEW mv;
         DROP TABLE t;
         DROP TABLE t_alter;
