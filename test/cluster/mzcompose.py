@@ -2854,7 +2854,7 @@ def workflow_test_storage_controller_metrics(c: Composition) -> None:
     count = metrics_u2.get_storage_commands_total("update_configuration")
     assert count == 1, f"got {count}"
     count = metrics_u2.get_storage_commands_total("run_ingestion")
-    assert count == 1, f"got {count}"
+    assert count == 2, f"got {count}"
     count = metrics_u2.get_storage_commands_total("allow_compaction")
     assert count > 0, f"got {count}"
     count = metrics_u2.get_storage_commands_total("run_sink")

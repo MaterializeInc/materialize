@@ -17,21 +17,27 @@ ALTER SYSTEM SET enable_clock_load_generator = true;
   IN CLUSTER ${arg.single-replica-cluster}
   FROM LOAD GENERATOR COUNTER (AS OF 5, UP TO 5)
 
-> SELECT count(*) FROM counter_empty
+> CREATE TABLE counter_empty_tbl FROM SOURCE counter_empty;
+
+> SELECT count(*) FROM counter_empty_tbl
 0
 
 > CREATE SOURCE counter_single
   IN CLUSTER ${arg.single-replica-cluster}
   FROM LOAD GENERATOR COUNTER (AS OF 0, UP TO 1)
 
-> SELECT count(*) FROM counter_single
+> CREATE TABLE counter_single_tbl FROM SOURCE counter_single;
+
+> SELECT count(*) FROM counter_single_tbl
 1
 
 > CREATE SOURCE counter_five
   IN CLUSTER ${arg.single-replica-cluster}
   FROM LOAD GENERATOR COUNTER (AS OF 4, UP TO 5)
 
-> SELECT count(*) FROM counter_five
+> CREATE TABLE counter_five_tbl FROM SOURCE counter_five;
+
+> SELECT count(*) FROM counter_five_tbl
 5
 
 ! CREATE SOURCE counter
@@ -44,7 +50,7 @@ contains:UP TO cannot be less than AS OF
   FROM LOAD GENERATOR COUNTER (SCALE FACTOR 1)
 exact:COUNTER load generators do not support SCALE FACTOR values
 
-> DROP SOURCE counter_empty, counter_single, counter_five
+> DROP SOURCE counter_empty, counter_single, counter_five CASCADE
 
 > CREATE SOURCE auction_house
   IN CLUSTER ${arg.single-replica-cluster}
@@ -153,10 +159,12 @@ materialize.public.accounts "CREATE TABLE materialize.public.accounts (id pg_cat
   IN CLUSTER ${arg.single-replica-cluster}
   FROM LOAD GENERATOR CLOCK (TICK INTERVAL '1s')
 
-> SELECT count(*) FROM clock;
+> CREATE TABLE clock_tbl FROM SOURCE clock;
+
+> SELECT count(*) FROM clock_tbl;
 1
 
-> SELECT time < now() + INTERVAL '5s', time > now() - INTERVAL '5s' FROM clock
+> SELECT time < now() + INTERVAL '5s', time > now() - INTERVAL '5s' FROM clock_tbl
 true true
 
 # Check that non-append-only `COUNTER` sources reach the proper size
@@ -165,14 +173,16 @@ true true
   IN CLUSTER ${arg.single-replica-cluster}
   FROM LOAD GENERATOR COUNTER (MAX CARDINALITY 8, TICK INTERVAL '0.001s')
 
-> SELECT count(*) FROM counter
+> CREATE TABLE counter_tbl FROM SOURCE counter;
+
+> SELECT count(*) FROM counter_tbl
 8
 
 # Now make sure it doesn't change
 > SELECT mz_unsafe.mz_sleep(1)
 <null>
 
-> SELECT count(*) FROM counter
+> SELECT count(*) FROM counter_tbl
 8
 
 # Check that negative max cardinalities are rejected
@@ -185,13 +195,15 @@ contains:invalid MAX CARDINALITY: invalid unsigned numeric value: invalid digit 
   IN CLUSTER ${arg.single-replica-cluster}
   FROM LOAD GENERATOR COUNTER (MAX CARDINALITY 0)
 
-> SELECT count(*) FROM counter3
+> CREATE TABLE counter3_tbl FROM SOURCE counter3;
+
+> SELECT count(*) FROM counter3_tbl
 0
 
 > SELECT mz_unsafe.mz_sleep(1)
 <null>
 
-> SELECT count(*) FROM counter3
+> SELECT count(*) FROM counter3_tbl
 0
 
 # Check that negative tick intervals are rejected

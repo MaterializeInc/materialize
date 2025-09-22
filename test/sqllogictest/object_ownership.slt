@@ -2317,7 +2317,7 @@ query TT
 SELECT mz_sources.name, mz_roles.name
   FROM mz_sources
   LEFT JOIN mz_roles ON mz_sources.owner_id = mz_roles.id
-  WHERE mz_sources.name IN ('s', accounts', 'auctions', 'bids', 'organizations', 'users')
+  WHERE mz_sources.name IN ('s', 'accounts', 'auctions', 'bids', 'organizations', 'users')
   ORDER BY mz_sources.name
 ----
 s  materialize

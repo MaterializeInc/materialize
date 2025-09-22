@@ -84,12 +84,16 @@ class LoadGeneratorMultiReplica(Check):
                 """
             > CREATE SOURCE multi_counter1 IN CLUSTER multi_cluster1 FROM LOAD GENERATOR COUNTER (UP TO 10);
             > CREATE SOURCE multi_counter2 IN CLUSTER multi_cluster2 FROM LOAD GENERATOR COUNTER (UP TO 10);
+            > CREATE TABLE multi_counter1_tbl FROM SOURCE multi_counter1;
+            > CREATE TABLE multi_counter2_tbl FROM SOURCE multi_counter2;
 
             > ALTER CLUSTER multi_cluster1 SET (REPLICATION FACTOR 4);
                 """,
                 """
             > CREATE SOURCE multi_counter3 IN CLUSTER multi_cluster1 FROM LOAD GENERATOR COUNTER (UP TO 10);
             > CREATE SOURCE multi_counter4 IN CLUSTER multi_cluster2 FROM LOAD GENERATOR COUNTER (UP TO 10);
+            > CREATE TABLE multi_counter3_tbl FROM SOURCE multi_counter3;
+            > CREATE TABLE multi_counter4_tbl FROM SOURCE multi_counter4;
             > ALTER CLUSTER multi_cluster2 SET (REPLICATION FACTOR 4);
                 """,
             ]
@@ -99,13 +103,13 @@ class LoadGeneratorMultiReplica(Check):
         return Testdrive(
             dedent(
                 """
-                > SELECT COUNT(*) FROM multi_counter1;
+                > SELECT COUNT(*) FROM multi_counter1_tbl;
                 10
-                > SELECT COUNT(*) FROM multi_counter2;
+                > SELECT COUNT(*) FROM multi_counter2_tbl;
                 10
-                > SELECT COUNT(*) FROM multi_counter3;
+                > SELECT COUNT(*) FROM multi_counter3_tbl;
                 10
-                > SELECT COUNT(*) FROM multi_counter4;
+                > SELECT COUNT(*) FROM multi_counter4_tbl;
                 10
             """
             )
