@@ -344,25 +344,11 @@ conflict_schema conflict_table
           CROSS JOIN (SELECT id AS subsource_id FROM mz_tables WHERE source_id IS NOT NULL);
 true
 
-# Ensure progress subsources have an ID less than the primary source ID
-> SELECT progress_source_id < primary_source_id
-    FROM (
-        SELECT
-            (SELECT id FROM mz_sources WHERE type = 'postgres') AS primary_source_id,
-            (SELECT id FROM mz_sources WHERE type = 'progress') AS progress_source_id
-    );
-true
-
 > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'mz_source';
 running
 
 > SELECT lsn > 0 FROM mz_source
 true
-
-# Ensure we report the write frontier of the progress subsource
-$ set-regex match=(\s{12}0|\d{13,20}|u\d{1,5}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d\.\d\d\d\)|true|false) replacement=<>
-> EXPLAIN TIMESTAMP FOR SELECT * FROM mz_source
-"                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n              session wall time: <> <>\n\nsource materialize.public.mz_source (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n\nbinding constraints:\nlower:\n  (IsolationLevel(StrictSerializable)): [<> <>]\n"
 
 $ set-regex match=[0-9]+|_[a-f0-9]+ replacement=<SUPPRESSED>
 
@@ -770,7 +756,7 @@ INSERT INTO pk_table VALUES (99999);
 # Ensure that source + all subsources have error
 > SELECT bool_and(error ~* 'publication .+ does not exist')
   FROM mz_internal.mz_source_statuses
-  WHERE id IN ( SELECT id FROM mz_sources WHERE type != 'progress' );
+  WHERE id IN ( SELECT id FROM mz_sources );
 true
 
 > DROP SOURCE enum_source CASCADE;

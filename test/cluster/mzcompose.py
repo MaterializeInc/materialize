@@ -3867,7 +3867,9 @@ def workflow_cluster_drop_concurrent(
     def subscribe():
         cursor = c.sql_cursor()
         cursor.execute("BEGIN")
-        cursor.execute("DECLARE subscribe CURSOR FOR SUBSCRIBE (SELECT * FROM counter_tbl)")
+        cursor.execute(
+            "DECLARE subscribe CURSOR FOR SUBSCRIBE (SELECT * FROM counter_tbl)"
+        )
         # This should hang until the cluster is dropped
         cursor.execute("FETCH ALL subscribe")
 

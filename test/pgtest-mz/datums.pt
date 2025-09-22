@@ -6,8 +6,7 @@
 send
 Query {"query": "DROP SOURCE IF EXISTS gen"}
 Query {"query": "CREATE SOURCE gen FROM LOAD GENERATOR DATUMS"}
-Query {"query": "CREATE TABLE gen_tbl FROM SOURCE gen"}
-Query {"query": "SELECT * FROM gen_tbl ORDER BY rowid AS OF 18446744073709551615"}
+Query {"query": "SELECT * FROM gen ORDER BY rowid AS OF 18446744073709551615"}
 ----
 
 until ignore=NoticeResponse
@@ -51,7 +50,7 @@ ReadyForQuery {"status":"I"}
 
 # Binary
 send
-Parse {"query": "SELECT * FROM gen_tbl ORDER BY rowid AS OF 18446744073709551615"}
+Parse {"query": "SELECT * FROM gen ORDER BY rowid AS OF 18446744073709551615"}
 Bind {"result_formats": [1]}
 Execute
 Sync

@@ -60,7 +60,7 @@ three
 # Ensure that offsets/counters can be updated correctly.
 > SELECT s.name,
   SUM(u.updates_committed) > 0,
-  SUM(u.messages_received) >= 4,
+  SUM(u.messages_received) >= 3,
   SUM(u.offset_known),
   SUM(u.offset_committed)
   FROM mz_sources s
