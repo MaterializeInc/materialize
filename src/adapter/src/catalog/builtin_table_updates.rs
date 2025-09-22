@@ -2013,13 +2013,14 @@ impl CatalogState {
                 continue;
             }
 
-            // Just invent something when the limits are `None`, which only happens in non-prod
-            // environments (tests, process orchestrator, etc.)
+            // Limits can be `None`, specifying that resource usage is unlimited. Unfortunately,
+            // the relevant table fields are not nullable, so we have to put in some value. We put
+            // in the maximum (based on `u64::MAX`), which makes it at least immediately clear that
+            // the limit is a bogus one.
             let cpu_limit = alloc.cpu_limit.unwrap_or(CpuLimit::MAX);
             let MemoryLimit(ByteSize(memory_bytes)) =
-                (alloc.memory_limit).unwrap_or(MemoryLimit::MAX);
-            let DiskLimit(ByteSize(disk_bytes)) =
-                (alloc.disk_limit).unwrap_or(DiskLimit::ARBITRARY);
+                alloc.memory_limit.unwrap_or(MemoryLimit::MAX);
+            let DiskLimit(ByteSize(disk_bytes)) = alloc.disk_limit.unwrap_or(DiskLimit::MAX);
 
             let row = Row::pack_slice(&[
                 size.as_str().into(),
