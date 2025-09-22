@@ -151,6 +151,7 @@ impl Catalog {
             source_references: BTreeMap::new(),
             storage_metadata: Default::default(),
             temporary_schemas: BTreeMap::new(),
+            mock_authentication_nonce: Default::default(),
             config: mz_sql::catalog::CatalogConfig {
                 start_time: to_datetime((config.now)()),
                 start_instant: Instant::now(),
@@ -400,6 +401,13 @@ impl Catalog {
             .get_catalog_content_version()
             .unwrap_or("new")
             .to_string();
+
+        let mz_authentication_mock_nonce =
+            txn.get_authentication_mock_nonce().ok_or_else(|| {
+                Error::new(ErrorKind::SettingError("authentication nonce".to_string()))
+            })?;
+
+        state.mock_authentication_nonce = Some(mz_authentication_mock_nonce);
 
         // Migrate item ASTs.
         let builtin_table_update = if !config.skip_migrations {

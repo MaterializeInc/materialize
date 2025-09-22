@@ -21,6 +21,9 @@ use mz_repr::{ColumnName, RelationDesc};
 pub enum BackendMessage {
     AuthenticationOk,
     AuthenticationCleartextPassword,
+    AuthenticationSASL,
+    AuthenticationSASLContinue(SASLServerFirstMessage),
+    AuthenticationSASLFinal(SASLServerFinalMessage),
     CommandComplete {
         tag: String,
     },
@@ -59,6 +62,13 @@ impl From<ErrorResponse> for BackendMessage {
 }
 
 #[derive(Debug)]
+pub struct SASLServerFirstMessage {
+    pub iteration_count: usize,
+    pub nonce: String,
+    pub salt: String,
+}
+
+#[derive(Debug)]
 pub struct FieldDescription {
     pub name: ColumnName,
     pub table_id: u32,
@@ -67,6 +77,19 @@ pub struct FieldDescription {
     pub type_len: i16,
     pub type_mod: i32,
     pub format: mz_pgwire_common::Format,
+}
+
+#[derive(Debug)]
+pub enum SASLServerFinalMessageKinds {
+    Verifier(String),
+    // The spec specifies an Error kind here but PG just uses
+    // its own error handling
+}
+
+#[derive(Debug)]
+pub struct SASLServerFinalMessage {
+    pub kind: SASLServerFinalMessageKinds,
+    pub extensions: Vec<String>,
 }
 
 pub fn encode_row_description(

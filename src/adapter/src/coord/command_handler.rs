@@ -10,6 +10,7 @@
 //! Logic for  processing client [`Command`]s. Each [`Command`] is initiated by a
 //! client via some external Materialize API (ex: HTTP and psql).
 
+use base64::prelude::*;
 use differential_dataflow::lattice::Lattice;
 use mz_adapter_types::dyncfgs::ALLOW_USER_SESSIONS;
 use mz_auth::password::Password;
@@ -59,13 +60,16 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::{Instrument, debug_span, info, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
-use crate::command::{AuthResponse, CatalogSnapshot, Command, ExecuteResponse, StartupResponse};
+use crate::command::{
+    AuthResponse, CatalogSnapshot, Command, ExecuteResponse, SASLChallengeResponse,
+    SASLVerifyProofResponse, StartupResponse,
+};
 use crate::coord::appends::PendingWriteTxn;
 use crate::coord::{
     ConnMeta, Coordinator, DeferredPlanStatement, Message, PendingTxn, PlanStatement, PlanValidity,
     PurifiedStatementReady, validate_ip_with_policy_rules,
 };
-use crate::error::AdapterError;
+use crate::error::{AdapterError, AuthenticationError};
 use crate::notice::AdapterNotice;
 use crate::session::{Session, TransactionOps, TransactionStatus};
 use crate::util::{ClientTransmitter, ResultExt};
@@ -118,6 +122,31 @@ impl Coordinator {
                 } => {
                     self.handle_authenticate_password(tx, role_name, password)
                         .await;
+                }
+
+                Command::AuthenticateGetSASLChallenge {
+                    tx,
+                    role_name,
+                    nonce,
+                } => {
+                    self.handle_generate_sasl_challenge(tx, role_name, nonce)
+                        .await;
+                }
+
+                Command::AuthenticateVerifySASLProof {
+                    tx,
+                    role_name,
+                    proof,
+                    mock_hash,
+                    auth_message,
+                } => {
+                    self.handle_authenticate_verify_sasl_proof(
+                        tx,
+                        role_name,
+                        proof,
+                        auth_message,
+                        mock_hash,
+                    );
                 }
 
                 Command::Execute {
@@ -246,6 +275,133 @@ impl Coordinator {
         .boxed_local()
     }
 
+    fn handle_authenticate_verify_sasl_proof(
+        &self,
+        tx: oneshot::Sender<Result<SASLVerifyProofResponse, AdapterError>>,
+        role_name: String,
+        proof: String,
+        auth_message: String,
+        mock_hash: String,
+    ) {
+        let role = self.catalog().try_get_role_by_name(role_name.as_str());
+        let role_auth = role.and_then(|r| self.catalog().try_get_role_auth_by_id(&r.id));
+
+        let login = role
+            .as_ref()
+            .map(|r| r.attributes.login.unwrap_or(false))
+            .unwrap_or(false);
+
+        let real_hash = role_auth
+            .as_ref()
+            .and_then(|auth| auth.password_hash.as_ref());
+        let hash_ref = real_hash.map(|s| s.as_str()).unwrap_or(&mock_hash);
+
+        let role_present = role.is_some();
+        let make_auth_err = |role_present: bool, login: bool| {
+            AdapterError::AuthenticationError(if role_present && !login {
+                AuthenticationError::NonLogin
+            } else {
+                AuthenticationError::InvalidCredentials
+            })
+        };
+
+        match mz_auth::hash::sasl_verify(hash_ref, &proof, &auth_message) {
+            Ok(verifier) => {
+                // Success only if role exists, allows login, and a real password hash was used.
+                if login && real_hash.is_some() {
+                    let role = role.expect("login implies role exists");
+                    let _ = tx.send(Ok(SASLVerifyProofResponse {
+                        verifier,
+                        auth_resp: AuthResponse {
+                            role_id: role.id,
+                            superuser: role.attributes.superuser.unwrap_or(false),
+                        },
+                    }));
+                } else {
+                    let _ = tx.send(Err(make_auth_err(role_present, login)));
+                }
+            }
+            Err(_) => {
+                let _ = tx.send(Err(AdapterError::AuthenticationError(
+                    AuthenticationError::InvalidCredentials,
+                )));
+            }
+        }
+    }
+
+    #[mz_ore::instrument(level = "debug")]
+    async fn handle_generate_sasl_challenge(
+        &mut self,
+        tx: oneshot::Sender<Result<SASLChallengeResponse, AdapterError>>,
+        role_name: String,
+        client_nonce: String,
+    ) {
+        let role_auth = self
+            .catalog()
+            .try_get_role_by_name(&role_name)
+            .and_then(|role| self.catalog().try_get_role_auth_by_id(&role.id));
+
+        let nonce = match mz_auth::hash::generate_nonce(&client_nonce) {
+            Ok(n) => n,
+            Err(e) => {
+                let msg = format!(
+                    "failed to generate nonce for client nonce {}: {}",
+                    client_nonce, e
+                );
+                let _ = tx.send(Err(AdapterError::Internal(msg.clone())));
+                soft_panic_or_log!("{msg}");
+                return;
+            }
+        };
+
+        // It's important that the mock_nonce is deterministic per role, otherwise the purpose of
+        // doing mock authentication is defeated. We use a catalog-wide nonce, and combine that
+        // with the role name to get a per-role mock nonce.
+        let send_mock_challenge =
+            |role_name: String,
+             mock_nonce: String,
+             nonce: String,
+             tx: oneshot::Sender<Result<SASLChallengeResponse, AdapterError>>| {
+                let opts = mz_auth::hash::mock_sasl_challenge(&role_name, &mock_nonce);
+                let _ = tx.send(Ok(SASLChallengeResponse {
+                    iteration_count: mz_ore::cast::u32_to_usize(opts.iterations.get()),
+                    salt: BASE64_STANDARD.encode(opts.salt),
+                    nonce,
+                }));
+            };
+
+        match role_auth {
+            Some(auth) if auth.password_hash.is_some() => {
+                let hash = auth.password_hash.as_ref().expect("checked above");
+                match mz_auth::hash::scram256_parse_opts(hash) {
+                    Ok(opts) => {
+                        let _ = tx.send(Ok(SASLChallengeResponse {
+                            iteration_count: mz_ore::cast::u32_to_usize(opts.iterations.get()),
+                            salt: BASE64_STANDARD.encode(opts.salt),
+                            nonce,
+                        }));
+                    }
+                    Err(_) => {
+                        send_mock_challenge(
+                            role_name,
+                            self.catalog().state().mock_authentication_nonce(),
+                            nonce,
+                            tx,
+                        );
+                    }
+                }
+            }
+            _ => {
+                send_mock_challenge(
+                    role_name,
+                    self.catalog().state().mock_authentication_nonce(),
+                    nonce,
+                    tx,
+                );
+            }
+        }
+    }
+
     #[mz_ore::instrument(level = "debug")]
     async fn handle_authenticate_password(
         &mut self,
@@ -255,14 +411,18 @@ impl Coordinator {
     ) {
         let Some(password) = password else {
             // The user did not provide a password.
-            let _ = tx.send(Err(AdapterError::AuthenticationError));
+            let _ = tx.send(Err(AdapterError::AuthenticationError(
+                AuthenticationError::PasswordRequired,
+            )));
             return;
         };
 
         if let Some(role) = self.catalog().try_get_role_by_name(role_name.as_str()) {
             if !role.attributes.login.unwrap_or(false) {
                 // The user is not allowed to login.
-                let _ = tx.send(Err(AdapterError::AuthenticationError));
+                let _ = tx.send(Err(AdapterError::AuthenticationError(
+                    AuthenticationError::NonLogin,
+                )));
                 return;
             }
             if let Some(auth) = self.catalog().try_get_role_auth_by_id(&role.id) {
@@ -272,16 +432,22 @@ impl Coordinator {
                             role_id: role.id,
                             superuser: role.attributes.superuser.unwrap_or(false),
                         })),
-                        Err(_) => tx.send(Err(AdapterError::AuthenticationError)),
+                        Err(_) => tx.send(Err(AdapterError::AuthenticationError(
+                            AuthenticationError::InvalidCredentials,
+                        ))),
                     };
                     return;
                 }
             }
             // Authentication failed due to incorrect password or missing password hash.
-            let _ = tx.send(Err(AdapterError::AuthenticationError));
+            let _ = tx.send(Err(AdapterError::AuthenticationError(
+                AuthenticationError::InvalidCredentials,
+            )));
         } else {
             // The user does not exist.
-            let _ = tx.send(Err(AdapterError::AuthenticationError));
+            let _ = tx.send(Err(AdapterError::AuthenticationError(
+                AuthenticationError::RoleNotFound,
+            )));
         }
     }
 

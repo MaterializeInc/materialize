@@ -73,6 +73,20 @@ pub enum Command {
         password: Option<Password>,
     },
 
+    AuthenticateGetSASLChallenge {
+        tx: oneshot::Sender<Result<SASLChallengeResponse, AdapterError>>,
+        role_name: String,
+        nonce: String,
+    },
+
+    AuthenticateVerifySASLProof {
+        tx: oneshot::Sender<Result<SASLVerifyProofResponse, AdapterError>>,
+        role_name: String,
+        proof: String,
+        auth_message: String,
+        mock_hash: String,
+    },
+
     Execute {
         portal_name: String,
         session: Session,
@@ -148,6 +162,8 @@ impl Command {
             Command::CancelRequest { .. }
             | Command::Startup { .. }
             | Command::AuthenticatePassword { .. }
+            | Command::AuthenticateGetSASLChallenge { .. }
+            | Command::AuthenticateVerifySASLProof { .. }
             | Command::CatalogSnapshot { .. }
             | Command::PrivilegedCancelRequest { .. }
             | Command::GetWebhook { .. }
@@ -166,6 +182,8 @@ impl Command {
             Command::CancelRequest { .. }
             | Command::Startup { .. }
             | Command::AuthenticatePassword { .. }
+            | Command::AuthenticateGetSASLChallenge { .. }
+            | Command::AuthenticateVerifySASLProof { .. }
             | Command::CatalogSnapshot { .. }
             | Command::PrivilegedCancelRequest { .. }
             | Command::GetWebhook { .. }
@@ -208,6 +226,22 @@ pub struct AuthResponse {
     pub role_id: RoleId,
     /// If the user is a superuser.
     pub superuser: bool,
+}
+
+#[derive(Derivative)]
+#[derivative(Debug)]
+pub struct SASLChallengeResponse {
+    pub iteration_count: usize,
+    /// Base64-encoded salt for the SASL challenge.
+    pub salt: String,
+    pub nonce: String,
+}
+
+#[derive(Derivative)]
+#[derivative(Debug)]
+pub struct SASLVerifyProofResponse {
+    pub verifier: String,
+    pub auth_resp: AuthResponse,
 }
 
 // Facile implementation for `StartupResponse`, which does not use the `allowed`

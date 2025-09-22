@@ -5378,6 +5378,7 @@ dependencies = [
  "arrow",
  "async-stream",
  "async-trait",
+ "base64 0.22.1",
  "bytes",
  "bytesize",
  "chrono",
@@ -5536,6 +5537,7 @@ name = "mz-auth"
 version = "0.0.0"
 dependencies = [
  "base64 0.22.1",
+ "itertools 0.14.0",
  "mz-ore",
  "openssl",
  "proptest",
@@ -5743,6 +5745,7 @@ dependencies = [
  "mz-storage-client",
  "mz-storage-types",
  "mz-transform",
+ "openssl",
  "paste",
  "prometheus",
  "proptest",
@@ -7293,6 +7296,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "base64 0.22.1",
  "byteorder",
  "bytes",
  "bytesize",

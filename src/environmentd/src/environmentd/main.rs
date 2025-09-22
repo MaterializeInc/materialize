@@ -766,6 +766,18 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         serde_json::from_reader(f)?
     };
 
+    for (_, listener) in &listeners_config.sql {
+        listener
+            .validate()
+            .map_err(|e| anyhow::anyhow!("invalid SQL listener: {}", e))?;
+    }
+
+    for (_, listener) in &listeners_config.http {
+        listener
+            .validate()
+            .map_err(|e| anyhow::anyhow!("invalid HTTP listener: {}", e))?;
+    }
+
     // Configure CORS.
     let allowed_origins = if !args.cors_allowed_origin.is_empty() {
         args.cors_allowed_origin
