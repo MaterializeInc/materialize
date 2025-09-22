@@ -38,6 +38,7 @@ use std::sync::Arc;
 use opentelemetry::trace::TraceContextExt;
 use tracing::Span;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
+use mz_ore::cast::CastLossy;
 use mz_sql_parser::ast::Statement;
 ////// todo: separate crate imports
 
@@ -536,50 +537,53 @@ impl SessionClient {
             &constraint_based,
         ).await?;
 
-        /////////// todo: metrics
-        // self.metrics
-        //     .determine_timestamp
-        //     .with_label_values(&[
-        //         match det.respond_immediately() {
-        //             true => "true",
-        //             false => "false",
-        //         },
-        //         isolation_level.as_str(),
-        //         &compute_instance.to_string(),
-        //         constraint_based.as_str(),
-        //     ])
-        //     .inc();
-        // if !det.respond_immediately()
-        //     && isolation_level == &IsolationLevel::StrictSerializable
-        //     && real_time_recency_ts.is_none()
-        // {
-        //     // Note down the difference between StrictSerializable and Serializable into a metric.
-        //     if let Some(strict) = det.timestamp_context.timestamp() {
-        //         let (serializable_det, _tmp_read_holds) = self.determine_timestamp_for(
-        //             session,
-        //             id_bundle,
-        //             when,
-        //             compute_instance,
-        //             timeline_context,
-        //             oracle_read_ts,
-        //             real_time_recency_ts,
-        //             &IsolationLevel::Serializable,
-        //             &constraint_based,
-        //         )?;
-        //
-        //         if let Some(serializable) = serializable_det.timestamp_context.timestamp() {
-        //             self.metrics
-        //                 .timestamp_difference_for_strict_serializable_ms
-        //                 .with_label_values(&[
-        //                     &compute_instance.to_string(),
-        //                     constraint_based.as_str(),
-        //                 ])
-        //                 .observe(f64::cast_lossy(u64::from(
-        //                     strict.saturating_sub(*serializable),
-        //                 )));
-        //         }
-        //     }
-        // }
+        session.metrics()
+            .determine_timestamp()
+            .with_label_values(&[
+                match det.respond_immediately() {
+                    true => "true",
+                    false => "false",
+                },
+                isolation_level.as_str(),
+                &compute_instance.to_string(),
+                constraint_based.as_str(),
+            ])
+            .inc();
+        if !det.respond_immediately()
+            && isolation_level == &IsolationLevel::StrictSerializable
+            && real_time_recency_ts.is_none()
+        {
+            /////// todo: this shouldn't do a new `acquire_read_holds_and_collection_write_frontiers`
+            // both due to performance, but also correctness: we want to comparison to be based on
+            // the same frontiers.
+
+            // Note down the difference between StrictSerializable and Serializable into a metric.
+            if let Some(strict) = det.timestamp_context.timestamp() {
+                let (serializable_det, _tmp_read_holds) = self.frontend_determine_timestamp_for(
+                    session,
+                    id_bundle,
+                    when,
+                    compute_instance,
+                    timeline_context,
+                    oracle_read_ts,
+                    real_time_recency_ts,
+                    &IsolationLevel::Serializable,
+                    &constraint_based,
+                ).await?;
+
+                if let Some(serializable) = serializable_det.timestamp_context.timestamp() {
+                    session.metrics()
+                        .timestamp_difference_for_strict_serializable_ms()
+                        .with_label_values(&[
+                            &compute_instance.to_string(),
+                            constraint_based.as_str(),
+                        ])
+                        .observe(f64::cast_lossy(u64::from(
+                            strict.saturating_sub(*serializable),
+                        )));
+                }
+            }
+        }
 
         Ok((det, read_holds))
     }

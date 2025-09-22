@@ -235,6 +235,8 @@ impl Metrics {
                 .session_startup_table_writes_seconds
                 .with_label_values(&[]),
             query_total: self.query_total.clone(),
+            determine_timestamp: self.determine_timestamp.clone(),
+            timestamp_difference_for_strict_serializable_ms: self.timestamp_difference_for_strict_serializable_ms.clone(),
         }
     }
 }
@@ -245,6 +247,8 @@ pub struct SessionMetrics {
     row_set_finishing_seconds: Histogram,
     session_startup_table_writes_seconds: Histogram,
     query_total: IntCounterVec,
+    determine_timestamp: IntCounterVec,
+    timestamp_difference_for_strict_serializable_ms: HistogramVec,
 }
 
 impl SessionMetrics {
@@ -258,6 +262,14 @@ impl SessionMetrics {
 
     pub(crate) fn query_total(&self) -> &IntCounterVec {
         &self.query_total
+    }
+
+    pub(crate) fn determine_timestamp(&self) -> &IntCounterVec {
+        &self.determine_timestamp
+    }
+
+    pub(crate) fn timestamp_difference_for_strict_serializable_ms(&self) -> &HistogramVec {
+        &self.timestamp_difference_for_strict_serializable_ms
     }
 }
 
