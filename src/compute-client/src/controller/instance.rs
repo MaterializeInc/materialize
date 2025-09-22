@@ -127,7 +127,7 @@ impl From<CollectionMissing> for ReadPolicyError {
 }
 
 /// A command sent to an [`Instance`] task.
-pub type Command<T> = Box<dyn FnOnce(&mut Instance<T>) + Send>;
+pub(super) type Command<T> = Box<dyn FnOnce(&mut Instance<T>) + Send>;
 
 /// A client for an [`Instance`] task.
 #[derive(Clone, derivative::Derivative)]
@@ -141,17 +141,17 @@ pub struct Client<T: ComputeControllerTimestamp> {
 }
 
 impl<T: ComputeControllerTimestamp> Client<T> {
-    pub(crate) fn send(&self, command: Command<T>) -> Result<(), SendError<Command<T>>> {
+    pub(super) fn send(&self, command: Command<T>) -> Result<(), SendError<Command<T>>> {
         self.command_tx.send(command)
     }
 
-    pub(crate) fn read_hold_tx(&self) -> read_holds::ChangeTx<T> {
+    pub(super) fn read_hold_tx(&self) -> read_holds::ChangeTx<T> {
         Arc::clone(&self.read_hold_tx)
     }
 
     /// Call a method to be run on the instance task, by sending a message to the instance and
     /// waiting for a response message.
-    pub async fn call_sync<F, R>(&self, f: F) -> R
+    pub(super) async fn call_sync<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut Instance<T>) -> R + Send + 'static,
         R: Send + 'static,
@@ -273,8 +273,7 @@ where
 pub(super) type ReplicaResponse<T> = (ReplicaId, u64, ComputeResponse<T>);
 
 /// The state we keep for a compute instance.
-/// //////////// todo: can we avoid pub?
-pub struct Instance<T: ComputeControllerTimestamp> {
+pub(super) struct Instance<T: ComputeControllerTimestamp> {
     /// Build info for spawning replicas
     build_info: &'static BuildInfo,
     /// A handle providing access to storage collections.
