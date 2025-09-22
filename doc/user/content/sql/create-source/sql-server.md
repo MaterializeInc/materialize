@@ -10,8 +10,6 @@ menu:
     weight: 20
 ---
 
-{{< private-preview />}}
-
 {{% create-source/intro %}}
 Materialize supports SQL Server (2016+) as a real-time data source. To connect to a
 SQL Server database, you first need to tweak its configuration to enable [Change Data
