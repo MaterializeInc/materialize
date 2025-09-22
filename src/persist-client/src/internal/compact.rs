@@ -667,6 +667,21 @@ where
             );
             let total_chunked_runs = chunked_runs.len();
 
+            // Special-case: incremental compaction with exactly one real run but many empty
+            // batches (each with zero runs). Without this, we only rewrite the single batch
+            // containing the run and leave all the adjacent empty batches intact, causing
+            // unnecessary metadata bloat. If we detect this case, treat all the empty batches
+            // as part of the compaction input so they get removed. This preserves correctness
+            // because empty batches contribute no updates.
+            //
+            // This matters for the pathological case where there are no updates, but many
+            // empty batches due to frequent frontier advancements.
+            let single_run_all_inputs = incremental_enabled && ordered_runs.len() == 1;
+
+            let all_input_batch_ids: BTreeSet<_> = req.inputs.iter().map(|x| x.id).collect();
+
+            let all_descs: Vec<_> = req.inputs.iter().map(|x| &x.batch.desc).collect();
+
             for (applied, (runs, run_chunk_max_memory_usage)) in
                 chunked_runs.into_iter().enumerate()
             {
@@ -685,9 +700,17 @@ where
                 let mut run_cfg = cfg.clone();
                 run_cfg.batch.batch_builder_max_outstanding_parts = 1 + extra_outstanding_parts;
 
-                let (batch_ids, descriptions): (BTreeSet<_>, Vec<_>) = runs.iter()
+
+                let (mut batch_ids, mut descriptions): (BTreeSet<_>, Vec<_>) = runs.iter()
                     .map(|(run_id, desc, _, _)| (run_id.0, *desc))
                     .unzip();
+
+                if single_run_all_inputs {
+                    // Extend to include all (empty) batch ids and their descriptions.
+                    // (Descriptions of empties are needed below to compute the merged desc.)
+                    batch_ids.extend(all_input_batch_ids.iter().copied());
+                    descriptions.extend(all_descs.iter().copied());
+                }
 
                 let input = if incremental_enabled {
                     let run_ids = runs.iter()
