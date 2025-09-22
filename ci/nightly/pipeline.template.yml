@@ -2316,14 +2316,14 @@ steps:
         agents:
           queue: hetzner-aarch64-16cpu-32gb
 
-      - id: orchestratord-all
-        label: "Orchestratord test (every property)"
+      - id: orchestratord-individual
+        label: "Orchestratord test (individual properties)"
         depends_on: build-aarch64
         timeout_in_minutes: 180
         plugins:
           - ./ci/plugins/mzcompose:
               composition: orchestratord
-              args: [--scenario=all, --recreate-cluster]
+              args: [--scenario=individual, --recreate-cluster]
               ci-builder: stable
         agents:
           queue: hetzner-aarch64-16cpu-32gb
@@ -2336,6 +2336,18 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: orchestratord
               args: [--scenario=combine, --runtime=7200, --recreate-cluster]
+              ci-builder: stable
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+
+      - id: orchestratord-upgrade
+        label: "Orchestratord test (upgrade)"
+        depends_on: build-aarch64
+        timeout_in_minutes: 180
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: orchestratord
+              args: [--scenario=upgrade, --runtime=7200, --recreate-cluster]
               ci-builder: stable
         agents:
           queue: hetzner-aarch64-16cpu-32gb

@@ -66,6 +66,26 @@ def get_self_managed_versions() -> list[MzVersion]:
     return sorted(result)
 
 
+BAD_SELF_MANAGED_VERSIONS = {
+    MzVersion.parse_mz("v0.130.0"),
+    MzVersion.parse_mz("v0.130.1"),
+    MzVersion.parse_mz("v0.130.2"),
+    MzVersion.parse_mz("v0.130.3"),
+    MzVersion.parse_mz("v0.130.4"),
+}
+
+
+def get_all_self_managed_versions() -> list[MzVersion]:
+    result = set()
+    for entry in yaml.safe_load(
+        requests.get("https://materializeinc.github.io/materialize/index.yaml").text
+    )["entries"]["materialize-operator"]:
+        version = MzVersion.parse_mz(entry["appVersion"])
+        if not version.prerelease and version not in BAD_SELF_MANAGED_VERSIONS:
+            result.add(version)
+    return sorted(result)
+
+
 # not released on Docker
 INVALID_VERSIONS = {
     MzVersion.parse_mz("v0.52.1"),

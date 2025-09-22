@@ -17,15 +17,20 @@ import datetime
 import json
 import os
 import random
+import signal
 import subprocess
 import time
+import uuid
 from collections.abc import Callable
+from enum import Enum
 from typing import Any
 
+import psycopg
 import yaml
 from semver.version import Version
 
 from materialize import MZ_ROOT, ci_util, git, spawn
+from materialize.mz_version import MzVersion
 from materialize.mzcompose.composition import (
     Composition,
     Service,
@@ -37,6 +42,7 @@ from materialize.mzcompose.services.environmentd import Environmentd
 from materialize.mzcompose.services.orchestratord import Orchestratord
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.util import all_subclasses
+from materialize.version_list import get_all_self_managed_versions
 
 SERVICES = [
     Testdrive(),
@@ -120,6 +126,8 @@ def retry(fn: Callable, timeout: int) -> None:
 
 
 class Modification:
+    pick_by_default: bool = True
+
     def __init__(self, value: Any):
         assert value in self.values(), f"Expected {value} to be in {self.values()}"
         self.value = value
@@ -147,7 +155,7 @@ class Modification:
                 break
         else:
             raise ValueError(
-                f"No modification with name {name} found, only know {[subclass.__name__ for subclass in all_subclasses(Modification)]}"
+                f"No modification with name {name} found, only know {[subclass.__name__ for subclass in all_modifications()]}"
             )
         return subclass(data["value"])
 
@@ -172,6 +180,14 @@ class Modification:
 
     def validate(self, mods: dict[type["Modification"], Any]) -> None:
         raise NotImplementedError
+
+
+def all_modifications() -> list[type[Modification]]:
+    return [
+        mod_class
+        for mod_class in all_subclasses(Modification)
+        if mod_class.pick_by_default
+    ]
 
 
 class LicenseKey(Modification):
@@ -201,6 +217,11 @@ class LicenseKey(Modification):
             raise ValueError(f"Unknown value {self.value}, only know {self.values()}")
 
     def validate(self, mods: dict[type[Modification], Any]) -> None:
+        if MzVersion.parse_mz(mods[EnvironmentdImageRef]) < MzVersion.parse_mz(
+            "v0.147.0"
+        ):
+            return
+
         environmentd = get_environmentd_data()
         if self.value == "invalid":
             assert len(environmentd["items"]) == 0
@@ -234,10 +255,6 @@ class LicenseKeyCheck(Modification):
     def values(cls) -> list[Any]:
         # TODO: Reenable False when fixed
         return [None, True]
-
-    # @classmethod
-    # def bad_values(cls) -> list[Any]:
-    #     return [False]
 
     @classmethod
     def default(cls) -> Any:
@@ -276,6 +293,11 @@ class BalancerdEnabled(Modification):
         definition["operator"]["balancerd"]["enabled"] = self.value
 
     def validate(self, mods: dict[type[Modification], Any]) -> None:
+        if MzVersion.parse_mz(mods[EnvironmentdImageRef]) < MzVersion.parse_mz(
+            "v0.147.0"
+        ):
+            return
+
         def check() -> None:
             result = spawn.capture(
                 [
@@ -347,6 +369,11 @@ class ConsoleEnabled(Modification):
         definition["operator"]["console"]["enabled"] = self.value
 
     def validate(self, mods: dict[type[Modification], Any]) -> None:
+        if MzVersion.parse_mz(mods[EnvironmentdImageRef]) < MzVersion.parse_mz(
+            "v0.147.0"
+        ):
+            return
+
         def check() -> None:
             result = spawn.capture(
                 [
@@ -394,6 +421,34 @@ class EnableRBAC(Modification):
             assert (
                 expected in args
             ), f"Expected {expected} in environmentd args, but only found {args}"
+
+
+class EnvironmentdImageRef(Modification):
+    # Only done intentionally during upgrades with correct ordering
+    pick_by_default = False
+
+    @classmethod
+    def values(cls) -> list[Any]:
+        return [str(version) for version in get_all_self_managed_versions()] + [
+            get_image(None).rsplit(":", 1)[1]
+        ]
+
+    @classmethod
+    def default(cls) -> Any:
+        return get_image(None).rsplit(":", 1)[1]
+
+    def modify(self, definition: dict[str, Any]) -> None:
+        definition["materialize"]["spec"][
+            "environmentdImageRef"
+        ] = f"materialize/environmentd:{self.value}"
+
+    def validate(self, mods: dict[type[Modification], Any]) -> None:
+        environmentd = get_environmentd_data()
+        image = environmentd["items"][0]["spec"]["containers"][0]["image"]
+        expected = f"materialize/environmentd:{self.value}"
+        assert (
+            image == expected
+        ), f"Expected environmentd image {expected}, but found {image}"
 
 
 class TelemetryEnabled(Modification):
@@ -866,6 +921,104 @@ class ConsoleResources(Modification):
         retry(check_pods, 240)
 
 
+class AuthenticatorKind(Modification):
+    @classmethod
+    def values(cls) -> list[Any]:
+        return ["None", "Password"]
+
+    @classmethod
+    def default(cls) -> Any:
+        return "None"
+
+    def modify(self, definition: dict[str, Any]) -> None:
+        definition["materialize"]["spec"]["authenticatorKind"] = self.value
+        if self.value == "Password":
+            definition["secret"]["stringData"][
+                "external_login_password_mz_system"
+            ] = "superpassword"
+        elif "external_login_password_mz_system" in definition["secret"]["stringData"]:
+            del definition["secret"]["stringData"]["external_login_password_mz_system"]
+
+    def validate(self, mods: dict[type[Modification], Any]) -> None:
+        environmentd = get_environmentd_data()
+        name = environmentd["items"][0]["metadata"]["name"]
+        process = None
+        version = MzVersion.parse_mz(mods[EnvironmentdImageRef])
+
+        if self.value == "Password" and version <= MzVersion.parse_mz("v0.147.6"):
+            return
+
+        port = (
+            6875
+            if version >= MzVersion.parse_mz("v0.147.0") and self.value == "Password"
+            else 6877
+        )
+        for i in range(120):
+            process = subprocess.Popen(
+                [
+                    "kubectl",
+                    "port-forward",
+                    f"pod/{name}",
+                    "-n",
+                    "materialize-environment",
+                    f"{port}:{port}",
+                ],
+                preexec_fn=os.setpgrp,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+            time.sleep(1)
+            # ret = process.poll()
+            assert process.stdout
+            line = process.stdout.readline()
+            if "Forwarding from" in line:
+                break
+            else:
+                print("Port-forward failed, retrying")
+        else:
+            spawn.capture(
+                [
+                    "kubectl",
+                    "describe",
+                    "pod",
+                    "-l",
+                    "app=environmentd",
+                    "-n",
+                    "materialize-environment",
+                ]
+            )
+            raise ValueError(
+                "Port-forwarding never worked, environmentd status:\n{status}"
+            )
+
+        time.sleep(1)
+        try:
+            psycopg.connect(
+                host="127.0.0.1",
+                user="mz_system",
+                password="superpassword" if self.value == "Password" else None,
+                dbname="materialize",
+                port=port,
+            )
+        finally:
+            os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+
+
+class Scenario(Enum):
+    Individual = "individual"
+    Combine = "combine"
+    Defaults = "defaults"
+    Upgrade = "upgrade"
+    UpgradeChain = "upgrade-chain"
+
+    @classmethod
+    def _missing_(cls, value):
+        if value == "random":
+            return cls(random.choice([elem.value for elem in cls]))
+
+
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "--recreate-cluster",
@@ -889,6 +1042,15 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     assert kind_version >= Version.parse(
         "0.29.0"
     ), f"kind >= v0.29.0 required, while you are on {kind_version}"
+
+    # Start up services and potentially compile them first so that we have all images locally
+    c.up(
+        Service("testdrive", idle=True),
+        Service("orchestratord", idle=True),
+        Service("environmentd", idle=True),
+        Service("clusterd", idle=True),
+        Service("balancerd", idle=True),
+    )
 
     cluster = "kind"
     clusters = spawn.capture(["kind", "get", "clusters"]).strip().split("\n")
@@ -942,6 +1104,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     definition["operator"]["operator"]["image"]["tag"] = get_image(
         c.compose["services"]["orchestratord"]["image"], args.tag
     ).rsplit(":", 1)[1]
+    # Necessary for upgrades
+    definition["operator"]["networkPolicies"]["enabled"] = True
+    definition["operator"]["networkPolicies"]["internal"]["enabled"] = True
     # TODO: Remove when fixed: error: unexpected argument '--disable-license-key-checks' found
     definition["operator"]["operator"]["args"]["enableLicenseKeyChecks"] = True
     definition["operator"]["clusterd"]["nodeSelector"][
@@ -957,7 +1122,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     rng = random.Random(args.seed)
 
-    mod_classes = sorted(list(all_subclasses(Modification)), key=repr)
+    mod_classes = sorted(all_modifications(), key=repr)
     if args.modification:
         mod_classes = [
             mod_class
@@ -965,35 +1130,84 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             if mod_class.__name__ in args.modification
         ]
 
-    if args.scenario == "all":
+    if not args.scenario[0].isalpha():
+        assert not args.runtime
+        assert not args.modification
+        run_scenario(
+            [
+                [Modification.from_dict(mod) for mod in mods]
+                for mods in json.loads(args.scenario)
+            ],
+            definition,
+        )
+        return
+
+    scenario = Scenario(args.scenario)
+    if scenario == Scenario.Individual:
         assert not args.runtime
         for mod_class in mod_classes:
             for value in mod_class.values():
-                mod = mod_class(value)
-                run_scenario([mod], definition)
-    elif args.scenario == "combine":
+                run_scenario([[mod_class(value)]], definition)
+    elif scenario == Scenario.Combine:
         assert args.runtime
-        done_mods = set()
         end_time = (
             datetime.datetime.now() + datetime.timedelta(seconds=args.runtime)
         ).timestamp()
         while time.time() < end_time:
-            mods = (
-                mod_class(rng.choice(mod_class.good_values()))
-                for mod_class in mod_classes
+            run_scenario(
+                [
+                    [
+                        mod_class(rng.choice(mod_class.good_values()))
+                        for mod_class in mod_classes
+                    ]
+                ],
+                definition,
             )
-            if mods not in done_mods:
-                done_mods.add(mods)
-                run_scenario(list(mods), definition)
-    elif args.scenario == "defaults":
+    elif scenario == Scenario.Defaults:
         assert not args.runtime
         mods = [mod_class(mod_class.default()) for mod_class in mod_classes]
-        run_scenario(mods, definition, modify=False)
+        run_scenario([mods], definition, modify=False)
+    elif scenario == Scenario.Upgrade:
+        assert args.runtime
+        end_time = (
+            datetime.datetime.now() + datetime.timedelta(seconds=args.runtime)
+        ).timestamp()
+        versions = get_all_self_managed_versions()
+        while time.time() < end_time:
+            versions = sorted(list(rng.sample(versions, 2)))
+            run_scenario(
+                [
+                    [EnvironmentdImageRef(str(version))]
+                    + [
+                        mod_class(rng.choice(mod_class.good_values()))
+                        for mod_class in mod_classes
+                    ]
+                    for version in versions
+                ],
+                definition,
+            )
+    elif scenario == Scenario.UpgradeChain:
+        assert args.runtime
+        end_time = (
+            datetime.datetime.now() + datetime.timedelta(seconds=args.runtime)
+        ).timestamp()
+        versions = get_all_self_managed_versions()
+        while time.time() < end_time:
+            n = random.randint(2, len(versions))
+            versions = sorted(list(rng.sample(versions, n)))
+            run_scenario(
+                [
+                    [EnvironmentdImageRef(str(version))]
+                    + [
+                        mod_class(rng.choice(mod_class.good_values()))
+                        for mod_class in mod_classes
+                    ]
+                    for version in versions
+                ],
+                definition,
+            )
     else:
-        assert not args.runtime
-        assert not args.modification
-        mods = [Modification.from_dict(mod) for mod in json.loads(args.scenario)]
-        run_scenario(mods, definition)
+        raise ValueError(f"Unhandled scenario {scenario}")
 
 
 def setup(cluster: str):
@@ -1060,34 +1274,54 @@ def setup(cluster: str):
     )
 
 
+DONE_SCENARIOS = set()
+
+
 def run_scenario(
-    mods: list[Modification], original_definition: dict[str, Any], modify: bool = True
+    scenario: list[list[Modification]],
+    original_definition: dict[str, Any],
+    modify: bool = True,
 ) -> None:
-    scenario = json.dumps([mod.to_dict() for mod in mods])
-    print(f"--- Running with {scenario}")
-    definition = copy.deepcopy(original_definition)
-    expect_fail = False
-    if modify:
-        for mod in mods:
-            mod.modify(definition)
-            if mod.value in mod.failed_reconciliation_values():
-                expect_fail = True
-    run(definition, expect_fail)
-    mod_dict = {mod.__class__: mod.value for mod in mods}
-    for subclass in all_subclasses(Modification):
-        if subclass not in mod_dict:
-            mod_dict[subclass] = subclass.default()
-    try:
-        for mod in mods:
-            mod.validate(mod_dict)
-    except:
-        print(
-            f"Reproduce with bin/mzcompose --find orchestratord run default --scenario='{scenario}'"
-        )
-        raise
+    initialize = True
+    scenario_json = json.dumps([[mod.to_dict() for mod in mods] for mods in scenario])
+    if scenario_json in DONE_SCENARIOS:
+        return
+    DONE_SCENARIOS.add(scenario_json)
+    print(f"--- Running with {scenario_json}")
+    for mods in scenario:
+        definition = copy.deepcopy(original_definition)
+        expect_fail = False
+        if modify:
+            for mod in mods:
+                mod.modify(definition)
+                if mod.value in mod.failed_reconciliation_values():
+                    expect_fail = True
+        if not initialize:
+            # TODO: rolling upgrades too
+            definition["materialize"]["spec"]["inPlaceRollout"] = True
+            definition["materialize"]["spec"]["requestRollout"] = str(uuid.uuid4())
+            run(definition, expect_fail)
+        if initialize:
+            init(definition)
+            run(definition, expect_fail)
+            initialize = False  # only initialize once
+        else:
+            upgrade(definition)
+        mod_dict = {mod.__class__: mod.value for mod in mods}
+        for subclass in all_modifications():
+            if subclass not in mod_dict:
+                mod_dict[subclass] = subclass.default()
+        try:
+            for mod in mods:
+                mod.validate(mod_dict)
+        except:
+            print(
+                f"Reproduce with bin/mzcompose --find orchestratord run default --scenario='{scenario_json}'"
+            )
+            raise
 
 
-def run(definition: dict[str, Any], expect_fail: bool):
+def init(definition: dict[str, Any]) -> None:
     try:
         spawn.capture(
             ["kubectl", "delete", "namespace", "materialize-environment"],
@@ -1111,7 +1345,7 @@ def run(definition: dict[str, Any], expect_fail: bool):
             "--namespace=materialize",
             "--create-namespace",
             "--version",
-            "v25.2.4",
+            "v25.3.0",
             "-f",
             "-",
         ],
@@ -1135,36 +1369,6 @@ def run(definition: dict[str, Any], expect_fail: bool):
                 ],
                 stderr=subprocess.DEVNULL,
             )
-            for pod_name in pod_names:
-                status = spawn.capture(
-                    [
-                        "kubectl",
-                        "get",
-                        pod_name,
-                        "-n",
-                        "materialize",
-                        "-o",
-                        "jsonpath={.status.phase}",
-                    ],
-                    stderr=subprocess.DEVNULL,
-                )
-                if status != "Running":
-                    break
-            else:
-                break
-            spawn.capture(
-                [
-                    "kubectl",
-                    "get",
-                    "crd",
-                    "materializes.materialize.cloud",
-                    "-n",
-                    "materialize",
-                    "-o",
-                    "name",
-                ],
-                stderr=subprocess.DEVNULL,
-            )
             break
 
         except subprocess.CalledProcessError:
@@ -1173,16 +1377,38 @@ def run(definition: dict[str, Any], expect_fail: bool):
     else:
         raise ValueError("Never completed")
 
+
+def upgrade(definition: dict[str, Any]) -> None:
+    spawn.runv(
+        [
+            "helm",
+            "upgrade",
+            "operator",
+            MZ_ROOT / "misc" / "helm-charts" / "operator",
+            "--namespace=materialize",
+            "--version",
+            "v25.3.0",
+            "-f",
+            "-",
+        ],
+        stdin=yaml.dump(definition["operator"]).encode(),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
+def run(definition: dict[str, Any], expect_fail: bool) -> None:
+    apply_input = yaml.dump_all(
+        [
+            definition["namespace"],
+            definition["secret"],
+            definition["materialize"],
+        ]
+    )
     try:
         spawn.runv(
             ["kubectl", "apply", "-f", "-"],
-            stdin=yaml.dump_all(
-                [
-                    definition["namespace"],
-                    definition["secret"],
-                    definition["materialize"],
-                ]
-            ).encode(),
+            stdin=apply_input.encode(),
         )
     except subprocess.CalledProcessError as e:
         print(f"Failed to apply: {e.stdout}\nSTDERR:{e.stderr}")
