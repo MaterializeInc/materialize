@@ -27,8 +27,8 @@ mz-ore = { path = "../ore", default-features = false }
 os_info = "3.11.0"
 pin-project = "1.1.10"
 prometheus = { version = "0.13.4", default-features = false }
-semver = { version = "1.0.26", features = ["serde"] }
-serde = { version = "1.0.219", features = ["derive"] }
+semver = { version = "1.0.27", features = ["serde"] }
+serde = { version = "1.0.226", features = ["derive"] }
 sysinfo = "0.29.11"
 tokio = "1.44.1"
 tokio-stream = "0.1.17"

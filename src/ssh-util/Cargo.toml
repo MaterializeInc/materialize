@@ -13,17 +13,17 @@ workspace = true
 anyhow = { version = "1.0.98" }
 mz-ore = { path = "../ore", features = ["test"] }
 openssh = { version = "0.11.5", default-features = false, features = ["native-mux"] }
-openssh-mux-client = "0.17.7"
+openssh-mux-client = "0.17.8"
 openssl = { version = "0.10.73", features = ["vendored"] }
 rand = "0.8.5"
 futures = "0.3.31"
 itertools = "0.14.0"
 scopeguard = "1.2.0"
-serde = { version = "1.0.219", features = ["derive"] }
-serde_json = { version = "1.0.127" }
+serde = { version = "1.0.226", features = ["derive"] }
+serde_json = { version = "1.0.145" }
 ssh-key = { version = "0.6.7" }
 tempfile = "3.20.0"
-thiserror = { version = "2.0.12" }
+thiserror = { version = "2.0.16" }
 tokio = "1.44.1"
 tokio-stream = "0.1.17"
 tracing = "0.1.37"
