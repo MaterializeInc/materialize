@@ -84,12 +84,14 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
    minikube start
    ```
 
-1. Add labels `materialize.cloud/disk=true` and `workload=materialize-instance`
-   to the `minikube` node (in this example, named `minikube`).
+1. Add labels `materialize.cloud/disk=true`, `materialize.cloud/swap=true` and
+   `workload=materialize-instance` to the `minikube` node (in this example,
+   named `minikube`).
 
    ```shell
    MYNODE=$(kubectl get nodes --no-headers | awk '{print $1}')
    kubectl label node  $MYNODE materialize.cloud/disk=true
+   kubectl label node  $MYNODE materialize.cloud/swap=true
    kubectl label node  $MYNODE workload=materialize-instance
    ```
 
