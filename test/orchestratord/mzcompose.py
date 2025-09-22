@@ -56,7 +56,9 @@ def get_image(image: str, tag: str | None) -> str:
     return f'{image.rsplit(":", 1)[0]}:{tag or LOCAL_TAG}'
 
 
-def get_orchestratord_data() -> dict[str, Any]:
+def get_pod_data(
+    labels: dict[str, str], namespace="materialize-environment"
+) -> dict[str, Any]:
     return json.loads(
         spawn.capture(
             [
@@ -64,49 +66,38 @@ def get_orchestratord_data() -> dict[str, Any]:
                 "get",
                 "pod",
                 "-l",
-                "app.kubernetes.io/instance=operator",
+                ",".join(f"{key}={value}" for key, value in labels.items()),
                 "-n",
-                "materialize",
+                namespace,
                 "-o",
                 "json",
             ]
         )
+    )
+
+
+def get_orchestratord_data() -> dict[str, Any]:
+    return get_pod_data(
+        labels={"app.kubernetes.io/instance": "operator"},
+        namespace="materialize",
     )
 
 
 def get_balancerd_data() -> dict[str, Any]:
-    return json.loads(
-        spawn.capture(
-            [
-                "kubectl",
-                "get",
-                "pod",
-                "-l",
-                "app=balancerd",
-                "-n",
-                "materialize-environment",
-                "-o",
-                "json",
-            ]
-        )
+    return get_pod_data(
+        labels={"materialize.cloud/app": "balancerd"},
+    )
+
+
+def get_console_data() -> dict[str, Any]:
+    return get_pod_data(
+        labels={"materialize.cloud/app": "console"},
     )
 
 
 def get_environmentd_data() -> dict[str, Any]:
-    return json.loads(
-        spawn.capture(
-            [
-                "kubectl",
-                "get",
-                "pod",
-                "-l",
-                "app=environmentd",
-                "-n",
-                "materialize-environment",
-                "-o",
-                "json",
-            ]
-        )
+    return get_pod_data(
+        labels={"materialize.cloud/app": "environmentd"},
     )
 
 
@@ -522,6 +513,63 @@ class ObservabilityPrometheusScrapeAnnotationsEnabled(Modification):
             ), f"Expected no {expected} in environmentd args, but found it: {args}"
 
 
+class BalancerdReplicas(Modification):
+    @classmethod
+    def values(cls) -> list[Any]:
+        return [None, 1, 2]
+
+    @classmethod
+    def default(cls) -> Any:
+        return None
+
+    def modify(self, definition: dict[str, Any]) -> None:
+        if self.value is not None:
+            definition["materialize"]["spec"]["balancerdReplicas"] = self.value
+
+    def validate(self, mods: dict[type[Modification], Any]) -> None:
+        if not mods[BalancerdEnabled]:
+            return
+
+        def check_replicas():
+            balancerd = get_balancerd_data()
+            num_pods = len(balancerd["items"])
+            expected = self.value if self.value is not None else 2
+            assert (
+                num_pods == expected
+            ), f"Expected {expected} balancerd pods, but found {num_pods}"
+
+        retry(check_replicas, 120)
+
+
+class ConsoleReplicas(Modification):
+    @classmethod
+    def values(cls) -> list[Any]:
+        return [None, 1, 2]
+
+    @classmethod
+    def default(cls) -> Any:
+        return None
+
+    def modify(self, definition: dict[str, Any]) -> None:
+        if self.value is not None:
+            definition["materialize"]["spec"]["consoleReplicas"] = self.value
+
+    def validate(self, mods: dict[type[Modification], Any]) -> None:
+        if not mods[ConsoleEnabled]:
+            return
+
+        def check_replicas():
+            console = get_console_data()
+            num_pods = len(console["items"])
+            expected = self.value if self.value is not None else 2
+            assert (
+                num_pods == expected
+            ), f"Expected {expected} console pods, but found {num_pods}"
+
+        # console doesn't get launched until last
+        retry(check_replicas, 120)
+
+
 def validate_cluster_replica_size(
     size: dict[str, Any], swap_enabled: bool, storage_class_name_set: bool
 ):
@@ -563,24 +611,6 @@ def validate_container_resources(
         assert resources["requests"]["memory"] != resources["limits"]["memory"]
     else:
         assert resources["requests"]["memory"] == resources["limits"]["memory"]
-
-
-def get_pod_data(labels: dict[str, str]) -> dict[str, Any]:
-    return json.loads(
-        spawn.capture(
-            [
-                "kubectl",
-                "get",
-                "pod",
-                "-l",
-                ",".join(f"{key}={value}" for key, value in labels.items()),
-                "-n",
-                "materialize-environment",
-                "-o",
-                "json",
-            ]
-        )
-    )
 
 
 class SwapEnabledGlobal(Modification):
