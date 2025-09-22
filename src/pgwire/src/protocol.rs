@@ -240,7 +240,18 @@ where
                 }
             };
             let auth_response = match adapter_client.authenticate(&user, &password).await {
-                Ok(resp) => resp,
+                Ok(resp) => match mz_auth::hash::scram256_verify(&password, &resp.password_hash) {
+                    Ok(_) => resp,
+                    Err(err) => {
+                        warn!(?err, "pgwire connection failed authentication");
+                        return conn
+                            .send(ErrorResponse::fatal(
+                                SqlState::INVALID_PASSWORD,
+                                "invalid password",
+                            ))
+                            .await;
+                    }
+                },
                 Err(err) => {
                     warn!(?err, "pgwire connection failed authentication");
                     return conn
