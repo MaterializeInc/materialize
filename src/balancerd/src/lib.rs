@@ -1318,13 +1318,13 @@ impl Resolver {
                             port,
                         }),
                     ) => {
-                        debug!("Found sni servername: {servername:?} (pgwire)");
                         let sni_addr = sni_addr_template.replace("{}", servername);
                         let tenant = stub_resolver.tenant(&sni_addr).await;
-                        debug!("sni_addr tenant lookup {:?} - {:?}", sni_addr, tenant);
                         let sni_addr = format!("{sni_addr}:{port}");
-                        debug!("sni_addr backend lookup {sni_addr}");
                         let addr = lookup(&sni_addr).await?;
+                        if tenant.is_some() {
+                            debug!("SNI header found for tenant {:?}", tenant);
+                        }
                         ResolvedAddr {
                             addr,
                             password: None,
@@ -1354,10 +1354,9 @@ impl Resolver {
                             addr_template.replace("{}", &auth_session.tenant_id().to_string());
                         let addr = lookup(&addr).await?;
                         let tenant = Some(auth_session.tenant_id().to_string());
-                        debug!(
-                            "No sni header found for tenant connection {:?}, used frontegg",
-                            tenant
-                        );
+                        if tenant.is_some() {
+                            debug!("SNI header NOT found for tenant {:?}", tenant);
+                        }
                         ResolvedAddr {
                             addr,
                             password: Some(password),
