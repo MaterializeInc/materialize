@@ -987,11 +987,9 @@ pub(crate) fn emit_optimizer_notices(catalog: &Catalog, session: &Session, notic
                 hint: notice.hint(&humanizer, false).to_string(),
             });
         }
-        ////// todo: pass in optimization_notices and re-enable this when we have metrics in
-        // the frontend peek sequencing.
-        // self.metrics
-        //     .optimization_notices
-        //     .with_label_values(&[kind.metric_label()])
-        //     .inc_by(1);
+        session.metrics()
+            .optimization_notices()
+            .with_label_values(&[kind.metric_label()])
+            .inc_by(1);
     }
 }

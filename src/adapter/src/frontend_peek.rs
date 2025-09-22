@@ -413,8 +413,6 @@ impl SessionClient {
 
         let (peek_plan, df_meta, typ) = global_lir_plan.unapply();
 
-        coord::sequencer::emit_optimizer_notices(&*catalog, session, &df_meta.optimizer_notices);
-
         // TODO: plan_insights stuff
 
         let fast_path_plan = match peek_plan {
@@ -435,10 +433,12 @@ impl SessionClient {
             }
         };
 
-        // # We do the second half of sequence_peek_timestamp, as mentioned above.
-
         // Warning: Do not bail out from the new peek sequencing after this point, because the
         // following has side effects.
+
+        coord::sequencer::emit_optimizer_notices(&*catalog, session, &df_meta.optimizer_notices);
+
+        // # We do the second half of sequence_peek_timestamp, as mentioned above.
 
         //////// todo: txn_read_holds stuff. Work with SessionClient::txn_read_holds.
 

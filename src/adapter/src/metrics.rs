@@ -237,6 +237,7 @@ impl Metrics {
             query_total: self.query_total.clone(),
             determine_timestamp: self.determine_timestamp.clone(),
             timestamp_difference_for_strict_serializable_ms: self.timestamp_difference_for_strict_serializable_ms.clone(),
+            optimization_notices: self.optimization_notices.clone(),
         }
     }
 }
@@ -249,6 +250,7 @@ pub struct SessionMetrics {
     query_total: IntCounterVec,
     determine_timestamp: IntCounterVec,
     timestamp_difference_for_strict_serializable_ms: HistogramVec,
+    optimization_notices: IntCounterVec,
 }
 
 impl SessionMetrics {
@@ -270,6 +272,10 @@ impl SessionMetrics {
 
     pub(crate) fn timestamp_difference_for_strict_serializable_ms(&self) -> &HistogramVec {
         &self.timestamp_difference_for_strict_serializable_ms
+    }
+
+    pub(crate) fn optimization_notices(&self) -> &IntCounterVec {
+        &self.optimization_notices
     }
 }
 
