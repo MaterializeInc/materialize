@@ -47,14 +47,6 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="56" y="261">AUCTION</text>
-   <rect x="48" y="287" width="70" height="32" rx="10"/>
-   <rect x="46"
-         y="285"
-         width="70"
-         height="32"
-         class="terminal"
-         rx="10"/>
-   <text class="terminal" x="56" y="305">CLOCK</text>
    <rect x="48" y="331" width="88" height="32" rx="10"/>
    <rect x="46"
          y="329"
