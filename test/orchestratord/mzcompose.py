@@ -24,29 +24,36 @@ from typing import Any
 
 import yaml
 
-from materialize import MZ_ROOT, ci_util, git, spawn, ui
-from materialize.docker import mz_image_tag_exists
+from materialize import MZ_ROOT, spawn
 from materialize.mzcompose.composition import (
     Composition,
     Service,
     WorkflowArgumentParser,
 )
+from materialize.mzcompose.services.balancerd import Balancerd
+from materialize.mzcompose.services.clusterd import Clusterd
+from materialize.mzcompose.services.environmentd import Environmentd
+from materialize.mzcompose.services.orchestratord import Orchestratord
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.util import all_subclasses
 
-SERVICES = [Testdrive()]
+SERVICES = [
+    Testdrive(),
+    Orchestratord(),
+    Environmentd(),
+    Clusterd(),
+    Balancerd(),
+]
 
 
-def get_tag(tag: str | None) -> str:
-    tag = tag or f"v{ci_util.get_mz_version()}--pr.g{git.rev_parse('HEAD')}"
-    # We have to wait for the image to be tagged
-    if ui.env_is_truthy("CI"):
-        for i in range(60):
-            if mz_image_tag_exists(tag):
-                break
-            print(f"Image tag {tag} missing, retrying in 10s")
-            time.sleep(10)
-    return tag
+# We can't use the real mzbuild tag because it has a different fingerprint for
+# environmentd/clusterd/balancerd and the orchestratord depends on them being
+# identical.
+LOCAL_TAG = "orchestratord-local"
+
+
+def get_image(image: dict[str, Any], tag: str | None) -> str:
+    return f'{image["image"].split(":")[0]}:{tag or LOCAL_TAG}'
 
 
 def get_orchestratord_data() -> dict[str, Any]:
@@ -693,12 +700,39 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     print(f"--- Random seed is {args.seed}")
 
-    c.up(Service("testdrive", idle=True))
-
     cluster = "kind"
     clusters = spawn.capture(["kind", "get", "clusters"]).strip().split("\n")
     if cluster not in clusters or args.recreate_cluster:
         setup(cluster)
+
+    if not args.tag:
+        # Start up services and potentially compile them first so that we have all images locally
+        c.up(
+            Service("testdrive", idle=True),
+            Service("orchestratord", idle=True),
+            Service("environmentd", idle=True),
+            Service("clusterd", idle=True),
+            Service("balancerd", idle=True),
+        )
+        services = [
+            "orchestratord",
+            "environmentd",
+            "clusterd",
+            "balancerd",
+        ]
+        for service in services:
+            spawn.runv(
+                [
+                    "docker",
+                    "tag",
+                    c.compose["services"][service]["image"],
+                    get_image(c.compose["services"][service], None),
+                ]
+            )
+        spawn.runv(
+            ["kind", "load", "docker-image", "--name", cluster]
+            + [get_image(c.compose["services"][service], None) for service in services]
+        )
 
     definition: dict[str, Any] = {}
 
@@ -711,7 +745,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         definition["secret"] = materialize_setup[1]
         definition["materialize"] = materialize_setup[2]
 
-    definition["operator"]["operator"]["image"]["tag"] = get_tag(args.tag)
+    definition["operator"]["operator"]["image"]["tag"] = get_image(
+        c.compose["services"]["orchestratord"], args.tag
+    ).split(":")[1]
     # TODO: Remove when fixed: error: unexpected argument '--disable-license-key-checks' found
     definition["operator"]["operator"]["args"]["enableLicenseKeyChecks"] = True
     definition["operator"]["clusterd"]["nodeSelector"][
@@ -721,9 +757,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "workload"
     ] = "materialize-instance"
     definition["secret"]["stringData"]["license_key"] = os.environ["MZ_CI_LICENSE_KEY"]
-    definition["materialize"]["spec"][
-        "environmentdImageRef"
-    ] = f"materialize/environmentd:{get_tag(args.tag)}"
+    definition["materialize"]["spec"]["environmentdImageRef"] = get_image(
+        c.compose["services"]["environmentd"], args.tag
+    )
 
     rng = random.Random(args.seed)
 
