@@ -125,6 +125,7 @@ build() {
         --build-arg "RUST_CPU_TARGET=$rust_cpu_target" \
         --build-arg "RUST_TARGET_FEATURES=$rust_target_features" \
         --tag materialize/ci-builder:"$tag" \
+        --tag ghcr.io/materialize/ci-builder:"$tag" \
         --tag materialize/ci-builder:"$cache_tag" \
         --target $docker_target \
         "$@" ci/builder

@@ -786,11 +786,19 @@ class ResolvedImage:
                 "-",
                 *(f"--build-arg={k}={v}" for k, v in build_args.items()),
                 "-t",
-                self.spec(),
+                f"docker.io/{self.spec()}",
+                "-t",
+                f"ghcr.io/materializeinc/{self.spec()}",
                 f"--platform=linux/{self.image.rd.arch.go_str()}",
                 str(self.image.path),
                 *(["--push"] if push else ["--load"]),
             ]
+
+        spawn.runv(
+            ["docker", "login", "ghcr.io", "-u", "materialize-bot", "--password-stdin"],
+            stdin=os.environ["GITHUB_GHCR_TOKEN"].encode(),
+        )
+
         spawn.runv(cmd, stdin=f, stdout=sys.stderr.buffer)
 
     def try_pull(self, max_retries: int) -> bool:
