@@ -42,7 +42,7 @@ RUN groupadd --system --gid=999 materialize \
     && touch /run/nginx.pid \
     && chown -R materialize /mzdata /scratch /var/run/postgresql /var/lib/nginx /var/log/nginx /run/nginx.pid
 
-COPY postgresql.conf pg_hba.conf /etc/postgresql
+COPY postgresql.conf pg_hba.conf /etc/postgresql/
 
 COPY --from=console /usr/share/nginx/html /usr/share/nginx/html
 COPY console_nginx.template /etc/nginx/templates/default.conf.template
