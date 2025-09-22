@@ -873,10 +873,10 @@ def add_cargo_test_dependency(
         return
 
     for step in steps(pipeline):
-        if step.get("id") == "cargo-test":
-            step["depends_on"] = "build-x86_64"
-        if step.get("id") == "miri-test":
-            step["depends_on"] = "build-aarch64"
+        if step.get("id") in ("cargo-test", "miri-test"):
+            step["depends_on"] = (
+                "build-x86_64" if "x86" in step["agents"]["queue"] else "build-aarch64"
+            )
 
 
 def remove_dependencies_on_prs(

@@ -50,7 +50,8 @@ class Polaris(Service):
         self,
         name: str = "polaris",
         image: str = "apache/polaris",
-        tag: str = "latest",
+        # Fails with 1.1.0-incubating
+        tag: str = "1.0.1-incubating",
         # 8181: api port, 8182: management port
         ports: list[str | int] = [8181, 8182],
         environment: list[str] = [
