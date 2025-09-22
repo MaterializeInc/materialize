@@ -523,9 +523,13 @@ impl Catalog {
         // accumulated updates to derive the required controller updates and the
         // builtin table updates.
         //
+        // We won't win any DDL throughput benchmarks, but so far that's not
+        // what we're optimizing for and there would probably be other
+        // bottlenecks before we hit this one as a bottleneck.
+        //
         // We could work around this by refactoring how the interplay of
         // transact_op and apply_updates works, but that's a larger undertaking.
-        let mut preliminary_state = state.clone();
+        let mut preliminary_state = Cow::Borrowed(state);
 
         // The final state that we will return, if modified.
         let mut state = Cow::Borrowed(state);
@@ -555,7 +559,7 @@ impl Catalog {
                 &temporary_ids,
                 audit_events,
                 tx,
-                &preliminary_state,
+                &*preliminary_state,
                 &mut storage_collections_to_create,
                 &mut storage_collections_to_drop,
                 &mut storage_collections_to_register,
@@ -591,8 +595,9 @@ impl Catalog {
             let mut op_updates: Vec<_> = tx.get_and_commit_op_updates();
             op_updates.extend(temporary_item_updates);
             if !op_updates.is_empty() {
-                let (_op_builtin_table_updates, _op_controller_state_updates) =
-                    preliminary_state.apply_updates(op_updates.clone())?;
+                let (_op_builtin_table_updates, _op_controller_state_updates) = preliminary_state
+                    .to_mut()
+                    .apply_updates(op_updates.clone())?;
             }
             updates.append(&mut op_updates);
         }
