@@ -8,7 +8,7 @@ menu:
 
 `EXECUTE` plans and executes [prepared statements](../prepare). Since prepared statements only last the duration of a session, the statement must have been prepared during the current session.
 
-If the `PREPARE` statement specified some parameters, you must pass values compatible with those parameters to `EXECUTE`. Values are considered compatible here when they can be _assignment cast_. (This is the same category of casting that happens for `INSERT`.)
+If the `PREPARE` statement specified some parameters, you must pass values compatible with those parameters to `EXECUTE`. Values are considered compatible here when they can be [_assignment cast_](../../sql/functions/cast/#valid-casts). (This is the same category of casting that happens for `INSERT`.)
 
 
 ## Syntax
