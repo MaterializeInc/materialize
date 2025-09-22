@@ -18,9 +18,7 @@ use std::time::{Duration, Instant};
 use futures::future::{BoxFuture, FutureExt};
 use itertools::{Either, Itertools};
 use mz_adapter_types::bootstrap_builtin_cluster_config::BootstrapBuiltinClusterConfig;
-use mz_adapter_types::dyncfgs::{
-    ENABLE_CONTINUAL_TASK_BUILTINS, ENABLE_EXPRESSION_CACHE, FORCE_SWAP_FOR_CC_SIZES,
-};
+use mz_adapter_types::dyncfgs::{ENABLE_CONTINUAL_TASK_BUILTINS, ENABLE_EXPRESSION_CACHE};
 use mz_auth::hash::scram256_hash;
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::{
@@ -39,7 +37,7 @@ use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
     BootstrapStateUpdateKind, CommentsMap, DefaultPrivileges, RoleAuth, StateUpdate,
 };
-use mz_controller::clusters::{ReplicaLocation, ReplicaLogging};
+use mz_controller::clusters::ReplicaLogging;
 use mz_controller_types::ClusterId;
 use mz_ore::cast::usize_to_u64;
 use mz_ore::collections::HashSet;
@@ -483,41 +481,6 @@ impl Catalog {
         txn.commit(config.boot_ts).await?;
 
         cleanup_action.await;
-
-        // Force cc sizes to use swap, if requested.
-        if FORCE_SWAP_FOR_CC_SIZES.get(state.system_configuration.dyncfgs()) {
-            info!("force-enabling swap for cc replica sizes");
-
-            for size in state.cluster_replica_sizes.0.values_mut() {
-                if size.is_cc {
-                    size.swap_enabled = true;
-                    size.cpu_exclusive = false;
-                    size.selectors.remove("materialize.cloud/scratch-fs");
-                    size.selectors
-                        .insert("materialize.cloud/swap".into(), "true".into());
-                }
-            }
-
-            // The size definitions were copied into the in-memory replica configs during
-            // `CatalogState` initialization above. We can't move this code before that because we
-            // need to wait for the `system_configuration` to be fully initialized. Instead we also
-            // patch the replica configs here.
-            for cluster in state.clusters_by_id.values_mut() {
-                for replica in cluster.replicas_by_id_.values_mut() {
-                    if let ReplicaLocation::Managed(loc) = &mut replica.config.location {
-                        let alloc = &mut loc.allocation;
-                        if alloc.is_cc {
-                            alloc.swap_enabled = true;
-                            alloc.cpu_exclusive = false;
-                            alloc.selectors.remove("materialize.cloud/scratch-fs");
-                            alloc
-                                .selectors
-                                .insert("materialize.cloud/swap".into(), "true".into());
-                        }
-                    }
-                }
-            }
-        }
 
         Ok(InitializeStateResult {
             state,
