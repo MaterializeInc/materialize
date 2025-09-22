@@ -40,6 +40,20 @@ def c_repositories():
         ],
     )
 
+    LIBUNWIND_NOGNU_VERSION = "1.7.2"
+    LIBUNWIND_NOGNU_INTEGRITY = ""
+
+    maybe(
+        http_archive,
+        name = "libunwind-nognu",
+        build_file = Label("//misc/bazel/c_deps:BUILD.libunwind-nognu.bazel"),
+        integrity = LIBUNWIND_NOGNU_INTEGRITY,
+        strip_prefix = "libunwind-{0}".format(LIBUNWIND_NOGNU_VERSION),
+        urls = [
+            "https://github.com/libunwind/libunwind/releases/download/v{0}/libunwind-{0}.tar.gz".format(LIBUNWIND_NOGNU_VERSION),
+        ],
+    )
+
     LZ4_VERSION = "1.9.4"
     LZ4_INTEGRITY = "sha256-Cw46oHyMBj3fQLCCvffjehVivaQKD/UnKVfz6Yfg5Us="
     maybe(
