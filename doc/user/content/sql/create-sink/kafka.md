@@ -1,12 +1,11 @@
 ---
-title: "CREATE SINK: Kafka"
+title: "CREATE SINK: Kafka/Redpanda"
 description: "Connecting Materialize to a Kafka or Redpanda broker sink"
-pagerank: 40
 menu:
   main:
     parent: 'create-sink'
     identifier: csink_kafka
-    name: Kafka
+    name: Kafka/Redpanda
     weight: 20
 aliases:
     - /sql/create-sink/

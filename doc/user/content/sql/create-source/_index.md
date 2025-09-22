@@ -2,13 +2,10 @@
 title: "CREATE SOURCE"
 description: "`CREATE SOURCE` connects Materialize to an external data source."
 disable_list: true
-pagerank: 30
 menu:
   main:
-    parent: reference
-    name: Sources
+    parent: commands
     identifier: 'create-source'
-    weight: 20
 ---
 
 A [source](/concepts/sources/) describes an external system you want Materialize to read data from, and provides details about how to decode and interpret that data. To create a source, you must specify a [connector](#connectors), a [format](#formats) and an [envelope](#envelopes).
