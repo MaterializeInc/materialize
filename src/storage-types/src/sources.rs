@@ -133,7 +133,10 @@ impl<S> IngestionDescription<S> {
             remap_collection_id,
         } = &self;
 
-        source_exports.keys().copied().chain([*remap_collection_id])
+        source_exports
+            .keys()
+            .copied()
+            .chain(std::iter::once(*remap_collection_id))
     }
 }
 
