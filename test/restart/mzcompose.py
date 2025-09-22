@@ -90,7 +90,7 @@ def workflow_retain_history(c: Composition) -> None:
     )
     c.sql("CREATE SOURCE retain_s FROM LOAD GENERATOR COUNTER")
     c.sql(
-        "CREATE SOURCE retain_s_tbl FROM SOURCE retain_s WITH (RETAIN HISTORY = FOR '5s')"
+        "CREATE TABLE retain_s_tbl FROM SOURCE retain_s WITH (RETAIN HISTORY = FOR '5s')"
     )
     names = ["mv", "s_tbl"]
     check_retain_history_for(names)
