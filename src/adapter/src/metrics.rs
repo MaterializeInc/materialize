@@ -234,6 +234,7 @@ impl Metrics {
             session_startup_table_writes_seconds: self
                 .session_startup_table_writes_seconds
                 .with_label_values(&[]),
+            query_total: self.query_total.clone(),
         }
     }
 }
@@ -243,6 +244,7 @@ impl Metrics {
 pub struct SessionMetrics {
     row_set_finishing_seconds: Histogram,
     session_startup_table_writes_seconds: Histogram,
+    query_total: IntCounterVec,
 }
 
 impl SessionMetrics {
@@ -252,6 +254,10 @@ impl SessionMetrics {
 
     pub(crate) fn session_startup_table_writes_seconds(&self) -> &Histogram {
         &self.session_startup_table_writes_seconds
+    }
+
+    pub(crate) fn query_total(&self) -> &IntCounterVec {
+        &self.query_total
     }
 }
 

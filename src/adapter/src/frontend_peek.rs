@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use crate::catalog::CatalogState;
-use crate::coord;
+use crate::{coord, metrics};
 use crate::coord::peek::{FastPathPlan, PeekPlan};
 use crate::coord::timestamp_selection::TimestampDetermination;
 use crate::coord::{
@@ -111,7 +111,8 @@ impl SessionClient {
             return Ok(None);
         }
 
-        ////// todo: metrics .query_total  (but only if we won't bail out somewhere below to the old code)
+        let session_type = metrics::session_type_label_value(session.user());
+        let stmt_type = metrics::statement_type_label_value(&stmt);
 
         // # From handle_execute_inner
 
@@ -435,6 +436,9 @@ impl SessionClient {
 
         // # We do the second half of sequence_peek_timestamp, as mentioned above.
 
+        // Warning: Do not bail out from the new peek sequencing after this point, because the
+        // following has side effects.
+
         //////// todo: txn_read_holds stuff. Work with SessionClient::txn_read_holds.
 
         // (This TODO is copied from the old peek sequencing.)
@@ -466,8 +470,14 @@ impl SessionClient {
             })?;
         };
 
-        // Warning: Do not bail out from the new peek sequencing after this point, because the above
-        // had side effects.
+        // TODO: move this up to the beginning of the function when we have eliminated all the
+        // fallbacks to the old peek sequencing. Currently, it has to be here to avoid
+        // double-counting a fallback situation, but this has the drawback that if we error out
+        // from this function then we don't count the peek at all.
+        session.metrics()
+            .query_total()
+            .with_label_values(&[session_type, stmt_type])
+            .inc();
 
         // # Now back to peek_finish
 
