@@ -711,7 +711,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         definition["secret"] = materialize_setup[1]
         definition["materialize"] = materialize_setup[2]
 
-    definition["operator"]["operator"]["tag"] = get_tag(args.tag)
+    definition["operator"]["operator"]["image"]["tag"] = get_tag(args.tag)
     # TODO: Remove when fixed: error: unexpected argument '--disable-license-key-checks' found
     definition["operator"]["operator"]["args"]["enableLicenseKeyChecks"] = True
     definition["operator"]["clusterd"]["nodeSelector"][
