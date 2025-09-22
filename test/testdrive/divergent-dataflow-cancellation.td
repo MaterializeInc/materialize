@@ -67,73 +67,33 @@ contains: canceling statement due to statement timeout
 
 > COMMIT
 
-# Confirm that all dataflows are now cancelled
+# Confirm that all dataflows are now cancelled.
+#
+# NOTE: It is important that the below queries are all fast-path queries.
+# Otherwise they'd introduce new dataflows, confusing the results.
+# For `_raw` relations, add a limit to protect against huge results.
 
-> SELECT count(*) FROM mz_introspection.mz_active_peeks_per_worker
-0
-
-> SELECT count(*) FROM mz_introspection.mz_arrangement_batches_raw
-0
-
-> SELECT count(*) FROM mz_introspection.mz_arrangement_records_raw
-0
-
-> SELECT count(*) FROM mz_introspection.mz_arrangement_sharing_raw
-0
-
-> SELECT count(*) FROM mz_introspection.mz_compute_error_counts_raw
-0
-
-# One export for each introspection arrangement.
-> SELECT count(*)
+> SELECT * FROM mz_introspection.mz_arrangement_batches_raw LIMIT 10
+> SELECT * FROM mz_introspection.mz_arrangement_records_raw LIMIT 10
+> SELECT * FROM mz_introspection.mz_arrangement_sharing_raw LIMIT 10
+> SELECT * FROM mz_introspection.mz_compute_error_counts_raw LIMIT 10
+> SELECT *
   FROM mz_introspection.mz_compute_exports_per_worker
-  WHERE worker_id = 0
-32
-
-# One frontier for each introspection arrangement.
-> SELECT count(*)
+  WHERE export_id NOT LIKE 'si%'
+> SELECT *
   FROM mz_introspection.mz_compute_frontiers_per_worker
-  WHERE worker_id = 0
-32
-
-> SELECT count(*) FROM mz_introspection.mz_compute_import_frontiers_per_worker
-0
-
-> SELECT count(*) FROM mz_introspection.mz_compute_operator_durations_histogram_raw
-0
-
-> SELECT count(*) FROM mz_introspection.mz_dataflow_addresses_per_worker
-0
-
-> SELECT count(*) FROM mz_introspection.mz_dataflow_channels_per_worker
-0
-
-> SELECT count(*) FROM mz_introspection.mz_dataflow_operator_reachability_raw
-0
-
-> SELECT count(*) FROM mz_introspection.mz_dataflow_operators_per_worker
-0
-
-# This source never sees retractions.
-> SELECT count(*) > 0 FROM mz_introspection.mz_dataflow_shutdown_durations_histogram_raw
-true
-
-> SELECT count(*) FROM mz_introspection.mz_message_counts_received_raw
-0
-
-> SELECT count(*) FROM mz_introspection.mz_message_counts_sent_raw
-0
-
-# This source never sees retractions.
-> SELECT count(*) > 0 FROM mz_introspection.mz_peek_durations_histogram_raw
-true
-
-> SELECT count(*) FROM mz_introspection.mz_scheduling_elapsed_raw
-0
-
-# This source never sees retractions.
-> SELECT count(*) > 0 FROM mz_introspection.mz_scheduling_parks_histogram_raw
-true
+  WHERE export_id NOT LIKE 'si%'
+> SELECT *
+  FROM mz_introspection.mz_compute_import_frontiers_per_worker
+  WHERE export_id NOT LIKE 'si%'
+> SELECT * FROM mz_introspection.mz_compute_operator_durations_histogram_raw LIMIT 10
+> SELECT id, worker_id, address::text FROM mz_introspection.mz_dataflow_addresses_per_worker
+> SELECT * FROM mz_introspection.mz_dataflow_channels_per_worker
+> SELECT * FROM mz_introspection.mz_dataflow_operator_reachability_raw LIMIT 10
+> SELECT * FROM mz_introspection.mz_dataflow_operators_per_worker
+> SELECT * FROM mz_introspection.mz_message_counts_received_raw LIMIT 10
+> SELECT * FROM mz_introspection.mz_message_counts_sent_raw LIMIT 10
+> SELECT * FROM mz_introspection.mz_scheduling_elapsed_raw LIMIT 10
 
 # Cleanup.
 > DROP CLUSTER test CASCADE
