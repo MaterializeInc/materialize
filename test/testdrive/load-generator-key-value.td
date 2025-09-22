@@ -339,7 +339,7 @@ true
   LEFT JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name IN ('kv', 'kv_up', 'kv_none')
   ORDER BY s.name;
-kv_snapshot 3 3 true true true 16
+kv 3 3 true true false 16
 kv_up 3 3 true true false 16
 
 > CREATE TABLE kv_none FROM SOURCE kv INCLUDE KEY ENVELOPE NONE;
@@ -361,7 +361,7 @@ kv_up 3 3 true true false 16
   WHERE s.name IN ('kv', 'kv_up', 'kv_none')
   ORDER BY s.name;
 kv_none 3 3 true true false 0
-kv_snapshot 3 3 true true true 16
+kv 3 3 true true false 16
 kv_up 3 3 false false false 16
 
 > DROP SOURCE kv CASCADE;
@@ -404,7 +404,7 @@ kv_up 3 3 false false false 16
   WHERE s.name IN ('kv', 'kv_up', 'kv_none')
   ORDER BY s.name;
 kv_none 6 6 0 0 false 0
-kv_snapshot 6 6 0 0 true 16
+kv 6 6 0 0 false 16
 kv_up 6 6 0 0 false 16
 
 > DROP SOURCE kv CASCADE;

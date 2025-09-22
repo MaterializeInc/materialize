@@ -13,10 +13,10 @@
 # Increased from the default because of CI flakiness.
 $ set-sql-timeout duration=180s
 
-> SELECT * from remote1
+> SELECT * from remote1_tbl
 one
 two
-> SELECT * from remote2
+> SELECT * from remote2_tbl
 one
 two
 
@@ -48,11 +48,11 @@ three
 $ webhook-append database=materialize schema=public name=webhook_text
 b
 
-> SELECT * from remote1
+> SELECT * from remote1_tbl
 one
 two
 three
-> SELECT * from remote2
+> SELECT * from remote2_tbl
 one
 two
 three

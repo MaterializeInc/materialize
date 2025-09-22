@@ -13,12 +13,12 @@
 # Increased from the default because of CI flakiness.
 $ set-sql-timeout duration=180s
 
-> SELECT * from remote1
+> SELECT * from remote1_tbl
 one
 two
 three
 four
-> SELECT * from remote2
+> SELECT * from remote2_tbl
 one
 two
 three
@@ -29,13 +29,13 @@ five
 $ kafka-ingest format=bytes topic=remote2
 five
 
-> SELECT * from remote1
+> SELECT * from remote1_tbl
 one
 two
 three
 four
 five
-> SELECT * from remote2
+> SELECT * from remote2_tbl
 one
 two
 three

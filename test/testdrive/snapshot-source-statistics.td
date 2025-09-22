@@ -89,7 +89,7 @@ mammalmore    moose   2
   WHERE s.name IN ('upsert', 'upsert_tbl')
   GROUP BY s.name
   ORDER BY s.name
-upsert 18 18
+upsert 9 9
 upsert_tbl 9 9
 
 $ set-from-sql var=previous-offset-known
@@ -114,7 +114,7 @@ $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} 
   WHERE s.name IN ('upsert', 'upsert_tbl')
   GROUP BY s.name
   ORDER BY s.name
-upsert true 18 18
+upsert true 9 9
 upsert_tbl true 9 9
 
 # ...even if we restart.
@@ -193,7 +193,7 @@ $ unset-regex
   WHERE s.name IN ('upsert', 'upsert_tbl')
   GROUP BY s.name, u.replica_id
   ORDER BY s.name, u.replica_id
-upsert true 18 18 ${old_replica_id}
+upsert true 9 9 ${old_replica_id}
 upsert_tbl true 9 9 ${old_replica_id}
 upsert true <null> <null> ${new_replica_id}
 upsert_tbl true <null> <null> ${new_replica_id}
@@ -228,7 +228,7 @@ moose  100
   GROUP BY s.name, u.replica_id
   ORDER BY s.name, u.replica_id
 append_tbl true 11 11 ${new_replica_id}
-upsert true 18 18 ${old_replica_id}
+upsert true 9 9 ${old_replica_id}
 upsert true 11 11 ${new_replica_id}
 upsert_tbl true 9 9 ${old_replica_id}
 upsert_tbl true 0 0 ${new_replica_id}
