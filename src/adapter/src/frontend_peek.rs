@@ -165,7 +165,7 @@ impl SessionClient {
             &conn_catalog,
             |_id| {
                 // This is only used by `Plan::SideEffectingFunc`, so it is irrelevant for us here
-                /////// todo: refactor `check_plan` to make this nicer
+                // TODO: refactor `check_plan` to make this nicer
                 unreachable!()
             },
             session,
@@ -500,7 +500,11 @@ impl SessionClient {
         Ok(Some(resp))
     }
 
-    //////// todo: comment
+    /// (Similar to Coordinator::determine_timestamp)
+    /// Determines the timestamp for a query, acquires read holds that ensure the
+    /// query remains executable at that time, and returns those.
+    /// The caller is responsible for eventually dropping those read holds.
+    ///
     /// Note: self is taken &mut because of the lazy fetching in `get_compute_instance_client`.
     pub(crate) async fn frontend_determine_timestamp(
         &mut self,

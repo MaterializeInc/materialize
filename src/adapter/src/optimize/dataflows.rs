@@ -55,7 +55,7 @@ use crate::util::viewable_variables;
 pub struct ComputeInstanceSnapshot {
     instance_id: ComputeInstanceId,
     /// The collections that exist on this compute instance. If it's None, then any collection that
-    /// a caller asks us about is considered to exist. //////// todo: adjust comments of methods
+    /// a caller asks us about is considered to exist.
     collections: Option<BTreeSet<GlobalId>>,
 }
 
@@ -89,7 +89,8 @@ impl ComputeInstanceSnapshot {
         self.instance_id
     }
 
-    /// Reports whether the instance contains the indicated collection.
+    /// Reports whether the instance contains the indicated collection. If the snapshot doesn't
+    /// track collections, then it returns true.
     pub fn contains_collection(&self, id: &GlobalId) -> bool {
         self.collections.as_ref().map_or(true, |collections| collections.contains(id))
     }
