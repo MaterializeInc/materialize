@@ -64,10 +64,10 @@ tests:
     storage.storageClass.name: ""
   asserts:
   - matchRegex:
-      path: spec.template.spec.containers[0].args[13]      # Index of the environmentd-cluster-replica-sizes argument
+      path: spec.template.spec.containers[0].args[12]      # Index of the environmentd-cluster-replica-sizes argument
       pattern: disk_limit":"0"
   - matchRegex:
-      path: spec.template.spec.containers[0].args[13]
+      path: spec.template.spec.containers[0].args[12]
       pattern: is_cc":true
 
 - it: should have a cluster with disk limit to 1552MiB when storage class is configured and swap disabled
@@ -76,25 +76,25 @@ tests:
     operator.clusters.swap_enabled: false
   asserts:
   - matchRegex:
-      path: spec.template.spec.containers[0].args[13]
+      path: spec.template.spec.containers[0].args[12]
       pattern: disk_limit":"1552MiB"
   - matchRegex:
-      path: spec.template.spec.containers[0].args[13]
+      path: spec.template.spec.containers[0].args[12]
       pattern: is_cc":true
   - matchRegex:
-      path: spec.template.spec.containers[0].args[13]
+      path: spec.template.spec.containers[0].args[12]
       pattern: materialize.cloud/scratch-fs":"true"
 
 - it: should have a cluster with swap_enabled
   asserts:
   - matchRegex:
-      path: spec.template.spec.containers[0].args[13]
+      path: spec.template.spec.containers[0].args[12]
       pattern: is_cc":true
   - matchRegex:
-      path: spec.template.spec.containers[0].args[13]
+      path: spec.template.spec.containers[0].args[12]
       pattern: swap_enabled":true
   - matchRegex:
-      path: spec.template.spec.containers[0].args[13]
+      path: spec.template.spec.containers[0].args[12]
       pattern: materialize.cloud/swap":"true"
 
 - it: should configure for AWS provider correctly
@@ -208,3 +208,17 @@ tests:
   - contains:
       path: spec.template.spec.containers[0].args
       content: "--scheduler-name=my-scheduler"
+
+- it: should have license key checks enabled by default
+  asserts:
+  - notContains:
+      path: spec.template.spec.containers[0].args
+      content: "--disable-license-key-checks"
+
+- it: should support disabling license key checks
+  set:
+    operator.args.enableLicenseKeyChecks: false
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: "--disable-license-key-checks"
