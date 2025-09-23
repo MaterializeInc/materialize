@@ -244,22 +244,7 @@ Target cluster: quickstart
 
 > CREATE VIEW v7 AS SELECT * from i6 ORDER BY c LIMIT 2;
 
-?[version>=15900] EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR SELECT * FROM v7;
-Explained Query:
-  TopK::MonotonicTopK order_by=[#0 asc nulls_last] limit=2
-    ArrangeBy
-      input_key=[#0{c}]
-      raw=true
-      Get::PassArrangements materialize.public.i6
-        raw=false
-        arrangements[0]={ key=[#0{c}], permutation=id, thinning=() }
-
-Used Indexes:
-  - materialize.public.i6_primary_idx (*** full scan ***)
-
-Target cluster: quickstart
-
-?[15400<=version<15900] EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR SELECT * FROM v7;
+?[version>=15400] EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR SELECT * FROM v7;
 Explained Query:
   TopK::MonotonicTopK order_by=[#0 asc nulls_last] limit=2 must_consolidate
     ArrangeBy

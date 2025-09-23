@@ -1007,13 +1007,13 @@ ArrangeBy[[Column(0,␠"id"),␠Column(1,␠"replica_id")]]  3
 ArrangeBy[[Column(0,␠"id"),␠Column(1,␠"replica_id")]]-errors  3
 ArrangeBy[[Column(0,␠"id"),␠Column(2,␠"id")]]  1
 ArrangeBy[[Column(0,␠"id"),␠Column(2,␠"position")]]  1
-ArrangeBy[[Column(0,␠"id")]]  82
+ArrangeBy[[Column(0,␠"id")]]  86
 ArrangeBy[[Column(0,␠"id")]]-errors  17
 ArrangeBy[[Column(0,␠"index_id")]]  1
 ArrangeBy[[Column(0,␠"name")]]  3
 ArrangeBy[[Column(0,␠"name")]]-errors  3
 ArrangeBy[[Column(0,␠"object_id"),␠Column(1,␠"replica_id")]]  1
-ArrangeBy[[Column(0,␠"object_id")]]  8
+ArrangeBy[[Column(0,␠"object_id")]]  9
 ArrangeBy[[Column(0,␠"object_id")]]-errors  5
 ArrangeBy[[Column(0,␠"objoid"),␠Column(1,␠"classoid"),␠Column(2,␠"objsubid"),␠Column(3,␠"description"),␠Column(4,␠"oid_database_name"),␠Column(5,␠"class_database_name")]]  1
 ArrangeBy[[Column(0,␠"objoid"),␠Column(1,␠"classoid"),␠Column(2,␠"objsubid"),␠Column(3,␠"description"),␠Column(4,␠"oid_database_name"),␠Column(5,␠"class_database_name")]]-errors  1
@@ -1055,7 +1055,7 @@ ArrangeBy[[Column(1,␠"oid")]]  1
 ArrangeBy[[Column(1,␠"on_id"),␠Column(3,␠"on_position")]]  1
 ArrangeBy[[Column(1,␠"on_id")]]  1
 ArrangeBy[[Column(1,␠"prepared_statement_id")]]  1
-ArrangeBy[[Column(1,␠"referenced_object_id")]]  1
+ArrangeBy[[Column(1,␠"referenced_object_id")]]  2
 ArrangeBy[[Column(1,␠"relname")]]  1
 ArrangeBy[[Column(1,␠"relname")]]-errors  1
 ArrangeBy[[Column(1,␠"replica_id")]]  2
