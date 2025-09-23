@@ -5438,6 +5438,7 @@ dependencies = [
  "mz-timestamp-oracle",
  "mz-tracing",
  "mz-transform",
+ "openssl",
  "opentelemetry",
  "prometheus",
  "prost",
