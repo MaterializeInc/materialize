@@ -45,6 +45,7 @@ If the required labels are missing, add them to the node by running:
 
 ```sh
 kubectl label node <node-name> materialize.cloud/disk=true
+kubectl label node <node-name> materialize.cloud/swap=true
 kubectl label node <node-name> workload=materialize-instance
 ```
 
