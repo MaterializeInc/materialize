@@ -33,4 +33,4 @@ $ set-sql-timeout duration=default force=true
 > ALTER CLUSTER sources SET (REPLICATION FACTOR 1);
 
 > EXPLAIN FILTER PUSHDOWN FOR SELECT count(*) FROM counter_tbl WHERE counter = 1;
-materialize.public.counter <number> <number> <number> <number>
+materialize.public.counter_tbl <number> <number> <number> <number>
