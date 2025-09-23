@@ -69,35 +69,12 @@ identifier = "reference"
 name = "Reference"
 weight = 15
 
-
-[[menu.main]]
-identifier = "cs_redpanda"
-name = "Redpanda"
-parent = "create-source"
-url = "/sql/create-source/kafka"
-weight = 10
-
-[[menu.main]]
-identifier = "csink_redpanda"
-name = "Redpanda"
-parent = "create-sink"
-url = "/sql/create-sink/kafka"
-
 [[menu.main]]
 name = "SQL commands"
 identifier = "commands"
 parent = "reference"
 weight = 100
 
-[[menu.main]]
-name = "CREATE SOURCE"
-parent = 'commands'
-url = '/sql/create-source'
-
-[[menu.main]]
-name = "CREATE SINK"
-parent = 'commands'
-url = '/sql/create-sink'
 
 
 #

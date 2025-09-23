@@ -5,10 +5,8 @@ disable_list: true
 pagerank: 30
 menu:
   main:
-    parent: reference
-    name: Sinks
+    parent: commands
     identifier: 'create-sink'
-    weight: 30
 ---
 
 A [sink](/concepts/sinks/) describes an external system you
