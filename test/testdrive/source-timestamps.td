@@ -18,7 +18,8 @@ $ kafka-create-topic topic=test
 > CREATE SOURCE kafka_src
   IN CLUSTER test
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-test-${testdrive.seed}')
-  FORMAT BYTES
+
+> CREATE TABLE kafka_tbl FROM SOURCE kafka_src;
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 DROP PUBLICATION IF EXISTS mz_source
