@@ -79,7 +79,23 @@ a min max
 
 $ set-regex match=(.User.:\s\d+|\(u\d+\)) replacement=UID
 
-?[version>=15400] EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR SELECT * FROM v2
+?[version>=15900] EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR SELECT * FROM v2
+Explained Query:
+  TopK::MonotonicTopK order_by=[#0 asc nulls_last] limit=3
+    ArrangeBy
+      input_key=[#0{b}]
+      raw=true
+      Get::PassArrangements materialize.public.i1
+        raw=false
+        arrangements[0]={ key=[#0{b}], permutation=id, thinning=() }
+
+Used Indexes:
+  - materialize.public.i1_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
+
+
+?[15400<=version<15900] EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR SELECT * FROM v2
 Explained Query:
   TopK::MonotonicTopK order_by=[#0 asc nulls_last] limit=3 must_consolidate
     ArrangeBy
@@ -122,7 +138,22 @@ Target cluster: quickstart
 
 > CREATE VIEW v3 AS SELECT * FROM non_dbz_data_indexed ORDER BY b LIMIT 3
 
-?[version>=15400] EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR SELECT * FROM v3
+?[version>=15900] EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR SELECT * FROM v3
+Explained Query:
+  TopK::MonotonicTopK order_by=[#1 asc nulls_last] limit=3
+    ArrangeBy
+      input_key=[#0{a}, #1{b}]
+      raw=true
+      Get::PassArrangements materialize.public.non_dbz_data_indexed
+        raw=false
+        arrangements[0]={ key=[#0{a}, #1{b}], permutation=id, thinning=() }
+
+Used Indexes:
+  - materialize.public.non_dbz_data_indexed_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
+
+?[15400<=version<15900] EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR SELECT * FROM v3
 Explained Query:
   TopK::MonotonicTopK order_by=[#1 asc nulls_last] limit=3 must_consolidate
     ArrangeBy
@@ -160,7 +191,22 @@ Target cluster: quickstart
 
 > CREATE VIEW v5 AS SELECT * from i4 ORDER BY c LIMIT 2;
 
-?[version>=15400] EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR SELECT * FROM v5;
+?[version>=15900] EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR SELECT * FROM v5;
+Explained Query:
+  TopK::MonotonicTopK order_by=[#0 asc nulls_last] limit=2
+    ArrangeBy
+      input_key=[#0{c}]
+      raw=true
+      Get::PassArrangements materialize.public.i4
+        raw=false
+        arrangements[0]={ key=[#0{c}], permutation=id, thinning=() }
+
+Used Indexes:
+  - materialize.public.i4_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
+
+?[15400<=version<15900] EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR SELECT * FROM v5;
 Explained Query:
   TopK::MonotonicTopK order_by=[#0 asc nulls_last] limit=2 must_consolidate
     ArrangeBy
@@ -198,7 +244,22 @@ Target cluster: quickstart
 
 > CREATE VIEW v7 AS SELECT * from i6 ORDER BY c LIMIT 2;
 
-?[version>=15400] EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR SELECT * FROM v7;
+?[version>=15900] EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR SELECT * FROM v7;
+Explained Query:
+  TopK::MonotonicTopK order_by=[#0 asc nulls_last] limit=2
+    ArrangeBy
+      input_key=[#0{c}]
+      raw=true
+      Get::PassArrangements materialize.public.i6
+        raw=false
+        arrangements[0]={ key=[#0{c}], permutation=id, thinning=() }
+
+Used Indexes:
+  - materialize.public.i6_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
+
+?[15400<=version<15900] EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR SELECT * FROM v7;
 Explained Query:
   TopK::MonotonicTopK order_by=[#0 asc nulls_last] limit=2 must_consolidate
     ArrangeBy
@@ -239,7 +300,22 @@ Target cluster: quickstart
 
 # Propagating monotonicity analysis in a complex situation: (i1, i1) -> i8; (i1, i8) -> i9
 
-?[version>=15400] EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR SELECT * FROM v10;
+?[version>=15900] EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR SELECT * FROM v10;
+Explained Query:
+  TopK::MonotonicTopK order_by=[#0 asc nulls_last] limit=2
+    ArrangeBy
+      input_key=[#0{b}]
+      raw=true
+      Get::PassArrangements materialize.public.i9
+        raw=false
+        arrangements[0]={ key=[#0{b}], permutation=id, thinning=() }
+
+Used Indexes:
+  - materialize.public.i9_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
+
+?[15400<=version<15900] EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR SELECT * FROM v10;
 Explained Query:
   TopK::MonotonicTopK order_by=[#0 asc nulls_last] limit=2 must_consolidate
     ArrangeBy
@@ -276,7 +352,17 @@ Target cluster: quickstart
 
 > CREATE VIEW v11 AS SELECT * FROM m1 ORDER BY b LIMIT 3;
 
-? EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR SELECT * FROM v11;
+?[version>=15900] EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR SELECT * FROM v11;
+Explained Query:
+  TopK::MonotonicTopK order_by=[#0 asc nulls_last] limit=3 must_consolidate
+    Get::PassArrangements materialize.public.m1
+      raw=true
+
+Source materialize.public.m1
+
+Target cluster: quickstart
+
+?[version<15900] EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR SELECT * FROM v11;
 Explained Query:
   TopK::MonotonicTopK order_by=[#0 asc nulls_last] limit=3 must_consolidate
     Get::PassArrangements materialize.public.m1
