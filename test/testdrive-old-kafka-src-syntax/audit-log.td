@@ -26,9 +26,8 @@ $ kafka-create-topic topic=test
   (TOPIC 'testdrive-test-${testdrive.seed}')
   FORMAT CSV WITH 2 COLUMNS;
 
-> SELECT event_type, object_type, details - 'replica_id' - 'billed_as' - 'internal', user FROM mz_audit_events ORDER BY id DESC LIMIT 4
+> SELECT event_type, object_type, details - 'replica_id' - 'billed_as' - 'internal', user FROM mz_audit_events ORDER BY id DESC LIMIT 3
 create source "{\"cluster_id\":\"<GID>\",\"database\":\"materialize\",\"id\":\"<GID>\",\"item\":\"kafka_src\",\"schema\":\"public\",\"type\":\"kafka\"}" materialize
-create source "{\"cluster_id\":null,\"database\":\"materialize\",\"id\":\"<GID>\",\"item\":\"kafka_src_progress\",\"schema\":\"public\",\"type\":\"progress\"}" materialize
 create cluster-replica "{\"cluster_id\":\"<GID>\",\"cluster_name\":\"audit_log_kafka_src\",\"logical_size\":\"${arg.default-storage-size}\",\"reason\":\"manual\",\"replica_name\":\"r1\"}" materialize
 create cluster "{\"id\":\"<GID>\",\"name\":\"audit_log_kafka_src\"}" materialize
 
@@ -38,8 +37,7 @@ create cluster "{\"id\":\"<GID>\",\"name\":\"audit_log_kafka_src\"}" materialize
   IN CLUSTER audit_log_counter_src
   FROM LOAD GENERATOR COUNTER (UP TO 100);
 
-> SELECT event_type, object_type, details - 'replica_id' - 'billed_as' - 'internal', user FROM mz_audit_events ORDER BY id DESC LIMIT 4
+> SELECT event_type, object_type, details - 'replica_id' - 'billed_as' - 'internal', user FROM mz_audit_events ORDER BY id DESC LIMIT 3
 create source "{\"cluster_id\":\"<GID>\",\"database\":\"materialize\",\"id\":\"<GID>\",\"item\":\"counter_src\",\"schema\":\"public\",\"type\":\"load-generator\"}" materialize
-create source "{\"cluster_id\":null,\"database\":\"materialize\",\"id\":\"<GID>\",\"item\":\"counter_src_progress\",\"schema\":\"public\",\"type\":\"progress\"}" materialize
 create cluster-replica "{\"cluster_id\":\"<GID>\",\"cluster_name\":\"audit_log_counter_src\",\"logical_size\":\"${arg.default-storage-size}\",\"reason\":\"manual\",\"replica_name\":\"r1\"}" materialize
 create cluster "{\"id\":\"<GID>\",\"name\":\"audit_log_counter_src\"}" materialize

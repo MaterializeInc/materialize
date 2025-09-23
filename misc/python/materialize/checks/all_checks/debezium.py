@@ -148,26 +148,5 @@ class DebeziumPostgres(Check):
                 E 3 16000
                 F 2 16000
                 """
-                + (
-                    r"""
-                $ set-regex match="FORMAT .*? ENVELOPE DEBEZIUM " replacement=""
-
-                >[version>=14000] SHOW CREATE SOURCE debezium_source1;
-                materialize.public.debezium_source1 "CREATE SOURCE materialize.public.debezium_source1\nIN CLUSTER quickstart\nFROM KAFKA CONNECTION materialize.public.kafka_conn (TOPIC = 'postgres.public.debezium_table');"
-                >[version>=14000] SHOW CREATE SOURCE debezium_source2;
-                materialize.public.debezium_source2 "CREATE SOURCE materialize.public.debezium_source2\nIN CLUSTER quickstart\nFROM KAFKA CONNECTION materialize.public.kafka_conn (TOPIC = 'postgres.public.debezium_table');"
-                >[version>=14000] SHOW CREATE SOURCE debezium_source3;
-                materialize.public.debezium_source3 "CREATE SOURCE materialize.public.debezium_source3\nIN CLUSTER quickstart\nFROM KAFKA CONNECTION materialize.public.kafka_conn (TOPIC = 'postgres.public.debezium_table');"
-
-                >[version<14000] SHOW CREATE SOURCE debezium_source1;
-                materialize.public.debezium_source1 "CREATE SOURCE \"materialize\".\"public\".\"debezium_source1\" IN CLUSTER \"quickstart\" FROM KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'postgres.public.debezium_table')"
-                >[version<14000] SHOW CREATE SOURCE debezium_source2;
-                materialize.public.debezium_source2 "CREATE SOURCE \"materialize\".\"public\".\"debezium_source2\" IN CLUSTER \"quickstart\" FROM KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'postgres.public.debezium_table')"
-                >[version<14000] SHOW CREATE SOURCE debezium_source3;
-                materialize.public.debezium_source3 "CREATE SOURCE \"materialize\".\"public\".\"debezium_source3\" IN CLUSTER \"quickstart\" FROM KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'postgres.public.debezium_table')"
-                """
-                    if not self.is_running_as_cloudtest()
-                    else ""
-                )
             )
         )

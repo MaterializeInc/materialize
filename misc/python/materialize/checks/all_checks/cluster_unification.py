@@ -34,7 +34,7 @@ class UnifiedCluster(Check):
 
                 > CREATE MATERIALIZED VIEW shared_cluster_compute_first_mv
                   IN CLUSTER shared_cluster_compute_first
-                  AS SELECT COUNT(*) AS cnt FROM shared_cluster_storage_first_source
+                  AS SELECT COUNT(*) AS cnt FROM shared_cluster_storage_first_source_tbl
 
                 > CREATE DEFAULT INDEX
                   IN CLUSTER shared_cluster_compute_first
@@ -48,11 +48,11 @@ class UnifiedCluster(Check):
                 > CREATE SOURCE shared_cluster_compute_first_source
                   IN CLUSTER shared_cluster_compute_first
                   FROM LOAD GENERATOR COUNTER
-                > CREATE TABLE shared_cluster_compute_first_source_tbl FROM SOURCE shared_cluster_storage_first_source;
+                > CREATE TABLE shared_cluster_compute_first_source_tbl FROM SOURCE shared_cluster_compute_first_source;
 
                 > CREATE MATERIALIZED VIEW shared_cluster_storage_first_mv
                   IN CLUSTER shared_cluster_storage_first
-                  AS SELECT COUNT(*) AS cnt FROM shared_cluster_compute_first_source
+                  AS SELECT COUNT(*) AS cnt FROM shared_cluster_compute_first_source_tbl
 
                 > CREATE DEFAULT INDEX
                   IN CLUSTER shared_cluster_storage_first
