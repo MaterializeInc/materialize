@@ -1059,11 +1059,11 @@ where
     /// but executes on the instance task itself.
     fn acquire_read_hold(&self, id: GlobalId) -> Result<ReadHold<T>, CollectionMissing> {
         ///////// todo: place this fn further down in the file
-        ///////// todo: refactor to take a collection of ids, so that we need just one call_sync in PeekClient::acquire_read_hold
-        // We acquire read holds at the earliest possible time rather than returning a copy
+        // Similarly to InstanceState::acquire_read_hold and StorageCollections::acquire_read_holds,
+        // we acquire read holds at the earliest possible time rather than returning a copy
         // of the implied read hold. This is so that dependents can acquire read holds on
         // compute dependencies at frontiers that are held back by other read holds the caller
-        // has previously taken. /////////// todo: check comment
+        // has previously taken.
         let collection = self.collection(id)?;
         let since = collection.shared.lock_read_capabilities(|caps| {
             let since = caps.frontier().to_owned();

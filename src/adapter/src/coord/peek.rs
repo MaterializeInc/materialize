@@ -379,7 +379,7 @@ pub struct PlannedPeek {
     /// [MapFilterProject](mz_expr::MapFilterProject), but _before_ applying a
     /// [RowSetFinishing].
     ///
-    /// This is _the_ `result_type` as far as compute is concerned and futher
+    /// This is _the_ `result_type` as far as compute is concerned and further
     /// changes through projections happen purely in the adapter.
     pub intermediate_result_type: SqlRelationType,
     pub source_arity: usize,
@@ -827,7 +827,7 @@ impl crate::coord::Coordinator {
         let (literal_constraints, timestamp, map_filter_project) = peek_command;
 
         // At this stage we don't know column names for the result because we
-        // only know the peek's result type as a bare ResultType.
+        // only know the peek's result type as a bare SqlRelationType.
         let peek_result_column_names =
             (0..intermediate_result_type.arity()).map(|i| format!("peek_{i}"));
         let peek_result_desc =

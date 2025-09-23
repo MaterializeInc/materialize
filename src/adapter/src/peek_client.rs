@@ -186,7 +186,8 @@ impl PeekClient {
     ///
     /// Note: self is taken &mut because of the lazy fetching in `get_compute_instance_client`.
     ///
-    /// ////////// todo: add statement logging, pending_peeks/client_pending_peeks wiring
+    /// TODO: add statement logging
+    /// //// todo: pending_peeks/client_pending_peeks wiring
     pub async fn implement_fast_path_peek_plan(
         &mut self,
         fast_path: FastPathPlan,
@@ -198,9 +199,7 @@ impl PeekClient {
         max_result_size: u64,
         max_returned_query_size: Option<u64>,
         row_set_finishing_seconds: Histogram,
-    ) -> Result<crate::ExecuteResponse, crate::AdapterError> {
-        //////// todo: don't we need other things from PlannedPeek?
-
+    ) -> Result<crate::ExecuteResponse, AdapterError> {
         match fast_path {
             // If the dataflow optimizes to a constant expression, we can immediately return the result.
             FastPathPlan::Constant(rows_res, _) => {
@@ -213,8 +212,7 @@ impl PeekClient {
                 let mut results = Vec::new();
                 for (row, count) in rows {
                     if count.is_negative() {
-                        /////// todo: check error type (might need to revise also in the old code)
-                        return Err(crate::AdapterError::Unstructured(anyhow::anyhow!(
+                        return Err(AdapterError::Unstructured(anyhow::anyhow!(
                             "Negative multiplicity in constant result: {}",
                             count
                         )));
@@ -242,7 +240,7 @@ impl PeekClient {
                     Ok((rows, _bytes)) => Ok(crate::ExecuteResponse::SendingRowsImmediate {
                         rows: Box::new(rows),
                     }),
-                    Err(e) => Err(crate::AdapterError::ResultSize(e)),
+                    Err(e) => Err(AdapterError::ResultSize(e)),
                 }
             }
             FastPathPlan::PeekExisting(_coll_id, idx_id, literal_constraints, mfp) => {
@@ -250,7 +248,8 @@ impl PeekClient {
                 let uuid = Uuid::new_v4();
                 // ////// todo: manage pending peeks for cancellation/cleanup
 
-                // ///////// todo: what are these names used for? (also in the original code)
+                // At this stage we don't know column names for the result because we
+                // only know the peek's result type as a bare SqlRelationType.
                 let cols = (0..intermediate_result_type.arity()).map(|i| format!("peek_{i}"));
                 let result_desc = RelationDesc::new(intermediate_result_type.clone(), cols);
 
