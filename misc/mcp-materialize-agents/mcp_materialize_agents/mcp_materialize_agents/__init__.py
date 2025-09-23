@@ -245,7 +245,7 @@ async def run():
                 conn.set_autocommit(True)
                 async with conn.cursor(row_factory=dict_row) as cur:
                     await cur.execute("START TRANSACTION READ ONLY;")
-                    set_cluster = sql.SQL("SET CLUSTER  {};").format(
+                    set_cluster = sql.SQL("SET CLUSTER TO {};").format(
                         sql.Identifier(cluster)
                     )
                     await cur.execute(set_cluster)

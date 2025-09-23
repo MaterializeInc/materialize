@@ -16,7 +16,7 @@
 [project]
 name = "mcp_materialize_agents"
 version = "0.3.1"
-description = "A server that exposes Materialize indexes as tools over the Model Context Protocol (MCP)"
+description = "Live data layer for agents. Expose canonical business objects as database-consistent, instantly-queryable SQL views via Model Context Protocol"
 readme = "README.md"
 requires-python = ">=3.13"
 authors = [
@@ -25,16 +25,10 @@ authors = [
 
 keywords = ["materialize", "mcp", "database", "api"]
 dependencies = [
-    "aiohttp>=3.11.18",
-    "aiorwlock>=1.5.0",
-    "fastapi>=0.115.12",
     "mcp>=1.10.1",
     "psycopg-pool>=3.2.6",
     "psycopg[binary]>=3.2.6",
-    "pytest>=8.4.1",
-    "pytest-asyncio>=1.0.0",
-    "pyyaml>=6.0.2",
-    "requests>=2.32.3",
+    "pydantic>=2.0.0",
 ]
 
 [project.scripts]
