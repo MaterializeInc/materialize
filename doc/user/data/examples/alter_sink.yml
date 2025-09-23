@@ -1,0 +1,118 @@
+- name: "syntax"
+  code: |
+    ALTER SINK <sink_name> SET FROM <relation_name>;
+
+- name: "alter-sink-create-original-sink"
+  description: |
+    That is, assume you have a Kafka sink `avro_sink` created from `matview_old`
+    (See [`CREATE SINK`:Kafka/Redpanda](/sql/create-sink/kafka/) for more
+    information):
+  code: |
+    CREATE SINK avro_sink
+      FROM matview_old
+      INTO KAFKA CONNECTION kafka_connection (TOPIC 'test_avro_topic')
+      KEY (key_col)
+      FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
+      ENVELOPE UPSERT
+    ;
+
+- name: "alter-sink-simple"
+  description: |
+
+    To have the sink read from `matview_new` instead of `matview_old`, you can
+    use `ALTER SINK` to change the `FROM <relation>`:
+
+    {{< note >}}
+    `matview_new` must be compatible with the previously published
+    schema. Otherwise, the `ALTER SINK` command will succeed, but the
+    subsequent execution of the sink will result in errors and will not be able
+    to make progress. See [Valid schema changes](#valid-schema-changes) for
+    details.
+    {{< /note >}}
+  code: |
+    ALTER SINK avro_sink
+      SET FROM matview_new
+    ;
+  results: |
+
+    {{< tip >}}
+
+    Because Materialize emits updates from the newly specified relation **only** if
+    they happen after the cutover timestamp, you might observe the following
+    scenarios:
+    - [Topic contains stale value for a
+      key](#scenario-1-topic-contains-stale-value-for-a-key)
+    - [Topic is missing a key that exists in the new relation](#scenario-2-topic-is-missing-a-key-that-exists-in-the-new-relation)
+    - [Topic contains a key that does not exist in the new relation](#scenario-3-topic-contains-a-key-that-does-not-exist-in-the-new-relation)
+
+    For workaround, see [Example: Handle cutover scenarios](#handle-cutover-scenarios)
+    {{< /tip >}}
+
+- name: "handle-cutover-scenarios-intro"
+  description: |
+    Because Materialize emits updates from the newly specified relation **only** if
+    they happen after the cutover timestamp, you might observe the following
+    scenarios:
+    - [Topic contains stale value for a
+      key](#scenario-1-topic-contains-stale-value-for-a-key)
+    - [Topic is missing a key that exists in the new relation](#scenario-2-topic-is-missing-a-key-that-exists-in-the-new-relation)
+    - [Topic contains a key that does not exist in the new relation](#scenario-3-topic-contains-a-key-that-does-not-exist-in-the-new-relation)
+
+    To handle these scenarios, you can first alter sink to an intermediary
+    materialized view. The intermediary materialized view uses a temporary table
+    `switch` that switches the view's contents from old relation content to new
+    relation content. At the time of the switch, Materialize emits the diff of
+    the changes. Then, after the sink upper has advanced beyond the time of the
+    switch, you can `ALTER SINK` to the new relation (and remove the temporary
+    intermediary materialized view and table).
+
+- name: "handle-cutover-scenarios-step-1-intro"
+  description: |
+    For example, create a table `switch` and a temporary materialized view
+    `transition` that contains either:
+    - the `matview_old` content if `switch.value` is `false`.
+    - the `matview_new` content if `switch.value` is `true`.
+
+    At first, the `switch.value` is `false`, so the `transition` materialized view contains the `matview_old` content.
+- name: "handle-cutover-scenarios-create-transition-mv"
+  code: |
+    CREATE TABLE switch (value bool);
+    INSERT INTO switch VALUES (false); -- controls whether we want the new or the old materialized view.
+
+    CREATE MATERIALIZED VIEW transition AS
+    (SELECT matview_old.* FROM matview_old JOIN switch ON switch.value = false)
+    UNION ALL
+    (SELECT matview_new.* FROM matview_new JOIN switch ON switch.value = true)
+    ;
+
+- name: "handle-cutover-scenarios-step-2-intro"
+  description: |
+    `ALTER SINK` to use `transition`, which currently contains `matview_old` content:
+- name: "handle-cutover-scenarios-alter-sink-to-transition"
+  code: |
+    ALTER SINK avro_sink SET FROM transition;
+
+- name: "handle-cutover-scenarios-step-3-intro"
+  description: |
+    Update `switch.value` to `true`, which causes the `transition` materialized view to contain `matview_new` content:
+
+- name: "handle-cutover-scenarios-update-switch"
+  code: |
+    UPDATE switch SET value = true;
+
+- name: "handle-cutover-scenarios-step-4-intro"
+  description: |
+    Wait for the sink's upper frontier to advance beyond the time of the switch update. Once
+    advanced, alter sink to use `matview_new`:
+- name: "handle-cutover-scenarios-alter-sink-to-new-mv"
+  code: |
+    -- After sink upper has advanced beyond the time of the switch UPDATE.
+    ALTER SINK avro_sink SET FROM matview_new;
+
+- name: "handle-cutover-scenarios-step-5-intro"
+  description: |
+    Drop the `transition` materialized view and the `switch` table:
+- name: "handle-cutover-scenarios-drop-intermediary-objects"
+  code: |
+    DROP MATERIALIZED VIEW transition;
+    DROP TABLE switch;
