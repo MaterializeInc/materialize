@@ -168,6 +168,7 @@ CREATE SOURCE s FROM LOAD GENERATOR COUNTER;
 query TT
 SELECT name, privilege FROM item_privileges WHERE name = 's'
 ----
+s  mz_support=r/materialize
 s  materialize=r/materialize
 
 statement ok
@@ -280,6 +281,7 @@ query TT
 SELECT name, privilege FROM item_privileges WHERE name = 's'
 ----
 s  joe=r/joe
+s  mz_support=r/joe
 
 simple conn=mz_system,user=mz_system
 ALTER TYPE ty OWNER TO joe
@@ -986,6 +988,7 @@ query TT
 SELECT name, privilege FROM item_privileges WHERE name = 's'
 ----
 s  joe=r/materialize
+s  mz_support=r/materialize
 s  materialize=r/materialize
 
 query B
@@ -1021,6 +1024,7 @@ query TT
 SELECT name, privilege FROM item_privileges WHERE name = 's'
 ----
 s  joe=r/materialize
+s  mz_support=r/materialize
 s  materialize=r/materialize
 
 statement ok
@@ -1031,6 +1035,7 @@ SELECT name, privilege FROM item_privileges WHERE name = 's'
 ----
 s  =r/materialize
 s  joe=r/materialize
+s  mz_support=r/materialize
 s  materialize=r/materialize
 
 simple conn=joe4,user=joe
@@ -1048,6 +1053,7 @@ query TT
 SELECT name, privilege FROM item_privileges WHERE name = 's'
 ----
 s  =r/materialize
+s  mz_support=r/materialize
 s  materialize=r/materialize
 
 query B
@@ -1083,6 +1089,7 @@ query TT
 SELECT name, privilege FROM item_privileges WHERE name = 's'
 ----
 s  =r/materialize
+s  mz_support=r/materialize
 s  materialize=r/materialize
 
 statement ok
@@ -1100,6 +1107,7 @@ REVOKE SELECT ON TABLE s FROM PUBLIC
 query TT
 SELECT name, privilege FROM item_privileges WHERE name = 's'
 ----
+s  mz_support=r/materialize
 s  materialize=r/materialize
 
 query B
