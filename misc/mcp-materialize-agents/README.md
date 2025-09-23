@@ -1,55 +1,142 @@
 # Materialize MCP Server
 
-**The live data layer for apps and agents** - Create up-to-the-second views into your business, just using SQL.
+**The live data layer for apps and agents**
 
-A Model Context Protocol (MCP) server that exposes Materialize indexed views as discoverable, canonical business objects for AI agents and LLM applications. Transform your live data infrastructure into intelligent, context-aware tools without additional services or caching layers.
+Agents succeed when they can act in a loop with confidence.
+They perceive the world, think about what to do, act to change it, and then observe the results. The loop repeats until the goal is reached.
 
-## What is MCP?
+Large language models are improving quickly at the thinking step. The real challenge is perception. Agents need a live, trustworthy picture of the world to base their decisions on. That picture must always be correct and always reflect the current state.
 
-The [Model Context Protocol](https://modelcontextprotocol.io/) is an open standard that enables seamless integration between LLM applications and data sources. This server implements MCP to expose your Materialize views as typed, discoverable tools that AI agents can query directly.
+The Materialize MCP Server provides that picture. It exposes your canonical business objects as **live, database consistent data products**.
 
-## Why Materialize + MCP?
+Consider a customer support agent that needs to understand a customer's complete context:
+- Current subscription status and tier
+- Recent support interactions and satisfaction scores
+- Active orders and shipment tracking
+- Account health indicators and churn risk
 
-Traditional RAG pipelines rely on stale snapshots and complex caching. With Materialize's incremental computation engine, your AI agents get:
+With Materialize, this complex business logic is precomputed and instantly available. Agents can query with SQL, observe the current state, and see the effects of their actions reflected immediately. Every observation reflects the same point in time, so every action can be taken with confidence.
 
-- **Live context**: Query continuously updated views without ETL delays
-- **Canonical business objects**: Single source of truth for both applications and agents
-- **Operational consistency**: Same data products power your entire stack
-- **Zero-latency lookups**: Indexed views deliver instant results at any scale
-- **Business-aligned tools**: Views encapsulate domain logic, making them perfect AI tools
+---
 
-## Vector Stores + Materialize: Better Together
+## Why Materialize with MCP?
 
-**Vector stores excel at the "why"** - they provide your AI with policies, documentation, historical patterns, and general knowledge. They answer questions like "What's our return policy?" or "How do we handle shipping delays?"
+The [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) defines how agents connect to external tools and data. The Materialize MCP Server implements it for your operational data, giving agents:
 
-**Materialize excels at the "what's happening now"** - it provides live operational context about current state. It answers questions like "What's the status of order #12345?" or "How many items are in stock right now?"
+* **Live context**: Always see what is happening now, not what happened minutes or hours ago.
+* **Database consistency**: All data products reflect the same moment in time, so cross-system joins always line up.
+* **Fast reactions**: Observe the effects of actions in under a second.
+* **Simple SQL**: Define digital twins of your business objects with views and indexes.
+* **Operational safety**: Explore without placing load on production databases.
 
-Together, they create complete AI agents:
-- **Vector store**: Retrieves the rule that orders over $100 get free shipping
-- **Materialize**: Provides the current order total, customer tier, and inventory levels
-- **AI Agent**: Combines both to make intelligent decisions with current context
+The result is a shorter path from perception to confident action.
 
-This complementary approach ensures your agents have both the knowledge to make good decisions and the live data to make them accurately.
+---
+
+## Knowledge plus Live Context
+
+Vector stores and Materialize play different roles that complement each other.
+
+* **Vector stores** give agents the rules and history of the world: policies, documentation, patterns, and prior examples.
+* **Materialize** gives agents the current state of the world: inventory, customer status, orders, and shipments.
+
+Together, they give agents both the knowledge and the live context required to act intelligently.
+
+---
 
 ## How It Works
 
-1. **Define indexed views** in Materialize that represent your canonical business objects
-2. **Add comments** to make views discoverable by AI agents
-3. **Connect your AI** application via MCP to access live data products
-4. **Query live data** - agents get fresh, up-to-the-second data with every request
+1. **Define views** that represent your canonical business objects
+2. **Create indexes** so results are always precomputed and instantly accessible
+3. **Add comments** for discovery and semantic meaning
+4. **Run the MCP server** to expose these live data products to your agents
+5. **Query with SQL** from any MCP compatible framework such as LangChain or Strands
 
-The server automatically:
-- Discovers all commented views and indexes as canonical business objects
-- Generates typed schemas from your SQL definitions
-- Exposes them as MCP tools for AI agents
-- Handles query execution with connection pooling
+Materialize incrementally maintains these views. Instead of recalculating them from scratch, it updates them as source data changes. Queries return in milliseconds even for complex joins, aggregations, and recursive logic.
 
-## Benefits of Operational Data Products
+### Example: Customer 360 View
 
-* **Stable:** Define canonical business objects once, use everywhere
-* **Typed:** Input and output schemas are derived from the index
-* **Observable:** Usage is logged per‑tool, making cost and performance explicit
-* **Secure:** If you don't create a view/index, it isn't callable
+Here's how you'd create a comprehensive customer view that combines data from multiple systems:
+
+```sql
+CREATE VIEW customer_360 AS
+SELECT
+    c.customer_id,
+    c.email,
+    c.signup_date,
+    -- Subscription and revenue metrics
+    s.plan_tier,
+    s.monthly_revenue,
+    s.renewal_date,
+    CASE
+        WHEN s.renewal_date < NOW() + INTERVAL '30 days' THEN 'upcoming'
+        ELSE 'active'
+    END as renewal_status,
+    -- Support experience
+    COALESCE(sup.recent_tickets, 0) as recent_tickets_30d,
+    COALESCE(sup.avg_satisfaction, 0) as avg_satisfaction_score,
+    CASE
+        WHEN sup.recent_tickets > 5 THEN 'high'
+        WHEN sup.recent_tickets > 2 THEN 'medium'
+        ELSE 'low'
+    END as support_intensity,
+    -- Order activity
+    COALESCE(o.active_orders, 0) as active_orders,
+    COALESCE(o.lifetime_value, 0) as lifetime_value,
+    o.last_order_date,
+    -- Churn risk calculation
+    CASE
+        WHEN s.renewal_date < NOW() + INTERVAL '30 days'
+            AND sup.avg_satisfaction < 3 THEN 'high'
+        WHEN sup.recent_tickets > 5
+            AND sup.avg_satisfaction < 4 THEN 'medium'
+        WHEN o.last_order_date < NOW() - INTERVAL '90 days' THEN 'medium'
+        ELSE 'low'
+    END as churn_risk
+FROM customers c
+LEFT JOIN subscriptions s ON c.customer_id = s.customer_id
+LEFT JOIN (
+    SELECT
+        customer_id,
+        COUNT(*) as recent_tickets,
+        AVG(satisfaction_score) as avg_satisfaction
+    FROM support_tickets
+    WHERE created_at > MZ_NOW() - INTERVAL '30 days'
+    GROUP BY customer_id
+) sup ON c.customer_id = sup.customer_id
+LEFT JOIN (
+    SELECT
+        customer_id,
+        COUNT(CASE WHEN status IN ('pending', 'processing') THEN 1 END) as active_orders,
+        SUM(total_amount) as lifetime_value,
+        MAX(order_date) as last_order_date
+    FROM orders
+    GROUP BY customer_id
+) o ON c.customer_id = o.customer_id;
+
+-- Index for instant lookups by customer
+CREATE INDEX ON customer_360 (customer_id);
+
+-- Documentation for agent discovery
+COMMENT ON VIEW customer_360 IS 'Complete customer context including subscription, support, orders, and churn risk';
+COMMENT ON COLUMN customer_360.churn_risk IS 'Risk level: high (immediate attention), medium (monitor), low (healthy)';
+```
+
+---
+
+## Real-World Example: Customer Retention Agent
+
+A customer retention agent monitors and acts on churn signals:
+
+* **Perceive**: Query `customer_360` to identify high-risk customers with upcoming renewals
+* **Think**: Apply retention strategies from vector store (discount policies, win-back campaigns)
+* **Act**: Create personalized retention offer and update customer record
+* **Observe**: Customer response reflected instantly in satisfaction scores and order activity
+* **Repeat**: Adjust strategy based on real-time customer behavior
+
+Every decision is based on live data that reflects the customer's current state across all systems—support, billing, orders—at the same moment in time.
+
+---
 
 ## Installation
 
@@ -57,192 +144,60 @@ The server automatically:
 pip install mcp-materialize-agents
 ```
 
-## Quickstart
-
-Run the server with default settings:
+Run with defaults:
 
 ```bash
 mcp-materialize-agents
 ```
 
-Or if installed via uv:
+Or with [uv](https://docs.astral.sh/uv/):
 
 ```bash
 uv run mcp-materialize-agents
 ```
 
+---
+
 ## Configuration
 
+| Argument          | Env Var             | Default                                               | Description                          |
+| ----------------- | ------------------- | ----------------------------------------------------- | ------------------------------------ |
+| `--mz-dsn`        | `MZ_DSN`            | `postgresql://materialize@localhost:6875/materialize` | Materialize DSN                      |
+| `--transport`     | `MCP_TRANSPORT`     | `stdio`                                               | Communication transport (stdio, sse) |
+| `--host`          | `MCP_HOST`          | `0.0.0.0`                                             | Server host                          |
+| `--port`          | `MCP_PORT`          | `3001`                                                | Server port                          |
+| `--pool-min-size` | `MCP_POOL_MIN_SIZE` | `1`                                                   | Minimum connection pool size         |
+| `--pool-max-size` | `MCP_POOL_MAX_SIZE` | `10`                                                  | Maximum connection pool size         |
+| `--log-level`     | `MCP_LOG_LEVEL`     | `INFO`                                                | Logging level                        |
 
-| Argument | Environment Variable | Default | Description |
-|----------|---------------------|---------|-------------|
-| `--mz-dsn` | `MZ_DSN` | `postgresql://materialize@localhost:6875/materialize` | Materialize DSN |
-| `--transport` | `MCP_TRANSPORT` | `stdio` | Communication transport (`stdio` or `sse`) |
-| `--host` | `MCP_HOST` | `0.0.0.0` | Server host |
-| `--port` | `MCP_PORT` | `3001` | Server port |
-| `--pool-min-size` | `MCP_POOL_MIN_SIZE` | `1` | Minimum connection pool size |
-| `--pool-max-size` | `MCP_POOL_MAX_SIZE` | `10` | Maximum connection pool size |
-| `--log-level` | `MCP_LOG_LEVEL` | `INFO` | Logging level |
+---
 
+## Using the Customer 360 View
 
-## Defining Canonical Business Objects as Tools
-
-Transform your business logic into discoverable, live data tools that AI agents can query:
-
-1. **Write a view** that represents a canonical business object
-2. **Create an index** on key columns for instant lookups
-3. **Add comments** to make it discoverable and self-documenting
+Once defined, agents can leverage this canonical business object:
 
 ```sql
--- Create a canonical view of order status
-CREATE VIEW order_status_summary AS
-SELECT  o.order_id,
-        o.status,
-        s.carrier,
-        c.estimated_delivery,
-        e.delay_reason
-FROM orders o
-LEFT JOIN shipments           s ON o.order_id = s.order_id
-LEFT JOIN carrier_tracking    c ON s.shipment_id = c.shipment_id
-LEFT JOIN delivery_exceptions e ON c.tracking_id = e.tracking_id;
+-- Find customers needing immediate attention
+SELECT customer_id, email, churn_risk, renewal_date
+FROM customer_360
+WHERE churn_risk = 'high'
+  AND renewal_date < NOW() + INTERVAL '7 days';
 
--- Index for instant lookups
-CREATE INDEX ON order_status_summary (order_id);
+-- Understand a specific customer's complete context
+SELECT * FROM customer_360 WHERE customer_id = 12345;
 
--- Make it discoverable to AI agents
-COMMENT ON VIEW order_status_summary IS 'Look up the status, shipment, and delivery info for a given order.';
-COMMENT ON COLUMN order_status_summary.order_id IS 'The unique id for an order';
+-- Monitor support experience trends
+SELECT support_intensity, COUNT(*), AVG(lifetime_value)
+FROM customer_360
+GROUP BY support_intensity;
 ```
 
-The server automatically exposes this as a typed MCP tool:
+Queries return instantly, always reflect the current state, and maintain consistency across all the underlying data sources. Your agent never sees stale data or inconsistent states between systems.
 
-Your AI agents can now query this live view to get up-to-the-second order information, while your vector store provides the policies for handling delays, returns, and customer communication.
-
-## Example 1: Customer Support Assistant
-
-Your support agent needs both policy knowledge and current context to help customers effectively.
-
-**Vector Store provides the rules:**
-- Return policy: 30 days for electronics, 60 days for furniture
-- Shipping policy: Free shipping on orders over $100
-- Gold members get free expedited shipping
-
-**Materialize provides what's happening now:**
-- Order #12345 was placed 27 days ago (still returnable)
-- Current status: Out for delivery
-- Customer is a Gold member with 3 items in cart totaling $97
-
-> User: Can I return my laptop if it arrives damaged? Also, how much more do I need to add for free shipping on my current cart?
->
-> Assistant: Yes, you can return your laptop within 30 days of purchase - you have 3 days left on order #12345 which is currently out for delivery. For your current cart, you need to add $3 more to qualify for free shipping, or as a Gold member, you already get free expedited shipping regardless of order total!
-
-```sql
-CREATE VIEW personalized_delivery_context AS
-WITH live_inventory AS (
-  SELECT p.product_id, i.warehouse, i.quantity_available
-  FROM products p
-  JOIN inventory_events i
-    ON p.product_id = i.product_id
-  WHERE i.event_time +  INTERVAL '5 minutes' >= mz_now() 
-),
-membership_info AS (
-  SELECT c.customer_id, m.tier, c.region
-  FROM customers c
-  JOIN memberships m
-    ON c.customer_id = m.customer_id
-  WHERE m.expires_at > mz_now()
-),
-shipping_rates AS (
-  SELECT region, standard_days, expedited_days, free_expedited_for_tier
-  FROM shipping_policies
-)
-SELECT
-  li.product_id,
-  SUM(li.quantity_available) AS total_available,
-  mi.tier              AS customer_tier,
-  sr.standard_days,
-  sr.expedited_days,
-  (mi.tier = sr.free_expedited_for_tier) AS free_expedited
-FROM live_inventory li
-CROSS JOIN membership_info mi
-JOIN shipping_rates sr
-  ON mi.region = sr.region
-GROUP BY li.product_id, mi.tier, sr.standard_days, sr.expedited_days, sr.free_expedited_for_tier;
-
-CREATE INDEX ON personalized_delivery_context (product_id);
-COMMENT ON personalized_delivery_context IS
-  'Combine live inventory, membership status, and shipping rules for personalized delivery quotes';
-```
-
-## Example 2: Financial Advisory Assistant
-
-Your robo-advisor combines investment strategies with live market conditions.
-
-**Vector Store provides the strategies:**
-- Risk profiles and allocation strategies
-- Tax-loss harvesting rules
-- Rebalancing thresholds and strategies
-- Market analysis patterns and indicators
-
-**Materialize provides what's happening now:**
-- Current portfolio value: $50,000
-- TechCorp position: Up 3% today, 15% of portfolio
-- GreenCo position: Down 6% today, 8% of portfolio
-- Cash position: $5,000 available
-- 2 pending limit orders
-
-> User: Should I rebalance my portfolio given today's market moves?
->
-> Assistant: Based on your moderate risk profile, your portfolio is slightly overweight in TechCorp (15% vs 12% target). With TechCorp up 3% today, this is a good opportunity to take profits. I recommend selling $1,500 of TechCorp to bring it back to target allocation. GreenCo is down 6% but still within your 5-10% allocation range at 8%, so no action needed there unless you want to tax-loss harvest.
-
-```sql
-CREATE VIEW financrag_portfolio_context AS
-WITH live_prices AS (
-  SELECT symbol, price_usd, as_of
-  FROM market_prices
-  WHERE as_of >= NOW() - INTERVAL '1 minute'
-),
-portfolio_stats AS (
-  SELECT p.client_id, p.symbol, p.shares,
-         lp.price_usd * p.shares AS position_value
-  FROM positions p
-  JOIN live_prices lp
-    ON p.symbol = lp.symbol
-),
-portfolio_agg AS (
-  SELECT
-    client_id,
-    SUM(position_value) AS total_value,
-    JSONB_AGG(
-      JSONB_BUILD_OBJECT(
-        'symbol', symbol,
-        'shares', shares,
-        'value', position_value,
-        'price', lp.price_usd
-      )
-    ) AS holdings
-  FROM portfolio_stats
-  GROUP BY client_id
-)
-SELECT client_id, total_value, holdings
-FROM portfolio_agg;
-
-CREATE INDEX ON financrag_portfolio_context (client_id);
-COMMENT ON financrag_portfolio_context IS
-  'Provide live portfolio valuation and per‑position details for RAG';
-```
-
-## Getting Started
-
-1. **Install the server**: `pip install mcp-materialize-agents`
-2. **Configure your connection**: Set `MZ_DSN` environment variable or use `--mz-dsn` flag
-3. **Create indexed views**: Define your canonical business objects in Materialize
-4. **Add comments**: Make views discoverable with descriptive comments
-5. **Connect your AI application**: Use any MCP-compatible client
+---
 
 ## Learn More
 
-- [Materialize Documentation](https://materialize.com/docs)
-- [Model Context Protocol](https://modelcontextprotocol.io/)
-- [MCP Integration Guide](https://modelcontextprotocol.io/integrations)
-```
+* [Materialize Documentation](https://materialize.com/docs)
+* [Model Context Protocol](https://modelcontextprotocol.io/)
+* [MCP Integration Guide](https://modelcontextprotocol.io/integrations)
