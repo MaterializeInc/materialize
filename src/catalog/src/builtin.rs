@@ -4904,14 +4904,19 @@ pub static MZ_CLUSTER_REPLICA_METRICS_HISTORY: LazyLock<BuiltinSource> =
             ("process_id", "The ID of a process within the replica."),
             (
                 "cpu_nano_cores",
-                "Approximate CPU usage in billionths of a vCPU core.",
+                "Approximate CPU usage, in billionths of a vCPU core.",
             ),
-            ("memory_bytes", "Approximate memory usage in bytes."),
-            ("disk_bytes", "Approximate disk usage in bytes."),
+            ("memory_bytes", "Approximate memory usage, in bytes."),
+            ("disk_bytes", "Approximate disk usage, in bytes."),
             (
                 "occurred_at",
                 "Wall-clock timestamp at which the event occurred.",
             ),
+            (
+                "heap_bytes",
+                "Approximate heap (RAM + swap) usage, in bytes.",
+            ),
+            ("heap_limit", "Available heap (RAM + swap) space, in bytes."),
         ]),
         is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
@@ -4957,7 +4962,12 @@ pub static MZ_CLUSTER_REPLICA_METRICS: LazyLock<BuiltinView> = LazyLock::new(|| 
             "Approximate CPU usage, in billionths of a vCPU core.",
         ),
         ("memory_bytes", "Approximate RAM usage, in bytes."),
-        ("disk_bytes", "Approximate disk usage in bytes."),
+        ("disk_bytes", "Approximate disk usage, in bytes."),
+        (
+            "heap_bytes",
+            "Approximate heap (RAM + swap) usage, in bytes.",
+        ),
+        ("heap_limit", "Available heap (RAM + swap) space, in bytes."),
     ]),
     sql: "
 SELECT
@@ -8874,15 +8884,19 @@ pub static MZ_CLUSTER_REPLICA_UTILIZATION: LazyLock<BuiltinView> = LazyLock::new
         ("process_id", "The ID of a process within the replica."),
         (
             "cpu_percent",
-            "Approximate CPU usage in percent of the total allocation.",
+            "Approximate CPU usage, in percent of the total allocation.",
         ),
         (
             "memory_percent",
-            "Approximate RAM usage in percent of the total allocation.",
+            "Approximate RAM usage, in percent of the total allocation.",
         ),
         (
             "disk_percent",
-            "Approximate disk usage in percent of the total allocation.",
+            "Approximate disk usage, in percent of the total allocation.",
+        ),
+        (
+            "heap_percent",
+            "Approximate heap (RAM + swap) usage, in percent of the total allocation.",
         ),
     ]),
     sql: "
@@ -8922,15 +8936,19 @@ pub static MZ_CLUSTER_REPLICA_UTILIZATION_HISTORY: LazyLock<BuiltinView> =
             ("process_id", "The ID of a process within the replica."),
             (
                 "cpu_percent",
-                "Approximate CPU usage in percent of the total allocation.",
+                "Approximate CPU usage, in percent of the total allocation.",
             ),
             (
                 "memory_percent",
-                "Approximate RAM usage in percent of the total allocation.",
+                "Approximate RAM usage, in percent of the total allocation.",
             ),
             (
                 "disk_percent",
-                "Approximate disk usage in percent of the total allocation.",
+                "Approximate disk usage, in percent of the total allocation.",
+            ),
+            (
+                "heap_percent",
+                "Approximate heap (RAM + swap) usage, in percent of the total allocation.",
             ),
             (
                 "occurred_at",

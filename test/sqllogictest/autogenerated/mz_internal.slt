@@ -118,6 +118,8 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 3  cpu_nano_cores  uint8
 4  memory_bytes  uint8
 5  disk_bytes  uint8
+6  heap_bytes  uint8
+7  heap_limit  uint8
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_metrics_history' ORDER BY position
@@ -128,6 +130,8 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 4  memory_bytes  uint8
 5  disk_bytes  uint8
 6  occurred_at  timestamp␠with␠time␠zone
+7  heap_bytes  uint8
+8  heap_limit  uint8
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_statuses' ORDER BY position
@@ -155,6 +159,7 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 3  cpu_percent  double␠precision
 4  memory_percent  double␠precision
 5  disk_percent  double␠precision
+6  heap_percent  double␠precision
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_utilization_history' ORDER BY position
@@ -164,7 +169,8 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 3  cpu_percent  double␠precision
 4  memory_percent  double␠precision
 5  disk_percent  double␠precision
-6  occurred_at  timestamp␠with␠time␠zone
+6  heap_percent  double␠precision
+7  occurred_at  timestamp␠with␠time␠zone
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_history' ORDER BY position
