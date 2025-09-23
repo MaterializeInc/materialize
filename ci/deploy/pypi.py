@@ -23,6 +23,7 @@ from materialize import spawn
 PACKAGE_PATHS: dict[str, Literal["setup.py", "pyproject.toml"]] = {
     "misc/dbt-materialize": "setup.py",
     "misc/mcp-materialize": "pyproject.toml",
+    "misc/mcp-materialize-agents": "pyproject.toml",
 }
 
 
