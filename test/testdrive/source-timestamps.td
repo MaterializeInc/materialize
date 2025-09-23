@@ -18,6 +18,7 @@ $ kafka-create-topic topic=test
 > CREATE SOURCE kafka_src
   IN CLUSTER test
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-test-${testdrive.seed}')
+  FORMAT BYTES
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 DROP PUBLICATION IF EXISTS mz_source
@@ -35,6 +36,7 @@ CREATE PUBLICATION mz_source FOR ALL TABLES
 > CREATE SOURCE pg_src
   IN CLUSTER test
   FROM POSTGRES CONNECTION pg_conn (PUBLICATION 'mz_source')
+  FOR TABLES (t)
 
 $ mysql-connect name=mysql url=mysql://root@mysql password=p@ssw0rd
 
@@ -53,6 +55,7 @@ CREATE TABLE t (x int)
 > CREATE SOURCE mysql_src
   IN CLUSTER test
   FROM MYSQL CONNECTION mysql_conn;
+  FOR TABLES (t)
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET kafka_default_metadata_fetch_interval = '1s'
