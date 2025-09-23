@@ -1042,38 +1042,6 @@ impl<T> Instance<T>
 where
     T: ComputeControllerTimestamp,
 {
-    /////////// todo: IntoIter instead of Vec
-    /// Acquires a `ReadHold` and collection write frontier for each of the identified compute
-    /// collections.
-    fn acquire_read_holds_and_collection_write_frontiers(&self, ids: Vec<GlobalId>) -> Result<Vec<(GlobalId, ReadHold<T>, Antichain<T>)>, CollectionMissing> {
-        let mut result = Vec::new();
-        for id in ids.into_iter() {
-            result.push((id, self.acquire_read_hold(id)?, self.collection_write_frontier(id)?));
-        }
-        Ok(result)
-    }
-
-    /// Acquires a `ReadHold` for the identified compute collection.
-    ///
-    /// This mirrors the logic used by the controller-side `InstanceState::acquire_read_hold`,
-    /// but executes on the instance task itself.
-    fn acquire_read_hold(&self, id: GlobalId) -> Result<ReadHold<T>, CollectionMissing> {
-        ///////// todo: place this fn further down in the file
-        // Similarly to InstanceState::acquire_read_hold and StorageCollections::acquire_read_holds,
-        // we acquire read holds at the earliest possible time rather than returning a copy
-        // of the implied read hold. This is so that dependents can acquire read holds on
-        // compute dependencies at frontiers that are held back by other read holds the caller
-        // has previously taken.
-        let collection = self.collection(id)?;
-        let since = collection.shared.lock_read_capabilities(|caps| {
-            let since = caps.frontier().to_owned();
-            caps.update_iter(since.iter().map(|t| (t.clone(), 1)));
-            since
-        });
-        let hold = ReadHold::new(id, since, Arc::clone(&self.read_hold_tx));
-        Ok(hold)
-    }
-
     fn new(
         build_info: &'static BuildInfo,
         storage: StorageCollections<T>,
@@ -2436,6 +2404,38 @@ where
             let collection = self.expect_collection_mut(id);
             let _ = collection.implied_read_hold.try_downgrade(new_capability);
         }
+    }
+
+    /// Acquires a `ReadHold` and collection write frontier for each of the identified compute
+    /// collections.
+    fn acquire_read_holds_and_collection_write_frontiers(&self, ids: Vec<GlobalId>) -> Result<Vec<(GlobalId, ReadHold<T>, Antichain<T>)>, CollectionMissing> {
+        let mut result = Vec::new();
+        for id in ids.into_iter() {
+            // TODO: This takes locks separately for each id. We should change these methods to be
+            // able to take a collection of ids.
+            result.push((id, self.acquire_read_hold(id)?, self.collection_write_frontier(id)?));
+        }
+        Ok(result)
+    }
+
+    /// Acquires a `ReadHold` for the identified compute collection.
+    ///
+    /// This mirrors the logic used by the controller-side `InstanceState::acquire_read_hold`,
+    /// but executes on the instance task itself.
+    fn acquire_read_hold(&self, id: GlobalId) -> Result<ReadHold<T>, CollectionMissing> {
+        // Similarly to InstanceState::acquire_read_hold and StorageCollections::acquire_read_holds,
+        // we acquire read holds at the earliest possible time rather than returning a copy
+        // of the implied read hold. This is so that dependents can acquire read holds on
+        // compute dependencies at frontiers that are held back by other read holds the caller
+        // has previously taken.
+        let collection = self.collection(id)?;
+        let since = collection.shared.lock_read_capabilities(|caps| {
+            let since = caps.frontier().to_owned();
+            caps.update_iter(since.iter().map(|t| (t.clone(), 1)));
+            since
+        });
+        let hold = ReadHold::new(id, since, Arc::clone(&self.read_hold_tx));
+        Ok(hold)
     }
 
     /// Process pending maintenance work.

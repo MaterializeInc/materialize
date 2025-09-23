@@ -482,7 +482,7 @@ impl SessionClient {
 
         let max_result_size = catalog.system_config().max_result_size();
 
-        let row_set_finishing_seconds = self.session().metrics().row_set_finishing_seconds().clone();
+        let row_set_finishing_seconds = session.metrics().row_set_finishing_seconds().clone();
 
         // Implement the peek, and capture the response.
         let resp = self
