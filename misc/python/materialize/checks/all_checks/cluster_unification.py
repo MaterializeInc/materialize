@@ -30,6 +30,7 @@ class UnifiedCluster(Check):
                 > CREATE SOURCE shared_cluster_storage_first_source
                   IN CLUSTER shared_cluster_storage_first
                   FROM LOAD GENERATOR COUNTER
+                > CREATE TABLE shared_cluster_storage_first_source_tbl FROM SOURCE shared_cluster_storage_first_source;
 
                 > CREATE MATERIALIZED VIEW shared_cluster_compute_first_mv
                   IN CLUSTER shared_cluster_compute_first
@@ -47,6 +48,7 @@ class UnifiedCluster(Check):
                 > CREATE SOURCE shared_cluster_compute_first_source
                   IN CLUSTER shared_cluster_compute_first
                   FROM LOAD GENERATOR COUNTER
+                > CREATE TABLE shared_cluster_compute_first_source_tbl FROM SOURCE shared_cluster_storage_first_source;
 
                 > CREATE MATERIALIZED VIEW shared_cluster_storage_first_mv
                   IN CLUSTER shared_cluster_storage_first
@@ -62,13 +64,13 @@ class UnifiedCluster(Check):
     def validate(self) -> Testdrive:
         return Testdrive(
             """
-            > SELECT COUNT(*) > 0 FROM shared_cluster_storage_first_source;
+            > SELECT COUNT(*) > 0 FROM shared_cluster_storage_first_source_tbl;
             true
 
             > SELECT cnt > 0 FROM shared_cluster_storage_first_mv;
             true
 
-            > SELECT COUNT(*) > 0 FROM shared_cluster_compute_first_source;
+            > SELECT COUNT(*) > 0 FROM shared_cluster_compute_first_source_tbl;
             true
 
             > SELECT cnt > 0 FROM shared_cluster_compute_first_mv;

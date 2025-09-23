@@ -20,6 +20,7 @@ class LoadGeneratorAsOfUpTo(Check):
             dedent(
                 """
             > CREATE SOURCE counter1 FROM LOAD GENERATOR COUNTER (AS OF 100, UP TO 200);
+            > CREATE TABLE counter1_tbl FROM SOURCE counter1;
 
             > CREATE SOURCE auction1 FROM LOAD GENERATOR AUCTION (AS OF 100, UP TO 200);
             > CREATE TABLE accounts FROM SOURCE auction1 (REFERENCE accounts);
@@ -37,9 +38,11 @@ class LoadGeneratorAsOfUpTo(Check):
             for s in [
                 """
             > CREATE SOURCE counter2 FROM LOAD GENERATOR COUNTER (AS OF 1100, UP TO 1200);
+            > CREATE TABLE counter2_tbl FROM SOURCE counter2;
                 """,
                 """
             > CREATE SOURCE counter3 FROM LOAD GENERATOR COUNTER (AS OF 11100, UP TO 11200);
+            > CREATE TABLE counter3_tbl FROM SOURCE counter3;
                 """,
             ]
         ]
@@ -48,11 +51,11 @@ class LoadGeneratorAsOfUpTo(Check):
         return Testdrive(
             dedent(
                 """
-                > SELECT COUNT(*) FROM counter1;
+                > SELECT COUNT(*) FROM counter1_tbl;
                 200
-                > SELECT COUNT(*) FROM counter2;
+                > SELECT COUNT(*) FROM counter2_tbl;
                 1200
-                > SELECT COUNT(*) FROM counter3;
+                > SELECT COUNT(*) FROM counter3_tbl;
                 11200
                 > SELECT COUNT(*) FROM users;
                 4076
