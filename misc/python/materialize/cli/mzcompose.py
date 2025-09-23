@@ -410,7 +410,7 @@ class SqlCommand(Command):
         # if the service isn't running or isn't exposing a port.
         composition.default_port(args.service)
 
-        image = service["image"].split(":")[0]
+        image = service["image"].rsplit(":", 1)[0]
         if image == "materialize/materialized":
             deps = composition.repo.resolve_dependencies(
                 [composition.repo.images["psql"]]

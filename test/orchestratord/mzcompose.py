@@ -52,8 +52,8 @@ SERVICES = [
 LOCAL_TAG = "orchestratord-local"
 
 
-def get_image(image: dict[str, Any], tag: str | None) -> str:
-    return f'{image["image"].split(":")[0]}:{tag or LOCAL_TAG}'
+def get_image(image: str, tag: str | None) -> str:
+    return f'{image.rsplit(":", 1)[0]}:{tag or LOCAL_TAG}'
 
 
 def get_orchestratord_data() -> dict[str, Any]:
@@ -726,12 +726,15 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     "docker",
                     "tag",
                     c.compose["services"][service]["image"],
-                    get_image(c.compose["services"][service], None),
+                    get_image(c.compose["services"][service]["image"], None),
                 ]
             )
         spawn.runv(
             ["kind", "load", "docker-image", "--name", cluster]
-            + [get_image(c.compose["services"][service], None) for service in services]
+            + [
+                get_image(c.compose["services"][service]["image"], None)
+                for service in services
+            ]
         )
 
     definition: dict[str, Any] = {}
@@ -746,8 +749,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         definition["materialize"] = materialize_setup[2]
 
     definition["operator"]["operator"]["image"]["tag"] = get_image(
-        c.compose["services"]["orchestratord"], args.tag
-    ).split(":")[1]
+        c.compose["services"]["orchestratord"]["image"], args.tag
+    ).rsplit(":", 1)[1]
     # TODO: Remove when fixed: error: unexpected argument '--disable-license-key-checks' found
     definition["operator"]["operator"]["args"]["enableLicenseKeyChecks"] = True
     definition["operator"]["clusterd"]["nodeSelector"][
@@ -758,7 +761,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     ] = "materialize-instance"
     definition["secret"]["stringData"]["license_key"] = os.environ["MZ_CI_LICENSE_KEY"]
     definition["materialize"]["spec"]["environmentdImageRef"] = get_image(
-        c.compose["services"]["environmentd"], args.tag
+        c.compose["services"]["environmentd"]["image"], args.tag
     )
 
     rng = random.Random(args.seed)

@@ -161,7 +161,7 @@ class Materialized(Service):
         if not image:
             image_version = MzVersion.parse_cargo()
         elif ":" in image:
-            image_version_str = image.split(":")[1]
+            image_version_str = image.rsplit(":", 1)[1]
             if docker.is_image_tag_of_release_version(image_version_str):
                 image_version = MzVersion.parse_mz(image_version_str)
 
