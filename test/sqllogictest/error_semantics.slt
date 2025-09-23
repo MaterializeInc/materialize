@@ -93,3 +93,9 @@ select coalesce(a, (select a/b from test)) from test;
 
 query error db error: ERROR: Evaluation error: division by zero
 select *, case when a = 5 then (select a/b from test) else 7 end from test;
+
+# Taken from https://github.com/MaterializeInc/sqllogictest/commit/5f37a00f02d569778316a092740731c7cc9f38d6
+query I
+SELECT ALL COUNT ( * ) / - - CAST ( NULL AS INTEGER ) + - 62 / - 0 * - + COUNT ( * ) * - + CAST ( NULL AS INTEGER ) * + - ( - COUNT ( * ) ) / + 49 * + - 71 - 5
+----
+NULL
