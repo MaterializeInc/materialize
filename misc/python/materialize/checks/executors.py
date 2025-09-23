@@ -90,6 +90,11 @@ class MzcomposeExecutorParallel(MzcomposeExecutor):
                     f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
                     f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
                 ],
+                print_prefix=(
+                    f"{caller.filename.split('/')[-1]}:{caller.lineno} "
+                    if caller
+                    else None
+                ),
             )
         except BaseException as e:
             self.exception = e
