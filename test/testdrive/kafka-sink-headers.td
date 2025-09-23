@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-sql-timeout duration=60s
+
 $ set-arg-default single-replica-cluster=quickstart
 
 # Test the HEADER option for Kafka sinks, which allows attaching user-specified

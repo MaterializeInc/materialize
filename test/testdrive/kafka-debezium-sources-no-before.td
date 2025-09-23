@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-sql-timeout duration=60s
+
 $ set-arg-default default-storage-size=scale=1,workers=1
 
 # Verify that we can (and continue to do so) ingest debezium topics that don't

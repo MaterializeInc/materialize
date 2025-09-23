@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-sql-timeout duration=60s
+
 # We will create topics with 100 partitions and we create two sinks that
 # publishes a single record twice, each time with a different Avro schema ID due
 # to changed comments.

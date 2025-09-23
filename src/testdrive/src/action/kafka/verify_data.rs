@@ -166,11 +166,11 @@ pub async fn run_verify_data(
         .context("subscribing to kafka topic")?;
 
     let (mut stream_messages_remaining, stream_timeout) = match partial_search {
-        Some(size) => (size, state.default_timeout),
+        Some(size) => (size, state.timeout),
         None => (expected_messages.len(), Duration::from_secs(15)),
     };
 
-    let timeout = cmp::max(state.default_timeout, stream_timeout);
+    let timeout = cmp::max(state.timeout, stream_timeout);
 
     let message_stream = consumer.stream().timeout(timeout);
     pin!(message_stream);

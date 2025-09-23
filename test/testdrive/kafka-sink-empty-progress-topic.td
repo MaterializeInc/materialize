@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+$ set-sql-timeout duration=60s
+
 # Test creating a sink when the progress topic is empty but has a non-zero low
 # water mark.
 #
