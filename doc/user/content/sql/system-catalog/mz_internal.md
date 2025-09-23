@@ -162,13 +162,15 @@ for all processes of all extant cluster replicas.
 At this time, we do not make any guarantees about the exactness or freshness of these numbers.
 
 <!-- RELATION_SPEC mz_internal.mz_cluster_replica_metrics -->
-| Field               | Type         | Meaning                                                                                                                                                      |
-| ------------------- | ------------ | --------                                                                                                                                                     |
-| `replica_id`        | [`text`]     | The ID of a cluster replica.                                                                                                                                 |
-| `process_id`        | [`uint8`]    | The ID of a process within the replica.                                                                                                         |
-| `cpu_nano_cores`    | [`uint8`]    | Approximate CPU usage, in billionths of a vCPU core.                                                                                                         |
-| `memory_bytes`      | [`uint8`]    | Approximate RAM usage, in bytes.                                                                                                                             |
-| `disk_bytes`        | [`uint8`]    | Approximate disk usage in bytes.                                                                                                                             |
+| Field               | Type         | Meaning
+| ------------------- | ------------ | --------
+| `replica_id`        | [`text`]     | The ID of a cluster replica.
+| `process_id`        | [`uint8`]    | The ID of a process within the replica.
+| `cpu_nano_cores`    | [`uint8`]    | Approximate CPU usage, in billionths of a vCPU core.
+| `memory_bytes`      | [`uint8`]    | Approximate RAM usage, in bytes.
+| `disk_bytes`        | [`uint8`]    | Approximate disk usage, in bytes.
+| `heap_bytes`        | [`uint8`]    | Approximate heap (RAM + swap) usage, in bytes.
+| `heap_limit`        | [`uint8`]    | Available heap (RAM + swap) space, in bytes.
 
 ## `mz_cluster_replica_metrics_history`
 
@@ -183,10 +185,12 @@ At this time, we do not make any guarantees about the exactness or freshness of 
 | ---------------- | --------- | --------
 | `replica_id`     | [`text`]  | The ID of a cluster replica.
 | `process_id`     | [`uint8`] | The ID of a process within the replica.
-| `cpu_nano_cores` | [`uint8`] | Approximate CPU usage in billionths of a vCPU core.
-| `memory_bytes`   | [`uint8`] | Approximate memory usage in bytes.
-| `disk_bytes`     | [`uint8`] | Approximate disk usage in bytes.
+| `cpu_nano_cores` | [`uint8`] | Approximate CPU usage, in billionths of a vCPU core.
+| `memory_bytes`   | [`uint8`] | Approximate memory usage, in bytes.
+| `disk_bytes`     | [`uint8`] | Approximate disk usage, in bytes.
 | `occurred_at`    | [`timestamp with time zone`] | Wall-clock timestamp at which the event occurred.
+| `heap_bytes`     | [`uint8`] | Approximate heap (RAM + swap) usage, in bytes.
+| `heap_limit`     | [`uint8`] | Available heap (RAM + swap) space, in bytes.
 
 ## `mz_cluster_replica_statuses`
 
@@ -225,13 +229,14 @@ for all processes of all extant cluster replicas, as a percentage of the total r
 At this time, we do not make any guarantees about the exactness or freshness of these numbers.
 
 <!-- RELATION_SPEC mz_internal.mz_cluster_replica_utilization -->
-| Field            | Type                 | Meaning                                                                                                                                                                                |
-|------------------|----------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `replica_id`     | [`text`]             | The ID of a cluster replica.                                                                                                                                                           |
-| `process_id`     | [`uint8`]            | The ID of a process within the replica.                                                                                                                                   |
-| `cpu_percent`    | [`double precision`] | Approximate CPU usage in percent of the total allocation.                                                                                                                              |
-| `memory_percent` | [`double precision`] | Approximate RAM usage in percent of the total allocation.                                                                                                                              |
-| `disk_percent`   | [`double precision`] | Approximate disk usage in percent of the total allocation.                                                                                                                             |
+| Field            | Type                 | Meaning
+|------------------|----------------------|---------
+| `replica_id`     | [`text`]             | The ID of a cluster replica.
+| `process_id`     | [`uint8`]            | The ID of a process within the replica.
+| `cpu_percent`    | [`double precision`] | Approximate CPU usage, in percent of the total allocation.
+| `memory_percent` | [`double precision`] | Approximate RAM usage, in percent of the total allocation.
+| `disk_percent`   | [`double precision`] | Approximate disk usage, in percent of the total allocation.
+| `heap_percent`   | [`double precision`] | Approximate heap (RAM + swap) usage, in percent of the total allocation.
 
 ## `mz_cluster_replica_utilization_history`
 
@@ -246,9 +251,10 @@ At this time, we do not make any guarantees about the exactness or freshness of 
 |------------------|----------------------|--------
 | `replica_id`     | [`text`]             | The ID of a cluster replica.
 | `process_id`     | [`uint8`]            | The ID of a process within the replica.
-| `cpu_percent`    | [`double precision`] | Approximate CPU usage in percent of the total allocation.
-| `memory_percent` | [`double precision`] | Approximate RAM usage in percent of the total allocation.
-| `disk_percent`   | [`double precision`] | Approximate disk usage in percent of the total allocation.
+| `cpu_percent`    | [`double precision`] | Approximate CPU usage, in percent of the total allocation.
+| `memory_percent` | [`double precision`] | Approximate RAM usage, in percent of the total allocation.
+| `disk_percent`   | [`double precision`] | Approximate disk usage, in percent of the total allocation.
+| `heap_percent`   | [`double precision`] | Approximate heap (RAM + swap) usage, in percent of the total allocation.
 | `occurred_at`    | [`timestamp with time zone`] | Wall-clock timestamp at which the event occurred.
 
 ## `mz_cluster_replica_history`
