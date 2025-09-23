@@ -521,7 +521,9 @@ impl SessionClient {
         );
 
         let isolation_level = session.vars().transaction_isolation();
-        let (det, read_holds) = self.frontend_determine_timestamp_for(
+
+        let (read_holds, upper) = self.peek_client_mut().acquire_read_holds_and_collection_write_frontiers(id_bundle).await.expect("missing collection");
+        let (det, read_holds) = <Coordinator as TimestampProvider>::determine_timestamp_for_inner(
             session,
             id_bundle,
             when,
@@ -531,7 +533,9 @@ impl SessionClient {
             real_time_recency_ts,
             isolation_level,
             &constraint_based,
-        ).await?;
+            read_holds,
+            upper.clone(),
+        )?;
 
         session.metrics()
             .determine_timestamp()
@@ -549,13 +553,9 @@ impl SessionClient {
             && isolation_level == &IsolationLevel::StrictSerializable
             && real_time_recency_ts.is_none()
         {
-            /////// todo: this shouldn't do a new `acquire_read_holds_and_collection_write_frontiers`
-            // both due to performance, but also correctness: we want the comparison to be based on
-            // the same frontiers.
-
             // Note down the difference between StrictSerializable and Serializable into a metric.
             if let Some(strict) = det.timestamp_context.timestamp() {
-                let (serializable_det, _tmp_read_holds) = self.frontend_determine_timestamp_for(
+                let (serializable_det, _tmp_read_holds) = <Coordinator as TimestampProvider>::determine_timestamp_for_inner(
                     session,
                     id_bundle,
                     when,
@@ -563,10 +563,11 @@ impl SessionClient {
                     timeline_context,
                     oracle_read_ts,
                     real_time_recency_ts,
-                    &IsolationLevel::Serializable,
+                    isolation_level,
                     &constraint_based,
-                ).await?;
-
+                    read_holds.clone(),
+                    upper,
+                )?;
                 if let Some(serializable) = serializable_det.timestamp_context.timestamp() {
                     session.metrics()
                         .timestamp_difference_for_strict_serializable_ms()
