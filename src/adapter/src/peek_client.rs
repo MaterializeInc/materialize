@@ -55,7 +55,6 @@ pub struct PeekClient {
     /// A generator for transient [`GlobalId`]s, shared with Coordinator.
     pub transient_id_gen: Arc<TransientIdGen>,
     pub optimizer_metrics: OptimizerMetrics,
-    ///////// todo: also fetch lazily (some tests in CI are failing, e.g., Testdrive 1 / github-8809.td)   and make this private
     /// Per-timeline oracles from the coordinator. Lazily populated.
     oracles: BTreeMap<Timeline, Arc<dyn TimestampOracle<Timestamp> + Send + Sync>>,
     // TODO: This is initialized only at session startup. We'll be able to properly check
@@ -84,8 +83,6 @@ impl PeekClient {
         }
     }
 
-    /////// todo: can we use or_insert_with? Seems non-trivial because of the error handling.
-    //////////// (and also in get_oracle)
     pub async fn get_compute_instance_client(&mut self, compute_instance: ComputeInstanceId) -> Result<&mut mz_compute_client::controller::instance::Client<Timestamp>, AdapterError> {
         if !self.compute_instances.contains_key(&compute_instance) {
             let client = self

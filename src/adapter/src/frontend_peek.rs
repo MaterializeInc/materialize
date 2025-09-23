@@ -238,12 +238,8 @@ impl SessionClient {
             })
             .transpose()?;
 
-        //////// todo: find better names for these dependency sets
-        // dimensions:
-        // - whether it include indexes
-        // - whether its transitive through views?
         let source_ids = select_plan.source.depends_on();
-        // todo: validate_timeline_context can be expensive in real scenarios (not in simple
+        // TODO: validate_timeline_context can be expensive in real scenarios (not in simple
         // benchmarks), because it traverses transitive dependencies even of indexed views and
         // materialized views (also traversing their MIR plans).
         let mut timeline_context = catalog.validate_timeline_context(source_ids.iter().copied())?;
@@ -376,7 +372,7 @@ impl SessionClient {
         let stats = Box::new(EmptyStatisticsOracle);
         let session_meta = session.meta();
         let now = catalog.config().now.clone();
-        let select_plan = select_plan.clone(); /////// todo: can we avoid cloning?
+        let select_plan = select_plan.clone();
 
         // TODO: if explain_ctx.needs_plan_insights() ...
 
@@ -405,7 +401,7 @@ impl SessionClient {
             },
         )
         .await
-        .expect("///////// todo: handle JoinError")?;
+        .expect("///////// todo: how to handle JoinError? Can only happen if the runtime is shutting down, right?")?;
 
         // # From peek_finish
 
@@ -554,7 +550,7 @@ impl SessionClient {
             && real_time_recency_ts.is_none()
         {
             /////// todo: this shouldn't do a new `acquire_read_holds_and_collection_write_frontiers`
-            // both due to performance, but also correctness: we want to comparison to be based on
+            // both due to performance, but also correctness: we want the comparison to be based on
             // the same frontiers.
 
             // Note down the difference between StrictSerializable and Serializable into a metric.
