@@ -201,7 +201,7 @@ class LicenseKey(Modification):
     def validate(self, mods: dict[type[Modification], Any]) -> None:
         environmentd = get_environmentd_data()
         envs = environmentd["items"][0]["spec"]["containers"][0]["env"]
-        if self.value == "del" or not mods[LicenseKeyCheck]:
+        if self.value == "del" or (mods[LicenseKeyCheck] == False):
             for env in envs:
                 assert (
                     env["name"] != "MZ_LICENSE_KEY"
@@ -230,7 +230,7 @@ class LicenseKeyCheck(Modification):
     @classmethod
     def values(cls) -> list[Any]:
         # TODO: Reenable False when fixed
-        return [True]
+        return [None, True]
 
     # @classmethod
     # def bad_values(cls) -> list[Any]:
@@ -238,19 +238,19 @@ class LicenseKeyCheck(Modification):
 
     @classmethod
     def default(cls) -> Any:
-        # TODO: Revert to False when fixed: error: unexpected argument '--disable-license-key-checks' found
-        return True
+        return None
 
     def modify(self, definition: dict[str, Any]) -> None:
-        definition["operator"]["operator"]["args"]["enableLicenseKeyChecks"] = bool(
-            self.value
-        )
+        if self.value is not None:
+            definition["operator"]["operator"]["args"]["enableLicenseKeyChecks"] = bool(
+                self.value
+            )
 
     def validate(self, mods: dict[type[Modification], Any]) -> None:
         environmentd = get_environmentd_data()
         args = environmentd["items"][0]["spec"]["containers"][0]["args"]
         expected = "--disable-license-key-checks"
-        if self.value:
+        if self.value is None or self.value:
             assert (
                 expected not in args
             ), f"Expected no {expected} in environmentd args, but found it: {args}"

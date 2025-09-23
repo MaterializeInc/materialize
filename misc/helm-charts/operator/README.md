@@ -134,6 +134,7 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.additionalMaterializeCRDColumns` | Additional columns to display when printing the Materialize CRD in table format. | ``nil`` |
 | `operator.affinity` | Affinity to use for the operator pod | ``nil`` |
 | `operator.args.enableInternalStatementLogging` |  | ``true`` |
+| `operator.args.enableLicenseKeyChecks` |  | ``true`` |
 | `operator.args.startupLogFilter` | Log filtering settings for startup logs | ``"INFO,mz_orchestratord=TRACE"`` |
 | `operator.cloudProvider.providers.aws.accountID` | When using AWS, accountID is required | ``""`` |
 | `operator.cloudProvider.providers.aws.enabled` |  | ``false`` |
