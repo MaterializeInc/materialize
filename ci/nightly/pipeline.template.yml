@@ -2179,6 +2179,7 @@ steps:
            - ./ci/plugins/mzcompose:
                composition: race-condition
                args: [--runtime=2800, --scenario=subsequent, --num-objects=100]
+         skip: "database-issues#9690"
 
        - id: race-condition-subsequent-chain
          label: "Race Condition Test (subsequent chain)"
@@ -2202,6 +2203,7 @@ steps:
                composition: race-condition
                # OoM with 100 objects
                args: [--runtime=2800, --scenario=subsequent-chain, --num-objects=50]
+         skip: "database-issues#9690"
 
        - id: race-condition-concurrent
          label: "Race Condition Test (concurrent)"
