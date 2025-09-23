@@ -13,6 +13,7 @@ Uses the frontegg-mock instead of a real frontend backend.
 """
 
 import contextlib
+import datetime
 import json
 import socket
 import ssl
@@ -33,6 +34,7 @@ from psycopg.errors import OperationalError, ProgramLimitExceeded, ProgrammingEr
 from materialize import MZ_ROOT
 from materialize.mzcompose.composition import Composition, Service
 from materialize.mzcompose.services.balancerd import Balancerd
+from materialize.mzcompose.services.dnsmasq import Dnsmasq, DnsmasqEntry
 from materialize.mzcompose.services.frontegg import FronteggMock
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mz import Mz
@@ -73,6 +75,13 @@ USERS = {
     },
 }
 FRONTEGG_URL = "http://frontegg-mock:6880"
+STATIC_IPS = {
+    "dnsmasq": "10.10.128.2",
+    "balancerd": "10.10.128.3",
+    "materialized": "10.10.128.4",
+    "frontegg-mock": "10.10.128.5",
+    "testdrive": "10.10.128.6",
+}
 
 
 def app_password(email: str) -> str:
@@ -81,12 +90,37 @@ def app_password(email: str) -> str:
     return password
 
 
+NETWORKS = {"balancerd": {"ipam": {"config": [{"subnet": "10.10.128.0/27"}]}}}
+
 SERVICES = [
     TestCerts(),
     Testdrive(
         materialize_url=f"postgres://{quote(ADMIN_USER)}:{app_password(ADMIN_USER)}@balancerd:6875?sslmode=require",
         materialize_use_https=True,
         no_reset=True,
+        networks={"balancerd": {"ipv4_address": STATIC_IPS["testdrive"]}},
+    ),
+    Dnsmasq(
+        dns_overrides=[
+            # Docker compose will insert into all service pods an arec for
+            # materialized. But what we need is a cname that points to an arec
+            # with the tenant id in the name and the value should point to the
+            # ip of materailized. We're going to use a new network for this
+            # to ensure that we can get a unique ip space and we're going to
+            # use explicit IPs for dnsmasq to set it it as the dns server for
+            # balancerd.
+            DnsmasqEntry(
+                type="cname",
+                key="materialized",
+                value="environmentd.environment-58cd23ff-a4d7-4bd0-ad85-a6ff29cc86c3-0.svc.cluster.local",
+            ),
+            DnsmasqEntry(
+                type="address",
+                key="environmentd.environment-58cd23ff-a4d7-4bd0-ad85-a6ff29cc86c3-0.svc.cluster.local",
+                value=STATIC_IPS["materialized"],
+            ),
+        ],
+        networks={"balancerd": {"ipv4_address": STATIC_IPS["dnsmasq"]}},
     ),
     Balancerd(
         command=[
@@ -100,8 +134,6 @@ SERVICES = [
             f"--frontegg-api-token-url={FRONTEGG_URL}/identity/resources/auth/v1/api-token",
             f"--frontegg-admin-role={ADMIN_ROLE}",
             "--https-sni-resolver-template=materialized:6876",
-            # This will be turned off until we can resolve perf issues
-            # https://github.com/MaterializeInc/database-issues/issues/9700
             "--pgwire-sni-resolver-template=materialized:6875",
             "--tls-key=/secrets/balancerd.key",
             "--tls-cert=/secrets/balancerd.crt",
@@ -115,6 +147,9 @@ SERVICES = [
         volumes=[
             "secrets:/secrets",
         ],
+        # Points to DNSMasq which has an explicit ip
+        dns=[STATIC_IPS["dnsmasq"]],
+        networks={"balancerd": {"ipv4_address": STATIC_IPS["balancerd"]}},
     ),
     FronteggMock(
         issuer=FRONTEGG_URL,
@@ -125,6 +160,7 @@ SERVICES = [
         volumes=[
             "secrets:/secrets",
         ],
+        networks={"balancerd": {"ipv4_address": STATIC_IPS["frontegg-mock"]}},
     ),
     Mz(app_password=""),
     Materialized(
@@ -147,6 +183,7 @@ SERVICES = [
             "secrets:/secrets",
         ],
         listeners_config_path=f"{MZ_ROOT}/src/materialized/ci/listener_configs/no_auth_https.json",
+        networks={"balancerd": {"ipv4_address": STATIC_IPS["materialized"]}},
     ),
 ]
 
@@ -240,6 +277,7 @@ def workflow_plaintext(c: Composition) -> None:
             volumes_extra=[
                 "secrets:/secrets",
             ],
+            networks={"balancerd": {"ipv4_address": STATIC_IPS["materialized"]}},
         ),
         Balancerd(
             command=[
@@ -262,6 +300,7 @@ def workflow_plaintext(c: Composition) -> None:
             volumes=[
                 "secrets:/secrets",
             ],
+            networks={"balancerd": {"ipv4_address": STATIC_IPS["balancerd"]}},
         ),
     ):
         with c.test_case("plaintext_http"):
@@ -328,7 +367,6 @@ def workflow_ip_forwarding(c: Composition) -> None:
         },
         verify=False,
     )
-    print(f"response {r.text}")
     session_ip = json.loads(r.text)["results"][0]["rows"][0][0]
     assert (
         session_ip != balancer_ip
@@ -622,10 +660,8 @@ def workflow_user(c: Composition) -> None:
                 f"--frontegg-api-token-url={FRONTEGG_URL}/identity/resources/auth/v1/api-token",
                 f"--frontegg-admin-role={ADMIN_ROLE}",
                 "--https-sni-resolver-template=materialized:6876",
-                # Same defaults but we want to remove the pgwire-sni-resolver
-                # In order for SNI to do tenant resoluition we need an extra CNAME rec to be added
-                # which we can't do in docker compose
-                # "--pgwire-sni-resolver-template=materialized:6875",
+                # We want to use the frontegg resolver in this
+                "--pgwire-sni-resolver-template=materialized:6875",
                 "--tls-key=/secrets/balancerd.key",
                 "--tls-cert=/secrets/balancerd.crt",
                 "--internal-tls",
@@ -638,31 +674,32 @@ def workflow_user(c: Composition) -> None:
             volumes=[
                 "secrets:/secrets",
             ],
+            networks={"balancerd": {"ipv4_address": STATIC_IPS["balancerd"]}},
+            dns=[STATIC_IPS["dnsmasq"]],
         ),
     ):
-        c.up("balancerd", "frontegg-mock", "materialized")
+        c.up("balancerd", "dnsmasq", "frontegg-mock", "materialized")
+        # Metrics aren't recorded until the connection has closed
         # Non-admin user.
-        cursor = sql_cursor(c, email=OTHER_USER)
+        with contextlib.closing(sql_cursor(c, email=OTHER_USER)) as cursor:
+            try:
+                cursor.execute("DROP DATABASE materialize CASCADE")
+                raise RuntimeError("execute() expected to fail")
+            except ProgrammingError as e:
+                assert "must be owner of DATABASE materialize" in str(e)
+            except:
+                raise RuntimeError("execute() threw an unexpected exception")
 
-        try:
-            cursor.execute("DROP DATABASE materialize CASCADE")
-            raise RuntimeError("execute() expected to fail")
-        except ProgrammingError as e:
-            assert "must be owner of DATABASE materialize" in str(e)
-        except:
-            raise RuntimeError("execute() threw an unexpected exception")
-
-        cursor.execute("SELECT current_user()")
-        assert OTHER_USER in str(cursor.fetchall())
-        cursor.close()
+            cursor.execute("SELECT current_user()")
+            assert OTHER_USER in str(cursor.fetchall())
+            cursor.close()
 
         assert_metrics(c, 'mz_balancer_tenant_connection_active{source="pgwire"')
         assert_metrics(c, 'mz_balancer_tenant_connection_rx{source="pgwire"')
 
 
 def workflow_many_connections(c: Composition) -> None:
-    c.up("balancerd", "frontegg-mock", "materialized")
-
+    c.up("balancerd", "dnsmasq", "frontegg-mock", "materialized")
     cursors = []
     connections = 1000 - 10  #  Go almost to the limit, but not above
     print(f"Opening {connections} connections.")
@@ -688,29 +725,37 @@ def workflow_many_connections(c: Composition) -> None:
 def workflow_webhook(c: Composition) -> None:
     c.up(
         "balancerd",
+        "dnsmasq",
         "frontegg-mock",
         "materialized",
         Service("testdrive", idle=True),
     )
 
     grant_all_admin_user(c)
-
-    c.testdrive(
-        dedent(
-            """
-        > CREATE SOURCE wh FROM WEBHOOK BODY FORMAT TEXT;
-        $ webhook-append database=materialize schema=public name=wh
-        a
-        > SELECT * FROM wh
-        a
-    """
-        )
+    # This could be done in testdrive, but that doesn't seem to play
+    # well with non default networks.
+    cursor = sql_cursor(c)
+    cursor.execute("DROP SOURCE IF EXISTS wh;")
+    cursor.execute("CREATE SOURCE IF NOT EXISTS wh FROM WEBHOOK BODY FORMAT JSON;")
+    balancer_port = c.port("balancerd", 6876)
+    r = requests.post(
+        f"https://localhost:{balancer_port}/api/webhook/materialize/public/wh",
+        headers={},
+        auth=(OTHER_USER, app_password(OTHER_USER)),
+        json={"k": "v"},
+        verify=False,
     )
+    assert r.status_code == 200
+    time.sleep(1.1)  # wait for webhook consistency I think
+    cursor.execute("SELECT * FROM wh;")
+    rows = cursor.fetchall()
+    assert rows[0][0] == {"k": "v"}
 
 
 def workflow_pgwire_with_sni(c: Composition) -> None:
     c.up(
         "balancerd",
+        "dnsmasq",
         "materialized",
         Service("testdrive", idle=True),
     )
@@ -718,3 +763,17 @@ def workflow_pgwire_with_sni(c: Composition) -> None:
     # This should mean that we need to rely on SNI to do tenant resolution
     cursor = sql_cursor(c)
     cursor.execute("select 1;")
+
+
+def retry(fn: Callable, timeout: int) -> None:
+    end_time = (
+        datetime.datetime.now() + datetime.timedelta(seconds=timeout)
+    ).timestamp()
+    while time.time() < end_time:
+        try:
+            fn()
+            return
+        except:
+            pass
+        time.sleep(1)
+    fn()

@@ -97,13 +97,15 @@ class Materialized(Service):
         default_replication_factor: int = 1,
         listeners_config_path: str = f"{MZ_ROOT}/src/materialized/ci/listener_configs/no_auth.json",
         support_external_clusterd: bool = False,
+        networks: (
+            dict[str, dict[str, list[str]]] | dict[str, dict[str, str]] | None
+        ) = None,
     ) -> None:
         if name is None:
             name = "materialized"
 
         if healthcheck is None:
             healthcheck = ["CMD", "curl", "-f", "localhost:6878/api/readyz"]
-
         depends_graph: dict[str, ServiceDependency] = {
             s: {"condition": "service_started"} for s in depends_on
         }
@@ -337,6 +339,9 @@ class Materialized(Service):
         if use_default_volumes:
             volumes += DEFAULT_MZ_VOLUMES
         volumes += volumes_extra
+
+        if networks:
+            config["networks"] = networks
 
         config.update(
             {

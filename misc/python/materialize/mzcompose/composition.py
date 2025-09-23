@@ -134,6 +134,10 @@ class Composition:
 
         self.compose: dict[str, Any] = {
             "services": {},
+            "networks": {},
+            # "networks": {
+            #     "mzcompose": {"ipam": {"config": [{"subnet": "10.10.0.0/24"}]}}
+            # },
         }
 
         # Add default volumes
@@ -188,6 +192,11 @@ class Composition:
                 if volume_name in self.compose["volumes"]:
                     raise UIError(f"volume {volume_name!r} specified more than once")
                 self.compose["volumes"][volume_name] = volume_def
+
+            for network_name, network_def in getattr(module, "NETWORKS", {}).items():
+                if network_name in self.compose["networks"]:
+                    raise UIError(f"network {network_name!r} specified more than once")
+                self.compose["networks"][network_name] = network_def
 
         # The CLI driver will handle acquiring these dependencies.
         if munge_services:

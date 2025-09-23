@@ -135,7 +135,7 @@ class ServiceConfig(TypedDict, total=False):
     volumes: list[str]
     """Volumes to attach to the service."""
 
-    networks: dict[str, dict[str, list[str]]]
+    networks: dict[str, dict[str, list[str]]] | dict[str, dict[str, str]] | list[str]
     """Additional networks to join.
 
     TODO(benesch): this should use a nested TypedDict.
@@ -177,6 +177,9 @@ class ServiceConfig(TypedDict, total=False):
 
     user: str | None
     """The user for the container."""
+
+    dns: list[str] | None
+    """The DNS servers to use for the container."""
 
 
 class Service:
