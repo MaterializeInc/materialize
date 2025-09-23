@@ -259,6 +259,11 @@ where
 
     /// Returns ingestion exports running on this instance. This includes the
     /// ingestion itself, if any, and running source tables (aka. subsources).
+    ///
+    /// This does _not_ filter out exports whose write frontier is the empty
+    /// frontier, which some might consider not active anymore. But for the
+    /// purposes of the instance controller, these are still considered active
+    /// because we don't know about frontiers.
     pub fn active_ingestion_exports(&self) -> impl Iterator<Item = &GlobalId> {
         let ingestion_exports = self.ingestion_exports.keys();
         self.active_ingestions.keys().chain(ingestion_exports)
