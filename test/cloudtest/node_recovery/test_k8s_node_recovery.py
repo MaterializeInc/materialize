@@ -203,7 +203,9 @@ def get_current_counter_index(mz: MaterializeApplication) -> int:
     """
     This query has no timeout. Only use it if is expected to deliver.
     """
-    reached_value: int = mz.environmentd.sql_query("SELECT COUNT(*) FROM source_tbl")[0][0]
+    reached_value: int = mz.environmentd.sql_query("SELECT COUNT(*) FROM source_tbl")[
+        0
+    ][0]
     return reached_value
 
 
