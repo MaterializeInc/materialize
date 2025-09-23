@@ -680,6 +680,18 @@ where
                     Box::new(std::iter::empty())
                 }
             }
+        } else if let Some(ingestion) = self.active_ingestions.get(id) {
+            Box::new(
+                self.replicas
+                    .iter_mut()
+                    .filter_map(move |(replica_id, replica)| {
+                        if ingestion.active_replicas.contains(replica_id) {
+                            Some(replica)
+                        } else {
+                            None
+                        }
+                    }),
+            )
         } else if let Some(export) = self.active_exports.get(id) {
             Box::new(
                 self.replicas
