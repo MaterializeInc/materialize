@@ -27,10 +27,27 @@ class Config:
     pool_min_size: int
     pool_max_size: int
     log_level: str
+    command: str | None = None
+    output_format: str = "table"
 
 
 def load_config() -> Config:
     parser = argparse.ArgumentParser(description="Run Materialize MCP server")
+
+    # Add subparsers for commands
+    subparsers = parser.add_subparsers(dest="command", help="Available commands")
+
+    # List command
+    list_parser = subparsers.add_parser("list", help="List available data products")
+    list_parser.add_argument(
+        "-o",
+        "--output",
+        choices=["table", "json"],
+        default="table",
+        help="Output format (default: table)",
+    )
+
+    # Common arguments for all commands
     parser.add_argument(
         "--transport",
         choices=["stdio", "http"],
@@ -89,4 +106,6 @@ def load_config() -> Config:
         pool_min_size=args.pool_min_size,
         pool_max_size=args.pool_max_size,
         log_level=args.log_level,
+        command=args.command,
+        output_format=getattr(args, "output", "table"),
     )
