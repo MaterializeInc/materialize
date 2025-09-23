@@ -294,6 +294,7 @@ class Composition:
         silent: bool = False,
         environment: dict[str, str] | None = None,
         build: str | None = None,
+        print_prefix: str | None = None,
     ) -> subprocess.CompletedProcess:
         """Invoke `docker compose` on the rendered composition.
 
@@ -307,6 +308,8 @@ class Composition:
                 stderr of the `docker compose` invocation.
             stdin: A string or IO handle to use as the process's stdin stream
         """
+
+        assert not print_prefix or capture_and_print
 
         if not self.silent and not silent:
             print(
@@ -390,10 +393,36 @@ class Composition:
                             # Keep running as long as stdout or stderr have any content
                             running = True
                             if key.fileobj is p.stdout:
-                                print(output, end="", flush=True)
+                                if print_prefix:
+                                    for line in output.splitlines(keepends=True):
+                                        print(
+                                            f"{print_prefix}{line}",
+                                            end="",
+                                            flush=True,
+                                        )
+                                else:
+                                    print(
+                                        output,
+                                        end="",
+                                        flush=True,
+                                    )
                                 stdout_result += output
                             else:
-                                print(output, end="", file=sys.stderr, flush=True)
+                                if print_prefix:
+                                    for line in output.splitlines(keepends=True):
+                                        print(
+                                            f"{print_prefix}{line}",
+                                            end="",
+                                            file=sys.stderr,
+                                            flush=True,
+                                        )
+                                else:
+                                    print(
+                                        output,
+                                        end="",
+                                        file=sys.stderr,
+                                        flush=True,
+                                    )
                                 stderr_result += output
                     p.wait()
                     retcode = p.poll()
@@ -888,6 +917,7 @@ class Composition:
         workdir: str | None = None,
         env_extra: dict[str, str] = {},
         silent: bool = False,
+        print_prefix: str | None = None,
     ) -> subprocess.CompletedProcess:
         """Execute a one-off command in a service's running container
 
@@ -920,6 +950,7 @@ class Composition:
             stdin=stdin,
             check=check,
             silent=silent,
+            print_prefix=print_prefix,
         )
 
     def pull_if_variable(self, services: list[str], max_tries: int = 2) -> None:
@@ -1417,6 +1448,7 @@ class Composition:
         mz_service: str | None = None,
         quiet: bool = False,
         silent: bool = False,
+        print_prefix: str | None = None,
     ) -> subprocess.CompletedProcess:
         """Run a string as a testdrive script.
 
@@ -1450,6 +1482,7 @@ class Composition:
             capture=quiet,
             capture_stderr=quiet,
             silent=silent,
+            print_prefix=print_prefix,
         )
 
     def enable_minio_versioning(self) -> None:
