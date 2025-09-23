@@ -1122,21 +1122,18 @@ def run(definition: dict[str, Any], expect_fail: bool):
 
     for i in range(120):
         try:
-            pod_names = (
-                spawn.capture(
-                    [
-                        "kubectl",
-                        "get",
-                        "pods",
-                        "-n",
-                        "materialize",
-                        "-o",
-                        "name",
-                    ],
-                    stderr=subprocess.DEVNULL,
-                )
-                .strip()
-                .split("\n")
+            spawn.capture(
+                [
+                    "kubectl",
+                    "get",
+                    "crd",
+                    "materializes.materialize.cloud",
+                    "-n",
+                    "materialize",
+                    "-o",
+                    "name",
+                ],
+                stderr=subprocess.DEVNULL,
             )
             for pod_name in pod_names:
                 status = spawn.capture(
