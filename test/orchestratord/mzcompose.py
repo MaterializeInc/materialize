@@ -23,8 +23,9 @@ from collections.abc import Callable
 from typing import Any
 
 import yaml
+from semver.version import Version
 
-from materialize import MZ_ROOT, spawn
+from materialize import MZ_ROOT, ci_util, git, spawn
 from materialize.mzcompose.composition import (
     Composition,
     Service,
@@ -46,14 +47,13 @@ SERVICES = [
 ]
 
 
-# We can't use the real mzbuild tag because it has a different fingerprint for
-# environmentd/clusterd/balancerd and the orchestratord depends on them being
-# identical.
-LOCAL_TAG = "orchestratord-local"
-
-
 def get_image(image: str, tag: str | None) -> str:
-    return f'{image.rsplit(":", 1)[0]}:{tag or LOCAL_TAG}'
+    # We can't use the mzbuild tag because it has a different fingerprint for
+    # environmentd/clusterd/balancerd and the orchestratord depends on them
+    # being identical.
+    tag = tag or f"v{ci_util.get_mz_version()}--pr.g{git.rev_parse('HEAD')}"
+
+    return f'{image.rsplit(":", 1)[0]}:{tag}'
 
 
 def get_orchestratord_data() -> dict[str, Any]:
@@ -700,6 +700,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     print(f"--- Random seed is {args.seed}")
 
+    kind_version = Version.parse(spawn.capture(["kind", "version"]).split(" ")[1][1:])
+    assert kind_version >= Version.parse(
+        "0.29.0"
+    ), f"kind >= v0.29.0 required, while you are on {kind_version}"
+
     cluster = "kind"
     clusters = spawn.capture(["kind", "get", "clusters"]).strip().split("\n")
     if cluster not in clusters or args.recreate_cluster:
@@ -707,6 +712,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     if not args.tag:
         # Start up services and potentially compile them first so that we have all images locally
+        c.down(destroy_volumes=True)
         c.up(
             Service("testdrive", idle=True),
             Service("orchestratord", idle=True),
@@ -961,6 +967,21 @@ def run(definition: dict[str, Any]):
                     break
             else:
                 break
+            spawn.capture(
+                [
+                    "kubectl",
+                    "get",
+                    "crd",
+                    "materializes.materialize.cloud",
+                    "-n",
+                    "materialize",
+                    "-o",
+                    "name",
+                ],
+                stderr=subprocess.DEVNULL,
+            )
+            break
+
         except subprocess.CalledProcessError:
             pass
         time.sleep(1)
