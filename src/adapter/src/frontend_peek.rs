@@ -482,6 +482,8 @@ impl SessionClient {
 
         let max_result_size = catalog.system_config().max_result_size();
 
+        let row_set_finishing_seconds = self.session().metrics().row_set_finishing_seconds().clone();
+
         // Implement the peek, and capture the response.
         let resp = self
             .peek_client_mut()
@@ -494,6 +496,7 @@ impl SessionClient {
                 typ,
                 max_result_size,
                 max_query_result_size,
+                row_set_finishing_seconds,
             )
             .await?;
 
@@ -587,24 +590,5 @@ impl SessionClient {
         }
 
         Ok((det, read_holds))
-    }
-
-    async fn frontend_determine_timestamp_for(&mut self, session: &Session, id_bundle: &CollectionIdBundle, when: &QueryWhen, compute_instance: ComputeInstanceId, timeline_context: &TimelineContext, oracle_read_ts: Option<Timestamp>, real_time_recency_ts: Option<Timestamp>, isolation_level: &IsolationLevel, constraint_based: &ConstraintBasedTimestampSelection) -> Result<(TimestampDetermination<Timestamp>, ReadHolds<Timestamp>), AdapterError> {
-
-        let (read_holds, upper) = self.peek_client_mut().acquire_read_holds_and_collection_write_frontiers(id_bundle).await.expect("missing collection");
-
-        <Coordinator as TimestampProvider>::determine_timestamp_for_inner(
-            session,
-            id_bundle,
-            when,
-            compute_instance,
-            timeline_context,
-            oracle_read_ts,
-            real_time_recency_ts,
-            isolation_level,
-            constraint_based,
-            read_holds,
-            upper,
-        )
     }
 }

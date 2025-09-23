@@ -15,6 +15,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use differential_dataflow::consolidation::consolidate;
+use prometheus::Histogram;
 use mz_compute_client::controller::error::CollectionMissing;
 use mz_compute_client::protocol::command::PeekTarget;
 use mz_compute_client::protocol::response::PeekResponse;
@@ -185,7 +186,7 @@ impl PeekClient {
     ///
     /// Note: self is taken &mut because of the lazy fetching in `get_compute_instance_client`.
     ///
-    /// ////////// todo: add statement logging, pending_peeks/client_pending_peeks wiring, and metrics.row_set_finishing_seconds.
+    /// ////////// todo: add statement logging, pending_peeks/client_pending_peeks wiring
     pub async fn implement_fast_path_peek_plan(
         &mut self,
         fast_path: FastPathPlan,
@@ -196,6 +197,7 @@ impl PeekClient {
         intermediate_result_type: mz_repr::SqlRelationType,
         max_result_size: u64,
         max_returned_query_size: Option<u64>,
+        row_set_finishing_seconds: Histogram,
     ) -> Result<crate::ExecuteResponse, crate::AdapterError> {
         //////// todo: don't we need other things from PlannedPeek?
 
@@ -230,20 +232,11 @@ impl PeekClient {
                     }
                 }
                 let row_collection = RowCollection::new(results, &finishing.order_by);
-                // /////////// todo: wire up metrics.row_set_finishing_seconds
-                let histogram = prometheus::Histogram::with_opts(
-                    prometheus::HistogramOpts::new(
-                        "new_fast_path_peek_finish",
-                        "temporary histogram for fast path finishing",
-                    )
-                    .buckets(vec![0.001, 0.01, 0.1, 1.0, 10.0]),
-                )
-                .unwrap();
                 match finishing.finish(
                     row_collection,
                     max_result_size,
                     max_returned_query_size,
-                    &histogram,
+                    &row_set_finishing_seconds,
                 ) {
                     ////////// todo: put send_immediate_rows somewhere where we can call it from here
                     Ok((rows, _bytes)) => Ok(crate::ExecuteResponse::SendingRowsImmediate {
@@ -285,16 +278,6 @@ impl PeekClient {
                     )
                     .await;
 
-                //////// todo: this is a dummy histogram; need to wire up metrics
-                let duration_histogram = prometheus::Histogram::with_opts(
-                    prometheus::HistogramOpts::new(
-                        "new_fast_path_peek_finish",
-                        "temporary histogram for fast path finishing",
-                    )
-                    .buckets(vec![0.001, 0.01, 0.1, 1.0, 10.0]),
-                )
-                .unwrap();
-
                 let peek_response_stream = async_stream::stream!({
                     match rows_rx.await {
                         Ok(PeekResponse::Rows(rows)) => {
@@ -302,7 +285,7 @@ impl PeekClient {
                                 rows,
                                 max_result_size,
                                 max_returned_query_size,
-                                &duration_histogram,
+                                &row_set_finishing_seconds,
                             ) {
                                 Ok((rows, _size_bytes)) => {
                                     yield crate::coord::peek::PeekResponseUnary::Rows(Box::new(
