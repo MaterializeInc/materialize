@@ -169,6 +169,8 @@ pub static REPLICA_METRICS_HISTORY_DESC: LazyLock<RelationDesc> = LazyLock::new(
             "occurred_at",
             SqlScalarType::TimestampTz { precision: None }.nullable(false),
         )
+        .with_column("heap_bytes", SqlScalarType::UInt64.nullable(true))
+        .with_column("heap_limit", SqlScalarType::UInt64.nullable(true))
         .finish()
 });
 

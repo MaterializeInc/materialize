@@ -4945,6 +4945,8 @@ pub static MZ_CLUSTER_REPLICA_METRICS: LazyLock<BuiltinView> = LazyLock::new(|| 
         .with_column("cpu_nano_cores", SqlScalarType::UInt64.nullable(true))
         .with_column("memory_bytes", SqlScalarType::UInt64.nullable(true))
         .with_column("disk_bytes", SqlScalarType::UInt64.nullable(true))
+        .with_column("heap_bytes", SqlScalarType::UInt64.nullable(true))
+        .with_column("heap_limit", SqlScalarType::UInt64.nullable(true))
         .with_key(vec![0, 1])
         .finish(),
     column_comments: BTreeMap::from_iter([
@@ -4964,7 +4966,9 @@ SELECT
     process_id,
     cpu_nano_cores,
     memory_bytes,
-    disk_bytes
+    disk_bytes,
+    heap_bytes,
+    heap_limit
 FROM mz_internal.mz_cluster_replica_metrics_history
 JOIN mz_cluster_replicas r ON r.id = replica_id
 ORDER BY replica_id, process_id, occurred_at DESC",
@@ -8863,6 +8867,7 @@ pub static MZ_CLUSTER_REPLICA_UTILIZATION: LazyLock<BuiltinView> = LazyLock::new
         .with_column("cpu_percent", SqlScalarType::Float64.nullable(true))
         .with_column("memory_percent", SqlScalarType::Float64.nullable(true))
         .with_column("disk_percent", SqlScalarType::Float64.nullable(true))
+        .with_column("heap_percent", SqlScalarType::Float64.nullable(true))
         .finish(),
     column_comments: BTreeMap::from_iter([
         ("replica_id", "The ID of a cluster replica."),
@@ -8886,7 +8891,8 @@ SELECT
     m.process_id,
     m.cpu_nano_cores::float8 / NULLIF(s.cpu_nano_cores, 0) * 100 AS cpu_percent,
     m.memory_bytes::float8 / NULLIF(s.memory_bytes, 0) * 100 AS memory_percent,
-    m.disk_bytes::float8 / NULLIF(s.disk_bytes, 0) * 100 AS disk_percent
+    m.disk_bytes::float8 / NULLIF(s.disk_bytes, 0) * 100 AS disk_percent,
+    m.heap_bytes::float8 / NULLIF(m.heap_limit, 0) * 100 AS heap_percent
 FROM
     mz_catalog.mz_cluster_replicas AS r
         JOIN mz_catalog.mz_cluster_replica_sizes AS s ON r.size = s.size
@@ -8905,6 +8911,7 @@ pub static MZ_CLUSTER_REPLICA_UTILIZATION_HISTORY: LazyLock<BuiltinView> =
             .with_column("cpu_percent", SqlScalarType::Float64.nullable(true))
             .with_column("memory_percent", SqlScalarType::Float64.nullable(true))
             .with_column("disk_percent", SqlScalarType::Float64.nullable(true))
+            .with_column("heap_percent", SqlScalarType::Float64.nullable(true))
             .with_column(
                 "occurred_at",
                 SqlScalarType::TimestampTz { precision: None }.nullable(false),
@@ -8937,6 +8944,7 @@ SELECT
     m.cpu_nano_cores::float8 / NULLIF(s.cpu_nano_cores, 0) * 100 AS cpu_percent,
     m.memory_bytes::float8 / NULLIF(s.memory_bytes, 0) * 100 AS memory_percent,
     m.disk_bytes::float8 / NULLIF(s.disk_bytes, 0) * 100 AS disk_percent,
+    m.heap_bytes::float8 / NULLIF(m.heap_limit, 0) * 100 AS heap_percent,
     m.occurred_at
 FROM
     mz_catalog.mz_cluster_replicas AS r
