@@ -80,12 +80,14 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
    kind create cluster
    ```
 
-1. Add labels `materialize.cloud/disk=true` and `workload=materialize-instance`
-   to the `kind` node (in this example, the `kind-control-plane` node).
+1. Add labels `materialize.cloud/disk=true`, `materialize.cloud/swap=true` and
+   `workload=materialize-instance` to the `kind` node (in this example, the
+   `kind-control-plane` node).
 
    ```shell
    MYNODE=$(kubectl get nodes --no-headers | awk '{print $1}')
    kubectl label node  $MYNODE materialize.cloud/disk=true
+   kubectl label node  $MYNODE materialize.cloud/swap=true
    kubectl label node  $MYNODE workload=materialize-instance
    ```
 
