@@ -11,7 +11,7 @@ apiVersion: v2
 name: materialize-operator-weekly
 description: Materialize Kubernetes Operator Helm Chart (weekly version upgrades)
 type: application
-version: v0.158.0
-appVersion: v0.158.0
+version: v0.158.1
+appVersion: v0.158.1
 icon: https://materialize.com/favicon.ico
 home: https://materialize.com
