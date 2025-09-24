@@ -142,6 +142,9 @@ spec:
         - '--environmentd-toleration={{ toJson $toleration }}'
         {{- end }}
         {{- end }}
+        {{- if .Values.environmentd.defaultResources }}
+        - '--environmentd-default-resources={{ toJson .Values.environmentd.defaultResources }}'
+        {{- end }}
         {{- if .Values.clusterd.nodeSelector }}
         {{- range $key, $value := .Values.clusterd.nodeSelector }}
         - "--clusterd-node-selector={{ $key }}={{ $value }}"
@@ -168,6 +171,9 @@ spec:
         - '--balancerd-toleration={{ toJson $toleration }}'
         {{- end }}
         {{- end }}
+        {{- if .Values.balancerd.defaultResources }}
+        - '--balancerd-default-resources={{ toJson .Values.balancerd.defaultResources }}'
+        {{- end }}
         {{- if .Values.console.nodeSelector }}
         {{- range $key, $value := .Values.console.nodeSelector }}
         - "--console-node-selector={{ $key }}={{ $value }}"
@@ -180,6 +186,9 @@ spec:
         {{- range $toleration := .Values.console.tolerations }}
         - '--console-toleration={{ toJson $toleration }}'
         {{- end }}
+        {{- end }}
+        {{- if .Values.console.defaultResources }}
+        - '--console-default-resources={{ toJson .Values.console.defaultResources }}'
         {{- end }}
         {{- if .Values.storage.storageClass.name }}
         - "--ephemeral-volume-class={{ .Values.storage.storageClass.name }}"

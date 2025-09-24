@@ -213,6 +213,15 @@ environmentd:
   affinity:
   # -- Tolerations to use for environmentd pods spawned by the operator
   tolerations:
+  # -- Default resources if not set in the Materialize CR
+  defaultResources:
+    limits:
+      memory: "4Gi"
+    requests:
+      cpu: "1"
+      # Setting the memory request to slightly less than limit
+      # allows the pod to use swap if enabled at the kubelet.
+      memory: "4095Mi"
 
 clusterd:
   # -- Node selector to use for all clusterd pods spawned by the operator
@@ -239,6 +248,13 @@ balancerd:
   affinity:
   # -- Tolerations to use for balancerd pods spawned by the operator
   tolerations:
+  # -- Default resources if not set in the Materialize CR
+  defaultResources:
+    limits:
+      memory: "256Mi"
+    requests:
+      cpu: "500m"
+      memory: "256Mi"
 
 console:
   # -- Flag to indicate whether to create console pods for the environments
@@ -251,6 +267,13 @@ console:
   affinity:
   # -- Tolerations to use for console pods spawned by the operator
   tolerations:
+  # -- Default resources if not set in the Materialize CR
+  defaultResources:
+    limits:
+      memory: "256Mi"
+    requests:
+      cpu: "500m"
+      memory: "256Mi"
 
 # RBAC (Role-Based Access Control) settings
 rbac:

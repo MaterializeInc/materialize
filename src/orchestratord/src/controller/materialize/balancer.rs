@@ -313,7 +313,11 @@ fn create_balancerd_deployment_object(
         startup_probe: Some(startup_probe),
         readiness_probe: Some(readiness_probe),
         liveness_probe: Some(liveness_probe),
-        resources: mz.spec.balancerd_resource_requirements.clone(),
+        resources: mz
+            .spec
+            .balancerd_resource_requirements
+            .clone()
+            .or_else(|| config.balancerd_default_resources.clone()),
         security_context: security_context.clone(),
         volume_mounts: Some(volume_mounts),
         ..Default::default()
