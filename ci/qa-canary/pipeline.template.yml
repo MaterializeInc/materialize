@@ -54,6 +54,9 @@ steps:
             - --benchmarking-env
             - --scenario=StagingBench
             - --sqlite-store
+    # Note that the environment is shared with the Cluster Spec Sheet, so if we
+    # want to enable both at once, we need to create a new staging environment
+    # for one of them
     skip: "Hasn't been useful"
 
   - id: terraform-aws-persistent-test

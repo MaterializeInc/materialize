@@ -38,10 +38,10 @@ from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mz import Mz
 from materialize.ui import UIError
 
-REGION = os.getenv("REGION", "aws/us-west-2")
-ENVIRONMENT = os.getenv("ENVIRONMENT", "production")
-USERNAME = os.getenv("NIGHTLY_MZ_USERNAME", "infra+bot@materialize.com")
-APP_PASSWORD = os.getenv("MZ_CLI_APP_PASSWORD")
+REGION = os.getenv("REGION", "aws/us-east-1")
+ENVIRONMENT = os.getenv("ENVIRONMENT", "staging")
+USERNAME = os.getenv("NIGHTLY_MZ_USERNAME", "qabenchmarking")
+APP_PASSWORD = os.getenv("QA_BENCHMARKING_APP_PASSWORD")
 
 SERVICES = [
     Mz(
