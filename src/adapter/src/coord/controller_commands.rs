@@ -1390,7 +1390,7 @@ impl ControllerCommand {
                     self.absorb_view(view, Some(parsed_full_name), catalog_update.diff);
                 }
                 CatalogItem::ContinualTask(ct) => {
-                    self.absorb_continual_task(ct, None, catalog_update.diff);
+                    self.absorb_continual_task(ct, Some(parsed_full_name), catalog_update.diff);
                 }
                 CatalogItem::Secret(secret) => {
                     self.absorb_secret(secret, None, catalog_update.diff);
