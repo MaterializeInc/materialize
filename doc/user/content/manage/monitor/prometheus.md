@@ -34,7 +34,7 @@ This guide assumes you have administrative access to your Kubernetes cluster and
 ## 2. Install Prometheus to your Kubernetes cluster
 
   {{< note >}}
-  In this guide, we use the [prometheus-community](https://github.com/prometheus-community/helm-charts) Helm chart to install Prometheus.
+  This guide uses the [prometheus-community](https://github.com/prometheus-community/helm-charts) Helm chart to install Prometheus.
   {{< /note >}}
 
 
@@ -71,7 +71,9 @@ This guide assumes you have administrative access to your Kubernetes cluster and
 
 3. Open the Grafana UI on [http://localhost:3000](http://localhost:3000) in a browser.
 
-4. In the Grafana UI, add a Prometheus data source. In the Connection section, set the Prometheus server URL to `http://<prometheus server name>.<namespace>.svc.cluster.local:<port>`(e.g. `http://prometheus-server.prometheus.svc.cluster.local:80`).
+4. Add a Prometheus data source. In the Grafana UI, under **Connection > Data sources**,
+   - Click **Add data source** and select **prometheus**
+   - In the Connection section, set **Prometheus server URL** to `http://<prometheus server name>.<namespace>.svc.cluster.local:<port>`(e.g. `http://prometheus-server.prometheus.svc.cluster.local:80`).
 
     ![Image of Materialize Console login screen with mz_system user](/images/grafana-prometheus-datasource-setup.png)
 
