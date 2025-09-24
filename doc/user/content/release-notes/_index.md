@@ -19,7 +19,7 @@ This version may cause unintended password resets when using password authentica
 {{</ warning>}}
 
 ### Enable multi-replica source clusters
-Clusters with sources can now have multiple sources by default.
+Clusters with sources can now have multiple replicas by default.
 
 ### Bug fixes
 - Fix bug where role modifications can wipe out role password.
