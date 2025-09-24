@@ -13,10 +13,12 @@
 //!
 //! See [parse_state_update] for details.
 
-use mz_catalog::memory::objects::{DataSourceDesc, StateDiff, StateUpdate, StateUpdateKind};
+use mz_catalog::memory::objects::{
+    CatalogItem, DataSourceDesc, StateDiff, StateUpdate, StateUpdateKind,
+};
 use mz_catalog::{durable, memory};
 use mz_ore::instrument;
-use mz_repr::Timestamp;
+use mz_repr::{CatalogItemId, Timestamp};
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::sources::GenericSourceConnection;
 
@@ -103,25 +105,8 @@ fn parse_item_update(
     catalog: &CatalogState,
     durable_item: durable::objects::Item,
 ) -> ParsedStateUpdateKind {
-    let entry = catalog.get_entry(&durable_item.id);
-
-    let parsed_item = entry.item().clone();
-    let parsed_full_name = catalog
-        .resolve_full_name(entry.name(), entry.conn_id())
-        .to_string();
-
-    let connection = match &parsed_item {
-        memory::objects::CatalogItem::Source(source) => {
-            if let DataSourceDesc::Ingestion { desc, .. }
-            | DataSourceDesc::OldSyntaxIngestion { desc, .. } = &source.data_source
-            {
-                Some(desc.connection.clone().into_inline_connection(catalog))
-            } else {
-                None
-            }
-        }
-        _ => None,
-    };
+    let (parsed_item, connection, parsed_full_name) =
+        parse_item_update_common(catalog, &durable_item.id);
 
     ParsedStateUpdateKind::Item {
         durable_item,
@@ -135,7 +120,23 @@ fn parse_temporary_item_update(
     catalog: &CatalogState,
     durable_item: memory::objects::TemporaryItem,
 ) -> ParsedStateUpdateKind {
-    let entry = catalog.get_entry(&durable_item.id);
+    let (parsed_item, connection, parsed_full_name) =
+        parse_item_update_common(catalog, &durable_item.id);
+
+    ParsedStateUpdateKind::TemporaryItem {
+        durable_item,
+        parsed_item,
+        connection,
+        parsed_full_name,
+    }
+}
+
+// Shared between temporary items and durable items.
+fn parse_item_update_common(
+    catalog: &CatalogState,
+    item_id: &CatalogItemId,
+) -> (CatalogItem, Option<GenericSourceConnection>, String) {
+    let entry = catalog.get_entry(item_id);
 
     let parsed_item = entry.item().clone();
     let parsed_full_name = catalog
@@ -155,12 +156,7 @@ fn parse_temporary_item_update(
         _ => None,
     };
 
-    ParsedStateUpdateKind::TemporaryItem {
-        durable_item,
-        parsed_item,
-        connection,
-        parsed_full_name,
-    }
+    (parsed_item, connection, parsed_full_name)
 }
 
 fn parse_cluster_update(
