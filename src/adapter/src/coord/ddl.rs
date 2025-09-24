@@ -108,10 +108,6 @@ impl Coordinator {
         // thing to do is panic and let restart/bootstrap handle it.
         controller_state_updates_res.expect("cannot fail to apply controller commands");
 
-        // WIP: Do we want to do this check here? We can't do it inside
-        // catalog_transact_inner anymore because we only apply the controller
-        // commands out here.
-
         // Note: It's important that we keep the function call inside macro, this way we only run
         // the consistency checks if soft assertions are enabled.
         mz_ore::soft_assert_eq_no_log!(
@@ -169,10 +165,6 @@ impl Coordinator {
         // thing to do is panic and let restart/bootstrap handle it.
         controller_apply_res.expect("cannot fail to apply controller commands");
 
-        // WIP: Do we want to do this check here? We can't do it inside
-        // catalog_transact_inner anymore because we only apply the controller
-        // commands out here.
-
         // Note: It's important that we keep the function call inside macro, this way we only run
         // the consistency checks if soft assertions are enabled.
         mz_ore::soft_assert_eq_no_log!(
@@ -209,10 +201,6 @@ impl Coordinator {
         // then failed to apply commands/updates to the controller. Easiest
         // thing to do is panic and let restart/bootstrap handle it.
         controller_apply_res.expect("cannot fail to apply controller commands");
-
-        // WIP: Do we want to do this check here? We can't do it inside
-        // catalog_transact_inner anymore because we only apply the side effects
-        // out here.
 
         // Note: It's important that we keep the function call inside macro, this way we only run
         // the consistency checks if soft assertions are enabled.
