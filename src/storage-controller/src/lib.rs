@@ -502,27 +502,7 @@ where
         &self,
         instance_id: StorageInstanceId,
     ) -> Box<dyn Iterator<Item = &GlobalId> + '_> {
-        let active_storage_collections: BTreeMap<_, _> = self
-            .storage_collections
-            .active_collection_frontiers()
-            .into_iter()
-            .map(|c| (c.id, c))
-            .collect();
-
-        let active_exports = self.instances[&instance_id]
-            .active_ingestion_exports()
-            .filter(move |id| {
-                let frontiers = active_storage_collections.get(id);
-                match frontiers {
-                    Some(frontiers) => !frontiers.write_frontier.is_empty(),
-                    None => {
-                        // Not "active", so we don't care here.
-                        false
-                    }
-                }
-            });
-
-        Box::new(active_exports)
+        Box::new(self.instances[&instance_id].active_ingestion_exports())
     }
 
     fn check_exists(&self, id: GlobalId) -> Result<(), StorageError<Self::Timestamp>> {
