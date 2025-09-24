@@ -506,7 +506,7 @@ impl Catalog {
         // We come up with new catalog state, builtin state updates, and parsed
         // catalog updates (for the controller commands) in two phases:
         //
-        // 1. We clone catalog state as `preliminary_state` and apply ops
+        // 1. We (cow)-clone catalog state as `preliminary_state` and apply ops
         //    one-by-one. This will give us the full list of updates to apply to
         //    the catalog, which will allow us to apply it in one batch, which
         //    in turn will allow the apply machinery to consolidate the updates.
