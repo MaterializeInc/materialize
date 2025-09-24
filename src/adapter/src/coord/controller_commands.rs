@@ -36,7 +36,7 @@ use mz_adapter_types::compaction::CompactionWindow;
 use mz_catalog::builtin;
 use mz_catalog::memory::objects::{
     CatalogItem, Cluster, ClusterReplica, Connection, ContinualTask, DataSourceDesc, Index,
-    MaterializedView, Secret, Sink, Source, StateDiff, Table, TableDataSource, View,
+    MaterializedView, Secret, Sink, Source, StateDiff, Table, TableDataSource,
 };
 use mz_compute_client::protocol::response::PeekResponse;
 use mz_controller_types::{ClusterId, ReplicaId};
@@ -317,19 +317,6 @@ impl Coordinator {
                     materialized_views_to_drop.push((mv.cluster_id, mv.global_id()));
                     dropped_item_names.insert(mv.global_id(), full_name);
                 }
-                ControllerCommand::View(ControllerCommandKind::Added(view)) => {
-                    tracing::debug!(?view, "not handling AddView in here yet");
-                }
-                ControllerCommand::View(ControllerCommandKind::Altered {
-                    prev: prev_view,
-                    new: new_view,
-                }) => {
-                    tracing::debug!(?prev_view, ?new_view, "not handling AlterView in here yet");
-                }
-                ControllerCommand::View(ControllerCommandKind::Dropped(view, full_name)) => {
-                    view_gids_to_drop.push(view.global_id());
-                    dropped_item_names.insert(view.global_id(), full_name);
-                }
                 ControllerCommand::ContinualTask(ControllerCommandKind::Added(ct)) => {
                     tracing::debug!(?ct, "not handling AddContinualTask in here yet");
                 }
@@ -406,7 +393,6 @@ impl Coordinator {
                 | ControllerCommand::Sink(ControllerCommandKind::None)
                 | ControllerCommand::Index(ControllerCommandKind::None)
                 | ControllerCommand::MaterializedView(ControllerCommandKind::None)
-                | ControllerCommand::View(ControllerCommandKind::None)
                 | ControllerCommand::ContinualTask(ControllerCommandKind::None)
                 | ControllerCommand::Secret(ControllerCommandKind::None)
                 | ControllerCommand::Connection(ControllerCommandKind::None) => {
@@ -1243,7 +1229,6 @@ enum ControllerCommand {
     Sink(ControllerCommandKind<Sink>),
     Index(ControllerCommandKind<Index>),
     MaterializedView(ControllerCommandKind<MaterializedView>),
-    View(ControllerCommandKind<View>),
     ContinualTask(ControllerCommandKind<ContinualTask>),
     Secret(ControllerCommandKind<Secret>),
     Connection(ControllerCommandKind<Connection>),
@@ -1406,13 +1391,9 @@ impl ControllerCommand {
                         catalog_update.diff,
                     );
                 }
-                CatalogItem::View(view) => {
-                    self.absorb_view(
-                        view,
-                        Some(parsed_full_name),
-                        catalog_update.ts,
-                        catalog_update.diff,
-                    );
+                CatalogItem::View(_) => {
+                    // Nothing to do for view changes. They're purely a catalog
+                    // concept.
                 }
                 CatalogItem::ContinualTask(ct) => {
                     self.absorb_continual_task(ct, None, catalog_update.ts, catalog_update.diff);
@@ -1476,13 +1457,9 @@ impl ControllerCommand {
                         catalog_update.diff,
                     );
                 }
-                CatalogItem::View(view) => {
-                    self.absorb_view(
-                        view,
-                        Some(parsed_full_name),
-                        catalog_update.ts,
-                        catalog_update.diff,
-                    );
+                CatalogItem::View(_) => {
+                    // Nothing to do for view changes. They're purely a catalog
+                    // concept.
                 }
                 CatalogItem::ContinualTask(ct) => {
                     self.absorb_continual_task(ct, None, catalog_update.ts, catalog_update.diff);
@@ -1530,7 +1507,6 @@ impl ControllerCommand {
     impl_absorb_method!(absorb_sink, Sink, Sink);
     impl_absorb_method!(absorb_index, Index, Index);
     impl_absorb_method!(absorb_materialized_view, MaterializedView, MaterializedView);
-    impl_absorb_method!(absorb_view, View, View);
 
     impl_absorb_method!(absorb_continual_task, ContinualTask, ContinualTask);
     impl_absorb_method!(absorb_secret, Secret, Secret);
