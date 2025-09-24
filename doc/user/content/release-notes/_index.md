@@ -7,7 +7,40 @@ menu:
     name: "Release notes"
     identifier: "release-notes"
 ---
+## v25.2.8
+
+### Bug fixes
+- Fix bug where users could not login after upgrading to version v25.2.6 or v25.2.7.
+
+## v25.2.7
+
+{{< warning >}}
+This version may cause unintended password resets when using password authentication. We recommend upgrading to v25.2.8+.
+{{</ warning>}}
+
+### Enable multi-replica source clusters
+Clusters with sources can now have multiple sources by default.
+
+### Bug fixes
+- Fix bug where role modifications can wipe out role password.
+- Fix bug where if two Materialize instances are in the same namespace and have clusters with the same ID, their services could query the wrong one.
+- Fix bug where when restarting a snapshot when adding a table to a source via `ALTER SOURCE`, we wouldn't cancel the existing snapshotting process.
+
+## v25.2.6
+
+{{< warning >}}
+This version may cause unintended password resets when using password authentication. We recommend upgrading to v25.2.8+.
+{{</ warning>}}
+
+### Bug fixes
+- Fix bug where `ROWS FROM` together with `WITH ORDINALITY` gives incorrect results.
+- Fix bug where one could not login as `mz_system` after migrating from v25.1 to v25.2 and enabling password auth.
+
 ## v25.2.5
+
+{{< warning >}}
+This version may cause unintended password resets when using password authentication. We recommend upgrading to v25.2.8+.
+{{</ warning>}}
 
 ### Broader support for service accounts
 
@@ -39,10 +72,14 @@ Cluster and replica names will not propagate into statefulset and pod annoattion
 ## v25.2.4 (DO NOT USE)
 
 {{< warning >}}
-Do not use v25.2.4.  Instead, upgrade to v25.2.5+.
+Do not use v25.2.4.  Instead, upgrade to v25.2.8+.
 {{</ warning>}}
 
 ## v25.2.3
+
+{{< warning >}}
+This version may cause unintended password resets when using password authentication. We recommend upgrading to v25.2.8+.
+{{</ warning>}}
 
 ### TLS Support for SQL Server Source
 
@@ -57,6 +94,10 @@ authentication for the HTTP interface. For more information, see [Integrations
 HTTP API](/integrations/http-api).
 
 ## v25.2.0
+
+{{< warning >}}
+This version may cause unintended password resets when using password authentication. We recommend upgrading to v25.2.8+.
+{{</ warning>}}
 
 ### Support for SQL Server Source
 
