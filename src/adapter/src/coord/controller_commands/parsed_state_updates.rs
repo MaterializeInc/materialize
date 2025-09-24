@@ -81,20 +81,12 @@ pub fn derive_controller_state_update(
     state_update: StateUpdate,
 ) -> Option<ParsedStateUpdate> {
     let kind = match state_update.kind {
-        StateUpdateKind::Item(item) => Some(parse_item_update(catalog, item, state_update.diff)),
-        StateUpdateKind::TemporaryItem(item) => Some(parse_temporary_item_update(
-            catalog,
-            item,
-            state_update.diff,
-        )),
-        StateUpdateKind::Cluster(cluster) => {
-            Some(parse_cluster_update(catalog, cluster, state_update.diff))
+        StateUpdateKind::Item(item) => Some(parse_item_update(catalog, item)),
+        StateUpdateKind::TemporaryItem(item) => Some(parse_temporary_item_update(catalog, item)),
+        StateUpdateKind::Cluster(cluster) => Some(parse_cluster_update(catalog, cluster)),
+        StateUpdateKind::ClusterReplica(replica) => {
+            Some(parse_cluster_replica_update(catalog, replica))
         }
-        StateUpdateKind::ClusterReplica(replica) => Some(parse_cluster_replica_update(
-            catalog,
-            replica,
-            state_update.diff,
-        )),
         _ => {
             // The controllers are currently not interested in other kinds of
             // changes to the catalog.
@@ -112,7 +104,6 @@ pub fn derive_controller_state_update(
 fn parse_item_update(
     catalog: &CatalogState,
     durable_item: durable::objects::Item,
-    _diff: StateDiff,
 ) -> ParsedStateUpdateKind {
     let (parsed_item, connection, parsed_full_name) =
         parse_item_update_common(catalog, &durable_item.id);
@@ -128,7 +119,6 @@ fn parse_item_update(
 fn parse_temporary_item_update(
     catalog: &CatalogState,
     durable_item: memory::objects::TemporaryItem,
-    _diff: StateDiff,
 ) -> ParsedStateUpdateKind {
     let (parsed_item, connection, parsed_full_name) =
         parse_item_update_common(catalog, &durable_item.id);
@@ -172,7 +162,6 @@ fn parse_item_update_common(
 fn parse_cluster_update(
     catalog: &CatalogState,
     durable_cluster: durable::objects::Cluster,
-    _diff: StateDiff,
 ) -> ParsedStateUpdateKind {
     let parsed_cluster = catalog.get_cluster(durable_cluster.id);
 
@@ -185,7 +174,6 @@ fn parse_cluster_update(
 fn parse_cluster_replica_update(
     catalog: &CatalogState,
     durable_cluster_replica: durable::objects::ClusterReplica,
-    _diff: StateDiff,
 ) -> ParsedStateUpdateKind {
     let parsed_cluster_replica = catalog.get_cluster_replica(
         durable_cluster_replica.cluster_id,
