@@ -856,9 +856,10 @@ pub fn plan_explain_analyze(
          SUM(mas.records) AS total_records,
          CASE WHEN COUNT(DISTINCT mas.worker_id) <> 0 THEN SUM(mas.size) / COUNT(DISTINCT mas.worker_id) ELSE NULL END AS avg_memory,
          CASE WHEN COUNT(DISTINCT mas.worker_id) <> 0 THEN SUM(mas.records) / COUNT(DISTINCT mas.worker_id) ELSE NULL END AS avg_records
-    FROM      mz_introspection.mz_lir_mapping mlm
-         JOIN mz_introspection.mz_arrangement_sizes_per_worker mas
-           ON (mlm.operator_id_start <= mas.operator_id AND mas.operator_id < mlm.operator_id_end)
+    FROM            mz_introspection.mz_lir_mapping mlm
+         CROSS JOIN generate_series((mlm.operator_id_start) :: int8, (mlm.operator_id_end - 1) :: int8) AS valid_id
+               JOIN mz_introspection.mz_arrangement_sizes_per_worker mas
+                 ON (mas.operator_id = valid_id)
 GROUP BY mlm.global_id, mlm.lir_id"#,
                         ));
                         from.push("LEFT JOIN summary_memory sm USING (global_id, lir_id)");
@@ -872,9 +873,10 @@ GROUP BY mlm.global_id, mlm.lir_id"#,
          mas.worker_id AS worker_id,
          SUM(mas.size) AS worker_memory,
          SUM(mas.records) AS worker_records
-    FROM      mz_introspection.mz_lir_mapping mlm
-         JOIN mz_introspection.mz_arrangement_sizes_per_worker mas
-           ON (mlm.operator_id_start <= mas.operator_id AND mas.operator_id < mlm.operator_id_end)
+    FROM            mz_introspection.mz_lir_mapping mlm
+         CROSS JOIN generate_series((mlm.operator_id_start) :: int8, (mlm.operator_id_end - 1) :: int8) AS valid_id
+               JOIN mz_introspection.mz_arrangement_sizes_per_worker mas
+                 ON (mas.operator_id = valid_id)
 GROUP BY mlm.global_id, mlm.lir_id, mas.worker_id"#,
                             ));
                             from.push("LEFT JOIN per_worker_memory pwm USING (global_id, lir_id)");
@@ -912,9 +914,10 @@ GROUP BY mlm.global_id, mlm.lir_id, mas.worker_id"#,
          mlm.lir_id AS lir_id,
          SUM(mse.elapsed_ns) AS total_ns,
          CASE WHEN COUNT(DISTINCT mse.worker_id) <> 0 THEN SUM(mse.elapsed_ns) / COUNT(DISTINCT mse.worker_id) ELSE NULL END AS avg_ns
-    FROM      mz_introspection.mz_lir_mapping mlm
-         JOIN mz_introspection.mz_scheduling_elapsed_per_worker mse
-           ON (mlm.operator_id_start <= mse.id AND mse.id < mlm.operator_id_end)
+    FROM            mz_introspection.mz_lir_mapping mlm
+         CROSS JOIN generate_series((mlm.operator_id_start) :: int8, (mlm.operator_id_end - 1) :: int8) AS valid_id
+               JOIN mz_introspection.mz_scheduling_elapsed_per_worker mse
+                 ON (mse.id = valid_id)
 GROUP BY mlm.global_id, mlm.lir_id"#,
                         ));
                         from.push("LEFT JOIN summary_cpu sc USING (global_id, lir_id)");
@@ -927,9 +930,10 @@ GROUP BY mlm.global_id, mlm.lir_id"#,
          mlm.lir_id AS lir_id,
          mse.worker_id AS worker_id,
          SUM(mse.elapsed_ns) AS worker_ns
-    FROM      mz_introspection.mz_lir_mapping mlm
-         JOIN mz_introspection.mz_scheduling_elapsed_per_worker mse
-           ON (mlm.operator_id_start <= mse.id AND mse.id < mlm.operator_id_end)
+    FROM            mz_introspection.mz_lir_mapping mlm
+         CROSS JOIN generate_series((mlm.operator_id_start) :: int8, (mlm.operator_id_end - 1) :: int8) AS valid_id
+               JOIN mz_introspection.mz_scheduling_elapsed_per_worker mse
+                 ON (mse.id = valid_id)
 GROUP BY mlm.global_id, mlm.lir_id, mse.worker_id"#,
                             ));
                             from.push("LEFT JOIN per_worker_cpu pwc USING (global_id, lir_id)");
@@ -960,10 +964,11 @@ GROUP BY mlm.global_id, mlm.lir_id, mse.worker_id"#,
                 "megsa.levels AS levels",
                 "megsa.to_cut AS to_cut",
                 "megsa.hint AS hint",
-                "pg_size_pretty(savings) AS savings",
+                "pg_size_pretty(megsa.savings) AS savings",
             ]);
             from.extend(["JOIN mz_introspection.mz_dataflow_global_ids mdgi ON (mlm.global_id = mdgi.global_id)",
-            "LEFT JOIN mz_introspection.mz_expected_group_size_advice megsa ON (megsa.dataflow_id = mdgi.id AND mlm.operator_id_start <= megsa.region_id AND megsa.region_id < mlm.operator_id_end)"]);
+            "LEFT JOIN (generate_series((mlm.operator_id_start) :: int8, (mlm.operator_id_end - 1) :: int8) AS valid_id JOIN \
+             mz_introspection.mz_expected_group_size_advice megsa ON (megsa.region_id = valid_id)) ON (megsa.dataflow_id = mdgi.id)"]);
         }
     }
 

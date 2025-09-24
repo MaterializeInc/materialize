@@ -313,35 +313,6 @@ EXPLAIN ANALYZE HINTS FOR INDEX wins_by_item AS SQL;
 ```
 
 The results show the SQL that `EXPLAIN ANALYZE` would run to get the TopK hints
-for the `wins_by_items` index:
-
-```none
-SELECT
-    repeat(' ', nesting * 2) || operator AS operator,
-    megsa.levels AS levels,
-    megsa.to_cut AS to_cut,
-    megsa.hint AS hint,
-    pg_size_pretty(savings) AS savings
-FROM
-    mz_introspection.mz_lir_mapping AS mlm
-        JOIN
-            mz_introspection.mz_dataflow_global_ids AS mdgi
-            ON (mlm.global_id = mdgi.global_id)
-        LEFT JOIN
-            mz_introspection.mz_expected_group_size_advice AS megsa
-            ON
-                (
-                    megsa.dataflow_id = mdgi.id
-                        AND
-                    mlm.operator_id_start <= megsa.region_id
-                        AND
-                    megsa.region_id < mlm.operator_id_end
-                )
-        JOIN
-            mz_introspection.mz_mappable_objects AS mo
-            ON (mlm.global_id = mo.global_id)
-WHERE mo.name = 'materialize.public.wins_by_item'
-ORDER BY mlm.lir_id DESC;
-```
+for the `wins_by_items` index.
 
 [TopK hints]: /transform-data/idiomatic-materialize-sql/top-k/#query-hints-1
