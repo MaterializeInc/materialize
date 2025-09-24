@@ -1324,7 +1324,6 @@ macro_rules! impl_absorb_method {
             &mut self,
             item: $item_type,
             parsed_full_name: Option<String>,
-            _ts: Timestamp,
             diff: StateDiff,
         ) {
             let state = match self {
@@ -1368,65 +1367,36 @@ impl ControllerCommand {
                 connection,
                 parsed_full_name,
             } => match parsed_item {
-                CatalogItem::Table(table) => self.absorb_table(
-                    table,
-                    Some(parsed_full_name),
-                    catalog_update.ts,
-                    catalog_update.diff,
-                ),
+                CatalogItem::Table(table) => {
+                    self.absorb_table(table, Some(parsed_full_name), catalog_update.diff)
+                }
                 CatalogItem::Source(source) => {
                     self.absorb_source(
                         (source, connection),
                         Some(parsed_full_name),
-                        catalog_update.ts,
                         catalog_update.diff,
                     );
                 }
                 CatalogItem::Sink(sink) => {
-                    self.absorb_sink(
-                        sink,
-                        Some(parsed_full_name),
-                        catalog_update.ts,
-                        catalog_update.diff,
-                    );
+                    self.absorb_sink(sink, Some(parsed_full_name), catalog_update.diff);
                 }
                 CatalogItem::Index(index) => {
-                    self.absorb_index(
-                        index,
-                        Some(parsed_full_name),
-                        catalog_update.ts,
-                        catalog_update.diff,
-                    );
+                    self.absorb_index(index, Some(parsed_full_name), catalog_update.diff);
                 }
                 CatalogItem::MaterializedView(mv) => {
-                    self.absorb_materialized_view(
-                        mv,
-                        Some(parsed_full_name),
-                        catalog_update.ts,
-                        catalog_update.diff,
-                    );
+                    self.absorb_materialized_view(mv, Some(parsed_full_name), catalog_update.diff);
                 }
                 CatalogItem::View(view) => {
-                    self.absorb_view(
-                        view,
-                        Some(parsed_full_name),
-                        catalog_update.ts,
-                        catalog_update.diff,
-                    );
+                    self.absorb_view(view, Some(parsed_full_name), catalog_update.diff);
                 }
                 CatalogItem::ContinualTask(ct) => {
-                    self.absorb_continual_task(ct, None, catalog_update.ts, catalog_update.diff);
+                    self.absorb_continual_task(ct, None, catalog_update.diff);
                 }
                 CatalogItem::Secret(secret) => {
-                    self.absorb_secret(secret, None, catalog_update.ts, catalog_update.diff);
+                    self.absorb_secret(secret, None, catalog_update.diff);
                 }
                 CatalogItem::Connection(connection) => {
-                    self.absorb_connection(
-                        connection,
-                        None,
-                        catalog_update.ts,
-                        catalog_update.diff,
-                    );
+                    self.absorb_connection(connection, None, catalog_update.diff);
                 }
                 CatalogItem::Log(_) => {}
                 CatalogItem::Type(_) => {}
@@ -1438,65 +1408,36 @@ impl ControllerCommand {
                 connection,
                 parsed_full_name,
             } => match parsed_item {
-                CatalogItem::Table(table) => self.absorb_table(
-                    table,
-                    Some(parsed_full_name),
-                    catalog_update.ts,
-                    catalog_update.diff,
-                ),
+                CatalogItem::Table(table) => {
+                    self.absorb_table(table, Some(parsed_full_name), catalog_update.diff)
+                }
                 CatalogItem::Source(source) => {
                     self.absorb_source(
                         (source, connection),
                         Some(parsed_full_name),
-                        catalog_update.ts,
                         catalog_update.diff,
                     );
                 }
                 CatalogItem::Sink(sink) => {
-                    self.absorb_sink(
-                        sink,
-                        Some(parsed_full_name),
-                        catalog_update.ts,
-                        catalog_update.diff,
-                    );
+                    self.absorb_sink(sink, Some(parsed_full_name), catalog_update.diff);
                 }
                 CatalogItem::Index(index) => {
-                    self.absorb_index(
-                        index,
-                        Some(parsed_full_name),
-                        catalog_update.ts,
-                        catalog_update.diff,
-                    );
+                    self.absorb_index(index, Some(parsed_full_name), catalog_update.diff);
                 }
                 CatalogItem::MaterializedView(mv) => {
-                    self.absorb_materialized_view(
-                        mv,
-                        Some(parsed_full_name),
-                        catalog_update.ts,
-                        catalog_update.diff,
-                    );
+                    self.absorb_materialized_view(mv, Some(parsed_full_name), catalog_update.diff);
                 }
                 CatalogItem::View(view) => {
-                    self.absorb_view(
-                        view,
-                        Some(parsed_full_name),
-                        catalog_update.ts,
-                        catalog_update.diff,
-                    );
+                    self.absorb_view(view, Some(parsed_full_name), catalog_update.diff);
                 }
                 CatalogItem::ContinualTask(ct) => {
-                    self.absorb_continual_task(ct, None, catalog_update.ts, catalog_update.diff);
+                    self.absorb_continual_task(ct, None, catalog_update.diff);
                 }
                 CatalogItem::Secret(secret) => {
-                    self.absorb_secret(secret, None, catalog_update.ts, catalog_update.diff);
+                    self.absorb_secret(secret, None, catalog_update.diff);
                 }
                 CatalogItem::Connection(connection) => {
-                    self.absorb_connection(
-                        connection,
-                        None,
-                        catalog_update.ts,
-                        catalog_update.diff,
-                    );
+                    self.absorb_connection(connection, None, catalog_update.diff);
                 }
                 CatalogItem::Log(_) => {}
                 CatalogItem::Type(_) => {}
@@ -1696,7 +1637,6 @@ mod tests {
         cmd.absorb_table(
             table1.clone(),
             Some("schema.table1".to_string()),
-            Timestamp::MIN,
             StateDiff::Addition,
         );
         // Check that we have an Added state
@@ -1716,7 +1656,6 @@ mod tests {
         cmd.absorb_table(
             table2.clone(),
             Some("schema.table2".to_string()),
-            Timestamp::MIN,
             StateDiff::Retraction,
         );
         match &cmd {
@@ -1736,7 +1675,6 @@ mod tests {
         cmd.absorb_table(
             table1.clone(),
             Some("schema.table1".to_string()),
-            Timestamp::MIN,
             StateDiff::Retraction,
         );
         match &cmd {
@@ -1754,7 +1692,6 @@ mod tests {
         cmd.absorb_table(
             table2.clone(),
             Some("schema.table2".to_string()),
-            Timestamp::MIN,
             StateDiff::Addition,
         );
         match &cmd {
@@ -1780,7 +1717,6 @@ mod tests {
         cmd.absorb_table(
             table.clone(),
             Some("schema.table".to_string()),
-            Timestamp::MIN,
             StateDiff::Addition,
         );
 
@@ -1788,7 +1724,6 @@ mod tests {
         cmd.absorb_table(
             table.clone(),
             Some("schema.table".to_string()),
-            Timestamp::MIN,
             StateDiff::Addition,
         );
     }
@@ -1803,7 +1738,6 @@ mod tests {
         cmd.absorb_table(
             table.clone(),
             Some("schema.table".to_string()),
-            Timestamp::MIN,
             StateDiff::Retraction,
         );
 
@@ -1811,7 +1745,6 @@ mod tests {
         cmd.absorb_table(
             table.clone(),
             Some("schema.table".to_string()),
-            Timestamp::MIN,
             StateDiff::Retraction,
         );
     }
