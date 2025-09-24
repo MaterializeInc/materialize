@@ -159,6 +159,20 @@ struct Args {
     /// The hostname is taken from `materialize_internal_url`.
     #[clap(long, default_value = "6878", value_name = "PORT")]
     materialize_internal_http_port: u16,
+    /// materialize password-protected SQL connection string.
+    #[clap(
+        long,
+        value_name = "PASSWORD_URL",
+        action = ArgAction::Set,
+    )]
+    materialize_password_sql_url: Option<tokio_postgres::Config>,
+    /// materialize SASL-protected SQL connection string.
+    #[clap(
+        long,
+        value_name = "SASL_URL",
+        action = ArgAction::Set,
+    )]
+    materialize_sasl_sql_url: Option<tokio_postgres::Config>,
     /// Arbitrary session parameters for testdrive to set after connecting to
     /// Materialize.
     #[clap(long, value_name = "KEY=VAL", value_parser = parse_kafka_opt)]
@@ -414,6 +428,8 @@ async fn main() {
         materialize_internal_pgconfig: args.materialize_internal_url,
         materialize_http_port: args.materialize_http_port,
         materialize_internal_http_port: args.materialize_internal_http_port,
+        materialize_password_sql_url: args.materialize_password_sql_url,
+        materialize_sasl_sql_url: args.materialize_sasl_sql_url,
         materialize_use_https: args.materialize_use_https,
         materialize_params: args.materialize_param,
         materialize_catalog_config,
