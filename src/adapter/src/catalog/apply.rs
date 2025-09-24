@@ -273,9 +273,9 @@ impl CatalogState {
                         retractions,
                         local_expression_cache,
                     )?;
-                    // We want the builtin table addition to match the state of the catalog
-                    // after applying the update. So that already have useful
-                    // in-memory state to work with.
+                    // We want the builtin table addition to match the state of
+                    // the catalog after applying the update. So that we already
+                    // have useful in-memory state to work with.
                     builtin_table_updates.extend(self.generate_builtin_table_update(
                         state_update.kind.clone(),
                         state_update.diff,
