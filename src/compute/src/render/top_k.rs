@@ -19,6 +19,7 @@ use differential_dataflow::Data;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
+use differential_dataflow::operators::iterate::SemigroupVariable;
 use differential_dataflow::trace::implementations::merge_batcher::container::MergerChunk;
 use differential_dataflow::trace::{Builder, Trace};
 use differential_dataflow::{AsCollection, Collection};
@@ -184,9 +185,8 @@ where
                     // down to `offset = 0` and `limit = offset + limit`, followed by a finishing act
                     // of `offset` and `limit`, discarding only the records not produced in the intermediate
                     // stage.
-                    use differential_dataflow::operators::iterate::Variable;
                     let delay = std::time::Duration::from_secs(10);
-                    let retractions = Variable::new(
+                    let retractions = SemigroupVariable::new(
                         &mut ok_input.scope(),
                         <G::Timestamp as crate::render::RenderTimestamp>::system_delay(
                             delay.try_into().expect("must fit"),

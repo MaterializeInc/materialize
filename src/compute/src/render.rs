@@ -113,6 +113,7 @@ use std::task::Poll;
 use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, ShutdownButton};
+use differential_dataflow::operators::iterate::SemigroupVariable;
 use differential_dataflow::trace::TraceReader;
 use differential_dataflow::{AsCollection, Collection, Data};
 use futures::FutureExt;
@@ -854,18 +855,20 @@ where
             let rec_ids: Vec<_> = recs.iter().map(|r| r.id).collect();
 
             // Define variables for rec bindings.
-            // It is important that we only use the `Variable` until the object is bound.
+            // It is important that we only use the `SemigroupVariable` until the object is bound.
             // At that point, all subsequent uses should have access to the object itself.
             let mut variables = BTreeMap::new();
             for id in rec_ids.iter() {
                 use differential_dataflow::dynamic::feedback_summary;
-                use differential_dataflow::operators::iterate::Variable;
                 let inner = feedback_summary::<u64>(level + 1, 1);
-                let oks_v = Variable::new(
+                let oks_v = SemigroupVariable::new(
                     &mut self.scope,
                     Product::new(Default::default(), inner.clone()),
                 );
-                let err_v = Variable::new(&mut self.scope, Product::new(Default::default(), inner));
+                let err_v = SemigroupVariable::new(
+                    &mut self.scope,
+                    Product::new(Default::default(), inner),
+                );
 
                 self.insert_id(
                     Id::Local(*id),
