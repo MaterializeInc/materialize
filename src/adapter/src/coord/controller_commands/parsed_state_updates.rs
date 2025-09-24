@@ -13,7 +13,7 @@
 //!
 //! See [parse_state_update] for details.
 
-use mz_catalog::memory::objects::{DataSourceDesc, StateDiff, StateUpdateKind};
+use mz_catalog::memory::objects::{DataSourceDesc, StateDiff, StateUpdate, StateUpdateKind};
 use mz_catalog::{durable, memory};
 use mz_ore::instrument;
 use mz_repr::Timestamp;
@@ -76,24 +76,32 @@ pub enum ParsedStateUpdateKind {
 #[instrument(level = "debug")]
 pub fn derive_controller_state_update(
     catalog: &CatalogState,
-    kind: StateUpdateKind,
-    ts: Timestamp,
-    diff: StateDiff,
+    state_update: StateUpdate,
 ) -> Option<ParsedStateUpdate> {
     // WIP: Exhaustive match?
-    let kind = match kind {
-        StateUpdateKind::Item(item) => Some(parse_item_update(catalog, item, diff)),
-        StateUpdateKind::TemporaryItem(item) => {
-            Some(parse_temporary_item_update(catalog, item, diff))
+    let kind = match state_update.kind {
+        StateUpdateKind::Item(item) => Some(parse_item_update(catalog, item, state_update.diff)),
+        StateUpdateKind::TemporaryItem(item) => Some(parse_temporary_item_update(
+            catalog,
+            item,
+            state_update.diff,
+        )),
+        StateUpdateKind::Cluster(cluster) => {
+            Some(parse_cluster_update(catalog, cluster, state_update.diff))
         }
-        StateUpdateKind::Cluster(cluster) => Some(parse_cluster_update(catalog, cluster, diff)),
-        StateUpdateKind::ClusterReplica(replica) => {
-            Some(parse_cluster_replica_update(catalog, replica, diff))
-        }
+        StateUpdateKind::ClusterReplica(replica) => Some(parse_cluster_replica_update(
+            catalog,
+            replica,
+            state_update.diff,
+        )),
         _ => None,
     };
 
-    kind.map(|kind| ParsedStateUpdate { kind, ts, diff })
+    kind.map(|kind| ParsedStateUpdate {
+        kind,
+        ts: state_update.ts,
+        diff: state_update.diff,
+    })
 }
 
 fn parse_item_update(

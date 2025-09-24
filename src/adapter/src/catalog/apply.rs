@@ -235,12 +235,12 @@ impl CatalogState {
         let mut builtin_table_updates = Vec::with_capacity(updates.len());
         let mut controller_state_updates = Vec::new();
 
-        for StateUpdate { kind, ts, diff } in updates {
-            if matches!(kind, StateUpdateKind::SystemConfiguration(_)) {
+        for state_update in updates {
+            if matches!(state_update.kind, StateUpdateKind::SystemConfiguration(_)) {
                 update_system_config = true;
             }
 
-            match diff {
+            match state_update.diff {
                 StateDiff::Retraction => {
                     // We want the parsed controller state updates to match the
                     // state of the catalog _before_ applying a retraction. So
@@ -248,34 +248,44 @@ impl CatalogState {
                     // with.
                     if let Some(update) = parsed_state_updates::derive_controller_state_update(
                         self,
-                        kind.clone(),
-                        ts,
-                        diff,
+                        state_update.clone(),
                     ) {
                         controller_state_updates.push(update);
                     }
 
                     // We want the builtin table retraction to match the state of the catalog
                     // before applying the update.
-                    builtin_table_updates
-                        .extend(self.generate_builtin_table_update(kind.clone(), diff));
-                    self.apply_update(kind, diff, retractions, local_expression_cache)?;
+                    builtin_table_updates.extend(self.generate_builtin_table_update(
+                        state_update.kind.clone(),
+                        state_update.diff,
+                    ));
+                    self.apply_update(
+                        state_update.kind,
+                        state_update.diff,
+                        retractions,
+                        local_expression_cache,
+                    )?;
                 }
                 StateDiff::Addition => {
-                    self.apply_update(kind.clone(), diff, retractions, local_expression_cache)?;
+                    self.apply_update(
+                        state_update.kind.clone(),
+                        state_update.diff,
+                        retractions,
+                        local_expression_cache,
+                    )?;
                     // We want the builtin table addition to match the state of the catalog
                     // after applying the update. So that already have useful
                     // in-memory state to work with.
-                    builtin_table_updates
-                        .extend(self.generate_builtin_table_update(kind.clone(), diff));
+                    builtin_table_updates.extend(self.generate_builtin_table_update(
+                        state_update.kind.clone(),
+                        state_update.diff,
+                    ));
 
                     // We want the parsed controller state updates to match the
                     // state of the catalog _after_ applying an addition.
                     if let Some(update) = parsed_state_updates::derive_controller_state_update(
                         self,
-                        kind.clone(),
-                        ts,
-                        diff,
+                        state_update.clone(),
                     ) {
                         controller_state_updates.push(update);
                     }
