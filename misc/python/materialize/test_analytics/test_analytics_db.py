@@ -25,6 +25,9 @@ from materialize.test_analytics.data.build.build_history_analysis import (
 from materialize.test_analytics.data.build_annotation.build_annotation_storage import (
     BuildAnnotationStorage,
 )
+from materialize.test_analytics.data.cluster_spec_sheet.cluster_spec_sheet_result_storage import (
+    ClusterSpecSheetResultStorage,
+)
 from materialize.test_analytics.data.feature_benchmark.feature_benchmark_result_storage import (
     FeatureBenchmarkResultStorage,
 )
@@ -71,6 +74,9 @@ class TestAnalyticsDb:
             self.database_connector
         )
         self.product_limits_results = ProductLimitsResultStorage(
+            self.database_connector
+        )
+        self.cluster_spec_sheet_results = ClusterSpecSheetResultStorage(
             self.database_connector
         )
 

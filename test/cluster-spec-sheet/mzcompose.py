@@ -36,7 +36,16 @@ from materialize.mzcompose.composition import (
 )
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mz import Mz
+from materialize.test_analytics.config.test_analytics_db_config import (
+    create_test_analytics_config,
+)
+from materialize.test_analytics.data.cluster_spec_sheet import (
+    cluster_spec_sheet_result_storage,
+)
+from materialize.test_analytics.test_analytics_db import TestAnalyticsDb
 from materialize.ui import UIError
+
+CLUSTER_SPEC_SHEET_VERSION = "1.0.0"  # Used for uploading test analytics results
 
 REGION = os.getenv("REGION", "aws/us-east-1")
 ENVIRONMENT = os.getenv("ENVIRONMENT", "production")
@@ -110,6 +119,7 @@ class ScenarioRunner:
     def __init__(
         self,
         scenario: str,
+        scenario_version: str,
         scale: int,
         mode: str,
         connection: ConnectionHandler,
@@ -117,6 +127,7 @@ class ScenarioRunner:
         replica_size: Any,
     ) -> None:
         self.scenario = scenario
+        self.scenario_version = scenario_version
         self.scale = scale
         self.mode = mode
         self.connection = connection
@@ -134,6 +145,7 @@ class ScenarioRunner:
         self.results_writer.writerow(
             {
                 "scenario": self.scenario,
+                "scenario_version": self.scenario_version,
                 "scale": self.scale,
                 "mode": self.mode,
                 "category": category,
@@ -208,6 +220,10 @@ class ScenarioRunner:
 
 
 class Scenario(ABC):
+    # Bump this version in the individual test if it changes in a way that
+    # makes comparing results between versions useless.
+    VERSION: str = "1.0.0"
+
     def __init__(self, scale: int, replica_size: str) -> None:
         self.scale = scale
         self.replica_size = replica_size
@@ -918,6 +934,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         results_file,
         fieldnames=[
             "scenario",
+            "scenario_version",
             "scale",
             "mode",
             "category",
@@ -987,6 +1004,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         # Clean up
         if args.cleanup:
             target.cleanup()
+
+    upload_results_to_test_analytics(c, args.record, not test_failed)
 
     assert not test_failed
 
@@ -1105,6 +1124,7 @@ def run_scenario_strong(
 
     runner = ScenarioRunner(
         scenario.name(),
+        scenario.VERSION,
         scenario.scale,
         "strong",
         connection,
@@ -1173,6 +1193,7 @@ def run_scenario_weak(
         scenario.scale = initial_scale * replica_scale
         runner = ScenarioRunner(
             scenario.name(),
+            scenario.VERSION,
             scenario.scale,
             "weak",
             connection,
@@ -1450,3 +1471,47 @@ def labels_to_drop(
             unique.append(data.columns.names[level])
             dropped[data.columns.names[level]] = labels[0]
     return unique, dropped
+
+
+def upload_results_to_test_analytics(
+    c: Composition,
+    file: str,
+    was_successful: bool,
+) -> None:
+    if not buildkite.is_in_buildkite():
+        return
+
+    test_analytics = TestAnalyticsDb(create_test_analytics_config(c))
+    test_analytics.builds.add_build_job(was_successful=was_successful)
+
+    result_entries = []
+
+    with open(file) as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            result_entries.append(
+                cluster_spec_sheet_result_storage.ClusterSpecSheetResultEntry(
+                    scenario=row["scenario"],
+                    scenario_version=row["scenario_version"],
+                    scale=int(row["scale"]),
+                    mode=row["mode"],
+                    category=row["category"],
+                    test_name=row["test_name"],
+                    cluster_size=row["cluster_size"],
+                    repetition=int(row["repetition"]),
+                    size_bytes=int(row["size_bytes"]),
+                    time_ms=int(row["time_ms"]),
+                )
+            )
+
+    test_analytics.cluster_spec_sheet_results.add_result(
+        framework_version=CLUSTER_SPEC_SHEET_VERSION,
+        results=result_entries,
+    )
+
+    try:
+        test_analytics.submit_updates()
+        print("Uploaded results.")
+    except Exception as e:
+        # An error during an upload must never cause the build to fail
+        test_analytics.on_upload_failed(e)
