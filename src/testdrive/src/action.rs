@@ -131,6 +131,10 @@ pub struct Config {
     /// The port for the internal endpoints of the materialize instance that
     /// testdrive will connect to via HTTP.
     pub materialize_internal_http_port: u16,
+    /// The connection string for the password-protected SQL endpoint.
+    pub materialize_password_sql_url: Option<tokio_postgres::Config>,
+    /// The connection string for the SASL-protected SQL endpoint.
+    pub materialize_sasl_sql_url: Option<tokio_postgres::Config>,
     /// Session parameters to set after connecting to materialize.
     pub materialize_params: Vec<(String, String)>,
     /// An optional catalog configuration.
@@ -191,6 +195,8 @@ pub struct MaterializeState {
     http_addr: String,
     internal_sql_addr: String,
     internal_http_addr: String,
+    password_sql_addr: Option<String>,
+    sasl_sql_addr: Option<String>,
     user: String,
     pgclient: tokio_postgres::Client,
     environment_id: EnvironmentId,
@@ -334,6 +340,19 @@ impl State {
             "testdrive.materialize-user".into(),
             self.materialize.user.clone(),
         );
+        // Add password-protected connection variables if they exist
+        if let Some(ref password_sql_addr) = self.materialize.password_sql_addr {
+            self.cmd_vars.insert(
+                "testdrive.materialize-password-sql-addr".into(),
+                password_sql_addr.clone(),
+            );
+        }
+        if let Some(ref sasl_sql_addr) = self.materialize.sasl_sql_addr {
+            self.cmd_vars.insert(
+                "testdrive.materialize-sasl-sql-addr".into(),
+                sasl_sql_addr.clone(),
+            );
+        }
         self.cmd_vars.insert(
             "testdrive.fivetran-destination-url".into(),
             self.fivetran_destination_url.clone(),
@@ -1130,6 +1149,26 @@ async fn create_materialize_state(
         materialize_internal_url.host_str().unwrap(),
         config.materialize_internal_http_port
     );
+    let materialize_password_sql_addr = if let Some(ref password_config) = config.materialize_password_sql_url {
+        let password_url = util::postgres::config_url(password_config)?;
+        Some(format!(
+            "{}:{}",
+            password_url.host_str().unwrap(),
+            password_url.port().unwrap()
+        ))
+    } else {
+        None
+    };
+    let materialize_sasl_sql_addr = if let Some(ref sasl_config) = config.materialize_sasl_sql_url {
+        let sasl_url = util::postgres::config_url(sasl_config)?;
+        Some(format!(
+            "{}:{}",
+            sasl_url.host_str().unwrap(),
+            sasl_url.port().unwrap()
+        ))
+    } else {
+        None
+    };
     let environment_id = pgclient
         .query_one("SELECT mz_environment_id()", &[])
         .await?
@@ -1151,6 +1190,8 @@ async fn create_materialize_state(
         http_addr: materialize_http_addr,
         internal_sql_addr: materialize_internal_sql_addr,
         internal_http_addr: materialize_internal_http_addr,
+        password_sql_addr: materialize_password_sql_addr,
+        sasl_sql_addr: materialize_sasl_sql_addr,
         user: materialize_user,
         pgclient,
         environment_id,

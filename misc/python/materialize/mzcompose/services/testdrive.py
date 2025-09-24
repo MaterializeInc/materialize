@@ -29,6 +29,8 @@ class Testdrive(Service):
         mzbuild: str = "testdrive",
         materialize_url: str = "postgres://materialize@materialized:6875",
         materialize_url_internal: str = "postgres://materialize@materialized:6877",
+        materialize_password_sql_url: str | None = None,
+        materialize_sasl_sql_url: str | None = None,
         materialize_use_https: bool = False,
         materialize_params: dict[str, str] = {},
         kafka_url: str = "kafka:9092",
@@ -110,6 +112,16 @@ class Testdrive(Service):
             ]
 
         entrypoint.append(f"--backoff-factor={backoff_factor}")
+
+        # Add the password-protected connection parameters
+        if materialize_password_sql_url:
+            entrypoint.append(
+                f"--materialize-password-sql-url={materialize_password_sql_url}"
+            )
+        if materialize_sasl_sql_url:
+            entrypoint.append(
+                f"--materialize-sasl-sql-url={materialize_sasl_sql_url}"
+            )
 
         if aws_region:
             entrypoint.append(f"--aws-region={aws_region}")

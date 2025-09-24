@@ -89,6 +89,7 @@ class StartMz(MzcomposeAction):
             publish=self.publish,
             default_replication_factor=2,
             support_external_clusterd=True,
+            listeners_config_path=f"{MZ_ROOT}/src/materialized/ci/listener_configs/mixed_auth.json",
         )
 
         # Don't fail since we are careful to explicitly kill and collect logs

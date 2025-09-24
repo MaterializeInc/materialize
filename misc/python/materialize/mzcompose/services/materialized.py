@@ -43,7 +43,7 @@ class MaterializeEmulator(Service):
 
         config: ServiceConfig = {
             "mzbuild": name,
-            "ports": [6875, 6876, 6877, 6878, 26257],
+            "ports": [6875, 6876, 6877, 6878, 6885, 6895, 26257],
             "healthcheck": {
                 "test": ["CMD", "curl", "-f", "localhost:6878/api/readyz"],
                 "interval": "1s",
@@ -342,7 +342,7 @@ class Materialized(Service):
             {
                 "depends_on": depends_graph,
                 "command": command,
-                "ports": [6875, 6876, 6877, 6878, 26257],
+                "ports": [6875, 6876, 6877, 6878, 6885, 6895, 26257],
                 "environment": environment,
                 "volumes": volumes,
                 "tmpfs": ["/tmp"],
