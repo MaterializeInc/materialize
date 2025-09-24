@@ -56,8 +56,8 @@ pub enum ParsedStateUpdateKind {
     },
 }
 
-/// Generate a [ParsedStateUpdates](ParsedStateUpdate) that
-/// corresponds to the given change to the catalog.
+/// Potentially generate a [ParsedStateUpdate] that corresponds to the given
+/// change to the catalog.
 ///
 /// This technically doesn't "parse" the given state update but uses the given
 /// in-memory [CatalogState] as a shortcut. It already contains the parsed
@@ -74,7 +74,7 @@ pub enum ParsedStateUpdateKind {
 /// Will return `None` if the given catalog change is not relevant to the
 /// controller(s).
 #[instrument(level = "debug")]
-pub fn parse_state_update(
+pub fn derive_controller_state_update(
     catalog: &CatalogState,
     kind: StateUpdateKind,
     ts: Timestamp,
