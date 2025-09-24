@@ -172,13 +172,13 @@ impl CatalogState {
 
         for (_, updates) in &updates.into_iter().chunk_by(|update| update.ts) {
             let mut retractions = InProgressRetractions::default();
-            let (builtin_table_update, parsed_catalog_updates_op) = self.apply_updates_inner(
+            let (builtin_table_update, controller_state_update) = self.apply_updates_inner(
                 updates.collect(),
                 &mut retractions,
                 &mut LocalExpressionCache::Closed,
             )?;
             builtin_table_updates.extend(builtin_table_update);
-            controller_state_updates.extend(parsed_catalog_updates_op);
+            controller_state_updates.extend(controller_state_update);
         }
 
         Ok((builtin_table_updates, controller_state_updates))
