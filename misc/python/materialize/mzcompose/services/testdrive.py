@@ -119,9 +119,7 @@ class Testdrive(Service):
                 f"--materialize-password-sql-url={materialize_password_sql_url}"
             )
         if materialize_sasl_sql_url:
-            entrypoint.append(
-                f"--materialize-sasl-sql-url={materialize_sasl_sql_url}"
-            )
+            entrypoint.append(f"--materialize-sasl-sql-url={materialize_sasl_sql_url}")
 
         if aws_region:
             entrypoint.append(f"--aws-region={aws_region}")

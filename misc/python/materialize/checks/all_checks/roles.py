@@ -139,6 +139,8 @@ class PasswordAuthentication(Check):
                     # Test connection with correct password
                     $ postgres-connect name=user1_conn url=postgres://auth_user1:password1@${testdrive.materialize-password-sql-addr}
 
+                    $ postgres-connect name=user1_conn_sasl url=postgres://auth_user1:password1@${testdrive.materialize-sasl-sql-addr}
+
                     $ postgres-execute connection=user1_conn
                     CREATE TABLE auth_test_table1 (id INT, data TEXT);
                     INSERT INTO auth_test_table1 VALUES (1, 'test from user1');
@@ -155,11 +157,15 @@ class PasswordAuthentication(Check):
                     # Test connection with user2
                     $ postgres-connect name=user2_conn url=postgres://auth_user2:password2@${testdrive.materialize-password-sql-addr}
 
+                    $ postgres-connect name=user2_conn_sasl url=postgres://auth_user2:password2@${testdrive.materialize-sasl-sql-addr}
+
                     $ postgres-execute connection=user2_conn
                     SELECT * FROM auth_test_table1;
 
                     # Test connection with user3
                     $ postgres-connect name=user3_conn url=postgres://auth_user3:password3@${testdrive.materialize-password-sql-addr}
+
+                    $ postgres-connect name=user3_conn_sasl url=postgres://auth_user3:password3@${testdrive.materialize-sasl-sql-addr}
 
                     $ postgres-execute connection=user3_conn
                     SELECT 1;
@@ -187,6 +193,8 @@ class PasswordAuthentication(Check):
 
                 # Test connection with user2
                 $ postgres-connect name=user2_conn url=postgres://auth_user2:password2@${testdrive.materialize-password-sql-addr}
+
+                $ postgres-connect name=user2_conn_sasl url=postgres://auth_user2:password2@${testdrive.materialize-sasl-sql-addr}
 
                 > SELECT * FROM auth_test_table1 ORDER BY id;
                 1 "test from user1"

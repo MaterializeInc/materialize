@@ -12,6 +12,12 @@
       "allowed_roles": "Normal",
       "enable_tls": false
     },
+    "external_sasl": {
+      "addr": "0.0.0.0:6895",
+      "authenticator_kind": "Sasl",
+      "allowed_roles": "Normal",
+      "enable_tls": false
+    },
     "internal": {
       "addr": "0.0.0.0:6877",
       "authenticator_kind": "None",
