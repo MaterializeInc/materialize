@@ -16,8 +16,6 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::convert;
 use std::sync::Arc;
 
-#[cfg(test)]
-use crate::coord::controller_commands::parsed_state_updates::ParsedStateUpdate;
 use futures::future::BoxFuture;
 use futures::{Future, FutureExt};
 use itertools::Itertools;
@@ -99,6 +97,8 @@ pub use crate::catalog::transact::{
 };
 use crate::command::CatalogDump;
 use crate::coord::TargetCluster;
+#[cfg(test)]
+use crate::coord::controller_commands::parsed_state_updates::ParsedStateUpdate;
 use crate::session::{Portal, PreparedStatement, Session};
 use crate::util::ResultExt;
 use crate::{AdapterError, AdapterNotice, ExecuteResponse};
