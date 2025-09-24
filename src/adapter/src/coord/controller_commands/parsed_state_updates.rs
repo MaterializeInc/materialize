@@ -157,13 +157,7 @@ fn parse_temporary_item_update(
             if let DataSourceDesc::Ingestion { desc, .. }
             | DataSourceDesc::OldSyntaxIngestion { desc, .. } = &source.data_source
             {
-                match &desc.connection {
-                    GenericSourceConnection::Postgres(conn) => {
-                        let inline_conn = conn.clone().into_inline_connection(catalog);
-                        Some(GenericSourceConnection::Postgres(inline_conn))
-                    }
-                    _ => None,
-                }
+                Some(desc.connection.clone().into_inline_connection(catalog))
             } else {
                 None
             }
