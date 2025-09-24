@@ -37,7 +37,6 @@ from materialize.zippy.sql_server_actions import (
     CreateSqlServerTable,
     SqlServerDML,
     SqlServerStart,
-    SqlServerRestart,
 )
 from materialize.zippy.sql_server_cdc_actions import CreateSqlServerCdcTable
 from materialize.zippy.mz_actions import (
@@ -253,7 +252,8 @@ class SqlServerCdc(Scenario):
             KillClusterd: 5,
             StoragedKill: 5,
             StoragedStart: 5,
-            SqlServerRestart: 10,
+            # TODO: Reenable when database-issues#9624 is fixed
+            # SqlServerRestart: 10,
             CreateViewParameterized(): 10,
             ValidateView: 20,
             SqlServerDML: 100,
