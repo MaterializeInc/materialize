@@ -78,7 +78,6 @@ pub fn derive_controller_state_update(
     catalog: &CatalogState,
     state_update: StateUpdate,
 ) -> Option<ParsedStateUpdate> {
-    // WIP: Exhaustive match?
     let kind = match state_update.kind {
         StateUpdateKind::Item(item) => Some(parse_item_update(catalog, item, state_update.diff)),
         StateUpdateKind::TemporaryItem(item) => Some(parse_temporary_item_update(
@@ -94,7 +93,11 @@ pub fn derive_controller_state_update(
             replica,
             state_update.diff,
         )),
-        _ => None,
+        _ => {
+            // The controllers are currently not interested in other kinds of
+            // changes to the catalog.
+            None
+        }
     };
 
     kind.map(|kind| ParsedStateUpdate {
