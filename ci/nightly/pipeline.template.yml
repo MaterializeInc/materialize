@@ -76,6 +76,15 @@ steps:
         branches: "main"
         skip: "currently broken"
 
+      - id: build-rust-latest-beta
+        label: "Build with Latest Rust Beta"
+        command: bin/ci-builder run stable bash -c "curl https://sh.rustup.rs -sSf | sh -s -- -y && source /cargo/env && rustup install beta && rustup default beta && cargo build --all-targets"
+        depends_on: []
+        timeout_in_minutes: 60
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+        branches: "main"
+
   - group: Linters
     key: linters
     steps:
