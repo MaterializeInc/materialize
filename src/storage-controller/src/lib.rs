@@ -498,11 +498,11 @@ where
         self.storage_collections.active_collection_metadatas()
     }
 
-    fn active_ingestion_exports(
+    fn active_ingestions(
         &self,
         instance_id: StorageInstanceId,
     ) -> Box<dyn Iterator<Item = &GlobalId> + '_> {
-        Box::new(self.instances[&instance_id].active_ingestion_exports())
+        Box::new(self.instances[&instance_id].active_ingestions())
     }
 
     fn check_exists(&self, id: GlobalId) -> Result<(), StorageError<Self::Timestamp>> {
