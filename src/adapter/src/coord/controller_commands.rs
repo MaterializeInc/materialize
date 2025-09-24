@@ -780,7 +780,8 @@ impl Coordinator {
                     }
 
                     // Drop secrets *after* dropping the replication slots,
-                    // because those replication slots may.
+                    // because dropping replication slots may rely on those
+                    // secrets still being present.
                     //
                     // It's okay if we crash before processing the secret drops,
                     // as we look for and remove any orphaned secrets during
