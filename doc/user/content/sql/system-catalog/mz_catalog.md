@@ -430,6 +430,8 @@ Field            | Type       | Meaning
 `oid`            | [`oid`]    | A [PostgreSQL-compatible OID][`oid`] for the role.
 `name`           | [`text`]   | The name of the role.
 `inherit`        | [`boolean`]   | Indicates whether the role has inheritance of privileges.
+`rolcanlogin`    | [`boolean`]   | Indicates whether the role can log in.
+`rolsuper`       | [`boolean`]   | Indicates whether the role is a superuser.
 
 ### `mz_role_members`
 
@@ -442,6 +444,16 @@ Field     | Type       | Meaning
 `role_id` | [`text`]   | The ID of the role the `member` is a member of. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
 `member`  | [`text`]   | The ID of the role that is a member of `role_id`. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
 `grantor` | [`text`]   | The ID of the role that granted membership of `member` to `role_id`. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
+
+### `mz_role_auth`
+<!-- RELATION_SPEC mz_catalog.mz_role_auth -->
+
+Field       | Type       | Meaning
+------------|------------|--------
+`role_id`   | [`text`]   | The ID of the role. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
+`role_oid`  | [`oid`]    | A [PostgreSQL-compatible OID][`oid`] for the role.
+`password_hash` | [`text`]   | The hashed password for the role, if any. Uses the `SCRAM-SHA-256` algorithm.
+`updated_at` | [`timestamp with time zone`] | The time at which the password was last updated.
 
 ### `mz_role_parameters`
 
