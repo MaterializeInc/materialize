@@ -1149,16 +1149,18 @@ async fn create_materialize_state(
         materialize_internal_url.host_str().unwrap(),
         config.materialize_internal_http_port
     );
-    let materialize_password_sql_addr = if let Some(ref password_config) = config.materialize_password_sql_url {
-        let password_url = util::postgres::config_url(password_config)?;
-        Some(format!(
-            "{}:{}",
-            password_url.host_str().unwrap(),
-            password_url.port().unwrap()
-        ))
-    } else {
-        None
-    };
+
+    let materialize_password_sql_addr =
+        if let Some(ref password_config) = config.materialize_password_sql_url {
+            let password_url = util::postgres::config_url(password_config)?;
+            Some(format!(
+                "{}:{}",
+                password_url.host_str().unwrap(),
+                password_url.port().unwrap()
+            ))
+        } else {
+            None
+        };
     let materialize_sasl_sql_addr = if let Some(ref sasl_config) = config.materialize_sasl_sql_url {
         let sasl_url = util::postgres::config_url(sasl_config)?;
         Some(format!(
@@ -1169,6 +1171,7 @@ async fn create_materialize_state(
     } else {
         None
     };
+
     let environment_id = pgclient
         .query_one("SELECT mz_environment_id()", &[])
         .await?

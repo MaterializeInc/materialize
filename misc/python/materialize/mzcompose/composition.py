@@ -1469,6 +1469,8 @@ class Composition:
                 f"--materialize-url=postgres://materialize@{mz_service}:6875",
                 f"--materialize-internal-url=postgres://mz_system@{mz_service}:6877",
                 f"--persist-consensus-url=postgres://root@{mz_service}:26257?options=--search_path=consensus",
+                f"--materialize-password-sql-url=postgres://materialize@{mz_service}:6885",
+                f"--materialize-sasl-sql-url=postgres://materialize@{mz_service}:6895",
             ]
 
         if not self.is_running(service):
