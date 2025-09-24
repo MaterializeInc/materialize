@@ -25,6 +25,7 @@ from threading import Thread
 
 import psycopg
 import requests
+import websocket
 from psycopg import Cursor
 from psycopg.errors import (
     DatabaseError,
@@ -5866,3 +5867,53 @@ def workflow_test_sql_cluster_disk(c: Composition) -> None:
                 """
             )
         )
+
+
+def workflow_websocket_connection(c: Composition) -> None:
+    """
+    Test that websocket connections work after initial ping, regression test
+    for https://github.com/MaterializeInc/materialize/pull/33192
+    """
+
+    c.down(destroy_volumes=True)
+
+    with c.override(
+        Testdrive(no_reset=True),
+    ):
+        c.up("materialized", Service("testdrive", idle=True))
+
+    port = c.port("materialized", 6876)
+    ws = websocket.WebSocket()
+    ws.connect(f"ws://127.0.0.1:{port}/api/experimental/sql")
+    ws.ping()
+    ws.send(
+        json.dumps(
+            {
+                "user": "materialize",
+                "password": "",
+                "options": {
+                    "application_name": "websocket-connection",
+                    "max_query_result_size": "1000000",
+                    "cluster": "quickstart",
+                    "database": "materialize",
+                    "search_path": "public",
+                },
+            }
+        )
+    )
+    ws_ready = False
+    while True:
+        result = json.loads(ws.recv())
+        result_type = result["type"]
+        if result_type == "ParameterStatus":
+            continue
+        elif result_type == "BackendKeyData":
+            continue
+        elif result_type == "ReadyForQuery":
+            ws_ready = True
+        elif result_type == "Notice":
+            assert "connected to Materialize" in result["payload"]["message"], result
+            break
+        else:
+            raise RuntimeError(f"Unexpected result type: {result_type} in: {result}")
+    assert ws_ready
