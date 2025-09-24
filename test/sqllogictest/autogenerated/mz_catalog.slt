@@ -277,6 +277,8 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object 
 2  oid  oid
 3  name  text
 4  inherit  boolean
+5  rolcanlogin  boolean
+6  rolsuper  boolean
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_role_members' ORDER BY position
@@ -284,6 +286,14 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object 
 1  role_id  text
 2  member  text
 3  grantor  text
+
+query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_role_auth' ORDER BY position
+----
+1  role_id  text
+2  role_oid  oid
+3  password_hash  text
+4  updated_at  timestamp␠with␠time␠zone
 
 query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_role_parameters' ORDER BY position
@@ -451,6 +461,7 @@ mz_operators
 mz_pseudo_types
 mz_recent_storage_usage
 mz_relations
+mz_role_auth
 mz_role_members
 mz_role_parameters
 mz_roles
