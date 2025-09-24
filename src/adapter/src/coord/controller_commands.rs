@@ -1234,7 +1234,7 @@ impl Coordinator {
 
 /// A state machine for building controller commands from catalog updates.
 ///
-/// Once all [ParsedStateUpdate] of a timestamp are ingested these are a command
+/// Once all [ParsedStateUpdate] of a timestamp are ingested this is a command
 /// that has to be applied to the controller(s).
 #[derive(Debug, Clone)]
 enum ControllerCommand {
