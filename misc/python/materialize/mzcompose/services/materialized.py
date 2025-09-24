@@ -348,7 +348,7 @@ class Materialized(Service):
             {
                 "depends_on": depends_graph,
                 "command": command,
-                "ports": [6875, 6876, 6877, 6878, 6880, 26257],
+                "ports": [6875, 6876, 6877, 6878, 6880, 6881, 26257],
                 "environment": environment,
                 "volumes": volumes,
                 "tmpfs": ["/tmp"],
