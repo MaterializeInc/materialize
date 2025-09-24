@@ -399,7 +399,7 @@ impl Coordinator {
                     // Nothing to do for None commands
                 }
                 ControllerCommand::Cluster(_) | ControllerCommand::ClusterReplica(_) => {
-                    unreachable!("clusters and cluster replicas are handled in a different map")
+                    unreachable!("clusters and cluster replicas are handled below")
                 }
                 ControllerCommand::Table(ControllerCommandKind::None)
                 | ControllerCommand::Source(ControllerCommandKind::None)
