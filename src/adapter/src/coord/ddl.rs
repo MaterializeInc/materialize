@@ -60,20 +60,20 @@ use crate::util::ResultExt;
 use crate::{AdapterError, ExecuteContext, catalog, flags};
 
 impl Coordinator {
-    /// Same as [`Self::catalog_transact_conn`] but takes a [`Session`].
+    /// Same as [`Self::catalog_transact_with_context`] but takes a [`Session`].
     #[instrument(name = "coord::catalog_transact")]
     pub(crate) async fn catalog_transact(
         &mut self,
         session: Option<&Session>,
         ops: Vec<catalog::Op>,
     ) -> Result<(), AdapterError> {
-        self.catalog_transact_conn(session.map(|session| session.conn_id()), ops)
+        self.catalog_transact_with_context(session.map(|session| session.conn_id()), None, ops)
             .await
     }
 
-    /// Same as [`Self::catalog_transact_conn`] but takes a [`Session`] and runs
-    /// builtin table updates concurrently with any side effects (e.g. creating
-    /// collections).
+    /// Same as [`Self::catalog_transact_with_context`] but takes a [`Session`]
+    /// and runs builtin table updates concurrently with any side effects (e.g.
+    /// creating collections).
     // TODO(aljoscha): Remove this method once all call-sites have been migrated
     // to the newer catalog_transact_with_context. The latter is what allows us
     // to apply controller commands that we derive from catalog chanages to the
@@ -132,17 +132,22 @@ impl Coordinator {
         Ok(())
     }
 
-    /// Same as [`Self::catalog_transact_conn`] but takes a [`Session`] and runs
-    /// builtin table updates concurrently with any controller commands that are
-    /// generated as part of applying the given `ops` (e.g. creating
-    /// collections).
+    /// Same as [`Self::catalog_transact_inner`] but takes an execution context
+    /// or connection ID and runs builtin table updates concurrently with any
+    /// controller commands that are generated as part of applying the given
+    /// `ops` (e.g. creating collections).
+    ///
+    /// This will use a connection ID if provided and otherwise fall back to
+    /// getting a connection ID from the execution context.
     #[instrument(name = "coord::catalog_transact_with_context")]
     pub(crate) async fn catalog_transact_with_context(
         &mut self,
+        conn_id: Option<&ConnectionId>,
         ctx: Option<&mut ExecuteContext>,
         ops: Vec<catalog::Op>,
     ) -> Result<(), AdapterError> {
-        let conn_id = ctx.as_ref().map(|ctx| ctx.session().conn_id());
+        let conn_id = conn_id.or_else(|| ctx.as_ref().map(|ctx| ctx.session().conn_id()));
+
         let (table_updates, controller_state_updates) =
             self.catalog_transact_inner(conn_id, ops).await?;
 
@@ -157,43 +162,6 @@ impl Coordinator {
             table_updates.instrument(info_span!(
                 "coord::catalog_transact_with_context::table_updates"
             )),
-        )
-        .await;
-
-        // We would get into an inconsistent state if we updated the catalog but
-        // then failed to apply commands/updates to the controller. Easiest
-        // thing to do is panic and let restart/bootstrap handle it.
-        controller_apply_res.expect("cannot fail to apply controller commands");
-
-        // Note: It's important that we keep the function call inside macro, this way we only run
-        // the consistency checks if soft assertions are enabled.
-        mz_ore::soft_assert_eq_no_log!(
-            self.check_consistency(),
-            Ok(()),
-            "coordinator inconsistency detected"
-        );
-
-        Ok(())
-    }
-
-    /// Same as [`Self::catalog_transact_inner`] but awaits the table updates.
-    #[instrument(name = "coord::catalog_transact_conn")]
-    pub(crate) async fn catalog_transact_conn(
-        &mut self,
-        conn_id: Option<&ConnectionId>,
-        ops: Vec<catalog::Op>,
-    ) -> Result<(), AdapterError> {
-        let (table_updates, controller_state_updates) =
-            self.catalog_transact_inner(conn_id, ops).await?;
-
-        let controller_apply_fut =
-            self.controller_apply_catalog_updates(None, controller_state_updates);
-
-        // Apple controller commands concurrently with the table updates.
-        let (controller_apply_res, ()) = futures::future::join(
-            controller_apply_fut
-                .instrument(info_span!("coord::catalog_transact_conn::side_effects_fut")),
-            table_updates.instrument(info_span!("coord::catalog_transact_conn::table_updates")),
         )
         .await;
 
@@ -899,7 +867,7 @@ impl Coordinator {
                 .collect(),
         );
 
-        self.catalog_transact_conn(Some(conn_id), vec![op])
+        self.catalog_transact_with_context(Some(conn_id), None, vec![op])
             .await
             .expect("unable to drop temporary items for conn_id");
     }
