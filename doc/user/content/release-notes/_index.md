@@ -23,8 +23,8 @@ Clusters with sources can now have multiple sources by default.
 
 ### Bug fixes
 - Fix bug where role modifications can wipe out role password.
-- Fix bug where if two Materialize instances are in the same namespace and have clusters with the same ID, their services could query the wrong one.
-- Fix bug where when restarting a snapshot when adding a table to a source via `ALTER SOURCE`, we wouldn't cancel the existing snapshotting process.
+- Fix bug where if two Materialize instances are in the same Kubernetes namespace and have clusters with the same ID, their services could query the wrong one.
+- Fix bug where restarting a snapshot while adding a table to a source via `ALTER SOURCE` would cause Materialize to not cancel the existing snapshotting process.
 
 ## v25.2.6
 
