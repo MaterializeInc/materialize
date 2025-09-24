@@ -25,21 +25,27 @@ This guide assumes you have administrative access to your Kubernetes cluster and
 {{< /important >}}
 
 ## 1. Download our Prometheus scrape configurations (`prometheus.yml`)
+  Download the Prometheus scrape configurations that we'll use to configure Prometheus to collect metrics from Materialize:
   ```bash
-  curl -O https://raw.githubusercontent.com/MaterializeInc/materialize/refs/heads/self-managed-docs/v25.2/doc/user/data/monitoring/prometheus.yml
+  curl -o prometheus_scrape_configs.yml https://raw.githubusercontent.com/prometheus-community/helm-charts/refs/heads/main/charts/prometheus/values.yaml
   ```
 
 
-## 2. Install Prometheus to your Kubernetes cluster using [`prometheus-community/prometheus`](https://github.com/prometheus-community/helm-charts/tree/main/charts/prometheus) (Optional)
+## 2. Install Prometheus to your Kubernetes cluster
+
+  {{< note >}}
+  In this guide, we use the [prometheus-community](https://github.com/prometheus-community/helm-charts) Helm chart to install Prometheus.
+  {{< /note >}}
+
 
 1. Download the prometheus-community default chart values (`values.yaml`):
    ```bash
    curl -O https://raw.githubusercontent.com/prometheus-community/helm-charts/refs/heads/main/charts/prometheus/values.yaml
    ```
 
-2. Within `values.yaml`, replace `serverFiles > prometheus.yml > scrape_configs` with our scrape configurations (`prometheus.yml`).
+2. Within `values.yaml`, replace `serverFiles > prometheus.yml > scrape_configs` with our scrape configurations (`prometheus_scrape_configs.yml`).
 
-3. Install the operator with the updated `values.yaml`
+3. Install the operator with the updated `values.yaml`:
    ```bash
    kubectl create namespace prometheus
    helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
@@ -48,9 +54,9 @@ This guide assumes you have administrative access to your Kubernetes cluster and
    --values values.yaml
    ```
 
-## 3. Visualize through Grafana (optional)
+## 3. Optional. Visualize through Grafana
 
-1. Install the Grafana helm chart following [this guide](https://grafana.com/docs/grafana/latest/setup-grafana/installation/helm/)
+1. Install the Grafana helm chart following [this guide](https://grafana.com/docs/grafana/latest/setup-grafana/installation/helm/).
 
 
 2.  Set up port forwarding to access the Grafana UI:
@@ -59,22 +65,28 @@ This guide assumes you have administrative access to your Kubernetes cluster and
     kubectl port-forward pod/$MZ_POD_GRAFANA 3000:3000 -n monitoring
     ```
 
-    {{< note >}}
-    The port forwarding method is for testing purposes only. For production environments, configure an ingress controller to securely expose the Grafana UI.
-    {{< /note >}}
+    {{< warning >}}
+  The port forwarding method is for testing purposes only. For production environments, configure an ingress controller to securely expose the Grafana UI.
+    {{< /warning >}}
 
-3. Within the UI, add a Prometheus data source where the URL is `http://<prometheus server name>.<namespace>.svc.cluster.local:<port>`(i.e. `http://prometheus-server.prometheus.svc.cluster.local:80`)
+3. Open the Grafana UI on [http://localhost:3000](http://localhost:3000) in a browser.
+
+4. In the Grafana UI, add a Prometheus data source. In the Connection section, set the Prometheus server URL to `http://<prometheus server name>.<namespace>.svc.cluster.local:<port>`(e.g. `http://prometheus-server.prometheus.svc.cluster.local:80`).
 
     ![Image of Materialize Console login screen with mz_system user](/images/grafana-prometheus-datasource-setup.png)
 
 4. Download the following dashboards:
+    ### Environment overview dashboard
+    An overview of the state of different objects in your environment.
+
     ```bash
-    # Environment overview: An overview of the state of different objects in your environment
+    # environment_overview_dashboard.json
     curl -O https://raw.githubusercontent.com/MaterializeInc/materialize/refs/heads/self-managed-docs/v25.2/doc/user/data/monitoring/grafana_dashboards/environment_overview_dashboard.json
     ```
-
+    ### Freshness overview dashboard
+    An overview of how out of date objects in your environment are.
      ```bash
-     # Freshness overview: An overview of how out of date objects in your environment are
+     # freshness_overview_dashboard.json
     curl -O https://raw.githubusercontent.com/MaterializeInc/materialize/refs/heads/self-managed-docs/v25.2/doc/user/data/monitoring/grafana_dashboards/freshness_overview_dashboard.json
     ```
 
