@@ -208,7 +208,9 @@ impl Coordinator {
                         });
                     }
 
-                    let result = self.catalog_transact_conn(Some(&conn_id), ops).await;
+                    let result = self
+                        .catalog_transact_with_context(Some(&conn_id), None, ops)
+                        .await;
                     let _ = tx.send(result);
                 }
 

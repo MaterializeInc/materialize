@@ -920,7 +920,7 @@ impl Coordinator {
     ) -> Result<ExecuteResponse, AdapterError> {
         self.validate_role_attributes(&attributes.clone())?;
         let op = catalog::Op::CreateRole { name, attributes };
-        self.catalog_transact_conn(conn_id, vec![op])
+        self.catalog_transact_with_context(conn_id, None, vec![op])
             .await
             .map(|_| ExecuteResponse::CreatedRole)
     }
@@ -936,7 +936,7 @@ impl Coordinator {
             name,
             owner_id: *session.current_role_id(),
         };
-        self.catalog_transact_conn(Some(session.conn_id()), vec![op])
+        self.catalog_transact_with_context(Some(session.conn_id()), None, vec![op])
             .await
             .map(|_| ExecuteResponse::CreatedNetworkPolicy)
     }
@@ -961,7 +961,7 @@ impl Coordinator {
             name,
             owner_id: *session.current_role_id(),
         };
-        self.catalog_transact_conn(Some(session.conn_id()), vec![op])
+        self.catalog_transact_with_context(Some(session.conn_id()), None, vec![op])
             .await
             .map(|_| ExecuteResponse::AlteredObject(ObjectType::NetworkPolicy))
     }
@@ -1296,7 +1296,8 @@ impl Coordinator {
             dropped_in_use_indexes,
         } = self.sequence_drop_common(ctx.session(), drop_ids)?;
 
-        self.catalog_transact_with_context(Some(ctx), ops).await?;
+        self.catalog_transact_with_context(None, Some(ctx), ops)
+            .await?;
 
         fail::fail_point!("after_sequencer_drop_replica");
 
@@ -4778,7 +4779,8 @@ impl Coordinator {
             sql: raw_sql_type,
         }];
 
-        self.catalog_transact_with_context(Some(ctx), ops).await?;
+        self.catalog_transact_with_context(None, Some(ctx), ops)
+            .await?;
 
         Ok(ExecuteResponse::AlteredObject(ObjectType::Table))
     }
