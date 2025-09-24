@@ -68,6 +68,14 @@ use crate::{AdapterError, CollectionIdBundle, ExecuteContext, ResultExt};
 pub mod parsed_state_updates;
 
 impl Coordinator {
+    /// Applies the given bucket of [ParsedStateUpdate] to our in-memory state
+    /// and our controllers. This will also apply implications that arise from
+    /// catalog changes. For example, peeks and subscribes will be cancelled
+    /// when referenced objects are dropped.
+    ///
+    /// This _requires_ that the given updates are consolidated. There must be
+    /// at most one addition and/or one retraction for a given item, as
+    /// identified by that items ID type.
     #[instrument(level = "debug")]
     pub async fn controller_apply_catalog_updates(
         &mut self,
