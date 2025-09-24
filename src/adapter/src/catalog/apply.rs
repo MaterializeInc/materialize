@@ -163,7 +163,10 @@ impl CatalogState {
         let mut builtin_table_updates = Vec::with_capacity(updates.len());
         let mut controller_state_updates = Vec::with_capacity(updates.len());
 
-        // First, consolidate updates.
+        // First, consolidate updates. The codes that applies parsed state
+        // updates _requires_ that the given updates are consolidated. There
+        // must be at most one addition and/or one retraction for a given item,
+        // as identified by that items ID type.
         let updates = Self::consolidate_updates(updates);
 
         // Then bring it into the pseudo-topological order that we need for
