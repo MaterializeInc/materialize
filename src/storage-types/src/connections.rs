@@ -2106,6 +2106,7 @@ impl SqlServerConnectionDetails<InlinedConnection> {
         for error in [
             mz_sql_server_util::inspect::ensure_database_cdc_enabled(&mut client).await,
             mz_sql_server_util::inspect::ensure_snapshot_isolation_enabled(&mut client).await,
+            mz_sql_server_util::inspect::ensure_sql_server_agent_running(&mut client).await,
         ] {
             match error {
                 Err(mz_sql_server_util::SqlServerError::InvalidSystemSetting {

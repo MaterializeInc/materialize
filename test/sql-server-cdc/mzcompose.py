@@ -124,6 +124,45 @@ def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
     c.test_parts(sharded_files, run)
 
 
+def workflow_no_agent(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """
+    Ensures that MZ detects that the SQL Server Agent is not running at purification and produces
+    an error to the user.
+    """
+
+    with c.override(
+        SqlServer(volumes_extra=["tmp:/var/opt/mssql"]),
+    ):
+        c.up("materialized", "sql-server", Service("testdrive", idle=True))
+        c.run_testdrive_files(
+            "setup/setup.td",
+            f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
+            f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
+        )
+        c.stop("sql-server")
+
+        with c.override(
+            SqlServer(enable_agent=False, volumes_extra=["tmp:/var/opt/mssql"])
+        ):
+            c.up("sql-server")
+
+            c.testdrive(
+                dedent(
+                    f"""
+                    > CREATE SECRET IF NOT EXISTS sql_server_pass AS '{SqlServer.DEFAULT_SA_PASSWORD}'
+
+                    ! CREATE CONNECTION sql_server_conn TO SQL SERVER (
+                        HOST 'sql-server',
+                        PORT 1433,
+                        DATABASE test,
+                        USER '{SqlServer.DEFAULT_USER}',
+                        PASSWORD = SECRET sql_server_pass);
+                    contains:Invalid SQL Server system replication settings
+                    """
+                )
+            )
+
+
 def workflow_snapshot_consistency(
     c: Composition, parser: WorkflowArgumentParser
 ) -> None:
