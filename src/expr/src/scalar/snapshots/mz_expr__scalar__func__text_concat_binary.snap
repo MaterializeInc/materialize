@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    sqlname = \"||\",\n    is_infix_op = true,\n    propagates_nulls = true,\n    is_monotone = (false, true),\n)]\nfn text_concat_binary<'a>(a: &str, b: &str, temp_storage: &'a RowArena) -> &'a str {\n    let mut buf = String::new();\n    buf.push_str(a);\n    buf.push_str(b);\n    temp_storage.push_string(buf)\n}\n"
+expression: "#[sqlfunc(\n    sqlname = \"||\",\n    is_infix_op = true,\n    propagates_nulls = true,\n    is_monotone = (false, true),\n)]\nfn text_concat_binary<'a>(a: &str, b: &str, temp_storage: &'a RowArena) -> &'a str {\n    let mut buf = String::with_capacity(a.len() + b.len());\n    buf.push_str(a);\n    buf.push_str(b);\n    temp_storage.push_string(buf)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -62,7 +62,7 @@ impl std::fmt::Display for TextConcatBinary {
     }
 }
 fn text_concat_binary<'a>(a: &str, b: &str, temp_storage: &'a RowArena) -> &'a str {
-    let mut buf = String::new();
+    let mut buf = String::with_capacity(a.len() + b.len());
     buf.push_str(a);
     buf.push_str(b);
     temp_storage.push_string(buf)

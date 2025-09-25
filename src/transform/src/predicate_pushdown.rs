@@ -52,7 +52,7 @@
 //!
 //! let predicate0 = MirScalarExpr::column(0);
 //! let predicate1 = MirScalarExpr::column(1);
-//! let predicate01 = MirScalarExpr::column(0).call_binary(MirScalarExpr::column(2), func::AddInt64.into());
+//! let predicate01 = MirScalarExpr::column(0).call_binary(MirScalarExpr::column(2), func::AddInt64);
 //! let predicate012 = MirScalarExpr::literal_false();
 //!
 //! let mut expr = join.filter(
@@ -70,7 +70,7 @@
 //!
 //! PredicatePushdown::default().transform(&mut expr, &mut transform_ctx);
 //!
-//! let predicate00 = MirScalarExpr::column(0).call_binary(MirScalarExpr::column(0), func::AddInt64.into());
+//! let predicate00 = MirScalarExpr::column(0).call_binary(MirScalarExpr::column(0), func::AddInt64);
 //! let expected_expr = MirRelationExpr::join(
 //!     vec![
 //!         input1.clone().filter(vec![predicate0.clone(), predicate00.clone()]),

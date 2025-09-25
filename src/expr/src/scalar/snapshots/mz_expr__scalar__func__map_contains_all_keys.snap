@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(is_infix_op = true, sqlname = \"?&\", propagates_nulls = true)]\nfn map_contains_all_keys<'a>(map: DatumMap<'a>, keys: Datum<'a>) -> Option<bool> {\n    if keys == Datum::Null {\n        return None;\n    }\n    let keys = keys.unwrap_array();\n    Some(\n        keys\n            .elements()\n            .iter()\n            .all(|key| !key.is_null() && map.iter().any(|(k, _v)| k == key.unwrap_str())),\n    )\n}\n"
+expression: "#[sqlfunc(is_infix_op = true, sqlname = \"?&\")]\nfn map_contains_all_keys<'a>(map: DatumMap<'a>, keys: Array<'a>) -> bool {\n    keys.elements()\n        .iter()\n        .all(|key| !key.is_null() && map.iter().any(|(k, _v)| k == key.unwrap_str()))\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -18,8 +18,8 @@ expression: "#[sqlfunc(is_infix_op = true, sqlname = \"?&\", propagates_nulls = 
 pub struct MapContainsAllKeys;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for MapContainsAllKeys {
     type Input1 = DatumMap<'a>;
-    type Input2 = Datum<'a>;
-    type Output = Option<bool>;
+    type Input2 = Array<'a>;
+    type Output = bool;
     fn call(
         &self,
         a: Self::Input1,
@@ -49,24 +49,14 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for MapContainsAllKeys {
     fn is_infix_op(&self) -> bool {
         true
     }
-    fn propagates_nulls(&self) -> bool {
-        true
-    }
 }
 impl std::fmt::Display for MapContainsAllKeys {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("?&")
     }
 }
-fn map_contains_all_keys<'a>(map: DatumMap<'a>, keys: Datum<'a>) -> Option<bool> {
-    if keys == Datum::Null {
-        return None;
-    }
-    let keys = keys.unwrap_array();
-    Some(
-        keys
-            .elements()
-            .iter()
-            .all(|key| !key.is_null() && map.iter().any(|(k, _v)| k == key.unwrap_str())),
-    )
+fn map_contains_all_keys<'a>(map: DatumMap<'a>, keys: Array<'a>) -> bool {
+    keys.elements()
+        .iter()
+        .all(|key| !key.is_null() && map.iter().any(|(k, _v)| k == key.unwrap_str()))
 }

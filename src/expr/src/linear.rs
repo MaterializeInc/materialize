@@ -1063,7 +1063,7 @@ impl MapFilterProject {
     /// for example if they occur in conditional branches of a `MirScalarExpr::If`.
     ///
     /// ```rust
-    /// use mz_expr::{MapFilterProject, MirScalarExpr, UnaryFunc, BinaryFunc};
+    /// use mz_expr::{func, MapFilterProject, MirScalarExpr, UnaryFunc, BinaryFunc};
     /// // Demonstrate extraction of unconditionally evaluated expressions, as well as
     /// // the non-extraction of common expressions guarded by conditions.
     /// let mut map_filter_project = MapFilterProject::new(2)

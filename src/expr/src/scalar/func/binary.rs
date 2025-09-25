@@ -119,7 +119,9 @@ impl<T: for<'a> EagerBinaryFunc<'a>> LazyBinaryFunc for T {
         a: &'a MirScalarExpr,
         b: &'a MirScalarExpr,
     ) -> Result<Datum<'a>, EvalError> {
-        let a = match T::Input1::try_from_result(a.eval(datums, temp_storage)) {
+        let a = a.eval(datums, temp_storage)?;
+        let b = b.eval(datums, temp_storage)?;
+        let a = match T::Input1::try_from_result(Ok(a)) {
             // If we can convert to the input type then we call the function
             Ok(input) => input,
             // If we can't and we got a non-null datum something went wrong in the planner
@@ -129,7 +131,7 @@ impl<T: for<'a> EagerBinaryFunc<'a>> LazyBinaryFunc for T {
             // Otherwise we just propagate NULLs and errors
             Err(res) => return res,
         };
-        let b = match T::Input2::try_from_result(b.eval(datums, temp_storage)) {
+        let b = match T::Input2::try_from_result(Ok(b)) {
             // If we can convert to the input type then we call the function
             Ok(input) => input,
             // If we can't and we got a non-null datum something went wrong in the planner
