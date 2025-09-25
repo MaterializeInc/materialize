@@ -101,12 +101,6 @@ def get_environmentd_data() -> dict[str, Any]:
     )
 
 
-def get_console_data() -> dict[str, Any]:
-    return get_pod_data(
-        labels={"materialize.cloud/app": "console"},
-    )
-
-
 def retry(fn: Callable, timeout: int) -> None:
     end_time = (
         datetime.datetime.now() + datetime.timedelta(seconds=timeout)
