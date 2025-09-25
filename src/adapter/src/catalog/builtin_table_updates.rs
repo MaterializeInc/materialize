@@ -12,6 +12,7 @@ mod notice;
 use bytesize::ByteSize;
 use ipnet::IpNet;
 use mz_adapter_types::compaction::CompactionWindow;
+use mz_adapter_types::dyncfgs::ENABLE_PASSWORD_AUTH;
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::{
@@ -25,10 +26,10 @@ use mz_catalog::builtin::{
     MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES, MZ_MATERIALIZED_VIEWS, MZ_MYSQL_SOURCE_TABLES,
     MZ_NETWORK_POLICIES, MZ_NETWORK_POLICY_RULES, MZ_OBJECT_DEPENDENCIES, MZ_OPERATORS,
     MZ_PENDING_CLUSTER_REPLICAS, MZ_POSTGRES_SOURCE_TABLES, MZ_POSTGRES_SOURCES, MZ_PSEUDO_TYPES,
-    MZ_ROLE_MEMBERS, MZ_ROLE_PARAMETERS, MZ_ROLES, MZ_SCHEMAS, MZ_SECRETS, MZ_SESSIONS, MZ_SINKS,
-    MZ_SOURCE_REFERENCES, MZ_SOURCES, MZ_SQL_SERVER_SOURCE_TABLES, MZ_SSH_TUNNEL_CONNECTIONS,
-    MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES, MZ_TABLES,
-    MZ_TYPE_PG_METADATA, MZ_TYPES, MZ_VIEWS, MZ_WEBHOOKS_SOURCES,
+    MZ_ROLE_AUTH, MZ_ROLE_MEMBERS, MZ_ROLE_PARAMETERS, MZ_ROLES, MZ_SCHEMAS, MZ_SECRETS,
+    MZ_SESSIONS, MZ_SINKS, MZ_SOURCE_REFERENCES, MZ_SOURCES, MZ_SQL_SERVER_SOURCE_TABLES,
+    MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES,
+    MZ_TABLES, MZ_TYPE_PG_METADATA, MZ_TYPES, MZ_VIEWS, MZ_WEBHOOKS_SOURCES,
 };
 use mz_catalog::config::AwsPrincipalContext;
 use mz_catalog::durable::SourceReferences;
@@ -51,6 +52,7 @@ use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
+use mz_repr::adt::regex;
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::refresh_schedule::RefreshEvery;
 use mz_repr::role_id::RoleId;
@@ -65,7 +67,7 @@ use mz_sql::names::{
     CommentObjectId, DatabaseId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier,
 };
 use mz_sql::plan::{ClusterSchedule, ConnectionDetails, SshKey};
-use mz_sql::session::user::SYSTEM_USER;
+use mz_sql::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID, SYSTEM_USER};
 use mz_sql::session::vars::SessionVars;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_storage_client::client::TableData;
@@ -192,6 +194,32 @@ impl CatalogState {
         )
     }
 
+    pub(super) fn pack_role_auth_update(
+        &self,
+        id: RoleId,
+        diff: Diff,
+    ) -> BuiltinTableUpdate<&'static BuiltinTable> {
+        let role_auth = self.get_role_auth(&id);
+        let role = self.get_role(&id);
+        BuiltinTableUpdate::row(
+            &*MZ_ROLE_AUTH,
+            Row::pack_slice(&[
+                Datum::String(&role_auth.role_id.to_string()),
+                Datum::UInt32(role.oid),
+                match &role_auth.password_hash {
+                    Some(hash) => Datum::String(hash),
+                    None => Datum::Null,
+                },
+                Datum::TimestampTz(
+                    mz_ore::now::to_datetime(role_auth.updated_at)
+                        .try_into()
+                        .expect("must fit"),
+                ),
+            ]),
+            diff,
+        )
+    }
+
     pub(super) fn pack_role_update(
         &self,
         id: RoleId,
@@ -202,6 +230,53 @@ impl CatalogState {
             RoleId::Public => vec![],
             id => {
                 let role = self.get_role(&id);
+                let self_managed_auth_enabled = self
+                    .system_config()
+                    .get(ENABLE_PASSWORD_AUTH.name())
+                    .ok()
+                    .map(|v| v.value() == "on")
+                    .unwrap_or(false);
+
+                let builtin_supers = [MZ_SYSTEM_ROLE_ID, MZ_SUPPORT_ROLE_ID];
+
+                // For self managed auth, we can get the actual login and superuser bits
+                // directly from the role. For cloud auth, we have to do some heuristics.
+                // We determine login status each time a role logs in, so there's no clean
+                // way to accurately determine this in the catalog. Instead we do something
+                // a little gross. For system roles, we hardcode the known roles that can
+                // log in. For user roles, we determine `rolcanlogin` based on whether the
+                // role name looks like an email address.
+                //
+                // This works for the vast majority of cases in production. Roles that users
+                // log in to come from Frontegg and therefore *must* be valid email
+                // addresses, while roles that are created via `CREATE ROLE` (e.g.,
+                // `admin`, `prod_app`) almost certainly are not named to look like email
+                // addresses.
+                //
+                // For the moment, we're comfortable with the edge cases here. If we discover
+                // that folks are regularly creating non-login roles with names that look
+                // like an email address (e.g., `admins@sysops.foocorp`), we can change
+                // course.
+
+                let cloud_login_regex = "^[^@]+@[^@]+\\.[^@]+$";
+                let matches = regex::Regex::new(cloud_login_regex, true)
+                    .expect("valid regex")
+                    .is_match(&role.name);
+
+                let rolcanlogin = if self_managed_auth_enabled {
+                    role.attributes.login.unwrap_or(false)
+                } else {
+                    builtin_supers.contains(&role.id) || matches
+                };
+
+                let rolsuper = if self_managed_auth_enabled {
+                    Datum::from(role.attributes.superuser.unwrap_or(false))
+                } else if builtin_supers.contains(&role.id) {
+                    Datum::from(true)
+                } else {
+                    Datum::Null
+                };
+
                 let role_update = BuiltinTableUpdate::row(
                     &*MZ_ROLES,
                     Row::pack_slice(&[
@@ -209,6 +284,8 @@ impl CatalogState {
                         Datum::UInt32(role.oid),
                         Datum::String(&role.name),
                         Datum::from(role.attributes.inherit),
+                        Datum::from(rolcanlogin),
+                        rolsuper,
                     ]),
                     diff,
                 );
