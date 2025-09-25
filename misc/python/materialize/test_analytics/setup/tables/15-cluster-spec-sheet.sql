@@ -20,8 +20,8 @@ CREATE TABLE cluster_spec_sheet_result (
    test_name TEXT NOT NULL,
    cluster_size TEXT NOT NULL,
    repetition INT NOT NULL,
-   size_bytes BIGINT NOT NULL,
-   time_ms BIGINT NOT NULL
+   size_bytes BIGINT,
+   time_ms BIGINT
 );
 
 ALTER TABLE cluster_spec_sheet_result OWNER TO qa;

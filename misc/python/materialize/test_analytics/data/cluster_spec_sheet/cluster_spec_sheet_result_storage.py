@@ -24,8 +24,8 @@ class ClusterSpecSheetResultEntry:
     test_name: str
     cluster_size: str
     repetition: int
-    size_bytes: int
-    time_ms: int
+    size_bytes: int | None
+    time_ms: int | None
 
 
 class ClusterSpecSheetResultStorage(BaseDataStorage):
@@ -69,8 +69,8 @@ class ClusterSpecSheetResultStorage(BaseDataStorage):
                     {as_sanitized_literal(result_entry.test_name)},
                     {as_sanitized_literal(result_entry.cluster_size)},
                     {result_entry.repetition},
-                    {result_entry.size_bytes},
-                    {result_entry.time_ms}
+                    {result_entry.size_bytes or 'NULL::BIGINT'},
+                    {result_entry.time_ms or 'NULL::BIGINT'}
                 ;
                 """
             )

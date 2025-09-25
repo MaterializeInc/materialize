@@ -1499,8 +1499,8 @@ def upload_results_to_test_analytics(
                     test_name=row["test_name"],
                     cluster_size=row["cluster_size"],
                     repetition=int(row["repetition"]),
-                    size_bytes=int(row["size_bytes"]),
-                    time_ms=int(row["time_ms"]),
+                    size_bytes=int(row["size_bytes"]) if row["size_bytes"] else None,
+                    time_ms=int(row["time_ms"]) if row["time_ms"] else None,
                 )
             )
 
