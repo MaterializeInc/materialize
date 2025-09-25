@@ -13,21 +13,17 @@
 
 set -euo pipefail
 
-aws_s3_noindex_nofollow() {
-    aws s3 --metadata-directive REPLACE --metadata "X-Robots-Tag=noindex,nofollow" "$@"
-}
-
 cargo about generate ci/deploy/licenses.hbs > misc/www/licenses.html
 
-aws_s3_noindex_nofollow cp --recursive misc/www/ s3://materialize-dev-website/
+aws s3 cp --metadata-directive REPLACE --metadata "X-Robots-Tag=noindex,nofollow" --recursive misc/www/ s3://materialize-dev-website/
 
 # We exclude all of these pages from search engines for SEO purposes. We don't
 # want to spend our crawl budget on these pages, nor have these pages appear
 # ahead of our marketing content.
 RUSTDOCFLAGS="--html-in-header $PWD/ci/deploy/noindex.html" bin/doc
 RUSTDOCFLAGS="--html-in-header $PWD/ci/deploy/noindex.html" bin/doc --document-private-items
-aws_s3_noindex_nofollow sync --size-only target-xcompile/doc/ s3://materialize-dev-website/api/rust
-aws_s3_noindex_nofollow sync --size-only target-xcompile/doc/ s3://materialize-dev-website/api/rust-private
+aws s3 sync --metadata-directive REPLACE --metadata "X-Robots-Tag=noindex,nofollow" --size-only target-xcompile/doc/ s3://materialize-dev-website/api/rust
+aws s3 sync --metadata-directive REPLACE --metadata "X-Robots-Tag=noindex,nofollow" --size-only target-xcompile/doc/ s3://materialize-dev-website/api/rust-private
 
 bin/pydoc
-aws_s3_noindex_nofollow sync --size-only --delete target/pydoc/ s3://materialize-dev-website/api/python
+aws s3 sync --metadata-directive REPLACE --metadata "X-Robots-Tag=noindex,nofollow" --size-only --delete target/pydoc/ s3://materialize-dev-website/api/python
