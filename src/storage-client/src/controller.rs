@@ -359,10 +359,8 @@ pub trait StorageController: Debug {
     /// capabilties.
     fn active_collection_metadatas(&self) -> Vec<(GlobalId, CollectionMetadata)>;
 
-    /// Returns the IDs of ingestion exports running on the given instance. This
-    /// includes the ingestion itself, if any, and running source tables (aka.
-    /// subsources).
-    fn active_ingestion_exports(
+    /// Returns the IDs of all active ingestions for the given storage instance.
+    fn active_ingestions(
         &self,
         instance_id: StorageInstanceId,
     ) -> Box<dyn Iterator<Item = &GlobalId> + '_>;
