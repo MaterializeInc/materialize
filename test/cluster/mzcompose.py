@@ -5783,3 +5783,82 @@ def workflow_test_operator_hydration_status_reconciliation(c: Composition) -> No
             """
             )
         )
+
+
+def workflow_test_sql_cluster_disk(c: Composition) -> None:
+    """
+    Test that `mz_clusters.disk` and `mz_cluster_replicas.disk` have expected
+    values.
+    """
+
+    with c.override(
+        Materialized(
+            cluster_replica_size={
+                "swap,zero": {
+                    "workers": 1,
+                    "scale": 1,
+                    "credits_per_hour": "1",
+                    "memory_limit": "1G",
+                    "disk_limit": "0",
+                    "swap_enabled": True,
+                },
+                "swap,nonzero": {
+                    "workers": 1,
+                    "scale": 1,
+                    "credits_per_hour": "1",
+                    "memory_limit": "1G",
+                    "disk_limit": "1G",
+                    "swap_enabled": True,
+                },
+                "noswap,zero": {
+                    "workers": 1,
+                    "scale": 1,
+                    "credits_per_hour": "1",
+                    "memory_limit": "1G",
+                    "disk_limit": "0",
+                    "swap_enabled": False,
+                },
+                "noswap,nonzero": {
+                    "workers": 1,
+                    "scale": 1,
+                    "credits_per_hour": "1",
+                    "memory_limit": "1G",
+                    "disk_limit": "1G",
+                    "swap_enabled": False,
+                },
+            },
+            bootstrap_replica_size="swap,zero",
+        ),
+        Testdrive(no_reset=True),
+    ):
+        c.up("materialized")
+
+        c.sql(
+            """
+            CREATE CLUSTER swap_zero SIZE 'swap,zero';
+            CREATE CLUSTER swap_nonzero SIZE 'swap,nonzero';
+            CREATE CLUSTER noswap_zero SIZE 'noswap,zero';
+            CREATE CLUSTER noswap_nonzero SIZE 'noswap,nonzero';
+            """
+        )
+
+        c.testdrive(
+            input=dedent(
+                """
+                > SELECT name, disk FROM mz_clusters WHERE name LIKE '%swap%'
+                swap_zero      false
+                swap_nonzero   false
+                noswap_zero    false
+                noswap_nonzero true
+
+                > SELECT c.name, r.disk
+                  FROM mz_cluster_replicas r
+                  JOIN mz_clusters c ON c.id = r.cluster_id
+                  WHERE c.name LIKE '%swap%'
+                swap_zero      false
+                swap_nonzero   false
+                noswap_zero    false
+                noswap_nonzero true
+                """
+            )
+        )
