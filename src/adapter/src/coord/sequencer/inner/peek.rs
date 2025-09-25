@@ -283,7 +283,6 @@ impl Coordinator {
         let compute_instance = self
             .instance_snapshot(cluster.id())
             .expect("compute instance does not exist");
-        let (_, view_id) = self.allocate_transient_id();
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
             .override_from(&self.catalog.get_cluster(cluster.id()).config.features())
             .override_from(&explain_ctx);
@@ -330,6 +329,7 @@ impl Coordinator {
                     }
                 };
                 copy_to_ctx.output_batch_count = Some(max_worker_count);
+                let (_, view_id) = self.allocate_transient_id();
                 // Build an optimizer for this COPY TO.
                 Either::Right(optimize::copy_to::Optimizer::new(
                     Arc::clone(&catalog),
