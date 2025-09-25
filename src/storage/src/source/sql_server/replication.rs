@@ -251,22 +251,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
 
                             let decoder = decoder_map.get(partition_idx).expect("decoder for output");
                             // Try to decode a row, returning a SourceError if it fails.
-                            let message = match decoder.decode(&sql_server_row, &mut mz_row, &arena) {
-                                Ok(()) => Ok(SourceMessage {
-                                    key: Row::default(),
-                                    value: mz_row,
-                                    metadata: Row::default(),
-                                }),
-                                Err(e) => {
-                                    let kind = DecodeErrorKind::Text(e.to_string().into());
-                                    // TODO(sql_server2): Get the raw bytes from `tiberius`.
-                                    let raw = format!("{sql_server_row:?}");
-                                    Err(DataflowError::DecodeError(Box::new(DecodeError {
-                                        kind,
-                                        raw: raw.as_bytes().to_vec(),
-                                    })))
-                                }
-                            };
+                            let message = decode(decoder, &sql_server_row, &mut mz_row, &arena, None);
                             data_output
                                 .give_fueled(
                                     &data_cap_set[0],
@@ -364,10 +349,28 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
             // here, when we receive progress events. What stops us from doing this now is our
             // 10-byte LSN doesn't fit into the 8-byte integer that the progress event uses.
             let mut log_rewinds_complete = true;
+
+            // deferred_updates temporarily stores rows for UPDATE operation to support Large Object
+            // Data (LOD) types (i.e. varchar(max), nvarchar(max)). The value of a
+            // LOD column will be NULL for the old row (operation = 3) if the value of the
+            // field did not change. The field data will be available in the new row
+            // (operation = 4).
+            // The CDC stream implementation emits a [`CdcEvent::Data`] event, which contains a
+            // batch of operations.  There is no guarantee that both old and new rows will
+            // exist in a single batch, so deferred updates must be tracked across multiple data
+            // events.
+            //
+            // In the current implementation schema change events won't be emitted between old
+            // and new rows.
+            //
+            // See <https://learn.microsoft.com/en-us/sql/relational-databases/system-tables/cdc-capture-instance-ct-transact-sql?view=sql-server-ver17#large-object-data-types>
+            let mut deferred_updates = BTreeMap::new();
+
             while let Some(event) = cdc_stream.next().await {
                 let event = event.map_err(TransientError::from)?;
                 tracing::trace!(?config.id, ?event, "got replication event");
 
+                tracing::trace!("deferred_updates = {deferred_updates:?}");
                 match event {
                     // We've received all of the changes up-to this LSN, so
                     // downgrade our capability.
@@ -415,6 +418,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                             return Ok(());
                         };
 
+
                         handle_data_event(
                             changes,
                             partition_indexes,
@@ -423,7 +427,8 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                             &rewinds,
                             &data_output,
                             data_cap_set,
-                            &metrics
+                            &metrics,
+                            &mut deferred_updates,
                         ).await?
                     },
                     CdcEvent::SchemaUpdate { capture_instance, table, ddl_event } => {
@@ -484,28 +489,69 @@ async fn handle_data_event(
     data_output: &StackedAsyncOutputHandle<Lsn, (u64, Result<SourceMessage, DataflowError>)>,
     data_cap_set: &CapabilitySet<Lsn>,
     metrics: &SqlServerSourceMetrics,
+    deferred_updates: &mut BTreeMap<(Lsn, Lsn), CdcOperation>,
 ) -> Result<(), TransientError> {
+    // Events are emitted in LSN order for a given capture instance. If deferred_updates contains
+    // LSNs that are less than the commit_lsn, it is a bug.
+    if let Some(((deferred_lsn, _seqval), _row)) = deferred_updates.first_key_value()
+        && *deferred_lsn < commit_lsn
+    {
+        panic!(
+            "deferred update lsn {deferred_lsn} < commit lsn {commit_lsn}: {:?}",
+            deferred_updates.keys()
+        );
+    }
+
+    let mut mz_row = Row::default();
+    let arena = RowArena::default();
+
     for change in changes {
+        // deferred_update is only valid for single iteration of the loop.  It is set once both
+        // old and new update rows are seen. It will be decoded and emitted to appropriate outputs.
+        // Its life now fullfilled, it will return to whence it came.
+        let mut deferred_update: Option<_> = None;
         let (sql_server_row, diff): (_, _) = match change {
             CdcOperation::Insert(sql_server_row) => {
                 metrics.inserts.inc();
-                (sql_server_row, Diff::ONE)
-            }
-            CdcOperation::UpdateNew(sql_server_row) => {
-                metrics.updates.inc();
                 (sql_server_row, Diff::ONE)
             }
             CdcOperation::Delete(sql_server_row) => {
                 metrics.deletes.inc();
                 (sql_server_row, Diff::MINUS_ONE)
             }
-            CdcOperation::UpdateOld(sql_server_row) => (sql_server_row, Diff::MINUS_ONE),
+
+            // Updates are not ordered by seqval, so either old or new row could be observed first.
+            // The first update row is stashed, when the second arrives, both are processed.
+            CdcOperation::UpdateNew(seqval, sql_server_row) => {
+                // arbitrarily choosing to update metrics on the the new row
+                metrics.updates.inc();
+                deferred_update = deferred_updates.remove(&(commit_lsn, seqval));
+                if deferred_update.is_none() {
+                    tracing::trace!("capture deferred UpdateNew ({commit_lsn}, {seqval})");
+                    deferred_updates.insert(
+                        (commit_lsn, seqval),
+                        CdcOperation::UpdateNew(seqval, sql_server_row),
+                    );
+                    continue;
+                }
+                (sql_server_row, Diff::ONE)
+            }
+            CdcOperation::UpdateOld(seqval, sql_server_row) => {
+                deferred_update = deferred_updates.remove(&(commit_lsn, seqval));
+                if deferred_update.is_none() {
+                    tracing::trace!("capture deferred UpdateOld ({commit_lsn}, {seqval})");
+                    deferred_updates.insert(
+                        (commit_lsn, seqval),
+                        CdcOperation::UpdateOld(seqval, sql_server_row),
+                    );
+                    continue;
+                }
+                // The old row is emitted conditionally. This [`Diff`] is for the new row.
+                (sql_server_row, Diff::ONE)
+            }
         };
 
-        // Try to decode a row, returning a SourceError if it fails.
-        let mut mz_row = Row::default();
-        let arena = RowArena::default();
-
+        // Try to decode the input row for each output.
         for partition_idx in partition_indexes {
             let decoder = decoder_map.get(partition_idx).unwrap();
 
@@ -516,24 +562,37 @@ async fn handle_data_event(
                 continue;
             }
 
-            // Try to decode a row, returning a SourceError if it fails.
-            let message = match decoder.decode(&sql_server_row, &mut mz_row, &arena) {
-                Ok(()) => Ok(SourceMessage {
-                    key: Row::default(),
-                    value: mz_row.clone(),
-                    metadata: Row::default(),
-                }),
-                Err(e) => {
-                    let kind = DecodeErrorKind::Text(e.to_string().into());
-                    // TODO(sql_server2): Get the raw bytes from `tiberius`.
-                    let raw = format!("{sql_server_row:?}");
-                    Err(DataflowError::DecodeError(Box::new(DecodeError {
-                        kind,
-                        raw: raw.as_bytes().to_vec(),
-                    })))
-                }
-            };
+            let message = if let Some(ref deferred_update) = deferred_update {
+                let (old_row, new_row) = match deferred_update {
+                    CdcOperation::UpdateOld(_seqval, row) => (row, &sql_server_row),
+                    CdcOperation::UpdateNew(_seqval, row) => (&sql_server_row, row),
+                    CdcOperation::Insert(_) | CdcOperation::Delete(_) => unreachable!(),
+                };
 
+                let update_old = decode(decoder, old_row, &mut mz_row, &arena, Some(new_row));
+                if rewind.is_some_and(|(_, snapshot_lsn)| commit_lsn <= *snapshot_lsn) {
+                    data_output
+                        .give_fueled(
+                            &data_cap_set[0],
+                            (
+                                (*partition_idx, update_old.clone()),
+                                Lsn::minimum(),
+                                Diff::ONE,
+                            ),
+                        )
+                        .await;
+                }
+                data_output
+                    .give_fueled(
+                        &data_cap_set[0],
+                        ((*partition_idx, update_old), commit_lsn, Diff::MINUS_ONE),
+                    )
+                    .await;
+
+                decode(decoder, new_row, &mut mz_row, &arena, None)
+            } else {
+                decode(decoder, &sql_server_row, &mut mz_row, &arena, None)
+            };
             if rewind.is_some_and(|(_, snapshot_lsn)| commit_lsn <= *snapshot_lsn) {
                 data_output
                     .give_fueled(
@@ -557,6 +616,33 @@ type StackedAsyncOutputHandle<T, D> = AsyncOutputHandle<
     T,
     AccountedStackBuilder<CapacityContainerBuilder<TimelyStack<(D, T, Diff)>>>,
 >;
+
+/// Helper method to decode a row from a [`tiberius::Row`] (or 2 of them in the case of update)
+/// to a [`Row`]. This centralizes the decode and mapping to result.
+fn decode(
+    decoder: &SqlServerRowDecoder,
+    row: &tiberius::Row,
+    mz_row: &mut Row,
+    arena: &RowArena,
+    new_row: Option<&tiberius::Row>,
+) -> Result<SourceMessage, DataflowError> {
+    match decoder.decode(row, mz_row, arena, new_row) {
+        Ok(()) => Ok(SourceMessage {
+            key: Row::default(),
+            value: mz_row.clone(),
+            metadata: Row::default(),
+        }),
+        Err(e) => {
+            let kind = DecodeErrorKind::Text(e.to_string().into());
+            // TODO(sql_server2): Get the raw bytes from `tiberius`.
+            let raw = format!("{row:?}");
+            Err(DataflowError::DecodeError(Box::new(DecodeError {
+                kind,
+                raw: raw.as_bytes().to_vec(),
+            })))
+        }
+    }
+}
 
 /// Helper method to return a "definite" error upstream.
 async fn return_definite_error(

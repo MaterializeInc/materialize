@@ -402,220 +402,233 @@ fn parse_data_type(
         });
     }
 
-    let scalar = match raw.data_type.to_lowercase().as_str() {
-        "tinyint" => (SqlScalarType::Int16, SqlServerColumnDecodeType::U8),
-        "smallint" => (SqlScalarType::Int16, SqlServerColumnDecodeType::I16),
-        "int" => (SqlScalarType::Int32, SqlServerColumnDecodeType::I32),
-        "bigint" => (SqlScalarType::Int64, SqlServerColumnDecodeType::I64),
-        "bit" => (SqlScalarType::Bool, SqlServerColumnDecodeType::Bool),
-        "decimal" | "numeric" | "money" | "smallmoney" => {
-            // SQL Server supports a precision in the range of [1, 38] and then
-            // the scale is 0 <= scale <= precision.
-            //
-            // Materialize numerics are floating point with a fixed precision of 39.
-            //
-            // See: <https://learn.microsoft.com/en-us/sql/t-sql/data-types/decimal-and-numeric-transact-sql?view=sql-server-ver16#arguments>
-            if raw.precision > 38 || raw.scale > raw.precision {
-                tracing::warn!(
-                    "unexpected value from SQL Server, precision of {} and scale of {}",
-                    raw.precision,
-                    raw.scale,
-                );
-            }
-            if raw.precision > 39 {
-                let reason = format!(
-                    "precision of {} is greater than our maximum of 39",
-                    raw.precision
-                );
-                return Err(UnsupportedDataType {
-                    column_name: raw.name.to_string(),
-                    column_type: raw.data_type.to_string(),
-                    reason,
-                });
-            }
-
-            let raw_scale = usize::cast_from(raw.scale);
-            let max_scale =
-                NumericMaxScale::try_from(raw_scale).map_err(|_| UnsupportedDataType {
-                    column_type: raw.data_type.to_string(),
-                    column_name: raw.name.to_string(),
-                    reason: format!("scale of {} is too large", raw.scale),
-                })?;
-            let column_type = SqlScalarType::Numeric {
-                max_scale: Some(max_scale),
-            };
-
-            (column_type, SqlServerColumnDecodeType::Numeric)
-        }
-        // SQL Server has a few IEEE 754 floating point type names. The underlying type is float(n),
-        // where n is the number of bits used. SQL Server still ends up with only 2 distinct types
-        // as it treats 1 <= n <= 24 as n=24, and 25 <= n <= 53 as n=53.
-        //
-        // Additionally, `real` and `double precision` exist as synonyms of float(24) and float(53),
-        // respectively.  What doesn't appear to be documented is how these appear in `sys.types`.
-        // See <https://learn.microsoft.com/en-us/sql/t-sql/data-types/float-and-real-transact-sql?view=sql-server-ver17>
-        "real" | "float" | "double precision" => match raw.max_length {
-            // Decide the MZ type based on the number of bytes rather than the name, just in case
-            // there is inconsistency among versions.
-            4 => (SqlScalarType::Float32, SqlServerColumnDecodeType::F32),
-            8 => (SqlScalarType::Float64, SqlServerColumnDecodeType::F64),
-            _ => {
-                return Err(UnsupportedDataType {
-                    column_name: raw.name.to_string(),
-                    column_type: raw.data_type.to_string(),
-                    reason: format!("unsupported length {}", raw.max_length),
-                });
-            }
-        },
-        dt @ ("char" | "nchar" | "varchar" | "nvarchar" | "sysname") => {
-            // When the `max_length` is -1 SQL Server will not present us with the "before" value
-            // for updated columns.
-            //
-            // TODO(sql_server3): Support UPSERT semantics for SQL Server.
-            if raw.max_length == -1 {
-                return Err(UnsupportedDataType {
-                    column_name: raw.name.to_string(),
-                    column_type: raw.data_type.to_string(),
-                    reason: "columns with unlimited size do not support CDC".to_string(),
-                });
-            }
-
-            let column_type = match dt {
-                "char" => {
-                    let length = CharLength::try_from(i64::from(raw.max_length)).map_err(|e| {
-                        UnsupportedDataType {
-                            column_name: raw.name.to_string(),
-                            column_type: raw.data_type.to_string(),
-                            reason: e.to_string(),
-                        }
-                    })?;
-                    SqlScalarType::Char {
-                        length: Some(length),
-                    }
+    let scalar =
+        match raw.data_type.to_lowercase().as_str() {
+            "tinyint" => (SqlScalarType::Int16, SqlServerColumnDecodeType::U8),
+            "smallint" => (SqlScalarType::Int16, SqlServerColumnDecodeType::I16),
+            "int" => (SqlScalarType::Int32, SqlServerColumnDecodeType::I32),
+            "bigint" => (SqlScalarType::Int64, SqlServerColumnDecodeType::I64),
+            "bit" => (SqlScalarType::Bool, SqlServerColumnDecodeType::Bool),
+            "decimal" | "numeric" | "money" | "smallmoney" => {
+                // SQL Server supports a precision in the range of [1, 38] and then
+                // the scale is 0 <= scale <= precision.
+                //
+                // Materialize numerics are floating point with a fixed precision of 39.
+                //
+                // See: <https://learn.microsoft.com/en-us/sql/t-sql/data-types/decimal-and-numeric-transact-sql?view=sql-server-ver16#arguments>
+                if raw.precision > 38 || raw.scale > raw.precision {
+                    tracing::warn!(
+                        "unexpected value from SQL Server, precision of {} and scale of {}",
+                        raw.precision,
+                        raw.scale,
+                    );
                 }
-                "varchar" => {
-                    let length =
-                        VarCharMaxLength::try_from(i64::from(raw.max_length)).map_err(|e| {
-                            UnsupportedDataType {
+                if raw.precision > 39 {
+                    let reason = format!(
+                        "precision of {} is greater than our maximum of 39",
+                        raw.precision
+                    );
+                    return Err(UnsupportedDataType {
+                        column_name: raw.name.to_string(),
+                        column_type: raw.data_type.to_string(),
+                        reason,
+                    });
+                }
+
+                let raw_scale = usize::cast_from(raw.scale);
+                let max_scale =
+                    NumericMaxScale::try_from(raw_scale).map_err(|_| UnsupportedDataType {
+                        column_type: raw.data_type.to_string(),
+                        column_name: raw.name.to_string(),
+                        reason: format!("scale of {} is too large", raw.scale),
+                    })?;
+                let column_type = SqlScalarType::Numeric {
+                    max_scale: Some(max_scale),
+                };
+
+                (column_type, SqlServerColumnDecodeType::Numeric)
+            }
+            // SQL Server has a few IEEE 754 floating point type names. The underlying type is float(n),
+            // where n is the number of bits used. SQL Server still ends up with only 2 distinct types
+            // as it treats 1 <= n <= 24 as n=24, and 25 <= n <= 53 as n=53.
+            //
+            // Additionally, `real` and `double precision` exist as synonyms of float(24) and float(53),
+            // respectively.  What doesn't appear to be documented is how these appear in `sys.types`.
+            // See <https://learn.microsoft.com/en-us/sql/t-sql/data-types/float-and-real-transact-sql?view=sql-server-ver17>
+            "real" | "float" | "double precision" => match raw.max_length {
+                // Decide the MZ type based on the number of bytes rather than the name, just in case
+                // there is inconsistency among versions.
+                4 => (SqlScalarType::Float32, SqlServerColumnDecodeType::F32),
+                8 => (SqlScalarType::Float64, SqlServerColumnDecodeType::F64),
+                _ => {
+                    return Err(UnsupportedDataType {
+                        column_name: raw.name.to_string(),
+                        column_type: raw.data_type.to_string(),
+                        reason: format!("unsupported length {}", raw.max_length),
+                    });
+                }
+            },
+            dt @ ("char" | "nchar" | "sysname") => {
+                // There isn't a char(max) or nchar(max), so it isn't clear if this condition
+                // is possible.
+                if raw.max_length == -1 {
+                    return Err(UnsupportedDataType {
+                        column_name: raw.name.to_string(),
+                        column_type: raw.data_type.to_string(),
+                        reason: "columns with unlimited size do not support CDC".to_string(),
+                    });
+                }
+
+                let column_type = match dt {
+                    "char" => {
+                        let length =
+                            if raw.max_length != -1 {
+                                let length = CharLength::try_from(i64::from(raw.max_length))
+                                    .map_err(|e| UnsupportedDataType {
+                                        column_name: raw.name.to_string(),
+                                        column_type: raw.data_type.to_string(),
+                                        reason: e.to_string(),
+                                    })?;
+                                Some(length)
+                            } else {
+                                None
+                            };
+                        SqlScalarType::Char { length }
+                    }
+                    // Determining the max character count for these types is difficult
+                    // because of different character encodings, so we fallback to just
+                    // representing them as "text".
+                    "nchar" | "sysname" => SqlScalarType::String,
+                    other => unreachable!("'{other}' checked above"),
+                };
+
+                (column_type, SqlServerColumnDecodeType::String)
+            }
+            "varchar" | "nvarchar" => {
+                // `max text repl size` is 64KB by default.  If a user attempts to insert a value
+                // that exceeds this limit, SQL Server will return an error and the insert fails
+                // with error `7139`.  This is also true for updates that increase the field length
+                // beyond the limit.
+                //
+                // See <https://learn.microsoft.com/en-us/sql/relational-databases/errors-events/database-engine-events-and-errors-7000-to-7999?view=sql-server-ver17>
+                //
+                // If the `max text repl size` changes, it does not affect events already written to
+                // the CDC table, nor does it change the behavior of what CDC captures for updates
+                // to non-LOD columns (based on testing).
+                let max_length =
+                    if raw.max_length != -1 {
+                        let length = VarCharMaxLength::try_from(i64::from(raw.max_length))
+                            .map_err(|e| UnsupportedDataType {
                                 column_name: raw.name.to_string(),
                                 column_type: raw.data_type.to_string(),
                                 reason: e.to_string(),
-                            }
-                        })?;
-                    SqlScalarType::VarChar {
-                        max_length: Some(length),
-                    }
+                            })?;
+                        Some(length)
+                    } else {
+                        None
+                    };
+                let column_type = SqlScalarType::VarChar { max_length };
+                (column_type, SqlServerColumnDecodeType::String)
+            }
+            "text" | "ntext" | "image" => {
+                // SQL Server docs indicate this should always be 16. There's no
+                // issue if it's not, but it's good to track.
+                mz_ore::soft_assert_eq_no_log!(raw.max_length, 16);
+
+                // TODO(sql_server3): Support UPSERT semantics for SQL Server.
+                return Err(UnsupportedDataType {
+                    column_name: raw.name.to_string(),
+                    column_type: raw.data_type.to_string(),
+                    reason: "columns with unlimited size do not support CDC".to_string(),
+                });
+            }
+            "xml" => {
+                // When the `max_length` is -1 SQL Server will not present us with the "before" value
+                // for updated columns.
+                //
+                // TODO(sql_server3): Support UPSERT semantics for SQL Server.
+                if raw.max_length == -1 {
+                    return Err(UnsupportedDataType {
+                        column_name: raw.name.to_string(),
+                        column_type: raw.data_type.to_string(),
+                        reason: "columns with unlimited size do not support CDC".to_string(),
+                    });
                 }
-                // Determining the max character count for these types is difficult
-                // because of different character encodings, so we fallback to just
-                // representing them as "text".
-                "nchar" | "nvarchar" | "sysname" => SqlScalarType::String,
-                other => unreachable!("'{other}' checked above"),
-            };
-
-            (column_type, SqlServerColumnDecodeType::String)
-        }
-        "text" | "ntext" | "image" => {
-            // SQL Server docs indicate this should always be 16. There's no
-            // issue if it's not, but it's good to track.
-            mz_ore::soft_assert_eq_no_log!(raw.max_length, 16);
-
-            // TODO(sql_server3): Support UPSERT semantics for SQL Server.
-            return Err(UnsupportedDataType {
-                column_name: raw.name.to_string(),
-                column_type: raw.data_type.to_string(),
-                reason: "columns with unlimited size do not support CDC".to_string(),
-            });
-        }
-        "xml" => {
-            // When the `max_length` is -1 SQL Server will not present us with the "before" value
-            // for updated columns.
+                (SqlScalarType::String, SqlServerColumnDecodeType::Xml)
+            }
+            "binary" | "varbinary" => {
+                // [`SqlScalarType`] does not support tracking max_length for binary data. To ensure
+                // columns of type varbinary(max) (Large Object Data) are decoded properly, it is
+                // necessary to know that the length is `max`. `varchar` and `nvarchar` track this
+                // using [`SqlScalarType::VarChar`] max_length field.
+                if raw.max_length == -1 {
+                    return Err(UnsupportedDataType {
+                        column_name: raw.name.to_string(),
+                        column_type: raw.data_type.to_string(),
+                        reason: "columns with unlimited size do not support CDC".to_string(),
+                    });
+                }
+                (SqlScalarType::Bytes, SqlServerColumnDecodeType::Bytes)
+            }
+            "json" => (SqlScalarType::Jsonb, SqlServerColumnDecodeType::String),
+            "date" => (SqlScalarType::Date, SqlServerColumnDecodeType::NaiveDate),
+            // SQL Server supports a scale of (and defaults to) 7 digits (aka 100 nanoseconds)
+            // for time related types.
             //
-            // TODO(sql_server3): Support UPSERT semantics for SQL Server.
-            if raw.max_length == -1 {
+            // Internally Materialize supports a scale of 9 (aka nanoseconds), but for Postgres
+            // compatibility we constraint ourselves to a scale of 6 (aka microseconds). By
+            // default we will round values we get from  SQL Server to fit in Materialize.
+            //
+            // TODO(sql_server3): Support a "strict" mode where we're fail the creation of the
+            // source if the scale is too large.
+            // TODO(sql_server3): Support specifying a precision for SqlScalarType::Time.
+            //
+            // See: <https://learn.microsoft.com/en-us/sql/t-sql/data-types/datetime2-transact-sql?view=sql-server-ver16>.
+            "time" => (SqlScalarType::Time, SqlServerColumnDecodeType::NaiveTime),
+            dt @ ("smalldatetime" | "datetime" | "datetime2" | "datetimeoffset") => {
+                if raw.scale > 7 {
+                    tracing::warn!("unexpected scale '{}' from SQL Server", raw.scale);
+                }
+                if raw.scale > mz_repr::adt::timestamp::MAX_PRECISION {
+                    tracing::warn!("truncating scale of '{}' for '{}'", raw.scale, dt);
+                }
+                let precision = std::cmp::min(raw.scale, mz_repr::adt::timestamp::MAX_PRECISION);
+                let precision =
+                    Some(TimestampPrecision::try_from(i64::from(precision)).expect("known to fit"));
+
+                match dt {
+                    "smalldatetime" | "datetime" | "datetime2" => (
+                        SqlScalarType::Timestamp { precision },
+                        SqlServerColumnDecodeType::NaiveDateTime,
+                    ),
+                    "datetimeoffset" => (
+                        SqlScalarType::TimestampTz { precision },
+                        SqlServerColumnDecodeType::DateTime,
+                    ),
+                    other => unreachable!("'{other}' checked above"),
+                }
+            }
+            "uniqueidentifier" => (SqlScalarType::Uuid, SqlServerColumnDecodeType::Uuid),
+            // TODO(sql_server3): Support reading the following types, at least as text:
+            //
+            // * geography
+            // * geometry
+            // * json (preview)
+            // * vector (preview)
+            //
+            // None of these types are implemented in `tiberius`, the crate that
+            // provides our SQL Server client, so we'll need to implement support
+            // for decoding them.
+            //
+            // See <https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-tds/355f7890-6e91-4978-ab76-2ded17ee09bc>.
+            other => {
                 return Err(UnsupportedDataType {
+                    column_type: other.to_string(),
                     column_name: raw.name.to_string(),
-                    column_type: raw.data_type.to_string(),
-                    reason: "columns with unlimited size do not support CDC".to_string(),
+                    reason: format!("'{other}' is unimplemented"),
                 });
             }
-            (SqlScalarType::String, SqlServerColumnDecodeType::Xml)
-        }
-        "binary" | "varbinary" => {
-            // When the `max_length` is -1 if this column changes as part of an `UPDATE`
-            // or `DELETE` statement, SQL Server will not provide the "old" value for
-            // this column, but we need this value so we can emit a retraction.
-            //
-            // TODO(sql_server3): Support UPSERT semantics for SQL Server.
-            if raw.max_length == -1 {
-                return Err(UnsupportedDataType {
-                    column_name: raw.name.to_string(),
-                    column_type: raw.data_type.to_string(),
-                    reason: "columns with unlimited size do not support CDC".to_string(),
-                });
-            }
-
-            (SqlScalarType::Bytes, SqlServerColumnDecodeType::Bytes)
-        }
-        "json" => (SqlScalarType::Jsonb, SqlServerColumnDecodeType::String),
-        "date" => (SqlScalarType::Date, SqlServerColumnDecodeType::NaiveDate),
-        // SQL Server supports a scale of (and defaults to) 7 digits (aka 100 nanoseconds)
-        // for time related types.
-        //
-        // Internally Materialize supports a scale of 9 (aka nanoseconds), but for Postgres
-        // compatibility we constraint ourselves to a scale of 6 (aka microseconds). By
-        // default we will round values we get from  SQL Server to fit in Materialize.
-        //
-        // TODO(sql_server3): Support a "strict" mode where we're fail the creation of the
-        // source if the scale is too large.
-        // TODO(sql_server3): Support specifying a precision for SqlScalarType::Time.
-        //
-        // See: <https://learn.microsoft.com/en-us/sql/t-sql/data-types/datetime2-transact-sql?view=sql-server-ver16>.
-        "time" => (SqlScalarType::Time, SqlServerColumnDecodeType::NaiveTime),
-        dt @ ("smalldatetime" | "datetime" | "datetime2" | "datetimeoffset") => {
-            if raw.scale > 7 {
-                tracing::warn!("unexpected scale '{}' from SQL Server", raw.scale);
-            }
-            if raw.scale > mz_repr::adt::timestamp::MAX_PRECISION {
-                tracing::warn!("truncating scale of '{}' for '{}'", raw.scale, dt);
-            }
-            let precision = std::cmp::min(raw.scale, mz_repr::adt::timestamp::MAX_PRECISION);
-            let precision =
-                Some(TimestampPrecision::try_from(i64::from(precision)).expect("known to fit"));
-
-            match dt {
-                "smalldatetime" | "datetime" | "datetime2" => (
-                    SqlScalarType::Timestamp { precision },
-                    SqlServerColumnDecodeType::NaiveDateTime,
-                ),
-                "datetimeoffset" => (
-                    SqlScalarType::TimestampTz { precision },
-                    SqlServerColumnDecodeType::DateTime,
-                ),
-                other => unreachable!("'{other}' checked above"),
-            }
-        }
-        "uniqueidentifier" => (SqlScalarType::Uuid, SqlServerColumnDecodeType::Uuid),
-        // TODO(sql_server3): Support reading the following types, at least as text:
-        //
-        // * geography
-        // * geometry
-        // * json (preview)
-        // * vector (preview)
-        //
-        // None of these types are implemented in `tiberius`, the crate that
-        // provides our SQL Server client, so we'll need to implement support
-        // for decoding them.
-        //
-        // See <https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-tds/355f7890-6e91-4978-ab76-2ded17ee09bc>.
-        other => {
-            return Err(UnsupportedDataType {
-                column_type: other.to_string(),
-                column_name: raw.name.to_string(),
-                reason: format!("'{other}' is unimplemented"),
-            });
-        }
-    };
+        };
     Ok(scalar)
 }
 
@@ -1041,6 +1054,60 @@ fn tiberius_numeric_to_mz_numeric(val: tiberius::numeric::Numeric) -> Numeric {
     numeric
 }
 
+/// The update mask of a CDC event row, returned by `cdc.fn_cdc_get_all_changes_<capture_instance>`
+/// as `__$update_mask`.
+///
+/// The [`tiberius::Row`] returned by `cdc.fn_cdc_get_all_changes_<capture_instance>` contains
+/// 4 metadata columns used by CDC. [`UpdateMask::data_col_updated()`] will always return false for
+/// the first 4 columns.
+///
+/// See <https://learn.microsoft.com/en-us/sql/relational-databases/system-functions/cdc-fn-cdc-get-all-changes-capture-instance-transact-sql?view=sql-server-ver17>
+
+#[derive(Debug)]
+pub struct UpdateMask {
+    mask: Vec<u8>,
+}
+
+impl TryFrom<&tiberius::Row> for UpdateMask {
+    type Error = SqlServerDecodeError;
+
+    fn try_from(row: &tiberius::Row) -> Result<Self, Self::Error> {
+        static UPDATE_MASK: &str = "__$update_mask";
+
+        let mask: Vec<u8> = row
+            .try_get::<&[u8], _>(UPDATE_MASK)
+            .inspect_err(|e| tracing::warn!("Failed extracting update mask: {e:?}"))
+            .map_err(|_| SqlServerDecodeError::InvalidColumn {
+                column_name: UPDATE_MASK.to_string(),
+                as_type: "bytes",
+            })?
+            .ok_or_else(|| SqlServerDecodeError::InvalidData {
+                column_name: UPDATE_MASK.to_string(),
+                error: "column cannot be null".to_string(),
+            })?
+            .into();
+        Ok(UpdateMask { mask })
+    }
+}
+
+impl UpdateMask {
+    /// Returns true if the data column was updated.
+    pub fn data_col_updated(&self, col_index: usize) -> bool {
+        if col_index < 4 {
+            return false;
+        }
+        let adj_col_index = col_index - 4;
+        let byte_offset = adj_col_index / 8;
+        assert!(
+            byte_offset < self.mask.len(),
+            "byte_offset = {byte_offset} mask_len = {}",
+            self.mask.len()
+        );
+        let bit_offset = adj_col_index % 8;
+        (self.mask[self.mask.len() - byte_offset - 1] >> bit_offset) & 1 == 1
+    }
+}
+
 /// A decoder from [`tiberius::Row`] to [`mz_repr::Row`].
 ///
 /// The goal of this type is to perform any expensive "downcasts" so in the hot
@@ -1113,15 +1180,49 @@ impl SqlServerRowDecoder {
     }
 
     /// Decode data from the provided [`tiberius::Row`] into the provided [`Row`].
+    ///
+    /// For updates, the new row data is provided in the event the data contains Large Object Data
+    /// (e.g. varchar(max)). [`SqlServerRowDecoder::decode()`] will decode the [`UpdateMask`] from
+    /// the new row and retrieve LOD values from the new row for any LOD column that was not updated
+    /// in the old row.
     pub fn decode(
         &self,
         data: &tiberius::Row,
         row: &mut Row,
         arena: &RowArena,
+        new_data: Option<&tiberius::Row>,
     ) -> Result<(), SqlServerDecodeError> {
         let mut packer = row.packer();
+
         for (col_name, col_type, decoder) in &self.decoders {
             let datum = decoder.decode(data, col_name, col_type, arena)?;
+
+            let datum = if let Some(new_data) = new_data
+                && matches!(
+                    col_type.scalar_type,
+                    SqlScalarType::VarChar { max_length: None }
+                )
+                && matches!(datum, Datum::Null)
+            {
+                let update_mask = UpdateMask::try_from(new_data)?;
+                let col_index = new_data
+                    .columns()
+                    .iter()
+                    .position(|c| c.name() == col_name.as_ref())
+                    .expect("column exists");
+                // The only time it is valid to pull the LOD column value from the new row
+                // is if the LOD column was *not* updated. The mask check is necessary to
+                // differentiate between updating a non-LOD column (the LOD column in old row
+                // is NULL) and updating a LOD column where the old value is NULL.
+                if !update_mask.data_col_updated(col_index) {
+                    decoder.decode(new_data, col_name, col_type, arena)?
+                } else {
+                    datum
+                }
+            } else {
+                datum
+            };
+
             packer.push(datum);
         }
         Ok(())
@@ -1225,7 +1326,7 @@ mod tests {
             SqlServerColumnDecodeType::Unsupported { .. }
         ));
 
-        let raw = SqlServerColumnRaw::new("foo", "varchar").max_length(-1);
+        let raw = SqlServerColumnRaw::new("foo", "varbinary").max_length(-1);
         let desc = SqlServerColumnDesc::new(&raw);
         let SqlServerColumnDecodeType::Unsupported { context } = desc.decode_type else {
             panic!("unexpected decode type {desc:?}");
@@ -1299,7 +1400,7 @@ mod tests {
         let arena = RowArena::default();
 
         decoder
-            .decode(&sql_server_row_a, &mut rnd_row, &arena)
+            .decode(&sql_server_row_a, &mut rnd_row, &arena, None)
             .unwrap();
         assert_eq!(
             &rnd_row,
@@ -1307,7 +1408,7 @@ mod tests {
         );
 
         decoder
-            .decode(&sql_server_row_b, &mut rnd_row, &arena)
+            .decode(&sql_server_row_b, &mut rnd_row, &arena, None)
             .unwrap();
         assert_eq!(
             &rnd_row,
@@ -1358,7 +1459,7 @@ mod tests {
             let mut mz_row = Row::default();
             let arena = RowArena::new();
             decoder
-                .decode(&sql_server_row, &mut mz_row, &arena)
+                .decode(&sql_server_row, &mut mz_row, &arena, None)
                 .unwrap();
 
             let str_datum = mz_row.into_element();
