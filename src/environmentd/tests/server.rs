@@ -183,6 +183,10 @@ fn setup_statement_logging_core(
             "statement_logging_use_reproducible_rng".to_string(),
             "true".to_string(),
         )
+        .with_system_parameter_default(
+            "enable_frontend_peek_sequencing".to_string(),
+            "false".to_string(),
+        )
         .start_blocking();
     let client = server.connect(postgres::NoTls).unwrap();
     (server, client)
@@ -721,6 +725,9 @@ fn test_statement_logging_sampling_constrained() {
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 async fn test_statement_logging_unsampled_metrics() {
     let server = test_util::TestHarness::default().start().await;
+    server
+        .disable_feature_flags(&["enable_frontend_peek_sequencing"])
+        .await;
     let client = server.connect().await.unwrap();
 
     // TODO[btv]
