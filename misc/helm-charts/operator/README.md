@@ -108,6 +108,7 @@ The following table lists the configurable parameters of the Materialize operato
 | Parameter | Description | Default |
 |-----------|-------------|---------|
 | `balancerd.affinity` | Affinity to use for balancerd pods spawned by the operator | ``nil`` |
+| `balancerd.defaultResources` | Default resources if not set in the Materialize CR | ``{"limits":{"memory":"256Mi"},"requests":{"cpu":"500m","memory":"256Mi"}}`` |
 | `balancerd.enabled` | Flag to indicate whether to create balancerd pods for the environments | ``true`` |
 | `balancerd.nodeSelector` | Node selector to use for balancerd pods spawned by the operator | ``nil`` |
 | `balancerd.tolerations` | Tolerations to use for balancerd pods spawned by the operator | ``nil`` |
@@ -117,11 +118,13 @@ The following table lists the configurable parameters of the Materialize operato
 | `clusterd.swapNodeSelector` | Additional node selector to use for clusterd pods when using swap. This will be merged with the values in `nodeSelector`. | ``{"materialize.cloud/swap":"true"}`` |
 | `clusterd.tolerations` | Tolerations to use for clusterd pods spawned by the operator | ``nil`` |
 | `console.affinity` | Affinity to use for console pods spawned by the operator | ``nil`` |
+| `console.defaultResources` | Default resources if not set in the Materialize CR | ``{"limits":{"memory":"256Mi"},"requests":{"cpu":"500m","memory":"256Mi"}}`` |
 | `console.enabled` | Flag to indicate whether to create console pods for the environments | ``true`` |
 | `console.imageTagMapOverride` | Override the mapping of environmentd versions to console versions | ``{}`` |
 | `console.nodeSelector` | Node selector to use for console pods spawned by the operator | ``nil`` |
 | `console.tolerations` | Tolerations to use for console pods spawned by the operator | ``nil`` |
 | `environmentd.affinity` | Affinity to use for environmentd pods spawned by the operator | ``nil`` |
+| `environmentd.defaultResources` | Default resources if not set in the Materialize CR | ``{"limits":{"memory":"4Gi"},"requests":{"cpu":"1","memory":"4095Mi"}}`` |
 | `environmentd.nodeSelector` | Node selector to use for environmentd pods spawned by the operator | ``{}`` |
 | `environmentd.tolerations` | Tolerations to use for environmentd pods spawned by the operator | ``nil`` |
 | `networkPolicies.egress` | egress from Materialize pods to sources and sinks | ``{"cidrs":["0.0.0.0/0"],"enabled":false}`` |

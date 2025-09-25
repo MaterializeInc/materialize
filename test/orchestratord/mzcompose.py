@@ -110,6 +110,12 @@ def get_environmentd_data() -> dict[str, Any]:
     )
 
 
+def get_console_data() -> dict[str, Any]:
+    return get_pod_data(
+        labels={"materialize.cloud/app": "console"},
+    )
+
+
 def retry(fn: Callable, timeout: int) -> None:
     end_time = (
         datetime.datetime.now() + datetime.timedelta(seconds=timeout)
@@ -679,6 +685,156 @@ class StorageClass(Modification):
 
         # Clusterd can take a while to start up
         retry(check_pods, 5)
+
+
+class EnvironmentdResources(Modification):
+    @classmethod
+    def values(cls) -> list[Any]:
+        return [
+            None,
+            {
+                "limits": {
+                    "cpu": "1",
+                    "memory": "1Gi",
+                },
+                "requests": {
+                    "cpu": "1",
+                    "memory": "1Gi",
+                },
+            },
+        ]
+
+    @classmethod
+    def default(cls) -> Any:
+        return None
+
+    def modify(self, definition: dict[str, Any]) -> None:
+        definition["materialize"]["spec"][
+            "environmentdResourceRequirements"
+        ] = self.value
+
+    def validate(self, mods: dict[type[Modification], Any]) -> None:
+        expected = self.value
+        if self.value is None:
+            expected = {
+                "limits": {
+                    "memory": "4Gi",
+                },
+                "requests": {
+                    "cpu": "1",
+                    "memory": "4095Mi",
+                },
+            }
+
+        def check_pods() -> None:
+            environmentd = get_environmentd_data()["items"][0]
+
+            resources = environmentd["spec"]["containers"][0]["resources"]
+            assert (
+                resources == expected
+            ), f"Expected environmentd resources {expected}, but got {resources}"
+
+        retry(check_pods, 120)
+
+
+class BalancerdResources(Modification):
+    @classmethod
+    def values(cls) -> list[Any]:
+        return [
+            None,
+            {
+                "limits": {
+                    "cpu": "1",
+                    "memory": "512Mi",
+                },
+                "requests": {
+                    "cpu": "1",
+                    "memory": "512Mi",
+                },
+            },
+        ]
+
+    @classmethod
+    def default(cls) -> Any:
+        return None
+
+    def modify(self, definition: dict[str, Any]) -> None:
+        definition["materialize"]["spec"]["balancerdResourceRequirements"] = self.value
+
+    def validate(self, mods: dict[type[Modification], Any]) -> None:
+        if mods[BalancerdEnabled] == False:
+            return
+        expected = self.value
+        if self.value is None:
+            expected = {
+                "limits": {
+                    "memory": "256Mi",
+                },
+                "requests": {
+                    "cpu": "500m",
+                    "memory": "256Mi",
+                },
+            }
+
+        def check_pods() -> None:
+            balancerd = get_balancerd_data()["items"][0]
+
+            resources = balancerd["spec"]["containers"][0]["resources"]
+            assert (
+                resources == expected
+            ), f"Expected balancerd resources {expected}, but got {resources}"
+
+        retry(check_pods, 120)
+
+
+class ConsoleResources(Modification):
+    @classmethod
+    def values(cls) -> list[Any]:
+        return [
+            None,
+            {
+                "limits": {
+                    "cpu": "100m",
+                    "memory": "128Mi",
+                },
+                "requests": {
+                    "cpu": "100m",
+                    "memory": "128Mi",
+                },
+            },
+        ]
+
+    @classmethod
+    def default(cls) -> Any:
+        return None
+
+    def modify(self, definition: dict[str, Any]) -> None:
+        definition["materialize"]["spec"]["consoleResourceRequirements"] = self.value
+
+    def validate(self, mods: dict[type[Modification], Any]) -> None:
+        if mods[ConsoleEnabled] == False:
+            return
+        expected = self.value
+        if self.value is None:
+            expected = {
+                "limits": {
+                    "memory": "256Mi",
+                },
+                "requests": {
+                    "cpu": "500m",
+                    "memory": "256Mi",
+                },
+            }
+
+        def check_pods() -> None:
+            console = get_console_data()["items"][0]
+
+            resources = console["spec"]["containers"][0]["resources"]
+            assert (
+                resources == expected
+            ), f"Expected console resources {expected}, but got {resources}"
+
+        retry(check_pods, 240)
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:

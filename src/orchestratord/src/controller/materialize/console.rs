@@ -388,7 +388,11 @@ ssl_certificate_key /nginx/tls/tls.key;",
             period_seconds: Some(30),
             ..probe.clone()
         }),
-        resources: mz.spec.console_resource_requirements.clone(),
+        resources: mz
+            .spec
+            .console_resource_requirements
+            .clone()
+            .or_else(|| config.console_default_resources.clone()),
         security_context,
         volume_mounts: Some(volume_mounts),
         ..Default::default()

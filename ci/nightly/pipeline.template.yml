@@ -2294,7 +2294,7 @@ steps:
               args: [--scenario=defaults, --recreate-cluster]
               ci-builder: stable
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: hetzner-aarch64-16cpu-32gb
 
       - id: orchestratord-all
         label: "Orchestratord test (every property)"
@@ -2306,7 +2306,7 @@ steps:
               args: [--scenario=all, --recreate-cluster]
               ci-builder: stable
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: hetzner-aarch64-16cpu-32gb
 
       - id: orchestratord-combine
         label: "Orchestratord test (combine properties)"
@@ -2318,4 +2318,4 @@ steps:
               args: [--scenario=combine, --runtime=7200, --recreate-cluster]
               ci-builder: stable
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: hetzner-aarch64-16cpu-32gb

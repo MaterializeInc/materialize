@@ -16,7 +16,7 @@ use std::{
 
 use http::HeaderValue;
 use k8s_openapi::{
-    api::core::v1::{Affinity, Toleration},
+    api::core::v1::{Affinity, ResourceRequirements, Toleration},
     apimachinery::pkg::apis::meta::v1::{Condition, Time},
 };
 use kube::{Api, Client, Resource, ResourceExt, api::PostParams, runtime::controller::Action};
@@ -91,6 +91,8 @@ pub struct MaterializeControllerArgs {
     environmentd_affinity: Option<Affinity>,
     #[clap(long = "environmentd-toleration", value_parser = parse_tolerations)]
     environmentd_tolerations: Option<Vec<Toleration>>,
+    #[clap(long, value_parser = parse_resources)]
+    environmentd_default_resources: Option<ResourceRequirements>,
     #[clap(long)]
     clusterd_node_selector: Vec<KeyValueArg<String, String>>,
     #[clap(long, value_parser = parse_affinity)]
@@ -103,12 +105,16 @@ pub struct MaterializeControllerArgs {
     balancerd_affinity: Option<Affinity>,
     #[clap(long = "balancerd-toleration", value_parser = parse_tolerations)]
     balancerd_tolerations: Option<Vec<Toleration>>,
+    #[clap(long, value_parser = parse_resources)]
+    balancerd_default_resources: Option<ResourceRequirements>,
     #[clap(long)]
     console_node_selector: Vec<KeyValueArg<String, String>>,
     #[clap(long, value_parser = parse_affinity)]
     console_affinity: Option<Affinity>,
     #[clap(long = "console-toleration", value_parser = parse_tolerations)]
     console_tolerations: Option<Vec<Toleration>>,
+    #[clap(long, value_parser = parse_resources)]
+    console_default_resources: Option<ResourceRequirements>,
     #[clap(long, default_value = "always", value_enum)]
     image_pull_policy: KubernetesImagePullPolicy,
     #[clap(flatten)]
@@ -178,6 +184,10 @@ fn parse_affinity(s: &str) -> anyhow::Result<Affinity> {
 }
 
 fn parse_tolerations(s: &str) -> anyhow::Result<Toleration> {
+    Ok(serde_json::from_str(s)?)
+}
+
+fn parse_resources(s: &str) -> anyhow::Result<ResourceRequirements> {
     Ok(serde_json::from_str(s)?)
 }
 

@@ -1429,7 +1429,11 @@ fn create_environmentd_statefulset_object(
         volume_mounts: Some(volume_mounts),
         liveness_probe: Some(probe.clone()),
         readiness_probe: Some(probe),
-        resources: mz.spec.environmentd_resource_requirements.clone(),
+        resources: mz
+            .spec
+            .environmentd_resource_requirements
+            .clone()
+            .or_else(|| config.environmentd_default_resources.clone()),
         security_context: security_context.clone(),
         ..Default::default()
     };
