@@ -82,7 +82,7 @@ use crate::names::{
 use crate::plan::error::PlanError;
 use crate::plan::statement::ddl::load_generator_ast_to_generator;
 use crate::plan::{SourceReferences, StatementContext};
-use crate::pure::error::SqlServerSourcePurificationError;
+use crate::pure::error::{IcebergSinkPurificationError, SqlServerSourcePurificationError};
 use crate::session::vars::ENABLE_SQL_SERVER_SOURCE;
 use crate::{kafka_util, normalize};
 
@@ -431,11 +431,6 @@ pub(crate) fn purify_create_sink_avro_doc_on_options(
 
 /// Checks that the sink described in the statement can connect to its external
 /// resources.
-///
-/// We must not leave any state behind in the Kafka broker, so just ensure that
-/// we can connect. This means we don't ensure that we can create the topic and
-/// introduces TOCTOU errors, but creating an inoperable sink is infinitely
-/// preferable to leaking state in users' environments.
 async fn purify_create_sink(
     catalog: impl SessionCatalog,
     mut create_sink_stmt: CreateSinkStatement<Aug>,
@@ -473,6 +468,10 @@ async fn purify_create_sink(
             key: _,
             headers: _,
         } => {
+            // We must not leave any state behind in the Kafka broker, so just ensure that
+            // we can connect. This means we don't ensure that we can create the topic and
+            // introduces TOCTOU errors, but creating an inoperable sink is infinitely
+            // preferable to leaking state in users' environments.
             let scx = StatementContext::new(None, &catalog);
             let connection = {
                 let item = scx.get_item_by_resolved_name(connection)?;
@@ -525,6 +524,59 @@ async fn purify_create_sink(
             if metadata.brokers().len() == 0 {
                 Err(KafkaSinkPurificationError::ZeroBrokers)?;
             }
+        }
+        CreateSinkConnection::Iceberg {
+            connection,
+            aws_connection,
+            ..
+        } => {
+            let scx = StatementContext::new(None, &catalog);
+            let connection = {
+                let item = scx.get_item_by_resolved_name(connection)?;
+                // Get Iceberg connection
+                match item.connection()? {
+                    Connection::IcebergCatalog(connection) => {
+                        connection.clone().into_inline_connection(scx.catalog)
+                    }
+                    _ => sql_bail!(
+                        "{} is not an iceberg connection",
+                        scx.catalog.resolve_full_name(item.name())
+                    ),
+                }
+            };
+
+            let aws_conn_id = aws_connection.item_id();
+
+            let aws_connection = {
+                let item = scx.get_item_by_resolved_name(aws_connection)?;
+                // Get AWS connection
+                match item.connection()? {
+                    Connection::Aws(aws_connection) => aws_connection.clone(),
+                    _ => sql_bail!(
+                        "{} is not an aws connection",
+                        scx.catalog.resolve_full_name(item.name())
+                    ),
+                }
+            };
+
+            let _catalog = connection
+                .connect(storage_configuration, InTask::No)
+                .await
+                .map_err(|e| IcebergSinkPurificationError::CatalogError(Arc::new(e)))?;
+
+            let sdk_config = aws_connection
+                .load_sdk_config(
+                    &storage_configuration.connection_context,
+                    aws_conn_id.clone(),
+                    InTask::No,
+                )
+                .await
+                .map_err(|e| IcebergSinkPurificationError::AwsSdkContextError(Arc::new(e)))?;
+
+            let sts_client = aws_sdk_sts::Client::new(&sdk_config);
+            let _ = sts_client.get_caller_identity().send().await.map_err(|e| {
+                IcebergSinkPurificationError::StsIdentityError(Arc::new(e.into_service_error()))
+            })?;
         }
     }
 

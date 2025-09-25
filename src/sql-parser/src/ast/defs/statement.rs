@@ -1224,6 +1224,7 @@ pub enum CreateSinkOptionName {
     Snapshot,
     Version,
     PartitionStrategy,
+    CommitInterval,
 }
 
 impl AstDisplay for CreateSinkOptionName {
@@ -1237,6 +1238,9 @@ impl AstDisplay for CreateSinkOptionName {
             }
             CreateSinkOptionName::PartitionStrategy => {
                 f.write_str("PARTITION STRATEGY");
+            }
+            CreateSinkOptionName::CommitInterval => {
+                f.write_str("COMMIT INTERVAL");
             }
         }
     }
@@ -1253,6 +1257,7 @@ impl WithOptionName for CreateSinkOptionName {
             CreateSinkOptionName::Snapshot => false,
             CreateSinkOptionName::Version => false,
             CreateSinkOptionName::PartitionStrategy => false,
+            CreateSinkOptionName::CommitInterval => false,
         }
     }
 }
