@@ -199,7 +199,7 @@ pub trait OpenableDurableCatalogState: Debug + Send {
 
 /// A read only API for the durable catalog state.
 #[async_trait]
-pub trait ReadOnlyDurableCatalogState: Debug + Send {
+pub trait ReadOnlyDurableCatalogState: Debug + Send + Sync {
     /// Returns the epoch of the current durable catalog state. The epoch acts as
     /// a fencing token to prevent split brain issues across two
     /// [`DurableCatalogState`]s. When a new [`DurableCatalogState`] opens the
