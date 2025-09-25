@@ -249,10 +249,9 @@ impl CatalogState {
                     // state of the catalog _before_ applying a retraction. So
                     // that we can still have useful in-memory state to work
                     // with.
-                    if let Some(update) = parsed_state_updates::derive_controller_state_update(
-                        self,
-                        state_update.clone(),
-                    ) {
+                    if let Some(update) =
+                        parsed_state_updates::parse_state_update(self, state_update.clone())
+                    {
                         controller_state_updates.push(update);
                     }
 
@@ -286,10 +285,9 @@ impl CatalogState {
 
                     // We want the parsed controller state updates to match the
                     // state of the catalog _after_ applying an addition.
-                    if let Some(update) = parsed_state_updates::derive_controller_state_update(
-                        self,
-                        state_update.clone(),
-                    ) {
+                    if let Some(update) =
+                        parsed_state_updates::parse_state_update(self, state_update.clone())
+                    {
                         controller_state_updates.push(update);
                     }
                 }

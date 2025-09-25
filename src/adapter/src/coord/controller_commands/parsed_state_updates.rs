@@ -73,10 +73,10 @@ pub enum ParsedStateUpdateKind {
 /// _before_ applying the changes. This is so that we can easily extract the
 /// state of an object before it is removed.
 ///
-/// Will return `None` if the given catalog change is not relevant to the
-/// controller(s).
+/// Will return `None` if the given catalog change is purely internal to the
+/// catalog and does not have implications for anything else.
 #[instrument(level = "debug")]
-pub fn derive_controller_state_update(
+pub fn parse_state_update(
     catalog: &CatalogState,
     state_update: StateUpdate,
 ) -> Option<ParsedStateUpdate> {
