@@ -399,7 +399,7 @@ ssl_certificate_key /nginx/tls/tls.key;",
     };
 
     let deployment_spec = DeploymentSpec {
-        replicas: Some(2),
+        replicas: Some(mz.console_replicas()),
         selector: LabelSelector {
             match_labels: Some(pod_template_labels.clone()),
             ..Default::default()
