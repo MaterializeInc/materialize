@@ -9,9 +9,10 @@
 
 use std::collections::BTreeMap;
 
+use base64::prelude::*;
 use maplit::btreeset;
 use mz_catalog::builtin::BuiltinTable;
-use mz_catalog::durable::Transaction;
+use mz_catalog::durable::{MOCK_AUTHENTICATION_NONCE_KEY, Transaction};
 use mz_catalog::memory::objects::{BootstrapStateUpdateKind, StateUpdate};
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NowFn;
@@ -830,6 +831,17 @@ pub(crate) fn durable_migrate(
             Some(BUILTIN_MIGRATION_SHARD_MIGRATION_DONE),
         )?;
     }
+
+    if tx
+        .get_setting(MOCK_AUTHENTICATION_NONCE_KEY.to_string())
+        .is_none()
+    {
+        let mut nonce = [0u8; 24];
+        let _ = openssl::rand::rand_bytes(&mut nonce).expect("failed to generate nonce");
+        let nonce = BASE64_STANDARD.encode(nonce);
+        tx.set_setting(MOCK_AUTHENTICATION_NONCE_KEY.to_string(), Some(nonce))?;
+    }
+
     Ok(())
 }
 
