@@ -8,8 +8,8 @@
 // by the Apache License, Version 2.0.
 
 //! Utilities for parsing and augmenting "raw" catalog changes
-//! ([StateUpdateKind]), so that we can apply derived commands to the
-//! controller(s).
+//! ([StateUpdateKind]), so that we can update in-memory adapter state, apply
+//! implications, and apply derived commands to the controller(s).
 //!
 //! See [parse_state_update] for details.
 
