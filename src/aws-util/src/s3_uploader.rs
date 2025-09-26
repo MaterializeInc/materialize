@@ -164,6 +164,12 @@ impl S3MultiPartUploader {
             .create_multipart_upload()
             .bucket(&bucket)
             .key(&key)
+            .customize()
+            .mutate_request(|req| {
+                // For GCS, Content-Length must be 0 when initiating MPU
+                // https://cloud.google.com/storage/docs/xml-api/post-object-multipart
+                req.headers_mut().insert("Content-Length", "0");
+            })
             .send()
             .await?;
         let upload_id = res
