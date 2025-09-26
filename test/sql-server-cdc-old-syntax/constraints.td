@@ -48,11 +48,11 @@ EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'unique_null
 > CREATE DEFAULT INDEX ON unique_not_null;
 > CREATE DEFAULT INDEX ON unique_nullable;
 
-# database-issues#9723
+# TODO: database-issues#9723
 #> SELECT key FROM (SHOW INDEXES ON pk);
 #{f1,f2}
 
-# database-issues#9723
+# TODO: database-issues#9723
 #> SELECT key FROM (SHOW INDEXES ON unique_not_null);
 #{f1,f2}
 
