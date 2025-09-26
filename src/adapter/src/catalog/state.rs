@@ -2339,12 +2339,17 @@ impl CatalogState {
 
     /// Return whether the given replica size requests a disk.
     ///
+    /// Note that here we treat replica sizes that enable swap as _not_ requesting disk. For swap
+    /// replicas, the provided disk limit is informational and mostly ignored. Whether an instance
+    /// has access to swap depends on the configuration of the node it gets scheduled on, and is
+    /// not something we can know at this point.
+    ///
     /// # Panics
     ///
     /// Panics if the given size doesn't exist in `cluster_replica_sizes`.
     pub(crate) fn cluster_replica_size_has_disk(&self, size: &str) -> bool {
         let alloc = &self.cluster_replica_sizes.0[size];
-        alloc.disk_limit != Some(DiskLimit::ZERO)
+        !alloc.swap_enabled && alloc.disk_limit != Some(DiskLimit::ZERO)
     }
 
     pub(crate) fn ensure_valid_replica_size(
