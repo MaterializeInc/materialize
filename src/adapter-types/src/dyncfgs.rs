@@ -131,7 +131,13 @@ pub const PERSIST_FAST_PATH_ORDER: Config<bool> = Config::new(
     "If set, send queries with a compatible literal constraint or ordering clause down the Persist fast path.",
 );
 
-/// Adds the full set of all compute `Config`s.
+pub const ENABLE_BUILTIN_MIGRATION_SCHEMA_EVOLUTION: Config<bool> = Config::new(
+    "enable_builtin_migration_schema_evolution",
+    true,
+    "Whether to attempt persist schema evolution for migration of builtin storage collections.",
+);
+
+/// Adds the full set of all adapter `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
         .add(&ALLOW_USER_SESSIONS)
@@ -151,4 +157,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_PASSWORD_AUTH)
         .add(&CONSTRAINT_BASED_TIMESTAMP_SELECTION)
         .add(&PERSIST_FAST_PATH_ORDER)
+        .add(&ENABLE_BUILTIN_MIGRATION_SCHEMA_EVOLUTION)
 }
