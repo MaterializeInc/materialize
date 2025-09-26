@@ -7,18 +7,18 @@ menu:
     identifier: csink_kafka
     name: Kafka/Redpanda
     weight: 20
-aliases:
-    - /sql/create-sink/
-
 ---
+
+{{< note >}}
+The `CREATE SINK` syntax, supported formats, and features are the
+same for Kafka and Redpanda broker. For simplicity, this page uses
+"Kafka" to refer to both Kafka and Redpanda.
+{{< /note >}}
 
 {{% create-sink/intro %}}
 To use a Kafka broker (and optionally a schema registry) as a sink, make sure that a connection that specifies access and authentication parameters to that broker already exists; otherwise, you first need to [create a connection](#creating-a-connection). Once created, a connection is **reusable** across multiple `CREATE SINK` and `CREATE SOURCE` statements.
 {{% /create-sink/intro %}}
 
-{{< note >}}
-The same syntax, supported formats and features can be used to connect to a [Redpanda](/integrations/redpanda/) broker.
-{{</ note >}}
 
 Sink source type      | Description
 ----------------------|------------
@@ -491,7 +491,15 @@ which are commonly used in Kafka partition assignment:
 For a full example of using the `PARTITION BY` option, see [Custom
 partioning](#custom-partitioning).
 
-## Required permissions
+## Required privileges
+
+To execute the `CREATE SINK` command, you need:
+
+{{< include-md file="shared-content/sql-command-privileges/create-sink.md" >}}
+
+See also [Required Kafka ACLs](#required-kafka-acls).
+
+## Required Kafka ACLs
 
 The access control lists (ACLs) on the Kafka cluster must allow Materialize
 to perform the following operations on the following resources:
