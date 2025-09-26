@@ -105,21 +105,9 @@ ALTER SYSTEM SET log_filter = 'mz_storage::source::sql_server=debug,mz_sql_serve
     PASSWORD = SECRET sql_server_pass
   );
 
-# TODO - SQL server delay because it's terrible for testing and the initial_lsn selection
-# may happen faster than CDC manages to process the above updates
-$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=5s
-
 > CREATE SOURCE test_40_data_types
   FROM SQL SERVER CONNECTION sql_server_test_40_connection
   FOR ALL TABLES;
-
-
-# Wait until snapshot has emitted stats and then insert a new row
-# to force LSN in MS SQL to progress.
-> SELECT s.name, ss.snapshot_records_known = ss.snapshot_records_staged
-  FROM mz_internal.mz_source_statistics ss JOIN mz_sources s using (id)
-  WHERE s.name = 'test_40_data_types' AND ss.snapshot_records_staged > 0;
-test_40_data_types true
 
 > SELECT * FROM table_tinyint ORDER BY val ASC;
 0

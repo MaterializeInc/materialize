@@ -60,13 +60,6 @@ contains:not found in source
 # Can create tables from SQL server source
 > CREATE TABLE t1 FROM SOURCE ms_src (REFERENCE t1_pk);
 
-# Wait until snapshot has emitted stats and then insert a new row
-# to force LSN in MS SQL to progress.
-> SELECT s.name, ss.snapshot_records_known = ss.snapshot_records_staged
-  FROM mz_internal.mz_source_statistics ss JOIN mz_sources s using (id)
-  WHERE s.name = 'ms_src' AND ss.snapshot_records_staged > 0;
-ms_src true
-
 > SELECT * FROM t1;
 a "hello world"
 b "foobar"
@@ -74,13 +67,6 @@ c "anotha one"
 
 # using a qualified name should work as well
 > CREATE TABLE t2 FROM SOURCE ms_src (REFERENCE dbo.t1_pk);
-
-# Wait until snapshot has emitted stats and then insert a new row
-# to force LSN in MS SQL to progress.
-> SELECT s.name, ss.snapshot_records_known = ss.snapshot_records_staged
-  FROM mz_internal.mz_source_statistics ss JOIN mz_sources s using (id)
-  WHERE s.name = 'ms_src' AND ss.snapshot_records_staged > 0;
-ms_src true
 
 > SELECT * FROM t2;
 a "hello world"
@@ -110,13 +96,6 @@ c "anotha one"
 # we should see the same values
 > CREATE TABLE t1 FROM SOURCE ms_src (REFERENCE t1_pk);
 
-# Wait until snapshot has emitted stats and then insert a new row
-# to force LSN in MS SQL to progress.
-> SELECT s.name, ss.snapshot_records_known = ss.snapshot_records_staged
-  FROM mz_internal.mz_source_statistics ss JOIN mz_sources s using (id)
-  WHERE s.name = 'ms_src' AND ss.snapshot_records_staged > 0;
-ms_src true
-
 > SELECT * FROM t1;
 b "beer"
 c "anotha one"
@@ -127,13 +106,6 @@ c "anotha one"
 
 # source tables support text columns
 > CREATE TABLE text_cols FROM SOURCE ms_src (REFERENCE dbo.text_cols) WITH (TEXT COLUMNS = (c1, c2, c3, c4));
-
-# Wait until snapshot has emitted stats and then insert a new row
-# to force LSN in MS SQL to progress.
-> SELECT s.name, ss.snapshot_records_known = ss.snapshot_records_staged
-  FROM mz_internal.mz_source_statistics ss JOIN mz_sources s using (id)
-  WHERE s.name = 'ms_src' AND ss.snapshot_records_staged > 0;
-ms_src true
 
 > SHOW COLUMNS FROM text_cols;
 c1 true text ""
@@ -156,13 +128,6 @@ INSERT INTO text_cols VALUES (2.000001, '01:59:32.99901', '$0.89', 0x1122AABBCC0
 
 # source tables support exclude columns
 > CREATE TABLE exclude_cols FROM SOURCE ms_src (REFERENCE dbo.t1_pk) WITH (EXCLUDE COLUMNS = (key_col));
-
-# Wait until snapshot has emitted stats and then insert a new row
-# to force LSN in MS SQL to progress.
-> SELECT s.name, ss.snapshot_records_known = ss.snapshot_records_staged
-  FROM mz_internal.mz_source_statistics ss JOIN mz_sources s using (id)
-  WHERE s.name = 'ms_src' AND ss.snapshot_records_staged > 0;
-ms_src true
 
 > SHOW COLUMNS FROM exclude_cols;
 val_col true "character varying" ""
@@ -187,13 +152,6 @@ INSERT INTO t1_pk(key_col, val_col) VALUES ('d', 'dogs'), ('e', 'elephant');
 # Ensure that rewinds are correctly processed
 > CREATE TABLE t1 FROM SOURCE ms_src (REFERENCE t1_pk);
 
-# Wait until snapshot has emitted stats and then insert a new row
-# to force LSN in MS SQL to progress.
-> SELECT s.name, ss.snapshot_records_known = ss.snapshot_records_staged
-  FROM mz_internal.mz_source_statistics ss JOIN mz_sources s using (id)
-  WHERE s.name = 'ms_src' AND ss.snapshot_records_staged > 0;
-ms_src true
-
 > SELECT * FROM t1;
 b "beer"
 c "anotha one"
@@ -209,15 +167,6 @@ INSERT INTO t1_pk VALUES ('x', 'xeon'), ('y', 'yellow'), ('z', 'zion');
 > CREATE TABLE t2 FROM SOURCE ms_src (REFERENCE t1_pk);
 
 > ALTER CLUSTER src_tables SET (REPLICATION FACTOR = 1);
-
-# Wait until snapshot has emitted stats and then insert a new row
-# to force LSN in MS SQL to progress inclusive of the table just
-# created for the existing SOURCE.
-> SELECT s.name, ss.snapshot_records_known = ss.snapshot_records_staged
-  FROM mz_internal.mz_source_statistics ss JOIN mz_sources s using (id)
-  WHERE s.name = 'ms_src' AND ss.snapshot_records_staged > 0;
-ms_src true
-ms_src true
 
 > SELECT * FROM t1;
 b "beer"

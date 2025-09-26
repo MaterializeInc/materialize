@@ -23,7 +23,9 @@ CREATE TABLE t1 (key_col VARCHAR(20) PRIMARY KEY, val_col VARCHAR(1024));
 
 INSERT INTO t1 VALUES ('a', 'hello world'), ('b', 'foobar'), ('c', 'anotha one');
 
-EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 't1', @role_name = 'SA', @supports_net_changes = 0, @capture_instance = 'first';
+# Lexicogarphic sorting is used as a tie breaker, not the primary differentiator. We name the
+# capture instances to ensure we pick the capture instance with the most recent create date.
+EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 't1', @role_name = 'SA', @supports_net_changes = 0, @capture_instance = 'zebra';
 
 # Add some delay and data changes to ensure second capture instance has a later create_date.
 INSERT INTO t1 VALUES ('d', 'after cdc'), ('e', 'also after'), ('f', 'one more');
@@ -32,7 +34,7 @@ INSERT INTO t1 VALUES ('d', 'after cdc'), ('e', 'also after'), ('f', 'one more')
 # capture instance with the later create_date (second) which has the updated schema.
 ALTER TABLE t1 DROP COLUMN val_col;
 
-EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 't1', @role_name = 'SA', @supports_net_changes = 0, @capture_instance = 'second';
+EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 't1', @role_name = 'SA', @supports_net_changes = 0, @capture_instance = 'apple';
 
 > CREATE SECRET IF NOT EXISTS sql_server_pass AS '${arg.default-sql-server-password}'
 
@@ -60,7 +62,7 @@ f
 
 $ sql-server-execute name=sql-server
 USE test;
-EXEC sys.sp_cdc_disable_table @source_schema = 'dbo', @source_name = 't1', @capture_instance = 'first';
+EXEC sys.sp_cdc_disable_table @source_schema = 'dbo', @source_name = 't1', @capture_instance = 'zebra';
 
 INSERT INTO t1 VALUES ('g'), ('h'), ('i');
 
@@ -82,7 +84,7 @@ CREATE TABLE t2 (key_col VARCHAR(20) PRIMARY KEY, val_col VARCHAR(1024));
 
 INSERT INTO t2 VALUES ('a', 'hello world'), ('b', 'foobar'), ('c', 'anotha one');
 
-EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 't2', @role_name = 'SA', @supports_net_changes = 0, @capture_instance = 'first_t2';
+EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 't2', @role_name = 'SA', @supports_net_changes = 0, @capture_instance = 'zebra_t2';
 
 # Add some delay and data changes to ensure second capture instance has a later create_date.
 INSERT INTO t2 VALUES ('d', 'after cdc'), ('e', 'also after'), ('f', 'one more');
@@ -91,13 +93,13 @@ INSERT INTO t2 VALUES ('d', 'after cdc'), ('e', 'also after'), ('f', 'one more')
 # capture instance with the later create_date (second) which has the updated schema.
 ALTER TABLE t2 DROP COLUMN val_col;
 
-EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 't2', @role_name = 'SA', @supports_net_changes = 0, @capture_instance = 'second_t2';
+EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 't2', @role_name = 'SA', @supports_net_changes = 0, @capture_instance = 'apple_t2';
 
 # force an update to the start_lsn of the first capture instance.
 $ sql-server-execute name=sql-server split-lines=false
 DECLARE @LSN BINARY(10);
 SET @LSN = sys.fn_cdc_get_max_lsn();
-EXEC sys.sp_cdc_cleanup_change_table @capture_instance = 'first_t2', @low_water_mark = @LSN, @threshold = 1;
+EXEC sys.sp_cdc_cleanup_change_table @capture_instance = 'zebra_t2', @low_water_mark = @LSN;
 
 > ALTER SOURCE mz_source ADD SUBSOURCE t2
 

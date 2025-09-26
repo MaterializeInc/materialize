@@ -7,8 +7,12 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+
+# Validates that SQL Server returns an error if CDC events are cleaned up before
+# being processsed.
+
 $ sql-server-connect name=sql-server
-server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID=${arg.default-sql-server-user};Password=${arg.default-sql-server-password};Database=test
+server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID=${arg.default-sql-server-user};Password=${arg.default-sql-server-password}
 
 > CREATE SECRET IF NOT EXISTS sql_server_pass AS '${arg.default-sql-server-password}'
 
@@ -27,31 +31,45 @@ $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.mater
 ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true
 
 $ sql-server-execute name=sql-server
+USE test;
 CREATE TABLE t1 (pk INT IDENTITY(1,1) PRIMARY KEY, f2 varchar(2048));
 EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 't1', @role_name = 'SA', @supports_net_changes = 0;
+INSERT INTO t1 VALUES ('apple');
 
 > CREATE CLUSTER storage REPLICAS (r1 (SIZE 'scale=1,workers=1'))
 
 > CREATE SOURCE mz_source
+  IN CLUSTER storage
   FROM SQL SERVER CONNECTION sql_server_test_connection
-  FOR ALL TABLES;
+  FOR TABLES (t1);
 
 # Wait for the initial snapshot to be ingested
 > SELECT * FROM t1
+1 apple
 
 # Stop ingestion by dropping the replica
 > DROP CLUSTER REPLICA storage.r1;
 
-# Now generate more than 10MB of WAL data so that the slot gets invalidated
-$set count=200000
 $ sql-server-execute name=sql-server
-WITH numbers AS (SELECT 1 AS x UNION ALL SELECT x + 1 FROM numbers WHERE x + 1 <= ${count}) INSERT INTO t1 (f2) SELECT REPLICATE('0123456789abcdef', 64) FROM numbers OPTION (MAXRECURSION 0);
-UPDATE t1 SET f2 = CONCAT(f2, pk);
-UPDATE t1 SET f2 = CONCAT(f2, pk);
+INSERT INTO t1 VALUES ('bottle');
+INSERT INTO t1 VALUES ('cork');
+
+# give CDC chance to progress the max LSN before we clear the table
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=5s
+
+# Cleanup the change events
+$ sql-server-execute name=sql-server split-lines=false
+DECLARE @max_lsn binary(10) = sys.fn_cdc_get_max_lsn();
+EXEC sys.sp_cdc_cleanup_change_table
+    @capture_instance = N'dbo_t1',
+    @low_water_mark = @max_lsn;
 
 # Resume the ingestion by adding a replica to the cluster.
 > CREATE CLUSTER REPLICA storage.r1 SIZE = 'scale=1,workers=1';
 
-$ set-sql-timeout duration=60s
-> SELECT count(*) FROM t1;
-200000
+# This is a transient error, but should be a definite error: database-issues#9722
+> SELECT
+  error LIKE '%the requested LSN%is less than the minimum%'
+  FROM mz_internal.mz_source_statuses
+  WHERE name = 't1';
+true

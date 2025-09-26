@@ -66,13 +66,6 @@ contains: SQL SERVER source validation: column dbo.table_xml.bad of type xml is 
 > SHOW COLUMNS FROM table_xml;
 good true "character varying" ""
 
-# Wait until snapshot has emitted stats and then insert a new row
-# to force LSN in MS SQL to progress.
-> SELECT s.name, ss.snapshot_records_known = ss.snapshot_records_staged
-  FROM mz_internal.mz_source_statistics ss JOIN mz_sources s using (id)
-  WHERE s.name = 'table_xml_source' AND ss.snapshot_records_staged > 0;
-table_xml_source true
-
 > SELECT * FROM table_xml;
 "i work"
 "maybe me"
@@ -115,13 +108,6 @@ contains: SQL SERVER source validation: column dbo.table_xml.bad of type xml is 
   WITH (
     EXCLUDE COLUMNS (bad)
   );
-
-# Wait until snapshot has emitted stats and then insert a new row
-# to force LSN in MS SQL to progress.
-> SELECT s.name, ss.snapshot_records_known = ss.snapshot_records_staged
-  FROM mz_internal.mz_source_statistics ss JOIN mz_sources s using (id)
-  WHERE s.name = 'ms_src' AND ss.snapshot_records_staged > 0;
-ms_src true
 
 > SHOW COLUMNS FROM table_xml;
 good true "character varying" ""

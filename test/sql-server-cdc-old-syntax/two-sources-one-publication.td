@@ -8,14 +8,8 @@
 # by the Apache License, Version 2.0.
 
 #
-# Test that two sources reading from one publication is OK
+# Test that two sources reading from one capture instance is OK
 #
-
-$ sql-server-connect name=sql-server
-server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID=${arg.default-sql-server-user};Password=${arg.default-sql-server-password}
-
-$ sql-server-execute name=sql-server
-USE test;
 
 > CREATE SECRET IF NOT EXISTS sql_server_pass AS '${arg.default-sql-server-password}'
 
@@ -30,7 +24,11 @@ USE test;
 
 > VALIDATE CONNECTION sql_server_test_connection;
 
+$ sql-server-connect name=sql-server
+server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID=${arg.default-sql-server-user};Password=${arg.default-sql-server-password}
+
 $ sql-server-execute name=sql-server
+USE test;
 CREATE TABLE t1 (f1 INTEGER);
 EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 't1', @role_name = 'SA', @supports_net_changes = 0;
 INSERT INTO t1 VALUES (1);

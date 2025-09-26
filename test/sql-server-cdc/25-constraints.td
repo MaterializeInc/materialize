@@ -52,13 +52,6 @@ key_col false "character varying" ""
 val_col false "character varying" ""
 extra true "character varying" ""
 
-# Wait until snapshot has emitted stats and then insert a new row
-# to force LSN in MS SQL to progress.
-> SELECT s.name, ss.snapshot_records_known = ss.snapshot_records_staged
-  FROM mz_internal.mz_source_statistics ss JOIN mz_sources s using (id)
-  WHERE s.name = 't25_pk_sql_server' AND ss.snapshot_records_staged > 0;
-t25_pk_sql_server true
-
 > SELECT * FROM t25_pk;
 a "hello world" <null>
 b foobar apple
