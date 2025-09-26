@@ -4,6 +4,9 @@ In addition to the concrete rules, such as for Rust, we also have some more info
 guidelines that we try to follow. These are not as strictly enforced as the
 other rules, but you should still try to follow them as much as possible.
 
+The best practices are a living document; feel free to add or suggest changes.
+Reference them when needed, for example in pull request reviews.
+
 ## Know your code's scaling limits
 
 When writing code, you should have a good understanding of how it will scale in the future.
@@ -85,9 +88,3 @@ It's better to ask questions and clarify misunderstandings than to assume you kn
 We sometimes need to ship fixes quickly, but we should always try to solve the underlying problem.
 Staggering a fix into multiple changes is OK, as long as we don't forget halfway through.
 Accumulating technical debt is easy, but it makes future changes harder and more error-prone.
-
-## Release blockers
-
-Release blockers should be reserved for critical issues that must be resolved before a release can proceed.
-Each release blocker causes work for whoever is doing the release, and should be used sparingly.
-Do not use release-blockers to backport features into releases that missed the deadline.
