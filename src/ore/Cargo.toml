@@ -11,20 +11,20 @@ authors = ["Materialize, Inc."]
 workspace = true
 
 [dependencies]
-anyhow = { version = "1.0.98", optional = true }
+anyhow = { version = "1.0.100", optional = true }
 # NB: ore is meant to be an extension of the Rust stdlib. To keep it
 # lightweight, dependencies on external crates should be avoided if possible. If
 # an external crate is required, it must be optional and feature-gated.
 #
 # The only exception to the above is the `either` crate, which itself has zero
 # dependencies and is widely considered to be basically part of the stdlib.
-async-trait = { version = "0.1.88", optional = true }
-bytemuck = { version = "1.23.1", optional = true }
+async-trait = { version = "0.1.89", optional = true }
+bytemuck = { version = "1.23.2", optional = true }
 bytes = { version = "1.10.1", optional = true }
 chrono = { version = "0.4.39", default-features = false, features = ["std"], optional = true }
 clap = { version = "4.5.23", features = ["env", "string"], optional = true }
 columnation = { version = "0.1.0", optional = true }
-columnar = { version = "0.10.1", optional = true }
+columnar = { version = "0.10.2", optional = true }
 compact_bytes = { version = "0.2.1", optional = true }
 ctor = { version = "0.4.2", optional = true }
 differential-dataflow = { version = "0.17.0", optional = true }
@@ -34,7 +34,7 @@ futures = { version = "0.3.31", optional = true }
 hibitset = { version = "0.6.4", optional = true }
 itertools = "0.14.0"
 lgalloc = { version = "0.6", optional = true }
-libc = { version = "0.2.174", optional = true }
+libc = { version = "0.2.175", optional = true }
 mz-ore-proc = { path = "../ore-proc", default-features = false }
 num = "0.4.3"
 num-traits = { version = "0.2", optional = true }
@@ -86,7 +86,7 @@ tonic = { version = "0.12.1", features = ["transport"], optional = true }
 tokio-native-tls = { version = "0.3.1", optional = true }
 native-tls = { version = "0.2.14", features = ["alpn"], optional = true }
 hyper-tls = { version = "0.6.0", optional = true }
-hyper-util = { version = "0.1.16", optional = true }
+hyper-util = { version = "0.1.17", optional = true }
 opentelemetry = { version = "0.24.0", features = ["trace"], optional = true }
 opentelemetry-otlp = { version = "0.17.0", optional = true }
 opentelemetry_sdk = { version = "0.24.1", features = ["rt-tokio"], optional = true }
@@ -96,7 +96,7 @@ turmoil = { version = "0.6.6", optional = true }
 yansi = { version = "1.0.1", optional = true }
 
 [dev-dependencies]
-anyhow = { version = "1.0.98" }
+anyhow = { version = "1.0.100" }
 criterion = { version = "0.6.0", features = ["async_tokio"] }
 mz-ore = { path = "../ore", features = ["id_gen", "chrono"] }
 proptest = { version = "1.7.0", default-features = false, features = ["std"] }

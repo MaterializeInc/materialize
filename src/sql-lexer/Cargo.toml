@@ -21,7 +21,7 @@ datadriven = "0.8.0"
 mz-ore = { path = "../ore", default-features = false, features = ["test"] }
 
 [build-dependencies]
-anyhow = "1.0.98"
+anyhow = "1.0.100"
 mz-ore-build = { path = "../ore-build", default-features = false }
 phf = { version = "0.11.1", features = ["uncased"] }
 phf_codegen = "0.11.3"

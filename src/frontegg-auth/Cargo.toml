@@ -10,7 +10,7 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.98"
+anyhow = "1.0.100"
 base64 = "0.22.1"
 clap = { version = "4.5.23", features = ["wrap_help", "env", "derive"] }
 derivative = "2.2.0"

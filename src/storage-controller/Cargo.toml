@@ -10,8 +10,8 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.98"
-async-trait = "0.1.88"
+anyhow = "1.0.100"
+async-trait = "0.1.89"
 bytes = "1.10.1"
 chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 derivative = "2.2.0"
