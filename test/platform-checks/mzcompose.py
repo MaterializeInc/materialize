@@ -17,7 +17,7 @@ import argparse
 import os
 from enum import Enum
 
-from materialize import buildkite
+from materialize import MZ_ROOT, buildkite
 from materialize.checks.all_checks import *  # noqa: F401 F403
 from materialize.checks.checks import Check
 from materialize.checks.executors import MzcomposeExecutor, MzcomposeExecutorParallel
@@ -70,15 +70,21 @@ def create_mzs(
             blob_store_is_azure=azurite,
             sanity_restart=False,
             volumes_extra=["secrets:/share/secrets"],
-            additional_system_parameter_defaults=additional_system_parameter_defaults,
+            additional_system_parameter_defaults=(
+                (additional_system_parameter_defaults or {})
+                | {"enable_password_auth": "true"}
+            ),
             default_replication_factor=default_replication_factor,
             support_external_clusterd=True,
+            listeners_config_path=f"{MZ_ROOT}/src/materialized/ci/listener_configs/mixed_auth.json",
         )
         for mz_name in ["materialized", "mz_1", "mz_2", "mz_3", "mz_4", "mz_5"]
     ] + [
         TestdriveService(
             default_timeout=TESTDRIVE_DEFAULT_TIMEOUT,
             materialize_params={"statement_timeout": f"'{TESTDRIVE_DEFAULT_TIMEOUT}'"},
+            materialize_password_sql_url="postgres://materialize@materialized:6885",
+            materialize_sasl_sql_url="postgres://materialize@materialized:6895",
             external_blob_store=external_blob_store,
             blob_store_is_azure=azurite,
             no_reset=True,

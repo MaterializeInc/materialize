@@ -268,6 +268,12 @@ trufflehog_jq_filter_common() {
       .Raw != "postgresql://materialize:AbC123dEf@ep-cool-darkness-123456.us-east-2.aws.neon.tech:5432" and
       .Raw != "d3aa325086974cdfb3912f28e5a8c168" and
       .Raw != "jdbc:postgresql://postgres:5432/postgres" and
+      .Raw != "postgres://auth_user1:password1@materialized:6885" and
+      .Raw != "postgres://auth_user2:password2@materialized:6885" and
+      .Raw != "postgres://auth_user3:password3@materialized:6885" and
+      .Raw != "postgres://auth_user1:password1@materialized:6895" and
+      .Raw != "postgres://auth_user2:password2@materialized:6895" and
+      .Raw != "postgres://auth_user3:password3@materialized:6895" and
       .Raw != "RPSsql12345" and
       .Raw != "RPSsql1234" and
       .Raw != "RPSsql123" and

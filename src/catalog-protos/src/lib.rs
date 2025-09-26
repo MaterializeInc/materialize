@@ -24,7 +24,7 @@ pub mod serialization;
 /// We will initialize new `Catalog`s with this version, and migrate existing `Catalog`s to this
 /// version. Whenever the `Catalog` changes, e.g. the protobufs we serialize in the `Catalog`
 /// change, we need to bump this version.
-pub const CATALOG_VERSION: u64 = 77;
+pub const CATALOG_VERSION: u64 = 78;
 
 /// The minimum `Catalog` version number that we support migrating from.
 ///

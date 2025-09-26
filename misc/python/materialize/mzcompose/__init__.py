@@ -367,6 +367,15 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "sql_server_offset_known_interval", "1s", ["10ms", "100ms", "1s"]
         ),
+        VariableSystemParameter(
+            "enable_password_auth",
+            ("true" if version >= MzVersion.parse_mz("v0.142.0") else "false"),
+            (
+                ["true", "false"]
+                if version >= MzVersion.parse_mz("v0.142.0")
+                else ["false"]
+            ),
+        ),
         # End of list (ordered by name)
     ]
 
@@ -550,7 +559,6 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "plan_insights_notice_fast_path_clusters_optimize_duration",
     "enable_continual_task_builtins",
     "enable_expression_cache",
-    "enable_password_auth",
     "mz_metrics_lgalloc_map_refresh_interval",
     "mz_metrics_lgalloc_refresh_interval",
     "mz_metrics_rusage_refresh_interval",
