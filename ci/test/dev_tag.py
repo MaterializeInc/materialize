@@ -27,12 +27,14 @@ def main() -> None:
             Arch.X86_64,
             coverage=False,
             sanitizer=sanitizer,
+            image_registry="materialize",
         ),
         mzbuild.Repository(
             Path("."),
             Arch.AARCH64,
             coverage=False,
             sanitizer=sanitizer,
+            image_registry="materialize",
         ),
     ]
     print("--- Tagging development Docker images")

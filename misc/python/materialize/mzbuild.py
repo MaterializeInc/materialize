@@ -857,10 +857,12 @@ class ResolvedImage:
 
     def is_published_if_necessary(self) -> bool:
         """Report whether the image exists on Docker Hub if it is publishable."""
-        if self.publish and is_docker_image_pushed(self.spec()):
-            ui.say(f"{self.spec()} already exists")
-            return True
-        return False
+        # TODO: Put back the original implementation
+        return self.publish
+        # if self.publish and is_docker_image_pushed(self.spec()):
+        #     ui.say(f"{self.spec()} already exists")
+        #     return True
+        # return False
 
     def run(
         self,
@@ -1082,7 +1084,9 @@ class DependencySet:
                     )
                 )
 
-            deps_to_build = [dep for dep, should_build in futures if should_build]
+            # TODO: Reenable
+            # deps_to_build = [dep for dep, should_build in futures if should_build]
+            deps_to_build = [dep for dep, should_build in futures]
 
         prep = self._prepare_batch(deps_to_build)
         if pre_build:
@@ -1171,7 +1175,11 @@ class Repository:
         ),
         coverage: bool = False,
         sanitizer: Sanitizer = Sanitizer.none,
-        image_registry: str = "materialize",
+        image_registry: str = (
+            "ghcr.io/materializeinc/materialize"
+            if ui.env_is_truthy("CI")
+            else "materialize"
+        ),
         image_prefix: str = "",
     ):
         self.rd = RepositoryDetails(
@@ -1273,7 +1281,11 @@ class Repository:
         )
         parser.add_argument(
             "--image-registry",
-            default="materialize",
+            default=(
+                "ghcr.io/materializeinc/materialize"
+                if ui.env_is_truthy("CI")
+                else "materialize"
+            ),
             help="the Docker image registry to pull images from and push images to",
         )
         parser.add_argument(

@@ -25,6 +25,7 @@ def main() -> None:
         Path("."),
         coverage=False,
         sanitizer=Sanitizer.none,
+        image_registry="materialize",
     )
     target = f"{repo.rd.arch}-unknown-linux-gnu"
 

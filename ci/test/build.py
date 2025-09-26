@@ -32,6 +32,7 @@ def main() -> None:
             Path("."),
             coverage=coverage,
             sanitizer=sanitizer,
+            image_registry="materialize",
         )
 
         # Build and push any images that are not already available on Docker Hub,

@@ -125,7 +125,7 @@ build() {
         --build-arg "RUST_CPU_TARGET=$rust_cpu_target" \
         --build-arg "RUST_TARGET_FEATURES=$rust_target_features" \
         --tag materialize/ci-builder:"$tag" \
-        --tag ghcr.io/materialize/ci-builder:"$tag" \
+        --tag ghcr.io/materializeinc/materialize/ci-builder:"$tag" \
         --tag materialize/ci-builder:"$cache_tag" \
         --target $docker_target \
         "$@" ci/builder
@@ -166,21 +166,25 @@ print(hash.decode())
 ')
 cache_tag=cache-$flavor-$rust_version-$arch_go
 
+image_registry="materialize"
+# TODO: Reenable
+# if is_truthy "${CI:-0}"; then
+#     image_registry="ghcr.io/materializeinc/materialize"
+# fi
 
 case "$cmd" in
     build)
         build "$@"
         ;;
     exists)
-        docker manifest inspect materialize/ci-builder:"$tag" &> /dev/null
+        docker manifest inspect "$image_registry"/ci-builder:"$tag" &> /dev/null
         ;;
     tag)
         echo "$tag"
         ;;
     push)
-        build "$@"
-        docker push materialize/ci-builder:"$tag"
-        docker push materialize/ci-builder:"$cache_tag"
+        docker login ghcr.io -u materialize-bot --password "$GITHUB_GHCR_TOKEN"
+        build --push "$@"
         ;;
     run)
         docker_command=()
@@ -240,6 +244,7 @@ case "$cmd" in
             --env AZURE_SERVICE_ACCOUNT_TENANT
             --env GCP_SERVICE_ACCOUNT_JSON
             --env GITHUB_TOKEN
+            --env GITHUB_GHCR_TOKEN
             --env GPG_KEY
             --env LAUNCHDARKLY_API_TOKEN
             --env LAUNCHDARKLY_SDK_KEY
@@ -384,7 +389,7 @@ case "$cmd" in
             args+=(--volume "$GIT_ROOT_DIR:$GIT_ROOT_DIR")
         fi
         rm -f "$cid_file"
-        docker run "${args[@]}" "materialize/ci-builder:$tag" eatmydata "${docker_command[@]}"
+        docker run "${args[@]}" "$image_registry/ci-builder:$tag" eatmydata "${docker_command[@]}"
         ;;
     root-shell)
         docker exec --interactive --tty --user 0:0 "$(<"$cid_file")" eatmydata ci/builder/root-shell.sh

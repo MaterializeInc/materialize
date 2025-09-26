@@ -183,7 +183,8 @@ so it is executed.""",
     check_depends_on(pipeline, args.pipeline)
     add_version_to_preflight_tests(pipeline)
     trim_builds_prep_thread.join()
-    trim_builds(pipeline, hash_check)
+    # TODO: Reenable
+    # trim_builds(pipeline, hash_check)
     add_cargo_test_dependency(
         pipeline,
         args.pipeline,
