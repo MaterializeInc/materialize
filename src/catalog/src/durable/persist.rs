@@ -18,6 +18,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
+use base64::prelude::*;
 use differential_dataflow::lattice::Lattice;
 use futures::{FutureExt, StreamExt};
 use itertools::Itertools;
@@ -45,6 +46,7 @@ use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
+use crate::durable::MOCK_AUTHENTICATION_NONCE_KEY;
 use crate::durable::debug::{Collection, CollectionType, DebugCatalogState, Trace};
 use crate::durable::error::FenceError;
 use crate::durable::initialize::{
@@ -1269,7 +1271,9 @@ impl UnopenedPersistCatalogState {
         let catalog_content_version = catalog.catalog_content_version.to_string();
         let txn = if is_initialized {
             let mut txn = catalog.transaction().await?;
-            txn.set_catalog_content_version(catalog_content_version)?;
+            txn.set_catalog_content_version(catalog_content_version.clone())?;
+            // If the catalog is already initialized, we may need to migrate some settings.
+            Self::apply_setting_migrations_in_tx(&mut txn)?;
             txn
         } else {
             soft_assert_eq_no_log!(
@@ -1392,6 +1396,29 @@ impl UnopenedPersistCatalogState {
             .await?;
         let version = version.map(|version| version.parse().expect("invalid version persisted"));
         Ok(version)
+    }
+
+    /// Apply any setting migrations that are needed.
+    /// We intentionally do not use the migration framework for this because
+    /// settings are "always deserializable" and thus can't be migrated for safety.
+    fn apply_setting_migrations_in_tx(
+        tx: &mut crate::durable::transaction::Transaction<'_>,
+    ) -> Result<(), CatalogError> {
+        let mut ensure_setting =
+            |key: &str, value_fn: &dyn Fn() -> String| -> Result<(), CatalogError> {
+                if tx.get_setting(key.to_string()).is_none() {
+                    tx.set_setting(key.to_string(), Some(value_fn()))?;
+                }
+                Ok(())
+            };
+
+        ensure_setting(MOCK_AUTHENTICATION_NONCE_KEY, &|| {
+            let mut nonce = [0u8; 24];
+            let _ = openssl::rand::rand_bytes(&mut nonce).expect("failed to generate nonce");
+            BASE64_STANDARD.encode(nonce)
+        })?;
+
+        Ok(())
     }
 }
 
