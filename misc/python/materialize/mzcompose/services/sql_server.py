@@ -25,6 +25,7 @@ class SqlServer(Service):
         name: str = "sql-server",
         environment_extra: list[str] = [],
         volumes_extra: list[str] = [],
+        enable_agent: bool = True,
     ) -> None:
         super().__init__(
             name=name,
@@ -35,7 +36,7 @@ class SqlServer(Service):
                 "environment": [
                     "ACCEPT_EULA=Y",
                     "MSSQL_PID=Developer",
-                    "MSSQL_AGENT_ENABLED=True",
+                    f"MSSQL_AGENT_ENABLED={enable_agent}",
                     f"SA_PASSWORD={sa_password}",
                     *environment_extra,
                 ],
