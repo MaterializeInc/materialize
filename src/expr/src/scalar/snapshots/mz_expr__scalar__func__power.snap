@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(output_type = \"f64\", propagates_nulls = true)]\nfn power<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {\n    let a = a.unwrap_float64();\n    let b = b.unwrap_float64();\n    if a == 0.0 && b.is_sign_negative() {\n        return Err(EvalError::Undefined(\"zero raised to a negative power\".into()));\n    }\n    if a.is_sign_negative() && b.fract() != 0.0 {\n        return Err(EvalError::ComplexOutOfRange(\"pow\".into()));\n    }\n    let res = a.powf(b);\n    if res.is_infinite() {\n        return Err(EvalError::FloatOverflow);\n    }\n    if res == 0.0 && a != 0.0 {\n        return Err(EvalError::FloatUnderflow);\n    }\n    Ok(Datum::from(res))\n}\n"
+expression: "#[sqlfunc(propagates_nulls = true)]\nfn power(a: f64, b: f64) -> Result<f64, EvalError> {\n    if a == 0.0 && b.is_sign_negative() {\n        return Err(EvalError::Undefined(\"zero raised to a negative power\".into()));\n    }\n    if a.is_sign_negative() && b.fract() != 0.0 {\n        return Err(EvalError::ComplexOutOfRange(\"pow\".into()));\n    }\n    let res = a.powf(b);\n    if res.is_infinite() {\n        return Err(EvalError::FloatOverflow);\n    }\n    if res == 0.0 && a != 0.0 {\n        return Err(EvalError::FloatUnderflow);\n    }\n    Ok(res)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -17,9 +17,9 @@ expression: "#[sqlfunc(output_type = \"f64\", propagates_nulls = true)]\nfn powe
 )]
 pub struct Power;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for Power {
-    type Input1 = Datum<'a>;
-    type Input2 = Datum<'a>;
-    type Output = Result<Datum<'a>, EvalError>;
+    type Input1 = f64;
+    type Input2 = f64;
+    type Output = Result<f64, EvalError>;
     fn call(
         &self,
         a: Self::Input1,
@@ -34,7 +34,7 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for Power {
         input_type_b: mz_repr::SqlColumnType,
     ) -> mz_repr::SqlColumnType {
         use mz_repr::AsColumnType;
-        let output = <f64>::as_column_type();
+        let output = Self::Output::as_column_type();
         let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
             self,
         );
@@ -46,9 +46,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for Power {
                         && (input_type_a.nullable || input_type_b.nullable)),
             )
     }
-    fn introduces_nulls(&self) -> bool {
-        <f64 as ::mz_repr::DatumType<'_, ()>>::nullable()
-    }
     fn propagates_nulls(&self) -> bool {
         true
     }
@@ -58,9 +55,7 @@ impl std::fmt::Display for Power {
         f.write_str(stringify!(power))
     }
 }
-fn power<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let a = a.unwrap_float64();
-    let b = b.unwrap_float64();
+fn power(a: f64, b: f64) -> Result<f64, EvalError> {
     if a == 0.0 && b.is_sign_negative() {
         return Err(EvalError::Undefined("zero raised to a negative power".into()));
     }
@@ -74,5 +69,5 @@ fn power<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     if res == 0.0 && a != 0.0 {
         return Err(EvalError::FloatUnderflow);
     }
-    Ok(Datum::from(res))
+    Ok(res)
 }

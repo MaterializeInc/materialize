@@ -262,7 +262,7 @@ impl ColumnKnowledge {
                     for predicate in predicates.iter() {
                         // Equality tests allow us to unify the column knowledge of each input.
                         if let MirScalarExpr::CallBinary {
-                            func: mz_expr::BinaryFunc::Eq,
+                            func: mz_expr::BinaryFunc::Eq(_),
                             expr1,
                             expr2,
                         } = predicate

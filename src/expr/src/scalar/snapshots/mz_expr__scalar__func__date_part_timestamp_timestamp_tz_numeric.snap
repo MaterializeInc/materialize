@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(output_type = \"Numeric\", sqlname = \"extracttstz\", propagates_nulls = true)]\n#[allow(dead_code)]\nfn date_part_timestamp_timestamp_tz_numeric<'a>(\n    units: &str,\n    ts: CheckedTimestamp<DateTime<Utc>>,\n) -> Result<Datum<'a>, EvalError> {\n    match units.parse() {\n        Ok(units) => Ok(date_part_timestamp_inner::<_, Numeric>(units, &*ts)?.into()),\n        Err(_) => Err(EvalError::UnknownUnits(units.into())),\n    }\n}\n"
+expression: "#[sqlfunc(sqlname = \"extracttstz\", propagates_nulls = true)]\nfn date_part_timestamp_timestamp_tz_numeric(\n    units: &str,\n    ts: CheckedTimestamp<DateTime<Utc>>,\n) -> Result<Numeric, EvalError> {\n    match units.parse() {\n        Ok(units) => Ok(date_part_timestamp_inner::<_, Numeric>(units, &*ts)?),\n        Err(_) => Err(EvalError::UnknownUnits(units.into())),\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -20,7 +20,7 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a>
 for DatePartTimestampTimestampTzNumeric {
     type Input1 = &'a str;
     type Input2 = CheckedTimestamp<DateTime<Utc>>;
-    type Output = Result<Datum<'a>, EvalError>;
+    type Output = Result<Numeric, EvalError>;
     fn call(
         &self,
         a: Self::Input1,
@@ -35,7 +35,7 @@ for DatePartTimestampTimestampTzNumeric {
         input_type_b: mz_repr::SqlColumnType,
     ) -> mz_repr::SqlColumnType {
         use mz_repr::AsColumnType;
-        let output = <Numeric>::as_column_type();
+        let output = Self::Output::as_column_type();
         let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
             self,
         );
@@ -47,9 +47,6 @@ for DatePartTimestampTimestampTzNumeric {
                         && (input_type_a.nullable || input_type_b.nullable)),
             )
     }
-    fn introduces_nulls(&self) -> bool {
-        <Numeric as ::mz_repr::DatumType<'_, ()>>::nullable()
-    }
     fn propagates_nulls(&self) -> bool {
         true
     }
@@ -59,13 +56,12 @@ impl std::fmt::Display for DatePartTimestampTimestampTzNumeric {
         f.write_str("extracttstz")
     }
 }
-#[allow(dead_code)]
-fn date_part_timestamp_timestamp_tz_numeric<'a>(
+fn date_part_timestamp_timestamp_tz_numeric(
     units: &str,
     ts: CheckedTimestamp<DateTime<Utc>>,
-) -> Result<Datum<'a>, EvalError> {
+) -> Result<Numeric, EvalError> {
     match units.parse() {
-        Ok(units) => Ok(date_part_timestamp_inner::<_, Numeric>(units, &*ts)?.into()),
+        Ok(units) => Ok(date_part_timestamp_inner::<_, Numeric>(units, &*ts)?),
         Err(_) => Err(EvalError::UnknownUnits(units.into())),
     }
 }

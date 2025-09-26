@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    output_type_expr = \"input_type_a.scalar_type.unwrap_map_value_type().clone().nullable(true)\",\n    is_infix_op = true,\n    sqlname = \"->\",\n    propagates_nulls = true,\n    introduces_nulls = true\n)]\nfn map_get_value<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {\n    let target_key = b.unwrap_str();\n    match a.unwrap_map().iter().find(|(key, _v)| target_key == *key) {\n        Some((_k, v)) => v,\n        None => Datum::Null,\n    }\n}\n"
+expression: "#[sqlfunc(\n    output_type_expr = \"input_type_a.scalar_type.unwrap_map_value_type().clone().nullable(true)\",\n    is_infix_op = true,\n    sqlname = \"->\",\n    propagates_nulls = true,\n    introduces_nulls = true\n)]\nfn map_get_value<'a>(a: DatumMap<'a>, target_key: &str) -> Datum<'a> {\n    match a.iter().find(|(key, _v)| target_key == *key) {\n        Some((_k, v)) => v,\n        None => Datum::Null,\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -17,8 +17,8 @@ expression: "#[sqlfunc(\n    output_type_expr = \"input_type_a.scalar_type.unwra
 )]
 pub struct MapGetValue;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for MapGetValue {
-    type Input1 = Datum<'a>;
-    type Input2 = Datum<'a>;
+    type Input1 = DatumMap<'a>;
+    type Input2 = &'a str;
     type Output = Datum<'a>;
     fn call(
         &self,
@@ -65,9 +65,8 @@ impl std::fmt::Display for MapGetValue {
         f.write_str("->")
     }
 }
-fn map_get_value<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    let target_key = b.unwrap_str();
-    match a.unwrap_map().iter().find(|(key, _v)| target_key == *key) {
+fn map_get_value<'a>(a: DatumMap<'a>, target_key: &str) -> Datum<'a> {
+    match a.iter().find(|(key, _v)| target_key == *key) {
         Some((_k, v)) => v,
         None => Datum::Null,
     }

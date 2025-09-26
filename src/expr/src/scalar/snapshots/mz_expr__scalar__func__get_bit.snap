@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(output_type = \"i32\", propagates_nulls = true)]\nfn get_bit<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {\n    let bytes = a.unwrap_bytes();\n    let index = b.unwrap_int32();\n    let err = EvalError::IndexOutOfRange {\n        provided: index,\n        valid_end: i32::try_from(bytes.len().saturating_mul(8)).unwrap() - 1,\n    };\n    let index = usize::try_from(index).map_err(|_| err.clone())?;\n    let byte_index = index / 8;\n    let bit_index = index % 8;\n    let i = bytes.get(byte_index).map(|b| (*b >> bit_index) & 1).ok_or(err)?;\n    assert!(i == 0 || i == 1);\n    Ok(Datum::from(i32::from(i)))\n}\n"
+expression: "#[sqlfunc(propagates_nulls = true)]\nfn get_bit(bytes: &[u8], index: i32) -> Result<i32, EvalError> {\n    let err = EvalError::IndexOutOfRange {\n        provided: index,\n        valid_end: i32::try_from(bytes.len().saturating_mul(8)).unwrap() - 1,\n    };\n    let index = usize::try_from(index).map_err(|_| err.clone())?;\n    let byte_index = index / 8;\n    let bit_index = index % 8;\n    let i = bytes.get(byte_index).map(|b| (*b >> bit_index) & 1).ok_or(err)?;\n    assert!(i == 0 || i == 1);\n    Ok(i32::from(i))\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -17,9 +17,9 @@ expression: "#[sqlfunc(output_type = \"i32\", propagates_nulls = true)]\nfn get_
 )]
 pub struct GetBit;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for GetBit {
-    type Input1 = Datum<'a>;
-    type Input2 = Datum<'a>;
-    type Output = Result<Datum<'a>, EvalError>;
+    type Input1 = &'a [u8];
+    type Input2 = i32;
+    type Output = Result<i32, EvalError>;
     fn call(
         &self,
         a: Self::Input1,
@@ -34,7 +34,7 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for GetBit {
         input_type_b: mz_repr::SqlColumnType,
     ) -> mz_repr::SqlColumnType {
         use mz_repr::AsColumnType;
-        let output = <i32>::as_column_type();
+        let output = Self::Output::as_column_type();
         let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
             self,
         );
@@ -46,9 +46,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for GetBit {
                         && (input_type_a.nullable || input_type_b.nullable)),
             )
     }
-    fn introduces_nulls(&self) -> bool {
-        <i32 as ::mz_repr::DatumType<'_, ()>>::nullable()
-    }
     fn propagates_nulls(&self) -> bool {
         true
     }
@@ -58,9 +55,7 @@ impl std::fmt::Display for GetBit {
         f.write_str(stringify!(get_bit))
     }
 }
-fn get_bit<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let bytes = a.unwrap_bytes();
-    let index = b.unwrap_int32();
+fn get_bit(bytes: &[u8], index: i32) -> Result<i32, EvalError> {
     let err = EvalError::IndexOutOfRange {
         provided: index,
         valid_end: i32::try_from(bytes.len().saturating_mul(8)).unwrap() - 1,
@@ -70,5 +65,5 @@ fn get_bit<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let bit_index = index % 8;
     let i = bytes.get(byte_index).map(|b| (*b >> bit_index) & 1).ok_or(err)?;
     assert!(i == 0 || i == 1);
-    Ok(Datum::from(i32::from(i)))
+    Ok(i32::from(i))
 }

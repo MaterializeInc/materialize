@@ -154,16 +154,16 @@ impl MirScalarExpr {
         MirScalarExpr::literal_ok(Datum::True, SqlScalarType::Bool)
     }
 
-    pub fn call_unary(self, func: UnaryFunc) -> Self {
+    pub fn call_unary<U: Into<UnaryFunc>>(self, func: U) -> Self {
         MirScalarExpr::CallUnary {
-            func,
+            func: func.into(),
             expr: Box::new(self),
         }
     }
 
-    pub fn call_binary(self, other: Self, func: BinaryFunc) -> Self {
+    pub fn call_binary<B: Into<BinaryFunc>>(self, other: Self, func: B) -> Self {
         MirScalarExpr::CallBinary {
-            func,
+            func: func.into(),
             expr1: Box::new(self),
             expr2: Box::new(other),
         }
@@ -221,7 +221,7 @@ impl MirScalarExpr {
     /// details on the inversion, see `invert_casts_on_expr_eq_literal_inner`.
     pub fn expr_eq_literal(&self, expr: &MirScalarExpr) -> Option<(Row, bool)> {
         if let MirScalarExpr::CallBinary {
-            func: BinaryFunc::Eq,
+            func: BinaryFunc::Eq(_),
             expr1,
             expr2,
         } = self
@@ -265,7 +265,7 @@ impl MirScalarExpr {
     /// `<expr>` before returning it, see `invert_casts_on_expr_eq_literal_inner`.
     pub fn any_expr_eq_literal(&self) -> Option<MirScalarExpr> {
         if let MirScalarExpr::CallBinary {
-            func: BinaryFunc::Eq,
+            func: BinaryFunc::Eq(_),
             expr1,
             expr2,
         } = self
@@ -288,26 +288,18 @@ impl MirScalarExpr {
     /// For more details, see `invert_casts_on_expr_eq_literal_inner`.
     pub fn invert_casts_on_expr_eq_literal(&self) -> MirScalarExpr {
         if let MirScalarExpr::CallBinary {
-            func: BinaryFunc::Eq,
+            func: BinaryFunc::Eq(_),
             expr1,
             expr2,
         } = self
         {
             if expr1.is_literal() {
                 let (expr, literal) = Self::invert_casts_on_expr_eq_literal_inner(expr2, expr1);
-                return MirScalarExpr::CallBinary {
-                    func: BinaryFunc::Eq,
-                    expr1: Box::new(literal),
-                    expr2: Box::new(expr),
-                };
+                return literal.call_binary(expr, func::Eq);
             }
             if expr2.is_literal() {
                 let (expr, literal) = Self::invert_casts_on_expr_eq_literal_inner(expr1, expr2);
-                return MirScalarExpr::CallBinary {
-                    func: BinaryFunc::Eq,
-                    expr1: Box::new(literal),
-                    expr2: Box::new(expr),
-                };
+                return literal.call_binary(expr, func::Eq);
             }
             // Note: The above return statements should be consistent in whether they put the
             // literal in expr1 or expr2, for the deduplication in CanonicalizeMfp to work.
@@ -372,7 +364,7 @@ impl MirScalarExpr {
     /// could have been inserted implicitly).
     pub fn impossible_literal_equality_because_types(&self) -> bool {
         if let MirScalarExpr::CallBinary {
-            func: BinaryFunc::Eq,
+            func: BinaryFunc::Eq(_),
             expr1,
             expr2,
         } = self
@@ -427,7 +419,8 @@ impl MirScalarExpr {
     pub fn any_expr_ineq_literal(&self) -> bool {
         match self {
             MirScalarExpr::CallBinary {
-                func: BinaryFunc::Lt | BinaryFunc::Lte | BinaryFunc::Gt | BinaryFunc::Gte,
+                func:
+                    BinaryFunc::Lt(_) | BinaryFunc::Lte(_) | BinaryFunc::Gt(_) | BinaryFunc::Gte(_),
                 expr1,
                 expr2,
             } => expr1.is_literal() || expr2.is_literal(),
@@ -586,11 +579,11 @@ impl MirScalarExpr {
             {
                 std::mem::swap(expr1, expr2);
                 *func = match func {
-                    BinaryFunc::Eq => BinaryFunc::Eq,
-                    BinaryFunc::Lt => BinaryFunc::Gt,
-                    BinaryFunc::Lte => BinaryFunc::Gte,
-                    BinaryFunc::Gt => BinaryFunc::Lt,
-                    BinaryFunc::Gte => BinaryFunc::Lte,
+                    BinaryFunc::Eq(_) => func::Eq.into(),
+                    BinaryFunc::Lt(_) => func::Gt.into(),
+                    BinaryFunc::Lte(_) => func::Gte.into(),
+                    BinaryFunc::Gt(_) => func::Lt.into(),
+                    BinaryFunc::Gte(_) => func::Lte.into(),
                     x => {
                         return Err(format!("Unsupported binary temporal operation: {:?}", x));
                     }
@@ -818,7 +811,9 @@ impl MirScalarExpr {
                                     ),
                                 };
                             }
-                        } else if *func == BinaryFunc::ExtractInterval && expr1.is_literal() {
+                        } else if let BinaryFunc::ExtractInterval(_) = *func
+                            && expr1.is_literal()
+                        {
                             let units = expr1.as_literal_str().unwrap();
                             *e = match units.parse::<DateTimeUnits>() {
                                 Ok(units) => MirScalarExpr::CallUnary {
@@ -830,7 +825,9 @@ impl MirScalarExpr {
                                     e.typ(column_types).scalar_type,
                                 ),
                             }
-                        } else if *func == BinaryFunc::ExtractTime && expr1.is_literal() {
+                        } else if let BinaryFunc::ExtractTime(_) = *func
+                            && expr1.is_literal()
+                        {
                             let units = expr1.as_literal_str().unwrap();
                             *e = match units.parse::<DateTimeUnits>() {
                                 Ok(units) => MirScalarExpr::CallUnary {
@@ -842,7 +839,9 @@ impl MirScalarExpr {
                                     e.typ(column_types).scalar_type,
                                 ),
                             }
-                        } else if *func == BinaryFunc::ExtractTimestamp && expr1.is_literal() {
+                        } else if let BinaryFunc::ExtractTimestamp(_) = *func
+                            && expr1.is_literal()
+                        {
                             let units = expr1.as_literal_str().unwrap();
                             *e = match units.parse::<DateTimeUnits>() {
                                 Ok(units) => MirScalarExpr::CallUnary {
@@ -856,7 +855,9 @@ impl MirScalarExpr {
                                     e.typ(column_types).scalar_type,
                                 ),
                             }
-                        } else if *func == BinaryFunc::ExtractTimestampTz && expr1.is_literal() {
+                        } else if let BinaryFunc::ExtractTimestampTz(_) = *func
+                            && expr1.is_literal()
+                        {
                             let units = expr1.as_literal_str().unwrap();
                             *e = match units.parse::<DateTimeUnits>() {
                                 Ok(units) => MirScalarExpr::CallUnary {
@@ -870,7 +871,9 @@ impl MirScalarExpr {
                                     e.typ(column_types).scalar_type,
                                 ),
                             }
-                        } else if *func == BinaryFunc::ExtractDate && expr1.is_literal() {
+                        } else if let BinaryFunc::ExtractDate(_) = *func
+                            && expr1.is_literal()
+                        {
                             let units = expr1.as_literal_str().unwrap();
                             *e = match units.parse::<DateTimeUnits>() {
                                 Ok(units) => MirScalarExpr::CallUnary {
@@ -882,7 +885,9 @@ impl MirScalarExpr {
                                     e.typ(column_types).scalar_type,
                                 ),
                             }
-                        } else if *func == BinaryFunc::DatePartInterval && expr1.is_literal() {
+                        } else if let BinaryFunc::DatePartInterval(_) = *func
+                            && expr1.is_literal()
+                        {
                             let units = expr1.as_literal_str().unwrap();
                             *e = match units.parse::<DateTimeUnits>() {
                                 Ok(units) => MirScalarExpr::CallUnary {
@@ -896,7 +901,9 @@ impl MirScalarExpr {
                                     e.typ(column_types).scalar_type,
                                 ),
                             }
-                        } else if *func == BinaryFunc::DatePartTime && expr1.is_literal() {
+                        } else if let BinaryFunc::DatePartTime(_) = *func
+                            && expr1.is_literal()
+                        {
                             let units = expr1.as_literal_str().unwrap();
                             *e = match units.parse::<DateTimeUnits>() {
                                 Ok(units) => MirScalarExpr::CallUnary {
@@ -908,7 +915,9 @@ impl MirScalarExpr {
                                     e.typ(column_types).scalar_type,
                                 ),
                             }
-                        } else if *func == BinaryFunc::DatePartTimestamp && expr1.is_literal() {
+                        } else if let BinaryFunc::DatePartTimestamp(_) = *func
+                            && expr1.is_literal()
+                        {
                             let units = expr1.as_literal_str().unwrap();
                             *e = match units.parse::<DateTimeUnits>() {
                                 Ok(units) => MirScalarExpr::CallUnary {
@@ -922,7 +931,9 @@ impl MirScalarExpr {
                                     e.typ(column_types).scalar_type,
                                 ),
                             }
-                        } else if *func == BinaryFunc::DatePartTimestampTz && expr1.is_literal() {
+                        } else if let BinaryFunc::DatePartTimestampTz(_) = *func
+                            && expr1.is_literal()
+                        {
                             let units = expr1.as_literal_str().unwrap();
                             *e = match units.parse::<DateTimeUnits>() {
                                 Ok(units) => MirScalarExpr::CallUnary {
@@ -936,7 +947,9 @@ impl MirScalarExpr {
                                     e.typ(column_types).scalar_type,
                                 ),
                             }
-                        } else if *func == BinaryFunc::DateTruncTimestamp && expr1.is_literal() {
+                        } else if let BinaryFunc::DateTruncTimestamp(_) = *func
+                            && expr1.is_literal()
+                        {
                             let units = expr1.as_literal_str().unwrap();
                             *e = match units.parse::<DateTimeUnits>() {
                                 Ok(units) => MirScalarExpr::CallUnary {
@@ -950,7 +963,9 @@ impl MirScalarExpr {
                                     e.typ(column_types).scalar_type,
                                 ),
                             }
-                        } else if *func == BinaryFunc::DateTruncTimestampTz && expr1.is_literal() {
+                        } else if let BinaryFunc::DateTruncTimestampTz(_) = *func
+                            && expr1.is_literal()
+                        {
                             let units = expr1.as_literal_str().unwrap();
                             *e = match units.parse::<DateTimeUnits>() {
                                 Ok(units) => MirScalarExpr::CallUnary {
@@ -993,7 +1008,9 @@ impl MirScalarExpr {
                                     e.typ(column_types).scalar_type,
                                 ),
                             }
-                        } else if *func == BinaryFunc::ToCharTimestamp && expr2.is_literal() {
+                        } else if let BinaryFunc::ToCharTimestamp(_) = *func
+                            && expr2.is_literal()
+                        {
                             let format_str = expr2.as_literal_str().unwrap();
                             *e = MirScalarExpr::CallUnary {
                                 func: UnaryFunc::ToCharTimestamp(func::ToCharTimestamp {
@@ -1002,7 +1019,9 @@ impl MirScalarExpr {
                                 }),
                                 expr: Box::new(expr1.take()),
                             };
-                        } else if *func == BinaryFunc::ToCharTimestampTz && expr2.is_literal() {
+                        } else if let BinaryFunc::ToCharTimestampTz(_) = *func
+                            && expr2.is_literal()
+                        {
                             let format_str = expr2.as_literal_str().unwrap();
                             *e = MirScalarExpr::CallUnary {
                                 func: UnaryFunc::ToCharTimestampTz(func::ToCharTimestampTz {
@@ -1011,7 +1030,7 @@ impl MirScalarExpr {
                                 }),
                                 expr: Box::new(expr1.take()),
                             };
-                        } else if matches!(*func, BinaryFunc::Eq | BinaryFunc::NotEq)
+                        } else if matches!(*func, BinaryFunc::Eq(_) | BinaryFunc::NotEq(_))
                             && expr2 < expr1
                         {
                             // Canonically order elements so that deduplication works better.
@@ -1019,7 +1038,7 @@ impl MirScalarExpr {
                             // relies on this canonical ordering.
                             mem::swap(expr1, expr2);
                         } else if let (
-                            BinaryFunc::Eq,
+                            BinaryFunc::Eq(_),
                             MirScalarExpr::Literal(
                                 Ok(lit_row),
                                 SqlColumnType {
@@ -1053,13 +1072,12 @@ impl MirScalarExpr {
                                             .iter()
                                             .zip_eq(field_types)
                                             .zip_eq(rec_create_args)
-                                            .map(|((d, (_, typ)), a)| MirScalarExpr::CallBinary {
-                                                func: BinaryFunc::Eq,
-                                                expr1: Box::new(MirScalarExpr::Literal(
-                                                    Ok(Row::pack_slice(&[d])),
-                                                    typ.clone(),
-                                                )),
-                                                expr2: Box::new(a.clone()),
+                                            .map(|((d, (_, typ)), a)| {
+                                                MirScalarExpr::literal_ok(
+                                                    d,
+                                                    typ.scalar_type.clone(),
+                                                )
+                                                .call_binary(a.clone(), func::Eq)
                                             })
                                             .collect(),
                                     };
@@ -1067,7 +1085,7 @@ impl MirScalarExpr {
                                 _ => {}
                             }
                         } else if let (
-                            BinaryFunc::Eq,
+                            BinaryFunc::Eq(_),
                             MirScalarExpr::CallVariadic {
                                 func: VariadicFunc::RecordCreate { .. },
                                 exprs: rec_create_args1,
@@ -1094,11 +1112,7 @@ impl MirScalarExpr {
                                 exprs: rec_create_args1
                                     .into_iter()
                                     .zip_eq(rec_create_args2)
-                                    .map(|(a, b)| MirScalarExpr::CallBinary {
-                                        func: BinaryFunc::Eq,
-                                        expr1: Box::new(a.clone()),
-                                        expr2: Box::new(b.clone()),
-                                    })
+                                    .map(|(a, b)| a.clone().call_binary(b.clone(), func::Eq))
                                     .collect(),
                             }
                         }

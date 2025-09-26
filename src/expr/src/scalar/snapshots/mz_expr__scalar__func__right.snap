@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(output_type = \"String\", propagates_nulls = true)]\nfn right<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {\n    let string: &'a str = a.unwrap_str();\n    let n = b.unwrap_int32();\n    let mut byte_indices = string.char_indices().map(|(i, _)| i);\n    let start_in_bytes = if n == 0 {\n        string.len()\n    } else if n > 0 {\n        let n = usize::try_from(n - 1)\n            .map_err(|_| {\n                EvalError::InvalidParameterValue(\n                    format!(\"invalid parameter n: {:?}\", n).into(),\n                )\n            })?;\n        byte_indices.rev().nth(n).unwrap_or(0)\n    } else if n == i32::MIN {\n        0\n    } else {\n        let n = n.abs();\n        let n = usize::try_from(n)\n            .map_err(|_| {\n                EvalError::InvalidParameterValue(\n                    format!(\"invalid parameter n: {:?}\", n).into(),\n                )\n            })?;\n        byte_indices.nth(n).unwrap_or(string.len())\n    };\n    Ok(Datum::String(&string[start_in_bytes..]))\n}\n"
+expression: "#[sqlfunc(propagates_nulls = true)]\nfn right<'a>(string: &'a str, n: i32) -> Result<&'a str, EvalError> {\n    let mut byte_indices = string.char_indices().map(|(i, _)| i);\n    let start_in_bytes = if n == 0 {\n        string.len()\n    } else if n > 0 {\n        let n = usize::try_from(n - 1)\n            .map_err(|_| {\n                EvalError::InvalidParameterValue(\n                    format!(\"invalid parameter n: {:?}\", n).into(),\n                )\n            })?;\n        byte_indices.rev().nth(n).unwrap_or(0)\n    } else if n == i32::MIN {\n        0\n    } else {\n        let n = n.abs();\n        let n = usize::try_from(n)\n            .map_err(|_| {\n                EvalError::InvalidParameterValue(\n                    format!(\"invalid parameter n: {:?}\", n).into(),\n                )\n            })?;\n        byte_indices.nth(n).unwrap_or(string.len())\n    };\n    Ok(&string[start_in_bytes..])\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -17,9 +17,9 @@ expression: "#[sqlfunc(output_type = \"String\", propagates_nulls = true)]\nfn r
 )]
 pub struct Right;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for Right {
-    type Input1 = Datum<'a>;
-    type Input2 = Datum<'a>;
-    type Output = Result<Datum<'a>, EvalError>;
+    type Input1 = &'a str;
+    type Input2 = i32;
+    type Output = Result<&'a str, EvalError>;
     fn call(
         &self,
         a: Self::Input1,
@@ -34,7 +34,7 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for Right {
         input_type_b: mz_repr::SqlColumnType,
     ) -> mz_repr::SqlColumnType {
         use mz_repr::AsColumnType;
-        let output = <String>::as_column_type();
+        let output = Self::Output::as_column_type();
         let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
             self,
         );
@@ -46,9 +46,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for Right {
                         && (input_type_a.nullable || input_type_b.nullable)),
             )
     }
-    fn introduces_nulls(&self) -> bool {
-        <String as ::mz_repr::DatumType<'_, ()>>::nullable()
-    }
     fn propagates_nulls(&self) -> bool {
         true
     }
@@ -58,9 +55,7 @@ impl std::fmt::Display for Right {
         f.write_str(stringify!(right))
     }
 }
-fn right<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let string: &'a str = a.unwrap_str();
-    let n = b.unwrap_int32();
+fn right<'a>(string: &'a str, n: i32) -> Result<&'a str, EvalError> {
     let mut byte_indices = string.char_indices().map(|(i, _)| i);
     let start_in_bytes = if n == 0 {
         string.len()
@@ -84,5 +79,5 @@ fn right<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
             })?;
         byte_indices.nth(n).unwrap_or(string.len())
     };
-    Ok(Datum::String(&string[start_in_bytes..]))
+    Ok(&string[start_in_bytes..])
 }

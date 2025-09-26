@@ -868,7 +868,7 @@ impl EquivalenceClasses {
                     // This substitution replaces a complex expression with several smaller expressions, and cannot
                     // cycle if we follow that practice.
                     if let MirScalarExpr::CallBinary {
-                        func: mz_expr::BinaryFunc::Eq,
+                        func: mz_expr::BinaryFunc::Eq(_),
                         expr1,
                         expr2,
                     } = expr
@@ -884,7 +884,7 @@ impl EquivalenceClasses {
                 // Remove the more complex form of the expression.
                 class.retain(|expr| {
                     if let MirScalarExpr::CallBinary {
-                        func: mz_expr::BinaryFunc::Eq,
+                        func: mz_expr::BinaryFunc::Eq(_),
                         ..
                     } = expr
                     {

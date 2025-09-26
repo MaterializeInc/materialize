@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    output_type = \"Option<i32>\",\n    is_infix_op = true,\n    sqlname = \"array_length\",\n    propagates_nulls = true,\n    introduces_nulls = true\n)]\nfn array_length<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {\n    let i = match usize::try_from(b.unwrap_int64()) {\n        Ok(0) | Err(_) => return Ok(Datum::Null),\n        Ok(n) => n - 1,\n    };\n    Ok(\n        match a.unwrap_array().dims().into_iter().nth(i) {\n            None => Datum::Null,\n            Some(dim) => {\n                Datum::Int32(\n                    dim\n                        .length\n                        .try_into()\n                        .map_err(|_| EvalError::Int32OutOfRange(\n                            dim.length.to_string().into(),\n                        ))?,\n                )\n            }\n        },\n    )\n}\n"
+expression: "#[sqlfunc(\n    is_infix_op = true,\n    sqlname = \"array_length\",\n    propagates_nulls = true,\n    introduces_nulls = true\n)]\nfn array_length<'a>(a: Array<'a>, b: i64) -> Result<Option<i32>, EvalError> {\n    let i = match usize::try_from(b) {\n        Ok(0) | Err(_) => return Ok(None),\n        Ok(n) => n - 1,\n    };\n    Ok(\n        match a.dims().into_iter().nth(i) {\n            None => None,\n            Some(dim) => {\n                Some(\n                    dim\n                        .length\n                        .try_into()\n                        .map_err(|_| EvalError::Int32OutOfRange(\n                            dim.length.to_string().into(),\n                        ))?,\n                )\n            }\n        },\n    )\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -17,9 +17,9 @@ expression: "#[sqlfunc(\n    output_type = \"Option<i32>\",\n    is_infix_op = t
 )]
 pub struct ArrayLength;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ArrayLength {
-    type Input1 = Datum<'a>;
-    type Input2 = Datum<'a>;
-    type Output = Result<Datum<'a>, EvalError>;
+    type Input1 = Array<'a>;
+    type Input2 = i64;
+    type Output = Result<Option<i32>, EvalError>;
     fn call(
         &self,
         a: Self::Input1,
@@ -34,7 +34,7 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ArrayLength {
         input_type_b: mz_repr::SqlColumnType,
     ) -> mz_repr::SqlColumnType {
         use mz_repr::AsColumnType;
-        let output = <Option<i32>>::as_column_type();
+        let output = Self::Output::as_column_type();
         let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
             self,
         );
@@ -61,16 +61,16 @@ impl std::fmt::Display for ArrayLength {
         f.write_str("array_length")
     }
 }
-fn array_length<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let i = match usize::try_from(b.unwrap_int64()) {
-        Ok(0) | Err(_) => return Ok(Datum::Null),
+fn array_length<'a>(a: Array<'a>, b: i64) -> Result<Option<i32>, EvalError> {
+    let i = match usize::try_from(b) {
+        Ok(0) | Err(_) => return Ok(None),
         Ok(n) => n - 1,
     };
     Ok(
-        match a.unwrap_array().dims().into_iter().nth(i) {
-            None => Datum::Null,
+        match a.dims().into_iter().nth(i) {
+            None => None,
             Some(dim) => {
-                Datum::Int32(
+                Some(
                     dim
                         .length
                         .try_into()

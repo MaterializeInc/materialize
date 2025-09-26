@@ -14,7 +14,7 @@ use mz_repr::{Datum, Row, RowArena, SqlColumnType, SqlRelationType, SqlScalarTyp
 
 use crate::{
     BinaryFunc, EvalError, MapFilterProject, MfpPlan, MirScalarExpr, UnaryFunc,
-    UnmaterializableFunc, VariadicFunc,
+    UnmaterializableFunc, VariadicFunc, func,
 };
 
 /// An inclusive range of non-null datum values.
@@ -447,12 +447,12 @@ pub trait Interpreter {
         let mz_now = mfp_eval.unmaterializable(&UnmaterializableFunc::MzNow);
         for bound in &plan.lower_bounds {
             let bound_range = mfp_eval.expr(bound);
-            let result = mfp_eval.binary(&BinaryFunc::Lte, bound_range, mz_now.clone());
+            let result = mfp_eval.binary(&BinaryFunc::Lte(func::Lte), bound_range, mz_now.clone());
             results.push(result);
         }
         for bound in &plan.upper_bounds {
             let bound_range = mfp_eval.expr(bound);
-            let result = mfp_eval.binary(&BinaryFunc::Gte, bound_range, mz_now.clone());
+            let result = mfp_eval.binary(&BinaryFunc::Gte(func::Gte), bound_range, mz_now.clone());
             results.push(result);
         }
         self.variadic(&VariadicFunc::And, results)
@@ -696,7 +696,7 @@ impl SpecialBinary {
                 map_fn: |l, r| jsonb_get_string(l, r, true),
                 pushdownable: (true, false),
             }),
-            BinaryFunc::Eq => Some(SpecialBinary {
+            BinaryFunc::Eq(_) => Some(SpecialBinary {
                 map_fn: eq,
                 pushdownable: (true, true),
             }),
@@ -1167,38 +1167,37 @@ mod tests {
         }
     }
 
-    const INTERESTING_BINARY_FUNCS: &[BinaryFunc] = {
-        use BinaryFunc::*;
-        &[
-            AddTimestampInterval,
-            AddNumeric,
-            SubNumeric,
-            MulNumeric,
-            DivNumeric,
-            Eq,
-            Lt,
-            Gt,
-            Lte,
-            Gte,
-            DateTruncTimestamp,
-            JsonbGetString,
-            JsonbGetStringStringify,
+    fn interesting_binary_funcs() -> Vec<BinaryFunc> {
+        vec![
+            AddTimestampInterval.into(),
+            AddNumeric.into(),
+            SubNumeric.into(),
+            MulNumeric.into(),
+            DivNumeric.into(),
+            Eq.into(),
+            Lt.into(),
+            Gt.into(),
+            Lte.into(),
+            Gte.into(),
+            DateTruncUnitsTimestamp.into(),
+            BinaryFunc::JsonbGetString,
+            BinaryFunc::JsonbGetStringStringify,
         ]
-    };
+    }
 
     fn binary_typecheck(func: &BinaryFunc, arg0: &SqlColumnType, arg1: &SqlColumnType) -> bool {
         use BinaryFunc::*;
         match func {
-            AddTimestampInterval => {
+            AddTimestampInterval(_) => {
                 arg0.scalar_type
                     .base_eq(&SqlScalarType::Timestamp { precision: None })
                     && arg1.scalar_type.base_eq(&SqlScalarType::Interval)
             }
-            AddNumeric | SubNumeric | MulNumeric | DivNumeric => {
+            AddNumeric(_) | SubNumeric(_) | MulNumeric(_) | DivNumeric(_) => {
                 arg0.scalar_type.base_eq(&NUM_TYPE) && arg1.scalar_type.base_eq(&NUM_TYPE)
             }
-            Eq | Lt | Gt | Lte | Gte => arg0.scalar_type.base_eq(&arg1.scalar_type),
-            DateTruncTimestamp => {
+            Eq(_) | Lt(_) | Gt(_) | Lte(_) | Gte(_) => arg0.scalar_type.base_eq(&arg1.scalar_type),
+            DateTruncTimestamp(_) => {
                 arg0.scalar_type.base_eq(&SqlScalarType::String)
                     && arg1
                         .scalar_type
@@ -1310,7 +1309,7 @@ mod tests {
                     })
                     .boxed();
                 let binary_gen = (
-                    select(INTERESTING_BINARY_FUNCS),
+                    select(interesting_binary_funcs()),
                     self_gen.clone(),
                     self_gen.clone(),
                 )
@@ -1449,7 +1448,7 @@ mod tests {
                     CallUnary {
                         func: UnaryFunc::IsNull(IsNull),
                         expr: Box::new(CallBinary {
-                            func: BinaryFunc::MulInt32,
+                            func: MulInt32.into(),
                             expr1: Box::new(MirScalarExpr::column(0)),
                             expr2: Box::new(MirScalarExpr::column(0)),
                         }),
@@ -1459,7 +1458,7 @@ mod tests {
                 (
                     1,
                     CallBinary {
-                        func: BinaryFunc::Eq,
+                        func: Eq.into(),
                         expr1: Box::new(MirScalarExpr::column(0)),
                         expr2: Box::new(Literal(
                             Ok(Row::pack_slice(&[Datum::Int32(1727694505)])),
@@ -1506,17 +1505,17 @@ mod tests {
             SqlScalarType::Int64.nullable(false),
         );
         let expr = MirScalarExpr::CallBinary {
-            func: BinaryFunc::Gte,
+            func: Gte.into(),
             expr1: Box::new(MirScalarExpr::CallUnmaterializable(
                 UnmaterializableFunc::MzNow,
             )),
             expr2: Box::new(MirScalarExpr::CallUnary {
                 func: UnaryFunc::CastInt64ToMzTimestamp(CastInt64ToMzTimestamp),
                 expr: Box::new(MirScalarExpr::CallBinary {
-                    func: BinaryFunc::MulInt64,
+                    func: MulInt64.into(),
                     expr1: Box::new(period_ms.clone()),
                     expr2: Box::new(MirScalarExpr::CallBinary {
-                        func: BinaryFunc::DivInt64,
+                        func: DivInt64.into(),
                         expr1: Box::new(MirScalarExpr::column(0)),
                         expr2: Box::new(period_ms),
                     }),
@@ -1726,13 +1725,10 @@ mod tests {
     fn test_inequality() {
         let arena = RowArena::new();
 
-        let expr = MirScalarExpr::CallBinary {
-            func: BinaryFunc::Gte,
-            expr1: Box::new(MirScalarExpr::column(0)),
-            expr2: Box::new(MirScalarExpr::CallUnmaterializable(
-                UnmaterializableFunc::MzNow,
-            )),
-        };
+        let expr = MirScalarExpr::column(0).call_binary(
+            MirScalarExpr::CallUnmaterializable(UnmaterializableFunc::MzNow),
+            Gte,
+        );
 
         let relation = SqlRelationType::new(vec![SqlScalarType::MzTimestamp.nullable(true)]);
         let mut interpreter = ColumnSpecs::new(&relation, &arena);
@@ -1766,18 +1762,11 @@ mod tests {
     fn test_trace() {
         use super::Trace;
 
-        let expr = MirScalarExpr::CallBinary {
-            func: BinaryFunc::Gte,
-            expr1: Box::new(MirScalarExpr::column(0)),
-            expr2: Box::new(MirScalarExpr::CallBinary {
-                func: BinaryFunc::AddInt64(AddInt64),
-                expr1: Box::new(MirScalarExpr::column(1)),
-                expr2: Box::new(MirScalarExpr::CallUnary {
-                    func: UnaryFunc::NegInt64(NegInt64),
-                    expr: Box::new(MirScalarExpr::column(3)),
-                }),
-            }),
-        };
+        let expr = MirScalarExpr::column(0).call_binary(
+            MirScalarExpr::column(1)
+                .call_binary(MirScalarExpr::column(3).call_unary(NegInt64), AddInt64),
+            Gte,
+        );
         let summary = Trace.expr(&expr);
         assert!(summary.pushdownable());
     }

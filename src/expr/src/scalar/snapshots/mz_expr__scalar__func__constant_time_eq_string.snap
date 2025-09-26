@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    output_type = \"bool\",\n    sqlname = \"constant_time_compare_strings\",\n    propagates_nulls = true\n)]\npub fn constant_time_eq_string<'a>(\n    a: Datum<'a>,\n    b: Datum<'a>,\n) -> Result<Datum<'a>, EvalError> {\n    let a = a.unwrap_str();\n    let b = b.unwrap_str();\n    Ok(Datum::from(bool::from(a.as_bytes().ct_eq(b.as_bytes()))))\n}\n"
+expression: "#[sqlfunc(sqlname = \"constant_time_compare_strings\", propagates_nulls = true)]\npub fn constant_time_eq_string(a: &str, b: &str) -> bool {\n    bool::from(a.as_bytes().ct_eq(b.as_bytes()))\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -17,9 +17,9 @@ expression: "#[sqlfunc(\n    output_type = \"bool\",\n    sqlname = \"constant_t
 )]
 pub struct ConstantTimeEqString;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ConstantTimeEqString {
-    type Input1 = Datum<'a>;
-    type Input2 = Datum<'a>;
-    type Output = Result<Datum<'a>, EvalError>;
+    type Input1 = &'a str;
+    type Input2 = &'a str;
+    type Output = bool;
     fn call(
         &self,
         a: Self::Input1,
@@ -34,7 +34,7 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ConstantTimeEqString {
         input_type_b: mz_repr::SqlColumnType,
     ) -> mz_repr::SqlColumnType {
         use mz_repr::AsColumnType;
-        let output = <bool>::as_column_type();
+        let output = Self::Output::as_column_type();
         let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
             self,
         );
@@ -46,9 +46,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ConstantTimeEqString {
                         && (input_type_a.nullable || input_type_b.nullable)),
             )
     }
-    fn introduces_nulls(&self) -> bool {
-        <bool as ::mz_repr::DatumType<'_, ()>>::nullable()
-    }
     fn propagates_nulls(&self) -> bool {
         true
     }
@@ -58,11 +55,6 @@ impl std::fmt::Display for ConstantTimeEqString {
         f.write_str("constant_time_compare_strings")
     }
 }
-pub fn constant_time_eq_string<'a>(
-    a: Datum<'a>,
-    b: Datum<'a>,
-) -> Result<Datum<'a>, EvalError> {
-    let a = a.unwrap_str();
-    let b = b.unwrap_str();
-    Ok(Datum::from(bool::from(a.as_bytes().ct_eq(b.as_bytes()))))
+pub fn constant_time_eq_string(a: &str, b: &str) -> bool {
+    bool::from(a.as_bytes().ct_eq(b.as_bytes()))
 }

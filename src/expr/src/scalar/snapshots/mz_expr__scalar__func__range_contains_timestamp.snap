@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(is_infix_op = true, sqlname = \"@>\", propagates_nulls = true)]\n#[allow(dead_code)]\nfn range_contains_timestamp<'a>(\n    a: Range<Datum<'a>>,\n    elem: CheckedTimestamp<NaiveDateTime>,\n) -> bool {\n    a.contains_elem(&elem)\n}\n"
+expression: "#[sqlfunc(is_infix_op = true, sqlname = \"@>\", propagates_nulls = true)]\nfn range_contains_timestamp<'a>(\n    a: Range<Datum<'a>>,\n    elem: CheckedTimestamp<NaiveDateTime>,\n) -> bool {\n    a.contains_elem(&elem)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -58,7 +58,6 @@ impl std::fmt::Display for RangeContainsTimestamp {
         f.write_str("@>")
     }
 }
-#[allow(dead_code)]
 fn range_contains_timestamp<'a>(
     a: Range<Datum<'a>>,
     elem: CheckedTimestamp<NaiveDateTime>,

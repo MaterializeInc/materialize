@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    output_type_expr = \"input_type_a.scalar_type.without_modifiers().nullable(true)\",\n    sqlname = \"array_remove\",\n    propagates_nulls = false,\n    introduces_nulls = false\n)]\nfn array_remove<'a>(\n    a: Datum<'a>,\n    b: Datum<'a>,\n    temp_storage: &'a RowArena,\n) -> Result<Datum<'a>, EvalError> {\n    if a.is_null() {\n        return Ok(a);\n    }\n    let arr = a.unwrap_array();\n    if arr.dims().len() == 0 {\n        return Ok(a);\n    }\n    if arr.dims().len() > 1 {\n        return Err(EvalError::MultidimensionalArrayRemovalNotSupported);\n    }\n    let elems: Vec<_> = arr.elements().iter().filter(|v| v != &b).collect();\n    let mut dims = arr.dims().into_iter().collect::<Vec<_>>();\n    dims[0] = ArrayDimension {\n        lower_bound: 1,\n        length: elems.len(),\n    };\n    Ok(temp_storage.try_make_datum(|packer| packer.try_push_array(&dims, elems))?)\n}\n"
+expression: "#[sqlfunc(\n    output_type_expr = \"input_type_a.scalar_type.without_modifiers().nullable(true)\",\n    sqlname = \"array_remove\",\n    propagates_nulls = false,\n    introduces_nulls = false\n)]\nfn array_remove<'a>(\n    arr: Array<'a>,\n    b: Datum<'a>,\n    temp_storage: &'a RowArena,\n) -> Result<Datum<'a>, EvalError> {\n    if arr.dims().len() == 0 {\n        return Ok(Datum::Array(arr));\n    }\n    if arr.dims().len() > 1 {\n        return Err(EvalError::MultidimensionalArrayRemovalNotSupported);\n    }\n    let elems: Vec<_> = arr.elements().iter().filter(|v| v != &b).collect();\n    let mut dims = arr.dims().into_iter().collect::<Vec<_>>();\n    dims[0] = ArrayDimension {\n        lower_bound: 1,\n        length: elems.len(),\n    };\n    Ok(temp_storage.try_make_datum(|packer| packer.try_push_array(&dims, elems))?)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -17,7 +17,7 @@ expression: "#[sqlfunc(\n    output_type_expr = \"input_type_a.scalar_type.witho
 )]
 pub struct ArrayRemove;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ArrayRemove {
-    type Input1 = Datum<'a>;
+    type Input1 = Array<'a>;
     type Input2 = Datum<'a>;
     type Output = Result<Datum<'a>, EvalError>;
     fn call(
@@ -59,16 +59,12 @@ impl std::fmt::Display for ArrayRemove {
     }
 }
 fn array_remove<'a>(
-    a: Datum<'a>,
+    arr: Array<'a>,
     b: Datum<'a>,
     temp_storage: &'a RowArena,
 ) -> Result<Datum<'a>, EvalError> {
-    if a.is_null() {
-        return Ok(a);
-    }
-    let arr = a.unwrap_array();
     if arr.dims().len() == 0 {
-        return Ok(a);
+        return Ok(Datum::Array(arr));
     }
     if arr.dims().len() > 1 {
         return Err(EvalError::MultidimensionalArrayRemovalNotSupported);

@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(output_type = \"String\", propagates_nulls = true)]\nfn left<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {\n    let string: &'a str = a.unwrap_str();\n    let n = i64::from(b.unwrap_int32());\n    let mut byte_indices = string.char_indices().map(|(i, _)| i);\n    let end_in_bytes = match n.cmp(&0) {\n        Ordering::Equal => 0,\n        Ordering::Greater => {\n            let n = usize::try_from(n)\n                .map_err(|_| {\n                    EvalError::InvalidParameterValue(\n                        format!(\"invalid parameter n: {:?}\", n).into(),\n                    )\n                })?;\n            byte_indices.nth(n).unwrap_or(string.len())\n        }\n        Ordering::Less => {\n            let n = usize::try_from(n.abs() - 1)\n                .map_err(|_| {\n                    EvalError::InvalidParameterValue(\n                        format!(\"invalid parameter n: {:?}\", n).into(),\n                    )\n                })?;\n            byte_indices.rev().nth(n).unwrap_or(0)\n        }\n    };\n    Ok(Datum::String(&string[..end_in_bytes]))\n}\n"
+expression: "#[sqlfunc(propagates_nulls = true, is_monotone = (false, false))]\nfn left<'a>(string: &'a str, b: i32) -> Result<&'a str, EvalError> {\n    let n = i64::from(b);\n    let mut byte_indices = string.char_indices().map(|(i, _)| i);\n    let end_in_bytes = match n.cmp(&0) {\n        Ordering::Equal => 0,\n        Ordering::Greater => {\n            let n = usize::try_from(n)\n                .map_err(|_| {\n                    EvalError::InvalidParameterValue(\n                        format!(\"invalid parameter n: {:?}\", n).into(),\n                    )\n                })?;\n            byte_indices.nth(n).unwrap_or(string.len())\n        }\n        Ordering::Less => {\n            let n = usize::try_from(n.abs() - 1)\n                .map_err(|_| {\n                    EvalError::InvalidParameterValue(\n                        format!(\"invalid parameter n: {:?}\", n).into(),\n                    )\n                })?;\n            byte_indices.rev().nth(n).unwrap_or(0)\n        }\n    };\n    Ok(&string[..end_in_bytes])\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -17,9 +17,9 @@ expression: "#[sqlfunc(output_type = \"String\", propagates_nulls = true)]\nfn l
 )]
 pub struct Left;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for Left {
-    type Input1 = Datum<'a>;
-    type Input2 = Datum<'a>;
-    type Output = Result<Datum<'a>, EvalError>;
+    type Input1 = &'a str;
+    type Input2 = i32;
+    type Output = Result<&'a str, EvalError>;
     fn call(
         &self,
         a: Self::Input1,
@@ -34,7 +34,7 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for Left {
         input_type_b: mz_repr::SqlColumnType,
     ) -> mz_repr::SqlColumnType {
         use mz_repr::AsColumnType;
-        let output = <String>::as_column_type();
+        let output = Self::Output::as_column_type();
         let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
             self,
         );
@@ -46,8 +46,8 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for Left {
                         && (input_type_a.nullable || input_type_b.nullable)),
             )
     }
-    fn introduces_nulls(&self) -> bool {
-        <String as ::mz_repr::DatumType<'_, ()>>::nullable()
+    fn is_monotone(&self) -> (bool, bool) {
+        (false, false)
     }
     fn propagates_nulls(&self) -> bool {
         true
@@ -58,9 +58,8 @@ impl std::fmt::Display for Left {
         f.write_str(stringify!(left))
     }
 }
-fn left<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let string: &'a str = a.unwrap_str();
-    let n = i64::from(b.unwrap_int32());
+fn left<'a>(string: &'a str, b: i32) -> Result<&'a str, EvalError> {
+    let n = i64::from(b);
     let mut byte_indices = string.char_indices().map(|(i, _)| i);
     let end_in_bytes = match n.cmp(&0) {
         Ordering::Equal => 0,
@@ -83,5 +82,5 @@ fn left<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
             byte_indices.rev().nth(n).unwrap_or(0)
         }
     };
-    Ok(Datum::String(&string[..end_in_bytes]))
+    Ok(&string[..end_in_bytes])
 }

@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    output_type_expr = \"SqlScalarType::Jsonb.nullable(true)\",\n    is_infix_op = true,\n    sqlname = \"||\",\n    propagates_nulls = true,\n    introduces_nulls = true\n)]\nfn jsonb_concat<'a>(\n    a: Datum<'a>,\n    b: Datum<'a>,\n    temp_storage: &'a RowArena,\n) -> Datum<'a> {\n    match (a, b) {\n        (Datum::Map(dict_a), Datum::Map(dict_b)) => {\n            let mut pairs = dict_b.iter().chain(dict_a.iter()).collect::<Vec<_>>();\n            pairs.sort_by(|(k1, _v1), (k2, _v2)| k1.cmp(k2));\n            pairs.dedup_by(|(k1, _v1), (k2, _v2)| k1 == k2);\n            temp_storage.make_datum(|packer| packer.push_dict(pairs))\n        }\n        (Datum::List(list_a), Datum::List(list_b)) => {\n            let elems = list_a.iter().chain(list_b.iter());\n            temp_storage.make_datum(|packer| packer.push_list(elems))\n        }\n        (Datum::List(list_a), b) => {\n            let elems = list_a.iter().chain(Some(b));\n            temp_storage.make_datum(|packer| packer.push_list(elems))\n        }\n        (a, Datum::List(list_b)) => {\n            let elems = Some(a).into_iter().chain(list_b.iter());\n            temp_storage.make_datum(|packer| packer.push_list(elems))\n        }\n        _ => Datum::Null,\n    }\n}\n"
+expression: "#[sqlfunc(\n    output_type_expr = \"SqlScalarType::Jsonb.nullable(true)\",\n    is_infix_op = true,\n    sqlname = \"||\",\n    propagates_nulls = true,\n    introduces_nulls = true\n)]\nfn jsonb_concat<'a>(\n    a: Datum<'a>,\n    b: Datum<'a>,\n    temp_storage: &'a RowArena,\n) -> Datum<'a> {\n    match (a, b) {\n        (Datum::Null, _) | (_, Datum::Null) => Datum::Null,\n        (Datum::Map(dict_a), Datum::Map(dict_b)) => {\n            let mut pairs = dict_b.iter().chain(dict_a.iter()).collect::<Vec<_>>();\n            pairs.sort_by(|(k1, _v1), (k2, _v2)| k1.cmp(k2));\n            pairs.dedup_by(|(k1, _v1), (k2, _v2)| k1 == k2);\n            temp_storage.make_datum(|packer| packer.push_dict(pairs))\n        }\n        (Datum::List(list_a), Datum::List(list_b)) => {\n            let elems = list_a.iter().chain(list_b.iter());\n            temp_storage.make_datum(|packer| packer.push_list(elems))\n        }\n        (Datum::List(list_a), b) => {\n            let elems = list_a.iter().chain(Some(b));\n            temp_storage.make_datum(|packer| packer.push_list(elems))\n        }\n        (a, Datum::List(list_b)) => {\n            let elems = Some(a).into_iter().chain(list_b.iter());\n            temp_storage.make_datum(|packer| packer.push_list(elems))\n        }\n        _ => Datum::Null,\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -67,6 +67,7 @@ fn jsonb_concat<'a>(
     temp_storage: &'a RowArena,
 ) -> Datum<'a> {
     match (a, b) {
+        (Datum::Null, _) | (_, Datum::Null) => Datum::Null,
         (Datum::Map(dict_a), Datum::Map(dict_b)) => {
             let mut pairs = dict_b.iter().chain(dict_a.iter()).collect::<Vec<_>>();
             pairs.sort_by(|(k1, _v1), (k2, _v2)| k1.cmp(k2));

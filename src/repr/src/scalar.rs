@@ -2082,6 +2082,27 @@ impl<'a, E> DatumType<'a, E> for DatumList<'a> {
     }
 }
 
+impl<'a, E> DatumType<'a, E> for Array<'a> {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
+        false
+    }
+
+    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
+        match res {
+            Ok(Datum::Array(array)) => Ok(array),
+            _ => Err(res),
+        }
+    }
+
+    fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
+        Ok(Datum::Array(self))
+    }
+}
+
 impl<'a, E> DatumType<'a, E> for DatumMap<'a> {
     fn nullable() -> bool {
         false

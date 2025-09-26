@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(output_type = \"Vec<u8>\", propagates_nulls = true)]\nfn decode<'a>(\n    string: Datum<'a>,\n    format: Datum<'a>,\n    temp_storage: &'a RowArena,\n) -> Result<Datum<'a>, EvalError> {\n    let format = encoding::lookup_format(format.unwrap_str())?;\n    let out = format.decode(string.unwrap_str())?;\n    Ok(Datum::from(temp_storage.push_bytes(out)))\n}\n"
+expression: "#[sqlfunc(propagates_nulls = true)]\nfn decode<'a>(\n    string: &str,\n    format: &str,\n    temp_storage: &'a RowArena,\n) -> Result<&'a [u8], EvalError> {\n    let format = encoding::lookup_format(format)?;\n    let out = format.decode(string)?;\n    Ok(temp_storage.push_bytes(out))\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -17,9 +17,9 @@ expression: "#[sqlfunc(output_type = \"Vec<u8>\", propagates_nulls = true)]\nfn 
 )]
 pub struct Decode;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for Decode {
-    type Input1 = Datum<'a>;
-    type Input2 = Datum<'a>;
-    type Output = Result<Datum<'a>, EvalError>;
+    type Input1 = &'a str;
+    type Input2 = &'a str;
+    type Output = Result<&'a [u8], EvalError>;
     fn call(
         &self,
         a: Self::Input1,
@@ -34,7 +34,7 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for Decode {
         input_type_b: mz_repr::SqlColumnType,
     ) -> mz_repr::SqlColumnType {
         use mz_repr::AsColumnType;
-        let output = <Vec<u8>>::as_column_type();
+        let output = Self::Output::as_column_type();
         let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
             self,
         );
@@ -46,9 +46,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for Decode {
                         && (input_type_a.nullable || input_type_b.nullable)),
             )
     }
-    fn introduces_nulls(&self) -> bool {
-        <Vec<u8> as ::mz_repr::DatumType<'_, ()>>::nullable()
-    }
     fn propagates_nulls(&self) -> bool {
         true
     }
@@ -59,11 +56,11 @@ impl std::fmt::Display for Decode {
     }
 }
 fn decode<'a>(
-    string: Datum<'a>,
-    format: Datum<'a>,
+    string: &str,
+    format: &str,
     temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let format = encoding::lookup_format(format.unwrap_str())?;
-    let out = format.decode(string.unwrap_str())?;
-    Ok(Datum::from(temp_storage.push_bytes(out)))
+) -> Result<&'a [u8], EvalError> {
+    let format = encoding::lookup_format(format)?;
+    let out = format.decode(string)?;
+    Ok(temp_storage.push_bytes(out))
 }

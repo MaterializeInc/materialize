@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(output_type = \"String\", propagates_nulls = true)]\nfn pretty_sql<'a>(\n    sql: Datum<'a>,\n    width: Datum<'a>,\n    temp_storage: &'a RowArena,\n) -> Result<Datum<'a>, EvalError> {\n    let sql = sql.unwrap_str();\n    let width = width.unwrap_int32();\n    let width = usize::try_from(width)\n        .map_err(|_| EvalError::PrettyError(\"invalid width\".into()))?;\n    let pretty = pretty_str(\n            sql,\n            PrettyConfig {\n                width,\n                format_mode: FormatMode::Simple,\n            },\n        )\n        .map_err(|e| EvalError::PrettyError(e.to_string().into()))?;\n    let pretty = temp_storage.push_string(pretty);\n    Ok(Datum::String(pretty))\n}\n"
+expression: "#[sqlfunc(propagates_nulls = true)]\nfn pretty_sql<'a>(\n    sql: &str,\n    width: i32,\n    temp_storage: &'a RowArena,\n) -> Result<&'a str, EvalError> {\n    let width = usize::try_from(width)\n        .map_err(|_| EvalError::PrettyError(\"invalid width\".into()))?;\n    let pretty = pretty_str(\n            sql,\n            PrettyConfig {\n                width,\n                format_mode: FormatMode::Simple,\n            },\n        )\n        .map_err(|e| EvalError::PrettyError(e.to_string().into()))?;\n    let pretty = temp_storage.push_string(pretty);\n    Ok(pretty)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -17,9 +17,9 @@ expression: "#[sqlfunc(output_type = \"String\", propagates_nulls = true)]\nfn p
 )]
 pub struct PrettySql;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for PrettySql {
-    type Input1 = Datum<'a>;
-    type Input2 = Datum<'a>;
-    type Output = Result<Datum<'a>, EvalError>;
+    type Input1 = &'a str;
+    type Input2 = i32;
+    type Output = Result<&'a str, EvalError>;
     fn call(
         &self,
         a: Self::Input1,
@@ -34,7 +34,7 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for PrettySql {
         input_type_b: mz_repr::SqlColumnType,
     ) -> mz_repr::SqlColumnType {
         use mz_repr::AsColumnType;
-        let output = <String>::as_column_type();
+        let output = Self::Output::as_column_type();
         let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
             self,
         );
@@ -46,9 +46,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for PrettySql {
                         && (input_type_a.nullable || input_type_b.nullable)),
             )
     }
-    fn introduces_nulls(&self) -> bool {
-        <String as ::mz_repr::DatumType<'_, ()>>::nullable()
-    }
     fn propagates_nulls(&self) -> bool {
         true
     }
@@ -59,12 +56,10 @@ impl std::fmt::Display for PrettySql {
     }
 }
 fn pretty_sql<'a>(
-    sql: Datum<'a>,
-    width: Datum<'a>,
+    sql: &str,
+    width: i32,
     temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let sql = sql.unwrap_str();
-    let width = width.unwrap_int32();
+) -> Result<&'a str, EvalError> {
     let width = usize::try_from(width)
         .map_err(|_| EvalError::PrettyError("invalid width".into()))?;
     let pretty = pretty_str(
@@ -76,5 +71,5 @@ fn pretty_sql<'a>(
         )
         .map_err(|e| EvalError::PrettyError(e.to_string().into()))?;
     let pretty = temp_storage.push_string(pretty);
-    Ok(Datum::String(pretty))
+    Ok(pretty)
 }

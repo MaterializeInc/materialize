@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    output_type = \"String\",\n    sqlname = \"mz_render_typmod\",\n    propagates_nulls = true,\n    introduces_nulls = false\n)]\nfn mz_render_typmod<'a>(\n    oid: Datum<'a>,\n    typmod: Datum<'a>,\n    temp_storage: &'a RowArena,\n) -> Result<Datum<'a>, EvalError> {\n    let oid = oid.unwrap_uint32();\n    let typmod = typmod.unwrap_int32();\n    let s = match Type::from_oid_and_typmod(oid, typmod) {\n        Ok(typ) => typ.constraint().display_or(\"\").to_string(),\n        Err(_) if typmod >= 0 => format!(\"({typmod})\"),\n        Err(_) => \"\".into(),\n    };\n    Ok(Datum::String(temp_storage.push_string(s)))\n}\n"
+expression: "#[sqlfunc(\n    output_type = \"String\",\n    sqlname = \"mz_render_typmod\",\n    propagates_nulls = true,\n    introduces_nulls = false\n)]\nfn mz_render_typmod<'a>(\n    oid: u32,\n    typmod: i32,\n    temp_storage: &'a RowArena,\n) -> Result<Datum<'a>, EvalError> {\n    let s = match Type::from_oid_and_typmod(oid, typmod) {\n        Ok(typ) => typ.constraint().display_or(\"\").to_string(),\n        Err(_) if typmod >= 0 => format!(\"({typmod})\"),\n        Err(_) => \"\".into(),\n    };\n    Ok(Datum::String(temp_storage.push_string(s)))\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -17,8 +17,8 @@ expression: "#[sqlfunc(\n    output_type = \"String\",\n    sqlname = \"mz_rende
 )]
 pub struct MzRenderTypmod;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for MzRenderTypmod {
-    type Input1 = Datum<'a>;
-    type Input2 = Datum<'a>;
+    type Input1 = u32;
+    type Input2 = i32;
     type Output = Result<Datum<'a>, EvalError>;
     fn call(
         &self,
@@ -59,12 +59,10 @@ impl std::fmt::Display for MzRenderTypmod {
     }
 }
 fn mz_render_typmod<'a>(
-    oid: Datum<'a>,
-    typmod: Datum<'a>,
+    oid: u32,
+    typmod: i32,
     temp_storage: &'a RowArena,
 ) -> Result<Datum<'a>, EvalError> {
-    let oid = oid.unwrap_uint32();
-    let typmod = typmod.unwrap_int32();
     let s = match Type::from_oid_and_typmod(oid, typmod) {
         Ok(typ) => typ.constraint().display_or("").to_string(),
         Err(_) if typmod >= 0 => format!("({typmod})"),

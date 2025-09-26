@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    is_monotone = (true, true),\n    output_type = Interval,\n    is_infix_op = true,\n    sqlname = \"-\",\n    propagates_nulls = true\n)]\nfn sub_timestamp<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {\n    Datum::from(a.unwrap_timestamp() - b.unwrap_timestamp())\n}\n"
+expression: "#[sqlfunc(\n    is_monotone = \"(true, true)\",\n    output_type = \"Interval\",\n    is_infix_op = true,\n    sqlname = \"-\",\n    propagates_nulls = true\n)]\nfn sub_timestamp<'a>(\n    a: CheckedTimestamp<chrono::NaiveDateTime>,\n    b: CheckedTimestamp<chrono::NaiveDateTime>,\n) -> Datum<'a> {\n    Datum::from(a - b)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -17,8 +17,8 @@ expression: "#[sqlfunc(\n    is_monotone = (true, true),\n    output_type = Inte
 )]
 pub struct SubTimestamp;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for SubTimestamp {
-    type Input1 = Datum<'a>;
-    type Input2 = Datum<'a>;
+    type Input1 = CheckedTimestamp<chrono::NaiveDateTime>;
+    type Input2 = CheckedTimestamp<chrono::NaiveDateTime>;
     type Output = Datum<'a>;
     fn call(
         &self,
@@ -64,6 +64,9 @@ impl std::fmt::Display for SubTimestamp {
         f.write_str("-")
     }
 }
-fn sub_timestamp<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_timestamp() - b.unwrap_timestamp())
+fn sub_timestamp<'a>(
+    a: CheckedTimestamp<chrono::NaiveDateTime>,
+    b: CheckedTimestamp<chrono::NaiveDateTime>,
+) -> Datum<'a> {
+    Datum::from(a - b)
 }

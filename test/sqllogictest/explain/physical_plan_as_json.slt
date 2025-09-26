@@ -1191,7 +1191,9 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                                 "expressions": [
                                   {
                                     "CallBinary": {
-                                      "func": "SubInt32",
+                                      "func": {
+                                        "SubInt32": null
+                                      },
                                       "expr1": {
                                         "Column": [
                                           0,
@@ -1576,7 +1578,9 @@ SELECT x * 5 FROM cte WHERE x = 5
             2,
             {
               "CallBinary": {
-                "func": "Eq",
+                "func": {
+                  "Eq": null
+                },
                 "expr1": {
                   "Column": [
                     1,
@@ -3174,7 +3178,9 @@ GROUP BY a
                                       "exprs": [
                                         {
                                           "CallBinary": {
-                                            "func": "TextConcat",
+                                            "func": {
+                                              "TextConcat": null
+                                            },
                                             "expr1": {
                                               "CallUnary": {
                                                 "func": {
@@ -3272,7 +3278,9 @@ GROUP BY a
                                       "exprs": [
                                         {
                                           "CallBinary": {
-                                            "func": "TextConcat",
+                                            "func": {
+                                              "TextConcat": null
+                                            },
                                             "expr1": {
                                               "CallUnary": {
                                                 "func": {
@@ -3430,7 +3438,9 @@ GROUP BY a
                                       "exprs": [
                                         {
                                           "CallBinary": {
-                                            "func": "TextConcat",
+                                            "func": {
+                                              "TextConcat": null
+                                            },
                                             "expr1": {
                                               "CallUnary": {
                                                 "func": {
@@ -3528,7 +3538,9 @@ GROUP BY a
                                       "exprs": [
                                         {
                                           "CallBinary": {
-                                            "func": "TextConcat",
+                                            "func": {
+                                              "TextConcat": null
+                                            },
                                             "expr1": {
                                               "CallUnary": {
                                                 "func": {
@@ -3803,7 +3815,9 @@ FROM t
                                                   "exprs": [
                                                     {
                                                       "CallBinary": {
-                                                        "func": "TextConcat",
+                                                        "func": {
+                                                          "TextConcat": null
+                                                        },
                                                         "expr1": {
                                                           "CallUnary": {
                                                             "func": {
@@ -3901,7 +3915,9 @@ FROM t
                                                   "exprs": [
                                                     {
                                                       "CallBinary": {
-                                                        "func": "TextConcat",
+                                                        "func": {
+                                                          "TextConcat": null
+                                                        },
                                                         "expr1": {
                                                           "CallUnary": {
                                                             "func": {
@@ -4029,7 +4045,9 @@ FROM t
                                                   "exprs": [
                                                     {
                                                       "CallBinary": {
-                                                        "func": "TextConcat",
+                                                        "func": {
+                                                          "TextConcat": null
+                                                        },
                                                         "expr1": {
                                                           "CallUnary": {
                                                             "func": {
@@ -4127,7 +4145,9 @@ FROM t
                                                   "exprs": [
                                                     {
                                                       "CallBinary": {
-                                                        "func": "TextConcat",
+                                                        "func": {
+                                                          "TextConcat": null
+                                                        },
                                                         "expr1": {
                                                           "CallUnary": {
                                                             "func": {
@@ -4723,7 +4743,9 @@ MATERIALIZED VIEW collated_group_by_mv
                                       "exprs": [
                                         {
                                           "CallBinary": {
-                                            "func": "TextConcat",
+                                            "func": {
+                                              "TextConcat": null
+                                            },
                                             "expr1": {
                                               "CallUnary": {
                                                 "func": {
@@ -4821,7 +4843,9 @@ MATERIALIZED VIEW collated_group_by_mv
                                       "exprs": [
                                         {
                                           "CallBinary": {
-                                            "func": "TextConcat",
+                                            "func": {
+                                              "TextConcat": null
+                                            },
                                             "expr1": {
                                               "CallUnary": {
                                                 "func": {
@@ -4979,7 +5003,9 @@ MATERIALIZED VIEW collated_group_by_mv
                                       "exprs": [
                                         {
                                           "CallBinary": {
-                                            "func": "TextConcat",
+                                            "func": {
+                                              "TextConcat": null
+                                            },
                                             "expr1": {
                                               "CallUnary": {
                                                 "func": {
@@ -5077,7 +5103,9 @@ MATERIALIZED VIEW collated_group_by_mv
                                       "exprs": [
                                         {
                                           "CallBinary": {
-                                            "func": "TextConcat",
+                                            "func": {
+                                              "TextConcat": null
+                                            },
                                             "expr1": {
                                               "CallUnary": {
                                                 "func": {
@@ -6136,7 +6164,9 @@ SELECT * FROM collated_group_by
                                       "exprs": [
                                         {
                                           "CallBinary": {
-                                            "func": "TextConcat",
+                                            "func": {
+                                              "TextConcat": null
+                                            },
                                             "expr1": {
                                               "CallUnary": {
                                                 "func": {
@@ -6234,7 +6264,9 @@ SELECT * FROM collated_group_by
                                       "exprs": [
                                         {
                                           "CallBinary": {
-                                            "func": "TextConcat",
+                                            "func": {
+                                              "TextConcat": null
+                                            },
                                             "expr1": {
                                               "CallUnary": {
                                                 "func": {
@@ -6392,7 +6424,9 @@ SELECT * FROM collated_group_by
                                       "exprs": [
                                         {
                                           "CallBinary": {
-                                            "func": "TextConcat",
+                                            "func": {
+                                              "TextConcat": null
+                                            },
                                             "expr1": {
                                               "CallUnary": {
                                                 "func": {
@@ -6490,7 +6524,9 @@ SELECT * FROM collated_group_by
                                       "exprs": [
                                         {
                                           "CallBinary": {
-                                            "func": "TextConcat",
+                                            "func": {
+                                              "TextConcat": null
+                                            },
                                             "expr1": {
                                               "CallUnary": {
                                                 "func": {
@@ -7533,7 +7569,9 @@ MATERIALIZED VIEW collated_global_mv
                                                   "exprs": [
                                                     {
                                                       "CallBinary": {
-                                                        "func": "TextConcat",
+                                                        "func": {
+                                                          "TextConcat": null
+                                                        },
                                                         "expr1": {
                                                           "CallUnary": {
                                                             "func": {
@@ -7631,7 +7669,9 @@ MATERIALIZED VIEW collated_global_mv
                                                   "exprs": [
                                                     {
                                                       "CallBinary": {
-                                                        "func": "TextConcat",
+                                                        "func": {
+                                                          "TextConcat": null
+                                                        },
                                                         "expr1": {
                                                           "CallUnary": {
                                                             "func": {
@@ -7759,7 +7799,9 @@ MATERIALIZED VIEW collated_global_mv
                                                   "exprs": [
                                                     {
                                                       "CallBinary": {
-                                                        "func": "TextConcat",
+                                                        "func": {
+                                                          "TextConcat": null
+                                                        },
                                                         "expr1": {
                                                           "CallUnary": {
                                                             "func": {
@@ -7857,7 +7899,9 @@ MATERIALIZED VIEW collated_global_mv
                                                   "exprs": [
                                                     {
                                                       "CallBinary": {
-                                                        "func": "TextConcat",
+                                                        "func": {
+                                                          "TextConcat": null
+                                                        },
                                                         "expr1": {
                                                           "CallUnary": {
                                                             "func": {
@@ -8881,7 +8925,9 @@ SELECT * FROM collated_global
                                                   "exprs": [
                                                     {
                                                       "CallBinary": {
-                                                        "func": "TextConcat",
+                                                        "func": {
+                                                          "TextConcat": null
+                                                        },
                                                         "expr1": {
                                                           "CallUnary": {
                                                             "func": {
@@ -8979,7 +9025,9 @@ SELECT * FROM collated_global
                                                   "exprs": [
                                                     {
                                                       "CallBinary": {
-                                                        "func": "TextConcat",
+                                                        "func": {
+                                                          "TextConcat": null
+                                                        },
                                                         "expr1": {
                                                           "CallUnary": {
                                                             "func": {
@@ -9107,7 +9155,9 @@ SELECT * FROM collated_global
                                                   "exprs": [
                                                     {
                                                       "CallBinary": {
-                                                        "func": "TextConcat",
+                                                        "func": {
+                                                          "TextConcat": null
+                                                        },
                                                         "expr1": {
                                                           "CallUnary": {
                                                             "func": {
@@ -9205,7 +9255,9 @@ SELECT * FROM collated_global
                                                   "exprs": [
                                                     {
                                                       "CallBinary": {
-                                                        "func": "TextConcat",
+                                                        "func": {
+                                                          "TextConcat": null
+                                                        },
                                                         "expr1": {
                                                           "CallUnary": {
                                                             "func": {
@@ -10210,7 +10262,9 @@ WHERE a = c AND d = e AND b + d > 42
                                   4,
                                   {
                                     "CallBinary": {
-                                      "func": "Gt",
+                                      "func": {
+                                        "Gt": null
+                                      },
                                       "expr1": {
                                         "Column": [
                                           3,
@@ -10396,7 +10450,9 @@ WHERE a = c AND d = e AND b + d > 42
                                   4,
                                   {
                                     "CallBinary": {
-                                      "func": "Gt",
+                                      "func": {
+                                        "Gt": null
+                                      },
                                       "expr1": {
                                         "Column": [
                                           3,
@@ -10615,7 +10671,9 @@ WHERE a = c AND d = e AND b + d > 42
                                   4,
                                   {
                                     "CallBinary": {
-                                      "func": "Gt",
+                                      "func": {
+                                        "Gt": null
+                                      },
                                       "expr1": {
                                         "Column": [
                                           3,

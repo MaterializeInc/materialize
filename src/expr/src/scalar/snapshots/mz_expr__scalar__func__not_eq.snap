@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    output_type = \"bool\",\n    is_infix_op = true,\n    sqlname = \"!=\",\n    propagates_nulls = true,\n    negate = \"Some(BinaryFunc::Eq)\"\n)]\nfn not_eq<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {\n    Datum::from(a != b)\n}\n"
+expression: "#[sqlfunc(\n    output_type = \"bool\",\n    is_infix_op = true,\n    sqlname = \"!=\",\n    propagates_nulls = true,\n    negate = \"Some(Eq.into())\"\n)]\nfn not_eq<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {\n    if a == Datum::Null || b == Datum::Null { Datum::Null } else { Datum::from(a != b) }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -53,7 +53,7 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for NotEq {
         true
     }
     fn negate(&self) -> Option<crate::BinaryFunc> {
-        Some(BinaryFunc::Eq)
+        Some(Eq.into())
     }
     fn propagates_nulls(&self) -> bool {
         true
@@ -65,5 +65,5 @@ impl std::fmt::Display for NotEq {
     }
 }
 fn not_eq<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a != b)
+    if a == Datum::Null || b == Datum::Null { Datum::Null } else { Datum::from(a != b) }
 }

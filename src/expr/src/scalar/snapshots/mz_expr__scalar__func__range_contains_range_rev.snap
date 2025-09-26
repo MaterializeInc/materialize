@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    output_type = \"bool\",\n    is_infix_op = true,\n    sqlname = \"<@\",\n    propagates_nulls = true\n)]\nfn range_contains_range_rev<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {\n    let l = a.unwrap_range();\n    let r = b.unwrap_range();\n    Datum::from(Range::<Datum<'a>>::contains_range(&l, &r))\n}\n"
+expression: "#[sqlfunc(\n    output_type = \"bool\",\n    is_infix_op = true,\n    sqlname = \"<@\",\n    propagates_nulls = true\n)]\nfn range_contains_range_rev<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {\n    if a.is_null() || b.is_null() {\n        return Datum::Null;\n    }\n    let l = a.unwrap_range();\n    let r = b.unwrap_range();\n    Datum::from(Range::<Datum<'a>>::contains_range(&l, &r))\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -62,6 +62,9 @@ impl std::fmt::Display for RangeContainsRangeRev {
     }
 }
 fn range_contains_range_rev<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    if a.is_null() || b.is_null() {
+        return Datum::Null;
+    }
     let l = a.unwrap_range();
     let r = b.unwrap_range();
     Datum::from(Range::<Datum<'a>>::contains_range(&l, &r))

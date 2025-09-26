@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(output_type = \"i32\", propagates_nulls = true)]\nfn get_byte<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {\n    let bytes = a.unwrap_bytes();\n    let index = b.unwrap_int32();\n    let err = EvalError::IndexOutOfRange {\n        provided: index,\n        valid_end: i32::try_from(bytes.len()).unwrap() - 1,\n    };\n    let i: &u8 = bytes.get(usize::try_from(index).map_err(|_| err.clone())?).ok_or(err)?;\n    Ok(Datum::from(i32::from(*i)))\n}\n"
+expression: "#[sqlfunc(propagates_nulls = true)]\nfn get_byte(bytes: &[u8], index: i32) -> Result<i32, EvalError> {\n    let err = EvalError::IndexOutOfRange {\n        provided: index,\n        valid_end: i32::try_from(bytes.len()).unwrap() - 1,\n    };\n    let i: &u8 = bytes.get(usize::try_from(index).map_err(|_| err.clone())?).ok_or(err)?;\n    Ok(i32::from(*i))\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -17,9 +17,9 @@ expression: "#[sqlfunc(output_type = \"i32\", propagates_nulls = true)]\nfn get_
 )]
 pub struct GetByte;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for GetByte {
-    type Input1 = Datum<'a>;
-    type Input2 = Datum<'a>;
-    type Output = Result<Datum<'a>, EvalError>;
+    type Input1 = &'a [u8];
+    type Input2 = i32;
+    type Output = Result<i32, EvalError>;
     fn call(
         &self,
         a: Self::Input1,
@@ -34,7 +34,7 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for GetByte {
         input_type_b: mz_repr::SqlColumnType,
     ) -> mz_repr::SqlColumnType {
         use mz_repr::AsColumnType;
-        let output = <i32>::as_column_type();
+        let output = Self::Output::as_column_type();
         let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
             self,
         );
@@ -46,9 +46,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for GetByte {
                         && (input_type_a.nullable || input_type_b.nullable)),
             )
     }
-    fn introduces_nulls(&self) -> bool {
-        <i32 as ::mz_repr::DatumType<'_, ()>>::nullable()
-    }
     fn propagates_nulls(&self) -> bool {
         true
     }
@@ -58,13 +55,11 @@ impl std::fmt::Display for GetByte {
         f.write_str(stringify!(get_byte))
     }
 }
-fn get_byte<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let bytes = a.unwrap_bytes();
-    let index = b.unwrap_int32();
+fn get_byte(bytes: &[u8], index: i32) -> Result<i32, EvalError> {
     let err = EvalError::IndexOutOfRange {
         provided: index,
         valid_end: i32::try_from(bytes.len()).unwrap() - 1,
     };
     let i: &u8 = bytes.get(usize::try_from(index).map_err(|_| err.clone())?).ok_or(err)?;
-    Ok(Datum::from(i32::from(*i)))
+    Ok(i32::from(*i))
 }

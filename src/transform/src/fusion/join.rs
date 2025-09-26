@@ -23,8 +23,8 @@
 
 use std::collections::BTreeMap;
 
+use mz_expr::VariadicFunc;
 use mz_expr::visit::Visit;
-use mz_expr::{BinaryFunc, VariadicFunc};
 use mz_expr::{MapFilterProject, MirRelationExpr, MirScalarExpr};
 
 use crate::analysis::equivalences::EquivalenceClasses;
@@ -270,7 +270,7 @@ fn unpack_equivalences(equivalences: &Vec<Vec<MirScalarExpr>>) -> Vec<MirScalarE
                 func: VariadicFunc::Or,
                 exprs: vec![
                     MirScalarExpr::CallBinary {
-                        func: BinaryFunc::Eq,
+                        func: mz_expr::func::Eq.into(),
                         expr1: Box::new(class[0].clone()),
                         expr2: Box::new(expr.clone()),
                     },

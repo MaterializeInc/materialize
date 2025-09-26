@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    sqlname = \"||\",\n    is_infix_op = true,\n    output_type = \"String\",\n    propagates_nulls = true,\n    is_monotone = (false, true),\n)]\nfn text_concat_binary<'a>(\n    a: Datum<'a>,\n    b: Datum<'a>,\n    temp_storage: &'a RowArena,\n) -> Datum<'a> {\n    let mut buf = String::new();\n    buf.push_str(a.unwrap_str());\n    buf.push_str(b.unwrap_str());\n    Datum::String(temp_storage.push_string(buf))\n}\n"
+expression: "#[sqlfunc(\n    sqlname = \"||\",\n    is_infix_op = true,\n    propagates_nulls = true,\n    is_monotone = (false, true),\n)]\nfn text_concat_binary<'a>(a: &str, b: &str, temp_storage: &'a RowArena) -> &'a str {\n    let mut buf = String::with_capacity(a.len() + b.len());\n    buf.push_str(a);\n    buf.push_str(b);\n    temp_storage.push_string(buf)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -17,9 +17,9 @@ expression: "#[sqlfunc(\n    sqlname = \"||\",\n    is_infix_op = true,\n    out
 )]
 pub struct TextConcatBinary;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for TextConcatBinary {
-    type Input1 = Datum<'a>;
-    type Input2 = Datum<'a>;
-    type Output = Datum<'a>;
+    type Input1 = &'a str;
+    type Input2 = &'a str;
+    type Output = &'a str;
     fn call(
         &self,
         a: Self::Input1,
@@ -34,7 +34,7 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for TextConcatBinary {
         input_type_b: mz_repr::SqlColumnType,
     ) -> mz_repr::SqlColumnType {
         use mz_repr::AsColumnType;
-        let output = <String>::as_column_type();
+        let output = Self::Output::as_column_type();
         let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
             self,
         );
@@ -45,9 +45,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for TextConcatBinary {
                     || (propagates_nulls
                         && (input_type_a.nullable || input_type_b.nullable)),
             )
-    }
-    fn introduces_nulls(&self) -> bool {
-        <String as ::mz_repr::DatumType<'_, ()>>::nullable()
     }
     fn is_infix_op(&self) -> bool {
         true
@@ -64,13 +61,9 @@ impl std::fmt::Display for TextConcatBinary {
         f.write_str("||")
     }
 }
-fn text_concat_binary<'a>(
-    a: Datum<'a>,
-    b: Datum<'a>,
-    temp_storage: &'a RowArena,
-) -> Datum<'a> {
-    let mut buf = String::new();
-    buf.push_str(a.unwrap_str());
-    buf.push_str(b.unwrap_str());
-    Datum::String(temp_storage.push_string(buf))
+fn text_concat_binary<'a>(a: &str, b: &str, temp_storage: &'a RowArena) -> &'a str {
+    let mut buf = String::with_capacity(a.len() + b.len());
+    buf.push_str(a);
+    buf.push_str(b);
+    temp_storage.push_string(buf)
 }
