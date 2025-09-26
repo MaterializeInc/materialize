@@ -36,7 +36,7 @@ mkdir -p $RELEASE_DIR
 CHART=operator-weekly
 CHART_PATH="$CHARTS_DIR/$CHART"
 echo "Processing chart: $CHART version: $VERSION"
-git checkout "origin/$VERSION"
+git checkout "upstream/$VERSION"
 # Check if version already exists
 if [ -f "gh-pages/$CHART-$VERSION.tgz" ]; then
   echo "Chart $CHART version $VERSION already exists, skipping"
