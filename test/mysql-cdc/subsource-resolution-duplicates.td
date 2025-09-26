@@ -46,7 +46,6 @@ contains:catalog item 't' already exists
 
 > SHOW sources
  mz_source          mysql     quickstart  ""
- mz_source_progress progress  <null>      ""
 
 $ mysql-execute name=mysql
 DROP DATABASE other;

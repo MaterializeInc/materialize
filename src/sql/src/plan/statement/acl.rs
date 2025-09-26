@@ -218,11 +218,6 @@ fn plan_alter_item_owner(
                 );
             }
 
-            // Progress subsources cannot be altered directly.
-            if item.is_progress_source() {
-                sql_bail!("cannot ALTER this type of source");
-            }
-
             Ok(Plan::AlterOwner(AlterOwnerPlan {
                 id: ObjectId::Item(item.id()),
                 object_type,

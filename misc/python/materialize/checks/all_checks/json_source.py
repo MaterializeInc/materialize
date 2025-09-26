@@ -81,13 +81,5 @@ class JsonSource(Check):
                 "\\"object\\"" "{\\"a\\":\\"b\\",\\"c\\":\\"d\\"}"
                 "\\"str\\"" "\\"hello\\""
                 """
-                + r"""
-
-                >[version>=14000] SHOW CREATE SOURCE format_jsonb_src;
-                materialize.public.format_jsonb_src "CREATE SOURCE materialize.public.format_jsonb_src\nIN CLUSTER single_replica_cluster\nFROM KAFKA CONNECTION materialize.public.kafka_conn (TOPIC = 'testdrive-format-json-${testdrive.seed}')\nEXPOSE PROGRESS AS materialize.public.format_jsonb_src_progress;"
-
-                >[version<14000] SHOW CREATE SOURCE format_jsonb_src;
-                materialize.public.format_jsonb_src "CREATE SOURCE \"materialize\".\"public\".\"format_jsonb_src\" IN CLUSTER \"single_replica_cluster\" FROM KAFKA CONNECTION \"materialize\".\"public\".\"kafka_conn\" (TOPIC = 'testdrive-format-json-1') EXPOSE PROGRESS AS \"materialize\".\"public\".\"format_jsonb_src_progress\""
-           """
             )
         )

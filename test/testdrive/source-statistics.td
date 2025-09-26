@@ -74,7 +74,7 @@ goofus gallant 1
 > SELECT
       s.name,
       bool_and(u.snapshot_committed),
-      SUM(u.messages_received) >= 4,
+      SUM(u.messages_received) = 2,
       SUM(u.updates_staged) > 0,
       SUM(u.updates_committed) > 0,
       SUM(u.bytes_received) > 0,
@@ -163,14 +163,14 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 
 # Test upsert
 
-# Note that we always count 9 messages received (18 with source tables), but can see as low as 3 updates.
+# Note that we always count 9 messages received, but can see as low as 3 updates.
 # This is because there are 3 active keys, as all the messages could be received in 1 second.
 # There could also be up to 11 updates, as updates cause inserts and deletes
 # (5 initial inserts, 2 deletes, and 2 updates). In total 3 records should be present in upsert state.
 # We can't control this, so have to accept the range.
 > SELECT
     s.name,
-    SUM(u.messages_received) >= 18,
+    SUM(u.messages_received) >= 9,
     SUM(u.bytes_received) > 0
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics u ON s.id = u.id
@@ -217,7 +217,7 @@ $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} 
 {"key": "mammalmore"}
 
 > SELECT s.name,
-    SUM(u.messages_received) >= 20,
+    SUM(u.messages_received) >= 10,
     SUM(u.bytes_received) > 0
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics u ON s.id = u.id
@@ -242,7 +242,7 @@ upsert_tbl true "${updates-committed}" "${updates-committed}" true 2
 # check pre-aggregated view
 
 > SELECT s.name,
-    u.messages_received >= 20,
+    u.messages_received >= 10,
     u.bytes_received > 0
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics u ON s.id = u.id

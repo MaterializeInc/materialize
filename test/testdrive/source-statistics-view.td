@@ -16,6 +16,7 @@ ALTER SYSTEM SET storage_statistics_interval = 2000
 > CREATE SOURCE counter
   IN CLUSTER ${arg.single-replica-cluster}
   FROM LOAD GENERATOR COUNTER (UP TO 100);
+> CREATE TABLE counter_tbl FROM SOURCE counter;
 
 > SELECT
     s.name,

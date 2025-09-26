@@ -133,7 +133,6 @@ INSERT INTO table_g VALUES (2, 'two');
 > CREATE TABLE table_g FROM SOURCE mz_source (REFERENCE table_g);
 
 > SHOW SUBSOURCES ON mz_source
-mz_source_progress    progress
 
 > SHOW TABLES
 table_a               ""
@@ -147,7 +146,7 @@ table_g               ""
 $ set-regex match="DETAILS = '[a-f0-9]+'" replacement=<DETAILS>
 
 > SHOW CREATE SOURCE mz_source;
-materialize.public.mz_source "CREATE SOURCE materialize.public.mz_source\nIN CLUSTER quickstart\nFROM POSTGRES CONNECTION materialize.public.pg (PUBLICATION = 'mz_source')\nEXPOSE PROGRESS AS materialize.public.mz_source_progress;"
+materialize.public.mz_source "CREATE SOURCE materialize.public.mz_source\nIN CLUSTER quickstart\nFROM POSTGRES CONNECTION materialize.public.pg (PUBLICATION = 'mz_source');"
 
 > SHOW CREATE TABLE table_a;
 materialize.public.table_a "CREATE TABLE materialize.public.table_a (pk pg_catalog.int4 NOT NULL, f2 pg_catalog.text, CONSTRAINT table_a_pkey PRIMARY KEY (pk)) FROM SOURCE materialize.public.mz_source (REFERENCE = postgres.public.table_a) WITH (<DETAILS>);"
@@ -162,7 +161,6 @@ materialize.public.table_a "CREATE TABLE materialize.public.table_a (pk pg_catal
 2 two
 
 > SHOW SUBSOURCES ON mz_source
-mz_source_progress    progress
 
 > SHOW TABLES
 table_b               ""
@@ -224,7 +222,6 @@ contains:cannot drop table "table_e": still depended upon by materialized view "
 <null>
 
 > SHOW SUBSOURCES ON mz_source
-mz_source_progress    progress
 
 > SHOW TABLES
 table_g               ""
@@ -234,7 +231,6 @@ table_g               ""
 > DROP TABLE table_g;
 
 > SHOW SUBSOURCES ON mz_source
-mz_source_progress    progress
 
 #
 # Add tables
@@ -276,7 +272,6 @@ INSERT INTO table_h VALUES (2, 'two');
 2 two
 
 > SHOW SUBSOURCES ON mz_source
-mz_source_progress progress
 
 > SHOW TABLES
 table_a            ""

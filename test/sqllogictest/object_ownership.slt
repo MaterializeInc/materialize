@@ -1245,11 +1245,7 @@ simple conn=materialize,user=materialize
 DROP ROLE owner
 ----
 db error: ERROR: role "owner" cannot be dropped because some objects depend on it
-DETAIL: owner: owner of SOURCE "materialize.public.s_progress"
-owner: privileges granted on SOURCE "materialize.public.s_progress" to mz_support
-owner: privileges on SOURCE "materialize.public.s_progress" granted by owner
-owner: privileges granted on SOURCE "materialize.public.s_progress" to owner
-owner: owner of SOURCE "materialize.public.s"
+DETAIL: owner: owner of SOURCE "materialize.public.s"
 owner: privileges on SOURCE "materialize.public.s" granted by owner
 owner: privileges granted on SOURCE "materialize.public.s" to owner
 owner: privileges on DATABASE "materialize" granted by mz_system
@@ -2321,17 +2317,16 @@ query TT
 SELECT mz_sources.name, mz_roles.name
   FROM mz_sources
   LEFT JOIN mz_roles ON mz_sources.owner_id = mz_roles.id
-  WHERE mz_sources.name IN ('s', 's_progress', 'accounts', 'auctions', 'bids', 'organizations', 'users')
+  WHERE mz_sources.name IN ('s', 'accounts', 'auctions', 'bids', 'organizations', 'users')
   ORDER BY mz_sources.name
 ----
 s  materialize
-s_progress  materialize
 
 query TT
 SELECT mz_tables.name, mz_roles.name
   FROM mz_tables
   LEFT JOIN mz_roles ON mz_tables.owner_id = mz_roles.id
-  WHERE mz_tables.name IN ('s', 's_progress', 'accounts', 'auctions', 'bids', 'organizations', 'users')
+  WHERE mz_tables.name IN ('s', 'accounts', 'auctions', 'bids', 'organizations', 'users')
   ORDER BY mz_tables.name
 ----
 accounts       materialize
@@ -2373,24 +2368,23 @@ ALTER TABLE accounts OWNER TO joe
 ----
 COMPLETE 0
 
-statement error cannot ALTER this type of source
-ALTER SOURCE s_progress OWNER TO joe
+statement error db error: ERROR: must be a member of "joe"
+ALTER SOURCE s OWNER TO joe
 
 query TT
 SELECT mz_sources.name, mz_roles.name
   FROM mz_sources
   LEFT JOIN mz_roles ON mz_sources.owner_id = mz_roles.id
-  WHERE mz_sources.name IN ('s', 's_progress', 'accounts', 'auctions', 'bids', 'organizations', 'users')
+  WHERE mz_sources.name IN ('s', 'accounts', 'auctions', 'bids', 'organizations', 'users')
   ORDER BY mz_sources.name
 ----
 s  materialize
-s_progress  materialize
 
 query TT
 SELECT mz_tables.name, mz_roles.name
   FROM mz_tables
   LEFT JOIN mz_roles ON mz_tables.owner_id = mz_roles.id
-  WHERE mz_tables.name IN ('s', 's_progress', 'accounts', 'auctions', 'bids', 'organizations', 'users')
+  WHERE mz_tables.name IN ('s', 'accounts', 'auctions', 'bids', 'organizations', 'users')
   ORDER BY mz_tables.name
 ----
 accounts       joe
@@ -2425,17 +2419,16 @@ query TT
 SELECT mz_sources.name, mz_roles.name
   FROM mz_sources
   LEFT JOIN mz_roles ON mz_sources.owner_id = mz_roles.id
-  WHERE mz_sources.name IN ('s', 's_progress', 'accounts', 'auctions', 'bids', 'organizations', 'users')
+  WHERE mz_sources.name IN ('s', 'accounts', 'auctions', 'bids', 'organizations', 'users')
   ORDER BY mz_sources.name
 ----
 s  joe
-s_progress  joe
 
 query TT
 SELECT mz_tables.name, mz_roles.name
   FROM mz_tables
   LEFT JOIN mz_roles ON mz_tables.owner_id = mz_roles.id
-  WHERE mz_tables.name IN ('s', 's_progress', 'accounts', 'auctions', 'bids', 'organizations', 'users')
+  WHERE mz_tables.name IN ('s', 'accounts', 'auctions', 'bids', 'organizations', 'users')
   ORDER BY mz_tables.name
 ----
 accounts       joe

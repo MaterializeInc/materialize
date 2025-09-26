@@ -85,7 +85,6 @@ name
 mz_data
 mz_data_tbl
 mz_data_tbl_primary_idx
-mz_data_progress
 
 # Test that data can be selected from the source before renaming.
 > SELECT * FROM mz_data_tbl
@@ -106,7 +105,6 @@ name
 -----
 mz_data_tbl_primary_idx
 mz_data_tbl
-mz_data_progress
 
 > ALTER TABLE mz_data_tbl RENAME TO renamed_mz_data_tbl;
 
@@ -114,7 +112,6 @@ mz_data_progress
 name
 -----
 mz_data_tbl_primary_idx
-mz_data_progress
 
 > SELECT name FROM public_objects WHERE name LIKE 'renamed_mz_data%';
 name
@@ -211,7 +208,6 @@ renamed_sink
 > SHOW SOURCES;
 name               type      cluster            comment
 -----------------------------------------------------------------
-mz_data_progress   progress  <null>             ""
 renamed_mz_data    kafka     <VARIABLE_OUTPUT>  ""
 
 # Sink was successfully renamed
@@ -888,7 +884,7 @@ renamed_mz_data_tbl
 > SHOW CREATE SOURCE to_be_renamed.mz_data;
 name                                create_sql
 ---------------------------------------------------------------------------------------------------------------------------------------------------
-materialize.to_be_renamed.mz_data "CREATE SOURCE materialize.to_be_renamed.mz_data\nIN CLUSTER <VARIABLE_OUTPUT>\nFROM KAFKA CONNECTION materialize.public.kafka_conn (TOPIC = '<VARIABLE_OUTPUT>')\nEXPOSE PROGRESS AS materialize.to_be_renamed.mz_data_progress;"
+materialize.to_be_renamed.mz_data "CREATE SOURCE materialize.to_be_renamed.mz_data\nIN CLUSTER <VARIABLE_OUTPUT>\nFROM KAFKA CONNECTION materialize.public.kafka_conn (TOPIC = '<VARIABLE_OUTPUT>');"
 
 > SHOW CREATE SINK to_be_renamed.sink1;
 name                                create_sql
@@ -902,7 +898,7 @@ materialize.to_be_renamed.sink1    "CREATE SINK materialize.to_be_renamed.sink1 
 > SHOW CREATE SOURCE foo_bar.mz_data;
 name                                create_sql
 ---------------------------------------------------------------------------------------------------------------------------------------------------
-materialize.foo_bar.mz_data "CREATE SOURCE materialize.foo_bar.mz_data\nIN CLUSTER <VARIABLE_OUTPUT>\nFROM KAFKA CONNECTION materialize.public.kafka_conn (TOPIC = '<VARIABLE_OUTPUT>')\nEXPOSE PROGRESS AS materialize.foo_bar.mz_data_progress;"
+materialize.foo_bar.mz_data "CREATE SOURCE materialize.foo_bar.mz_data\nIN CLUSTER <VARIABLE_OUTPUT>\nFROM KAFKA CONNECTION materialize.public.kafka_conn (TOPIC = '<VARIABLE_OUTPUT>');"
 
 > SHOW CREATE SINK foo_bar.sink1;
 name                                create_sql

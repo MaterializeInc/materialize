@@ -29,9 +29,8 @@ $ kafka-create-topic topic=test
   FROM SOURCE kafka_src (REFERENCE "testdrive-test-${testdrive.seed}")
   FORMAT CSV WITH 2 COLUMNS;
 
-> SELECT event_type, object_type, details - 'replica_id' - 'billed_as' - 'internal', user FROM mz_audit_events ORDER BY id DESC LIMIT 4
+> SELECT event_type, object_type, details - 'replica_id' - 'billed_as' - 'internal', user FROM mz_audit_events ORDER BY id DESC LIMIT 3
 create source "{\"cluster_id\":\"<GID>\",\"database\":\"materialize\",\"id\":\"<GID>\",\"item\":\"kafka_src\",\"schema\":\"public\",\"type\":\"kafka\"}" materialize
-create source "{\"cluster_id\":null,\"database\":\"materialize\",\"id\":\"<GID>\",\"item\":\"kafka_src_progress\",\"schema\":\"public\",\"type\":\"progress\"}" materialize
 create cluster-replica "{\"cluster_id\":\"<GID>\",\"cluster_name\":\"audit_log_kafka_src\",\"logical_size\":\"${arg.default-storage-size}\",\"reason\":\"manual\",\"replica_name\":\"r1\"}" materialize
 create table "{\"database\":\"materialize\",\"id\":\"<GID>\",\"item\":\"kafka_src_tbl\",\"schema\":\"public\"}" materialize
 
@@ -41,8 +40,7 @@ create table "{\"database\":\"materialize\",\"id\":\"<GID>\",\"item\":\"kafka_sr
   IN CLUSTER audit_log_counter_src
   FROM LOAD GENERATOR COUNTER (UP TO 100);
 
-> SELECT event_type, object_type, details - 'replica_id' - 'billed_as' - 'internal', user FROM mz_audit_events ORDER BY id DESC LIMIT 4
+> SELECT event_type, object_type, details - 'replica_id' - 'billed_as' - 'internal', user FROM mz_audit_events ORDER BY id DESC LIMIT 3
 create source "{\"cluster_id\":\"<GID>\",\"database\":\"materialize\",\"id\":\"<GID>\",\"item\":\"counter_src\",\"schema\":\"public\",\"type\":\"load-generator\"}" materialize
-create source "{\"cluster_id\":null,\"database\":\"materialize\",\"id\":\"<GID>\",\"item\":\"counter_src_progress\",\"schema\":\"public\",\"type\":\"progress\"}" materialize
 create cluster-replica "{\"cluster_id\":\"<GID>\",\"cluster_name\":\"audit_log_counter_src\",\"logical_size\":\"${arg.default-storage-size}\",\"reason\":\"manual\",\"replica_name\":\"r1\"}" materialize
 create cluster "{\"id\":\"<GID>\",\"name\":\"audit_log_counter_src\"}" materialize
