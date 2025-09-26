@@ -62,18 +62,18 @@ proptest = { version = "1.7.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.5.1", features = ["boxed_union"] }
 prost = { version = "0.13.5", features = ["no-recursion-limit"] }
 rdkafka = { version = "0.29.0", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
-regex = "1.11.1"
+regex = "1.11.2"
 reqwest = "0.11.24"
-serde = { version = "1.0.219", features = ["derive"] }
-serde_json = { version = "1.0.127", features = ["preserve_order"] }
-thiserror = "2.0.12"
+serde = { version = "1.0.226", features = ["derive"] }
+serde_json = { version = "1.0.145", features = ["preserve_order"] }
+thiserror = "2.0.16"
 tiberius = { version = "0.12", features = ["sql-browser-tokio", "tds73", "native-tls"], default-features = false }
 timely = "0.24.0"
 tokio = { version = "1.44.1", features = ["fs", "rt", "sync", "test-util", "time"] }
 tokio-postgres = { version = "0.7.8", features = ["serde"] }
 tracing = "0.1.37"
 url = { version = "2.3.1", features = ["serde"] }
-uuid = { version = "1.17.0", features = ["serde", "v4"] }
+uuid = { version = "1.18.1", features = ["serde", "v4"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 base64 = "0.22.1"
 iceberg = "0.6.0"

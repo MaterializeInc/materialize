@@ -10,7 +10,7 @@ publish = false
 [dependencies]
 mz-adapter = { path = "../adapter", default-features = false }
 mz-frontegg-auth = { path = "../frontegg-auth", default-features = false }
-serde = { version = "1.0.219", features = ["derive"] }
+serde = { version = "1.0.226", features = ["derive"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [lints]

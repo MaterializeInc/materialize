@@ -36,14 +36,14 @@ mz-tls-util = { path = "../tls-util" }
 mz-txn-wal = { path = "../txn-wal" }
 proptest = { version = "1.7.0", default-features = false, features = ["std"] }
 prost = { version = "0.13.5", features = ["no-recursion-limit"] }
-serde = { version = "1.0.219", features = ["derive"] }
-serde_json = { version = "1.0.140" }
+serde = { version = "1.0.226", features = ["derive"] }
+serde_json = { version = "1.0.145" }
 timely = "0.24.0"
 tokio = { version = "1.44.1", features = ["fs", "rt", "sync", "test-util", "time"] }
 tokio-postgres = { version = "0.7.8", features = ["serde"] }
 tokio-stream = "0.1.17"
 tracing = "0.1.37"
-uuid = "1.17.0"
+uuid = "1.18.1"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [package.metadata.cargo-udeps.ignore]
