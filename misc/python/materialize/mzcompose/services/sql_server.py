@@ -42,7 +42,8 @@ class SqlServer(Service):
                 "healthcheck": {
                     "test": f"/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P '{sa_password}' -Q 'SELECT 1'",
                     "interval": "1s",
-                    "start_period": "60s",
+                    # Recovering can take a while
+                    "start_period": "300s",
                 },
             },
         )
