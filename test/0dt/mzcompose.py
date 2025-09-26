@@ -1801,12 +1801,18 @@ def fetch_reconciliation_metrics(c: Composition, process: str) -> tuple[int, int
     return reused, replaced
 
 
-def workflow_builtin_item_migrations(c: Composition) -> None:
-    """Verify builtin item migrations"""
+def workflow_builtin_item_migrations_replacement(c: Composition) -> None:
+    """
+    Verify builtin item migrations by shard replacement, with schema evolution
+    disabled.
+    """
     c.down(destroy_volumes=True)
     c.up("mz_old")
     c.sql(
-        "CREATE MATERIALIZED VIEW mv AS SELECT name FROM mz_tables;",
+        """
+        ALTER SYSTEM SET enable_builtin_migration_schema_evolution = false;
+        CREATE MATERIALIZED VIEW mv AS SELECT name FROM mz_tables;
+        """,
         service="mz_old",
         port=6877,
         user="mz_system",
@@ -1883,6 +1889,90 @@ def workflow_builtin_item_migrations(c: Composition) -> None:
             reuse_connection=False,
         )[0][0]
         assert new_mz_tables_shard_id != mz_tables_shard_id
+        assert new_mv_shard_id == mv_shard_id
+
+        reused, replaced = fetch_reconciliation_metrics(c, "mz_new")
+        assert reused > 0
+        assert (
+            replaced == 0
+        ), f"{replaced} dataflows have been replaced, expected all to be reused"
+
+
+def workflow_builtin_item_migrations_schema_evolution(c: Composition) -> None:
+    """
+    Verify builtin item migrations by schema evolution.
+    """
+    c.down(destroy_volumes=True)
+    c.up("mz_old")
+    c.sql(
+        """
+        ALTER SYSTEM SET enable_builtin_migration_schema_evolution = true;
+        CREATE MATERIALIZED VIEW mv AS SELECT name FROM mz_tables;
+        """,
+        service="mz_old",
+        port=6877,
+        user="mz_system",
+    )
+
+    mz_tables_gid = c.sql_query(
+        "SELECT id FROM mz_tables WHERE name = 'mz_tables'",
+        service="mz_old",
+    )[0][0]
+    mv_gid = c.sql_query(
+        "SELECT id FROM mz_materialized_views WHERE name = 'mv'",
+        service="mz_old",
+    )[0][0]
+    mz_tables_shard_id = c.sql_query(
+        f"SELECT shard_id FROM mz_internal.mz_storage_shards WHERE object_id = '{mz_tables_gid}'",
+        service="mz_old",
+    )[0][0]
+    mv_shard_id = c.sql_query(
+        f"SELECT shard_id FROM mz_internal.mz_storage_shards WHERE object_id = '{mv_gid}'",
+        service="mz_old",
+    )[0][0]
+
+    with c.override(
+        Materialized(
+            name="mz_new",
+            sanity_restart=False,
+            deploy_generation=1,
+            system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
+            restart="on-failure",
+            external_metadata_store=True,
+            force_migrations="all",
+            healthcheck=LEADER_STATUS_HEALTHCHECK,
+            default_replication_factor=2,
+        ),
+    ):
+        c.up("mz_new")
+
+        c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
+        c.promote_mz("mz_new")
+        c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new")
+
+        new_mz_tables_gid = c.sql_query(
+            "SELECT id FROM mz_tables WHERE name = 'mz_tables'",
+            service="mz_new",
+            reuse_connection=False,
+        )[0][0]
+        new_mv_gid = c.sql_query(
+            "SELECT id FROM mz_materialized_views WHERE name = 'mv'",
+            service="mz_new",
+            reuse_connection=False,
+        )[0][0]
+        assert new_mz_tables_gid == mz_tables_gid
+        assert new_mv_gid == mv_gid
+        new_mz_tables_shard_id = c.sql_query(
+            f"SELECT shard_id FROM mz_internal.mz_storage_shards WHERE object_id = '{mz_tables_gid}'",
+            service="mz_new",
+            reuse_connection=False,
+        )[0][0]
+        new_mv_shard_id = c.sql_query(
+            f"SELECT shard_id FROM mz_internal.mz_storage_shards WHERE object_id = '{mv_gid}'",
+            service="mz_new",
+            reuse_connection=False,
+        )[0][0]
+        assert new_mz_tables_shard_id == mz_tables_shard_id
         assert new_mv_shard_id == mv_shard_id
 
         reused, replaced = fetch_reconciliation_metrics(c, "mz_new")
