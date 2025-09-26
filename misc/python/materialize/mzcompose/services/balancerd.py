@@ -16,6 +16,7 @@ from materialize.mzcompose.service import (
 
 
 class Balancerd(Service):
+
     def __init__(
         self,
         name: str = "balancerd",
@@ -23,6 +24,13 @@ class Balancerd(Service):
         command: list[str] | None = None,
         volumes: list[str] = [],
         depends_on: list[str] = [],
+        networks: (
+            dict[str, dict[str, list[str]]]
+            | dict[str, dict[str, str]]
+            | list[str]
+            | None
+        ) = None,
+        dns: list[str] | None = None,
         https_resolver_template: str | None = None,
         frontegg_resolver_template: str | None = None,
         static_resolver_addr: str | None = None,
@@ -56,6 +64,11 @@ class Balancerd(Service):
             "volumes": volumes,
             "depends_on": depends_graph,
         }
+        if dns:
+            config["dns"] = dns
+        if networks:
+            config["networks"] = networks
+
         super().__init__(
             name=name,
             config=config,

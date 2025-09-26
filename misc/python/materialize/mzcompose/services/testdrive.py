@@ -65,6 +65,12 @@ class Testdrive(Service):
         network_mode: str | None = None,
         set_persist_urls: bool = True,
         backoff_factor: float = 1.0,
+        networks: (
+            dict[str, dict[str, list[str]]]
+            | dict[str, dict[str, str]]
+            | list[str]
+            | None
+        ) = None,
     ) -> None:
         if cluster_replica_size is None:
             cluster_replica_size = cluster_replica_size_map()
@@ -202,6 +208,9 @@ class Testdrive(Service):
         }
         if network_mode:
             config["network_mode"] = network_mode
+
+        if networks:
+            config["networks"] = networks
 
         super().__init__(
             name=name,
