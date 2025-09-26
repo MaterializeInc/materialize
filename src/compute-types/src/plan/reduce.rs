@@ -65,7 +65,7 @@ use std::collections::BTreeMap;
 use mz_expr::{
     AggregateExpr, AggregateFunc, MapFilterProject, MirScalarExpr, permutation_for_arrangement,
 };
-use mz_ore::{assert_none, soft_assert_or_log};
+use mz_ore::{assert_none, soft_assert_eq_or_log, soft_assert_or_log};
 use serde::{Deserialize, Serialize};
 
 use crate::plan::{AvailableCollections, bucketing_of_expected_group_size};
@@ -369,6 +369,14 @@ impl ReducePlan {
         if plan.len() == 1 {
             return plan[0].clone();
         }
+
+        // Warn if we encounter a collation plan. This can trigger if the `enable_reduce_reduction`
+        // flag is disabled.
+        soft_assert_eq_or_log!(
+            plan.len(),
+            1,
+            "Expected reduce reduction to remove collation plans"
+        );
 
         // Otherwise, we have to stitch reductions together.
 
