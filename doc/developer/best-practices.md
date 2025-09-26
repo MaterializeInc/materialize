@@ -40,6 +40,39 @@ to enforce invariants, rather than writing complex logic to check for them at ru
 * Consider separating a function into two functions if it has multiple responsibilities.
   An indicator could be a Boolean argument and if-else branches that depend on it.
 
+## Write code for others, not only for yourself
+
+(Adapted from @frankmcsherry's document on technical leadership.)
+Here are some tests that I use for my own work.
+These are likely applicable to your work too, and worth thinking through.
+A common theme is that they are all about other people.
+Those other people may be users, colleagues, or even (and most often) my future self.
+
+1. Can I explain how to use my work effectively to someone who could benefit?
+
+    This is a test of whether I've actually reduced complexity.
+    If it's less complicated to just stick with the incumbent approach than to switch to what I've built, I haven't reduced complexity.
+    If it is hard to understand when it would be appropriate to use my work, I've introduced a new complexity.
+    Roughly half the time I write a blog post about a thing I've built, I realize midway that it is inoperable and I need to redo some part of the work before I tell the world about it.
+    This is great, and a great process, as the goal is to get to an output that folks find valuable.
+
+2. Do I need to be present for other people to succeed?
+
+    This tests whether I've built something that reduces complexity for others, or reduces complexity for myself in service of others.
+    A dashboard may make it easy to see how well your stuff is working, but if others don't know about or don't understand the dashboard, you've made your life easier rather than theirs.
+    If errors and logs announce the offending lines of code, rather than how the user can start to fix things, your presence may still be required.
+    For as long as this is the case, your solution involves your participation, which may not seem that complicated to you but is very complicated for others.
+
+3. Can I explain how my work operates in simple words and a short amount of time to an interested person?
+
+    If not, I may not understand it fully, and it is unlikely that a new person approaching the work would be able to understand it either.
+    If nothing else, it may mean that the work is a soup of complexity, even if it presents outwards as simple.
+    Think of this as "architectural" documentation, in service of the next person who will have to work with or maintain your code.
+    That person may currently be you, and it may currently feel fine, but it will eventually be a later version of you or someone else entirely, both of whom will thank you.
+
+These tests have been humbling, but very valuable for me.
+They are not necessarily comprehensive, and ideally we are able to add even more structure to recipes for upleveling technical success.
+
 ## Listen for feedback
 
 Language is ambiguous, and different people have different interpretations of the same words.
