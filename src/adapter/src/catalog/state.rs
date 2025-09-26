@@ -1246,8 +1246,8 @@ impl CatalogState {
                 let optimizer_config =
                     optimize::OptimizerConfig::from(session_catalog.system_vars());
                 let previous_exprs = previous_item.map(|item| match item {
-                    CatalogItem::View(view) => (view.raw_expr, view.optimized_expr),
-                    item => unreachable!("expected view, found: {item:#?}"),
+                    CatalogItem::View(view) => Some((view.raw_expr, view.optimized_expr)),
+                    _ => None,
                 });
 
                 let (raw_expr, optimized_expr) = match (cached_expr, previous_exprs) {
@@ -1258,7 +1258,7 @@ impl CatalogState {
                         (Arc::new(view.expr), Arc::new(local_expr.local_mir))
                     }
                     // If the new expr is equivalent to the old expr, then we don't need to re-optimize.
-                    (_, Some((raw_expr, optimized_expr))) if *raw_expr == view.expr => {
+                    (_, Some(Some((raw_expr, optimized_expr)))) if *raw_expr == view.expr => {
                         (Arc::clone(&raw_expr), Arc::clone(&optimized_expr))
                     }
                     (cached_expr, _) => {
