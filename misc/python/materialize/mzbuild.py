@@ -1368,7 +1368,9 @@ class Repository:
         ),
         coverage: bool = False,
         sanitizer: Sanitizer = Sanitizer.none,
-        image_registry: str = "materialize",
+        image_registry: str = (
+            "ghcr.io/materializeinc" if ui.env_is_truthy("CI") else "materialize"
+        ),
         image_prefix: str = "",
         bazel: bool = False,
         bazel_remote_cache: str | None = None,
@@ -1476,7 +1478,9 @@ class Repository:
         )
         parser.add_argument(
             "--image-registry",
-            default="materialize",
+            default=(
+                "ghcr.io/materializeinc" if ui.env_is_truthy("CI") else "materialize"
+            ),
             help="the Docker image registry to pull images from and push images to",
         )
         parser.add_argument(

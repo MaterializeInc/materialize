@@ -73,6 +73,7 @@ def main() -> None:
         bazel_remote_cache=bazel_remote_cache,
         bazel_lto=bazel_lto,
         arch=Arch(args.arch),
+        image_registry="materialize",
     )
 
     collect_and_upload_debug_data_to_polarsignals(
