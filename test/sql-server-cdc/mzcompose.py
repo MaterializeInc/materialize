@@ -48,9 +48,7 @@ SERVICES = [
     ),
 ]
 
-VOLUMES = {
-    "ms_scratch": {}
-}
+VOLUMES = {"ms_scratch": {}}
 
 
 #
@@ -152,7 +150,9 @@ def workflow_no_agent(c: Composition, parser: WorkflowArgumentParser) -> None:
             c.kill("sql-server")
 
             with c.override(
-                SqlServer(enable_agent=False, volumes_extra=["ms_scratch:/var/opt/mssql"])
+                SqlServer(
+                    enable_agent=False, volumes_extra=["ms_scratch:/var/opt/mssql"]
+                )
             ):
                 c.up("sql-server")
 
