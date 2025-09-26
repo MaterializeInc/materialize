@@ -13,7 +13,7 @@ Test sources with SSH connections using an SSH bastion host.
 
 from prettytable import PrettyTable
 
-from materialize import buildkite
+from materialize import MZ_ROOT, buildkite
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
@@ -22,10 +22,16 @@ from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.sql_server import (
+    SqlServer,
+    setup_sql_server_testing,
+)
 from materialize.mzcompose.services.ssh_bastion_host import SshBastionHost
 from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.zookeeper import Zookeeper
+
+SQL_SERVER_TLS_CONF_PATH = MZ_ROOT / "test" / "sql-server-cdc" / "tls-mssconfig.conf"
 
 SERVICES = [
     Zookeeper(),
@@ -38,6 +44,12 @@ SERVICES = [
     TestCerts(),
     Redpanda(),
     MySql(),
+    SqlServer(
+        volumes_extra=[
+            "secrets:/var/opt/mssql/certs",
+            f"{SQL_SERVER_TLS_CONF_PATH}:/var/opt/mssql/mssql.conf",
+        ]
+    ),
     Mz(app_password=""),
 ]
 
@@ -182,6 +194,67 @@ def workflow_mysql(c: Composition) -> None:
         f"--var=ssl-client-key={ssl_client_key}",
         f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
         "mysql-source-ssl.td",
+    )
+
+
+def workflow_sql_server(c: Composition) -> None:
+    """
+    Test SSH tunnel connection to SQL Server with and with TLS.
+    """
+    c.up("materialized", "ssh-bastion-host", "sql-server", "test-certs")
+
+    setup_sql_server_testing(c)
+    c.run_testdrive_files("setup.td")
+
+    public_key = c.sql_query(
+        """
+        select public_key_1 from mz_ssh_tunnel_connections ssh \
+        join mz_connections c on c.id = ssh.id
+        where c.name = 'thancred';
+        """
+    )[0][0]
+
+    c.exec(
+        "ssh-bastion-host",
+        "bash",
+        "-c",
+        f"echo '{public_key}' > /etc/authorized_keys/mz",
+    )
+
+    # Basic validation
+    c.run_testdrive_files(
+        "--no-reset",
+        f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
+        f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
+        "sql-server-source.td",
+    )
+
+    # Validate SSH bastion host failure & recovery scenario
+    c.kill("ssh-bastion-host")
+    c.run_testdrive_files("--no-reset", "sql-server-source-after-ssh-failure.td")
+    c.up("ssh-bastion-host")
+    c.run_testdrive_files(
+        "--no-reset",
+        f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
+        f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
+        "sql-server-source-after-ssh-restart.td",
+    )
+
+    ssl_ca = c.exec(
+        "sql-server", "cat", "/var/opt/mssql/certs/ca.crt", capture=True
+    ).stdout
+    alt_ssl_ca = c.exec(
+        "sql-server", "cat", "/var/opt/mssql/certs/ca-selective.crt", capture=True
+    ).stdout
+
+    # Validate SSL/TLS connections over SSH tunnel
+    c.run_testdrive_files(
+        "--no-reset",
+        f"--var=ssl-ca={ssl_ca}",
+        f"--var=alt-ssl-ca={alt_ssl_ca}",
+        f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
+        f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
+        "sql-server-source-ssl.td",
     )
 
 
@@ -671,6 +744,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         (workflow_pg, (), True),
         # (workflow_kafka_restart_replica, (), True),  # TODO: Reenable when database-issues#9638 is fixed
         (workflow_kafka_sink, (), True),
+        (workflow_sql_server, (), True),
     ]
     if args.extended:
         workflows.extend(
