@@ -9,6 +9,7 @@
 
 import random
 import threading
+from collections.abc import Callable
 from inspect import Traceback
 from typing import Any
 
@@ -32,6 +33,13 @@ class Executor:
 
     def testdrive(
         self, input: str, caller: Traceback | None = None, mz_service: str | None = None
+    ) -> None:
+        raise NotImplementedError
+
+    def run_pyaction(
+        self,
+        method: Callable,
+        mz_service: str | None = None,
     ) -> None:
         raise NotImplementedError
 
@@ -65,6 +73,15 @@ class MzcomposeExecutor(Executor):
             ],
         )
 
+    def run_pyaction(
+        self,
+        method: Callable,
+        mz_service: str | None = None,
+    ) -> None:
+        conn = self.composition.sql_connection(mz_service)
+        conn.autocommit = True
+        method(conn)
+
 
 class MzcomposeExecutorParallel(MzcomposeExecutor):
     def __init__(self, composition: Composition) -> None:
@@ -74,7 +91,9 @@ class MzcomposeExecutorParallel(MzcomposeExecutor):
     def testdrive(
         self, input: str, caller: Traceback | None = None, mz_service: str | None = None
     ) -> Any:
-        thread = threading.Thread(target=self._testdrive, args=[input, caller])
+        thread = threading.Thread(
+            target=self._testdrive, args=[input, caller, mz_service]
+        )
         thread.start()
         return thread
 
@@ -96,6 +115,27 @@ class MzcomposeExecutorParallel(MzcomposeExecutor):
                     else None
                 ),
             )
+        except BaseException as e:
+            self.exception = e
+
+    def run_pyaction(
+        self,
+        method: Callable,
+        mz_service: str | None = None,
+    ) -> Any:
+        thread = threading.Thread(target=self._run_pyaction, args=[method, mz_service])
+        thread.start()
+        return thread
+
+    def _run_pyaction(
+        self,
+        method: Callable,
+        mz_service: str | None = None,
+    ) -> None:
+        try:
+            conn = self.composition.sql_connection(mz_service)
+            conn.autocommit = True
+            method(conn)
         except BaseException as e:
             self.exception = e
 
@@ -129,3 +169,12 @@ class CloudtestExecutor(Executor):
             seed=self.seed,
             caller=caller,
         )
+
+    def run_pyaction(
+        self,
+        method: Callable,
+        mz_service: str | None = None,
+    ) -> None:
+        conn = self.application.environmentd.sql_conn()
+        conn.autocommit = True
+        method(conn)
