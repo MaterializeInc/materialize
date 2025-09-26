@@ -342,8 +342,26 @@ fn parse_data_type(
 
             (column_type, SqlServerColumnDecodeType::Numeric)
         }
-        "real" => (SqlScalarType::Float32, SqlServerColumnDecodeType::F32),
-        "double" => (SqlScalarType::Float64, SqlServerColumnDecodeType::F64),
+        // SQL Server has a few IEEE 754 floating point type names. The underlying type is float(n),
+        // where n is the number of bits used. SQL Server still ends up with only 2 distinct types
+        // as it treats 1 <= n <= 24 as n=24, and 25 <= n <= 53 as n=53.
+        //
+        // Additionally, `real` and `double precision` exist as synonyms of float(24) and float(53),
+        // respectively.  What doesn't appear to be documented is how these appear in `sys.types`.
+        // See <https://learn.microsoft.com/en-us/sql/t-sql/data-types/float-and-real-transact-sql?view=sql-server-ver17>
+        "real" | "float" | "double precision" => match raw.max_length {
+            // Decide the MZ type based on the number of bytes rather than the name, just in case
+            // there is inconsistency among versions.
+            4 => (SqlScalarType::Float32, SqlServerColumnDecodeType::F32),
+            8 => (SqlScalarType::Float64, SqlServerColumnDecodeType::F64),
+            _ => {
+                return Err(UnsupportedDataType {
+                    column_name: raw.name.to_string(),
+                    column_type: raw.data_type.to_string(),
+                    reason: format!("unsupported length {}", raw.max_length),
+                });
+            }
+        },
         dt @ ("char" | "nchar" | "varchar" | "nvarchar" | "sysname") => {
             // When the `max_length` is -1 SQL Server will not present us with the "before" value
             // for updated columns.

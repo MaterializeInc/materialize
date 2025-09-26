@@ -90,6 +90,11 @@ CREATE TABLE table_nvarchar(val nvarchar(999));
 INSERT INTO table_nvarchar VALUES (N'🦀🚀🦀🚀🦀🚀🦀🚀🦀🚀🦀🚀🦀🚀'), (N'💯💯💯💯💯💯💯💯💯'), (NULL);
 EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'table_nvarchar', @role_name = 'SA', @supports_net_changes = 0;
 
+CREATE TABLE table_floats(a real, b float, c float(24), d float(25), e float(53), f double precision);
+INSERT INTO table_floats VALUES (0.01, 0.002, 16777217, 16777217, 16777217, 16777217);
+EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'table_floats', @role_name = 'SA', @supports_net_changes = 0;
+
+
 # Exercise Materialize.
 
 > CREATE SECRET IF NOT EXISTS sql_server_pass AS '${arg.default-sql-server-password}'
@@ -264,5 +269,8 @@ true
 "🦀🚀🦀🚀🦀🚀🦀🚀🦀🚀🦀🚀🦀🚀"
 "💯💯💯💯💯💯💯💯💯"
 <null>
+
+> SELECT * FROM table_floats;
+0.01 0.002 16777216 16777217 16777217 16777217
 
 > DROP SOURCE test_40_data_types CASCADE;
