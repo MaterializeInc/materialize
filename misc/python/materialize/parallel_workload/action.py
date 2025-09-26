@@ -1513,6 +1513,7 @@ class FlipFlagsAction(Action):
             "enable_paused_cluster_readhold_downgrade",
             "enable_mz_join_core_v2",
             "enable_with_ordinality_legacy_fallback",
+            "enable_builtin_migration_schema_evolution",
         ]
 
     def run(self, exe: Executor) -> bool:

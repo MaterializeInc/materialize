@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 use futures::FutureExt;
 use futures::future::BoxFuture;
+use mz_adapter_types::dyncfgs::ENABLE_BUILTIN_MIGRATION_SCHEMA_EVOLUTION;
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::{BUILTINS, BuiltinTable, Fingerprint};
 use mz_catalog::config::BuiltinItemMigrationConfig;
@@ -84,7 +85,7 @@ pub(crate) async fn migrate_builtin_items(
     update_catalog_fingerprints(state, txn, &migrated_builtins)?;
 
     // Collect GlobalIds of storage collections we need to migrate.
-    let collections_to_migrate: Vec<_> = migrated_builtins
+    let mut collections_to_migrate: Vec<_> = migrated_builtins
         .into_iter()
         .filter_map(|id| {
             use CatalogItem::*;
@@ -100,8 +101,18 @@ pub(crate) async fn migrate_builtin_items(
         .collect();
 
     // Attempt to perform schema evolution.
-    let collections_to_migrate =
-        try_evolve_persist_schemas(state, txn, collections_to_migrate, &persist_client).await?;
+    //
+    // If we run into an unexpected error (i.e. any persist error other than "schema incompatible")
+    // while trying to perform schema evolution, we abort the migration process, rather than
+    // automatically falling back to replacing the persist shards. We do this to avoid accidentally
+    // losing data due to a bug. This gives us the option to decide if we'd rather fix the bug or
+    // skip schema evolution using the dyncfg flag.
+    if ENABLE_BUILTIN_MIGRATION_SCHEMA_EVOLUTION.get(state.system_config().dyncfgs()) {
+        collections_to_migrate =
+            try_evolve_persist_schemas(state, txn, collections_to_migrate, &persist_client).await?;
+    } else {
+        info!("skipping builtin migration by schema evolution");
+    }
 
     // For collections whose schemas we couldn't evolve, perform the replacement process.
     // Note that we need to invoke this process even if `collections_to_migrate` is empty because
