@@ -6,7 +6,8 @@ Materialize natively supports the following SQL Server types:
 <li><code>int</code></li>
 <li><code>bigint</code></li>
 <li><code>real</code></li>
-<li><code>double</code></li>
+<li><code>double precision</code></li>
+<li><code>float</code></li>
 <li><code>bit</code></li>
 <li><code>decimal</code></li>
 <li><code>numeric</code></li>
