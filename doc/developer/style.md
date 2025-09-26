@@ -1,7 +1,7 @@
 # Style guide
 
 Following are the coding conventions that Materialize developers should strive
-to adhere to. We maintain a separate [Informal style guide](style-informal.md).
+to adhere to. We maintain a separate [best practices guide](best-practices.md).
 
 ## SQL style
 

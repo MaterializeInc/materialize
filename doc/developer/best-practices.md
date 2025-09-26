@@ -1,22 +1,22 @@
-# Informal style guide
+# Engineering best practices
 
 In addition to the concrete rules, such as for Rust, we also have some more informal style
 guidelines that we try to follow. These are not as strictly enforced as the
 other rules, but you should still try to follow them as much as possible.
 
-## Know your code's scalability limits
+## Know your code's scaling limits
 
 When writing code, you should have a good understanding of how it will scale in the future.
 For example, when you build a feature that targets the current scale, you should also think
 about how it will behave when the data size is 10x, 100x, or even 1000x larger.
 What are the bottlenecks? Will it still be performant? Will it still be maintainable?
 
-This doesn't mean that the code you write today has to be perfect for all future scales, but
-it should be easy to change and adapt as the scale changes. Documentation should point out
-any assumptions or limitations that the code has regarding scale. Leave breadcrumbs for your
-future self and others who will work on the code later.
+This doesn't mean that the code you write today has to be perfect for all future scales, but it should be easy to change and adapt as the scale changes.
+In fact, all code has scaling limits, and we'd like to make conscious decisions one way or another.
+Documentation should point out any assumptions or limitations that the code has regarding scale.
+Leave breadcrumbs for your future self and others who will work on the code later.
 
-A common way to think about scalability is to keep time and space complexity in mind.
+A common way to think about scaling is to keep time and space complexity in mind.
 For example, if you are writing a function that takes 50 microseconds per item, it is
 fine to write a O(n^2) algorithm for very small n, but it will quickly become a problem.
 The following table demonstrates how different time complexities scale with increasing input sizes:
@@ -33,12 +33,12 @@ The following table demonstrates how different time complexities scale with incr
 ## Prefer simplicity to complexity
 
 When writing code, you should always prefer simplicity to complexity. Rely on Rust's type system
-to enforce invariants, rather than writing complex logic to check for them at runtime.
+to enforce invariants, rather than writing complex logic to check for them at run time.
 
 * If a function gets too hard to explain, consider breaking it up into smaller functions.
 * If a change requires extensive documentation to explain, consider simplifying the change.
 * Consider separating a function into two functions if it has multiple responsibilities.
-  An indicator could be a boolen argument and if-else branches that depend on it.
+  An indicator could be a Boolean argument and if-else branches that depend on it.
 
 ## Listen for feedback
 
@@ -52,12 +52,6 @@ It's better to ask questions and clarify misunderstandings than to assume you kn
 We sometimes need to ship fixes quickly, but we should always try to solve the underlying problem.
 Staggering a fix into multiple changes is OK, as long as we don't forget halfway through.
 Accumulating technical debt is easy, but it makes future changes harder and more error-prone.
-
-## Revert rather than fix-forward
-
-If release contains a bug, prefer reverting the offending change rather than trying to fix it in place.
-Fixing in place puts us at risk of introducing more bugs, and puts us under time pressure.
-Instead, prefer to mitigate the issue by reverting, and then re-introduce the change later after more careful review.
 
 ## Release blockers
 
