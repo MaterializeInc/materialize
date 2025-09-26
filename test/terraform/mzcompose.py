@@ -1030,7 +1030,7 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
         ]
         vars += [
             "-var",
-            f"orchestratord_version={get_tag(tag)}",
+            f"orchestratord_version={tag}",
         ]
 
         if args.setup:
@@ -1041,7 +1041,7 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
             )
             spawn.runv(["terraform", "init"], cwd=path)
             spawn.runv(["terraform", "validate"], cwd=path)
-            spawn.runv(["terraform", "plan"], cwd=path)
+            spawn.runv(["terraform", "plan", *vars], cwd=path)
             spawn.runv(["terraform", "apply", "-auto-approve", *vars], cwd=path)
 
         gke_cluster = json.loads(
@@ -1141,7 +1141,7 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
         ]
         vars += [
             "-var",
-            f"orchestratord_version={get_tag(tag)}",
+            f"orchestratord_version={tag}",
         ]
 
         if args.setup:
@@ -1151,7 +1151,7 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
             )
             spawn.runv(["terraform", "init"], cwd=path, env=venv_env)
             spawn.runv(["terraform", "validate"], cwd=path, env=venv_env)
-            spawn.runv(["terraform", "plan"], cwd=path, env=venv_env)
+            spawn.runv(["terraform", "plan", *vars], cwd=path, env=venv_env)
             try:
                 spawn.runv(
                     ["terraform", "apply", "-auto-approve", *vars],
