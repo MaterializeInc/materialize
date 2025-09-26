@@ -56,7 +56,8 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
     let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
 
     let (data_output, stream) = builder.new_output::<AccountedStackBuilder<_>>();
-    let partition_count = u64::cast_from(config.source_exports.len());
+    let export_ids: Vec<_> = config.source_exports.keys().copied().collect();
+    let partition_count = u64::cast_from(export_ids.len());
     let data_streams: Vec<_> = stream.partition::<CapacityContainerBuilder<_>, _, _>(
         partition_count,
         |((output, data), time, diff): &(
@@ -69,7 +70,7 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
         },
     );
     let mut data_collections = BTreeMap::new();
-    for (id, data_stream) in config.source_exports.keys().zip_eq(data_streams) {
+    for (id, data_stream) in export_ids.iter().zip_eq(data_streams) {
         data_collections.insert(*id, data_stream.as_collection());
     }
 
@@ -252,12 +253,17 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
         })
     });
 
-    let status = [HealthStatusMessage {
-        id: None,
-        namespace: StatusNamespace::Generator,
-        update: HealthStatusUpdate::running(),
-    }]
-    .to_stream(scope);
+    let status = export_ids
+        .into_iter()
+        .map(Some)
+        .chain(None)
+        .map(|id| HealthStatusMessage {
+            id,
+            namespace: StatusNamespace::Generator,
+            update: HealthStatusUpdate::running(),
+        })
+        .collect::<Vec<_>>()
+        .to_stream(scope);
     (
         data_collections,
         progress_stream,

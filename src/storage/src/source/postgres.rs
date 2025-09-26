@@ -214,12 +214,17 @@ impl SourceRender for PostgresSourceConnection {
             data_collections.insert(*id, data_stream.as_collection());
         }
 
-        let init = std::iter::once(HealthStatusMessage {
-            id: None,
-            namespace: Self::STATUS_NAMESPACE,
-            update: HealthStatusUpdate::Running,
-        })
-        .to_stream(scope);
+        let export_ids = config.source_exports.keys().copied();
+        let health_init = export_ids
+            .map(Some)
+            .chain(None)
+            .map(|id| HealthStatusMessage {
+                id,
+                namespace: Self::STATUS_NAMESPACE,
+                update: HealthStatusUpdate::Running,
+            })
+            .collect::<Vec<_>>()
+            .to_stream(scope);
 
         // N.B. Note that we don't check ssh tunnel statuses here. We could, but immediately on
         // restart we are going to set the status to an ssh error correctly, so we don't do this
@@ -249,7 +254,7 @@ impl SourceRender for PostgresSourceConnection {
             }
         });
 
-        let health = init.concat(&errs);
+        let health = health_init.concat(&errs);
 
         (
             data_collections,
