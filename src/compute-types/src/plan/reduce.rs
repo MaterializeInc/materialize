@@ -65,7 +65,7 @@ use std::collections::BTreeMap;
 use mz_expr::{
     AggregateExpr, AggregateFunc, MapFilterProject, MirScalarExpr, permutation_for_arrangement,
 };
-use mz_ore::{assert_none, soft_assert_eq_or_log, soft_assert_or_log};
+use mz_ore::{soft_assert_eq_or_log, soft_assert_or_log};
 use serde::{Deserialize, Serialize};
 
 use crate::plan::{AvailableCollections, bucketing_of_expected_group_size};
@@ -127,10 +127,6 @@ pub enum ReducePlan {
     Hierarchical(HierarchicalPlan),
     /// Plan for computing only basic aggregations.
     Basic(BasicPlan),
-    /// Plan for computing a mix of different kinds of aggregations.
-    /// We need to do extra work here to reassemble results back in the
-    /// requested order.
-    Collation(CollationPlan),
 }
 
 /// Plan for computing a set of accumulable aggregations.
@@ -351,71 +347,21 @@ impl ReducePlan {
         }
 
         // Convert each grouped list of reductions into a plan.
-        let plan: Vec<_> = reduction_types
-            .into_iter()
-            .map(|(typ, aggregates_list)| {
-                ReducePlan::create_inner(
-                    typ,
-                    aggregates_list,
-                    monotonic,
-                    expected_group_size,
-                    fused_unnest_list,
-                )
-            })
-            .collect();
+        let Some(plan) = reduction_types.pop_first().map(|(typ, aggregates_list)| {
+            ReducePlan::create_inner(
+                typ,
+                aggregates_list,
+                monotonic,
+                expected_group_size,
+                fused_unnest_list,
+            )
+        }) else {
+            panic!(
+                "Multiple reduction types ({reduction_types:?}) detected in ReducePlan::create_from. This indicates a bug in reduce reduction."
+            );
+        };
 
-        // If we only have a single type of aggregation present we can
-        // render that directly
-        if plan.len() == 1 {
-            return plan[0].clone();
-        }
-
-        // Warn if we encounter a collation plan. This can trigger if the `enable_reduce_reduction`
-        // flag is disabled.
-        soft_assert_eq_or_log!(
-            plan.len(),
-            1,
-            "Expected reduce reduction to remove collation plans"
-        );
-
-        // Otherwise, we have to stitch reductions together.
-
-        // First, lets sanity check that we don't have an impossible number
-        // of reduction types.
-        assert!(plan.len() <= 3);
-
-        let mut collation: CollationPlan = Default::default();
-
-        // Construct a mapping from output_position -> reduction that we can
-        // use to reconstruct the output in the correct order.
-        let aggregate_types = aggregates
-            .iter()
-            .map(|a| reduction_type(&a.func))
-            .collect::<Vec<_>>();
-
-        collation.aggregate_types = aggregate_types;
-
-        for expr in plan.into_iter() {
-            match expr {
-                ReducePlan::Accumulable(e) => {
-                    assert_none!(collation.accumulable);
-                    collation.accumulable = Some(e);
-                }
-                ReducePlan::Hierarchical(e) => {
-                    assert_none!(collation.hierarchical);
-                    collation.hierarchical = Some(e);
-                }
-                ReducePlan::Basic(e) => {
-                    assert_none!(collation.basic);
-                    collation.basic = Some(e);
-                }
-                ReducePlan::Distinct | ReducePlan::Collation(_) => {
-                    panic!("Inner reduce plan was unsupported type!")
-                }
-            }
-        }
-
-        ReducePlan::Collation(collation)
+        plan
     }
 
     /// Generate a plan for computing the specified type of aggregations.
