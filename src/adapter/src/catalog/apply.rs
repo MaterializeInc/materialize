@@ -40,7 +40,7 @@ use mz_controller_types::ClusterId;
 use mz_expr::MirScalarExpr;
 use mz_ore::collections::CollectionExt;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_ore::{assert_none, instrument, soft_assert_no_log};
+use mz_ore::{instrument, soft_assert_no_log};
 use mz_pgrepr::oid::INVALID_OID;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::role_id::RoleId;
@@ -1936,70 +1936,121 @@ fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
         }
     }
 
-    /// Sort `CONNECTION` items.
+    type ConnectionKey = (mz_catalog::durable::Item, Timestamp, StateDiff);
+
+    /// Topologically sort `CONNECTION` items by dependencies using Kahn's Algorithm.
     ///
     /// `CONNECTION`s can depend on one another, e.g. a `KAFKA CONNECTION` contains
     /// a list of `BROKERS` and these broker definitions can themselves reference other
     /// connections. This `BROKERS` list can also be `ALTER`ed and thus it's possible
     /// for a connection to depend on another with an ID greater than its own.
-    fn sort_connections(connections: &mut Vec<(mz_catalog::durable::Item, Timestamp, StateDiff)>) {
-        let mut topo: BTreeMap<
-            (mz_catalog::durable::Item, Timestamp, StateDiff),
-            BTreeSet<CatalogItemId>,
-        > = BTreeMap::default();
+    ///
+    /// # Examples of Connection Dependencies
+    /// - Kafka connections using SSH tunnels: `BROKERS ('host' USING SSH TUNNEL ssh_conn)`
+    /// - Postgres connections using SSH tunnels: `SSH TUNNEL ssh_conn`
+    /// - Schema registry connections that reference other connections
+    ///
+    /// # Algorithm (Kahn's Topological Sort)
+    /// 1. Parse CREATE SQL of each connection to extract dependencies using `mz_sql::names::dependencies`
+    /// 2. Build correct in-degrees (number of dependencies each connection has) and reverse dependency graph
+    /// 3. Initialize queue with connections that have zero in-degree (no dependencies)
+    /// 4. Process connections in topological order:
+    ///    - Remove connection from queue and add to result
+    ///    - For each connection that depends on the current one, decrease its in-degree
+    ///    - Add newly zero in-degree connections to queue
+    /// 5. Continue until queue is empty, then verify all connections were processed (cycle detection)
+    ///
+    /// # Panics
+    /// - If dependency parsing fails (malformed CREATE SQL)
+    /// - If circular dependencies exist (algorithm would not complete)
+    /// - If internal data structures become inconsistent
+    fn sort_connections(connections: &mut Vec<ConnectionKey>) {
+        // Map each connection to its data and correct in-degree (number of dependencies)
+        let mut connection_data: BTreeMap<CatalogItemId, (ConnectionKey, usize)> = BTreeMap::new();
+
+        // Reverse dependency graph: dependency_id -> Vec<dependent_connection_ids>
+        // This maps each connection to the list of connections that depend on it
+        let mut dependents_graph: BTreeMap<CatalogItemId, Vec<CatalogItemId>> = BTreeMap::new();
+
+        // Set of all connection IDs being processed (for filtering dependencies)
         let existing_connections: BTreeSet<_> = connections.iter().map(|item| item.0.id).collect();
 
-        // Initialize our set of topological sort.
-        tracing::debug!(?connections, "sorting connections");
+        // Phase 1: Parse dependencies and build correct in-degrees and reverse dependency graph
         for (connection, ts, diff) in connections.drain(..) {
+            let connection_id = connection.id;
+
+            // Parse the CREATE SQL statement to extract object references
             let statement = mz_sql::parse::parse(&connection.create_sql)
                 .expect("valid CONNECTION create_sql")
                 .into_element()
                 .ast;
+
+            // Extract all connection IDs that this connection depends on
             let mut dependencies = mz_sql::names::dependencies(&statement)
                 .expect("failed to find dependencies of CONNECTION");
-            // Be defensive and remove any possible self references.
-            dependencies.remove(&connection.id);
-            // It's possible we're applying updates to a connection where the
-            // dependency already exists and thus it's not in `connections`.
+
+            // Remove self-references to prevent trivial cycles
+            dependencies.remove(&connection_id);
+
             dependencies.retain(|dep| existing_connections.contains(dep));
 
-            // Be defensive and ensure we're not clobbering any items.
-            assert_none!(topo.insert((connection, ts, diff), dependencies));
-        }
-        tracing::debug!(?topo, ?existing_connections, "built topological sort");
+            let in_degree = dependencies.len();
+            connection_data.insert(connection_id, ((connection, ts, diff), in_degree));
 
-        // Do a topological sort, pushing back into the provided Vec.
-        while !topo.is_empty() {
-            // Get all of the connections with no dependencies.
-            let no_deps: Vec<_> = topo
-                .iter()
-                .filter_map(|(item, deps)| {
-                    if deps.is_empty() {
-                        Some(item.clone())
-                    } else {
-                        None
+            for dep_id in dependencies {
+                dependents_graph
+                    .entry(dep_id)
+                    .or_insert_with(Vec::new)
+                    .push(connection_id);
+            }
+        }
+
+        // Phase 2: Initialize the topological sort with zero in-degree connections
+        let mut to_sort: VecDeque<CatalogItemId> = VecDeque::new();
+        let total_connections = connection_data.len();
+
+        // Find all connections with no dependencies (in-degree = 0) to start processing
+        for (conn_id, (_, in_degree)) in &connection_data {
+            if *in_degree == 0 {
+                to_sort.push_back(*conn_id);
+            }
+        }
+
+        // Phase 3: Process connections in topological order using Kahn's algorithm
+        while let Some(current_id) = to_sort.pop_front() {
+            // Remove the connection from our tracking and add to sorted results
+            let (current_connection, _) = connection_data
+                .remove(&current_id)
+                .expect("Programming error: connection should exist in data map");
+
+            connections.push(current_connection);
+
+            // Find all connections that depend on the current connection
+            if let Some(dependents) = dependents_graph.get(&current_id) {
+                for &dependent_id in dependents {
+                    // Decrement the in-degree of each dependent connection
+                    if let Some((_, in_degree)) = connection_data.get_mut(&dependent_id) {
+                        *in_degree -= 1;
+
+                        // If this connection now has no remaining dependencies, add to queue
+                        if *in_degree == 0 {
+                            to_sort.push_back(dependent_id);
+                        }
                     }
-                })
-                .collect();
-
-            // Cycle in our graph!
-            if no_deps.is_empty() {
-                panic!("programming error, cycle in Connections");
-            }
-
-            // Process all of the items with no dependencies.
-            for item in no_deps {
-                // Remove the item from our topological sort.
-                topo.remove(&item);
-                // Remove this item from anything that depends on it.
-                topo.values_mut().for_each(|deps| {
-                    deps.remove(&item.0.id);
-                });
-                // Push it back into our list as "completed".
-                connections.push(item);
+                }
             }
         }
+
+        // Phase 4: Cycle detection
+        // If we haven't processed all connections, there must be a cycle
+        assert_eq!(
+            connections.len(),
+            total_connections,
+            "Programming error: Circular dependency detected in connections. \
+             Unable to sort {} remaining connections: {:?}",
+            connection_data.len(),
+            connection_data.keys().collect::<Vec<_>>()
+        );
     }
 
     /// Sort item updates by dependency.
