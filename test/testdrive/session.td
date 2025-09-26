@@ -61,7 +61,7 @@ max_roles                                1000                    "The maximum nu
 max_rules_per_network_policy             25                      "The maximum number of rules per network policies."
 max_schemas_per_database                 1000                    "The maximum number of schemas in a database (Materialize)."
 max_secrets                              100                     "The maximum number of secrets in the region, across all schemas (Materialize)."
-max_sinks                                25                      "The maximum number of sinks in the region, across all schemas (Materialize)."
+max_sinks                                1000                    "The maximum number of sinks in the region, across all schemas (Materialize)."
 max_sources                              200                     "The maximum number of sources in the region, across all schemas (Materialize)."
 max_sql_server_connections               1000                    "The maximum number of SQL Server connections in the region, across all schemas (Materialize)."
 max_tables                               200                     "The maximum number of tables in the region, across all schemas (Materialize)."
