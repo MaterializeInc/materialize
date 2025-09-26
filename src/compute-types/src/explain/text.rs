@@ -37,8 +37,7 @@ use crate::plan::join::delta_join::{DeltaPathPlan, DeltaStagePlan};
 use crate::plan::join::linear_join::LinearStagePlan;
 use crate::plan::join::{DeltaJoinPlan, JoinClosure, LinearJoinPlan};
 use crate::plan::reduce::{
-    AccumulablePlan, BasicPlan, BucketedPlan, CollationPlan, HierarchicalPlan, MonotonicPlan,
-    SingleBasicPlan,
+    AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, MonotonicPlan, SingleBasicPlan,
 };
 use crate::plan::threshold::ThresholdPlan;
 use crate::plan::{AvailableCollections, LirId, Plan, PlanNode};
@@ -357,14 +356,6 @@ impl Plan {
                         )?;
                         ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
                         ctx.indent.reset();
-                    }
-                    ReducePlan::Collation(plan) => {
-                        writeln!(
-                            f,
-                            "{}→Collated Multi-GroupAggregate{annotations}",
-                            ctx.indent
-                        )?;
-                        ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
                     }
                 }
 
@@ -763,10 +754,6 @@ impl Plan {
                     }
                     ReducePlan::Basic(plan) => {
                         writeln!(f, "{}Reduce::Basic{}", ctx.indent, annotations)?;
-                        ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
-                    }
-                    ReducePlan::Collation(plan) => {
-                        writeln!(f, "{}Reduce::Collation{}", ctx.indent, annotations)?;
                         ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
                     }
                 }
@@ -1609,77 +1596,6 @@ impl BasicPlan {
                     writeln!(f, "{}aggrs[{}]=({}, {})", ctx.indent, i, i_datum, agg)?;
                 }
             }
-        }
-        Ok(())
-    }
-}
-
-impl DisplayText<PlanRenderingContext<'_, Plan>> for CollationPlan {
-    fn fmt_text(
-        &self,
-        f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
-    ) -> fmt::Result {
-        if ctx.config.verbose_syntax {
-            self.fmt_verbose_text(f, ctx)
-        } else {
-            self.fmt_default_text(f, ctx)
-        }
-    }
-}
-
-impl CollationPlan {
-    #[allow(clippy::needless_pass_by_ref_mut)]
-    fn fmt_default_text(
-        &self,
-        f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
-    ) -> fmt::Result {
-        if let Some(plan) = &self.accumulable {
-            writeln!(f, "{}Accumulable sub-aggregation", ctx.indent)?;
-            ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
-        }
-        if let Some(plan) = &self.hierarchical {
-            writeln!(f, "{}Hierarchical sub-aggregation", ctx.indent)?;
-            ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
-        }
-        if let Some(plan) = &self.basic {
-            writeln!(f, "{}Non-incremental sub-aggregation", ctx.indent)?;
-            ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
-        }
-        Ok(())
-    }
-
-    fn fmt_verbose_text(
-        &self,
-        f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
-    ) -> fmt::Result {
-        {
-            use crate::plan::reduce::ReductionType;
-            let aggregate_types = &self
-                .aggregate_types
-                .iter()
-                .map(|reduction_type| match reduction_type {
-                    ReductionType::Accumulable => "a".to_string(),
-                    ReductionType::Hierarchical => "h".to_string(),
-                    ReductionType::Basic => "b".to_string(),
-                })
-                .collect::<Vec<_>>();
-            let aggregate_types = separated(", ", aggregate_types);
-            writeln!(f, "{}aggregate_types=[{}]", ctx.indent, aggregate_types)?;
-        }
-        if let Some(plan) = &self.accumulable {
-            writeln!(f, "{}accumulable", ctx.indent)?;
-            ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
-        }
-        if let Some(plan) = &self.hierarchical {
-            writeln!(f, "{}hierarchical", ctx.indent)?;
-            ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
-        }
-        if let Some(plan) = &self.basic {
-            writeln!(f, "{}basic", ctx.indent)?;
-            ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
         }
         Ok(())
     }

@@ -630,7 +630,6 @@ impl TryFrom<ExplainPlanOptionExtracted> for ExplainConfig {
                 enable_cardinality_estimates: Default::default(),
                 persist_fast_path_limit: Default::default(),
                 reoptimize_imported_views: v.reoptimize_imported_views,
-                enable_reduce_reduction: Default::default(),
                 enable_join_prioritize_arranged: v.enable_join_prioritize_arranged,
                 enable_projection_pushdown_after_relation_cse: v
                     .enable_projection_pushdown_after_relation_cse,

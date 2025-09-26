@@ -121,8 +121,6 @@ optimizer_feature_flags!({
     // `DataflowDescription` in the global MIR optimization phase.
     reoptimize_imported_views: bool,
     // See the feature flag of the same name.
-    enable_reduce_reduction: bool,
-    // See the feature flag of the same name.
     enable_join_prioritize_arranged: bool,
     // See the feature flag of the same name.
     enable_projection_pushdown_after_relation_cse: bool,
