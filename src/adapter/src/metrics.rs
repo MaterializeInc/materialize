@@ -13,6 +13,7 @@ use mz_ore::stats::{histogram_milliseconds_buckets, histogram_seconds_buckets};
 use mz_sql::ast::{AstInfo, Statement, StatementKind, SubscribeOutput};
 use mz_sql::session::user::User;
 use mz_sql_parser::ast::statement_kind_label_value;
+use prometheus::core::{AtomicU64, GenericCounter};
 use prometheus::{Histogram, HistogramVec, IntCounter, IntCounterVec, IntGaugeVec};
 
 #[derive(Debug, Clone)]
@@ -262,20 +263,24 @@ impl SessionMetrics {
         &self.session_startup_table_writes_seconds
     }
 
-    pub(crate) fn query_total(&self) -> &IntCounterVec {
-        &self.query_total
+    pub(crate) fn query_total(&self, label_values: &[&str]) -> GenericCounter<AtomicU64> {
+        self.query_total.with_label_values(label_values)
     }
 
-    pub(crate) fn determine_timestamp(&self) -> &IntCounterVec {
-        &self.determine_timestamp
+    pub(crate) fn determine_timestamp(&self, label_values: &[&str]) -> GenericCounter<AtomicU64> {
+        self.determine_timestamp.with_label_values(label_values)
     }
 
-    pub(crate) fn timestamp_difference_for_strict_serializable_ms(&self) -> &HistogramVec {
-        &self.timestamp_difference_for_strict_serializable_ms
+    pub(crate) fn timestamp_difference_for_strict_serializable_ms(
+        &self,
+        label_values: &[&str],
+    ) -> Histogram {
+        self.timestamp_difference_for_strict_serializable_ms
+            .with_label_values(label_values)
     }
 
-    pub(crate) fn optimization_notices(&self) -> &IntCounterVec {
-        &self.optimization_notices
+    pub(crate) fn optimization_notices(&self, label_values: &[&str]) -> GenericCounter<AtomicU64> {
+        self.optimization_notices.with_label_values(label_values)
     }
 }
 
