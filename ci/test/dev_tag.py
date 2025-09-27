@@ -34,6 +34,7 @@ def main() -> None:
             bazel=bazel,
             bazel_remote_cache=bazel_remote_cache,
             bazel_lto=bazel_lto,
+            image_registry="materialize",
         ),
         mzbuild.Repository(
             Path("."),
@@ -43,6 +44,7 @@ def main() -> None:
             bazel=bazel,
             bazel_remote_cache=bazel_remote_cache,
             bazel_lto=bazel_lto,
+            image_registry="materialize",
         ),
     ]
     print("--- Tagging development Docker images")

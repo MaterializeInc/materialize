@@ -38,6 +38,7 @@ def main() -> None:
             bazel=bazel,
             bazel_remote_cache=bazel_remote_cache,
             bazel_lto=bazel_lto,
+            image_registry="materialize",
         )
 
         # Build and push any images that are not already available on Docker Hub,
