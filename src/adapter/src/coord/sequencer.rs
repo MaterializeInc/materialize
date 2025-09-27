@@ -993,8 +993,7 @@ pub(crate) fn emit_optimizer_notices(
         }
         session
             .metrics()
-            .optimization_notices()
-            .with_label_values(&[kind.metric_label()])
+            .optimization_notices(&[kind.metric_label()])
             .inc_by(1);
     }
 }

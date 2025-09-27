@@ -100,6 +100,7 @@ use tracing::{Instrument, Span, info, warn};
 use crate::catalog::{self, Catalog, ConnCatalog, DropObjectInfo, UpdatePrivilegeVariant};
 use crate::command::{ExecuteResponse, Response};
 use crate::coord::appends::{BuiltinTableAppendNotify, DeferredOp, DeferredPlan, PendingWriteTxn};
+use crate::coord::sequencer::emit_optimizer_notices;
 use crate::coord::{
     AlterConnectionValidationReady, AlterSinkReadyContext, Coordinator,
     CreateConnectionValidationReady, DeferredPlanStatement, ExecuteContext, ExplainContext,
@@ -140,7 +141,6 @@ macro_rules! return_if_err {
     };
 }
 
-use crate::coord::sequencer::emit_optimizer_notices;
 pub(super) use return_if_err;
 
 struct DropOps {

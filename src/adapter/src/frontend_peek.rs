@@ -69,8 +69,7 @@ impl SessionClient {
                 .span_context()
                 .clone();
             if span_context.is_valid() {
-                // We emit a slightly different notice here than in handle_execute.
-                session.add_notice(AdapterNotice::FrontendQueryTrace {
+                session.add_notice(AdapterNotice::QueryTrace {
                     trace_id: span_context.trace_id(),
                 });
             }
@@ -275,7 +274,7 @@ impl SessionClient {
 
         let oracle_read_ts = match timeline {
             Some(timeline) if needs_linearized_read_ts => {
-                let oracle = self.peek_client_mut().get_oracle(timeline).await?;
+                let oracle = self.peek_client_mut().ensure_oracle(timeline).await?;
                 let oracle_read_ts = oracle.read_ts().await;
                 Some(oracle_read_ts)
             }
@@ -489,8 +488,7 @@ impl SessionClient {
         // from this function then we don't count the peek at all.
         session
             .metrics()
-            .query_total()
-            .with_label_values(&[session_type, stmt_type])
+            .query_total(&[session_type, stmt_type])
             .inc();
 
         // # Now back to peek_finish
@@ -570,8 +568,7 @@ impl SessionClient {
 
         session
             .metrics()
-            .determine_timestamp()
-            .with_label_values(&[
+            .determine_timestamp(&[
                 match det.respond_immediately() {
                     true => "true",
                     false => "false",
@@ -604,9 +601,8 @@ impl SessionClient {
                 if let Some(serializable) = serializable_det.timestamp_context.timestamp() {
                     session
                         .metrics()
-                        .timestamp_difference_for_strict_serializable_ms()
-                        .with_label_values(&[
-                            compute_instance.to_string().as_ref(),
+                        .timestamp_difference_for_strict_serializable_ms(&[
+                            &compute_instance.to_string().as_ref(),
                             constraint_based.as_str(),
                         ])
                         .observe(f64::cast_lossy(u64::from(

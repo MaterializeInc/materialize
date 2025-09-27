@@ -41,7 +41,7 @@ pub type StorageCollectionsHandle = Arc<
         + Sync,
 >;
 
-/// Clients needed for peek sequencing from the Adapter Frontend.
+/// Clients needed for peek sequencing in the Adapter Frontend.
 #[derive(Debug)]
 pub struct PeekClient {
     coordinator_client: Client,
@@ -81,7 +81,7 @@ impl PeekClient {
         }
     }
 
-    pub async fn get_compute_instance_client(
+    pub async fn ensure_compute_instance_client(
         &mut self,
         compute_instance: ComputeInstanceId,
     ) -> Result<&mut mz_compute_client::controller::instance::Client<Timestamp>, AdapterError> {
@@ -100,7 +100,7 @@ impl PeekClient {
             .expect("ensured above"))
     }
 
-    pub async fn get_oracle(
+    pub async fn ensure_oracle(
         &mut self,
         timeline: Timeline,
     ) -> Result<&mut Arc<dyn TimestampOracle<Timestamp> + Send + Sync>, AdapterError> {
@@ -167,7 +167,7 @@ impl PeekClient {
 
         for (&instance_id, collection_ids) in &id_bundle.compute_ids {
             let client = self
-                .get_compute_instance_client(instance_id)
+                .ensure_compute_instance_client(instance_id)
                 .await
                 .expect("missing compute instance client");
 
@@ -274,7 +274,7 @@ impl PeekClient {
 
                 // Issue peek to the instance
                 let client = self
-                    .get_compute_instance_client(compute_instance)
+                    .ensure_compute_instance_client(compute_instance)
                     .await
                     .expect("missing compute instance client");
                 let peek_target = PeekTarget::Index { id: idx_id };

@@ -275,7 +275,7 @@ impl Coordinator {
                     let _ = tx.send(
                         self.controller
                             .compute
-                            .thin_instance_client(instance_id)
+                            .instance_client(instance_id)
                             .map_err(|_| AdapterError::ConcurrentClusterDrop),
                     );
                 }
