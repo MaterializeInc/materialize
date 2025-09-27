@@ -335,7 +335,7 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
     }
 
     /// Return an `instance::Client` for the indicated compute instance.
-    pub fn thin_instance_client(
+    pub fn instance_client(
         &self,
         id: ComputeInstanceId,
     ) -> Result<instance::Client<T>, InstanceMissing> {

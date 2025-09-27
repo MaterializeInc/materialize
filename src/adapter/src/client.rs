@@ -543,7 +543,7 @@ pub struct SessionClient {
     timeouts: Timeout,
     segment_client: Option<mz_segment::Client>,
     environment_id: EnvironmentId,
-    /// Thin client for frontend peek sequencing; populated at connection startup.
+    /// Client for frontend peek sequencing; populated at connection startup.
     peek_client: PeekClient,
 }
 
