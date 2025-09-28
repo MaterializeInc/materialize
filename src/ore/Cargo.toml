@@ -51,7 +51,7 @@ smallvec = { version = "1.15.1", optional = true }
 stacker = { version = "0.1.21", optional = true }
 sentry = { version = "0.38.1", optional = true, default-features = false, features = ["backtrace", "contexts", "debug-images", "transport"] }
 sentry-panic = { version = "0.38.1", optional = true }
-serde = { version = "1.0.219", features = ["derive"] }
+serde = { version = "1.0.228", features = ["derive"] }
 tokio = { version = "1.44.1", features = [
     "io-util",
     "net",
@@ -60,7 +60,7 @@ tokio = { version = "1.44.1", features = [
     "time",
 ], optional = true }
 tokio-openssl = { version = "0.6.5", optional = true }
-thiserror = "2.0.12"
+thiserror = "2.0.16"
 tracing-capture = { version = "0.1.0", optional = true }
 # TODO(guswynn): determine, when, if ever, we can remove `tracing-log`
 # The `tracing-log` feature here is load-bearing: While our busiest-logging dependency (`rdkafka`) is now hooked-up
@@ -74,7 +74,7 @@ tracing-subscriber = { version = "0.3.19", default-features = false, features = 
     "json",
     "tracing-log",
 ], optional = true }
-uuid = { version = "1.17.0", optional = true, features = ["v4", "v7"] }
+uuid = { version = "1.18.1", optional = true, features = ["v4", "v7"] }
 url = { version = "2.3.1", features = ["serde"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
@@ -101,7 +101,7 @@ criterion = { version = "0.6.0", features = ["async_tokio"] }
 mz-ore = { path = "../ore", features = ["id_gen", "chrono"] }
 proptest = { version = "1.7.0", default-features = false, features = ["std"] }
 scopeguard = "1.2.0"
-serde_json = "1.0.127"
+serde_json = "1.0.145"
 tokio = { version = "1.44.1", features = ["macros", "rt-multi-thread"] }
 tokio-test = "0.4.4"
 tracing-subscriber = "0.3.19"

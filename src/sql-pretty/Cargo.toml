@@ -12,8 +12,8 @@ workspace = true
 [dependencies]
 itertools = "0.14.0"
 mz-sql-parser = { path = "../sql-parser", default-features = false }
-pretty = "0.12.4"
-thiserror = "2.0.12"
+pretty = "0.12.5"
+thiserror = "2.0.16"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]

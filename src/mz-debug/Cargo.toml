@@ -23,13 +23,13 @@ mz-ore = { path = "../ore", features = ["cli", "test"] }
 mz-server-core = { path = "../server-core"}
 mz-tls-util = { path = "../tls-util" }
 postgres-openssl = { version = "0.5.0" }
-regex = "1.11.1"
+regex = "1.11.3"
 reqwest = { version = "0.11", features = ["stream"] }
-serde = "1.0.219"
+serde = "1.0.228"
 serde_yaml = "0.9.34"
 tokio = "1.44.1"
 tokio-postgres = { version = "0.7.8" }
-tokio-util = { version = "0.7.15", features = ["io"] }
+tokio-util = { version = "0.7.16", features = ["io"] }
 tracing = "0.1.37"
 tracing-subscriber = { version = "0.3.19", default-features = false, features = ["env-filter", "fmt"] }
 url = { version = "2.3.1", features = ["serde"] }
