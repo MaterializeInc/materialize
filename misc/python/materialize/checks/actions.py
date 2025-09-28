@@ -9,6 +9,7 @@
 
 import textwrap
 import time
+from collections.abc import Callable
 from inspect import getframeinfo, stack
 from typing import TYPE_CHECKING, Any
 
@@ -45,6 +46,19 @@ class Testdrive(Action):
     def execute(self, e: Executor, mz_service: str | None = None) -> None:
         """Pass testdrive actions to be run by an Executor-specific implementation."""
         self.handle = e.testdrive(self.input, self.caller, mz_service)
+
+    def join(self, e: Executor) -> None:
+        e.join(self.handle)
+
+
+class PyAction(Action):
+    def __init__(self, method: Callable) -> None:
+        self.method: Any = method
+        self.handle: Any | None = None
+
+    def execute(self, e: Executor, mz_service: str | None = None) -> None:
+        """Pass Python-based actions to be run by an Executor-specific implementation."""
+        self.handle = e.run_pyaction(self.method, mz_service)
 
     def join(self, e: Executor) -> None:
         e.join(self.handle)

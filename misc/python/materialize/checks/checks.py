@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 
 from materialize import buildkite
 from materialize.buildkite import BuildkiteEnvVar
-from materialize.checks.actions import Testdrive
+from materialize.checks.actions import PyAction, Testdrive
 from materialize.checks.executors import Executor
 from materialize.mz_version import MzVersion
 
@@ -50,13 +50,13 @@ class Check:
         """
         return "quickstart"
 
-    def initialize(self) -> Testdrive:
+    def initialize(self) -> Testdrive | PyAction:
         return Testdrive(TESTDRIVE_NOP)
 
-    def manipulate(self) -> list[Testdrive]:
+    def manipulate(self) -> list[Testdrive] | list[PyAction]:
         raise NotImplementedError
 
-    def validate(self) -> Testdrive:
+    def validate(self) -> Testdrive | PyAction:
         """Note that the validation method may be invoked multiple times (depending on the scenario)."""
         raise NotImplementedError
 
