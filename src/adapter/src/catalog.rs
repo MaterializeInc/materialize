@@ -98,7 +98,7 @@ pub use crate::catalog::transact::{
 use crate::command::CatalogDump;
 use crate::coord::TargetCluster;
 #[cfg(test)]
-use crate::coord::controller_commands::parsed_state_updates::ParsedStateUpdate;
+use crate::coord::apply_implications::parsed_state_updates::ParsedStateUpdate;
 use crate::session::{Portal, PreparedStatement, Session};
 use crate::util::ResultExt;
 use crate::{AdapterError, AdapterNotice, ExecuteResponse};

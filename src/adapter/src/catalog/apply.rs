@@ -62,7 +62,7 @@ use tracing::{Instrument, info_span, warn};
 use crate::AdapterError;
 use crate::catalog::state::LocalExpressionCache;
 use crate::catalog::{BuiltinTableUpdate, CatalogState};
-use crate::coord::controller_commands::parsed_state_updates::{self, ParsedStateUpdate};
+use crate::coord::apply_implications::parsed_state_updates::{self, ParsedStateUpdate};
 use crate::util::index_sql;
 
 /// Maintains the state of retractions while applying catalog state updates for a single timestamp.
