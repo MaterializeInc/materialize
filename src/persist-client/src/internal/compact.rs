@@ -655,11 +655,8 @@ where
                 .compaction_memory_bound_bytes
                 .saturating_sub(in_progress_part_reserved_memory_bytes);
 
-            let ordered_runs =
-                Self::flatten_runs(&req, cfg.batch.preferred_order)?;
-
             let chunked_runs = Self::chunk_runs(
-                &ordered_runs,
+                &req,
                 &cfg,
                 &*metrics,
                 run_reserved_memory_bytes,
@@ -805,28 +802,49 @@ where
     ///    batch is present in the chunk.
     /// 2. Otherwise, runs are split into chunks of runs from a single batch.
     fn chunk_runs<'a>(
-        ordered_runs: &'a [(
-            RunLocation,
-            &'a Description<T>,
-            &'a RunMeta,
-            &'a [RunPart<T>],
-        )],
+        req: &'a CompactReq<T>,
         cfg: &CompactConfig,
         metrics: &Metrics,
         run_reserved_memory_bytes: usize,
     ) -> Vec<(
         Vec<(
-            &'a RunLocation,
+            RunLocation,
             &'a Description<T>,
             &'a RunMeta,
             &'a [RunPart<T>],
         )>,
         usize,
     )> {
+        let total_number_of_runs = req
+            .inputs
+            .iter()
+            .map(|x| x.batch.run_splits.len() + 1)
+            .sum::<usize>();
+
+        let batch_runs: Vec<_> = req
+            .inputs
+            .iter()
+            .map(|x| (x.id, &x.batch.desc, x.batch.runs()))
+            .collect();
+
+        let mut ordered_runs = Vec::with_capacity(total_number_of_runs);
+        for (spine_id, desc, runs) in batch_runs {
+            for (meta, run) in runs {
+                let run_id = RunLocation(spine_id, meta.id);
+                let same_order = meta.order.unwrap_or(RunOrder::Codec) == cfg.batch.preferred_order;
+                let has_hollow_runs = run.iter().any(|r| matches!(r, RunPart::Many(_)));
+                soft_assert_or_log!(
+                    same_order || !has_hollow_runs,
+                    "unexpected out-of-order hollow run"
+                );
+                ordered_runs.push((run_id, desc, meta, run));
+            }
+        }
+
         // Group runs by SpineId
         let grouped: BTreeMap<SpineId, Vec<_>> = ordered_runs
             .iter()
-            .map(|(run_id, desc, meta, parts)| (run_id.0, (run_id, *desc, *meta, *parts)))
+            .map(|(run_id, desc, meta, parts)| (run_id.0, (*run_id, *desc, *meta, *parts)))
             .fold(BTreeMap::new(), |mut acc, item| {
                 acc.entry(item.0).or_default().push(item.1);
                 acc
@@ -936,40 +954,6 @@ where
         }
 
         chunks
-    }
-
-    /// Flattens the runs in the input batches into a single ordered list of runs.
-    fn flatten_runs(
-        req: &CompactReq<T>,
-        target_order: RunOrder,
-    ) -> anyhow::Result<Vec<(RunLocation, &Description<T>, &RunMeta, &[RunPart<T>])>> {
-        let total_number_of_runs = req
-            .inputs
-            .iter()
-            .map(|x| x.batch.run_splits.len() + 1)
-            .sum::<usize>();
-
-        let batch_runs: Vec<_> = req
-            .inputs
-            .iter()
-            .map(|x| (x.id, &x.batch.desc, x.batch.runs()))
-            .collect();
-
-        let mut ordered_runs = Vec::with_capacity(total_number_of_runs);
-        for (spine_id, desc, runs) in batch_runs {
-            for (meta, run) in runs {
-                let run_id = RunLocation(spine_id, meta.id);
-                let same_order = meta.order.unwrap_or(RunOrder::Codec) == target_order;
-                let has_hollow_runs = run.iter().any(|r| matches!(r, RunPart::Many(_)));
-                soft_assert_or_log!(
-                    same_order || !has_hollow_runs,
-                    "unexpected out-of-order hollow run"
-                );
-                ordered_runs.push((run_id, desc, meta, run));
-            }
-        }
-
-        Ok(ordered_runs)
     }
 
     /// Compacts runs together. If the input runs are sorted, a single run will be created as output.
