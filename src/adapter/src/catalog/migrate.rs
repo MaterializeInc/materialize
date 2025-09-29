@@ -41,7 +41,7 @@ use uuid::Uuid;
 use crate::catalog::open::into_consolidatable_updates_startup;
 use crate::catalog::state::LocalExpressionCache;
 use crate::catalog::{BuiltinTableUpdate, CatalogState, ConnCatalog};
-use crate::coord::controller_commands::parsed_state_updates::ParsedStateUpdate;
+use crate::coord::apply_implications::parsed_state_updates::ParsedStateUpdate;
 
 fn rewrite_ast_items<F>(tx: &mut Transaction<'_>, mut f: F) -> Result<(), anyhow::Error>
 where

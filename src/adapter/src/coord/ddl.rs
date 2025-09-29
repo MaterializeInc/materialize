@@ -53,7 +53,7 @@ use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReaso
 use crate::catalog::{DropObjectInfo, Op, ReplicaCreateDropReason, TransactionResult};
 use crate::coord::Coordinator;
 use crate::coord::appends::BuiltinTableAppendNotify;
-use crate::coord::controller_commands::parsed_state_updates::ParsedStateUpdate;
+use crate::coord::apply_implications::parsed_state_updates::ParsedStateUpdate;
 use crate::session::{Session, Transaction, TransactionOps};
 use crate::telemetry::{EventDetails, SegmentClientExt};
 use crate::util::ResultExt;
@@ -100,7 +100,7 @@ impl Coordinator {
         // We can't run this concurrently with the explicit side effects,
         // because both want to borrow self mutably.
         let controller_state_updates_res = self
-            .controller_apply_catalog_updates(ctx.as_deref_mut(), controller_state_updates)
+            .apply_catalog_update_implications(ctx.as_deref_mut(), controller_state_updates)
             .await;
 
         // We would get into an inconsistent state if we updated the catalog but
@@ -152,7 +152,7 @@ impl Coordinator {
             self.catalog_transact_inner(conn_id, ops).await?;
 
         let controller_apply_fut =
-            self.controller_apply_catalog_updates(ctx, controller_state_updates);
+            self.apply_catalog_update_implications(ctx, controller_state_updates);
 
         // Apply controller commands concurrently with the table updates.
         let (controller_apply_res, ()) = futures::future::join(

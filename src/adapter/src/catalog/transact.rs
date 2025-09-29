@@ -70,8 +70,8 @@ use crate::catalog::{
     system_object_type_to_audit_object_type,
 };
 use crate::coord::ConnMeta;
+use crate::coord::apply_implications::parsed_state_updates::ParsedStateUpdate;
 use crate::coord::cluster_scheduling::SchedulingDecision;
-use crate::coord::controller_commands::parsed_state_updates::ParsedStateUpdate;
 use crate::util::ResultExt;
 
 #[derive(Debug, Clone)]

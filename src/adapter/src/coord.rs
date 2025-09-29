@@ -216,12 +216,12 @@ pub(crate) mod timeline;
 pub(crate) mod timestamp_selection;
 
 pub mod appends;
+pub mod apply_implications;
 mod catalog_serving;
 mod caught_up;
 pub mod cluster_scheduling;
 mod command_handler;
 pub mod consistency;
-pub mod controller_commands;
 mod ddl;
 mod indexes;
 mod introspection;
