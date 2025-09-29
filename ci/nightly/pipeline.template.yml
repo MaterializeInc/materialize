@@ -391,6 +391,14 @@ steps:
               # Uses .td-file based parallelism instead
               args: [-m=long, test/cloudtest/test_full_testdrive.py, --no-test-parallelism]
         sanitizer: skip
+      - id: self-managed-password-auth-testdrive
+        label: "Self managed password auth testdrive"
+        depends_on: build-aarch64
+        timeout_in_minutes: 180
+        parallelism: 2
+        agents:
+          queue: linux-aarch64-small
+        sanitizer: skip
 
 
   - group: Limits

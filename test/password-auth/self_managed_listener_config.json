@@ -1,0 +1,44 @@
+{
+  "sql": {
+    "external": {
+      "addr": "0.0.0.0:6875",
+      "authenticator_kind": "Password",
+      "allowed_roles": "NormalAndInternal",
+      "enable_tls": false
+    },
+    "externalsasl": {
+      "addr": "0.0.0.0:6877",
+      "authenticator_kind": "None",
+      "allowed_roles": "NormalAndInternal",
+      "enable_tls": false
+    }
+  },
+  "http": {
+    "external": {
+      "addr": "0.0.0.0:6876",
+      "authenticator_kind": "Password",
+      "allowed_roles": "NormalAndInternal",
+      "enable_tls": false,
+      "routes": {
+        "base": true,
+        "webhook": true,
+        "internal": true,
+        "metrics": false,
+        "profiling": true
+      }
+    },
+    "internal": {
+      "addr": "0.0.0.0:6878",
+      "authenticator_kind": "None",
+      "allowed_roles": "NormalAndInternal",
+      "enable_tls": false,
+      "routes": {
+        "base": true,
+        "webhook": true,
+        "internal": true,
+        "metrics": true,
+        "profiling": true
+      }
+    }
+  }
+}
