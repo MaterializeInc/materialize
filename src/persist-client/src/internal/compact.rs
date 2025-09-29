@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -815,42 +815,10 @@ where
         )>,
         usize,
     )> {
-        let total_number_of_runs = req
-            .inputs
-            .iter()
-            .map(|x| x.batch.run_splits.len() + 1)
-            .sum::<usize>();
-
-        let batch_runs: Vec<_> = req
-            .inputs
-            .iter()
-            .map(|x| (x.id, &x.batch.desc, x.batch.runs()))
-            .collect();
-
-        let mut ordered_runs = Vec::with_capacity(total_number_of_runs);
-        for (spine_id, desc, runs) in batch_runs {
-            for (meta, run) in runs {
-                let run_id = RunLocation(spine_id, meta.id);
-                let same_order = meta.order.unwrap_or(RunOrder::Codec) == cfg.batch.preferred_order;
-                let has_hollow_runs = run.iter().any(|r| matches!(r, RunPart::Many(_)));
-                soft_assert_or_log!(
-                    same_order || !has_hollow_runs,
-                    "unexpected out-of-order hollow run"
-                );
-                ordered_runs.push((run_id, desc, meta, run));
-            }
-        }
-
-        // Group runs by SpineId
-        let grouped: BTreeMap<SpineId, Vec<_>> = ordered_runs
-            .iter()
-            .map(|(run_id, desc, meta, parts)| (run_id.0, (*run_id, *desc, *meta, *parts)))
-            .fold(BTreeMap::new(), |mut acc, item| {
-                acc.entry(item.0).or_default().push(item.1);
-                acc
-            });
-
-        let mut grouped = grouped.into_iter().peekable();
+        // Iterate through batches by spine id.
+        let mut batches: Vec<_> = req.inputs.iter().map(|x| (x.id, &*x.batch)).collect();
+        batches.sort_by_key(|(id, _)| *id);
+        batches.retain(|(_, batch)| !batch.parts.is_empty());
 
         let mut chunks = vec![];
         let mut current_chunk = vec![];
@@ -865,13 +833,24 @@ where
                 .unwrap_or(cfg.batch.blob_target_size)
         }
 
-        while let Some((_spine_id, runs)) = grouped.next() {
-            let batch_size = runs
-                .iter()
-                .map(|(_, _, _, parts)| max_part_bytes(parts, cfg))
+        for (spine_id, batch) in batches {
+            let batch_size = batch
+                .runs()
+                .map(|(_, parts)| max_part_bytes(parts, cfg))
                 .sum::<usize>();
 
-            let num_runs = runs.len();
+            let num_runs = batch.run_meta.len();
+
+            let runs = batch.runs().map(|(meta, parts)| {
+                let run_id = RunLocation(spine_id, meta.id);
+                let same_order = meta.order.unwrap_or(RunOrder::Codec) == cfg.batch.preferred_order;
+                let has_hollow_runs = parts.iter().any(|r| matches!(r, RunPart::Many(_)));
+                soft_assert_or_log!(
+                    same_order || !has_hollow_runs,
+                    "unexpected out-of-order hollow run"
+                );
+                (run_id, &batch.desc, meta, parts)
+            });
 
             // Determine if adding this batch poses a memory violation risk.
             // If we have a single run which is greater than the reserved memory, we need to be careful.
@@ -883,7 +862,7 @@ where
             if mem_violation && num_runs == 1 {
                 // After a memory violation, combine the next single run (if present)
                 // into the chunk, forcing us to make progress.
-                current_chunk.extend(runs.clone());
+                current_chunk.extend(runs);
                 current_chunk_max_memory_usage += batch_size;
                 mem_violation = false;
                 continue;
@@ -896,7 +875,7 @@ where
                 // If adding this single-run batch would cause a memory violation, add it anyway.
                 metrics.compaction.memory_violations.inc();
                 mem_violation = true;
-                current_chunk.extend(runs.clone());
+                current_chunk.extend(runs);
                 current_chunk_max_memory_usage += batch_size;
                 continue;
             }
