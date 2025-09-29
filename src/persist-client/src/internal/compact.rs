@@ -7,33 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::marker::PhantomData;
-use std::pin::pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-
-use anyhow::anyhow;
-use differential_dataflow::difference::Semigroup;
-use differential_dataflow::lattice::Lattice;
-use differential_dataflow::trace::Description;
-use futures::{Stream, pin_mut};
-use futures_util::StreamExt;
-use itertools::Itertools;
-use mz_dyncfg::Config;
-use mz_ore::cast::CastFrom;
-use mz_ore::error::ErrorExt;
-use mz_ore::now::NowFn;
-use mz_persist::location::Blob;
-use mz_persist_types::part::Part;
-use mz_persist_types::{Codec, Codec64};
-use timely::PartialOrder;
-use timely::progress::{Antichain, Timestamp};
-use tokio::sync::mpsc::Sender;
-use tokio::sync::{TryAcquireError, mpsc, oneshot};
-use tracing::{Instrument, Span, debug, debug_span, error, trace, warn};
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::batch::{BatchBuilderConfig, BatchBuilderInternal, BatchParts, PartDeletes};
@@ -57,6 +35,26 @@ use crate::internal::trace::{
 };
 use crate::iter::{Consolidator, StructuredSort};
 use crate::{Metrics, PersistConfig, ShardId};
+use anyhow::anyhow;
+use differential_dataflow::difference::Semigroup;
+use differential_dataflow::lattice::Lattice;
+use differential_dataflow::trace::Description;
+use futures::{Stream, pin_mut};
+use futures_util::StreamExt;
+use itertools::Itertools;
+use mz_dyncfg::Config;
+use mz_ore::cast::CastFrom;
+use mz_ore::error::ErrorExt;
+use mz_ore::now::NowFn;
+use mz_ore::soft_assert_or_log;
+use mz_persist::location::Blob;
+use mz_persist_types::part::Part;
+use mz_persist_types::{Codec, Codec64};
+use timely::PartialOrder;
+use timely::progress::{Antichain, Timestamp};
+use tokio::sync::mpsc::Sender;
+use tokio::sync::{TryAcquireError, mpsc, oneshot};
+use tracing::{Instrument, Span, debug, debug_span, error, trace, warn};
 
 /// A request for compaction.
 ///
@@ -657,7 +655,7 @@ where
                 .saturating_sub(in_progress_part_reserved_memory_bytes);
 
             let ordered_runs =
-                Self::flatten_runs(&req, cfg.batch.preferred_order, &*blob, &*metrics).await?;
+                Self::flatten_runs(&req, cfg.batch.preferred_order)?;
 
             let chunked_runs = Self::chunk_runs(
                 &ordered_runs,
@@ -803,14 +801,14 @@ where
 
     /// Chunks runs with the following rules:
     /// 1. Runs from multiple batches are allowed to be mixed as long as _every_ run in the
-    ///    the batch is present in the chunk.
-    /// 2. Otherwise runs are split into chunks of runs from a single batch.
+    ///    batch is present in the chunk.
+    /// 2. Otherwise, runs are split into chunks of runs from a single batch.
     fn chunk_runs<'a>(
         ordered_runs: &'a [(
             RunLocation,
             &'a Description<T>,
             &'a RunMeta,
-            Cow<'a, [RunPart<T>]>,
+            &'a [RunPart<T>],
         )],
         cfg: &CompactConfig,
         metrics: &Metrics,
@@ -827,7 +825,7 @@ where
         // Group runs by SpineId
         let grouped: BTreeMap<SpineId, Vec<_>> = ordered_runs
             .iter()
-            .map(|(run_id, desc, meta, parts)| (run_id.0, (run_id, *desc, *meta, &**parts)))
+            .map(|(run_id, desc, meta, parts)| (run_id.0, (run_id, *desc, *meta, *parts)))
             .fold(BTreeMap::new(), |mut acc, item| {
                 acc.entry(item.0).or_default().push(item.1);
                 acc
@@ -940,19 +938,10 @@ where
     }
 
     /// Flattens the runs in the input batches into a single ordered list of runs.
-    async fn flatten_runs<'a>(
-        req: &'a CompactReq<T>,
+    fn flatten_runs(
+        req: &CompactReq<T>,
         target_order: RunOrder,
-        blob: &'a dyn Blob,
-        metrics: &'a Metrics,
-    ) -> anyhow::Result<
-        Vec<(
-            RunLocation,
-            &'a Description<T>,
-            &'a RunMeta,
-            Cow<'a, [RunPart<T>]>,
-        )>,
-    > {
+    ) -> anyhow::Result<Vec<(RunLocation, &Description<T>, &RunMeta, &[RunPart<T>])>> {
         let total_number_of_runs = req
             .inputs
             .iter()
@@ -970,30 +959,12 @@ where
             for (meta, run) in runs {
                 let run_id = RunLocation(spine_id, meta.id);
                 let same_order = meta.order.unwrap_or(RunOrder::Codec) == target_order;
-                if same_order {
-                    ordered_runs.push((run_id, desc, meta, Cow::Borrowed(run)));
-                } else {
-                    // The downstream consolidation step will handle a long run that's not in
-                    // the desired order by splitting it up into many single-element runs. This preserves
-                    // correctness, but it means that we may end up needing to iterate through
-                    // many more parts concurrently than expected, increasing memory use. Instead,
-                    // we break up those runs into individual batch parts, fetching hollow runs as
-                    // necessary, before they're grouped together to be passed to consolidation.
-                    // The downside is that this breaks the usual property that compaction produces
-                    // fewer runs than it takes in. This should generally be resolved by future
-                    // runs of compaction.
-                    for part in run {
-                        let mut batch_parts = pin!(part.part_stream(req.shard_id, blob, metrics));
-                        while let Some(part) = batch_parts.next().await {
-                            ordered_runs.push((
-                                run_id,
-                                desc,
-                                meta,
-                                Cow::Owned(vec![RunPart::Single(part?.into_owned())]),
-                            ));
-                        }
-                    }
-                }
+                let has_hollow_runs = run.iter().any(|r| matches!(r, RunPart::Many(_)));
+                soft_assert_or_log!(
+                    same_order || !has_hollow_runs,
+                    "unexpected out-of-order hollow run"
+                );
+                ordered_runs.push((run_id, desc, meta, run));
             }
         }
 
