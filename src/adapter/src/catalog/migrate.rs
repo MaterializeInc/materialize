@@ -27,6 +27,7 @@ use mz_sql::ast::{
 use mz_sql::catalog::SessionCatalog;
 use mz_sql::names::{FullItemName, QualifiedItemName};
 use mz_sql::normalize;
+use mz_sql::session::vars::{FORCE_SOURCE_TABLE_SYNTAX, Var, VarInput};
 use mz_sql_parser::ast::{Raw, Statement};
 use mz_storage_client::controller::StorageTxn;
 use mz_storage_types::sources::SourceExportStatementDetails;
@@ -159,6 +160,18 @@ pub(crate) async fn migrate(
             diff: diff.try_into().expect("valid diff"),
         })
         .collect();
+
+    let force_source_table_syntax = state.system_config().force_source_table_syntax();
+    // When this flag is set the legacy syntax is denied. But here we are about to perform a
+    // migration which requires that we parse the current catalog state. To proceed we temporarily disable
+    // the flag and then reset it after migrationsa are done.
+    if force_source_table_syntax {
+        state
+            .system_config_mut()
+            .set(FORCE_SOURCE_TABLE_SYNTAX.name(), VarInput::Flat("off"))
+            .unwrap();
+    }
+
     let mut ast_builtin_table_updates = state
         .apply_updates_for_bootstrap(item_updates, local_expr_cache)
         .await;
@@ -169,7 +182,7 @@ pub(crate) async fn migrate(
 
     // Special block for `ast_rewrite_sources_to_tables` migration
     // since it requires a feature flag needs to update multiple AST items at once.
-    if state.system_config().force_source_table_syntax() {
+    if force_source_table_syntax {
         rewrite_sources_to_tables(tx, &conn_cat)?;
     }
 
@@ -191,6 +204,13 @@ pub(crate) async fn migrate(
         // arbitrary changes to the catalog.
         Ok(())
     })?;
+
+    if force_source_table_syntax {
+        state
+            .system_config_mut()
+            .set(FORCE_SOURCE_TABLE_SYNTAX.name(), VarInput::Flat("on"))
+            .unwrap();
+    }
 
     // Add whole-catalog migrations below.
     //
