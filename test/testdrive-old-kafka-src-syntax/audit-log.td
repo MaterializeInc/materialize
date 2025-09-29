@@ -34,11 +34,12 @@ create cluster "{\"id\":\"<GID>\",\"name\":\"audit_log_kafka_src\"}" materialize
 
 > CREATE CLUSTER audit_log_counter_src SIZE = '${arg.default-storage-size}';
 
-> CREATE SOURCE counter_src
+> CREATE SOURCE counter_src (counter)
   IN CLUSTER audit_log_counter_src
   FROM LOAD GENERATOR COUNTER (UP TO 100);
 
-> SELECT event_type, object_type, details - 'replica_id' - 'billed_as' - 'internal', user FROM mz_audit_events ORDER BY id DESC LIMIT 3
+> SELECT event_type, object_type, details - 'replica_id' - 'billed_as' - 'internal', user FROM mz_audit_events ORDER BY id DESC LIMIT 4
 create source "{\"cluster_id\":\"<GID>\",\"database\":\"materialize\",\"id\":\"<GID>\",\"item\":\"counter_src\",\"schema\":\"public\",\"type\":\"load-generator\"}" materialize
+create source "{\"cluster_id\":null,\"database\":\"materialize\",\"id\":\"<GID>\",\"item\":\"counter_src_progress\",\"schema\":\"public\",\"type\":\"progress\"}" materialize
 create cluster-replica "{\"cluster_id\":\"<GID>\",\"cluster_name\":\"audit_log_counter_src\",\"logical_size\":\"${arg.default-storage-size}\",\"reason\":\"manual\",\"replica_name\":\"r1\"}" materialize
 create cluster "{\"id\":\"<GID>\",\"name\":\"audit_log_counter_src\"}" materialize
