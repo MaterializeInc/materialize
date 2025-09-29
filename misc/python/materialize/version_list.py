@@ -36,9 +36,14 @@ def get_self_managed_versions() -> list[MzVersion]:
     for entry in yaml.safe_load(
         requests.get("https://materializeinc.github.io/materialize/index.yaml").text
     )["entries"]["materialize-operator"]:
+        helm_version = MzVersion.parse_mz(entry["version"])
         version = MzVersion.parse_mz(entry["appVersion"])
         prefix = (version.major, version.minor)
-        if not version.prerelease and prefix not in prefixes:
+        if (
+            not version.prerelease
+            and prefix not in prefixes
+            and not helm_version.prerelease
+        ):
             result.add(version)
             prefixes.add(prefix)
     return sorted(result)
