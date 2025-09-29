@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 import frontmatter
@@ -30,21 +31,37 @@ from materialize.mz_version import MzVersion
 MZ_ROOT = Path(os.environ["MZ_ROOT"])
 
 
+@dataclass
+class SelfManagedVersion:
+    helm_version: MzVersion
+    version: MzVersion
+
+
+def fetch_self_managed_versions() -> list[SelfManagedVersion]:
+    return [
+        SelfManagedVersion(
+            MzVersion.parse_mz(entry["version"]),
+            MzVersion.parse_mz(entry["appVersion"]),
+        )
+        for entry in yaml.safe_load(
+            requests.get("https://materializeinc.github.io/materialize/index.yaml").text
+        )["entries"]["materialize-operator"]
+        if MzVersion.parse_mz(entry["appVersion"]) not in INVALID_VERSIONS
+    ]
+
+
 def get_self_managed_versions() -> list[MzVersion]:
     prefixes = set()
     result = set()
-    for entry in yaml.safe_load(
-        requests.get("https://materializeinc.github.io/materialize/index.yaml").text
-    )["entries"]["materialize-operator"]:
-        helm_version = MzVersion.parse_mz(entry["version"])
-        version = MzVersion.parse_mz(entry["appVersion"])
-        prefix = (version.major, version.minor)
+    self_managed_versions = fetch_self_managed_versions()
+    for version_info in self_managed_versions:
+        prefix = (version_info.version.major, version_info.version.minor)
         if (
-            not version.prerelease
+            not version_info.version.prerelease
             and prefix not in prefixes
-            and not helm_version.prerelease
+            and not version_info.helm_version.prerelease
         ):
-            result.add(version)
+            result.add(version_info.version)
             prefixes.add(prefix)
     return sorted(result)
 
@@ -71,6 +88,12 @@ INVALID_VERSIONS = {
     MzVersion.parse_mz("v0.93.0"),  # accidental release
     MzVersion.parse_mz("v0.99.1"),  # incompatible for upgrades
     MzVersion.parse_mz("v0.113.1"),  # incompatible for upgrades
+    MzVersion.parse_mz(
+        "v0.147.7"
+    ),  # Incompatible for upgrades because it clears login attribute for roles due to catalog migration
+    MzVersion.parse_mz(
+        "v0.147.14"
+    ),  # Incompatible for upgrades because it clears login attribute for roles due to catalog migration
     MzVersion.parse_mz("v0.157.0"),
 }
 
@@ -101,7 +124,7 @@ def resolve_ancestor_image_tag(ancestor_overrides: dict[str, MzVersion]) -> str:
 
 
 def _create_ancestor_image_resolution(
-    ancestor_overrides: dict[str, MzVersion]
+    ancestor_overrides: dict[str, MzVersion],
 ) -> AncestorImageResolutionBase:
     if buildkite.is_in_buildkite():
         return AncestorImageResolutionInBuildkite(ancestor_overrides)
