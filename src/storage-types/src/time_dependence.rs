@@ -11,9 +11,6 @@
 
 use mz_repr::Timestamp;
 use mz_repr::refresh_schedule::RefreshSchedule;
-use proptest::arbitrary::{Arbitrary, any};
-use proptest::prelude::BoxedStrategy;
-use proptest::strategy::Strategy;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -119,17 +116,6 @@ pub enum TimeDependenceError {
     /// One of the imported collections does not exist.
     #[error("collection does not exist: {0}")]
     CollectionMissing(mz_repr::GlobalId),
-}
-
-impl Arbitrary for TimeDependence {
-    type Strategy = BoxedStrategy<Self>;
-    type Parameters = ();
-
-    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
-        any::<Option<RefreshSchedule>>()
-            .prop_map(|s| TimeDependence::new(s, vec![]))
-            .boxed()
-    }
 }
 
 #[cfg(test)]

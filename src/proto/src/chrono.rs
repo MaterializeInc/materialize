@@ -26,24 +26,6 @@ use crate::{RustType, TryFromProtoError};
 
 include!(concat!(env!("OUT_DIR"), "/mz_proto.chrono.rs"));
 
-impl RustType<ProtoNaiveDate> for NaiveDate {
-    fn into_proto(&self) -> ProtoNaiveDate {
-        ProtoNaiveDate {
-            year: self.year(),
-            ordinal: self.ordinal(),
-        }
-    }
-
-    fn from_proto(proto: ProtoNaiveDate) -> Result<Self, TryFromProtoError> {
-        NaiveDate::from_yo_opt(proto.year, proto.ordinal).ok_or_else(|| {
-            TryFromProtoError::DateConversionError(format!(
-                "NaiveDate::from_yo_opt({},{}) failed",
-                proto.year, proto.ordinal
-            ))
-        })
-    }
-}
-
 impl RustType<ProtoNaiveTime> for NaiveTime {
     fn into_proto(&self) -> ProtoNaiveTime {
         ProtoNaiveTime {
@@ -167,14 +149,6 @@ mod tests {
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(4096))]
-
-        #[mz_ore::test]
-        #[cfg_attr(miri, ignore)] // too slow
-        fn naive_date_protobuf_roundtrip(expect in any_naive_date() ) {
-            let actual = protobuf_roundtrip::<_, ProtoNaiveDate>(&expect);
-            assert_ok!(actual);
-            assert_eq!(actual.unwrap(), expect);
-        }
 
         #[mz_ore::test]
         #[cfg_attr(miri, ignore)] // too slow

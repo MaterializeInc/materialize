@@ -34,7 +34,6 @@ rust_library(
         ":mz_pgtz_build_script",
         "//src/lowertest:mz_lowertest",
         "//src/ore:mz_ore",
-        "//src/proto:mz_proto",
     ] + all_crate_deps(normal = True),
 )
 
@@ -68,7 +67,6 @@ rust_test(
     deps = [
         "//src/lowertest:mz_lowertest",
         "//src/ore:mz_ore",
-        "//src/proto:mz_proto",
     ] + all_crate_deps(
         normal = True,
         normal_dev = True,
@@ -81,19 +79,10 @@ rust_doc_test(
     deps = [
         "//src/lowertest:mz_lowertest",
         "//src/ore:mz_ore",
-        "//src/proto:mz_proto",
     ] + all_crate_deps(
         normal = True,
         normal_dev = True,
     ),
-)
-
-filegroup(
-    name = "all_protos",
-    srcs = [
-        "src/timezone.proto",
-        "//src/proto:all_protos",
-    ],
 )
 
 cargo_build_script(
@@ -101,17 +90,11 @@ cargo_build_script(
     srcs = ["build.rs"],
     build_script_env = {},
     compile_data = [],
-    data = [
-        "tznames/Default",
-        ":all_protos",
-    ],
+    data = ["tznames/Default"],
     proc_macro_deps = [] + all_crate_deps(build_proc_macro = True),
     rustc_env = {},
     rustc_flags = [],
-    deps = [
-        "//src/build-tools:mz_build_tools",
-        "//src/ore-build:mz_ore_build",
-    ] + all_crate_deps(build = True),
+    deps = ["//src/ore-build:mz_ore_build"] + all_crate_deps(build = True),
 )
 
 extract_cargo_lints(

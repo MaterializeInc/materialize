@@ -15,7 +15,6 @@ use columnar::Columnar;
 use columnation::{Columnation, CopyRegion};
 use mz_lowertest::MzReflect;
 use mz_ore::id_gen::AtomicIdGen;
-use mz_proto::{RustType, TryFromProtoError};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -118,33 +117,6 @@ impl fmt::Display for GlobalId {
             GlobalId::User(id) => write!(f, "u{}", id),
             GlobalId::Transient(id) => write!(f, "t{}", id),
             GlobalId::Explain => write!(f, "Explained Query"),
-        }
-    }
-}
-
-impl RustType<ProtoGlobalId> for GlobalId {
-    fn into_proto(&self) -> ProtoGlobalId {
-        use proto_global_id::Kind::*;
-        ProtoGlobalId {
-            kind: Some(match self {
-                GlobalId::System(x) => System(*x),
-                GlobalId::IntrospectionSourceIndex(x) => IntrospectionSourceIndex(*x),
-                GlobalId::User(x) => User(*x),
-                GlobalId::Transient(x) => Transient(*x),
-                GlobalId::Explain => Explain(()),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoGlobalId) -> Result<Self, TryFromProtoError> {
-        use proto_global_id::Kind::*;
-        match proto.kind {
-            Some(System(x)) => Ok(GlobalId::System(x)),
-            Some(IntrospectionSourceIndex(x)) => Ok(GlobalId::IntrospectionSourceIndex(x)),
-            Some(User(x)) => Ok(GlobalId::User(x)),
-            Some(Transient(x)) => Ok(GlobalId::Transient(x)),
-            Some(Explain(_)) => Ok(GlobalId::Explain),
-            None => Err(TryFromProtoError::missing_field("ProtoGlobalId::kind")),
         }
     }
 }

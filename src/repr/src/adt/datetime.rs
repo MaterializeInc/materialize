@@ -19,13 +19,10 @@ use chrono::{NaiveDate, NaiveTime, Timelike};
 use mz_lowertest::MzReflect;
 use mz_persist_types::columnar::FixedSizeCodec;
 use mz_pgtz::timezone::Timezone;
-use mz_proto::{RustType, TryFromProtoError};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use crate::adt::interval::Interval;
-
-include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.datetime.rs"));
 
 /// Units of measurements associated with dates and times.
 ///
@@ -129,67 +126,6 @@ impl FromStr for DateTimeUnits {
             "timezone_m" | "timezone_minute" => Ok(Self::TimezoneMinute),
             _ => Err(format!("unknown units {}", s)),
         }
-    }
-}
-
-impl RustType<ProtoDateTimeUnits> for DateTimeUnits {
-    fn into_proto(&self) -> ProtoDateTimeUnits {
-        use proto_date_time_units::Kind;
-        ProtoDateTimeUnits {
-            kind: Some(match self {
-                DateTimeUnits::Epoch => Kind::Epoch(()),
-                DateTimeUnits::Millennium => Kind::Millennium(()),
-                DateTimeUnits::Century => Kind::Century(()),
-                DateTimeUnits::Decade => Kind::Decade(()),
-                DateTimeUnits::Year => Kind::Year(()),
-                DateTimeUnits::Quarter => Kind::Quarter(()),
-                DateTimeUnits::Week => Kind::Week(()),
-                DateTimeUnits::Month => Kind::Month(()),
-                DateTimeUnits::Hour => Kind::Hour(()),
-                DateTimeUnits::Day => Kind::Day(()),
-                DateTimeUnits::DayOfWeek => Kind::DayOfWeek(()),
-                DateTimeUnits::DayOfYear => Kind::DayOfYear(()),
-                DateTimeUnits::IsoDayOfWeek => Kind::IsoDayOfWeek(()),
-                DateTimeUnits::IsoDayOfYear => Kind::IsoDayOfYear(()),
-                DateTimeUnits::Minute => Kind::Minute(()),
-                DateTimeUnits::Second => Kind::Second(()),
-                DateTimeUnits::Milliseconds => Kind::Milliseconds(()),
-                DateTimeUnits::Microseconds => Kind::Microseconds(()),
-                DateTimeUnits::Timezone => Kind::Timezone(()),
-                DateTimeUnits::TimezoneHour => Kind::TimezoneHour(()),
-                DateTimeUnits::TimezoneMinute => Kind::TimezoneMinute(()),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoDateTimeUnits) -> Result<Self, TryFromProtoError> {
-        use proto_date_time_units::Kind;
-        let kind = proto
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoDateTimeUnits.kind"))?;
-        Ok(match kind {
-            Kind::Epoch(_) => DateTimeUnits::Epoch,
-            Kind::Millennium(_) => DateTimeUnits::Millennium,
-            Kind::Century(_) => DateTimeUnits::Century,
-            Kind::Decade(_) => DateTimeUnits::Decade,
-            Kind::Year(_) => DateTimeUnits::Year,
-            Kind::Quarter(_) => DateTimeUnits::Quarter,
-            Kind::Week(_) => DateTimeUnits::Week,
-            Kind::Month(_) => DateTimeUnits::Month,
-            Kind::Hour(_) => DateTimeUnits::Hour,
-            Kind::Day(_) => DateTimeUnits::Day,
-            Kind::DayOfWeek(_) => DateTimeUnits::DayOfWeek,
-            Kind::DayOfYear(_) => DateTimeUnits::DayOfYear,
-            Kind::IsoDayOfWeek(_) => DateTimeUnits::IsoDayOfWeek,
-            Kind::IsoDayOfYear(_) => DateTimeUnits::IsoDayOfYear,
-            Kind::Minute(_) => DateTimeUnits::Minute,
-            Kind::Second(_) => DateTimeUnits::Second,
-            Kind::Milliseconds(_) => DateTimeUnits::Milliseconds,
-            Kind::Microseconds(_) => DateTimeUnits::Microseconds,
-            Kind::Timezone(_) => DateTimeUnits::Timezone,
-            Kind::TimezoneHour(_) => DateTimeUnits::TimezoneHour,
-            Kind::TimezoneMinute(_) => DateTimeUnits::TimezoneMinute,
-        })
     }
 }
 
@@ -2024,9 +1960,6 @@ impl FixedSizeCodec<NaiveTime> for PackedNaiveTime {
 #[cfg(test)]
 mod tests {
     use itertools::Itertools;
-    use mz_ore::assert_ok;
-    use mz_proto::protobuf_roundtrip;
-    use proptest::prelude::any;
     use proptest::{prop_assert_eq, proptest};
 
     use crate::scalar::add_arb_duration;
@@ -3566,16 +3499,6 @@ mod tests {
             assert_eq!(ts, test.1);
             assert_eq!(tz, test.2);
             assert_eq!(era, CalendarEra::AD);
-        }
-    }
-
-    proptest! {
-        #[mz_ore::test]
-        #[cfg_attr(miri, ignore)] // slow, large amount of memory
-        fn datetimeunits_serialization_roundtrip(expect in any::<DateTimeUnits>() ) {
-            let actual = protobuf_roundtrip::<_, ProtoDateTimeUnits>(&expect);
-            assert_ok!(actual);
-            assert_eq!(actual.unwrap(), expect);
         }
     }
 

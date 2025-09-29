@@ -14,54 +14,26 @@ use chrono::FixedOffset;
 use chrono_tz::Tz;
 use itertools::Itertools;
 use mz_lowertest::MzReflect;
-use mz_proto::chrono::{any_fixed_offset, any_timezone};
-use mz_proto::{RustType, TryFromProtoError};
-use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use uncased::UncasedStr;
 
 use crate::abbrev::TIMEZONE_ABBREVS;
-
-include!(concat!(env!("OUT_DIR"), "/mz_pgtz.timezone.rs"));
 
 /// The SQL definition of the contents of the `mz_timezone_names` view.
 pub const MZ_CATALOG_TIMEZONE_NAMES_SQL: &str =
     include_str!(concat!(env!("OUT_DIR"), "/timezone.gen.sql"));
 
 /// Parsed timezone.
-#[derive(Arbitrary, Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, MzReflect)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, MzReflect)]
 pub enum Timezone {
     #[serde(with = "fixed_offset_serde")]
-    FixedOffset(#[proptest(strategy = "any_fixed_offset()")] FixedOffset),
-    Tz(#[proptest(strategy = "any_timezone()")] Tz),
+    FixedOffset(FixedOffset),
+    Tz(Tz),
 }
 
 impl Timezone {
     pub fn parse(tz: &str, spec: TimezoneSpec) -> Result<Self, String> {
         build_timezone_offset_second(&tokenize_timezone(tz)?, tz, spec)
-    }
-}
-
-impl RustType<ProtoTimezone> for Timezone {
-    fn into_proto(&self) -> ProtoTimezone {
-        use proto_timezone::Kind;
-        ProtoTimezone {
-            kind: Some(match self {
-                Timezone::FixedOffset(fo) => Kind::FixedOffset(fo.into_proto()),
-                Timezone::Tz(tz) => Kind::Tz(tz.into_proto()),
-            }),
-        }
-    }
-
-    fn from_proto(proto: ProtoTimezone) -> Result<Self, TryFromProtoError> {
-        use proto_timezone::Kind;
-        let kind = proto
-            .kind
-            .ok_or_else(|| TryFromProtoError::missing_field("ProtoTimezone::kind"))?;
-        Ok(match kind {
-            Kind::FixedOffset(pof) => Timezone::FixedOffset(FixedOffset::from_proto(pof)?),
-            Kind::Tz(ptz) => Timezone::Tz(Tz::from_proto(ptz)?),
-        })
     }
 }
 
