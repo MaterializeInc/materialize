@@ -316,6 +316,10 @@ rows:
     Privileges: |
       {{< include-md file="shared-content/sql-command-privileges/show-create-materialized-view.md" >}}
 
+  - Command: "[`SHOW CREATE TYPE`](/sql/show-create-type)"
+    Privileges: |
+      {{< include-md file="shared-content/sql-command-privileges/show-create-type.md" >}}
+
   - Command: "[`SHOW CREATE SINK`](/sql/show-create-sink)"
     Privileges: |
       {{< include-md file="shared-content/sql-command-privileges/show-create-sink.md" >}}

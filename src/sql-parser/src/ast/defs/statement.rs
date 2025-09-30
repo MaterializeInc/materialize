@@ -3743,7 +3743,7 @@ pub struct ShowCreateTypeStatement<T: AstInfo> {
 
 impl<T: AstInfo> AstDisplay for ShowCreateTypeStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("SHOW CREATE TYPE");
+        f.write_str("SHOW CREATE TYPE ");
         f.write_node(&self.type_name);
     }
 }

@@ -394,7 +394,7 @@ Show(ShowCreateCluster(ShowCreateClusterStatement { cluster_name: Unresolved(Ide
 parse-statement
 SHOW CREATE TYPE foo
 ----
-SHOW CREATE TYPE  foo
+SHOW CREATE TYPE foo
 =>
 Show(ShowCreateType(ShowCreateTypeStatement { type_name: Unresolved(Ident("foo")) }))
 

@@ -59,3 +59,19 @@ SELECT value_modifiers::text FROM mz_map_types m JOIN mz_types t ON m.id=t.id AN
 ----
 {5,2}
 NULL
+
+# Show CREATE TYPE Test
+
+query TT
+SHOW CREATE TYPE y1;
+----
+y1
+CREATE TYPE "materialize"."public"."y1" AS ("id" [s20 AS "pg_catalog"."int4"], "name" [s46 AS "pg_catalog"."text"], "num" [s32 AS "pg_catalog"."numeric"](3, 1), "updatedAt" [s50 AS "pg_catalog"."timestamp"](3))
+
+# For builtin types
+
+query TT
+SHOW CREATE TYPE int4;
+----
+int4
+<builtin>

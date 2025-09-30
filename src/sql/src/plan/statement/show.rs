@@ -21,7 +21,7 @@ use mz_ore::collections::CollectionExt;
 use mz_repr::{CatalogItemId, Datum, RelationDesc, Row, SqlScalarType};
 use mz_sql_parser::ast::display::{AstDisplay, FormatMode};
 use mz_sql_parser::ast::{
-    CreateSubsourceOptionName, ExternalReferenceExport, ExternalReferences, ObjectType,
+    CreateSubsourceOptionName, ExternalReferenceExport, ExternalReferences, IdentError, ObjectType,
     ShowCreateClusterStatement, ShowCreateConnectionStatement, ShowCreateMaterializedViewStatement,
     ShowCreateTypeStatement, ShowObjectType, SqlServerConfigOptionName, SystemObjectType,
     UnresolvedItemName, WithOptionValue,
@@ -269,7 +269,9 @@ pub fn plan_show_create_type(
             row: Row::pack_slice(&[Datum::String(&name), Datum::String(create_sql)]),
         })
     } else {
-        PlanError::InvalidIdent("expected named type".into())
+        Err(PlanError::InvalidIdent(IdentError::Invalid(
+            "expected named type".to_owned(),
+        )))
     }
 }
 
