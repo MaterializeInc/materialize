@@ -7452,7 +7452,6 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
- "tokio-postgres",
  "url",
  "uuid",
  "workspace-hack",

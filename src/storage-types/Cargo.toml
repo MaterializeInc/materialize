@@ -45,7 +45,7 @@ mz-mysql-util = { path = "../mysql-util" }
 mz-persist-types = { path = "../persist-types" }
 mz-pgcopy = { path = "../pgcopy" }
 mz-postgres-util = { path = "../postgres-util" }
-mz-proto = { path = "../proto", features = ["tokio-postgres"] }
+mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr" }
 mz-rocksdb-types = { path = "../rocksdb-types" }
 mz-secrets = { path = "../secrets" }
