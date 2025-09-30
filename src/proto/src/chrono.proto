@@ -15,13 +15,6 @@ message ProtoTz {
   string name = 1;
 }
 
-message ProtoNaiveDate {
-  // Year
-  int32 year = 1;
-  // Day-of-year (0..365)
-  uint32 ordinal = 2;
-}
-
 message ProtoNaiveTime {
   // The number of seconds since midnight
   uint32 secs = 1;

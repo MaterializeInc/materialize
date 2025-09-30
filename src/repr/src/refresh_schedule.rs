@@ -7,17 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use proptest::arbitrary::{Arbitrary, any};
-use proptest::prelude::{BoxedStrategy, Strategy};
 use std::time::Duration;
 
-use mz_proto::IntoRustIfSome;
-use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use serde::{Deserialize, Serialize};
 
 use crate::Timestamp;
-
-include!(concat!(env!("OUT_DIR"), "/mz_repr.refresh_schedule.rs"));
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct RefreshSchedule {
@@ -157,70 +151,6 @@ impl RefreshEvery {
     /// Rounds down `x` to the nearest multiple of `interval`.
     fn round_down_to_multiple_of_interval(interval: u64, x: u64) -> u64 {
         x / interval * interval
-    }
-}
-
-impl RustType<ProtoRefreshSchedule> for RefreshSchedule {
-    fn into_proto(&self) -> ProtoRefreshSchedule {
-        ProtoRefreshSchedule {
-            everies: self.everies.into_proto(),
-            ats: self.ats.into_proto(),
-        }
-    }
-
-    fn from_proto(proto: ProtoRefreshSchedule) -> Result<Self, TryFromProtoError> {
-        Ok(RefreshSchedule {
-            everies: proto.everies.into_rust()?,
-            ats: proto.ats.into_rust()?,
-        })
-    }
-}
-
-impl RustType<ProtoRefreshEvery> for RefreshEvery {
-    fn into_proto(&self) -> ProtoRefreshEvery {
-        ProtoRefreshEvery {
-            interval: Some(self.interval.into_proto()),
-            aligned_to: Some(self.aligned_to.into_proto()),
-        }
-    }
-
-    fn from_proto(proto: ProtoRefreshEvery) -> Result<Self, TryFromProtoError> {
-        Ok(RefreshEvery {
-            interval: proto
-                .interval
-                .into_rust_if_some("ProtoRefreshEvery::interval")?,
-            aligned_to: proto
-                .aligned_to
-                .into_rust_if_some("ProtoRefreshEvery::aligned_to")?,
-        })
-    }
-}
-
-impl Arbitrary for RefreshSchedule {
-    type Strategy = BoxedStrategy<Self>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        (
-            proptest::collection::vec(any::<RefreshEvery>(), 0..4),
-            proptest::collection::vec(any::<Timestamp>(), 0..4),
-        )
-            .prop_map(|(everies, ats)| RefreshSchedule { everies, ats })
-            .boxed()
-    }
-}
-
-impl Arbitrary for RefreshEvery {
-    type Strategy = BoxedStrategy<Self>;
-    type Parameters = ();
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        (any::<Duration>(), any::<Timestamp>())
-            .prop_map(|(interval, aligned_to)| RefreshEvery {
-                interval,
-                aligned_to,
-            })
-            .boxed()
     }
 }
 

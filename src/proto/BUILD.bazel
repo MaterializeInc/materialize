@@ -93,7 +93,6 @@ filegroup(
     srcs = [
         "src/chrono.proto",
         "src/proto.proto",
-        "src/tokio_postgres.proto",
     ],
 )
 

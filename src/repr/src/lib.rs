@@ -32,7 +32,6 @@ mod row;
 mod scalar;
 
 pub mod adt;
-pub mod antichain;
 pub mod bytes;
 pub mod catalog_item_id;
 pub mod explain;
@@ -46,7 +45,6 @@ pub mod role_id;
 pub mod stats;
 pub mod strconv;
 pub mod timestamp;
-pub mod url;
 pub mod user;
 
 pub use crate::catalog_item_id::CatalogItemId;

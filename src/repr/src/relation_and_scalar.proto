@@ -20,7 +20,6 @@ import "repr/src/adt/numeric.proto";
 import "repr/src/adt/timestamp.proto";
 import "repr/src/adt/varchar.proto";
 import "repr/src/catalog_item_id.proto";
-import "repr/src/global_id.proto";
 
 message ProtoRelationType {
   message ProtoKey {
