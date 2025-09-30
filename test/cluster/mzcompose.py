@@ -4010,9 +4010,9 @@ def check_read_frontiers_not_stuck(c: Composition, object_names: list[str]):
         """
 
     # Because `mz_frontiers` isn't a linearizable relation it's possible that
-    # we need to wait a bit for the object's frontier to show up.
+    # we need to wait a bit for the objects' frontiers to show up.
     result = c.sql_query(query)
-    if not result:
+    if len(result) < len(object_names):
         time.sleep(2)
         result = c.sql_query(query)
 
