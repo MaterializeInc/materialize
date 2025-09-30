@@ -479,7 +479,7 @@ pub static MAX_SOURCES: VarDefinition = VarDefinition::new(
 
 pub static MAX_SINKS: VarDefinition = VarDefinition::new(
     "max_sinks",
-    value!(u32; 25),
+    value!(u32; 1000),
     "The maximum number of sinks in the region, across all schemas (Materialize).",
     true,
 );
