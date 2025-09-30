@@ -1235,3 +1235,8 @@ sup {
         color: var(--link);
     }
 }
+
+// Remove the bottom border from the last row of a nested table
+table table tr:last-child {
+    border-bottom: none;
+}
