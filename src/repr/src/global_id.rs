@@ -20,8 +20,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::CatalogItemId;
 
-include!(concat!(env!("OUT_DIR"), "/mz_repr.global_id.rs"));
-
 /// The identifier for an item/object.
 ///
 /// WARNING: `GlobalId`'s `Ord` implementation does not express a dependency order.
