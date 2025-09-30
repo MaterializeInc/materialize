@@ -620,9 +620,9 @@ def workflow_pg_restart_postgres(c: Composition) -> None:
     table.add_rows(rows)
     print(f"== mz_source_statuses ==\n{table}")
 
-    # table name "mz_source_progress" is dependent on setup.td
-    mz_source_progress_lsn = c.sql_query("select lsn from mz_source_progress;")[0][0]
-    print(f"== mz_source_progress_lsn ==\n{mz_source_progress_lsn}")
+    # table name "mz_source" is dependent on setup.td
+    mz_source_lsn = c.sql_query("select lsn from mz_source;")[0][0]
+    print(f"== mz_source_lsn ==\n{mz_source_lsn}")
 
 
 def workflow_pg_via_ssh_tunnel_with_ssl(c: Composition) -> None:

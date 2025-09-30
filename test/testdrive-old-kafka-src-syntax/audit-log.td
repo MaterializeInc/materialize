@@ -34,7 +34,7 @@ create cluster "{\"id\":\"<GID>\",\"name\":\"audit_log_kafka_src\"}" materialize
 
 > CREATE CLUSTER audit_log_counter_src SIZE = '${arg.default-storage-size}';
 
-> CREATE SOURCE counter_src
+> CREATE SOURCE counter_src (counter)
   IN CLUSTER audit_log_counter_src
   FROM LOAD GENERATOR COUNTER (UP TO 100);
 

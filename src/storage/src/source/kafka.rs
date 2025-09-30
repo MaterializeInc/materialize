@@ -426,6 +426,18 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
                         ),
                         None,
                     );
+                    health_output.give(
+                        &health_cap,
+                        HealthStatusMessage {
+                            id: None,
+                            namespace: if matches!(e, ContextCreationError::Ssh(_)) {
+                                StatusNamespace::Ssh
+                            } else {
+                                StatusNamespace::Kafka
+                            },
+                            update: update.clone(),
+                        },
+                    );
                     for (output, update) in outputs.iter().repeat_clone(update) {
                         health_output.give(
                             &health_cap,
@@ -644,6 +656,16 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
                                 );
                             }
                         }
+                        for namespace in [StatusNamespace::Kafka, StatusNamespace::Ssh] {
+                            health_output.give(
+                                &health_cap,
+                                HealthStatusMessage {
+                                    id: None,
+                                    namespace,
+                                    update: HealthStatusUpdate::running(),
+                                },
+                            );
+                        }
 
                         for export_stat in all_export_stats.iter() {
                             export_stat.set_offset_known(offset_known);
@@ -654,6 +676,14 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
                     }
                     Some(MetadataUpdate::TransientError(status)) => {
                         if let Some(update) = status.kafka {
+                            health_output.give(
+                                &health_cap,
+                                HealthStatusMessage {
+                                    id: None,
+                                    namespace: StatusNamespace::Kafka,
+                                    update: update.clone(),
+                                },
+                            );
                             for (output, update) in outputs.iter().repeat_clone(update) {
                                 health_output.give(
                                     &health_cap,
@@ -666,6 +696,14 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
                             }
                         }
                         if let Some(update) = status.ssh {
+                            health_output.give(
+                                &health_cap,
+                                HealthStatusMessage {
+                                    id: None,
+                                    namespace: StatusNamespace::Ssh,
+                                    update: update.clone(),
+                                },
+                            );
                             for (output, update) in outputs.iter().repeat_clone(update) {
                                 health_output.give(
                                     &health_cap,
@@ -679,6 +717,17 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
                         }
                     }
                     Some(MetadataUpdate::DefiniteError(error)) => {
+                        health_output.give(
+                            &health_cap,
+                            HealthStatusMessage {
+                                id: None,
+                                namespace: StatusNamespace::Kafka,
+                                update: HealthStatusUpdate::stalled(
+                                    error.to_string(),
+                                    None,
+                                ),
+                            },
+                        );
                         let error = Err(error.into());
                         let time = data_cap.time().clone();
                         for (output, error) in
@@ -709,6 +758,14 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
                                 reader.source_name, reader.topic_name, e
                             );
                             let status = HealthStatusUpdate::stalled(error, None);
+                            health_output.give(
+                                &health_cap,
+                                HealthStatusMessage {
+                                    id: None,
+                                    namespace: StatusNamespace::Kafka,
+                                    update: status.clone(),
+                                },
+                            );
                             for (output, status) in outputs.iter().repeat_clone(status) {
                                 health_output.give(
                                     &health_cap,
@@ -816,6 +873,14 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
                                             config.name
                                         ),
                                         None,
+                                    );
+                                    health_output.give(
+                                        &health_cap,
+                                        HealthStatusMessage {
+                                            id: None,
+                                            namespace: StatusNamespace::Kafka,
+                                            update: status.clone(),
+                                        },
                                     );
                                     health_output.give(
                                         &health_cap,

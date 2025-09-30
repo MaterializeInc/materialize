@@ -1087,7 +1087,8 @@ class AlterSinkLGSource(Check):
             dedent(
                 """
                 > CREATE SOURCE lg1 FROM LOAD GENERATOR COUNTER (UP TO 2);
-                > CREATE SINK sink_alter_lg FROM lg1
+                > CREATE TABLE lg1_tbl FROM SOURCE lg1;
+                > CREATE SINK sink_alter_lg FROM lg1_tbl
                   INTO KAFKA CONNECTION kafka_conn (TOPIC 'sink-alter-lg')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE DEBEZIUM
@@ -1101,17 +1102,19 @@ class AlterSinkLGSource(Check):
             for s in [
                 """
                 > CREATE SOURCE lg2 FROM LOAD GENERATOR COUNTER (UP TO 4, TICK INTERVAL '5s');
+                > CREATE TABLE lg2_tbl FROM SOURCE lg2;
 
                 $ set-from-sql var=running_count
                 SELECT COUNT(*)::text FROM mz_internal.mz_sink_status_history JOIN mz_sinks ON mz_internal.mz_sink_status_history.sink_id = mz_sinks.id WHERE name = 'sink_alter_lg';
 
-                > ALTER SINK sink_alter_lg SET FROM lg2;
+                > ALTER SINK sink_alter_lg SET FROM lg2_tbl;
 
                 > SELECT COUNT(*) > ${running_count} FROM mz_internal.mz_sink_status_history JOIN mz_sinks ON mz_internal.mz_sink_status_history.sink_id = mz_sinks.id WHERE name = 'sink_alter_lg';
                 true
                 """,
                 """
                 > CREATE SOURCE lg3 FROM LOAD GENERATOR COUNTER (UP TO 6, TICK INTERVAL '5s');
+                > CREATE TABLE lg3_tbl FROM SOURCE lg3;
 
                 $ set-from-sql var=running_count
                 SELECT COUNT(*)::text FROM mz_internal.mz_sink_status_history JOIN mz_sinks ON mz_internal.mz_sink_status_history.sink_id = mz_sinks.id WHERE name = 'sink_alter_lg';

@@ -17,6 +17,7 @@ $ set-regex match="\d\d\d\d-\d\d-\d\d \d\d:\d\d:\d\d(\.\d\d\d)?" replacement="<T
 > CREATE CLUSTER c SIZE 'scale=1,workers=1', REPLICATION FACTOR 0
 
 > CREATE SOURCE counter in cluster c FROM LOAD GENERATOR COUNTER (UP TO 100)
+> CREATE TABLE counter_tbl FROM SOURCE counter;
 
 $ set-from-sql var=load_id
 SELECT id FROM mz_sources WHERE name = 'counter'
