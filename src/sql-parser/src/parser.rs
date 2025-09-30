@@ -8035,6 +8035,10 @@ impl<'a> Parser<'a> {
                     cluster_name: RawClusterName::Unresolved(self.parse_identifier()?),
                 },
             ))
+        } else if self.parse_keywords(&[CREATE, TYPE]) {
+            Ok(ShowStatement::ShowCreateType(ShowCreateTypeStatement {
+                type_name: self.parse_data_type()?,
+            }))
         } else {
             let variable = if self.parse_keywords(&[TRANSACTION, ISOLATION, LEVEL]) {
                 ident!("transaction_isolation")

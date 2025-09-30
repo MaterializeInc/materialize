@@ -23,8 +23,8 @@ use mz_sql_parser::ast::display::{AstDisplay, FormatMode};
 use mz_sql_parser::ast::{
     CreateSubsourceOptionName, ExternalReferenceExport, ExternalReferences, ObjectType,
     ShowCreateClusterStatement, ShowCreateConnectionStatement, ShowCreateMaterializedViewStatement,
-    ShowObjectType, SqlServerConfigOptionName, SystemObjectType, UnresolvedItemName,
-    WithOptionValue,
+    ShowCreateTypeStatement, ShowObjectType, SqlServerConfigOptionName, SystemObjectType,
+    UnresolvedItemName, WithOptionValue,
 };
 use mz_sql_pretty::PrettyConfig;
 use query::QueryContext;
@@ -37,8 +37,8 @@ use crate::ast::{
 };
 use crate::catalog::{CatalogItemType, SessionCatalog};
 use crate::names::{
-    self, Aug, NameSimplifier, ObjectId, ResolvedClusterName, ResolvedDatabaseName, ResolvedIds,
-    ResolvedItemName, ResolvedRoleName, ResolvedSchemaName,
+    self, Aug, NameSimplifier, ObjectId, ResolvedClusterName, ResolvedDataType,
+    ResolvedDatabaseName, ResolvedIds, ResolvedItemName, ResolvedRoleName, ResolvedSchemaName,
 };
 use crate::parse;
 use crate::plan::scope::Scope;
@@ -246,6 +246,36 @@ pub fn plan_show_create_cluster(
 pub fn describe_show_create_cluster(
     _: &StatementContext,
     _: ShowCreateClusterStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(Some(
+        RelationDesc::builder()
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("create_sql", SqlScalarType::String.nullable(false))
+            .finish(),
+    )))
+}
+
+pub fn plan_show_create_type(
+    scx: &StatementContext,
+    ShowCreateTypeStatement { type_name }: ShowCreateTypeStatement<Aug>,
+) -> Result<ShowCreatePlan, PlanError> {
+    if let ResolvedDataType::Named { id, full_name, .. } = type_name {
+        let type_item = scx.get_type(full_name)?;
+        let create_sql = type_item.create_sql();
+        let name = type_item.name().item.clone();
+
+        Ok(ShowCreatePlan {
+            id: ObjectId::Item(id),
+            row: Row::pack_slice(&[Datum::String(&name), Datum::String(create_sql)]),
+        })
+    } else {
+        PlanError::InvalidIdent("expected named type".into())
+    }
+}
+
+pub fn describe_show_create_type(
+    _: &StatementContext,
+    _: ShowCreateTypeStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(Some(
         RelationDesc::builder()

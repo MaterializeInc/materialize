@@ -392,6 +392,13 @@ SHOW CREATE CLUSTER foo
 Show(ShowCreateCluster(ShowCreateClusterStatement { cluster_name: Unresolved(Ident("foo")) }))
 
 parse-statement
+SHOW CREATE TYPE foo
+----
+SHOW CREATE TYPE  foo
+=>
+Show(ShowCreateType(ShowCreateTypeStatement { type_name: Unresolved(Ident("foo")) }))
+
+parse-statement
 SHOW COLUMNS FROM mytable
 ----
 SHOW COLUMNS FROM mytable
