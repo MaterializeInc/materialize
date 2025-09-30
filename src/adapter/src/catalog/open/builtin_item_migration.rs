@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 use futures::FutureExt;
 use futures::future::BoxFuture;
+use mz_adapter_types::dyncfgs::ENABLE_BUILTIN_MIGRATION_SCHEMA_EVOLUTION;
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::{BUILTINS, BuiltinTable, Fingerprint};
 use mz_catalog::config::BuiltinItemMigrationConfig;
@@ -28,16 +29,18 @@ use mz_ore::{halt, soft_assert_or_log, soft_panic_or_log};
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_CATALOG;
 use mz_persist_client::critical::SinceHandle;
 use mz_persist_client::read::ReadHandle;
+use mz_persist_client::schema::CaESchema;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient};
 use mz_persist_types::ShardId;
-use mz_persist_types::codec_impls::ShardIdSchema;
+use mz_persist_types::codec_impls::{ShardIdSchema, UnitSchema};
 use mz_repr::{CatalogItemId, GlobalId, Timestamp};
 use mz_sql::catalog::CatalogItem as _;
 use mz_storage_client::controller::StorageTxn;
 use mz_storage_types::StorageDiff;
+use mz_storage_types::sources::SourceData;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
-use tracing::{debug, error};
+use tracing::{debug, error, info};
 
 use crate::catalog::open::builtin_item_migration::persist_schema::{TableKey, TableKeySchema};
 use crate::catalog::state::LocalExpressionCache;
@@ -54,6 +57,15 @@ pub(crate) struct BuiltinItemMigrationResult {
 }
 
 /// Perform migrations for any builtin items that may have changed between versions.
+///
+/// We only need to do anything for items that have an associated storage collection. Others
+/// (views, indexes) don't have any durable state that requires migration.
+///
+/// We have the ability to handle some backward-compatible schema changes through persist schema
+/// evolution, and we do so when possible. For changes that schema evolution doesn't support, we
+/// instead "migrate" the affected storage collections by creating new persist shards with the new
+/// schemas and dropping the old ones. See [`migrate_builtin_collections_incompatible`] for
+/// details.
 pub(crate) async fn migrate_builtin_items(
     state: &mut CatalogState,
     txn: &mut Transaction<'_>,
@@ -64,88 +76,64 @@ pub(crate) async fn migrate_builtin_items(
         read_only,
     }: BuiltinItemMigrationConfig,
 ) -> Result<BuiltinItemMigrationResult, Error> {
-    migrate_builtin_items_0dt(
+    assert_eq!(
+        read_only,
+        txn.is_savepoint(),
+        "txn must be in savepoint mode when read_only is true, and in writable mode otherwise",
+    );
+
+    update_catalog_fingerprints(state, txn, &migrated_builtins)?;
+
+    // Collect GlobalIds of storage collections we need to migrate.
+    let mut collections_to_migrate: Vec<_> = migrated_builtins
+        .into_iter()
+        .filter_map(|id| {
+            use CatalogItem::*;
+            match &state.get_entry(&id).item() {
+                Table(table) => Some(table.global_ids().into_element()),
+                Source(source) => Some(source.global_id()),
+                MaterializedView(mv) => Some(mv.global_id()),
+                ContinualTask(ct) => Some(ct.global_id()),
+                Log(_) | Sink(_) | View(_) | Index(_) | Type(_) | Func(_) | Secret(_)
+                | Connection(_) => None,
+            }
+        })
+        .collect();
+
+    // Attempt to perform schema evolution.
+    //
+    // If we run into an unexpected error (i.e. any persist error other than "schema incompatible")
+    // while trying to perform schema evolution, we abort the migration process, rather than
+    // automatically falling back to replacing the persist shards. We do this to avoid accidentally
+    // losing data due to a bug. This gives us the option to decide if we'd rather fix the bug or
+    // skip schema evolution using the dyncfg flag.
+    if ENABLE_BUILTIN_MIGRATION_SCHEMA_EVOLUTION.get(state.system_config().dyncfgs()) {
+        collections_to_migrate =
+            try_evolve_persist_schemas(state, txn, collections_to_migrate, &persist_client).await?;
+    } else {
+        info!("skipping builtin migration by schema evolution");
+    }
+
+    // For collections whose schemas we couldn't evolve, perform the replacement process.
+    // Note that we need to invoke this process even if `collections_to_migrate` is empty because
+    // it also cleans up any leftovers of previous migrations from the migration shard.
+    migrate_builtin_collections_incompatible(
         state,
         txn,
         local_expr_cache,
         persist_client,
-        migrated_builtins,
+        collections_to_migrate,
         read_only,
     )
     .await
 }
 
-/// An implementation of builtin item migrations that is compatible with zero down-time upgrades.
-/// The issue with the legacy approach is that it mints new global IDs for each migrated item and
-/// its descendents, without durably writing those IDs down in the catalog. As a result, the
-/// previous Materialize version, which is still running, may allocate the same global IDs. This
-/// would cause confusion for the current version when it's promoted to the leader because its
-/// definition of global IDs will no longer be valid. At best, the current version would have to
-/// rehydrate all objects that depend on migrated items. At worst, it would panic.
-///
-/// The high level description of this approach is that we create new shards for each migrated
-/// builtin table with the new table schema, without changing the global ID. Dependent objects are
-/// not modified but now read from the new shards.
-///
-/// A detailed description of this approach follows. It's important that all of these steps are
-/// idempotent, so that we can safely crash at any point and non-upgrades turn into a no-op.
-///
-///    1. Each environment has a dedicated persist shard, called the migration shard, that allows
-///       environments to durably write down metadata while in read-only mode. The shard is a
-///       mapping of `(GlobalId, build_version)` to `ShardId`.
-///    2. Collect the `GlobalId` of all migrated tables for the current build version.
-///    3. Read in the current contents of the migration shard.
-///    4. Collect all the `ShardId`s from the migration shard that are not at the current
-///       `build_version` or are not in the set of migrated tables.
-///       a. If they ARE NOT mapped to a `GlobalId` in the storage metadata then they are shards
-///          from an incomplete migration. Finalize them and remove them from the migration shard.
-///          Note: care must be taken to not remove the shard from the migration shard until we are
-///          sure that they will be finalized, otherwise the shard will leak.
-///       b. If they ARE mapped to a `GlobalId` in the storage metadata then they are shards from a
-///       complete migration. Remove them from the migration shard.
-///    5. Collect all the `GlobalId`s of tables that are migrated, but not in the migration shard
-///       for the current build version. Generate new `ShardId`s and add them to the migration
-///       shard.
-///    6. At this point the migration shard should only logically contain a mapping of migrated
-///       table `GlobalId`s to new `ShardId`s for the current build version. For each of these
-///       `GlobalId`s such that the `ShardId` isn't already in the storage metadata:
-///       a. Remove the current `GlobalId` to `ShardId` mapping from the storage metadata.
-///       b. Finalize the removed `ShardId`s.
-///       c. Insert the new `GlobalId` to `ShardId` mapping into the storage metadata.
-///
-/// This approach breaks the abstraction boundary between the catalog and the storage metadata, but
-/// these types of rare, but extremely useful, abstraction breaks is the exact reason they are
-/// co-located.
-///
-/// Since the new shards are created in read-only mode, they will be left empty and all dependent
-/// items will fail to hydrate.
-/// TODO(jkosh44) Back-fill these tables in read-only mode so they can properly hydrate.
-///
-/// While in read-only mode we write the migration changes to `txn`, which will update the
-/// in-memory catalog, which will cause the new shards to be created in storage. However, we don't
-/// have to worry about the catalog changes becoming durable because the `txn` is in savepoint
-/// mode. When we re-execute this migration as the leader (i.e. outside of read-only mode), `txn`
-/// will be writable and the migration will be made durable in the catalog. We always write
-/// directly to the migration shard, regardless of read-only mode. So we have to be careful not to
-/// remove anything from the migration shard until we're sure that its results have been made
-/// durable elsewhere.
-async fn migrate_builtin_items_0dt(
-    state: &mut CatalogState,
+/// Update the durably stored fingerprints of `migrated_builtins`.
+fn update_catalog_fingerprints(
+    state: &CatalogState,
     txn: &mut Transaction<'_>,
-    local_expr_cache: &mut LocalExpressionCache,
-    persist_client: PersistClient,
-    migrated_builtins: Vec<CatalogItemId>,
-    read_only: bool,
-) -> Result<BuiltinItemMigrationResult, Error> {
-    assert_eq!(
-        read_only,
-        txn.is_savepoint(),
-        "txn must be in savepoint mode when read_only is true, and in writable mode when read_only is false"
-    );
-
-    let build_version = state.config.build_info.semver_version();
-
-    // 0. Update durably stored fingerprints.
+    migrated_builtins: &[CatalogItemId],
+) -> Result<(), Error> {
     let id_fingerprint_map: BTreeMap<_, _> = BUILTINS::iter(&state.config().builtins_cfg)
         .map(|builtin| {
             let id = state.resolve_builtin_object(builtin);
@@ -154,7 +142,7 @@ async fn migrate_builtin_items_0dt(
         })
         .collect();
     let mut migrated_system_object_mappings = BTreeMap::new();
-    for item_id in &migrated_builtins {
+    for item_id in migrated_builtins {
         let fingerprint = id_fingerprint_map
             .get(item_id)
             .expect("missing fingerprint");
@@ -188,6 +176,148 @@ async fn migrate_builtin_items_0dt(
         );
     }
     txn.update_system_object_mappings(migrated_system_object_mappings)?;
+
+    Ok(())
+}
+
+/// Attempt to migrate the given builtin collections using persist schema evolution.
+///
+/// Returns the IDs of collections for which schema evolution did not succeed.
+async fn try_evolve_persist_schemas(
+    state: &CatalogState,
+    txn: &Transaction<'_>,
+    migrated_storage_collections: Vec<GlobalId>,
+    persist_client: &PersistClient,
+) -> Result<Vec<GlobalId>, Error> {
+    let collection_metadata = txn.get_collection_metadata();
+
+    let mut failed = Vec::new();
+    for id in migrated_storage_collections {
+        let Some(&shard_id) = collection_metadata.get(&id) else {
+            return Err(Error::new(ErrorKind::Internal(format!(
+                "builtin migration: missing metadata for builtin collection {id}"
+            ))));
+        };
+
+        let diagnostics = Diagnostics {
+            shard_name: id.to_string(),
+            handle_purpose: "migrate builtin schema".to_string(),
+        };
+        let Some((old_schema_id, old_schema, _)) = persist_client
+            .latest_schema::<SourceData, (), Timestamp, StorageDiff>(shard_id, diagnostics.clone())
+            .await
+            .expect("invalid usage")
+        else {
+            return Err(Error::new(ErrorKind::Internal(format!(
+                "builtin migration: missing old schema for builtin collection {id}"
+            ))));
+        };
+
+        let entry = state.get_entry_by_global_id(&id);
+        let Some(new_schema) = entry.desc_opt_latest() else {
+            return Err(Error::new(ErrorKind::Internal(format!(
+                "builtin migration: missing new schema for builtin collection {id}"
+            ))));
+        };
+
+        info!(%id, ?old_schema, ?new_schema, "attempting builtin schema evolution");
+
+        let result = persist_client
+            .compare_and_evolve_schema::<SourceData, (), Timestamp, StorageDiff>(
+                shard_id,
+                old_schema_id,
+                &new_schema,
+                &UnitSchema,
+                diagnostics,
+            )
+            .await
+            .expect("invalid usage");
+
+        match result {
+            CaESchema::Ok(_) => {
+                info!("builtin schema evolution succeeded");
+            }
+            CaESchema::Incompatible => {
+                info!("builtin schema evolution failed");
+                failed.push(id);
+            }
+            CaESchema::ExpectedMismatch { schema_id, .. } => {
+                return Err(Error::new(ErrorKind::Internal(format!(
+                    "builtin migration: unexpected schema mismatch ({} != {})",
+                    schema_id, old_schema_id,
+                ))));
+            }
+        }
+    }
+
+    Ok(failed)
+}
+
+/// Migrate builtin collections that are not supported by persist schema evolution.
+///
+/// The high level description of this approach is that we create new shards for each migrated
+/// builtin collection with the new schema, without changing the global ID. Dependent objects are
+/// not modified but now read from the new shards.
+///
+/// A detailed description of this approach follows. It's important that all of these steps are
+/// idempotent, so that we can safely crash at any point and non-upgrades turn into a no-op.
+///
+///    1. Each environment has a dedicated persist shard, called the migration shard, that allows
+///       environments to durably write down metadata while in read-only mode. The shard is a
+///       mapping of `(GlobalId, build_version)` to `ShardId`.
+///    2. Read in the current contents of the migration shard.
+///    3. Collect all the `ShardId`s from the migration shard that are not at the current
+///       `build_version` or are not in the set of migrated collections.
+///       a. If they ARE NOT mapped to a `GlobalId` in the storage metadata then they are shards
+///          from an incomplete migration. Finalize them and remove them from the migration shard.
+///          Note: care must be taken to not remove the shard from the migration shard until we are
+///          sure that they will be finalized, otherwise the shard will leak.
+///       b. If they ARE mapped to a `GlobalId` in the storage metadata then they are shards from a
+///          complete migration. Remove them from the migration shard.
+///    4. Collect all the `GlobalId`s of collections that are migrated, but not in the migration
+///       shard for the current build version. Generate new `ShardId`s and add them to the
+///       migration shard.
+///    5. At this point the migration shard should only logically contain a mapping of migrated
+///       collection `GlobalId`s to new `ShardId`s for the current build version. For each of these
+///       `GlobalId`s such that the `ShardId` isn't already in the storage metadata:
+///       a. Remove the current `GlobalId` to `ShardId` mapping from the storage metadata.
+///       b. Finalize the removed `ShardId`s.
+///       c. Insert the new `GlobalId` to `ShardId` mapping into the storage metadata.
+///
+/// This approach breaks the abstraction boundary between the catalog and the storage metadata, but
+/// these types of rare, but extremely useful, abstraction breaks is the exact reason they are
+/// co-located.
+///
+/// Since the new shards are created in read-only mode, they will be left empty and all dependent
+/// items will fail to hydrate.
+///
+/// While in read-only mode we write the migration changes to `txn`, which will update the
+/// in-memory catalog, which will cause the new shards to be created in storage. However, we don't
+/// have to worry about the catalog changes becoming durable because the `txn` is in savepoint
+/// mode. When we re-execute this migration as the leader (i.e. outside of read-only mode), `txn`
+/// will be writable and the migration will be made durable in the catalog. We always write
+/// directly to the migration shard, regardless of read-only mode. So we have to be careful not to
+/// remove anything from the migration shard until we're sure that its results have been made
+/// durable elsewhere.
+async fn migrate_builtin_collections_incompatible(
+    state: &mut CatalogState,
+    txn: &mut Transaction<'_>,
+    local_expr_cache: &mut LocalExpressionCache,
+    persist_client: PersistClient,
+    migrated_storage_collections: Vec<GlobalId>,
+    read_only: bool,
+) -> Result<BuiltinItemMigrationResult, Error> {
+    let build_version = state.config.build_info.semver_version();
+
+    // The migration shard only stores raw GlobalIds, so it's more convenient to keep the list of
+    // migrated collections in that form.
+    let migrated_storage_collections: Vec<_> = migrated_storage_collections
+        .into_iter()
+        .map(|gid| match gid {
+            GlobalId::System(raw) => raw,
+            _ => panic!("builtins must have system IDs"),
+        })
+        .collect();
 
     // 1. Open migration shard.
     let organization_id = state.config.environment_id.organization_id();
@@ -238,38 +368,7 @@ async fn migrate_builtin_items_0dt(
         debug!("migration shard already initialized: {e:?}");
     }
 
-    // 2. Get the `GlobalId` of all migrated storage collections.
-    let migrated_storage_collections: BTreeSet<_> = migrated_builtins
-        .into_iter()
-        .filter_map(|item_id| {
-            let gid = match state.get_entry(&item_id).item() {
-                CatalogItem::Table(table) => {
-                    let mut ids: Vec<_> = table.global_ids().collect();
-                    assert_eq!(ids.len(), 1, "{ids:?}");
-                    ids.pop().expect("checked length")
-                }
-                CatalogItem::Source(source) => source.global_id(),
-                CatalogItem::MaterializedView(mv) => mv.global_id(),
-                CatalogItem::ContinualTask(ct) => ct.global_id(),
-                CatalogItem::Log(_)
-                | CatalogItem::Sink(_)
-                | CatalogItem::View(_)
-                | CatalogItem::Index(_)
-                | CatalogItem::Type(_)
-                | CatalogItem::Func(_)
-                | CatalogItem::Secret(_)
-                | CatalogItem::Connection(_) => return None,
-            };
-            let GlobalId::System(raw_gid) = gid else {
-                unreachable!(
-                    "builtin objects must have system ID, found: {item_id:?} with {gid:?}"
-                );
-            };
-            Some(raw_gid)
-        })
-        .collect();
-
-    // 3. Read in the current contents of the migration shard.
+    // 2. Read in the current contents of the migration shard.
     // We intentionally fetch the upper AFTER opening the read handle to address races between
     // the upper and since moving forward in some other process.
     let upper = fetch_upper(&mut write_handle).await;
@@ -305,10 +404,7 @@ async fn migrate_builtin_items_0dt(
     // 4. Clean up contents of migration shard.
     let mut migrated_shard_updates: Vec<((TableKey, ShardId), Timestamp, StorageDiff)> = Vec::new();
     let mut migration_shards_to_finalize = BTreeSet::new();
-    let storage_collection_metadata = {
-        let txn: &mut dyn StorageTxn<Timestamp> = txn;
-        txn.get_collection_metadata()
-    };
+    let storage_collection_metadata = txn.get_collection_metadata();
     for (table_key, shard_id) in global_id_shards.clone() {
         if table_key.build_version > build_version {
             halt!(
