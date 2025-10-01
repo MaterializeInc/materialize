@@ -57,17 +57,17 @@ proptest = { version = "1.7.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.5.1", features = ["boxed_union"] }
 prost = "0.13.5"
 rand = "0.8.5"
-semver = { version = "1.0.26" }
-serde = "1.0.219"
-serde_json = "1.0.127"
+semver = { version = "1.0.27" }
+serde = "1.0.228"
+serde_json = "1.0.145"
 serde_plain = "1.0.2"
 static_assertions = "1.1"
 sha2 = "0.10.9"
-thiserror = "2.0.12"
+thiserror = "2.0.17"
 timely = "0.24.0"
 tokio = { version = "1.44.1" }
 tracing = "0.1.37"
-uuid = "1.17.0"
+uuid = "1.18.1"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]

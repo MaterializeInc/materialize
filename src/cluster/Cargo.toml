@@ -20,11 +20,11 @@ mz-cluster-client = { path = "../cluster-client" }
 mz-ore = { path = "../ore", features = ["async", "process", "tracing"] }
 mz-service = { path = "../service" }
 rand = "0.8.5"
-regex = "1.11.1"
+regex = "1.11.3"
 timely = "0.24.0"
 tokio = { version = "1.44.1", features = ["fs", "rt", "sync", "net"] }
 tracing = "0.1.37"
-uuid = "1.17.0"
+uuid = "1.18.1"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
