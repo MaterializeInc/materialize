@@ -97,6 +97,7 @@ impl Pretty {
             Statement::CreateConnection(v) => self.doc_create_connection(v),
             Statement::CreateSink(v) => self.doc_create_sink(v),
             Statement::CreateSubsource(v) => self.doc_create_subsource(v),
+            Statement::CreateCluster(v) => self.doc_create_cluster(v),
             _ => self.doc_display(v, "statement"),
         }
     }
