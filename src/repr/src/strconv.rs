@@ -673,7 +673,7 @@ pub fn parse_bytes_traditional(s: &str) -> Result<Vec<u8>, ParseError> {
     // Bytes are interpreted literally, save for the special escape sequences
     // "\\", which represents a single backslash, and "\NNN", where each N
     // is an octal digit, which represents the byte whose octal value is NNN.
-    let mut out = Vec::new();
+    let mut out = Vec::with_capacity(s.len());
     let mut bytes = s.as_bytes().iter().fuse();
     while let Some(&b) = bytes.next() {
         if b != b'\\' {
