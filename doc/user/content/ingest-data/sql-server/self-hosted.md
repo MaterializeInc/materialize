@@ -281,8 +281,6 @@ available(also for PostgreSQL)."
 
 ## High Availability
 
-### Using SQL Server Always On Availability Groups
-
 To make your SQL Server source resilient to database failovers, configure
 Materialize to connect through a SQL Server [Always On Availability Group (AG)
 listener](https://learn.microsoft.com/en-us/sql/database-engine/availability-groups/windows/listeners-client-connectivity-application-failover).
