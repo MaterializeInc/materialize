@@ -167,7 +167,6 @@ impl Pretty {
         let mut inner = Vec::new();
 
         if let Some(options) = &v.options {
-            // WITH (HEADERS, BODY, SECRET ...)
             let mut with_items = Vec::new();
 
             for header in &options.headers {
@@ -194,6 +193,122 @@ impl Pretty {
             RcDoc::text(")"),
             RcDoc::line(),
         )
+    }
+
+    pub(crate) fn doc_create_table<'a, T: AstInfo>(
+        &'a self,
+        v: &'a CreateTableStatement<T>,
+    ) -> RcDoc<'a> {
+        let mut docs = Vec::new();
+
+        // CREATE [TEMPORARY] TABLE [IF NOT EXISTS] name
+        let mut title = "CREATE ".to_string();
+        if v.temporary {
+            title.push_str("TEMPORARY ");
+        }
+        title.push_str("TABLE");
+        if v.if_not_exists {
+            title.push_str(" IF NOT EXISTS");
+        }
+
+        // Table name and columns/constraints
+        let mut col_items = Vec::new();
+        col_items.extend(v.columns.iter().map(|c| self.doc_display_pass(c)));
+        col_items.extend(v.constraints.iter().map(|c| self.doc_display_pass(c)));
+
+        let table_def = nest(
+            self.doc_display_pass(&v.name),
+            bracket("(", comma_separated(col_items), ")"),
+        );
+        docs.push(nest_title(title, table_def));
+
+        // WITH options
+        if !v.with_options.is_empty() {
+            docs.push(bracket(
+                "WITH (",
+                comma_separate(|wo| self.doc_display_pass(wo), &v.with_options),
+                ")",
+            ));
+        }
+
+        RcDoc::intersperse(docs, Doc::line()).group()
+    }
+
+    pub(crate) fn doc_create_table_from_source<'a, T: AstInfo>(
+        &'a self,
+        v: &'a CreateTableFromSourceStatement<T>,
+    ) -> RcDoc<'a> {
+        let mut docs = Vec::new();
+
+        // CREATE TABLE [IF NOT EXISTS] name
+        let mut title = "CREATE TABLE".to_string();
+        if v.if_not_exists {
+            title.push_str(" IF NOT EXISTS");
+        }
+
+        let mut table_def = self.doc_display_pass(&v.name);
+
+        let has_columns_or_constraints = match &v.columns {
+            TableFromSourceColumns::NotSpecified => false,
+            _ => true,
+        } || !v.constraints.is_empty();
+
+        if has_columns_or_constraints {
+            let mut items = Vec::new();
+
+            match &v.columns {
+                TableFromSourceColumns::NotSpecified => {}
+                TableFromSourceColumns::Named(cols) => {
+                    items.extend(cols.iter().map(|c| self.doc_display_pass(c)));
+                }
+                TableFromSourceColumns::Defined(cols) => {
+                    items.extend(cols.iter().map(|c| self.doc_display_pass(c)));
+                }
+            }
+
+            items.extend(v.constraints.iter().map(|c| self.doc_display_pass(c)));
+
+            if !items.is_empty() {
+                table_def = nest(table_def, bracket("(", comma_separated(items), ")"));
+            }
+        }
+
+        docs.push(nest_title(title, table_def));
+
+        // FROM SOURCE
+        let mut from_source = nest_title("FROM SOURCE", self.doc_display_pass(&v.source));
+        if let Some(reference) = &v.external_reference {
+            from_source = nest(
+                from_source,
+                bracket("(REFERENCE = ", self.doc_display_pass(reference), ")"),
+            );
+        }
+        docs.push(from_source);
+
+        if let Some(format) = &v.format {
+            docs.push(self.doc_format_specifier(format));
+        }
+
+        if !v.include_metadata.is_empty() {
+            docs.push(nest_title(
+                "INCLUDE",
+                comma_separate(|im| self.doc_display_pass(im), &v.include_metadata),
+            ));
+        }
+
+        if let Some(envelope) = &v.envelope {
+            docs.push(nest_title("ENVELOPE", self.doc_display_pass(envelope)));
+        }
+
+        if !v.with_options.is_empty() {
+            docs.push(bracket(
+                "WITH (",
+                comma_separate(|wo| self.doc_display_pass(wo), &v.with_options),
+                ")",
+            ));
+        }
+
+        RcDoc::intersperse(docs, Doc::line()).group()
     }
 
     fn doc_format_specifier<T: AstInfo>(&self, v: &FormatSpecifier<T>) -> RcDoc<'_> {

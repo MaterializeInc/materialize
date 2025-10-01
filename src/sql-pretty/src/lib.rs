@@ -92,6 +92,8 @@ impl Pretty {
             Statement::Subscribe(v) => self.doc_subscribe(v),
             Statement::CreateSource(v) => self.doc_create_source(v),
             Statement::CreateWebhookSource(v) => self.doc_create_webhook_source(v),
+            Statement::CreateTable(v) => self.doc_create_table(v),
+            Statement::CreateTableFromSource(v) => self.doc_create_table_from_source(v),
             _ => self.doc_display(v, "statement"),
         }
     }
