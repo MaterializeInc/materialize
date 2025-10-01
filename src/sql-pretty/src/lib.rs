@@ -95,6 +95,7 @@ impl Pretty {
             Statement::CreateTable(v) => self.doc_create_table(v),
             Statement::CreateTableFromSource(v) => self.doc_create_table_from_source(v),
             Statement::CreateConnection(v) => self.doc_create_connection(v),
+            Statement::CreateSink(v) => self.doc_create_sink(v),
             _ => self.doc_display(v, "statement"),
         }
     }
