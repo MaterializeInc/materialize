@@ -391,6 +391,46 @@ impl Pretty {
         RcDoc::intersperse(docs, Doc::line()).group()
     }
 
+    pub(crate) fn doc_create_subsource<'a, T: AstInfo>(
+        &'a self,
+        v: &'a CreateSubsourceStatement<T>,
+    ) -> RcDoc<'a> {
+        let mut docs = Vec::new();
+
+        // CREATE SUBSOURCE [IF NOT EXISTS] name
+        let mut title = "CREATE SUBSOURCE".to_string();
+        if v.if_not_exists {
+            title.push_str(" IF NOT EXISTS");
+        }
+
+        // Table name with columns/constraints
+        let mut col_items = Vec::new();
+        col_items.extend(v.columns.iter().map(|c| self.doc_display_pass(c)));
+        col_items.extend(v.constraints.iter().map(|c| self.doc_display_pass(c)));
+
+        let table_def = nest(
+            self.doc_display_pass(&v.name),
+            bracket("(", comma_separated(col_items), ")"),
+        );
+        docs.push(nest_title(title, table_def));
+
+        // OF SOURCE
+        if let Some(of_source) = &v.of_source {
+            docs.push(nest_title("OF SOURCE", self.doc_display_pass(of_source)));
+        }
+
+        // WITH options
+        if !v.with_options.is_empty() {
+            docs.push(bracket(
+                "WITH (",
+                comma_separate(|wo| self.doc_display_pass(wo), &v.with_options),
+                ")",
+            ));
+        }
+
+        RcDoc::intersperse(docs, Doc::line()).group()
+    }
+
     fn doc_format_specifier<T: AstInfo>(&self, v: &FormatSpecifier<T>) -> RcDoc<'_> {
         match v {
             FormatSpecifier::Bare(format) => nest_title("FORMAT", self.doc_display_pass(format)),
