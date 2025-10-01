@@ -241,7 +241,10 @@ scenarios, we recommend separating your workloads into multiple clusters for
 {{< note >}}
 For a new SQL Server source, if none of the replicating tables
 are receiving write queries, snapshotting may take up to an additional 5 minutes
-to complete. For details, see [snapshot latency for inactive databases](#snapshot-latency-for-inactive-databases)
+to complete. For details, see [snapshot latency for inactive databases](#snapshot-latency-for-inactive-databases).
+
+For production deployments with SQL Server Always On Availability Groups, see
+[High Availability](#high-availability) for configuration guidance.
 {{</ note >}}
 
 Now that you've configured your database network, you can connect Materialize to
@@ -322,13 +325,14 @@ Before connecting Materialize to an AG, ensure:
        EXEC sys.sp_cdc_enable_table
            @source_schema = 'schema',
            @source_name = 'table_name',
-           @role_name = NULL;
+           @role_name = NULL,
+           @supports_net_changes = 0;
    END
 
    -- Create capture job if it doesn't exist
    IF NOT EXISTS (SELECT 1 FROM msdb.dbo.cdc_jobs WHERE job_type = 'capture')
    BEGIN
-       EXEC sys.sp_cdc_add_job @job_type = 'capture';
+       EXEC sys.sp_cdc_add_job @job_type = 'capture', @continuous = 1;
    END
 
    -- Create cleanup job if it doesn't exist
