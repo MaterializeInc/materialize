@@ -485,6 +485,28 @@ impl Pretty {
         RcDoc::intersperse(docs, Doc::line()).group()
     }
 
+    pub(crate) fn doc_create_network_policy<'a, T: AstInfo>(
+        &'a self,
+        v: &'a CreateNetworkPolicyStatement<T>,
+    ) -> RcDoc<'a> {
+        let mut docs = Vec::new();
+
+        // CREATE NETWORK POLICY name
+        docs.push(nest_title(
+            "CREATE NETWORK POLICY",
+            self.doc_display_pass(&v.name),
+        ));
+
+        // OPTIONS (...)
+        docs.push(bracket(
+            "(",
+            comma_separate(|o| self.doc_display_pass(o), &v.options),
+            ")",
+        ));
+
+        RcDoc::intersperse(docs, Doc::line()).group()
+    }
+
     fn doc_format_specifier<T: AstInfo>(&self, v: &FormatSpecifier<T>) -> RcDoc<'_> {
         match v {
             FormatSpecifier::Bare(format) => nest_title("FORMAT", self.doc_display_pass(format)),

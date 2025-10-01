@@ -99,6 +99,7 @@ impl Pretty {
             Statement::CreateSubsource(v) => self.doc_create_subsource(v),
             Statement::CreateCluster(v) => self.doc_create_cluster(v),
             Statement::CreateClusterReplica(v) => self.doc_create_cluster_replica(v),
+            Statement::CreateNetworkPolicy(v) => self.doc_create_network_policy(v),
             _ => self.doc_display(v, "statement"),
         }
     }
