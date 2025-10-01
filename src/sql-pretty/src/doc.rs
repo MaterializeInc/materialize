@@ -311,6 +311,42 @@ impl Pretty {
         RcDoc::intersperse(docs, Doc::line()).group()
     }
 
+    pub(crate) fn doc_create_connection<'a, T: AstInfo>(
+        &'a self,
+        v: &'a CreateConnectionStatement<T>,
+    ) -> RcDoc<'a> {
+        let mut docs = Vec::new();
+
+        let mut title = "CREATE CONNECTION".to_string();
+        if v.if_not_exists {
+            title.push_str(" IF NOT EXISTS");
+        }
+        docs.push(nest_title(title, self.doc_display_pass(&v.name)));
+
+        let connection_with_values = nest(
+            RcDoc::concat([
+                RcDoc::text("TO "),
+                self.doc_display_pass(&v.connection_type),
+            ]),
+            bracket(
+                "(",
+                comma_separate(|val| self.doc_display_pass(val), &v.values),
+                ")",
+            ),
+        );
+        docs.push(connection_with_values);
+
+        if !v.with_options.is_empty() {
+            docs.push(bracket(
+                "WITH (",
+                comma_separate(|wo| self.doc_display_pass(wo), &v.with_options),
+                ")",
+            ));
+        }
+
+        RcDoc::intersperse(docs, Doc::line()).group()
+    }
+
     fn doc_format_specifier<T: AstInfo>(&self, v: &FormatSpecifier<T>) -> RcDoc<'_> {
         match v {
             FormatSpecifier::Bare(format) => nest_title("FORMAT", self.doc_display_pass(format)),

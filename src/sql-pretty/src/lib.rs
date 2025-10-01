@@ -94,6 +94,7 @@ impl Pretty {
             Statement::CreateWebhookSource(v) => self.doc_create_webhook_source(v),
             Statement::CreateTable(v) => self.doc_create_table(v),
             Statement::CreateTableFromSource(v) => self.doc_create_table_from_source(v),
+            Statement::CreateConnection(v) => self.doc_create_connection(v),
             _ => self.doc_display(v, "statement"),
         }
     }
