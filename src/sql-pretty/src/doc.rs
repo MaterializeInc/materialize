@@ -461,6 +461,30 @@ impl Pretty {
         RcDoc::intersperse(docs, Doc::line()).group()
     }
 
+    pub(crate) fn doc_create_cluster_replica<'a, T: AstInfo>(
+        &'a self,
+        v: &'a CreateClusterReplicaStatement<T>,
+    ) -> RcDoc<'a> {
+        let mut docs = Vec::new();
+
+        // CREATE CLUSTER REPLICA cluster.replica
+        let replica_name = RcDoc::concat([
+            self.doc_display_pass(&v.of_cluster),
+            RcDoc::text("."),
+            self.doc_display_pass(&v.definition.name),
+        ]);
+        docs.push(nest_title("CREATE CLUSTER REPLICA", replica_name));
+
+        // OPTIONS (...)
+        docs.push(bracket(
+            "(",
+            comma_separate(|o| self.doc_display_pass(o), &v.definition.options),
+            ")",
+        ));
+
+        RcDoc::intersperse(docs, Doc::line()).group()
+    }
+
     fn doc_format_specifier<T: AstInfo>(&self, v: &FormatSpecifier<T>) -> RcDoc<'_> {
         match v {
             FormatSpecifier::Bare(format) => nest_title("FORMAT", self.doc_display_pass(format)),

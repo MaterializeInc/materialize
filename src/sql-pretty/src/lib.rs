@@ -98,6 +98,7 @@ impl Pretty {
             Statement::CreateSink(v) => self.doc_create_sink(v),
             Statement::CreateSubsource(v) => self.doc_create_subsource(v),
             Statement::CreateCluster(v) => self.doc_create_cluster(v),
+            Statement::CreateClusterReplica(v) => self.doc_create_cluster_replica(v),
             _ => self.doc_display(v, "statement"),
         }
     }
