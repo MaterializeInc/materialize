@@ -37,4 +37,4 @@ mz-build-tools = { path = "../build-tools", default-features = false, features =
 prost-build = "0.13.5"
 
 [package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
+normal = ["workspace-hack", "tokio-postgres"]
