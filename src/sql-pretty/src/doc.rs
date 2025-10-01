@@ -489,20 +489,71 @@ impl Pretty {
         &'a self,
         v: &'a CreateNetworkPolicyStatement<T>,
     ) -> RcDoc<'a> {
+        let docs = vec![
+            // CREATE NETWORK POLICY name
+            nest_title("CREATE NETWORK POLICY", self.doc_display_pass(&v.name)),
+            // OPTIONS (...)
+            bracket(
+                "(",
+                comma_separate(|o| self.doc_display_pass(o), &v.options),
+                ")",
+            ),
+        ];
+
+        RcDoc::intersperse(docs, Doc::line()).group()
+    }
+
+    pub(crate) fn doc_create_index<'a, T: AstInfo>(
+        &'a self,
+        v: &'a CreateIndexStatement<T>,
+    ) -> RcDoc<'a> {
         let mut docs = Vec::new();
 
-        // CREATE NETWORK POLICY name
-        docs.push(nest_title(
-            "CREATE NETWORK POLICY",
-            self.doc_display_pass(&v.name),
-        ));
+        // CREATE [DEFAULT] INDEX [IF NOT EXISTS] [name]
+        let mut title = "CREATE".to_string();
+        if v.key_parts.is_none() {
+            title.push_str(" DEFAULT");
+        }
+        title.push_str(" INDEX");
+        if v.if_not_exists {
+            title.push_str(" IF NOT EXISTS");
+        }
 
-        // OPTIONS (...)
-        docs.push(bracket(
-            "(",
-            comma_separate(|o| self.doc_display_pass(o), &v.options),
-            ")",
-        ));
+        let index_clause = if let Some(name) = &v.name {
+            self.doc_display_pass(name)
+        } else {
+            RcDoc::nil()
+        };
+        docs.push(nest_title(title, index_clause));
+
+        // IN CLUSTER
+        if let Some(cluster) = &v.in_cluster {
+            docs.push(nest_title("IN CLUSTER", self.doc_display_pass(cluster)));
+        }
+
+        // ON table_name [(key_parts)]
+        let on_clause = if let Some(key_parts) = &v.key_parts {
+            nest(
+                self.doc_display_pass(&v.on_name),
+                bracket(
+                    "(",
+                    comma_separate(|k| self.doc_display_pass(k), key_parts),
+                    ")",
+                ),
+            )
+        } else {
+            self.doc_display_pass(&v.on_name)
+        };
+        docs.push(nest_title("ON", on_clause));
+
+        // WITH options
+        if !v.with_options.is_empty() {
+            docs.push(bracket(
+                "WITH (",
+                comma_separate(|wo| self.doc_display_pass(wo), &v.with_options),
+                ")",
+            ));
+        }
 
         RcDoc::intersperse(docs, Doc::line()).group()
     }
