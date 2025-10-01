@@ -289,6 +289,17 @@ listener](https://learn.microsoft.com/en-us/sql/database-engine/availability-gro
 When a failover occurs, SQL Server drops the existing connection and routes new
 connections to the new primary replica transparently.
 
+{{< warning >}}
+**Availability modes and data consistency:** SQL Server AGs support two
+[availability modes](https://learn.microsoft.com/en-us/sql/database-engine/availability-groups/windows/overview-of-always-on-availability-groups-sql-server?view=sql-server-ver17#availability-modes):
+synchronous-commit and asynchronous-commit.
+
+With **asynchronous-commit mode**, transactions commit on the primary before
+being sent to secondaries. If the primary fails before replicating recent
+transactions, those changes will be lost and **Materialize will not ingest
+them**. For guaranteed data consistency, use **synchronous-commit mode**.
+{{< /warning >}}
+
 #### Prerequisites
 
 Before connecting Materialize to an AG, ensure:
