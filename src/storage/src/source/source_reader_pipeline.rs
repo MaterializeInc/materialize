@@ -365,30 +365,6 @@ where
 
                 while let Some((cap, data)) = input.next() {
                     for (message, _, _) in data.iter() {
-                        let status = match &message {
-                            Ok(_) => HealthStatusUpdate::running(),
-                            // All errors coming into the data stream are definite.
-                            // Downstream consumers of this data will preserve this
-                            // status.
-                            Err(error) => HealthStatusUpdate::stalled(
-                                error.to_string(),
-                                Some(
-                                    "retracting the errored value may resume the source"
-                                        .to_string(),
-                                ),
-                            ),
-                        };
-
-                        let status = HealthStatusMessage {
-                            id: Some(id),
-                            namespace: C::STATUS_NAMESPACE.clone(),
-                            update: status,
-                        };
-                        if last_status.as_ref() != Some(&status) {
-                            last_status = Some(status.clone());
-                            health_output.session(&health_cap).give(status);
-                        }
-
                         match message {
                             Ok(message) => {
                                 source_statistics.inc_messages_received_by(1);
@@ -397,7 +373,27 @@ where
                                 bytes_read_counter.inc_by(key_len + value_len);
                                 source_statistics.inc_bytes_received_by(key_len + value_len);
                             }
-                            Err(_) => {}
+                            Err(error) => {
+                                // All errors coming into the data stream are definite.
+                                // Downstream consumers of this data will preserve this
+                                // status.
+                                let update = HealthStatusUpdate::stalled(
+                                    error.to_string(),
+                                    Some(
+                                        "retracting the errored value may resume the source"
+                                            .to_string(),
+                                    ),
+                                );
+                                let status = HealthStatusMessage {
+                                    id: Some(id),
+                                    namespace: C::STATUS_NAMESPACE.clone(),
+                                    update,
+                                };
+                                if last_status.as_ref() != Some(&status) {
+                                    last_status = Some(status.clone());
+                                    health_output.session(&health_cap).give(status);
+                                }
+                            }
                         }
                     }
                     let mut output = output.activate();

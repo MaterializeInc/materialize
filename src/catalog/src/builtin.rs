@@ -4531,17 +4531,6 @@ pub static MZ_SOURCE_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinV
                     self_events.status <> 'ceased' AND
                     parent_events.status = 'stalled'
                 THEN parent_events.source_id
-                -- TODO: Remove this once subsources eagerly propogate their status
-                -- Subsources move from starting to running lazily once they see
-                -- a record flow through, even though they are online and healthy.
-                -- This has been repeatedly brought up as confusing by users.
-                -- So now, if the parent source is running, and the subsource is
-                -- starting, we override its status to running to relfect its healthy
-                -- status.
-                WHEN
-                    self_events.status = 'starting' AND
-                    parent_events.status = 'running'
-                THEN parent_events.source_id
                 ELSE self_events.source_id
             END AS id_to_use
         FROM

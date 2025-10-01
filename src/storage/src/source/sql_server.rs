@@ -189,12 +189,18 @@ impl SourceRender for SqlServerSourceConnection {
             data_collections.insert(*id, data_stream.as_collection());
         }
 
-        let health_init = std::iter::once(HealthStatusMessage {
-            id: None,
-            namespace: Self::STATUS_NAMESPACE,
-            update: HealthStatusUpdate::Running,
-        })
-        .to_stream(scope);
+        let export_ids = config.source_exports.keys().copied();
+        let health_init = export_ids
+            .map(Some)
+            .chain(None)
+            .map(|id| HealthStatusMessage {
+                id,
+                namespace: Self::STATUS_NAMESPACE,
+                update: HealthStatusUpdate::Running,
+            })
+            .collect::<Vec<_>>()
+            .to_stream(scope);
+
         let health_errs = repl_errs.concat(&progress_errs).map(move |err| {
             // This update will cause the dataflow to restart
             let err_string = err.display_with_causes().to_string();

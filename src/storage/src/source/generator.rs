@@ -243,7 +243,8 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
     let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
 
     let (data_output, stream) = builder.new_output::<AccountedStackBuilder<_>>();
-    let partition_count = u64::cast_from(config.source_exports.len());
+    let export_ids: Vec<_> = config.source_exports.keys().copied().collect();
+    let partition_count = u64::cast_from(export_ids.len());
     let data_streams: Vec<_> = stream.partition::<CapacityContainerBuilder<_>, _, _>(
         partition_count,
         |((output, data), time, diff): &(
@@ -256,7 +257,7 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
         },
     );
     let mut data_collections = BTreeMap::new();
-    for (id, data_stream) in config.source_exports.keys().zip_eq(data_streams) {
+    for (id, data_stream) in export_ids.iter().zip_eq(data_streams) {
         data_collections.insert(*id, data_stream.as_collection());
     }
 
@@ -373,14 +374,17 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
                     Event::Progress(Some(offset)) => {
                         if resume_offset <= offset && health_cap.is_some() {
                             let health_cap = health_cap.take().expect("known to exist");
-                            health_output.give(
-                                &health_cap,
-                                HealthStatusMessage {
-                                    id: None,
-                                    namespace: StatusNamespace::Generator,
-                                    update: HealthStatusUpdate::running(),
-                                },
-                            );
+                            let export_ids = export_ids.iter().copied();
+                            for id in export_ids.map(Some).chain(None) {
+                                health_output.give(
+                                    &health_cap,
+                                    HealthStatusMessage {
+                                        id,
+                                        namespace: StatusNamespace::Generator,
+                                        update: HealthStatusUpdate::running(),
+                                    },
+                                );
+                            }
                         }
 
                         // If we've reached the requested maximum offset, cease.
