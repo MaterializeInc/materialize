@@ -10,6 +10,7 @@
 use std::collections::BTreeSet;
 use std::fmt::Debug;
 use std::marker::PhantomData;
+use std::mem;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -19,7 +20,7 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures::{Stream, pin_mut};
 use futures_util::StreamExt;
-use itertools::Itertools;
+use itertools::Either;
 use mz_dyncfg::Config;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
@@ -48,7 +49,7 @@ use crate::internal::machine::Machine;
 use crate::internal::maintenance::RoutineMaintenance;
 use crate::internal::metrics::ShardMetrics;
 use crate::internal::state::{
-    ENABLE_INCREMENTAL_COMPACTION, HollowBatch, RunId, RunMeta, RunOrder, RunPart,
+    ENABLE_INCREMENTAL_COMPACTION, HollowBatch, RunMeta, RunOrder, RunPart,
 };
 use crate::internal::trace::{
     ActiveCompaction, ApplyMergeResult, CompactionInput, FueledMergeRes, IdHollowBatch, SpineId,
@@ -81,11 +82,6 @@ pub struct CompactRes<T> {
     /// The runs that were compacted together to produce the output batch.
     pub input: CompactionInput,
 }
-
-/// A location in a spine, used to identify the Run that a batch belongs to.
-/// If the Run is not known, the RunId is None.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct RunLocation(pub SpineId, pub Option<RunId>);
 
 /// A snapshot of dynamic configs to make it easier to reason about an
 /// individual run of compaction.
@@ -663,7 +659,11 @@ where
             );
             let total_chunked_runs = chunked_runs.len();
 
-            for (applied, (runs, run_chunk_max_memory_usage)) in
+            let parts_before = req.inputs.iter().map(|x| x.batch.parts.len()).sum::<usize>();
+            let parts_after = chunked_runs.iter().flat_map(|(_, runs, _)| runs.iter().map(|(_, _, parts)| parts.len())).sum::<usize>();
+            assert_eq!(parts_before, parts_after, "chunking should not change the number of parts");
+
+            for (applied, (input, runs, run_chunk_max_memory_usage)) in
                 chunked_runs.into_iter().enumerate()
             {
                 metrics.compaction.chunks_compacted.inc();
@@ -681,25 +681,14 @@ where
                 let mut run_cfg = cfg.clone();
                 run_cfg.batch.batch_builder_max_outstanding_parts = 1 + extra_outstanding_parts;
 
-                let (batch_ids, descriptions): (BTreeSet<_>, Vec<_>) = runs.iter()
-                    .map(|(run_id, desc, _, _)| (run_id.0, *desc))
-                    .unzip();
+                let descriptions:  Vec<_> = runs.iter()
+                    .map(|(desc, _, _)| *desc)
+                    .collect();
 
                 let input = if incremental_enabled {
-                    let run_ids = runs.iter()
-                        .map(|(run_id, _, _, _)| run_id.1.expect("run_id should be present"))
-                        .collect::<BTreeSet<_>>();
-                    match batch_ids.iter().exactly_one().ok() {
-                        Some(batch_id) => {
-                            CompactionInput::PartialBatch(
-                                *batch_id,
-                                run_ids
-                            )
-                        }
-                        None => input_id_range(batch_ids),
-                    }
+                    input
                 } else {
-                    input_id_range(batch_ids)
+                    input_id_range(req.inputs.iter().map(|x| x.id).collect())
                 };
 
                 let desc = if incremental_enabled {
@@ -723,7 +712,7 @@ where
                 };
 
                 let runs = runs.iter()
-                    .map(|(_, desc, meta, run)| (*desc, *meta, *run))
+                    .map(|(desc, meta, run)| (*desc, *meta, *run))
                     .collect::<Vec<_>>();
 
                 let batch = Self::compact_runs(
@@ -807,23 +796,18 @@ where
         metrics: &Metrics,
         run_reserved_memory_bytes: usize,
     ) -> Vec<(
-        Vec<(
-            RunLocation,
-            &'a Description<T>,
-            &'a RunMeta,
-            &'a [RunPart<T>],
-        )>,
+        CompactionInput,
+        Vec<(&'a Description<T>, &'a RunMeta, &'a [RunPart<T>])>,
         usize,
     )> {
         // Iterate through batches by spine id.
         let mut batches: Vec<_> = req.inputs.iter().map(|x| (x.id, &*x.batch)).collect();
         batches.sort_by_key(|(id, _)| *id);
-        batches.retain(|(_, batch)| !batch.parts.is_empty());
 
         let mut chunks = vec![];
-        let mut current_chunk = vec![];
+        let mut current_chunk_ids = BTreeSet::new();
+        let mut current_chunk_runs = vec![];
         let mut current_chunk_max_memory_usage = 0;
-        let mut mem_violation = false;
 
         fn max_part_bytes<T>(parts: &[RunPart<T>], cfg: &CompactConfig) -> usize {
             parts
@@ -841,76 +825,95 @@ where
 
             let num_runs = batch.run_meta.len();
 
-            let runs = batch.runs().map(|(meta, parts)| {
-                let run_id = RunLocation(spine_id, meta.id);
-                let same_order = meta.order.unwrap_or(RunOrder::Codec) == cfg.batch.preferred_order;
-                let has_hollow_runs = parts.iter().any(|r| matches!(r, RunPart::Many(_)));
-                soft_assert_or_log!(
-                    same_order || !has_hollow_runs,
-                    "unexpected out-of-order hollow run"
-                );
-                (run_id, &batch.desc, meta, parts)
+            let runs = batch.runs().flat_map(|(meta, parts)| {
+                if meta.order.unwrap_or(RunOrder::Codec) == cfg.batch.preferred_order {
+                    Either::Left(std::iter::once((&batch.desc, meta, parts)))
+                } else {
+                    // The downstream consolidation step will handle a long run that's not in
+                    // the desired order by splitting it up into many single-element runs. This preserves
+                    // correctness, but it means that we may end up needing to iterate through
+                    // many more parts concurrently than expected, increasing memory use. Instead,
+                    // we break up those runs into individual batch parts, fetching hollow runs as
+                    // necessary, before they're grouped together to be passed to consolidation.
+                    // The downside is that this breaks the usual property that compaction produces
+                    // fewer runs than it takes in. This should generally be resolved by future
+                    // runs of compaction.
+                    soft_assert_or_log!(
+                        !parts.iter().any(|r| matches!(r, RunPart::Many(_))),
+                        "unexpected out-of-order hollow run"
+                    );
+                    Either::Right(
+                        parts
+                            .iter()
+                            .map(move |p| (&batch.desc, meta, std::slice::from_ref(p))),
+                    )
+                }
             });
 
-            // Determine if adding this batch poses a memory violation risk.
-            // If we have a single run which is greater than the reserved memory, we need to be careful.
-            // We need to force it to be merged with another batch (if present)
-            // or else compaction won't make progress.
-            let memory_violation_risk =
-                batch_size > run_reserved_memory_bytes && num_runs == 1 && current_chunk.is_empty();
-
-            if mem_violation && num_runs == 1 {
-                // After a memory violation, combine the next single run (if present)
-                // into the chunk, forcing us to make progress.
-                current_chunk.extend(runs);
-                current_chunk_max_memory_usage += batch_size;
-                mem_violation = false;
-                continue;
-            } else if current_chunk_max_memory_usage + batch_size <= run_reserved_memory_bytes {
-                // If the whole batch fits into the current mixed-batch chunk, add it and consider continuing to mix.
-                current_chunk.extend(runs);
-                current_chunk_max_memory_usage += batch_size;
-                continue;
-            } else if memory_violation_risk {
-                // If adding this single-run batch would cause a memory violation, add it anyway.
-                metrics.compaction.memory_violations.inc();
-                mem_violation = true;
-                current_chunk.extend(runs);
+            // Combine the given batch into the current chunk
+            // - if they fit within the memory budget,
+            // - if both have only at most a single run, so otherwise compaction wouldn't make progress.
+            if current_chunk_max_memory_usage + batch_size <= run_reserved_memory_bytes
+                || current_chunk_runs.len() + num_runs <= 2
+            {
+                if current_chunk_max_memory_usage + batch_size > run_reserved_memory_bytes {
+                    // We've chosen to merge these batches together despite being over budget,
+                    // which should be rare.
+                    metrics.compaction.memory_violations.inc();
+                }
+                current_chunk_ids.insert(spine_id);
+                current_chunk_runs.extend(runs);
                 current_chunk_max_memory_usage += batch_size;
                 continue;
             }
 
             // Otherwise, we cannot mix this batch partially. Flush any existing mixed chunk first.
-            if !current_chunk.is_empty() {
+            if !current_chunk_ids.is_empty() {
                 chunks.push((
-                    std::mem::take(&mut current_chunk),
+                    input_id_range(std::mem::take(&mut current_chunk_ids)),
+                    std::mem::take(&mut current_chunk_runs),
                     current_chunk_max_memory_usage,
                 ));
-                mem_violation = false;
                 current_chunk_max_memory_usage = 0;
             }
 
-            // Now process this batch alone, splitting into single-batch chunks as needed.
+            // If the batch fits within limits, try and accumulate future batches into it.
+            if batch_size <= run_reserved_memory_bytes {
+                current_chunk_ids.insert(spine_id);
+                current_chunk_runs.extend(runs);
+                current_chunk_max_memory_usage += batch_size;
+                continue;
+            }
+
+            // This batch is too large to compact with others, or even in a single go.
+            // Process this batch alone, splitting into single-batch chunks as needed.
             let mut run_iter = runs.into_iter().peekable();
-            debug_assert!(current_chunk.is_empty());
+            debug_assert!(current_chunk_ids.is_empty());
+            debug_assert!(current_chunk_runs.is_empty());
             debug_assert_eq!(current_chunk_max_memory_usage, 0);
+            let mut current_chunk_run_ids = BTreeSet::new();
 
-            while let Some((run_id, desc, meta, parts)) = run_iter.next() {
+            while let Some((desc, meta, parts)) = run_iter.next() {
                 let run_size = max_part_bytes(parts, cfg);
-                current_chunk.push((run_id, desc, meta, parts));
+                current_chunk_runs.push((desc, meta, parts));
                 current_chunk_max_memory_usage += run_size;
+                current_chunk_run_ids.extend(meta.id);
 
-                if let Some((_, _, _, next_parts)) = run_iter.peek() {
+                if let Some((_, _meta, next_parts)) = run_iter.peek() {
                     let next_size = max_part_bytes(next_parts, cfg);
                     if current_chunk_max_memory_usage + next_size > run_reserved_memory_bytes {
                         // If the current chunk only has one run, record a memory violation metric.
-                        if current_chunk.len() == 1 {
+                        if current_chunk_runs.len() == 1 {
                             metrics.compaction.memory_violations.inc();
                             continue;
                         }
                         // Flush the current chunk and start a new one.
                         chunks.push((
-                            std::mem::take(&mut current_chunk),
+                            CompactionInput::PartialBatch(
+                                spine_id,
+                                mem::take(&mut current_chunk_run_ids),
+                            ),
+                            std::mem::take(&mut current_chunk_runs),
                             current_chunk_max_memory_usage,
                         ));
                         current_chunk_max_memory_usage = 0;
@@ -918,9 +921,10 @@ where
                 }
             }
 
-            if !current_chunk.is_empty() {
+            if !current_chunk_runs.is_empty() {
                 chunks.push((
-                    std::mem::take(&mut current_chunk),
+                    CompactionInput::PartialBatch(spine_id, mem::take(&mut current_chunk_run_ids)),
+                    std::mem::take(&mut current_chunk_runs),
                     current_chunk_max_memory_usage,
                 ));
                 current_chunk_max_memory_usage = 0;
@@ -928,8 +932,12 @@ where
         }
 
         // If we ended with a mixed-batch chunk in progress, flush it.
-        if !current_chunk.is_empty() {
-            chunks.push((current_chunk, current_chunk_max_memory_usage));
+        if !current_chunk_ids.is_empty() {
+            chunks.push((
+                input_id_range(current_chunk_ids),
+                current_chunk_runs,
+                current_chunk_max_memory_usage,
+            ));
         }
 
         chunks
