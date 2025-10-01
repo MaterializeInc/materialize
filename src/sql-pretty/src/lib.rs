@@ -100,6 +100,7 @@ impl Pretty {
             Statement::CreateCluster(v) => self.doc_create_cluster(v),
             Statement::CreateClusterReplica(v) => self.doc_create_cluster_replica(v),
             Statement::CreateNetworkPolicy(v) => self.doc_create_network_policy(v),
+            Statement::CreateIndex(v) => self.doc_create_index(v),
             _ => self.doc_display(v, "statement"),
         }
     }
