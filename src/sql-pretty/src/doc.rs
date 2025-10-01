@@ -94,6 +94,108 @@ impl Pretty {
         RcDoc::intersperse(docs, Doc::line()).group()
     }
 
+    pub(crate) fn doc_create_webhook_source<'a, T: AstInfo>(
+        &'a self,
+        v: &'a CreateWebhookSourceStatement<T>,
+    ) -> RcDoc<'a> {
+        let mut docs = Vec::new();
+
+        let mut title = "CREATE ".to_string();
+        if v.is_table {
+            title.push_str("TABLE");
+        } else {
+            title.push_str("SOURCE");
+        }
+        if v.if_not_exists {
+            title.push_str(" IF NOT EXISTS");
+        }
+        docs.push(nest_title(title, self.doc_display_pass(&v.name)));
+
+        // IN CLUSTER (only for sources, not tables)
+        if !v.is_table {
+            if let Some(cluster) = &v.in_cluster {
+                docs.push(nest_title("IN CLUSTER", self.doc_display_pass(cluster)));
+            }
+        }
+
+        docs.push(RcDoc::text("FROM WEBHOOK"));
+        docs.push(nest_title(
+            "BODY FORMAT",
+            self.doc_display_pass(&v.body_format),
+        ));
+
+        if !v.include_headers.mappings.is_empty() || v.include_headers.column.is_some() {
+            let mut header_docs = Vec::new();
+
+            // Individual header mappings
+            for mapping in &v.include_headers.mappings {
+                header_docs.push(self.doc_display_pass(mapping));
+            }
+
+            // INCLUDE HEADERS column
+            if let Some(filters) = &v.include_headers.column {
+                let mut include_doc = RcDoc::text("INCLUDE HEADERS");
+                if !filters.is_empty() {
+                    include_doc = nest(
+                        include_doc,
+                        bracket(
+                            "(",
+                            comma_separate(|f| self.doc_display_pass(f), filters),
+                            ")",
+                        ),
+                    );
+                }
+                header_docs.push(include_doc);
+            }
+
+            if !header_docs.is_empty() {
+                docs.extend(header_docs);
+            }
+        }
+
+        if let Some(check) = &v.validate_using {
+            docs.push(self.doc_webhook_check(check));
+        }
+
+        RcDoc::intersperse(docs, Doc::line()).group()
+    }
+
+    fn doc_webhook_check<'a, T: AstInfo>(
+        &'a self,
+        v: &'a CreateWebhookSourceCheck<T>,
+    ) -> RcDoc<'a> {
+        let mut inner = Vec::new();
+
+        if let Some(options) = &v.options {
+            // WITH (HEADERS, BODY, SECRET ...)
+            let mut with_items = Vec::new();
+
+            for header in &options.headers {
+                with_items.push(self.doc_display_pass(header));
+            }
+            for body in &options.bodies {
+                with_items.push(self.doc_display_pass(body));
+            }
+            for secret in &options.secrets {
+                with_items.push(self.doc_display_pass(secret));
+            }
+
+            if !with_items.is_empty() {
+                inner.push(bracket("WITH (", comma_separated(with_items), ")"));
+                inner.push(RcDoc::space());
+            }
+        }
+
+        inner.push(self.doc_display_pass(&v.using));
+
+        bracket_doc(
+            RcDoc::text("CHECK ("),
+            RcDoc::concat(inner),
+            RcDoc::text(")"),
+            RcDoc::line(),
+        )
+    }
+
     fn doc_format_specifier<T: AstInfo>(&self, v: &FormatSpecifier<T>) -> RcDoc<'_> {
         match v {
             FormatSpecifier::Bare(format) => nest_title("FORMAT", self.doc_display_pass(format)),
