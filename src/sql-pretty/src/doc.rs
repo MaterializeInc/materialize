@@ -347,6 +347,50 @@ impl Pretty {
         RcDoc::intersperse(docs, Doc::line()).group()
     }
 
+    pub(crate) fn doc_create_sink<'a, T: AstInfo>(
+        &'a self,
+        v: &'a CreateSinkStatement<T>,
+    ) -> RcDoc<'a> {
+        let mut docs = Vec::new();
+
+        // CREATE SINK [IF NOT EXISTS] [name]
+        let mut title = "CREATE SINK".to_string();
+        if v.if_not_exists {
+            title.push_str(" IF NOT EXISTS");
+        }
+
+        if let Some(name) = &v.name {
+            docs.push(nest_title(title, self.doc_display_pass(name)));
+        } else {
+            docs.push(RcDoc::text(title));
+        }
+
+        if let Some(cluster) = &v.in_cluster {
+            docs.push(nest_title("IN CLUSTER", self.doc_display_pass(cluster)));
+        }
+
+        docs.push(nest_title("FROM", self.doc_display_pass(&v.from)));
+        docs.push(nest_title("INTO", self.doc_display_pass(&v.connection)));
+
+        if let Some(format) = &v.format {
+            docs.push(self.doc_format_specifier(format));
+        }
+
+        if let Some(envelope) = &v.envelope {
+            docs.push(nest_title("ENVELOPE", self.doc_display_pass(envelope)));
+        }
+
+        if !v.with_options.is_empty() {
+            docs.push(bracket(
+                "WITH (",
+                comma_separate(|wo| self.doc_display_pass(wo), &v.with_options),
+                ")",
+            ));
+        }
+
+        RcDoc::intersperse(docs, Doc::line()).group()
+    }
+
     fn doc_format_specifier<T: AstInfo>(&self, v: &FormatSpecifier<T>) -> RcDoc<'_> {
         match v {
             FormatSpecifier::Bare(format) => nest_title("FORMAT", self.doc_display_pass(format)),
