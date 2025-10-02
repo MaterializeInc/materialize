@@ -177,7 +177,6 @@ To create a connection that uses static access key credentials:
 ```mzsql
 CREATE SECRET secret_access_key AS '...';
 CREATE CONNECTION gcs_connection TO AWS (
-    ENDPOINT = 's3://<bucket-name>/<key-name>`,
     ACCESS KEY ID = 'ASIAV2KIV5LPTG6HGXG6',
     SECRET ACCESS KEY = SECRET secret_access_key
 );
