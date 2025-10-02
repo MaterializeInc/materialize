@@ -385,7 +385,7 @@ class State:
                     ],
                     cwd=self.path,
                 )
-                pod_name = spawn.capturev(
+                pod_name = spawn.capture(
                     [
                         "kubectl",
                         "get",
