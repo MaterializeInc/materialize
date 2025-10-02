@@ -4893,14 +4893,19 @@ pub static MZ_CLUSTER_REPLICA_METRICS_HISTORY: LazyLock<BuiltinSource> =
             ("process_id", "The ID of a process within the replica."),
             (
                 "cpu_nano_cores",
-                "Approximate CPU usage in billionths of a vCPU core.",
+                "Approximate CPU usage, in billionths of a vCPU core.",
             ),
-            ("memory_bytes", "Approximate memory usage in bytes."),
-            ("disk_bytes", "Approximate disk usage in bytes."),
+            ("memory_bytes", "Approximate memory usage, in bytes."),
+            ("disk_bytes", "Approximate disk usage, in bytes."),
             (
                 "occurred_at",
                 "Wall-clock timestamp at which the event occurred.",
             ),
+            (
+                "heap_bytes",
+                "Approximate heap (RAM + swap) usage, in bytes.",
+            ),
+            ("heap_limit", "Available heap (RAM + swap) space, in bytes."),
         ]),
         is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
@@ -4934,6 +4939,8 @@ pub static MZ_CLUSTER_REPLICA_METRICS: LazyLock<BuiltinView> = LazyLock::new(|| 
         .with_column("cpu_nano_cores", SqlScalarType::UInt64.nullable(true))
         .with_column("memory_bytes", SqlScalarType::UInt64.nullable(true))
         .with_column("disk_bytes", SqlScalarType::UInt64.nullable(true))
+        .with_column("heap_bytes", SqlScalarType::UInt64.nullable(true))
+        .with_column("heap_limit", SqlScalarType::UInt64.nullable(true))
         .with_key(vec![0, 1])
         .finish(),
     column_comments: BTreeMap::from_iter([
@@ -4944,7 +4951,12 @@ pub static MZ_CLUSTER_REPLICA_METRICS: LazyLock<BuiltinView> = LazyLock::new(|| 
             "Approximate CPU usage, in billionths of a vCPU core.",
         ),
         ("memory_bytes", "Approximate RAM usage, in bytes."),
-        ("disk_bytes", "Approximate disk usage in bytes."),
+        ("disk_bytes", "Approximate disk usage, in bytes."),
+        (
+            "heap_bytes",
+            "Approximate heap (RAM + swap) usage, in bytes.",
+        ),
+        ("heap_limit", "Available heap (RAM + swap) space, in bytes."),
     ]),
     sql: "
 SELECT
@@ -4953,7 +4965,9 @@ SELECT
     process_id,
     cpu_nano_cores,
     memory_bytes,
-    disk_bytes
+    disk_bytes,
+    heap_bytes,
+    heap_limit
 FROM mz_internal.mz_cluster_replica_metrics_history
 JOIN mz_cluster_replicas r ON r.id = replica_id
 ORDER BY replica_id, process_id, occurred_at DESC",
@@ -8852,21 +8866,26 @@ pub static MZ_CLUSTER_REPLICA_UTILIZATION: LazyLock<BuiltinView> = LazyLock::new
         .with_column("cpu_percent", SqlScalarType::Float64.nullable(true))
         .with_column("memory_percent", SqlScalarType::Float64.nullable(true))
         .with_column("disk_percent", SqlScalarType::Float64.nullable(true))
+        .with_column("heap_percent", SqlScalarType::Float64.nullable(true))
         .finish(),
     column_comments: BTreeMap::from_iter([
         ("replica_id", "The ID of a cluster replica."),
         ("process_id", "The ID of a process within the replica."),
         (
             "cpu_percent",
-            "Approximate CPU usage in percent of the total allocation.",
+            "Approximate CPU usage, in percent of the total allocation.",
         ),
         (
             "memory_percent",
-            "Approximate RAM usage in percent of the total allocation.",
+            "Approximate RAM usage, in percent of the total allocation.",
         ),
         (
             "disk_percent",
-            "Approximate disk usage in percent of the total allocation.",
+            "Approximate disk usage, in percent of the total allocation.",
+        ),
+        (
+            "heap_percent",
+            "Approximate heap (RAM + swap) usage, in percent of the total allocation.",
         ),
     ]),
     sql: "
@@ -8875,7 +8894,8 @@ SELECT
     m.process_id,
     m.cpu_nano_cores::float8 / NULLIF(s.cpu_nano_cores, 0) * 100 AS cpu_percent,
     m.memory_bytes::float8 / NULLIF(s.memory_bytes, 0) * 100 AS memory_percent,
-    m.disk_bytes::float8 / NULLIF(s.disk_bytes, 0) * 100 AS disk_percent
+    m.disk_bytes::float8 / NULLIF(s.disk_bytes, 0) * 100 AS disk_percent,
+    m.heap_bytes::float8 / NULLIF(m.heap_limit, 0) * 100 AS heap_percent
 FROM
     mz_catalog.mz_cluster_replicas AS r
         JOIN mz_catalog.mz_cluster_replica_sizes AS s ON r.size = s.size
@@ -8894,6 +8914,7 @@ pub static MZ_CLUSTER_REPLICA_UTILIZATION_HISTORY: LazyLock<BuiltinView> =
             .with_column("cpu_percent", SqlScalarType::Float64.nullable(true))
             .with_column("memory_percent", SqlScalarType::Float64.nullable(true))
             .with_column("disk_percent", SqlScalarType::Float64.nullable(true))
+            .with_column("heap_percent", SqlScalarType::Float64.nullable(true))
             .with_column(
                 "occurred_at",
                 SqlScalarType::TimestampTz { precision: None }.nullable(false),
@@ -8904,15 +8925,19 @@ pub static MZ_CLUSTER_REPLICA_UTILIZATION_HISTORY: LazyLock<BuiltinView> =
             ("process_id", "The ID of a process within the replica."),
             (
                 "cpu_percent",
-                "Approximate CPU usage in percent of the total allocation.",
+                "Approximate CPU usage, in percent of the total allocation.",
             ),
             (
                 "memory_percent",
-                "Approximate RAM usage in percent of the total allocation.",
+                "Approximate RAM usage, in percent of the total allocation.",
             ),
             (
                 "disk_percent",
-                "Approximate disk usage in percent of the total allocation.",
+                "Approximate disk usage, in percent of the total allocation.",
+            ),
+            (
+                "heap_percent",
+                "Approximate heap (RAM + swap) usage, in percent of the total allocation.",
             ),
             (
                 "occurred_at",
@@ -8926,6 +8951,7 @@ SELECT
     m.cpu_nano_cores::float8 / NULLIF(s.cpu_nano_cores, 0) * 100 AS cpu_percent,
     m.memory_bytes::float8 / NULLIF(s.memory_bytes, 0) * 100 AS memory_percent,
     m.disk_bytes::float8 / NULLIF(s.disk_bytes, 0) * 100 AS disk_percent,
+    m.heap_bytes::float8 / NULLIF(m.heap_limit, 0) * 100 AS heap_percent,
     m.occurred_at
 FROM
     mz_catalog.mz_cluster_replicas AS r

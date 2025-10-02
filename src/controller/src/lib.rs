@@ -591,8 +591,10 @@ where
                     Datum::UInt64(u64::cast_from(process_id)),
                     m.cpu_nano_cores.into(),
                     m.memory_bytes.into(),
-                    m.disk_usage_bytes.into(),
+                    m.disk_bytes.into(),
                     Datum::TimestampTz(now_tz),
+                    m.heap_bytes.into(),
+                    m.heap_limit.into(),
                 ]);
                 (row.clone(), mz_repr::Diff::ONE)
             })
