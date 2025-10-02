@@ -84,6 +84,9 @@ module "materialize" {
           # Remove this when that is fixed.
           swap_enabled = false
         }
+        image = {
+          tag = var.operator_version
+        }
       },
   }
 
