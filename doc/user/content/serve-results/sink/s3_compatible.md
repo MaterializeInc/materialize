@@ -79,9 +79,9 @@ WITH (
 
 {{< /tabs >}}
 
-## Step 4. (Optional) Add scheduling
+## Step 3. (Optional) Add scheduling
 
-Bulk exports to Amazon object storage the `COPY TO` command are _one-shot_: every time
+Bulk exports to object storage using the `COPY TO` command are _one-shot_: every time
 you want to export results, you must run the command. To automate running bulk
 exports on a regular basis, you can set up scheduling, for example using a
 simple `cron`-like service or an orchestration platform like Airflow or
