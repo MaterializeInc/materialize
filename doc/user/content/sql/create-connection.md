@@ -153,12 +153,6 @@ CREATE CONNECTION aws_role_assumption TO AWS (
 {{< /tab >}}
 
 {{< tab "Credentials">}}
-{{< warning >}}
-
-Use of credentials-based authentication is deprecated.  AWS strongly encourages
-the use of role assumption-based authentication instead.
-
-{{< /warning >}}
 
 To create an AWS connection that uses static access key credentials:
 
@@ -172,6 +166,21 @@ CREATE CONNECTION aws_credentials TO AWS (
 {{< /tab >}}
 
 {{< /tabs >}}
+
+### S3 compatible object storage
+You can use an AWS connection to perform bulk exports to any S3 compatible object storage service,
+such as Google Cloud Storage. While connecting to S3 compatible object storage, you need to use
+static access key credentials.
+
+To create a connection that uses static access key credentials:
+
+```mzsql
+CREATE SECRET secret_access_key AS '...';
+CREATE CONNECTION gcs_connection TO AWS (
+    ACCESS KEY ID = 'ASIAV2KIV5LPTG6HGXG6',
+    SECRET ACCESS KEY = SECRET secret_access_key
+);
+```
 
 ### Kafka
 
