@@ -6,7 +6,7 @@ aliases:
 menu:
   main:
     parent: sink
-    name: "S3 compatible storage"
+    name: "S3 Compatible Object Storage"
     weight: 10
 ---
 
