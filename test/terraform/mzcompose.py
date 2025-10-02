@@ -290,6 +290,16 @@ class State:
                         ],
                         cwd=self.path,
                     )
+                    spawn.runv(
+                        [
+                            "kubectl",
+                            "describe",
+                            "-n",
+                            "materialize",
+                            pod_name,
+                        ],
+                        cwd=self.path,
+                    )
                 status = spawn.capture(
                     [
                         "kubectl",
