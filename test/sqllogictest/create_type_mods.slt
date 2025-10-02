@@ -66,7 +66,7 @@ query TT
 SHOW CREATE TYPE y1;
 ----
 y1
-CREATE TYPE "materialize"."public"."y1" AS ("id" [s20 AS "pg_catalog"."int4"], "name" [s46 AS "pg_catalog"."text"], "num" [s32 AS "pg_catalog"."numeric"](3, 1), "updatedAt" [s50 AS "pg_catalog"."timestamp"](3))
+CREATE TYPE materialize.public.y1 AS (id pg_catalog.int4, name pg_catalog.text, num pg_catalog.numeric(3, 1), "updatedAt" pg_catalog.timestamp(3));
 
 # For builtin types
 

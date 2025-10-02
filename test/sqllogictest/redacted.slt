@@ -227,4 +227,4 @@ query TT
 SHOW REDACTED CREATE TYPE ty;
 ----
 ty
-CREATE TYPE "materialize"."public"."ty" AS LIST (ELEMENT TYPE = [s6 AS "pg_catalog"."bool"])
+CREATE TYPE materialize.public.ty AS LIST (ELEMENT TYPE = pg_catalog.bool);

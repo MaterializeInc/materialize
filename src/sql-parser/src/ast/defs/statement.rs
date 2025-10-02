@@ -3739,11 +3739,16 @@ impl_display!(StartTransactionStatement);
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ShowCreateTypeStatement<T: AstInfo> {
     pub type_name: T::DataType,
+    pub redacted: bool,
 }
 
 impl<T: AstInfo> AstDisplay for ShowCreateTypeStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("SHOW CREATE TYPE ");
+        f.write_str("SHOW ");
+        if self.redacted {
+            f.write_str("REDACTED ");
+        }
+        f.write_str("CREATE TYPE ");
         f.write_node(&self.type_name);
     }
 }

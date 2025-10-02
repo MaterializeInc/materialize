@@ -257,16 +257,34 @@ pub fn describe_show_create_cluster(
 
 pub fn plan_show_create_type(
     scx: &StatementContext,
-    ShowCreateTypeStatement { type_name }: ShowCreateTypeStatement<Aug>,
+    ShowCreateTypeStatement {
+        type_name,
+        redacted,
+    }: ShowCreateTypeStatement<Aug>,
 ) -> Result<ShowCreatePlan, PlanError> {
     if let ResolvedDataType::Named { id, full_name, .. } = type_name {
         let type_item = scx.get_type(full_name)?;
-        let create_sql = type_item.create_sql();
+        let create_sql;
+
+        // check if a builtin type is being accessed
+        if id.is_system() {
+            // cheap to clone a builtin type's sql
+            create_sql = type_item.create_sql().to_owned();
+        } else {
+            // if custom type we make the sql human readable
+            create_sql = humanize_sql_for_show_create(
+                scx.catalog,
+                type_item.id(),
+                type_item.create_sql(),
+                redacted,
+            )?;
+        }
+
         let name = type_item.name().item.clone();
 
         Ok(ShowCreatePlan {
             id: ObjectId::Item(id),
-            row: Row::pack_slice(&[Datum::String(&name), Datum::String(create_sql)]),
+            row: Row::pack_slice(&[Datum::String(&name), Datum::String(&create_sql)]),
         })
     } else {
         Err(PlanError::InvalidIdent(IdentError::Invalid(

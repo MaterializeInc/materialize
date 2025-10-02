@@ -8038,6 +8038,7 @@ impl<'a> Parser<'a> {
         } else if self.parse_keywords(&[CREATE, TYPE]) {
             Ok(ShowStatement::ShowCreateType(ShowCreateTypeStatement {
                 type_name: self.parse_data_type()?,
+                redacted,
             }))
         } else {
             let variable = if self.parse_keywords(&[TRANSACTION, ISOLATION, LEVEL]) {
