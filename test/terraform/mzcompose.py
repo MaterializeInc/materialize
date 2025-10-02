@@ -385,6 +385,31 @@ class State:
                     ],
                     cwd=self.path,
                 )
+                pod_name = spawn.capturev(
+                    [
+                        "kubectl",
+                        "get",
+                        "pods",
+                        "-n",
+                        "materialize-environment",
+                        "-o",
+                        "jsonpath={.items[*].metadata.name}",
+                    ],
+                    cwd=self.path,
+                ).strip()
+                envd_pods = [p for p in pod_name.split() if "environmentd" in p]
+                for pod in envd_pods:
+                    spawn.runv(
+                        [
+                            "kubectl",
+                            "describe",
+                            "pod",
+                            pod,
+                            "-n",
+                            "materialize-environment",
+                        ],
+                        cwd=self.path,
+                    )
                 break
             except subprocess.CalledProcessError:
                 time.sleep(1)
