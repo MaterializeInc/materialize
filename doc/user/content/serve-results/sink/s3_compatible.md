@@ -10,8 +10,6 @@ menu:
     weight: 10
 ---
 
-{{< public-preview />}}
-
 This guide walks you through the steps required to export results from
 Materialize to an S3 compatible object storage service, such as Google
 Cloud Storage, or Cloudflare R2.
