@@ -85,7 +85,7 @@ module "materialize" {
           swap_enabled = false
         }
         image = {
-          tag = var.operator_version
+          tag = var.orchestratord_version
         }
         cloudProvider = {
           type   = "azure"
