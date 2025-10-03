@@ -134,18 +134,15 @@ impl Pretty {
 
             // INCLUDE HEADERS column
             if let Some(filters) = &v.include_headers.column {
-                let mut include_doc = RcDoc::text("INCLUDE HEADERS");
-                if !filters.is_empty() {
-                    include_doc = nest(
-                        include_doc,
-                        bracket(
-                            "(",
-                            comma_separate(|f| self.doc_display_pass(f), filters),
-                            ")",
-                        ),
-                    );
+                if filters.is_empty() {
+                    header_docs.push(RcDoc::text("INCLUDE HEADERS"));
+                } else {
+                    header_docs.push(bracket(
+                        "INCLUDE HEADERS (",
+                        comma_separate(|f| self.doc_display_pass(f), filters),
+                        ")",
+                    ));
                 }
-                header_docs.push(include_doc);
             }
 
             if !header_docs.is_empty() {
@@ -181,7 +178,7 @@ impl Pretty {
 
             if !with_items.is_empty() {
                 inner.push(bracket("WITH (", comma_separated(with_items), ")"));
-                inner.push(RcDoc::space());
+                inner.push(RcDoc::line());
             }
         }
 
@@ -519,12 +516,11 @@ impl Pretty {
             title.push_str(" IF NOT EXISTS");
         }
 
-        let index_clause = if let Some(name) = &v.name {
-            self.doc_display_pass(name)
+        if let Some(name) = &v.name {
+            docs.push(nest_title(title, self.doc_display_pass(name)));
         } else {
-            RcDoc::nil()
-        };
-        docs.push(nest_title(title, index_clause));
+            docs.push(RcDoc::text(title));
+        }
 
         // IN CLUSTER
         if let Some(cluster) = &v.in_cluster {
