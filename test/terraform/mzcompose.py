@@ -290,16 +290,6 @@ class State:
                         ],
                         cwd=self.path,
                     )
-                    spawn.runv(
-                        [
-                            "kubectl",
-                            "describe",
-                            "-n",
-                            "materialize",
-                            pod_name,
-                        ],
-                        cwd=self.path,
-                    )
                 status = spawn.capture(
                     [
                         "kubectl",
@@ -392,11 +382,12 @@ class State:
             raise ValueError("Never completed")
         for i in range(240):
             try:
+                time.sleep(2)
                 spawn.runv(
                     ["kubectl", "get", "pods", "-n", "materialize-environment"],
                     cwd=self.path,
                 )
-                pod_name = spawn.capture(
+                pod_names = spawn.capture(
                     [
                         "kubectl",
                         "get",
@@ -408,7 +399,7 @@ class State:
                     ],
                     cwd=self.path,
                 ).strip()
-                envd_pods = [p for p in pod_name.split() if "environmentd" in p]
+                envd_pods = [p for p in pod_names.split() if "environmentd" in p]
                 for pod in envd_pods:
                     spawn.runv(
                         [
