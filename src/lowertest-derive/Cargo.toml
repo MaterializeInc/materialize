@@ -13,9 +13,9 @@ workspace = true
 proc-macro = true
 
 [dependencies]
-proc-macro2 = "1.0.95"
-quote = "1.0.40"
-syn = { version = "1.0.107", features = ["extra-traits", "printing"] }
+proc-macro2 = "1.0.101"
+quote = "1.0.41"
+syn = { version = "2.0.104", features = ["extra-traits", "printing"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [package.metadata.cargo-udeps.ignore]

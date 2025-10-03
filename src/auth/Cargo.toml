@@ -13,7 +13,7 @@ workspace = true
 base64 = "0.22.1"
 mz-ore = { path = "../ore", features = ["test"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
-serde = "1.0.219"
+serde = "1.0.228"
 proptest-derive = "0.5.1"
 proptest = "1.7.0"
 static_assertions = "1.1"
