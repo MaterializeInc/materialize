@@ -153,6 +153,12 @@ CREATE CONNECTION aws_role_assumption TO AWS (
 {{< /tab >}}
 
 {{< tab "Credentials">}}
+{{< warning >}}
+
+Use of credentials-based authentication is deprecated.  AWS strongly encourages
+the use of role assumption-based authentication instead.
+
+{{< /warning >}}
 
 To create an AWS connection that uses static access key credentials:
 
