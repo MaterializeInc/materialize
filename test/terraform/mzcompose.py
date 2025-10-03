@@ -412,6 +412,17 @@ class State:
                         ],
                         cwd=self.path,
                     )
+                    # Get the logs of the pod:
+                    spawn.runv(
+                        [
+                            "kubectl",
+                            "logs",
+                            pod,
+                            "-n",
+                            "materialize-environment",
+                        ],
+                        cwd=self.path,
+                    )
                 spawn.runv(
                     [
                         "kubectl",
