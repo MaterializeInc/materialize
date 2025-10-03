@@ -612,10 +612,10 @@ class State:
                 "-n",
                 "materialize-environment",
                 "-o",
-                "jsonpath={.items[*].metadata.name}",
+                "jsonpath={.items[0].metadata.name}",
             ],
             cwd=self.path,
-        ).strip()[0]
+        ).strip()
         # error: arguments in resource/name form must have a single resource and name
         print(f"Got balancerd name: {balancerd_name}")
 
