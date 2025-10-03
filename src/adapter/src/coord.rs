@@ -108,7 +108,9 @@ use mz_compute_client::controller::error::InstanceMissing;
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::Plan;
-use mz_controller::clusters::{ClusterConfig, ClusterEvent, ClusterStatus, ProcessId};
+use mz_controller::clusters::{
+    ClusterConfig, ClusterEvent, ClusterStatus, ProcessId, ReplicaLocation,
+};
 use mz_controller::{ControllerConfig, Readiness};
 use mz_controller_types::{ClusterId, ReplicaId, WatchSetId};
 use mz_expr::{MapFilterProject, OptimizedMirRelationExpr, RowSetFinishing};
@@ -129,6 +131,7 @@ use mz_ore::{
 use mz_persist_client::PersistClient;
 use mz_persist_client::batch::ProtoBatch;
 use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
+use mz_repr::adt::numeric::Numeric;
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::global_id::TransientIdGen;
 use mz_repr::optimize::OptimizerFeatures;
@@ -145,7 +148,7 @@ use mz_sql::plan::{
     OnTimeoutAction, Params, QueryWhen,
 };
 use mz_sql::session::user::User;
-use mz_sql::session::vars::SystemVars;
+use mz_sql::session::vars::{MAX_CREDIT_CONSUMPTION_RATE, SystemVars, Var};
 use mz_sql_parser::ast::ExplainStage;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_storage_client::client::TableData;
@@ -1870,6 +1873,18 @@ impl Coordinator {
         self.controller
             .update_orchestrator_scheduling_config(scheduling_config);
         self.controller.update_configuration(dyncfg_updates);
+
+        self.validate_resource_limit_numeric(
+            Numeric::zero(),
+            self.current_credit_consumption_rate(),
+            |system_vars| {
+                self.license_key
+                    .max_credit_consumption_rate()
+                    .map_or_else(|| system_vars.max_credit_consumption_rate(), Numeric::from)
+            },
+            "cluster replica",
+            MAX_CREDIT_CONSUMPTION_RATE.name(),
+        )?;
 
         let mut policies_to_set: BTreeMap<CompactionWindow, CollectionIdBundle> =
             Default::default();
@@ -3876,6 +3891,24 @@ impl Coordinator {
             // main thread has shut down.
             let _ = internal_cmd_tx.send(Message::StorageUsagePrune(expired));
         });
+    }
+
+    fn current_credit_consumption_rate(&self) -> Numeric {
+        self.catalog()
+            .user_cluster_replicas()
+            .filter_map(|replica| match &replica.config.location {
+                ReplicaLocation::Managed(location) => Some(location.size_for_billing()),
+                ReplicaLocation::Unmanaged(_) => None,
+            })
+            .map(|size| {
+                self.catalog()
+                    .cluster_replica_sizes()
+                    .0
+                    .get(size)
+                    .expect("location size is validated against the cluster replica sizes")
+                    .credits_per_hour
+            })
+            .sum()
     }
 }
 
