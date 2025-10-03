@@ -58,6 +58,30 @@ pub mod v1alpha1 {
         // Additional annotations and labels to include in the Certificate object.
         pub secret_template: Option<CertificateSecretTemplate>,
     }
+    #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+    pub enum MaterializeRolloutStrategy {
+        // Default. Create a new generation of pods, leaving the old generation around until the
+        // new ones are ready to take over.
+        // This minimizes downtime, and is what almost everyone should use.
+        WaitForReady,
+
+        // WARNING!!!
+        // THIS WILL CAUSE YOUR MATERIALIZE INSTANCE TO BE UNAVAILABLE FOR SOME TIME!!!
+        // WARNING!!!
+        //
+        // Tear down the old generation of pods and promote the new generation of pods immediately,
+        // without waiting for the new generation of pods to be ready.
+        //
+        // This strategy should ONLY be used by customers with physical hardware who do not have
+        // enough hardware for the WaitForReady strategy. If you think you want this, please
+        // consult with Materialize engineering to discuss your situation.
+        ImmediatelyPromoteCausingDowntime,
+    }
+    impl Default for MaterializeRolloutStrategy {
+        fn default() -> Self {
+            Self::WaitForReady
+        }
+    }
 
     #[derive(
         CustomResource, Clone, Debug, Default, PartialEq, Deserialize, Serialize, JsonSchema,
@@ -147,11 +171,12 @@ pub mod v1alpha1 {
         // even without making any meaningful changes.
         #[serde(default)]
         pub force_rollout: Uuid,
-        // If false (the default), orchestratord will use the leader
-        // promotion codepath to minimize downtime during rollouts. If true,
-        // it will just kill the environmentd pod directly.
+        // Deprecated and ignored. Use rollout_strategy instead.
         #[serde(default)]
         pub in_place_rollout: bool,
+        // Rollout strategy to use when upgrading this Materialize instance.
+        #[serde(default)]
+        pub rollout_strategy: MaterializeRolloutStrategy,
         // The name of a secret containing metadata_backend_url and persist_backend_url.
         // It may also contain external_login_password_mz_system, which will be used as
         // the password for the mz_system user if authenticator_kind is Password.
@@ -368,10 +393,6 @@ pub mod v1alpha1 {
             self.spec.request_rollout
         }
 
-        pub fn in_place_rollout(&self) -> bool {
-            self.spec.in_place_rollout
-        }
-
         pub fn rollout_requested(&self) -> bool {
             self.requested_reconciliation_id()
                 != self
@@ -386,6 +407,8 @@ pub mod v1alpha1 {
 
         pub fn should_force_promote(&self) -> bool {
             self.spec.force_promote == self.spec.request_rollout
+                || self.spec.rollout_strategy
+                    == MaterializeRolloutStrategy::ImmediatelyPromoteCausingDowntime
         }
 
         pub fn conditions_need_update(&self) -> bool {

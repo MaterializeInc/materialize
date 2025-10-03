@@ -431,8 +431,7 @@ impl k8s_controller::Context for Context {
         let has_current_changes = status.resources_hash != active_resources.generate_hash();
         let active_generation = status.active_generation;
         let next_generation = active_generation + 1;
-        let increment_generation = has_current_changes && !mz.in_place_rollout();
-        let desired_generation = if increment_generation {
+        let desired_generation = if has_current_changes {
             next_generation
         } else {
             active_generation
@@ -494,12 +493,7 @@ impl k8s_controller::Context for Context {
 
                 trace!("applying environment resources");
                 match resources
-                    .apply(
-                        &client,
-                        increment_generation,
-                        mz.should_force_promote(),
-                        &mz.namespace(),
-                    )
+                    .apply(&client, mz.should_force_promote(), &mz.namespace())
                     .await
                 {
                     Ok(Some(action)) => {
@@ -511,11 +505,9 @@ impl k8s_controller::Context for Context {
                         // the previous environmentd until the new one is
                         // fully ready
                         resources.promote_services(&client, &mz.namespace()).await?;
-                        if increment_generation {
-                            resources
-                                .teardown_generation(&client, mz, active_generation)
-                                .await?;
-                        }
+                        resources
+                            .teardown_generation(&client, mz, active_generation)
+                            .await?;
                         self.update_status(
                             &mz_api,
                             mz,
