@@ -181,6 +181,11 @@ def get_variable_system_parameters(
             ["0", "1048576", "314572800", "67108864"],
         ),
         VariableSystemParameter(
+            "enable_password_auth",
+            "true",
+            ["true", "false"],
+        ),
+        VariableSystemParameter(
             "kafka_default_metadata_fetch_interval",
             "1s",
             ["100ms", "1s"],
@@ -550,7 +555,6 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "plan_insights_notice_fast_path_clusters_optimize_duration",
     "enable_continual_task_builtins",
     "enable_expression_cache",
-    "enable_password_auth",
     "mz_metrics_lgalloc_map_refresh_interval",
     "mz_metrics_lgalloc_refresh_interval",
     "mz_metrics_rusage_refresh_interval",

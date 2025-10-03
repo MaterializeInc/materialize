@@ -731,7 +731,7 @@ class Composition:
         if reuse_connection and key in self.conns:
             return self.conns[key]
         conn = psycopg.connect(
-            host="localhost",
+            host="127.0.0.1",
             dbname=database,
             user=user,
             password=password,
