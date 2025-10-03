@@ -34,7 +34,7 @@ rust_binary(
         "@//misc/bazel/platforms:xlang_lto_enabled": ["-Clinker-plugin-lto"],
         "//conditions:default": [],
     }),
-    version = "0.159.0-dev.0",
+    version = "0.160.0-dev.0",
     deps = [
         "//src/clusterd:mz_clusterd",
         "//src/environmentd:mz_environmentd",
