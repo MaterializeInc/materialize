@@ -11,8 +11,10 @@ menu:
 ## Syntax
 
 ```sql
-SHOW CREATE TYPE <type_name>
+SHOW [REDACTED] CREATE TYPE <type_name>
 ```
+
+{{< yaml-table data="show_create_redacted_option" >}}
 
 For available type names names, see [`SHOW TYPES`](/sql/show-types).
 
@@ -26,7 +28,7 @@ SHOW CREATE TYPE point;
 ```nofmt
     name          |    create_sql
 ------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
- point            | CREATE TYPE "materialize"."public"."point" AS ("x" [s20 AS "pg_catalog"."int4"], "y" [s20 AS "pg_catalog"."int4"])
+ point            | CREATE TYPE materialize.public.point AS (x pg_catalog.int4, y pg_catalog.int4);
 ```
 
 ## Privileges

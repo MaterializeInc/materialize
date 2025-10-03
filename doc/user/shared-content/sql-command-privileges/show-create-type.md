@@ -1,1 +1,1 @@
-There are no privileges required to execute this statement.
+- `USAGE` privileges on the schema containing the table.
