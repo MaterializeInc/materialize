@@ -296,6 +296,9 @@ With **asynchronous-commit mode**, transactions commit on the primary before
 being sent to secondaries. If the primary fails before replicating recent
 transactions, those changes will be lost and **Materialize will not ingest
 them**. For guaranteed data consistency, use **synchronous-commit mode**.
+
+For additional best practices on configuring CDC with availability groups, see
+[Microsoft's documentation on replication agents with availability groups](https://learn.microsoft.com/en-us/sql/database-engine/availability-groups/windows/replicate-track-change-data-capture-always-on-availability?view=sql-server-ver17#general-changes-to-replication-agents-to-support-availability-groups).
 {{< /warning >}}
 
 #### Prerequisites
