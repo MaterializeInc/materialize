@@ -616,7 +616,7 @@ class State:
                 "jsonpath={.items[*].metadata.name}",
             ],
             cwd=self.path,
-        )
+        ).strip()[0]
         # error: arguments in resource/name form must have a single resource and name
         print(f"Got balancerd name: {balancerd_name}")
 
