@@ -52,7 +52,8 @@ CREATE CONNECTION kafka_conn TO KAFKA (BROKER 'localhost:9092', SECURITY PROTOCO
 query T multiline
 SELECT pretty_sql(create_sql) FROM mz_connections WHERE name = 'kafka_conn'
 ----
-CREATE CONNECTION materialize.public.kafka_conn TO KAFKA (BROKER = 'localhost:9092', SECURITY PROTOCOL = plaintext);
+CREATE CONNECTION materialize.public.kafka_conn
+TO KAFKA (BROKER = 'localhost:9092', SECURITY PROTOCOL = plaintext);
 EOF
 
 statement ok
