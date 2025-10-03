@@ -68,10 +68,19 @@ SHOW CREATE TYPE y1;
 y1
 CREATE TYPE materialize.public.y1 AS (id pg_catalog.int4, name pg_catalog.text, num pg_catalog.numeric(3, 1), "updatedAt" pg_catalog.timestamp(3));
 
+# For non existent types
+
+query error db error: ERROR: type "tx" does not exist
+SHOW CREATE TYPE tx;
+
+# For unnamed types
+
+simple conn=mz_system,user=mz_system
+SHOW CREATE TYPE map[text=>int]
+----
+db error: ERROR: map[[s46 AS pg_catalog.text]=>[s20 AS pg_catalog.int4]] is not a named type
+
 # For builtin types
 
-query TT
+query error db error: ERROR: cannot show create for system type pg_catalog.int4
 SHOW CREATE TYPE int4;
-----
-int4
-<builtin>

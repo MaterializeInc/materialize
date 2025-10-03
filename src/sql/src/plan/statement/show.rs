@@ -21,7 +21,7 @@ use mz_ore::collections::CollectionExt;
 use mz_repr::{CatalogItemId, Datum, RelationDesc, Row, SqlScalarType};
 use mz_sql_parser::ast::display::{AstDisplay, FormatMode};
 use mz_sql_parser::ast::{
-    CreateSubsourceOptionName, ExternalReferenceExport, ExternalReferences, IdentError, ObjectType,
+    CreateSubsourceOptionName, ExternalReferenceExport, ExternalReferences, ObjectType,
     ShowCreateClusterStatement, ShowCreateConnectionStatement, ShowCreateMaterializedViewStatement,
     ShowCreateTypeStatement, ShowObjectType, SqlServerConfigOptionName, SystemObjectType,
     UnresolvedItemName, WithOptionValue,
@@ -263,33 +263,30 @@ pub fn plan_show_create_type(
     }: ShowCreateTypeStatement<Aug>,
 ) -> Result<ShowCreatePlan, PlanError> {
     if let ResolvedDataType::Named { id, full_name, .. } = type_name {
-        let type_item = scx.get_type(full_name)?;
-        let create_sql;
+        let type_item = scx.get_item(&id);
 
         // check if a builtin type is being accessed
-        if id.is_system() {
-            // cheap to clone a builtin type's sql
-            create_sql = type_item.create_sql().to_owned();
+        let create_sql = if id.is_system() {
+            // builtin types do not have a create sql
+            sql_bail!("cannot show create for system type {full_name}");
         } else {
             // if custom type we make the sql human readable
-            create_sql = humanize_sql_for_show_create(
+            humanize_sql_for_show_create(
                 scx.catalog,
                 type_item.id(),
                 type_item.create_sql(),
                 redacted,
-            )?;
-        }
+            )?
+        };
 
-        let name = type_item.name().item.clone();
+        let name = type_item.name().item.as_ref();
 
         Ok(ShowCreatePlan {
             id: ObjectId::Item(id),
-            row: Row::pack_slice(&[Datum::String(&name), Datum::String(&create_sql)]),
+            row: Row::pack_slice(&[Datum::String(name), Datum::String(&create_sql)]),
         })
     } else {
-        Err(PlanError::InvalidIdent(IdentError::Invalid(
-            "expected named type".to_owned(),
-        )))
+        sql_bail!("{type_name} is not a named type");
     }
 }
 

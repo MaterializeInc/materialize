@@ -28,8 +28,8 @@ use mz_storage_types::connections::{AwsPrivatelink, Connection, SshTunnel, Tunne
 
 use crate::ast::{Ident, Statement, UnresolvedItemName};
 use crate::catalog::{
-    CatalogCluster, CatalogCollectionItem, CatalogDatabase, CatalogError, CatalogItem,
-    CatalogItemType, CatalogSchema, ObjectType, SessionCatalog, SystemObjectType,
+    CatalogCluster, CatalogCollectionItem, CatalogDatabase, CatalogItem, CatalogItemType,
+    CatalogSchema, ObjectType, SessionCatalog, SystemObjectType,
 };
 use crate::names::{
     self, Aug, DatabaseId, FullItemName, ItemQualifiers, ObjectId, PartialItemName,
@@ -681,10 +681,6 @@ impl<'a> StatementContext<'a> {
 
     pub fn get_cluster(&self, id: &ClusterId) -> &dyn CatalogCluster<'_> {
         self.catalog.get_cluster(*id)
-    }
-
-    pub fn get_type(&self, type_name: FullItemName) -> Result<&dyn CatalogItem, CatalogError> {
-        self.catalog.resolve_type(&PartialItemName::from(type_name))
     }
 
     pub fn resolve_database(
