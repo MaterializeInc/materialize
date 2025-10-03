@@ -100,7 +100,7 @@ pub use sql::{SqlResponse, WebSocketAuth, WebSocketResponse};
 /// Maximum allowed size for a request.
 pub const MAX_REQUEST_SIZE: usize = u64_to_usize(5 * bytesize::MIB);
 
-const SESSION_DURATION: Duration = Duration::from_secs(3600); // 1 hour
+const SESSION_DURATION: Duration = Duration::from_secs(8 * 3600); // 8 hours
 
 const PROFILING_API_ENDPOINTS: &[&str] = &["/memory", "/hierarchical-memory", "/prof/"];
 
