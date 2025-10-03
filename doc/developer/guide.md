@@ -119,6 +119,7 @@ Time: 10.459 ms
 
 Or in mzcompose:
 ```bash
+docker pull --no-cache materialize/materialized:latest
 docker run --env MZ_EAT_MY_DATA=1 -p 127.0.0.1:6875:6875 materialize/materialized:latest
 ```
 
