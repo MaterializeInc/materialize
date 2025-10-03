@@ -159,6 +159,11 @@ struct Args {
     /// The hostname is taken from `materialize_internal_url`.
     #[clap(long, default_value = "6878", value_name = "PORT")]
     materialize_internal_http_port: u16,
+    /// The port on which Materialize is listening for password authenticated SQL connections.
+    ///
+    /// The hostname is taken from `materialize_url`.
+    #[clap(long, default_value = "6880", value_name = "PORT")]
+    materialize_password_sql_port: u16,
     /// Arbitrary session parameters for testdrive to set after connecting to
     /// Materialize.
     #[clap(long, value_name = "KEY=VAL", value_parser = parse_kafka_opt)]
@@ -415,6 +420,7 @@ async fn main() {
         materialize_http_port: args.materialize_http_port,
         materialize_internal_http_port: args.materialize_internal_http_port,
         materialize_use_https: args.materialize_use_https,
+        materialize_password_sql_port: args.materialize_password_sql_port,
         materialize_params: args.materialize_param,
         materialize_catalog_config,
         build_info: &BUILD_INFO,
