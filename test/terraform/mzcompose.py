@@ -380,9 +380,8 @@ class State:
                 time.sleep(1)
         else:
             raise ValueError("Never completed")
-        sleep_time = 30
-        print(f"Sleeping for {sleep_time} seconds to give the pods a chance to start and then checking:")
-        time.sleep(sleep_time)
+        # Give the pods a chance to start and then check:
+        time.sleep(30)
         for i in range(240):
             try:
                 time.sleep(2)
