@@ -10,10 +10,8 @@ records belong to **10** different partitions, where the average size of each
 partition is **100**. Then, amount of work to perform is proportional to
 computing the window function results for **10\*100=1000** rows.
 
-As a rule of thumb, if the total size of all touched window partitions is at
-most 1000000 rows per second, then the system should be able to keep up with the
-input data as it arrives. However, if your use case has higher performance
-requirements, consider rewriting your query to not use window functions. If your
-query cannot be rewritten without the window functions and the performance of
-window functions is insufficient for your use case, please [contact our
-team](/support/).
+To avoid performance issues that may arise as the number of records grows,
+consider rewriting your query to use idiomatic Materialize SQL instead of window
+functions. If your query cannot be rewritten without the window functions and
+the performance of window functions is insufficient for your use case, please
+[contact our team](/support/).
