@@ -396,6 +396,42 @@ class State:
                     ["kubectl", "get", "pods", "-n", "materialize-environment"],
                     cwd=self.path,
                 )
+                pod_name = spawn.capture(
+                    [
+                        "kubectl",
+                        "get",
+                        "pods",
+                        "-n",
+                        "materialize-environment",
+                        "-o",
+                        "jsonpath={.items[*].metadata.name}",
+                    ],
+                    cwd=self.path,
+                ).strip()
+                envd_pods = [p for p in pod_name.split() if "environmentd" in p]
+                for pod in envd_pods:
+                    spawn.runv(
+                        [
+                            "kubectl",
+                            "describe",
+                            "pod",
+                            pod,
+                            "-n",
+                            "materialize-environment",
+                        ],
+                        cwd=self.path,
+                    )
+                spawn.runv(
+                    [
+                        "kubectl",
+                        "describe",
+                        "pod",
+                        pod,
+                        "-n",
+                        "materialize-environment",
+                    ],
+                    cwd=self.path,
+                )
                 status = spawn.capture(
                     [
                         "kubectl",
