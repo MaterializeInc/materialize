@@ -391,14 +391,6 @@ steps:
               # Uses .td-file based parallelism instead
               args: [-m=long, test/cloudtest/test_full_testdrive.py, --no-test-parallelism]
         sanitizer: skip
-      - id: self-managed-password-auth-testdrive
-        label: "Self managed password auth testdrive"
-        depends_on: build-aarch64
-        timeout_in_minutes: 180
-        parallelism: 2
-        agents:
-          queue: linux-aarch64-small
-        sanitizer: skip
 
 
   - group: Limits
@@ -1134,6 +1126,19 @@ steps:
               args: [-m=long, test/cloudtest/test_upgrade.py, --no-test-parallelism]
         sanitizer: skip
         skip: "TODO(def-) Reenable in one version when labels are fixed in old version"
+      - id: checks-self-managed-25-2-upgrade
+        label: "Checks Self-Managed upgrade across all v25.2 patch releases, whole-Mz restart"
+        depends_on: build-x86_64
+        timeout_in_minutes: 180
+        # Sometimes runs into query timeouts or entire test timeouts with parallelism 1, too much state, same in all other platform-checks
+        parallelism: 3
+        agents:
+          # A larger instance is needed due to frequent OOMs, same in all other platform-checks
+          queue: hetzner-x86-64-8cpu-16gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=SelfManagedv25_2_Upgrade, "--seed=$BUILDKITE_JOB_ID", --features=azurite]
 
   - group: "K8s node recovery cloudtest"
     key: k8s-node-recovery
