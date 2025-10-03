@@ -34,6 +34,12 @@ Run the emulator using the following command to allow for local access to the he
 
 Navigate to `http://localhost:6878` to view debug information for environtmentd.
 
+Note that when using the `latest` tag, you might have to pull the latest version manually if you had already used it previously:
+
+```bash
+docker pull --no-cache materialize/materialized:latest
+```
+
 **Linux Only**
 
 To profile using the [parka agent](https://github.com/parca-dev/parca-agent) you must be running on Linux as it requires sharing a variety of directories with the emulator container.
