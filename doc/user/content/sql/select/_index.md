@@ -120,7 +120,7 @@ CTEs have the following limitations, which we are working to improve:
 
 Users can specify query hints to help Materialize optimize queries.
 
-The following query hints are valid within the `OPTION` clause.
+The following query hints are valid within the `OPTIONS` clause.
 
 Hint | Value type | Description
 ------|------------|------------
