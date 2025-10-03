@@ -228,7 +228,9 @@ helm upgrade my-materialize-operator materialize/misc/helm-charts/operator -f my
 
 To upgrade your Materialize instances, you'll need to update the Materialize custom resource and trigger a rollout.
 
-By default, the operator performs rolling upgrades (`inPlaceRollout: false`) which minimize downtime but require additional Kubernetes cluster resources during the transition. However, keep in mind that rolling upgrades typically take longer to complete due to the sequential rollout process. For environments where downtime is acceptable, you can opt for in-place upgrades (`inPlaceRollout: true`).
+By default, the operator performs rolling upgrades (`rolloutStrategy: WaitForReady`) which minimizes downtime but require additional Kubernetes cluster resources during the transition.
+
+For environments without enough capacity to perform the `WaitForReady` strategy, and where downtime is acceptable, there is the `ImmediatelyPromoteCausingDowntime` strategy. This strategy will cause downtime and is not recommended. If you think you need this, please reach out to Materialize engineering to discuss your situation.
 
 #### Determining the Version
 
@@ -291,7 +293,6 @@ spec:
   environmentdImageRef: materialize/environmentd:v0.147.0 # Update version as needed
   requestRollout: 22222222-2222-2222-2222-222222222222    # Generate new UUID
   forceRollout: 33333333-3333-3333-3333-333333333333      # Optional: for forced rollouts
-  inPlaceRollout: false                                   # When false, performs a rolling upgrade rather than in-place
   backendSecretName: materialize-backend
 ```
 
@@ -312,10 +313,6 @@ kubectl patch materialize <instance-name> \
   -p "{\"spec\": {\"requestRollout\": \"$(uuidgen)\", \"forceRollout\": \"$(uuidgen)\"}}"
 ```
 
-The behavior of a forced rollout follows your `inPlaceRollout` setting:
-- With `inPlaceRollout: false` (default): Creates new instances before terminating the old ones, temporarily requiring twice the resources during the transition
-- With `inPlaceRollout: true`: Directly replaces the instances, causing downtime but without requiring additional resources
-
 ### Verifying the Upgrade
 
 After initiating the rollout, you can monitor the status:
@@ -333,9 +330,6 @@ kubectl logs -l app.kubernetes.io/name=materialize-operator -n materialize
 - `requestRollout` triggers a rollout only if there are actual changes to the instance (like image updates)
 - `forceRollout` triggers a rollout regardless of whether there are changes, which can be useful for debugging or when you need to force a rollout for other reasons
 - Both fields expect UUID values and each rollout requires a new, unique UUID value
-- `inPlaceRollout`:
-  - When `false` (default): Performs a rolling upgrade by spawning new instances before terminating old ones. While this minimizes downtime, there may still be a brief interruption during the transition.
-  - When `true`: Directly replaces existing instances, which will cause downtime.
 
 # Operational Guidelines
 
