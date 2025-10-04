@@ -2659,7 +2659,6 @@ impl<'a> Parser<'a> {
                 PUBLIC,
                 PROGRESS,
                 REGION,
-                ROLE,
                 SASL,
                 SCOPE,
                 SECRET,
