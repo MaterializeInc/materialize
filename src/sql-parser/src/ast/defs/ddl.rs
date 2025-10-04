@@ -1089,6 +1089,43 @@ impl_display_for_with_option!(KafkaSinkConfigOption);
 impl_display_t!(KafkaSinkConfigOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum IcebergSinkConfigOptionName {
+    Namespace,
+    Table,
+}
+
+impl AstDisplay for IcebergSinkConfigOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(match self {
+            IcebergSinkConfigOptionName::Namespace => "NAMESPACE",
+            IcebergSinkConfigOptionName::Table => "TABLE",
+        })
+    }
+}
+impl_display!(IcebergSinkConfigOptionName);
+
+impl WithOptionName for IcebergSinkConfigOptionName {
+    /// # WARNING
+    ///
+    /// Whenever implementing this trait consider very carefully whether or not
+    /// this value could contain sensitive user data. If you're uncertain, err
+    /// on the conservative side and return `true`.
+    fn redact_value(&self) -> bool {
+        match self {
+            IcebergSinkConfigOptionName::Namespace | IcebergSinkConfigOptionName::Table => false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct IcebergSinkConfigOption<T: AstInfo> {
+    pub name: IcebergSinkConfigOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+impl_display_for_with_option!(IcebergSinkConfigOption);
+impl_display_t!(IcebergSinkConfigOption);
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum PgConfigOptionName {
     /// Hex encoded string of binary serialization of
     /// `mz_storage_types::sources::postgres::PostgresSourcePublicationDetails`
@@ -1460,8 +1497,14 @@ pub enum CreateSinkConnection<T: AstInfo> {
     Kafka {
         connection: T::ItemName,
         options: Vec<KafkaSinkConfigOption<T>>,
-        key: Option<KafkaSinkKey>,
+        key: Option<SinkKey>,
         headers: Option<Ident>,
+    },
+    Iceberg {
+        connection: T::ItemName,
+        aws_connection: T::ItemName,
+        key: Option<SinkKey>,
+        options: Vec<IcebergSinkConfigOption<T>>,
     },
 }
 
@@ -1482,11 +1525,32 @@ impl<T: AstInfo> AstDisplay for CreateSinkConnection<T> {
                     f.write_str(")");
                 }
                 if let Some(key) = key.as_ref() {
+                    f.write_str(" ");
                     f.write_node(key);
                 }
                 if let Some(headers) = headers {
                     f.write_str(" HEADERS ");
                     f.write_node(headers);
+                }
+            }
+            CreateSinkConnection::Iceberg {
+                connection,
+                aws_connection,
+                key,
+                options,
+            } => {
+                f.write_str("ICEBERG CATALOG CONNECTION ");
+                f.write_node(connection);
+                if !options.is_empty() {
+                    f.write_str(" (");
+                    f.write_node(&display::comma_separated(options));
+                    f.write_str(")");
+                }
+                f.write_str(" USING AWS CONNECTION ");
+                f.write_node(aws_connection);
+                if let Some(key) = key.as_ref() {
+                    f.write_str(" ");
+                    f.write_node(key);
                 }
             }
         }
@@ -1495,14 +1559,14 @@ impl<T: AstInfo> AstDisplay for CreateSinkConnection<T> {
 impl_display_t!(CreateSinkConnection);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct KafkaSinkKey {
+pub struct SinkKey {
     pub key_columns: Vec<Ident>,
     pub not_enforced: bool,
 }
 
-impl AstDisplay for KafkaSinkKey {
+impl AstDisplay for SinkKey {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str(" KEY (");
+        f.write_str("KEY (");
         f.write_node(&display::comma_separated(&self.key_columns));
         f.write_str(")");
         if self.not_enforced {
