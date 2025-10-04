@@ -10,7 +10,7 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.98"
+anyhow = "1.0.100"
 askama = { version = "0.12.1", default-features = false, features = ["config", "serde-json"] }
 axum = "0.7.5"
 axum-extra = { version = "0.9.3", features = ["typed-header"] }

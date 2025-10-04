@@ -21,7 +21,7 @@ uncased = "0.9.7"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [build-dependencies]
-anyhow = "1.0.98"
+anyhow = "1.0.100"
 chrono-tz = { version = "0.8.1", features = ["serde", "case-insensitive"] }
 mz-ore-build = { path = "../ore-build", default-features = false }
 phf_codegen = "0.11.3"

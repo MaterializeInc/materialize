@@ -34,7 +34,7 @@ mz-ore = { path = "../ore", default-features = false, features = ["test"] }
 mz-sql-parser = { path = ".", default-features = false, features = ["test"] }
 
 [build-dependencies]
-anyhow = "1.0.98"
+anyhow = "1.0.100"
 mz-ore-build = { path = "../ore-build", default-features = false }
 mz-walkabout = { path = "../walkabout", default-features = false }
 
