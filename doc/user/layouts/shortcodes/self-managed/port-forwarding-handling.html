@@ -1,0 +1,40 @@
+{{- $console := .Get "console" | default "console" -}}
+1. Find your console service name.
+
+   ```shell
+   MZ_SVC_CONSOLE=$(kubectl -n materialize-environment get svc \
+     -o custom-columns="NAME:.metadata.name" --no-headers | grep {{$console}})
+   echo $MZ_SVC_CONSOLE
+   ```
+
+1. Port forward the Materialize Console service to your local machine:[^1]
+
+   ```shell
+   (
+     while true; do
+        kubectl port-forward svc/$MZ_SVC_CONSOLE 8080:8080 -n materialize-environment 2>&1 | tee /dev/stderr |
+        grep -q "portforward.go" && echo "Restarting port forwarding due to an error." || break;
+     done;
+   ) &
+   ```
+
+   The command is run in background.
+   <br>- To list the background jobs, use `jobs`.
+   <br>- To bring back to foreground, use `fg %<job-number>`.
+   <br>- To kill the background job, use `kill %<job-number>`.
+
+1. Open a browser and navigate to
+   [https://localhost:8080](https://localhost:8080) (or, if you have not enabled
+   TLS, [http://localhost:8080](http://localhost:8080)).
+
+   The example uses a self-signed ClusterIssuer. As such, you may encounter a
+   warning with regards to the certificate. In production, run with certificates
+   from an official Certificate Authority (CA) rather than self-signed
+   certificates.
+
+[^1]: The port forwarding command uses a while loop to handle a [known
+Kubernetes issue 78446](https://github.com/kubernetes/kubernetes/issues/78446),
+where interrupted long-running requests through a standard port-forward cause
+the port forward to hang. The command automatically restarts the port forwarding
+if an error occurs, ensuring a more stable connection. It detects failures by
+monitoring for "portforward.go" error messages.

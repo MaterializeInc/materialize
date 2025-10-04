@@ -1,0 +1,13 @@
+columns:
+  - column: "Materialize Operator Weekly"
+  - column: "orchestratord version"
+  - column: "environmentd version"
+  - column: "Release date"
+  - column: "Notes"
+
+rows:
+  - "Materialize Operator Weekly": "v0.157.4"
+    "orchestratord version": "v0.157.4"
+    "environmentd version": "v0.157.4"
+    "Release date": "2025-09-18"
+    "Notes": ""
