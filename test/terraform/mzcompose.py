@@ -537,7 +537,8 @@ class State:
                 "kubectl",
                 "delete",
                 "materialize.materialize.cloud/12345678-1234-1234-1234-123456789012",
-                "-n" "materialize-environment",
+                "-n",
+                "materialize-environment",
             ]
         )
         run_ignore_error(["kubectl", "delete", "namespace", "materialize-environment"])
