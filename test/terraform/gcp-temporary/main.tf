@@ -53,25 +53,25 @@ module "materialize" {
   }
 
   install_materialize_operator = true
-  use_local_chart = true
-  helm_chart = "materialize-operator-v25.3.0-beta.1.tgz"
-  operator_version = var.operator_version
-  orchestratord_version = var.orchestratord_version
+  use_local_chart              = true
+  helm_chart                   = "materialize-operator-v25.3.0-beta.1.tgz"
+  operator_version             = var.operator_version
+  orchestratord_version        = var.orchestratord_version
 
-  install_cert_manager = false
+  install_cert_manager           = false
   use_self_signed_cluster_issuer = false
 
   helm_values = {
-      operator = {
-        args = {
-          enableLicenseKeyChecks = true
-        }
-        clusters = {
-          # Overriding here because merging values doesn't work.
-          # Remove this when that is fixed.
-          swap_enabled = false
-        }
-      },
+    operator = {
+      args = {
+        enableLicenseKeyChecks = true
+      }
+      clusters = {
+        # Overriding here because merging values doesn't work.
+        # Remove this when that is fixed.
+        swap_enabled = false
+      }
+    },
   }
 
   providers = {

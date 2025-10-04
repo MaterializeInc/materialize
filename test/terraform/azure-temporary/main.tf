@@ -60,55 +60,55 @@ resource "azurerm_resource_group" "materialize" {
 }
 
 module "materialize" {
-  source = "git::https://github.com/MaterializeInc/terraform-azurerm-materialize.git?ref=v0.5.2"
+  source              = "git::https://github.com/MaterializeInc/terraform-azurerm-materialize.git?ref=v0.5.2"
   resource_group_name = azurerm_resource_group.materialize.name
   location            = "eastus2"
   prefix              = "mz-tf-test"
 
   install_materialize_operator = true
-  use_local_chart = true
-  helm_chart = "materialize-operator-v25.3.0-beta.1.tgz"
-  operator_version = var.operator_version
-  orchestratord_version = var.orchestratord_version
+  use_local_chart              = true
+  helm_chart                   = "materialize-operator-v25.3.0-beta.1.tgz"
+  operator_version             = var.operator_version
+  orchestratord_version        = var.orchestratord_version
 
-  install_cert_manager = false
+  install_cert_manager           = false
   use_self_signed_cluster_issuer = false
 
   helm_values = {
-      operator = {
-        args = {
-          enableLicenseKeyChecks = true
-        }
-        clusters = {
-          # Overriding here because merging values doesn't work.
-          # Remove this when that is fixed.
-          swap_enabled = false
-        }
-        image = {
-          tag = var.orchestratord_version
-        }
-        cloudProvider = {
-          type   = "azure"
-          region = "eastus2"
+    operator = {
+      args = {
+        enableLicenseKeyChecks = true
+      }
+      clusters = {
+        # Overriding here because merging values doesn't work.
+        # Remove this when that is fixed.
+        swap_enabled = false
+      }
+      image = {
+        tag = var.orchestratord_version
+      }
+      cloudProvider = {
+        type   = "azure"
+        region = "eastus2"
+      }
+    }
+    observability = {
+      podMetrics = {
+        enabled = true
+      }
+    }
+    storage = {
+      storageClass = {
+        create      = true
+        name        = "openebs-lvm-instance-store-ext4"
+        provisioner = "local.csi.openebs.io"
+        parameters = {
+          storage  = "lvm"
+          fsType   = "ext4"
+          volgroup = "instance-store-vg"
         }
       }
-      observability = {
-        podMetrics = {
-          enabled = true
-        }
-      }
-      storage = {
-        storageClass = {
-          create      = true
-          name        = "openebs-lvm-instance-store-ext4"
-          provisioner = "local.csi.openebs.io"
-          parameters = {
-            storage  = "lvm"
-            fsType   = "ext4"
-            volgroup = "instance-store-vg"
-          }
-        }
-      }
+    }
   }
 
   materialize_instances = var.materialize_instances

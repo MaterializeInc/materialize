@@ -30,29 +30,29 @@ module "materialize_infrastructure" {
   source = "git::https://github.com/MaterializeInc/terraform-aws-materialize.git?ref=v0.5.2"
 
   # Basic settings
-  namespace    = "aws-persistent"
-  environment  = "dev"
+  namespace                    = "aws-persistent"
+  environment                  = "dev"
   install_materialize_operator = true
-  use_local_chart = true
-  helm_chart = "materialize-operator-v25.3.0-beta.1.tgz"
-  operator_version = var.operator_version
-  orchestratord_version = var.orchestratord_version
+  use_local_chart              = true
+  helm_chart                   = "materialize-operator-v25.3.0-beta.1.tgz"
+  operator_version             = var.operator_version
+  orchestratord_version        = var.orchestratord_version
 
   # TODO: This currently fails: https://github.com/MaterializeInc/terraform-aws-materialize/issues/71
   helm_values = {
-      operator = {
-        args = {
-          enableLicenseKeyChecks = true
-        },
+    operator = {
+      args = {
+        enableLicenseKeyChecks = true
       },
-      clusters = {
-        defaultReplicationFactor = {
-            system = 1
-            probe = 1
-            support = 1
-            analytics = 1
-        }
+    },
+    clusters = {
+      defaultReplicationFactor = {
+        system    = 1
+        probe     = 1
+        support   = 1
+        analytics = 1
       }
+    }
   }
 
   # VPC Configuration

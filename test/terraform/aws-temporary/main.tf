@@ -62,30 +62,30 @@ module "materialize_infrastructure" {
   # Basic settings
   # The namespace and environment variables are used to construct the names of the resources
   # e.g. ${namespace}-${environment}-eks and etc.
-  namespace    = "aws-test"
-  environment  = "dev"
+  namespace   = "aws-test"
+  environment = "dev"
 
   install_materialize_operator = true
-  use_local_chart = true
-  helm_chart = "materialize-operator-v25.3.0-beta.1.tgz"
-  operator_version = var.operator_version
-  orchestratord_version = var.orchestratord_version
+  use_local_chart              = true
+  helm_chart                   = "materialize-operator-v25.3.0-beta.1.tgz"
+  operator_version             = var.operator_version
+  orchestratord_version        = var.orchestratord_version
 
-  install_cert_manager = false
+  install_cert_manager           = false
   use_self_signed_cluster_issuer = false
 
   # TODO: This currently fails: https://github.com/MaterializeInc/terraform-aws-materialize/issues/71
   helm_values = {
-      operator = {
-        args = {
-          enableLicenseKeyChecks = true
-        }
-        clusters = {
-          # Overriding here because merging values doesn't work.
-          # Remove this when that is fixed.
-          swap_enabled = false
-        }
-      },
+    operator = {
+      args = {
+        enableLicenseKeyChecks = true
+      }
+      clusters = {
+        # Overriding here because merging values doesn't work.
+        # Remove this when that is fixed.
+        swap_enabled = false
+      }
+    },
   }
 
   # VPC Configuration
