@@ -489,7 +489,10 @@ impl ConfigUpdates {
     pub fn apply(&self, set: &ConfigSet) {
         for (name, val) in self.updates.iter() {
             let Some(config) = set.configs.get(name) else {
-                error!("config update {} {:?} not known set: {:?}", name, val, set);
+                error!(
+                    "config update {} {:?} not in known set: {:?}",
+                    name, val, set
+                );
                 continue;
             };
             config.val.store(val.clone());
