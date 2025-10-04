@@ -380,12 +380,51 @@ class State:
                 time.sleep(1)
         else:
             raise ValueError("Never completed")
+        # Give the pods a chance to start and then check:
+        time.sleep(30)
         for i in range(240):
             try:
+                time.sleep(2)
                 spawn.runv(
                     ["kubectl", "get", "pods", "-n", "materialize-environment"],
                     cwd=self.path,
                 )
+                pod_names = spawn.capture(
+                    [
+                        "kubectl",
+                        "get",
+                        "pods",
+                        "-n",
+                        "materialize-environment",
+                        "-o",
+                        "jsonpath={.items[*].metadata.name}",
+                    ],
+                    cwd=self.path,
+                ).strip()
+                envd_pods = [p for p in pod_names.split() if "environmentd" in p]
+                for pod in envd_pods:
+                    spawn.runv(
+                        [
+                            "kubectl",
+                            "describe",
+                            "pod",
+                            pod,
+                            "-n",
+                            "materialize-environment",
+                        ],
+                        cwd=self.path,
+                    )
+                    # Get the logs of the pod:
+                    spawn.runv(
+                        [
+                            "kubectl",
+                            "logs",
+                            pod,
+                            "-n",
+                            "materialize-environment",
+                        ],
+                        cwd=self.path,
+                    )
                 status = spawn.capture(
                     [
                         "kubectl",
@@ -562,10 +601,10 @@ class State:
                 "-n",
                 "materialize-environment",
                 "-o",
-                "jsonpath={.items[*].metadata.name}",
+                "jsonpath={.items[0].metadata.name}",
             ],
             cwd=self.path,
-        )
+        ).strip()
         # error: arguments in resource/name form must have a single resource and name
         print(f"Got balancerd name: {balancerd_name}")
 

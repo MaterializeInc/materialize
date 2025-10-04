@@ -84,7 +84,31 @@ module "materialize" {
           # Remove this when that is fixed.
           swap_enabled = false
         }
-      },
+        image = {
+          tag = var.orchestratord_version
+        }
+        cloudProvider = {
+          type   = "azure"
+          region = "eastus2"
+        }
+      }
+      observability = {
+        podMetrics = {
+          enabled = true
+        }
+      }
+      storage = {
+        storageClass = {
+          create      = true
+          name        = "openebs-lvm-instance-store-ext4"
+          provisioner = "local.csi.openebs.io"
+          parameters = {
+            storage  = "lvm"
+            fsType   = "ext4"
+            volgroup = "instance-store-vg"
+          }
+        }
+      }
   }
 
   materialize_instances = var.materialize_instances
