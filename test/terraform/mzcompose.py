@@ -1158,7 +1158,7 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
             tenant = os.getenv("AZURE_SERVICE_ACCOUNT_TENANT")
             assert username, "AZURE_SERVICE_ACCOUNT_USERNAME has to be set"
             assert password, "AZURE_SERVICE_ACCOUNT_PASSWORD has to be set"
-            assert tenant, "AZURE_SERVICE_ACOUNT_TENANT has to be set"
+            assert tenant, "AZURE_SERVICE_ACCOUNT_TENANT has to be set"
             subprocess.run(
                 [
                     "az",
