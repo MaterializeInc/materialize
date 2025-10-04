@@ -9,6 +9,7 @@
 
 
 from materialize.checks.actions import Action, Initialize, Manipulate, Sleep, Validate
+from materialize.checks.all_checks import password_auth
 from materialize.checks.checks import Check
 from materialize.checks.executors import Executor
 from materialize.checks.features import Features
@@ -25,6 +26,7 @@ from materialize.checks.scenarios import Scenario
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.services.materialized import LEADER_STATUS_HEALTHCHECK
 from materialize.version_list import (
+    fetch_self_managed_versions,
     get_published_minor_mz_versions,
     get_self_managed_versions,
 )
@@ -509,3 +511,60 @@ class ActivateSourceVersioningMigration(Scenario):
             ),
             Validate(self),
         ]
+
+
+class SelfManagedv25_2_Upgrade(Scenario):
+    """
+    Upgrade from the oldest v25.2 patch release to the latest v25.2 patch release.
+    """
+
+    def __init__(
+        self,
+        checks: list[type[Check]],
+        executor: Executor,
+        features: Features,
+        seed: str | None = None,
+    ):
+        self_managed_versions = fetch_self_managed_versions()
+        self.v25_2_versions = sorted(
+            [
+                v.version
+                for v in self_managed_versions
+                if v.helm_version.major == 25 and v.helm_version.minor == 2
+            ]
+        )
+
+        super().__init__(checks, executor, features, seed)
+
+    def base_version(self) -> MzVersion:
+        return self.v25_2_versions[0]
+
+    def actions(self) -> list[Action]:
+        print(f"Upgrading from tag {self.base_version()}")
+
+        def upgrade_actions(version: MzVersion | None) -> list[Action]:
+            return [
+                KillMz(
+                    capture_logs=True
+                ),  # We always use True here otherwise docker-compose will lose the pre-upgrade logs
+                StartMz(
+                    self,
+                    tag=version,
+                ),
+                Validate(self),
+            ]
+
+        actions = [
+            StartMz(
+                self,
+                tag=self.base_version(),
+            ),
+            Initialize(self),
+            Manipulate(self, phase=1),
+            Manipulate(self, phase=2),
+        ]
+
+        for version in self.v25_2_versions[1:] + [None]:
+            actions.extend(upgrade_actions(version))
+
+        return actions
