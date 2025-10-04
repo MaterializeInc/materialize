@@ -14,6 +14,6 @@ set -euo pipefail
 curl https://sh.rustup.rs -sSf | sh -s -- -y
 # shellcheck source=/dev/null
 source /cargo/env
-trap "rustup self uninstall -y" SIGTERM SIGINT EXIT
+trap "rustup self uninstall -y || true" SIGTERM SIGINT EXIT
 rustup install beta
 rustup run beta cargo build --all-targets
