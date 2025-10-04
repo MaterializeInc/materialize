@@ -3173,6 +3173,8 @@ pub static MZ_ROLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
         .with_column("oid", SqlScalarType::Oid.nullable(false))
         .with_column("name", SqlScalarType::String.nullable(false))
         .with_column("inherit", SqlScalarType::Bool.nullable(false))
+        .with_column("rolcanlogin", SqlScalarType::Bool.nullable(false))
+        .with_column("rolsuper", SqlScalarType::Bool.nullable(true))
         .with_key(vec![0])
         .with_key(vec![1])
         .finish(),
@@ -3184,6 +3186,11 @@ pub static MZ_ROLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
             "inherit",
             "Indicates whether the role has inheritance of privileges.",
         ),
+        (
+            "rolcanlogin",
+            "Indicates whether the role can log in (i.e., is a user).",
+        ),
+        ("rolsuper", "Indicates whether the role is a superuser."),
     ]),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
@@ -3239,6 +3246,37 @@ pub static MZ_ROLE_PARAMETERS: LazyLock<BuiltinTable> = LazyLock::new(|| Builtin
     ]),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
+});
+pub static MZ_ROLE_AUTH: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
+    name: "mz_role_auth",
+    schema: MZ_CATALOG_SCHEMA,
+    oid: oid::TABLE_MZ_ROLE_AUTH_OID,
+    desc: RelationDesc::builder()
+        .with_column("role_id", SqlScalarType::String.nullable(false))
+        .with_column("role_oid", SqlScalarType::Oid.nullable(false))
+        .with_column("password_hash", SqlScalarType::String.nullable(true))
+        .with_column(
+            "updated_at",
+            SqlScalarType::TimestampTz { precision: None }.nullable(false),
+        )
+        .finish(),
+    column_comments: BTreeMap::from_iter([
+        (
+            "role_id",
+            "The ID of the role. Corresponds to `mz_roles.id`.",
+        ),
+        (
+            "role_oid",
+            "The OID of the role whose configuration parameter default is set. Corresponds to `mz_roles.oid`.",
+        ),
+        ("password_hash", "The hashed password for the role"),
+        (
+            "updated_at",
+            "The timestamp when the password was last updated.",
+        ),
+    ]),
+    is_retained_metrics_object: false,
+    access: vec![rbac::owner_privilege(ObjectType::Table, MZ_SYSTEM_ROLE_ID)],
 });
 pub static MZ_PSEUDO_TYPES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_pseudo_types",
@@ -9786,7 +9824,7 @@ pub static PG_ROLES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     rolcanlogin,
     rolreplication,
     rolconnlimit,
-    rolpassword,
+    '********' as rolpassword,
     rolvaliduntil,
     rolbypassrls,
     (
@@ -9811,7 +9849,7 @@ pub static PG_USER: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
         .with_column("usesuper", SqlScalarType::Bool.nullable(true))
         .with_column("userepl", SqlScalarType::Bool.nullable(false))
         .with_column("usebypassrls", SqlScalarType::Bool.nullable(false))
-        .with_column("passwd", SqlScalarType::String.nullable(false))
+        .with_column("passwd", SqlScalarType::String.nullable(true))
         .with_column(
             "valuntil",
             SqlScalarType::TimestampTz { precision: None }.nullable(true),
@@ -10527,7 +10565,7 @@ pub static PG_AUTHID: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
         .with_column("rolreplication", SqlScalarType::Bool.nullable(false))
         .with_column("rolbypassrls", SqlScalarType::Bool.nullable(false))
         .with_column("rolconnlimit", SqlScalarType::Int32.nullable(false))
-        .with_column("rolpassword", SqlScalarType::String.nullable(false))
+        .with_column("rolpassword", SqlScalarType::String.nullable(true))
         .with_column(
             "rolvaliduntil",
             SqlScalarType::TimestampTz { precision: None }.nullable(true),
@@ -10538,50 +10576,22 @@ pub static PG_AUTHID: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
 SELECT
     r.oid AS oid,
     r.name AS rolname,
-    -- We determine superuser status each time a role logs in, so there's no way to accurately
-    -- depict this in the catalog. Except for mz_system, which is always a superuser. For all other
-    -- roles we hardcode NULL.
-    CASE
-        WHEN r.name = 'mz_system' THEN true
-        ELSE NULL::pg_catalog.bool
-    END AS rolsuper,
+    rolsuper,
     inherit AS rolinherit,
     mz_catalog.has_system_privilege(r.oid, 'CREATEROLE') AS rolcreaterole,
     mz_catalog.has_system_privilege(r.oid, 'CREATEDB') AS rolcreatedb,
-    -- We determine login status each time a role logs in, so there's no clean
-    -- way to accurately determine this in the catalog. Instead we do something
-    -- a little gross. For system roles, we hardcode the known roles that can
-    -- log in. For user roles, we determine `rolcanlogin` based on whether the
-    -- role name looks like an email address.
-    --
-    -- This works for the vast majority of cases in production. Roles that users
-    -- log in to come from Frontegg and therefore *must* be valid email
-    -- addresses, while roles that are created via `CREATE ROLE` (e.g.,
-    -- `admin`, `prod_app`) almost certainly are not named to look like email
-    -- addresses.
-    --
-    -- For the moment, we're comfortable with the edge cases here. If we discover
-    -- that folks are regularly creating non-login roles with names that look
-    -- like an email address (e.g., `admins@sysops.foocorp`), we can change
-    -- course.
-    (
-        r.name IN ('mz_support', 'mz_system')
-        -- This entire scheme is sloppy, so we intentionally use a simple
-        -- regex to match email addresses, rather than one that perfectly
-        -- matches the RFC on what constitutes a valid email address.
-        OR r.name ~ '^[^@]+@[^@]+\.[^@]+$'
-    ) AS rolcanlogin,
+    r.rolcanlogin AS rolcanlogin,
     -- MZ doesn't support replication in the same way Postgres does
     false AS rolreplication,
     -- MZ doesn't how row level security
     false AS rolbypassrls,
     -- MZ doesn't have a connection limit
     -1 AS rolconnlimit,
-    '********'::pg_catalog.text AS rolpassword,
-    -- MZ doesn't have role passwords
+    a.password_hash AS rolpassword,
     NULL::pg_catalog.timestamptz AS rolvaliduntil
-FROM mz_catalog.mz_roles r"#,
-    access: vec![PUBLIC_SELECT],
+FROM mz_catalog.mz_roles r
+LEFT JOIN mz_catalog.mz_role_auth a ON r.oid = a.role_oid"#,
+    access: vec![rbac::owner_privilege(ObjectType::Table, MZ_SYSTEM_ROLE_ID)],
 });
 
 pub static PG_AGGREGATE: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
@@ -13781,6 +13791,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Table(&MZ_LIST_TYPES),
         Builtin::Table(&MZ_MAP_TYPES),
         Builtin::Table(&MZ_ROLES),
+        Builtin::Table(&MZ_ROLE_AUTH),
         Builtin::Table(&MZ_ROLE_MEMBERS),
         Builtin::Table(&MZ_ROLE_PARAMETERS),
         Builtin::Table(&MZ_PSEUDO_TYPES),

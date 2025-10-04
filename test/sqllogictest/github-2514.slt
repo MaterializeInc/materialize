@@ -52,6 +52,7 @@ Only the following relations are available:
 "mz_catalog.mz_materialized_views"
 "mz_catalog.mz_operators"
 "mz_catalog.mz_pseudo_types"
+"mz_catalog.mz_role_auth"
 "mz_catalog.mz_role_members"
 "mz_catalog.mz_role_parameters"
 "mz_catalog.mz_roles"

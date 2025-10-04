@@ -21,9 +21,9 @@ CREATE ROLE "materialize@foocorp.io"
 query TIBBBBTTT rowsort
 SELECT usename, usesysid, usecreatedb, usesuper, userepl, usebypassrls, passwd, valuntil, useconfig FROM pg_user;
 ----
-materialize@foocorp.io  20196  false  NULL  false  false  ********  NULL  NULL
-mz_support  16662  false  NULL  false  false  ********  NULL  NULL
-mz_system  16661  true  true  false  false  ********  NULL  NULL
+materialize@foocorp.io  20196  false  NULL  false  false  NULL  NULL  NULL
+mz_support  16662  false  true  false  false  NULL  NULL  NULL
+mz_system  16661  true  true  false  false  NULL  NULL  NULL
 
 statement ok
 ALTER USER "materialize@foocorp.io" SET search_path = 'abc,def';

@@ -230,6 +230,8 @@ impl Catalog {
         let op_updates = txn.get_and_commit_op_updates();
         updates.extend(op_updates);
 
+        let mut builtin_table_updates = Vec::new();
+
         // Seed the in-memory catalog with values that don't come from the durable catalog.
         {
             // Set defaults from configuration passed in the provided `system_parameter_defaults`
@@ -246,21 +248,7 @@ impl Catalog {
                 };
             }
             state.create_temporary_schema(&SYSTEM_CONN_ID, MZ_SYSTEM_ROLE_ID)?;
-            if let Some(password) = config.external_login_password_mz_system {
-                state.role_auth_by_id.insert(
-                    MZ_SYSTEM_ROLE_ID,
-                    RoleAuth {
-                        role_id: MZ_SYSTEM_ROLE_ID,
-                        password_hash: Some(scram256_hash(&password).map_err(|_| {
-                            AdapterError::Internal("Failed to hash mz_system password.".to_owned())
-                        })?),
-                        updated_at: SYSTEM_TIME(),
-                    },
-                );
-            }
         }
-
-        let mut builtin_table_updates = Vec::new();
 
         // Make life easier by consolidating all updates, so that we end up with only positive
         // diffs.
@@ -327,6 +315,29 @@ impl Catalog {
             .apply_updates_for_bootstrap(pre_item_updates, &mut LocalExpressionCache::Closed)
             .await;
         builtin_table_updates.extend(builtin_table_update);
+
+        // Ensure mz_system has a password if configured to have one.
+        // It's important we do this after the `pre_item_updates` so that
+        // the mz_system role exists in the catalog.
+        {
+            if let Some(password) = config.external_login_password_mz_system {
+                let role_auth = RoleAuth {
+                    role_id: MZ_SYSTEM_ROLE_ID,
+                    password_hash: Some(scram256_hash(&password).map_err(|_| {
+                        AdapterError::Internal("Failed to hash mz_system password.".to_owned())
+                    })?),
+                    updated_at: SYSTEM_TIME(),
+                };
+                state
+                    .role_auth_by_id
+                    .insert(MZ_SYSTEM_ROLE_ID, role_auth.clone());
+                let builtin_table_update = state.generate_builtin_table_update(
+                    mz_catalog::memory::objects::StateUpdateKind::RoleAuth(role_auth.into()),
+                    mz_catalog::memory::objects::StateDiff::Addition,
+                );
+                builtin_table_updates.extend(builtin_table_update);
+            }
+        }
 
         let expr_cache_start = Instant::now();
         info!("startup: coordinator init: catalog open: expr cache open beginning");
