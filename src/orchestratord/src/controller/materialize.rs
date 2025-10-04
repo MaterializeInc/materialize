@@ -381,8 +381,7 @@ impl k8s_controller::Context for Context {
         let has_current_changes = status.resources_hash != active_resources.generate_hash();
         let active_generation = status.active_generation;
         let next_generation = active_generation + 1;
-        let increment_generation = has_current_changes && !mz.in_place_rollout();
-        let desired_generation = if increment_generation {
+        let desired_generation = if has_current_changes {
             next_generation
         } else {
             active_generation
@@ -399,8 +398,9 @@ impl k8s_controller::Context for Context {
         );
         let resources_hash = resources.generate_hash();
 
-        let mut result = if has_current_changes {
-            if mz.rollout_requested() {
+        let mut result = match (has_current_changes, mz.rollout_requested()) {
+            // There are changes pending, and we want to appy them.
+            (true, true) => {
                 // we remove the environment resources hash annotation here
                 // because if we fail halfway through applying the resources,
                 // things will be in an inconsistent state, and we don't want
@@ -444,12 +444,7 @@ impl k8s_controller::Context for Context {
 
                 trace!("applying environment resources");
                 match resources
-                    .apply(
-                        &client,
-                        increment_generation,
-                        mz.should_force_promote(),
-                        &mz.namespace(),
-                    )
+                    .apply(&client, mz.should_force_promote(), &mz.namespace())
                     .await
                 {
                     Ok(Some(action)) => {
@@ -460,12 +455,12 @@ impl k8s_controller::Context for Context {
                         // do this last, so that we keep traffic pointing at
                         // the previous environmentd until the new one is
                         // fully ready
+                        // TODO add condition saying we're about to promote,
+                        // and check it before aborting anything.
                         resources.promote_services(&client, &mz.namespace()).await?;
-                        if increment_generation {
-                            resources
-                                .teardown_generation(&client, mz, active_generation)
-                                .await?;
-                        }
+                        resources
+                            .teardown_generation(&client, mz, active_generation)
+                            .await?;
                         self.update_status(
                             &mz_api,
                             mz,
@@ -528,7 +523,9 @@ impl k8s_controller::Context for Context {
                         Err(e)
                     }
                 }
-            } else {
+            }
+            // There are changes pending, but we don't want to apply them yet.
+            (true, false) => {
                 let mut needs_update = mz.conditions_need_update();
                 if mz.update_in_progress() {
                     resources
@@ -563,44 +560,46 @@ impl k8s_controller::Context for Context {
                 debug!("changes detected, waiting for approval");
                 Ok(None)
             }
-        } else {
-            // this can happen if we update the environment, but then revert
-            // that update before the update was deployed. in this case, we
-            // don't want the environment to still show up as
-            // WaitingForApproval.
-            let mut needs_update = mz.conditions_need_update() || mz.rollout_requested();
-            if mz.update_in_progress() {
-                resources
-                    .teardown_generation(&client, mz, next_generation)
+            // No changes pending, but we might need to clean up a partially applied rollout.
+            (false, _) => {
+                // this can happen if we update the environment, but then revert
+                // that update before the update was deployed. in this case, we
+                // don't want the environment to still show up as
+                // WaitingForApproval.
+                let mut needs_update = mz.conditions_need_update() || mz.rollout_requested();
+                if mz.update_in_progress() {
+                    resources
+                        .teardown_generation(&client, mz, next_generation)
+                        .await?;
+                    needs_update = true;
+                }
+                if needs_update {
+                    self.update_status(
+                        &mz_api,
+                        mz,
+                        MaterializeStatus {
+                            active_generation,
+                            last_completed_rollout_request: mz.requested_reconciliation_id(),
+                            resource_id: status.resource_id,
+                            resources_hash: status.resources_hash,
+                            conditions: vec![Condition {
+                                type_: "UpToDate".into(),
+                                status: "True".into(),
+                                last_transition_time: Time(chrono::offset::Utc::now()),
+                                message: format!(
+                                    "No changes found from generation {active_generation}"
+                                ),
+                                observed_generation: mz.meta().generation,
+                                reason: "Applied".into(),
+                            }],
+                        },
+                        active_generation != desired_generation,
+                    )
                     .await?;
-                needs_update = true;
+                }
+                debug!("no changes");
+                Ok(None)
             }
-            if needs_update {
-                self.update_status(
-                    &mz_api,
-                    mz,
-                    MaterializeStatus {
-                        active_generation,
-                        last_completed_rollout_request: mz.requested_reconciliation_id(),
-                        resource_id: status.resource_id,
-                        resources_hash: status.resources_hash,
-                        conditions: vec![Condition {
-                            type_: "UpToDate".into(),
-                            status: "True".into(),
-                            last_transition_time: Time(chrono::offset::Utc::now()),
-                            message: format!(
-                                "No changes found from generation {active_generation}"
-                            ),
-                            observed_generation: mz.meta().generation,
-                            reason: "Applied".into(),
-                        }],
-                    },
-                    active_generation != desired_generation,
-                )
-                .await?;
-            }
-            debug!("no changes");
-            Ok(None)
         };
 
         // balancers rely on the environmentd service existing, which is

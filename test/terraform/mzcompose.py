@@ -732,7 +732,6 @@ class AWS(State):
                 "namespace": "materialize-environment",
             },
             "spec": {
-                "inPlaceRollout": True,
                 "requestRollout": f"12345678-9012-3456-7890-12345678901{self.version+3}",
                 "environmentdImageRef": f"materialize/environmentd:{tag}",
                 "environmentdResourceRequirements": {
