@@ -28,8 +28,8 @@ use mz_storage_types::connections::{AwsPrivatelink, Connection, SshTunnel, Tunne
 
 use crate::ast::{Ident, Statement, UnresolvedItemName};
 use crate::catalog::{
-    CatalogCluster, CatalogCollectionItem, CatalogDatabase, CatalogItem, CatalogItemType,
-    CatalogSchema, ObjectType, SessionCatalog, SystemObjectType,
+    CatalogCluster, CatalogCollectionItem, CatalogDatabase, CatalogError, CatalogItem,
+    CatalogItemType, CatalogSchema, ObjectType, SessionCatalog, SystemObjectType,
 };
 use crate::names::{
     self, Aug, DatabaseId, FullItemName, ItemQualifiers, ObjectId, PartialItemName,
@@ -204,6 +204,9 @@ pub fn describe(
         }
         Statement::Show(ShowStatement::ShowCreateMaterializedView(stmt)) => {
             show::describe_show_create_materialized_view(&scx, stmt)?
+        }
+        Statement::Show(ShowStatement::ShowCreateType(stmt)) => {
+            show::describe_show_create_type(&scx, stmt)?
         }
         Statement::Show(ShowStatement::ShowObjects(stmt)) => {
             show::show_objects(&scx, stmt)?.describe()?
@@ -399,6 +402,9 @@ pub fn plan(
         }
         Statement::Show(ShowStatement::ShowCreateMaterializedView(stmt)) => {
             show::plan_show_create_materialized_view(scx, stmt).map(Plan::ShowCreate)
+        }
+        Statement::Show(ShowStatement::ShowCreateType(stmt)) => {
+            show::plan_show_create_type(scx, stmt).map(Plan::ShowCreate)
         }
         Statement::Show(ShowStatement::ShowObjects(stmt)) => show::show_objects(scx, stmt)?.plan(),
 
@@ -675,6 +681,10 @@ impl<'a> StatementContext<'a> {
 
     pub fn get_cluster(&self, id: &ClusterId) -> &dyn CatalogCluster<'_> {
         self.catalog.get_cluster(*id)
+    }
+
+    pub fn get_type(&self, type_name: FullItemName) -> Result<&dyn CatalogItem, CatalogError> {
+        self.catalog.resolve_type(&PartialItemName::from(type_name))
     }
 
     pub fn resolve_database(
@@ -1103,6 +1113,7 @@ impl<T: mz_sql_parser::ast::AstInfo> From<&Statement<T>> for StatementClassifica
             Statement::Show(ShowStatement::ShowCreateTable(_)) => Show,
             Statement::Show(ShowStatement::ShowCreateView(_)) => Show,
             Statement::Show(ShowStatement::ShowCreateMaterializedView(_)) => Show,
+            Statement::Show(ShowStatement::ShowCreateType(_)) => Show,
             Statement::Show(ShowStatement::ShowObjects(_)) => Show,
 
             // SCL statements.

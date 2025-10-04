@@ -3736,6 +3736,23 @@ impl AstDisplay for StartTransactionStatement {
 }
 impl_display!(StartTransactionStatement);
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ShowCreateTypeStatement<T: AstInfo> {
+    pub type_name: T::DataType,
+    pub redacted: bool,
+}
+
+impl<T: AstInfo> AstDisplay for ShowCreateTypeStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("SHOW ");
+        if self.redacted {
+            f.write_str("REDACTED ");
+        }
+        f.write_str("CREATE TYPE ");
+        f.write_node(&self.type_name);
+    }
+}
+
 /// `SET TRANSACTION ...`
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SetTransactionStatement {
@@ -5074,6 +5091,7 @@ pub enum ShowStatement<T: AstInfo> {
     ShowCreateIndex(ShowCreateIndexStatement<T>),
     ShowCreateConnection(ShowCreateConnectionStatement<T>),
     ShowCreateCluster(ShowCreateClusterStatement<T>),
+    ShowCreateType(ShowCreateTypeStatement<T>),
     ShowVariable(ShowVariableStatement),
     InspectShard(InspectShardStatement),
 }
@@ -5091,6 +5109,7 @@ impl<T: AstInfo> AstDisplay for ShowStatement<T> {
             ShowStatement::ShowCreateIndex(stmt) => f.write_node(stmt),
             ShowStatement::ShowCreateConnection(stmt) => f.write_node(stmt),
             ShowStatement::ShowCreateCluster(stmt) => f.write_node(stmt),
+            ShowStatement::ShowCreateType(stmt) => f.write_node(stmt),
             ShowStatement::ShowVariable(stmt) => f.write_node(stmt),
             ShowStatement::InspectShard(stmt) => f.write_node(stmt),
         }

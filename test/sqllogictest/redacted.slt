@@ -223,8 +223,8 @@ SHOW REDACTED CREATE MATERIALIZED VIEW v;
 query error db error: ERROR: materialize\.public\.mv1 is not a view
 SHOW REDACTED CREATE VIEW mv1;
 
-query error Expected end of statement, found TYPE
-SHOW CREATE TYPE ty;
-
-query error Expected end of statement, found TYPE
+query TT
 SHOW REDACTED CREATE TYPE ty;
+----
+ty
+CREATE TYPE materialize.public.ty AS LIST (ELEMENT TYPE = pg_catalog.bool);
