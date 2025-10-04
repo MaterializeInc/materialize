@@ -369,8 +369,6 @@ mod tests {
     use std::io::Cursor;
     use std::str::FromStr;
 
-    use serde::{Deserialize, Serialize};
-
     use crate::Reader;
     use crate::types::Record;
     use crate::util::zig_i64;
@@ -524,12 +522,6 @@ mod tests {
                 .collect::<Vec<u8>>(),
             data
         );
-    }
-
-    #[derive(Debug, Clone, Deserialize, Serialize)]
-    struct TestSerdeSerialize {
-        a: i64,
-        b: String,
     }
 
     #[mz_ore::test]
