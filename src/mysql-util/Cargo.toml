@@ -35,13 +35,13 @@ prost = { version = "0.13.5", features = ["no-recursion-limit"] }
 proptest = { version = "1.7.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.5.1", features = ["boxed_union"] }
 fancy-regex = "0.14.0"
-regex = "1.11.1"
-serde = { version = "1.0.219", features = ["derive"] }
-serde_json = { version = "1.0.127" }
-thiserror = "2.0.12"
+regex = "1.11.3"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = { version = "1.0.145" }
+thiserror = "2.0.17"
 tracing = "0.1.37"
 url = "2.3.1"
-uuid = { version = "1.17.0", features = ["v4"] }
+uuid = { version = "1.18.1", features = ["v4"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [build-dependencies]

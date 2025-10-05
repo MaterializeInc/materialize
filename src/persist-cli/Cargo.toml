@@ -39,13 +39,13 @@ mz-txn-wal = { path = "../txn-wal" }
 num_cpus = "1.17.0"
 num_enum = "0.7.4"
 prometheus = { version = "0.13.4", default-features = false }
-serde = { version = "1.0.219", features = ["derive", "rc"] }
-serde_json = "1.0.140"
+serde = { version = "1.0.228", features = ["derive", "rc"] }
+serde_json = "1.0.145"
 timely = "0.24.0"
 tokio = { version = "1.44.1", default-features = false, features = ["macros", "sync", "rt", "rt-multi-thread", "time"] }
 tracing = "0.1.37"
 url = "2.3.1"
-uuid = { version = "1.17.0", features = ["v4"] }
+uuid = { version = "1.18.1", features = ["v4"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [features]
