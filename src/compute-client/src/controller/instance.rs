@@ -48,6 +48,7 @@ use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use tokio::sync::mpsc::error::SendError;
 use tokio::sync::{mpsc, oneshot};
+use tracing::debug_span;
 use uuid::Uuid;
 
 use crate::controller::error::{
@@ -141,12 +142,22 @@ pub struct Client<T: ComputeControllerTimestamp> {
 }
 
 impl<T: ComputeControllerTimestamp> Client<T> {
-    pub(super) fn send(&self, command: Command<T>) -> Result<(), SendError<Command<T>>> {
-        self.command_tx.send(command)
-    }
-
     pub(super) fn read_hold_tx(&self) -> read_holds::ChangeTx<T> {
         Arc::clone(&self.read_hold_tx)
+    }
+
+    pub(super) fn call<F>(&self, f: F)
+    where
+        F: FnOnce(&mut Instance<T>) + Send + 'static,
+    {
+        let otel_ctx = OpenTelemetryContext::obtain();
+        self.command_tx.send(Box::new(move |instance| {
+            let _span = debug_span!("instance::call").entered();
+            otel_ctx.attach_as_parent();
+
+            f(instance)
+        }))
+            .expect("instance not dropped");
     }
 
     /// Call a method to be run on the instance task, by sending a message to the instance and
@@ -160,7 +171,7 @@ impl<T: ComputeControllerTimestamp> Client<T> {
         use tracing::debug_span;
         let (tx, rx) = oneshot::channel();
         let otel_ctx = OpenTelemetryContext::obtain();
-        self.send(Box::new(move |instance| {
+        self.command_tx.send(Box::new(move |instance| {
             let _span = debug_span!("instance::call_sync").entered();
             otel_ctx.attach_as_parent();
             let result = f(instance);
