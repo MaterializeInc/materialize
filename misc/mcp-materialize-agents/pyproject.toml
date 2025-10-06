@@ -18,7 +18,7 @@ name = "mcp_materialize_agents"
 version = "0.3.1"
 description = "Live data layer for agents. Expose canonical business objects as database-consistent, instantly-queryable SQL views via Model Context Protocol"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.10"
 authors = [
     {name = "Materialize Inc", email = "support@materialize.com"}
 ]
