@@ -58,19 +58,23 @@ pub struct MapFilterProject {
 
 impl Display for MapFilterProject {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "MapFilterProject(")?;
-        writeln!(f, "  expressions:")?;
-        self.expressions
-            .iter()
-            .enumerate()
-            .try_for_each(|(i, e)| writeln!(f, "    #{} <- {},", i + self.input_arity, e))?;
-        writeln!(f, "  predicates:")?;
-        self.predicates
-            .iter()
-            .try_for_each(|(before, p)| writeln!(f, "    <before: {}> {},", before, p))?;
-        writeln!(f, "  projection: {:?}", self.projection)?;
-        writeln!(f, "  input_arity: {}", self.input_arity)?;
-        writeln!(f, ")")
+        if !mz_ore::assert::soft_assertions_enabled() {
+            writeln!(f, "<redacted MFP; see `impl Display for MapFilterProject`>")
+        } else {
+            writeln!(f, "MapFilterProject(")?;
+            writeln!(f, "  expressions:")?;
+            self.expressions
+                .iter()
+                .enumerate()
+                .try_for_each(|(i, e)| writeln!(f, "    #{} <- {},", i + self.input_arity, e))?;
+            writeln!(f, "  predicates:")?;
+            self.predicates
+                .iter()
+                .try_for_each(|(before, p)| writeln!(f, "    <before: {}> {},", before, p))?;
+            writeln!(f, "  projection: {:?}", self.projection)?;
+            writeln!(f, "  input_arity: {}", self.input_arity)?;
+            writeln!(f, ")")
+        }
     }
 }
 
