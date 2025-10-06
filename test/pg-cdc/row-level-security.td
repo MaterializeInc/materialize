@@ -40,21 +40,48 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
     PASSWORD SECRET pgpass
   )
 
+
+# Policy that affects the user is detected
+> BEGIN
+> CREATE SOURCE mz_source
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
+! CREATE TABLE foo FROM SOURCE mz_source (REFERENCE foo);
+contains:one or more tables requires BYPASSRLS
+> ROLLBACK;
+
+# Policy for public instead of a specific user is also detected
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+DROP POLICY restrict_mzuser ON foo;
+CREATE POLICY restrict_mzuser ON foo FOR SELECT USING (visible = TRUE);
+
+> BEGIN
+> CREATE SOURCE mz_source
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
+! CREATE TABLE foo FROM SOURCE mz_source (REFERENCE foo);
+contains:one or more tables requires BYPASSRLS
+> ROLLBACK;
+
+# if bypassrls is set, source can be created
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+ALTER ROLE mz_user BYPASSRLS;
+
 > BEGIN
 > CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
 > CREATE TABLE foo FROM SOURCE mz_source (REFERENCE foo);
-> COMMIT
+> COMMIT;
 
-# Wait for the initial snapshot to be ingested, note we cannot see the second row
+# Initial snapshot shows all rows
 > SELECT * FROM foo
 1 a true
+2 b false
 
+# Updates are processed without error
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 INSERT INTO foo (val, visible) VALUES ('c', true);
 DELETE FROM foo WHERE id = 2;
+UPDATE foo SET val = 'apple' WHERE id = 1;
 
-# Boom
 > SELECT * FROM foo
-1 a true
+1 apple true
 3 c true

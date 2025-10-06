@@ -86,6 +86,16 @@ pub async fn available_replication_slots(client: &Client) -> Result<i64, Postgre
     Ok(available_replication_slots)
 }
 
+pub async fn bypass_rls_attribute(client: &Client) -> Result<bool, PostgresError> {
+    let rls_attribute = client
+        .query_one(
+            "SELECT rolbypassrls FROM pg_roles WHERE rolname = CURRENT_USER;",
+            &[],
+        )
+        .await?;
+    Ok(rls_attribute.get("rolbypassrls"))
+}
+
 pub async fn drop_replication_slots(
     ssh_tunnel_manager: &SshTunnelManager,
     config: Config,
