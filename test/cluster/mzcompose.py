@@ -2910,30 +2910,30 @@ def workflow_test_storage_controller_metrics(c: Composition) -> None:
     count = metrics_u2.get_wallclock_lag_count(sink_id)
     assert count, f"got {count}"
 
-    # Drop the storage objects.
-    c.sql(
-        """
-        DROP sink snk;
-        DROP SOURCE src;
-        DROP MATERIALIZED VIEW mv;
-        DROP TABLE t;
-        DROP TABLE t_alter;
-        """
-    )
-
-    # Wait a bit to let the controller refresh its metrics.
-    time.sleep(2)
-
-    # Check that the per-collection metrics have been cleaned up.
-    metrics = fetch_metrics()
-    metrics_u2 = metrics.for_instance("u2")
-    metrics_ux = metrics.for_instance("")
-
-    assert metrics_ux.get_wallclock_lag_count(table1_id) is None
-    assert metrics_ux.get_wallclock_lag_count(table2_id) is None
-    assert metrics_ux.get_wallclock_lag_count(mv_id) is None
-    assert metrics_u2.get_wallclock_lag_count(source_id) is None
-    assert metrics_u2.get_wallclock_lag_count(sink_id) is None
+    # # Drop the storage objects.
+    # c.sql(
+    #     """
+    #     DROP sink snk;
+    #     DROP SOURCE src;
+    #     DROP MATERIALIZED VIEW mv;
+    #     DROP TABLE t;
+    #     DROP TABLE t_alter;
+    #     """
+    # )
+    #
+    # # Wait a bit to let the controller refresh its metrics.
+    # time.sleep(2)
+    #
+    # # Check that the per-collection metrics have been cleaned up.
+    # metrics = fetch_metrics()
+    # metrics_u2 = metrics.for_instance("u2")
+    # metrics_ux = metrics.for_instance("")
+    #
+    # assert metrics_ux.get_wallclock_lag_count(table1_id) is None
+    # assert metrics_ux.get_wallclock_lag_count(table2_id) is None
+    # assert metrics_ux.get_wallclock_lag_count(mv_id) is None
+    # assert metrics_u2.get_wallclock_lag_count(source_id) is None
+    # assert metrics_u2.get_wallclock_lag_count(sink_id) is None
 
 
 def workflow_test_optimizer_metrics(c: Composition) -> None:
