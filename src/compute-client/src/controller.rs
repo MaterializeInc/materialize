@@ -60,7 +60,6 @@ use timely::PartialOrder;
 use timely::progress::{Antichain, Timestamp};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{self, MissedTickBehavior};
-use tracing::debug_span;
 use uuid::Uuid;
 
 use crate::controller::error::{
@@ -1075,15 +1074,7 @@ impl<T: ComputeControllerTimestamp> InstanceState<T> {
     where
         F: FnOnce(&mut Instance<T>) + Send + 'static,
     {
-        let otel_ctx = OpenTelemetryContext::obtain();
-        self.client
-            .send(Box::new(move |instance| {
-                let _span = debug_span!("instance::call").entered();
-                otel_ctx.attach_as_parent();
-
-                f(instance)
-            }))
-            .expect("instance not dropped");
+        self.client.call(f)
     }
 
     async fn call_sync<F, R>(&self, f: F) -> R
