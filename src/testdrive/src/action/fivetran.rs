@@ -16,7 +16,7 @@ use crate::parser::BuiltinCommand;
 
 // Note(parkmycar): We wrap this in a `mod` block soley for the purpose of allowing lints for the
 // generated protobuf code.
-#[allow(clippy::as_conversions, clippy::clone_on_ref_ptr)]
+#[allow(dead_code, clippy::as_conversions, clippy::clone_on_ref_ptr)]
 mod proto {
     pub mod fivetran {
         include!(concat!(env!("OUT_DIR"), "/fivetran_sdk.v2.rs"));

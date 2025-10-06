@@ -260,7 +260,7 @@ resolver = "2"
 
 [workspace.package]
 edition = "2024"
-rust-version = "1.89.0"
+rust-version = "1.90.0"
 
 [profile.dev]
 split-debuginfo = "unpacked"
