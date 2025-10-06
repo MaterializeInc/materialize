@@ -56,6 +56,8 @@ pub struct ComputeInstanceSnapshot {
     instance_id: ComputeInstanceId,
     /// The collections that exist on this compute instance. If it's None, then any collection that
     /// a caller asks us about is considered to exist.
+    /// TODO: Remove this completely once all callers are able to handle suddenly missing
+    /// collections, in which case we won't need a `ComputeInstanceSnapshot` at all.
     collections: Option<BTreeSet<GlobalId>>,
 }
 
