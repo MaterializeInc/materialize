@@ -54,7 +54,7 @@ use mz_ore::task::AbortOnDropHandle;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use tokio::sync::{mpsc, oneshot};
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 pub mod cloud_resource_controller;
 pub mod secrets;
@@ -1423,15 +1423,6 @@ impl OrchestratorWorker {
                 .collect();
         }
 
-        /// Usage metrics reported by clusterd processes.
-        #[derive(Deserialize)]
-        pub(crate) struct ClusterdUsage {
-            disk_bytes: Option<u64>,
-            memory_bytes: Option<u64>,
-            swap_bytes: Option<u64>,
-            heap_limit: Option<u64>,
-        }
-
         /// Get metrics for a particular service and process, converting them into a sane (i.e., numeric) format.
         ///
         /// Note that we want to keep going even if a lookup fails for whatever reason,
@@ -1444,13 +1435,12 @@ impl OrchestratorWorker {
         ) -> ServiceProcessMetrics {
             let name = format!("{service_name}-{i}");
 
-            let clusterd_usage_fut = get_clusterd_usage(self_, service_name, i);
-            let (metrics, clusterd_usage) =
-                match futures::future::join(self_.metrics_api.get(&name), clusterd_usage_fut).await
-                {
-                    (Ok(metrics), Ok(clusterd_usage)) => (metrics, Some(clusterd_usage)),
+            let disk_usage_fut = get_disk_usage(self_, service_name, i);
+            let (metrics, disk_usage) =
+                match futures::future::join(self_.metrics_api.get(&name), disk_usage_fut).await {
+                    (Ok(metrics), Ok(disk_usage)) => (metrics, disk_usage),
                     (Ok(metrics), Err(e)) => {
-                        warn!("Failed to fetch clusterd usage for {name}: {e}");
+                        warn!("Failed to fetch disk usage for {name}: {e}");
                         (metrics, None)
                     }
                     (Err(e), _) => {
@@ -1471,58 +1461,56 @@ impl OrchestratorWorker {
                 return ServiceProcessMetrics::default();
             };
 
-            let mut process_metrics = ServiceProcessMetrics::default();
-
-            match parse_k8s_quantity(cpu_str) {
+            let cpu = match parse_k8s_quantity(cpu_str) {
                 Ok(q) => match q.try_to_integer(-9, true) {
-                    Some(nano_cores) => process_metrics.cpu_nano_cores = Some(nano_cores),
-                    None => error!("CPU value {q:?} out of range"),
+                    Some(i) => Some(i),
+                    None => {
+                        tracing::error!("CPU value {q:? }out of range");
+                        None
+                    }
                 },
-                Err(e) => error!("failed to parse CPU value {cpu_str}: {e}"),
-            }
-            match parse_k8s_quantity(mem_str) {
+                Err(e) => {
+                    tracing::error!("Failed to parse CPU value {cpu_str}: {e}");
+                    None
+                }
+            };
+            let memory = match parse_k8s_quantity(mem_str) {
                 Ok(q) => match q.try_to_integer(0, false) {
-                    Some(mem) => process_metrics.memory_bytes = Some(mem),
-                    None => error!("memory value {q:?} out of range"),
+                    Some(i) => Some(i),
+                    None => {
+                        tracing::error!("Memory value {q:?} out of range");
+                        None
+                    }
                 },
-                Err(e) => error!("failed to parse memory value {mem_str}: {e}"),
+                Err(e) => {
+                    tracing::error!("Failed to parse memory value {mem_str}: {e}");
+                    None
+                }
+            };
+
+            ServiceProcessMetrics {
+                cpu_nano_cores: cpu,
+                memory_bytes: memory,
+                disk_usage_bytes: disk_usage,
             }
-
-            if let Some(usage) = clusterd_usage {
-                // clusterd may report disk usage as either `disk_bytes`, or `swap_bytes`, or both.
-                //
-                // For now the Console expects the swap size to be reported in `disk_bytes`.
-                // Once the Console has been ported to use `heap_bytes`/`heap_limit`, we can
-                // simplify things by setting `process_metrics.disk_bytes = usage.disk_bytes`.
-                process_metrics.disk_bytes = match (usage.disk_bytes, usage.swap_bytes) {
-                    (Some(disk), Some(swap)) => Some(disk + swap),
-                    (disk, swap) => disk.or(swap),
-                };
-
-                // clusterd may report heap usage as `memory_bytes` and optionally `swap_bytes`.
-                // If no `memory_bytes` is reported, we can't know the heap usage.
-                process_metrics.heap_bytes = match (usage.memory_bytes, usage.swap_bytes) {
-                    (Some(memory), Some(swap)) => Some(memory + swap),
-                    (Some(memory), None) => Some(memory),
-                    (None, _) => None,
-                };
-
-                process_metrics.heap_limit = usage.heap_limit;
-            }
-
-            process_metrics
         }
 
-        /// Get the current usage metrics exposed by a clusterd process.
+        /// Get the current disk usage for a particular service and process.
         ///
-        /// Usage metrics are collected by connecting to a metrics endpoint exposed by the process.
-        /// The endpoint is assumed to be reachable at the 'internal-http' under the HTTP path
+        /// Disk usage is collected by connecting to a metrics endpoint exposed by the process. The
+        /// endpoint is assumed to be reachable at the 'internal-http' under the HTTP path
         /// `/api/usage-metrics`.
-        async fn get_clusterd_usage(
+        async fn get_disk_usage(
             self_: &OrchestratorWorker,
             service_name: &str,
             i: usize,
-        ) -> anyhow::Result<ClusterdUsage> {
+        ) -> anyhow::Result<Option<u64>> {
+            #[derive(Deserialize)]
+            pub(crate) struct Usage {
+                disk_bytes: Option<u64>,
+                swap_bytes: Option<u64>,
+            }
+
             let service = self_
                 .service_api
                 .get(service_name)
@@ -1554,9 +1542,17 @@ impl OrchestratorWorker {
                 .build()
                 .context("error building HTTP client")?;
             let resp = http_client.get(metrics_url).send().await?;
-            let usage = resp.json().await?;
+            let Usage {
+                disk_bytes,
+                swap_bytes,
+            } = resp.json().await?;
 
-            Ok(usage)
+            let bytes = if let (Some(disk), Some(swap)) = (disk_bytes, swap_bytes) {
+                Some(disk + swap)
+            } else {
+                disk_bytes.or(swap_bytes)
+            };
+            Ok(bytes)
         }
 
         let ret =

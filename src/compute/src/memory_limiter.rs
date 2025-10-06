@@ -51,8 +51,7 @@ pub fn start_limiter(memory_limit: usize, metrics_registry: &MetricsRegistry) {
     mz_ore::task::spawn(|| "memory-limiter", LimiterTask::run(config_rx, metrics));
 
     *limiter = Some(Limiter {
-        base_memory_limit: memory_limit,
-        effective_memory_limit: memory_limit,
+        memory_limit,
         config_tx,
     });
 }
@@ -64,25 +63,17 @@ pub fn apply_limiter_config(config: &ConfigSet) {
     }
 }
 
-/// Get the current effective memory limit.
-pub fn get_memory_limit() -> Option<usize> {
-    let limiter = LIMITER.lock().expect("poisoned");
-    limiter.as_ref().map(|l| l.effective_memory_limit)
-}
-
 /// A handle to a running memory limiter task.
 struct Limiter {
-    /// The base process memory limit.
-    base_memory_limit: usize,
-    /// The effective memory limit, obtained by applying dyncfgs to the base limit.
-    effective_memory_limit: usize,
+    /// The process memory limit.
+    memory_limit: usize,
     /// A sender for limiter configuration updates.
     config_tx: UnboundedSender<LimiterConfig>,
 }
 
 impl Limiter {
     /// Apply the given configuration to the limiter.
-    fn apply_config(&mut self, config: &ConfigSet) {
+    fn apply_config(&self, config: &ConfigSet) {
         let mut interval = MEMORY_LIMITER_INTERVAL.get(config);
         // A zero duration means the limiter is disabled. Translate that into an ~infinite duration
         // so the limiter doesn't have to worry about the special case.
@@ -91,13 +82,11 @@ impl Limiter {
         }
 
         let memory_limit =
-            f64::cast_lossy(self.base_memory_limit) * MEMORY_LIMITER_USAGE_BIAS.get(config);
+            f64::cast_lossy(self.memory_limit) * MEMORY_LIMITER_USAGE_BIAS.get(config);
         let memory_limit = usize::cast_lossy(memory_limit);
 
         let burst_budget = f64::cast_lossy(memory_limit) * MEMORY_LIMITER_BURST_FACTOR.get(config);
         let burst_budget = usize::cast_lossy(burst_budget);
-
-        self.effective_memory_limit = memory_limit;
 
         self.config_tx
             .send(LimiterConfig {

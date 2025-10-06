@@ -158,9 +158,6 @@ pub static REPLICA_STATUS_HISTORY_DESC: LazyLock<RelationDesc> = LazyLock::new(|
         .finish()
 });
 
-/// NOTE: We want to avoid breaking schema changes, as those would cause the builtin migrations to
-/// drop all existing data. For details on what changes are compatible, see
-/// [`mz_persist_types::schema::backward_compatible`].
 pub static REPLICA_METRICS_HISTORY_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
     RelationDesc::builder()
         .with_column("replica_id", SqlScalarType::String.nullable(false))
@@ -172,8 +169,6 @@ pub static REPLICA_METRICS_HISTORY_DESC: LazyLock<RelationDesc> = LazyLock::new(
             "occurred_at",
             SqlScalarType::TimestampTz { precision: None }.nullable(false),
         )
-        .with_column("heap_bytes", SqlScalarType::UInt64.nullable(true))
-        .with_column("heap_limit", SqlScalarType::UInt64.nullable(true))
         .finish()
 });
 

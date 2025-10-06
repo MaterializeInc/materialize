@@ -553,10 +553,8 @@ impl OrchestratorWorker {
             metrics.push(ServiceProcessMetrics {
                 cpu_nano_cores,
                 memory_bytes,
-                // Process orchestrator does not support the remaining fields right now.
-                disk_bytes: None,
-                heap_bytes: None,
-                heap_limit: None,
+                // Process orchestrator does not support this right now.
+                disk_usage_bytes: None,
             });
         }
         Ok(metrics)
