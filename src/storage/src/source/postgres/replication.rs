@@ -302,6 +302,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 })
                 .min();
             let Some(resume_lsn) = resume_lsn else {
+                std::future::pending::<()>().await;
                 return Ok(());
             };
             upper_cap_set.downgrade([&resume_lsn]);
