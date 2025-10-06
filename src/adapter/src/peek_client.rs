@@ -55,7 +55,7 @@ pub struct PeekClient {
     pub optimizer_metrics: OptimizerMetrics,
     /// Per-timeline oracles from the coordinator. Lazily populated.
     oracles: BTreeMap<Timeline, Arc<dyn TimestampOracle<Timestamp> + Send + Sync>>,
-    // TODO: This is initialized only at session startup. We'll be able to properly check
+    // TODO(peek-seq): This is initialized only at session startup. We'll be able to properly check
     // the actual feature flag value (without a Coordinator call) once we'll always have a catalog
     // snapshot at hand.
     pub enable_frontend_peek_sequencing: bool,
@@ -207,8 +207,9 @@ impl PeekClient {
     ///
     /// Note: self is taken &mut because of the lazy fetching in `get_compute_instance_client`.
     ///
-    /// TODO: add statement logging
-    /// TODO: cancellation (see pending_peeks/client_pending_peeks wiring in the old sequencing)
+    /// TODO(peek-seq): add statement logging
+    /// TODO(peek-seq): cancellation (see pending_peeks/client_pending_peeks wiring in the old
+    /// sequencing)
     pub async fn implement_fast_path_peek_plan(
         &mut self,
         fast_path: FastPathPlan,
@@ -259,7 +260,7 @@ impl PeekClient {
                     &row_set_finishing_seconds,
                 ) {
                     Ok((rows, _bytes)) => Ok(Coordinator::send_immediate_rows(rows)),
-                    // TODO: make this a structured error. (also in the old sequencing)
+                    // TODO(peek-seq): make this a structured error. (also in the old sequencing)
                     Err(e) => Err(AdapterError::ResultSize(e)),
                 }
             }
@@ -308,8 +309,8 @@ impl PeekClient {
                     )
                     .await;
 
-                // TODO: call `create_peek_response_stream` instead. For that, we'll need to pass in
-                // a PersistClient from afar.
+                // TODO(peek-seq): call `create_peek_response_stream` instead. For that, we'll need
+                // to pass in a PersistClient from afar.
                 let peek_response_stream = async_stream::stream!({
                     match rows_rx.await {
                         Ok(PeekResponse::Rows(rows)) => {
@@ -326,7 +327,7 @@ impl PeekClient {
                             }
                         }
                         Ok(PeekResponse::Stashed(_response)) => {
-                            // TODO: support this (through `create_peek_response_stream`)
+                            // TODO(peek-seq): support this (through `create_peek_response_stream`)
                             yield coord::peek::PeekResponseUnary::Error("stashed peek responses not yet supported in frontend peek sequencing".into());
                         }
                         Ok(PeekResponse::Error(err)) => {
@@ -348,8 +349,8 @@ impl PeekClient {
                 })
             }
             FastPathPlan::PeekPersist(..) => {
-                // TODO: Implement this. (We currently bail out in `try_frontend_peek_inner`,
-                // similarly to slow-path peeks.)
+                // TODO(peek-seq): Implement this. (We currently bail out in
+                // `try_frontend_peek_inner`, similarly to slow-path peeks.)
                 // Note that `Instance::peek` has the following comment:
                 // "For persist peeks, the controller should provide a storage read hold.
                 // We don't support acquiring it here."
