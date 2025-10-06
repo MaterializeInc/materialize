@@ -46,6 +46,9 @@ pub type StorageCollectionsHandle = Arc<
 pub struct PeekClient {
     coordinator_client: Client,
     /// Channels to talk to each compute Instance task directly. Lazily populated.
+    /// Note that these are never cleaned up. In theory, this could lead to a very slow memory leak
+    /// if a long-running user session keeps peeking on clusters that are being created and dropped
+    /// in a hot loop. Hopefully this won't occur any time soon.
     compute_instances:
         BTreeMap<ComputeInstanceId, mz_compute_client::controller::instance::Client<Timestamp>>,
     /// Handle to storage collections for reading frontiers and policies.
@@ -87,7 +90,7 @@ impl PeekClient {
     ) -> Result<&mut mz_compute_client::controller::instance::Client<Timestamp>, AdapterError> {
         if !self.compute_instances.contains_key(&compute_instance) {
             let client = self
-                .send_to_coordinator(|tx| Command::GetComputeInstanceClient {
+                .call_coordinator(|tx| Command::GetComputeInstanceClient {
                     instance_id: compute_instance,
                     tx,
                 })
@@ -106,7 +109,7 @@ impl PeekClient {
     ) -> Result<&mut Arc<dyn TimestampOracle<Timestamp> + Send + Sync>, AdapterError> {
         if !self.oracles.contains_key(&timeline) {
             let oracle = self
-                .send_to_coordinator(|tx| Command::GetOracle {
+                .call_coordinator(|tx| Command::GetOracle {
                     timeline: timeline.clone(),
                     tx,
                 })
@@ -116,7 +119,7 @@ impl PeekClient {
         Ok(self.oracles.get_mut(&timeline).expect("ensured above"))
     }
 
-    async fn send_to_coordinator<T, F>(&self, f: F) -> T
+    async fn call_coordinator<T, F>(&self, f: F) -> T
     where
         F: FnOnce(oneshot::Sender<T>) -> Command,
     {
@@ -283,7 +286,7 @@ impl PeekClient {
                 let map_filter_project = mfp;
                 let finishing_for_instance = finishing.clone();
                 client
-                    .peek_call_sync(
+                    .peek(
                         peek_target,
                         literal_vec,
                         uuid,
@@ -303,7 +306,6 @@ impl PeekClient {
                         // to let `Instance::peek` acquire the read holds, then we might acquire
                         // read holds too late, leading to panic if the Coordinator drops its own
                         // read holds in the meantime, e.g., due to cancelling the peek.)
-                        None,
                         target_replica,
                         rows_tx,
                     )
