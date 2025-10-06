@@ -41,6 +41,8 @@ pub enum PgSourcePurificationError {
     UserLacksUsageOnSchemas { schemas: Vec<String> },
     #[error("insufficient privileges")]
     UserLacksSelectOnTables { tables: Vec<String> },
+    #[error("one or more tables requires BYPASSRLS")]
+    UserMustBypassRLS { tables: Vec<String> },
     #[error("referenced items not tables with REPLICA IDENTITY FULL")]
     NotTablesWReplicaIdentityFull { items: Vec<String> },
     #[error("TEXT COLUMNS refers to table not currently being added")]
@@ -76,6 +78,10 @@ impl PgSourcePurificationError {
             Self::UserLacksSelectOnTables { tables } => Some(format!(
                 "user lacks SELECT privileges for tables {}",
                 tables.join(", ")
+            )),
+            Self::UserMustBypassRLS { tables } => Some(format!(
+                "user must have BYPASSRLS attribute to read tables {}",
+                tables.join(", "),
             )),
             Self::NotTablesWReplicaIdentityFull { items } => {
                 Some(format!("referenced items: {}", items.join(", ")))
