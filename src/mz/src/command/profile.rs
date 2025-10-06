@@ -162,7 +162,7 @@ pub async fn init(
     let config_file = scx.config_file();
     let profile = scx
         .get_global_profile()
-        .unwrap_or_else(|| config_file.profile().to_string());
+        .map_or(config_file.profile().to_string(), |n| n);
 
     if let Some(profiles) = scx.config_file().profiles() {
         if profiles.contains_key(&profile) && !force {

@@ -3620,6 +3620,11 @@ async fn webhook_concurrent_swap() {
     let server = test_util::TestHarness::default().start().await;
     let mut client = server.connect().await.unwrap();
 
+    #[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
+    struct WebhookEvent {
+        name: String,
+    }
+
     // Create our webhook sources.
     let webhook_cluster = "webhook_cluster_concurrent_swap";
     client
