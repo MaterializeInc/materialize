@@ -10,15 +10,12 @@ menu:
 
 ## Signatures
 
-```mzsql
-normalize(str)
-normalize(str, form)
-```
+{{% include-example file="examples/normalize" example="syntax" %}}
 
 Parameter | Type | Description
 ----------|------|------------
 _str_ | [`string`](../../types/string) | The string to normalize.
-_form_ | keyword | The Unicode normalization form: `NFC`, `NFD`, `NFKC`, or `NFKD` (unquoted keywords). _Defaults to `NFC`_.
+_form_ | keyword | The Unicode normalization form: `NFC`, `NFD`, `NFKC`, or `NFKD` (unquoted, case-insensitive keywords). _Defaults to `NFC`_.
 
 ### Return value
 
@@ -35,67 +32,26 @@ The four normalization forms are:
 - **NFKC** (Normalization Form Compatibility Composition): Compatibility decomposition, followed by canonical composition. This applies more aggressive transformations, converting compatibility variants to standard forms.
 - **NFKD** (Normalization Form Compatibility Decomposition): Compatibility decomposition only.
 
-The form parameter is case-insensitive.
-
 For more information, see:
 - [Unicode Normalization Forms](https://unicode.org/reports/tr15/#Norm_Forms)
 - [PostgreSQL normalize function](https://www.postgresql.org/docs/current/functions-string.html)
 
 ## Examples
 
-```mzsql
-SELECT normalize('é') AS normalized;
-```
-```nofmt
- normalized
-------------
- é
-```
+{{% include-example file="examples/normalize" example="normalize-default" %}}
 
 <hr/>
 
-```mzsql
--- NFC combines base character with combining marks
-SELECT normalize('é', NFC) AS nfc;
-```
-```nofmt
- nfc
------
- é
-```
+{{% include-example file="examples/normalize" example="normalize-nfc" %}}
 
 <hr/>
 
-```mzsql
--- NFD decomposes into base character + combining accent
-SELECT normalize('é', NFD) = E'e\u0301' AS is_decomposed;
-```
-```nofmt
- is_decomposed
----------------
- t
-```
+{{% include-example file="examples/normalize" example="normalize-nfd" %}}
 
 <hr/>
 
-```mzsql
--- NFKC decomposes compatibility characters like ligatures
-SELECT normalize('ﬁ', NFKC) AS decomposed;
-```
-```nofmt
- decomposed
-------------
- fi
-```
+{{% include-example file="examples/normalize" example="normalize-nfkc-ligatures" %}}
 
 <hr/>
 
-```mzsql
--- NFKC converts superscripts to regular characters
-SELECT normalize('x²', NFKC) AS normalized;
-```
-```nofmt
- normalized
-------------
- x2
-```
+{{% include-example file="examples/normalize" example="normalize-nfkc-superscript" %}}
