@@ -102,8 +102,10 @@
 
 - name: "handle-cutover-scenarios-step-4-intro"
   description: |
-    Wait for the sink's upper frontier to advance beyond the time of the switch update. Once
-    advanced, alter sink to use `matview_new`:
+    Wait for the sink's upper frontier
+    ([`mz_frontiers`](/sql/system-catalog/mz_internal/#mz_frontiers)) to advance
+    beyond the time of the switch update. Once advanced, alter sink to use
+    `matview_new`:
 - name: "handle-cutover-scenarios-alter-sink-to-new-mv"
   code: |
     -- After sink upper has advanced beyond the time of the switch UPDATE.
