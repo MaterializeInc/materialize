@@ -16,7 +16,7 @@ class StatementLogging(Check):
     def initialize(self) -> Testdrive:
         return Testdrive(
             dedent(
-                # TODO: enable_frontend_peek_sequencing when it supports statement logging.
+                # TODO(peek-seq): enable_frontend_peek_sequencing when it supports statement logging.
                 """
                 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                 ALTER SYSTEM SET statement_logging_max_sample_rate TO 1.0

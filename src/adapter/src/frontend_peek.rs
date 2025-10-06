@@ -47,7 +47,7 @@ impl SessionClient {
         session: &mut Session,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
         if session.transaction().is_in_multi_statement_transaction() {
-            // TODO: handle multi-statement transactions
+            // TODO(peek-seq): handle multi-statement transactions
             debug!(
                 "Bailing out from try_frontend_peek_inner, because is_in_multi_statement_transaction"
             );
@@ -55,7 +55,7 @@ impl SessionClient {
         }
 
         if session.vars().emit_timestamp_notice() {
-            // TODO: implement this. See end of peek_finish
+            // TODO(peek-seq): implement this. See end of peek_finish
             debug!("Bailing out from try_frontend_peek_inner, because emit_timestamp_notice");
             return Ok(None);
         }
@@ -78,21 +78,21 @@ impl SessionClient {
         // This is from handle_execute_inner, but we do it already here because of lifetime issues,
         // and also to be able to give a catalog to `verify_portal`.
         //
-        // TODO: This snapshot is wasted when we end up bailing out from the frontend peek
+        // TODO(peek-seq): This snapshot is wasted when we end up bailing out from the frontend peek
         // sequencing. I think the best way to solve this is with that optimization where we
         // continuously keep a catalog snapshot in the session, and only get a new one when the
         // catalog revision has changed, which we could see with an atomic read.
         let catalog = self.catalog_snapshot("try_frontend_peek").await;
 
         if let Err(_) = Coordinator::verify_portal(&*catalog, session, portal_name) {
-            // TODO: Don't fall back to the coordinator's peek sequencing here, but retire already.
+            // TODO(peek-seq): Don't fall back to the coordinator's peek sequencing here, but retire already.
             debug!(
                 "Bailing out from try_frontend_peek_inner, because verify_portal returned an error"
             );
             return Ok(None);
         }
 
-        // TODO: statement logging (and then re-enable it in workflow_statement_logging)
+        // TODO(peek-seq): statement logging (and then enable it in various tests)
         let (stmt, params) = {
             let portal = session
                 .get_portal_unverified(portal_name)
@@ -154,7 +154,7 @@ impl SessionClient {
             (cluster, cluster.id, &cluster.name)
         };
 
-        // TODO: statement logging: set_statement_execution_cluster
+        // TODO(peek-seq): statement logging: set_statement_execution_cluster
 
         if let Err(e) = coord::catalog_serving::check_cluster_restrictions(
             target_cluster_name.as_str(),
@@ -168,7 +168,7 @@ impl SessionClient {
             &conn_catalog,
             |_id| {
                 // This is only used by `Plan::SideEffectingFunc`, so it is irrelevant for us here
-                // TODO: refactor `check_plan` to make this nicer
+                // TODO(peek-seq): refactor `check_plan` to make this nicer
                 unreachable!()
             },
             session,
@@ -185,7 +185,8 @@ impl SessionClient {
         // (This is done slightly earlier in the normal peek sequencing, but we have to be past the
         // last use of `conn_catalog` here.)
         if let Some(_) = coord::appends::waiting_on_startup_appends(&*catalog, session, &plan) {
-            // TODO: Don't fall back to the coordinator's peek sequencing here, but call `defer_op`.
+            // TODO(peek-seq): Don't fall back to the coordinator's peek sequencing here, but call
+            // `defer_op`.
             debug!("Bailing out from try_frontend_peek_inner, because waiting_on_startup_appends");
             return Ok(None);
         }
@@ -195,8 +196,8 @@ impl SessionClient {
         // # From sequence_peek
 
         if session.vars().emit_plan_insights_notice() {
-            // TODO: We'll need to do this when we want the frontend peek sequencing to take over
-            // from the old sequencing code.
+            // TODO(peek-seq): We'll need to do this when we want the frontend peek sequencing to
+            // take over from the old sequencing code.
             debug!("Bailing out from try_frontend_peek_inner, because emit_plan_insights_notice");
             return Ok(None);
         }
@@ -243,8 +244,8 @@ impl SessionClient {
             .transpose()?;
 
         let source_ids = select_plan.source.depends_on();
-        // TODO: validate_timeline_context can be expensive in real scenarios (not in simple
-        // benchmarks), because it traverses transitive dependencies even of indexed views and
+        // TODO(peek-seq): validate_timeline_context can be expensive in real scenarios (not in
+        // simple benchmarks), because it traverses transitive dependencies even of indexed views and
         // materialized views (also traversing their MIR plans).
         let mut timeline_context = catalog.validate_timeline_context(source_ids.iter().copied())?;
         if matches!(timeline_context, TimelineContext::TimestampIndependent)
@@ -283,8 +284,8 @@ impl SessionClient {
 
         // # From peek_real_time_recency
 
-        // TODO: Real-time recency is slow anyhow, so we don't handle it in frontend peek sequencing
-        // for now.
+        // TODO(peek-seq): Real-time recency is slow anyhow, so we don't handle it in frontend peek
+        // sequencing for now.
         let vars = session.vars();
         if vars.real_time_recency()
             && vars.transaction_isolation() == &IsolationLevel::StrictSerializable
@@ -319,7 +320,7 @@ impl SessionClient {
             ) if in_immediate_multi_stmt_txn => (determination, None),
             _ => {
                 let determine_bundle = if in_immediate_multi_stmt_txn {
-                    // TODO: handle multi-statement transactions
+                    // TODO(peek-seq): handle multi-statement transactions
                     // needs timedomain_for, which needs DataflowBuilder / index oracle / sufficient_collections
                     debug!(
                         "Bailing out from try_frontend_peek_inner, because of in_immediate_multi_stmt_txn"
@@ -348,7 +349,7 @@ impl SessionClient {
                         // We don't need the read holds and shouldn't add them
                         // to the txn.
                         //
-                        // TODO: Handle this within determine_timestamp.
+                        // TODO(peek-seq): Handle this within determine_timestamp?
                         drop(read_holds);
                         None
                     }
@@ -378,7 +379,7 @@ impl SessionClient {
         let now = catalog.config().now.clone();
         let select_plan = select_plan.clone();
 
-        // TODO: if explain_ctx.needs_plan_insights() ...
+        // TODO(peek-seq): if explain_ctx.needs_plan_insights() ...
 
         let span = Span::current();
 
@@ -398,7 +399,7 @@ impl SessionClient {
 
                     let optimization_finished_at = now();
 
-                    // TODO: plan_insights stuff
+                    // TODO(peek-seq): plan_insights stuff
 
                     Ok::<_, AdapterError>((global_lir_plan, optimization_finished_at))
                 })
@@ -422,11 +423,11 @@ impl SessionClient {
 
         // # From peek_finish
 
-        // TODO: statement logging
+        // TODO(peek-seq): statement logging
 
         let (peek_plan, df_meta, typ) = global_lir_plan.unapply();
 
-        // TODO: plan_insights stuff
+        // TODO(peek-seq): plan_insights stuff
 
         // This match is based on what `implement_fast_path_peek_plan` supports.
         let fast_path_plan = match peek_plan {
@@ -451,7 +452,7 @@ impl SessionClient {
 
         // # We do the second half of sequence_peek_timestamp, as mentioned above.
 
-        // TODO: txn_read_holds stuff. Add SessionClient::txn_read_holds.
+        // TODO(peek-seq): txn_read_holds stuff. Add SessionClient::txn_read_holds.
 
         // (This TODO is copied from the old peek sequencing.)
         // TODO: Checking for only `InTransaction` and not `Implied` (also `Started`?) seems
@@ -482,8 +483,8 @@ impl SessionClient {
             })?;
         };
 
-        // TODO: move this up to the beginning of the function when we have eliminated all the
-        // fallbacks to the old peek sequencing. Currently, it has to be here to avoid
+        // TODO(peek-seq): move this up to the beginning of the function when we have eliminated all
+        // the fallbacks to the old peek sequencing. Currently, it has to be here to avoid
         // double-counting a fallback situation, but this has the drawback that if we error out
         // from this function then we don't count the peek at all.
         session
@@ -493,7 +494,7 @@ impl SessionClient {
 
         // # Now back to peek_finish
 
-        // TODO: statement logging
+        // TODO(peek-seq): statement logging
 
         let max_result_size = catalog.system_config().max_result_size();
 
