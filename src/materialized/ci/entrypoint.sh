@@ -71,7 +71,7 @@ if ! is_truthy "${MZ_NO_BUILTIN_POSTGRES:-0}"; then
   /usr/lib/postgresql/17/bin/postgres -D $PGDATA \
       -c listen_addresses='*' \
       -c unix_socket_directories=/var/run/postgresql \
-      -c config_file=/etc/postgresql/postgresql.conf &
+      -c config_file=/etc/postgresql/postgresql.conf > /mzdata/postgres/postgres.log 2>&1 &
   PGPID=$!
 
   trap 'kill -INT $PGPID; wait $PGPID' SIGTERM SIGINT
