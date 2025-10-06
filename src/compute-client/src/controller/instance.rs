@@ -2415,8 +2415,8 @@ where
     ) -> Result<Vec<(GlobalId, ReadHold<T>, Antichain<T>)>, CollectionMissing> {
         let mut result = Vec::new();
         for id in ids.into_iter() {
-            // TODO: This takes locks separately for each id. We should change these methods to be
-            // able to take a collection of ids.
+            // TODO(peek-seq): This takes locks separately for each id. We should change these
+            // methods to be able to take a collection of ids.
             result.push((
                 id,
                 self.acquire_read_hold(id)?,

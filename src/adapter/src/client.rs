@@ -696,7 +696,7 @@ impl SessionClient {
 
         // Attempt peek sequencing in the session task.
         // If unsupported, fall back to the Coordinator path.
-        // TODO: wire up cancel_future
+        // TODO(peek-seq): wire up cancel_future
         if let Some(resp) = self.try_frontend_peek(&portal_name).await? {
             debug!("frontend peek succeeded");
             return Ok((resp, execute_started));

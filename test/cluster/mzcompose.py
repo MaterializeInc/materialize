@@ -3688,7 +3688,7 @@ def workflow_statement_logging(c: Composition, parser: WorkflowArgumentParser) -
     ):
         c.up("materialized")
 
-        # TODO: enable_frontend_peek_sequencing when it supports statement logging.
+        # TODO(peek-seq): enable_frontend_peek_sequencing when it supports statement logging.
         c.sql(
             """
             ALTER SYSTEM SET statement_logging_max_sample_rate = 1.0;
