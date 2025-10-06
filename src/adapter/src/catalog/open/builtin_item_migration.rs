@@ -102,11 +102,10 @@ pub(crate) async fn migrate_builtin_items(
 
     // Attempt to perform schema evolution.
     //
-    // If we run into an unexpected error (i.e. any persist error other than "schema incompatible")
-    // while trying to perform schema evolution, we abort the migration process, rather than
-    // automatically falling back to replacing the persist shards. We do this to avoid accidentally
-    // losing data due to a bug. This gives us the option to decide if we'd rather fix the bug or
-    // skip schema evolution using the dyncfg flag.
+    // If we run into an unexpected error while trying to perform schema evolution, we abort the
+    // migration process, rather than automatically falling back to replacing the persist shards.
+    // We do this to avoid accidentally losing data due to a bug. This gives us the option to
+    // decide if we'd rather fix the bug or skip schema evolution using the dyncfg flag.
     if ENABLE_BUILTIN_MIGRATION_SCHEMA_EVOLUTION.get(state.system_config().dyncfgs()) {
         collections_to_migrate =
             try_evolve_persist_schemas(state, txn, collections_to_migrate, &persist_client).await?;
@@ -182,7 +181,13 @@ fn update_catalog_fingerprints(
 
 /// Attempt to migrate the given builtin collections using persist schema evolution.
 ///
-/// Returns the IDs of collections for which schema evolution did not succeed.
+/// Returns the IDs of collections for which schema evolution did not succeed, due to an "expected"
+/// error. At the moment, there are two expected reasons for schema evolution to fail: (a) the
+/// existing shard doesn't have a schema and (b) the new schema is incompatible with the existing
+/// schema.
+///
+/// If this method encounters an unexpected error, it returns an `Error` instead. The caller is
+/// expected to abort the migration process in response.
 async fn try_evolve_persist_schemas(
     state: &CatalogState,
     txn: &Transaction<'_>,
@@ -208,9 +213,12 @@ async fn try_evolve_persist_schemas(
             .await
             .expect("invalid usage")
         else {
-            return Err(Error::new(ErrorKind::Internal(format!(
-                "builtin migration: missing old schema for builtin collection {id}"
-            ))));
+            // There are two known cases where it is expected to not find a latest schema:
+            //   * The existing shard has never been written to previously.
+            //   * We are running inside an upgrade check, with an in-memory `persist_client`.
+            info!(%id, "builtin schema evolution failed: missing latest schema");
+            failed.push(id);
+            continue;
         };
 
         let entry = state.get_entry_by_global_id(&id);
@@ -238,7 +246,7 @@ async fn try_evolve_persist_schemas(
                 info!("builtin schema evolution succeeded");
             }
             CaESchema::Incompatible => {
-                info!("builtin schema evolution failed");
+                info!("builtin schema evolution failed: incompatible");
                 failed.push(id);
             }
             CaESchema::ExpectedMismatch { schema_id, .. } => {
