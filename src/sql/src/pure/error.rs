@@ -9,6 +9,7 @@
 
 use std::sync::Arc;
 
+use aws_sdk_sts::operation::get_caller_identity::GetCallerIdentityError;
 use mz_ccsr::ListError;
 use mz_repr::adt::system::Oid;
 use mz_sql_parser::ast::display::AstDisplay;
@@ -193,6 +194,30 @@ impl KafkaSinkPurificationError {
         match self {
             Self::AdminClientError(e) => Some(e.to_string_with_causes()),
             _ => None,
+        }
+    }
+
+    pub fn hint(&self) -> Option<String> {
+        None
+    }
+}
+
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum IcebergSinkPurificationError {
+    #[error("catalog connection errored")]
+    CatalogError(Arc<anyhow::Error>),
+    #[error("error loading aws sdk context")]
+    AwsSdkContextError(Arc<anyhow::Error>),
+    #[error("error listing sts identity")]
+    StsIdentityError(Arc<GetCallerIdentityError>),
+}
+
+impl IcebergSinkPurificationError {
+    pub fn detail(&self) -> Option<String> {
+        match self {
+            Self::CatalogError(e) => Some(e.to_string_with_causes()),
+            Self::AwsSdkContextError(e) => Some(e.to_string_with_causes()),
+            Self::StsIdentityError(e) => Some(e.to_string_with_causes()),
         }
     }
 

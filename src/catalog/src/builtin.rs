@@ -2063,6 +2063,24 @@ pub static MZ_DATAFLOW_OPERATOR_REACHABILITY_RAW: LazyLock<BuiltinLog> =
         access: vec![PUBLIC_SELECT],
     });
 
+pub static MZ_ICEBERG_SINKS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
+    name: "mz_iceberg_sinks",
+    schema: MZ_CATALOG_SCHEMA,
+    oid: oid::TABLE_MZ_ICEBERG_SINKS_OID,
+    desc: RelationDesc::builder()
+        .with_column("id", SqlScalarType::String.nullable(false))
+        .with_column("namespace", SqlScalarType::String.nullable(false))
+        .with_column("table", SqlScalarType::String.nullable(false))
+        .finish(),
+    column_comments: BTreeMap::from_iter([
+        ("id", "The ID of the sink."),
+        ("namespace", "The namespace of the sink."),
+        ("table", "The table the sink is writing to."),
+    ]),
+    is_retained_metrics_object: false,
+    access: vec![PUBLIC_SELECT],
+});
+
 pub static MZ_KAFKA_SINKS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_kafka_sinks",
     schema: MZ_CATALOG_SCHEMA,
@@ -2713,9 +2731,9 @@ pub static MZ_SINKS: LazyLock<BuiltinTable> = LazyLock::new(|| {
             .with_column("envelope_type", SqlScalarType::String.nullable(true))
             // This `format` column is deprecated and replaced by the `key_format` and `value_format` columns
             // below. This should be removed in the future.
-            .with_column("format", SqlScalarType::String.nullable(false))
+            .with_column("format", SqlScalarType::String.nullable(true))
             .with_column("key_format", SqlScalarType::String.nullable(true))
-            .with_column("value_format", SqlScalarType::String.nullable(false))
+            .with_column("value_format", SqlScalarType::String.nullable(true))
             .with_column("cluster_id", SqlScalarType::String.nullable(false))
             .with_column("owner_id", SqlScalarType::String.nullable(false))
             .with_column("create_sql", SqlScalarType::String.nullable(false))
@@ -13767,6 +13785,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Table(&MZ_KAFKA_CONNECTIONS),
         Builtin::Table(&MZ_KAFKA_SOURCES),
         Builtin::Table(&MZ_OBJECT_DEPENDENCIES),
+        Builtin::Table(&MZ_ICEBERG_SINKS),
         Builtin::Table(&MZ_DATABASES),
         Builtin::Table(&MZ_SCHEMAS),
         Builtin::Table(&MZ_COLUMNS),

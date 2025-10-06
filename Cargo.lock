@@ -7696,6 +7696,7 @@ dependencies = [
  "globset",
  "hex",
  "http 1.2.0",
+ "iceberg",
  "im",
  "ipnet",
  "itertools 0.14.0",
