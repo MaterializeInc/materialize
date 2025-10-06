@@ -700,6 +700,8 @@ pub async fn blob_usage(args: &StateArgs) -> Result<(), anyhow::Error> {
 pub(crate) struct K;
 #[derive(Default, Debug, PartialEq, Eq)]
 pub(crate) struct V;
+#[derive(Default, Debug, PartialEq, Eq)]
+struct T;
 
 pub(crate) static KVTD_CODECS: Mutex<(String, String, String, String, Option<CodecConcreteType>)> =
     Mutex::new((
@@ -753,6 +755,34 @@ impl Codec for V {
     }
 
     fn decode(_buf: &[u8], _schema: &TodoSchema<V>) -> Result<Self, String> {
+        Ok(Self)
+    }
+
+    fn encode_schema(_schema: &Self::Schema) -> Bytes {
+        Bytes::new()
+    }
+
+    fn decode_schema(buf: &Bytes) -> Self::Schema {
+        assert_eq!(*buf, Bytes::new());
+        TodoSchema::default()
+    }
+}
+
+impl Codec for T {
+    type Storage = ();
+    type Schema = TodoSchema<T>;
+
+    fn codec_name() -> String {
+        KVTD_CODECS.lock().expect("lockable").2.clone()
+    }
+
+    fn encode<B>(&self, _buf: &mut B)
+    where
+        B: BufMut,
+    {
+    }
+
+    fn decode(_buf: &[u8], _schema: &TodoSchema<T>) -> Result<Self, String> {
         Ok(Self)
     }
 
