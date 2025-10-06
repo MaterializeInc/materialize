@@ -41,7 +41,7 @@ use crate::util::ResultExt;
 /// that read frontiers cannot advance past the held time as long as they exist.
 /// Dropping a [`ReadHolds`] also drops the [`ReadHold`] tokens within and
 /// relinquishes the associated read capabilities.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ReadHolds<T: TimelyTimestamp> {
     pub storage_holds: BTreeMap<GlobalId, ReadHold<T>>,
     pub compute_holds: BTreeMap<(ComputeInstanceId, GlobalId), ReadHold<T>>,
