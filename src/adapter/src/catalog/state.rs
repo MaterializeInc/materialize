@@ -877,6 +877,12 @@ impl CatalogState {
             .map(|id| &self.roles_by_id[id])
     }
 
+    pub(super) fn get_role_auth(&self, id: &RoleId) -> &RoleAuth {
+        self.role_auth_by_id
+            .get(id)
+            .unwrap_or_else(|| panic!("catalog out of sync, missing role auth for {id}"))
+    }
+
     pub(super) fn try_get_role_auth_by_id(&self, id: &RoleId) -> Option<&RoleAuth> {
         self.role_auth_by_id.get(id)
     }

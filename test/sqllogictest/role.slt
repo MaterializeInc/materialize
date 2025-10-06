@@ -283,10 +283,17 @@ ALTER SYSTEM SET enable_password_auth = true;
 COMPLETE 0
 
 # Test creating and using a role with password
-statement ok
+simple conn=mz_system,user=mz_system
 CREATE ROLE password_user WITH LOGIN PASSWORD 'test_password123'
+----
+COMPLETE 0
 
-# Grant necessary permissions to the new role (using mz_system which has appropriate privileges)
+simple conn=mz_system,user=mz_system
+CREATE ROLE password_superuser WITH LOGIN SUPERUSER PASSWORD 'super_password123'
+----
+COMPLETE 0
+
+# Grant necessary permissions to the new role
 simple conn=mz_system,user=mz_system
 GRANT USAGE ON DATABASE materialize TO password_user
 ----
@@ -296,6 +303,36 @@ simple conn=mz_system,user=mz_system
 GRANT CREATE ON SCHEMA materialize.public TO password_user
 ----
 COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+SELECT rolsuper, rolcanlogin FROM mz_roles WHERE name = 'password_user'
+----
+f,t
+COMPLETE 1
+
+simple conn=mz_system,user=mz_system
+SELECT rolsuper, rolcanlogin FROM mz_roles WHERE name = 'password_superuser'
+----
+t,t
+COMPLETE 1
+
+simple conn=mz_system,user=mz_system
+SELECT rolsuper, rolcanlogin FROM pg_authid WHERE rolname = 'password_superuser'
+----
+t,t
+COMPLETE 1
+
+simple conn=superuser_conn,user=password_superuser,password=super_password123
+SELECT rolsuper, rolcanlogin FROM pg_authid WHERE rolname = 'password_superuser'
+----
+t,t
+COMPLETE 1
+
+simple
+SELECT rolsuper, rolcanlogin FROM pg_authid WHERE rolname = 'password_superuser'
+----
+db error: ERROR: permission denied for VIEW "pg_catalog.pg_authid"
+DETAIL: The 'materialize' role needs SELECT privileges on VIEW "pg_catalog.pg_authid"
 
 # Test connecting with the password
 simple conn=password_conn,user=password_user,password=test_password123

@@ -152,7 +152,7 @@ rolcanlogin        false       boolean                        ""
 rolreplication     false       boolean                        ""
 rolbypassrls       false       boolean                        ""
 rolconnlimit       false       integer                        ""
-rolpassword        false       text                           ""
+rolpassword        true        text                           ""
 rolvaliduntil      true        "timestamp with time zone"     ""
 
 > SHOW COLUMNS FROM pg_auth_members

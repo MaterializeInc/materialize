@@ -1219,6 +1219,9 @@ impl CatalogState {
                 }
                 builtin_table_updates
             }
+            StateUpdateKind::RoleAuth(role_auth) => {
+                vec![self.pack_role_auth_update(role_auth.role_id, diff)]
+            }
             StateUpdateKind::Database(database) => {
                 vec![self.pack_database_update(&database.id, diff)]
             }
@@ -1278,8 +1281,7 @@ impl CatalogState {
                 .pack_network_policy_update(&policy.id, diff)
                 .expect("could not pack audit log update"),
             StateUpdateKind::StorageCollectionMetadata(_)
-            | StateUpdateKind::UnfinalizedShard(_)
-            | StateUpdateKind::RoleAuth(_) => Vec::new(),
+            | StateUpdateKind::UnfinalizedShard(_) => Vec::new(),
         }
     }
 
