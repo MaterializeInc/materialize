@@ -288,15 +288,17 @@ When a failover occurs, SQL Server drops the existing connection and routes new
 connections to the new primary replica transparently.
 
 {{< warning >}}
-**Availability modes and data consistency:** SQL Server AGs support two
+SQL Server AGs support two
 [availability modes](https://learn.microsoft.com/en-us/sql/database-engine/availability-groups/windows/overview-of-always-on-availability-groups-sql-server?view=sql-server-ver17#availability-modes):
-synchronous-commit and asynchronous-commit.
 
-With **asynchronous-commit mode**, transactions commit on the primary before
+- **Asynchronous-commit mode**: Does not guarantee data consistency.  Transactions commit on the primary before
 being sent to secondaries. If the primary fails before replicating recent
 transactions, those changes will be lost and **Materialize will not ingest
-them**. For guaranteed data consistency, use **synchronous-commit mode**.
+them**.
 
+- **Synchronous-commit mode**: Guarantees data consistency.
+
+For guaranteed data consistency, use **synchronous-commit mode**.
 For additional best practices on configuring CDC with availability groups, see
 [Microsoft's documentation on replication agents with availability groups](https://learn.microsoft.com/en-us/sql/database-engine/availability-groups/windows/replicate-track-change-data-capture-always-on-availability?view=sql-server-ver17#general-changes-to-replication-agents-to-support-availability-groups).
 {{< /warning >}}
