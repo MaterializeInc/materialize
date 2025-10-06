@@ -87,7 +87,7 @@ spec:
         {{- if .Values.console.enabled }}
         - "--create-console"
         {{- end }}
-        - "--console-image-tag-default=25.2.3"
+        - "--console-image-tag-default=25.2.9"
         {{- range $key, $value := .Values.console.imageTagMapOverride }}
         - "--console-image-tag-map={{ $key }}={{ $value }}"
         {{- end }}
