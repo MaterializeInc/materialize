@@ -362,6 +362,14 @@
   - signature: 'ltrim(s: str, c: str) -> str'
     description: Trim any character in `c` from the left side of `s`.
 
+  - signature: 'normalize(s: str) -> str'
+    description: Normalize `s` to Unicode Normalization Form NFC (default).
+    url: /sql/functions/normalize
+
+  - signature: 'normalize(s: str, form: keyword) -> str'
+    description: Normalize `s` to the specified Unicode normalization form (NFC, NFD, NFKC, or NFKD).
+    url: /sql/functions/normalize
+
   - signature: 'octet_length(s: str) -> int'
     description: Number of bytes in `s`.
 

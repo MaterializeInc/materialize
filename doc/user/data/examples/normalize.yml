@@ -1,0 +1,64 @@
+- name: "syntax"
+  code: |
+    normalize(str)
+    normalize(str, form)
+
+- name: "normalize-default"
+  description: |
+    Normalize a string using the default NFC form:
+  code: |
+    SELECT normalize('é') AS normalized;
+  results: |
+    ```nofmt
+     normalized
+    ------------
+     é
+    ```
+
+- name: "normalize-nfc"
+  description: |
+    NFC combines base character with combining marks:
+  code: |
+    SELECT normalize('é', NFC) AS nfc;
+  results: |
+    ```nofmt
+     nfc
+    -----
+     é
+    ```
+
+- name: "normalize-nfd"
+  description: |
+    NFD decomposes into base character + combining accent:
+  code: |
+    SELECT normalize('é', NFD) = E'e\u0301' AS is_decomposed;
+  results: |
+    ```nofmt
+     is_decomposed
+    ---------------
+     t
+    ```
+
+- name: "normalize-nfkc-ligatures"
+  description: |
+    NFKC decomposes compatibility characters like ligatures:
+  code: |
+    SELECT normalize('ﬁ', NFKC) AS decomposed;
+  results: |
+    ```nofmt
+     decomposed
+    ------------
+     fi
+    ```
+
+- name: "normalize-nfkc-superscript"
+  description: |
+    NFKC converts superscripts to regular characters:
+  code: |
+    SELECT normalize('x²', NFKC) AS normalized;
+  results: |
+    ```nofmt
+     normalized
+    ------------
+     x2
+    ```
