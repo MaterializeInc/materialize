@@ -347,8 +347,8 @@ h 7 1
 ----
 parts=4 len=4
 
-# Memory bound is too small to mix both batches, but allows 2 parts at a time.
-# Compaction will chunk within each batch, not across batches.
+# Memory bound is too small for all parts, but allows two parts at a time.
+# Since both input batches are a single run, we can fit both runs in our memory budget.
 compact output=sb0_1 inputs=(sb0,sb1) lower=0 upper=8 since=8 target_size=30 memory_bound=120
 ----
 parts=4 len=8
@@ -370,7 +370,6 @@ h 8 1
 <run 0>
 part 0
 part 1
-<run 1>
 part 2
 part 3
 
