@@ -11,7 +11,7 @@ menu:
 
 A [sink](/concepts/sinks/) describes an external system you
 want Materialize to write data to, and provides details about how to encode
-that data.
+that data. You can define a sink over a materialized view, source, or table.
 
 ## Connectors
 
@@ -20,8 +20,7 @@ following external systems:
 
 {{< multilinkbox >}}
 {{< linkbox title="Message Brokers" >}}
-- [Kafka](/sql/create-sink/kafka)
-- [Redpanda](/sql/create-sink/kafka)
+- [Kafka/Redpanda](/sql/create-sink/kafka)
 {{</ linkbox >}}
 {{</ multilinkbox >}}
 
@@ -58,14 +57,7 @@ materialized view.
 
 The privileges required to execute this statement are:
 
-- `CREATE` privileges on the containing schema.
-- `SELECT` privileges on the item being written out to an external system.
-  - NOTE: if the item is a view, then the view owner must also have the necessary privileges to
-    execute the view definition.
-- `CREATE` privileges on the containing cluster if the sink is created in an existing cluster.
-- `CREATECLUSTER` privileges on the system if the sink is not created in an existing cluster.
-- `USAGE` privileges on all connections and secrets used in the sink definition.
-- `USAGE` privileges on the schemas that all connections and secrets in the statement are contained in.
+{{< include-md file="shared-content/sql-command-privileges/create-sink.md" >}}
 
 ## Related pages
 
