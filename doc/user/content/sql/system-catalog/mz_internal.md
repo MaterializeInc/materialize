@@ -1147,13 +1147,13 @@ When a source is first created, it must process an initial snapshot of data.
 <a name="meaning-record"></a>
 
 The meaning of record depends on the source:
-- For Kafka sources, its the total number of offsets in the snapshot.
-- For Postgres and MySQL sources, its the number of rows in the snapshot.
+- For Kafka sources, it's the total number of offsets in the snapshot.
+- For Postgres and MySQL sources, it's the number of rows in the snapshot.
 
 Note that when tables are added to Postgres or MySQL sources,
 `snapshot_records_known` and `snapshot_records_staged` will reset as the source
 snapshots those new tables. The metrics will also reset if the source is
-restarted while the snapshot is in progres.
+restarted while the snapshot is in progress.
 
 `snapshot_committed` becomes true when we have fully committed the snapshot for
 the given source. <!-- TODO: when does this reset? -->
