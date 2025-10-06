@@ -128,7 +128,7 @@ impl From<CollectionMissing> for ReadPolicyError {
 }
 
 /// A command sent to an [`Instance`] task.
-pub(super) type Command<T> = Box<dyn FnOnce(&mut Instance<T>) + Send>;
+type Command<T> = Box<dyn FnOnce(&mut Instance<T>) + Send>;
 
 /// A client for an `Instance` task.
 #[derive(Clone, derivative::Derivative)]
@@ -151,12 +151,13 @@ impl<T: ComputeControllerTimestamp> Client<T> {
         F: FnOnce(&mut Instance<T>) + Send + 'static,
     {
         let otel_ctx = OpenTelemetryContext::obtain();
-        self.command_tx.send(Box::new(move |instance| {
-            let _span = debug_span!("instance::call").entered();
-            otel_ctx.attach_as_parent();
+        self.command_tx
+            .send(Box::new(move |instance| {
+                let _span = debug_span!("instance::call").entered();
+                otel_ctx.attach_as_parent();
 
-            f(instance)
-        }))
+                f(instance)
+            }))
             .expect("instance not dropped");
     }
 
@@ -167,17 +168,16 @@ impl<T: ComputeControllerTimestamp> Client<T> {
         F: FnOnce(&mut Instance<T>) -> R + Send + 'static,
         R: Send + 'static,
     {
-        use tokio::sync::oneshot;
-        use tracing::debug_span;
         let (tx, rx) = oneshot::channel();
         let otel_ctx = OpenTelemetryContext::obtain();
-        self.command_tx.send(Box::new(move |instance| {
-            let _span = debug_span!("instance::call_sync").entered();
-            otel_ctx.attach_as_parent();
-            let result = f(instance);
-            let _ = tx.send(result);
-        }))
-        .expect("instance not dropped");
+        self.command_tx
+            .send(Box::new(move |instance| {
+                let _span = debug_span!("instance::call_sync").entered();
+                otel_ctx.attach_as_parent();
+                let result = f(instance);
+                let _ = tx.send(result);
+            }))
+            .expect("instance not dropped");
 
         rx.await.expect("instance not dropped")
     }
@@ -248,10 +248,10 @@ where
             .await
     }
 
-    /// Issue a peek by calling into the instance task synchronously, letting the instance acquire
-    /// read holds if none are provided. This ensures the read holds are established before
-    /// returning to the caller.
-    pub async fn peek_call_sync(
+    /// Issue a peek by calling into the instance task, letting the instance acquire read holds if
+    /// none are provided. This ensures the read holds are established before returning to the
+    /// caller.
+    pub async fn peek(
         &self,
         peek_target: PeekTarget,
         literal_constraints: Option<Vec<Row>>,
@@ -260,7 +260,6 @@ where
         result_desc: RelationDesc,
         finishing: RowSetFinishing,
         map_filter_project: mz_expr::SafeMfpPlan,
-        read_hold: Option<ReadHold<T>>,
         target_replica: Option<ReplicaId>,
         peek_response_tx: oneshot::Sender<PeekResponse>,
     ) {
@@ -273,7 +272,7 @@ where
                 result_desc,
                 finishing,
                 map_filter_project,
-                read_hold,
+                None,
                 target_replica,
                 peek_response_tx,
             )
@@ -2426,8 +2425,6 @@ where
     ) -> Result<Vec<(GlobalId, ReadHold<T>, Antichain<T>)>, CollectionMissing> {
         let mut result = Vec::new();
         for id in ids.into_iter() {
-            // TODO(peek-seq): This takes locks separately for each id. We should change these
-            // methods to be able to take a collection of ids.
             result.push((
                 id,
                 self.acquire_read_hold(id)?,
@@ -2671,10 +2668,11 @@ pub(super) struct SharedCollectionState<T> {
     /// This accumulation contains the capabilities held by all [`ReadHold`]s given out for the
     /// collection, including `implied_read_hold` and `warmup_read_hold`.
     ///
-    /// NOTE: This field may only be modified by [`Instance::apply_read_hold_change`] and
-    /// `ComputeController::acquire_read_hold`. Nobody else should modify read capabilities
-    /// directly. Instead, collection users should manage read holds through [`ReadHold`] objects
-    /// acquired through `ComputeController::acquire_read_hold`.
+    /// NOTE: This field may only be modified by [`Instance::apply_read_hold_change`],
+    /// [`Instance::acquire_read_hold`], and `ComputeController::acquire_read_hold`.
+    /// Nobody else should modify read capabilities directly. Instead, collection users should
+    /// manage read holds through [`ReadHold`] objects acquired through
+    /// `ComputeController::acquire_read_hold`.
     ///
     /// TODO(teskje): Restructure the code to enforce the above in the type system.
     read_capabilities: Arc<Mutex<MutableAntichain<T>>>,
