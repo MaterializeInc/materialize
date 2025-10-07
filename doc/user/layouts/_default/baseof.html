@@ -197,6 +197,58 @@ Apache License, Version 2.0. */}}
         closeSidebar();
       });
 
+      // Prevent body scroll when scrolling in sidebar
+      const sidebar = document.querySelector(".sidebar");
+      let isScrollingSidebar = false;
+
+      sidebar.addEventListener("wheel", (e) => {
+        const sidebarElement = e.currentTarget;
+        const { scrollTop, scrollHeight, clientHeight } = sidebarElement;
+
+        // Check if we're at the top or bottom of the sidebar
+        const isAtTop = scrollTop === 0;
+        const isAtBottom = scrollTop + clientHeight >= scrollHeight - 1; // Small tolerance for rounding
+
+        // If scrolling up and at top, or scrolling down and at bottom, prevent default
+        if ((e.deltaY < 0 && isAtTop) || (e.deltaY > 0 && isAtBottom)) {
+          e.preventDefault();
+        }
+      }, { passive: false });
+
+      // Also handle touch events for mobile
+      sidebar.addEventListener("touchstart", () => {
+        isScrollingSidebar = true;
+      });
+
+      sidebar.addEventListener("touchend", () => {
+        isScrollingSidebar = false;
+      });
+
+      // Prevent body scroll when actively scrolling sidebar
+      document.addEventListener("wheel", (e) => {
+        if (isScrollingSidebar) {
+          e.preventDefault();
+        }
+      }, { passive: false });
+
+      // Ensure sidebar content is properly scrollable when expanded
+      const ensureSidebarScrollability = () => {
+        const sidebar = document.querySelector(".sidebar");
+        if (sidebar) {
+          // Force a reflow to ensure proper height calculation
+          sidebar.style.height = 'auto';
+          sidebar.offsetHeight; // Trigger reflow
+          sidebar.style.height = '';
+        }
+      };
+
+      // Run on menu expansion
+      document.addEventListener('click', (e) => {
+        if (e.target.closest('.sidebar a') && e.target.closest('li').classList.contains('has-children')) {
+          setTimeout(ensureSidebarScrollability, 100);
+        }
+      });
+
       backdrop.addEventListener("click", () => {
         closeSidebar();
       });
