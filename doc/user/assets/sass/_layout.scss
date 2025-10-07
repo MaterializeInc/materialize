@@ -139,6 +139,7 @@ table.inline-headings {
         z-index: 100;
         top: var(--nav-height);
         left: 0;
+        height: calc(100vh - var(--nav-height));
         border-right: 1px solid var(--divider-light);
         transform: translateX(-100%);
         transition: all .2s ease-out;
@@ -167,10 +168,11 @@ table.inline-headings {
     top: var(--nav-height);
     padding: var(--xx-small) var(--small);
     overflow-y: auto;
-    height: 100vh;
+    height: calc(100vh - var(--nav-height));
     display: flex;
     font-size: rem(1.3);
     overflow-x: hidden;
+    overscroll-behavior: contain;
 
     &,
     ul {
@@ -190,6 +192,7 @@ table.inline-headings {
 
     @media(max-width: 850px) {
         padding-bottom: var(--large);
+        height: calc(100vh - var(--nav-height));
     }
 
     a {
