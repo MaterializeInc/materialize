@@ -828,6 +828,9 @@ class AWS(State):
         else:
             raise ValueError("Never completed")
 
+        # Wait a bit for the status to stabilize
+        print("--- Waiting and get status:")
+        time.sleep(180)
         # Get all pods in materialize-environment:
         spawn.runv(
             ["kubectl", "get", "pods", "-n", "materialize-environment"],
@@ -838,6 +841,27 @@ class AWS(State):
             ["kubectl", "describe", "pods", "-n", "materialize-environment"],
             cwd=self.path,
         )
+        pod_names = (
+            spawn.capture(
+                [
+                    "kubectl",
+                    "get",
+                    "pods",
+                    "-n",
+                    "materialize-environment",
+                    "-o",
+                    "name",
+                ],
+                cwd=self.path,
+            )
+            .strip()
+            .split("\n")
+        )
+        for pod in pod_names:
+            spawn.runv(
+                ["kubectl", "logs", pod, "-n", "materialize-environment"],
+                cwd=self.path,
+            )
 
 
 def workflow_aws_temporary(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -886,8 +910,7 @@ def workflow_aws_upgrade(c: Composition, parser: WorkflowArgumentParser) -> None
         aws.upgrade(tag)
         if args.test:
             # Try waiting a bit, otherwise connection error, should be handled better
-            print("--- Waiting for 240 seconds")
-            time.sleep(240)
+            time.sleep(180)
             print("--- Running tests")
             aws.connect(c)
 
