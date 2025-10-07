@@ -16,7 +16,8 @@
 //! Port forwards k8s service via Kubectl
 
 use anyhow::{Context, Result};
-use k8s_openapi::api::core::v1::{Pod, Service, ServicePort};
+use k8s_openapi::api::apps::v1::StatefulSet;
+use k8s_openapi::api::core::v1::{Service, ServicePort};
 use kube::api::ListParams;
 use kube::{Api, Client};
 use tokio::io::AsyncBufReadExt;
@@ -147,12 +148,13 @@ pub async fn find_environmentd_service(
         .await
         .with_context(|| format!("Failed to list services in namespace {}", k8s_namespace))?;
 
-    // Find the first sql service that contains balancerd
+    // Find the first sql service that contains environmentd
     let maybe_service =
         services
             .iter()
             .find_map(|service| match (&service.metadata.name, &service.spec) {
                 (Some(service_name), Some(spec)) => {
+                    // TODO (debug_tool3): This could match both the generation service and the globally active one. We should use the active one.
                     if !service_name.to_lowercase().contains("environmentd") {
                         return None;
                     }
@@ -183,33 +185,19 @@ pub async fn find_cluster_services(
     k8s_namespace: &String,
     mz_instance_name: &String,
 ) -> Result<Vec<ServiceInfo>> {
-    let pods: Api<Pod> = Api::namespaced(client.clone(), k8s_namespace);
-
-    let pods_label_filter = format!(
-        "environmentd.materialize.cloud/namespace=cluster,materialize.cloud/organization-name={}",
-        mz_instance_name
-    );
-
-    let pods = pods
-        .list(&ListParams::default().labels(&pods_label_filter))
-        .await
-        .with_context(|| format!("Failed to list pods in namespace {}", k8s_namespace))?;
-
-    // Create a set of service IDs from pod labels
-    let service_ids_to_scrape: std::collections::BTreeSet<String> = pods
-        .iter()
-        .filter_map(|pod| {
-            pod.metadata
-                .labels
-                .as_ref()
-                .and_then(|labels| labels.get("environmentd.materialize.cloud/service-id"))
-                .map(|s| s.to_string())
-        })
-        .collect();
-
     let services: Api<Service> = Api::namespaced(client.clone(), k8s_namespace);
     let services = services
         .list(&ListParams::default())
+        .await
+        .with_context(|| format!("Failed to list services in namespace {}", k8s_namespace))?;
+
+    let statefulsets_api: Api<StatefulSet> = Api::namespaced(client.clone(), k8s_namespace);
+
+    let organization_name_filter =
+        format!("materialize.cloud/organization-name={}", mz_instance_name);
+
+    let statefulsets = statefulsets_api
+        .list(&ListParams::default().labels(&organization_name_filter))
         .await
         .with_context(|| format!("Failed to list services in namespace {}", k8s_namespace))?;
 
@@ -222,8 +210,25 @@ pub async fn find_cluster_services(
             let ports = spec.ports?;
 
             // Check if this is a cluster service
-            if !service_ids_to_scrape
-                .contains(selector.get("environmentd.materialize.cloud/service-id")?)
+            if selector.get("environmentd.materialize.cloud/namespace")? != "cluster" {
+                return None;
+            }
+
+            // Check if the owner reference points to environmentd StatefulSet in the same mz instance
+            let envd_statefulset_reference_name = service
+                .metadata
+                .owner_references
+                .as_ref()?
+                .iter()
+                //  There should only be one StatefulSet reference to environmentd
+                .find(|owner_reference| owner_reference.kind == "StatefulSet")?
+                .name
+                .clone();
+
+            if !statefulsets
+                .iter()
+                .filter_map(|statefulset| statefulset.metadata.name.clone())
+                .any(|name| name == envd_statefulset_reference_name)
             {
                 return None;
             }
