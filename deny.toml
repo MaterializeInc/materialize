@@ -161,6 +161,8 @@ skip = [
     { name = "darling_macro", version = "0.20.11" },
     { name = "darling_core", version = "0.20.11" },
     { name = "darling", version = "0.20.11" },
+    { name = "typed-builder", version = "0.21.2" },
+    { name = "typed-builder-macro", version = "0.21.2" },
     # prost needs an older version of `petgraph`.
     { name = "petgraph", version = "0.7.1" },
 ]

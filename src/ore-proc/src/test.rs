@@ -18,7 +18,8 @@
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use syn::{AttributeArgs, ItemFn, Meta, NestedMeta, ReturnType, parse_macro_input, parse_quote};
+use syn::punctuated::Punctuated;
+use syn::{ItemFn, Meta, ReturnType, Token, parse_macro_input, parse_quote};
 
 /// Based on <https://github.com/d-e-s-o/test-log>
 /// Copyright (C) 2019-2022 Daniel Mueller <deso@posteo.net>
@@ -26,13 +27,16 @@ use syn::{AttributeArgs, ItemFn, Meta, NestedMeta, ReturnType, parse_macro_input
 ///
 /// Implementation for the `test` macro.
 pub fn test_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let args = parse_macro_input!(attr as AttributeArgs);
+    let args: Vec<_> =
+        parse_macro_input!(attr with Punctuated::<Meta, Token![,]>::parse_terminated)
+            .into_iter()
+            .collect();
     let input = parse_macro_input!(item as ItemFn);
 
     let inner_test = match args.as_slice() {
         [] => parse_quote! { ::core::prelude::v1::test },
-        [NestedMeta::Meta(Meta::Path(path))] => quote! { #path },
-        [NestedMeta::Meta(Meta::List(list))] => quote! { #list },
+        [Meta::Path(path)] => quote! { #path },
+        [Meta::List(list)] => quote! { #list },
         _ => panic!("unsupported attributes supplied: {:?}", args),
     };
 

@@ -84,7 +84,7 @@ impl BuildScriptContext {
             })
             .flat_map(|func| {
                 func.block.stmts.iter().filter_map(|stmt| match stmt {
-                    syn::Stmt::Expr(expr) | syn::Stmt::Semi(expr, _) => Some(expr),
+                    syn::Stmt::Expr(expr, _) => Some(expr),
                     _ => None,
                 })
             })
@@ -140,7 +140,7 @@ fn find_proto_build(config: &GlobalConfig, expr: &syn::Expr) -> bool {
         syn::Expr::Call(call) => find_proto_build(config, &call.func),
         syn::Expr::MethodCall(call) => find_proto_build(config, &call.receiver),
         syn::Expr::Block(inner) => inner.block.stmts.iter().any(|s| match &s {
-            syn::Stmt::Semi(expr, _) | syn::Stmt::Expr(expr) => find_proto_build(config, expr),
+            syn::Stmt::Expr(expr, _) => find_proto_build(config, expr),
             _ => false,
         }),
         syn::Expr::Try(inner) => find_proto_build(config, &inner.expr),
