@@ -45,7 +45,7 @@ insta = "1.43"
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
 prost-build = "0.13.5"
-reqwest = { version = "0.11.13", features = ["blocking", "native-tls-vendored"] }
+reqwest = { version = "0.12.23", features = ["blocking", "native-tls-vendored"] }
 tonic-build = "0.12.3"
 
 [features]
