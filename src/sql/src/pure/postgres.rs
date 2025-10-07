@@ -685,46 +685,24 @@ mod privileges {
     }
 
     /// Ensure that the user specified in `config` can read data from tables if row level security
-    /// (RLS) is enabled.
+    /// (RLS) is enabled. If the user/role does not have the BYPASSRLS attribute set, there is
+    /// the possibility that MZ may not be able to read all data during the snapshot, which would
+    /// result in missing data.
     pub async fn check_rls_privileges(
         client: &Client,
         table_oids: &[Oid],
     ) -> Result<(), PlanError> {
-        tracing::error!("looking up RLS for oids {table_oids:?}");
-        let tables_with_rls_for_user = client
-            .query(
-                "SELECT
-                    format('%I.%I', pc.relnamespace::regnamespace, pc.relname) AS qualified_name
-                FROM pg_policy pp
-                JOIN pg_class pc ON pc.oid = polrelid
-                WHERE
-                    polrelid = ANY($1::oid[])
-                    AND
-                    (0 = ANY(polroles) OR CURRENT_USER::regrole::oid = ANY(polroles));",
-                &[&table_oids],
-            )
-            .await
-            .map_err(PostgresError::from)?;
-
-        let mut tables_with_rls_for_user = tables_with_rls_for_user
-            .into_iter()
-            .map(|row| row.get("qualified_name"))
-            .collect::<Vec<String>>();
-
-        if tables_with_rls_for_user.is_empty() {
-            Ok(())
-        } else {
-            // if the user/role does not have the BYPASSRLS attribute set, there is the possibility
-            // that we may not be able to read all data during the snapshot, which would result
-            // in missing data.
-            if mz_postgres_util::bypass_rls_attribute(client).await? {
-                Ok(())
-            } else {
-                tables_with_rls_for_user.sort();
-                Err(PgSourcePurificationError::UserMustBypassRLS {
-                    tables: tables_with_rls_for_user,
-                })?
-            }
+        match mz_postgres_util::validate_no_rls_policies(client, table_oids).await {
+            Ok(_) => Ok(()),
+            Err(err) => match err {
+                // This is a little gross to do, but PlanError::PostgresConnectionErr implements
+                // From<PostgresError>, and the error in that case would be
+                // "failed to connect to PostgreSQL database", which doesn't make any sense.
+                PostgresError::BypassRLSRequired(tables) => {
+                    Err(PgSourcePurificationError::BypassRLSRequired { tables })?
+                }
+                _ => Err(err)?,
+            },
         }
     }
 }
