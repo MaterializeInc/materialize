@@ -164,6 +164,11 @@ skip = [
     # prost needs an older version of `petgraph`.
     { name = "petgraph", version = "0.7.1" },
     # chrono-tz
+    { name = "phf", version = "0.12.1" },
+    { name = "phf_shared", version = "0.12.1" },
+    { name = "phf_generator", version = "0.12.1" },
+    { name = "phf_codegen", version = "0.12.1" },
+    # tokio-postgres
     { name = "phf", version = "0.11.3" },
     { name = "phf_shared", version = "0.11.3" },
     { name = "phf_generator", version = "0.11.2" },

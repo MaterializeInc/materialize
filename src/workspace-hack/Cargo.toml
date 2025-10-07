@@ -77,7 +77,7 @@ hashbrown-582f2526e08bb6a0 = { package = "hashbrown", version = "0.14.5", defaul
 hyper = { version = "0.14.27", features = ["client", "http1", "http2", "stream", "tcp"] }
 hyper-util = { version = "0.1.17", features = ["client-legacy", "server-auto", "service", "tracing"] }
 insta = { version = "1.43.2", features = ["json"] }
-itertools = { version = "0.10.5" }
+itertools = { version = "0.13.0" }
 libc = { version = "0.2.177", features = ["extra_traits", "use_std"] }
 libz-sys = { version = "1.1.22", features = ["static"] }
 lock_api = { version = "0.4.14", features = ["serde"] }
@@ -99,10 +99,9 @@ num-traits = { version = "0.2.19", features = ["i128", "libm"] }
 parking_lot = { version = "0.12.5", features = ["serde"] }
 parquet = { version = "55.2.0", features = ["async"] }
 percent-encoding = { version = "2.3.2" }
-phf-594e8ee84c453af0 = { package = "phf", version = "0.13.1", features = ["uncased"] }
-phf-a6292c17cd707f01 = { package = "phf", version = "0.11.3", features = ["uncased"] }
+phf = { version = "0.13.1", features = ["uncased"] }
 phf_shared-594e8ee84c453af0 = { package = "phf_shared", version = "0.13.1", features = ["uncased"] }
-phf_shared-a6292c17cd707f01 = { package = "phf_shared", version = "0.11.3", features = ["uncased"] }
+phf_shared-5ef9efb8ec2df382 = { package = "phf_shared", version = "0.12.1", features = ["uncased"] }
 portable-atomic = { version = "1.11.1", features = ["require-cas"] }
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4"] }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
@@ -226,7 +225,7 @@ hashbrown-582f2526e08bb6a0 = { package = "hashbrown", version = "0.14.5", defaul
 hyper = { version = "0.14.27", features = ["client", "http1", "http2", "stream", "tcp"] }
 hyper-util = { version = "0.1.17", features = ["client-legacy", "server-auto", "service", "tracing"] }
 insta = { version = "1.43.2", features = ["json"] }
-itertools = { version = "0.10.5" }
+itertools = { version = "0.13.0" }
 libc = { version = "0.2.177", features = ["extra_traits", "use_std"] }
 libz-sys = { version = "1.1.22", features = ["static"] }
 lock_api = { version = "0.4.14", features = ["serde"] }
@@ -248,10 +247,9 @@ num-traits = { version = "0.2.19", features = ["i128", "libm"] }
 parking_lot = { version = "0.12.5", features = ["serde"] }
 parquet = { version = "55.2.0", features = ["async"] }
 percent-encoding = { version = "2.3.2" }
-phf-594e8ee84c453af0 = { package = "phf", version = "0.13.1", features = ["uncased"] }
-phf-a6292c17cd707f01 = { package = "phf", version = "0.11.3", features = ["uncased"] }
+phf = { version = "0.13.1", features = ["uncased"] }
 phf_shared-594e8ee84c453af0 = { package = "phf_shared", version = "0.13.1", features = ["uncased"] }
-phf_shared-a6292c17cd707f01 = { package = "phf_shared", version = "0.11.3", features = ["uncased"] }
+phf_shared-5ef9efb8ec2df382 = { package = "phf_shared", version = "0.12.1", features = ["uncased"] }
 portable-atomic = { version = "1.11.1", features = ["require-cas"] }
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4"] }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
