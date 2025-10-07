@@ -21,29 +21,29 @@ pub struct Metrics {
     pub active_sessions: IntGaugeVec,
     pub active_subscribes: IntGaugeVec,
     pub active_copy_tos: IntGaugeVec,
-    pub queue_busy_seconds: HistogramVec,
+    pub queue_busy_seconds: Histogram,
     pub determine_timestamp: IntCounterVec,
     pub timestamp_difference_for_strict_serializable_ms: HistogramVec,
     pub commands: IntCounterVec,
-    pub storage_usage_collection_time_seconds: HistogramVec,
+    pub storage_usage_collection_time_seconds: Histogram,
     pub subscribe_outputs: IntCounterVec,
-    pub canceled_peeks: IntCounterVec,
+    pub canceled_peeks: IntCounter,
     pub linearize_message_seconds: HistogramVec,
     pub time_to_first_row_seconds: HistogramVec,
     pub statement_logging_records: IntCounterVec,
-    pub statement_logging_unsampled_bytes: IntCounterVec,
-    pub statement_logging_actual_bytes: IntCounterVec,
-    pub message_batch: HistogramVec,
+    pub statement_logging_unsampled_bytes: IntCounter,
+    pub statement_logging_actual_bytes: IntCounter,
+    pub message_batch: Histogram,
     pub message_handling: HistogramVec,
     pub optimization_notices: IntCounterVec,
-    pub append_table_duration_seconds: HistogramVec,
+    pub append_table_duration_seconds: Histogram,
     pub webhook_validation_reduce_failures: IntCounterVec,
     pub webhook_get_appender: IntCounter,
     pub check_scheduling_policies_seconds: HistogramVec,
     pub handle_scheduling_decisions_seconds: HistogramVec,
-    pub row_set_finishing_seconds: HistogramVec,
-    pub session_startup_table_writes_seconds: HistogramVec,
-    pub parse_seconds: HistogramVec,
+    pub row_set_finishing_seconds: Histogram,
+    pub session_startup_table_writes_seconds: Histogram,
+    pub parse_seconds: Histogram,
     pub pgwire_message_processing_seconds: HistogramVec,
     pub result_rows_first_to_last_byte_seconds: HistogramVec,
     pub pgwire_ensure_transaction_seconds: HistogramVec,
@@ -225,15 +225,13 @@ impl Metrics {
     }
 
     pub(crate) fn row_set_finishing_seconds(&self) -> Histogram {
-        self.row_set_finishing_seconds.with_label_values(&[])
+        self.row_set_finishing_seconds.clone()
     }
 
     pub(crate) fn session_metrics(&self) -> SessionMetrics {
         SessionMetrics {
             row_set_finishing_seconds: self.row_set_finishing_seconds(),
-            session_startup_table_writes_seconds: self
-                .session_startup_table_writes_seconds
-                .with_label_values(&[]),
+            session_startup_table_writes_seconds: self.session_startup_table_writes_seconds.clone(),
         }
     }
 }

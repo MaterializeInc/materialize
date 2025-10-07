@@ -26,7 +26,7 @@ mz-orchestrator-kubernetes = { path = "../orchestrator-kubernetes", default-feat
 mz-ore = { path = "../ore", default-features = false }
 os_info = "3.11.0"
 pin-project = "1.1.10"
-prometheus = { version = "0.13.4", default-features = false }
+prometheus = { version = "0.14.0", default-features = false }
 semver = { version = "1.0.27", features = ["serde"] }
 serde = { version = "1.0.219", features = ["derive"] }
 sysinfo = "0.29.11"

@@ -554,10 +554,7 @@ impl Coordinator {
             );
         }
         // Instrument our table writes since they can block the coordinator.
-        let histogram = self
-            .metrics
-            .append_table_duration_seconds
-            .with_label_values(&[]);
+        let histogram = self.metrics.append_table_duration_seconds.clone();
         let append_fut = self
             .controller
             .storage

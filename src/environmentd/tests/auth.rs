@@ -2151,7 +2151,7 @@ async fn test_auth_deduplication() {
     let metrics = server.metrics_registry.gather();
     let mut metrics: Vec<_> = metrics
         .into_iter()
-        .filter(|family| family.get_name() == "mz_auth_session_request_count")
+        .filter(|family| family.name() == "mz_auth_session_request_count")
         .collect();
     assert_eq!(metrics.len(), 1);
     let metric = metrics.pop().unwrap();
@@ -2163,13 +2163,13 @@ async fn test_auth_deduplication() {
     assert_eq!(metric.get_counter().get_value(), 1.0);
     let labels = metric.get_label();
     assert_eq!(labels.len(), 1);
-    let reason_1 = labels[0].get_value().to_string();
+    let reason_1 = labels[0].value().to_string();
 
     let metric = &metrics[1];
     assert_eq!(metric.get_counter().get_value(), 1.0);
     let labels = metric.get_label();
     assert_eq!(labels.len(), 1);
-    let reason_2 = labels[0].get_value().to_string();
+    let reason_2 = labels[0].value().to_string();
 
     // One reason should indicate a new session, while the other indicates joining an existing session.
     assert_ne!(reason_1, reason_2);
@@ -2299,7 +2299,7 @@ async fn test_refresh_task_metrics() {
     let metrics = server.metrics_registry.gather();
     let mut metrics: Vec<_> = metrics
         .into_iter()
-        .filter(|family| family.get_name() == "mz_auth_refresh_tasks_active")
+        .filter(|family| family.name() == "mz_auth_refresh_tasks_active")
         .collect();
     assert_eq!(metrics.len(), 1);
     let metric = metrics.pop().unwrap();
@@ -2316,7 +2316,7 @@ async fn test_refresh_task_metrics() {
     let metrics = server.metrics_registry.gather();
     let mut metrics: Vec<_> = metrics
         .into_iter()
-        .filter(|family| family.get_name() == "mz_auth_refresh_tasks_active")
+        .filter(|family| family.name() == "mz_auth_refresh_tasks_active")
         .collect();
 
     let metric = metrics.pop().unwrap();
@@ -2597,7 +2597,7 @@ async fn test_refresh_dropped_session() {
     let metrics = server.metrics_registry.gather();
     let mut metrics: Vec<_> = metrics
         .into_iter()
-        .filter(|family| family.get_name() == "mz_auth_session_refresh_count")
+        .filter(|family| family.name() == "mz_auth_session_refresh_count")
         .collect();
     assert_eq!(metrics.len(), 1);
     let metric = metrics.pop().unwrap();
@@ -2606,11 +2606,11 @@ async fn test_refresh_dropped_session() {
 
     let labels = metric.get_label();
     assert_eq!(
-        (labels[0].get_name(), labels[0].get_value()),
+        (labels[0].name(), labels[0].value()),
         ("outstanding_receivers", "false")
     );
     assert_eq!(
-        (labels[1].get_name(), labels[1].get_value()),
+        (labels[1].name(), labels[1].value()),
         ("recent_drop", "true")
     );
 

@@ -1099,7 +1099,6 @@ impl crate::coord::Coordinator {
         if let Some(uuids) = self.client_pending_peeks.remove(conn_id) {
             self.metrics
                 .canceled_peeks
-                .with_label_values(&[])
                 .inc_by(u64::cast_from(uuids.len()));
 
             let mut inverse: BTreeMap<ComputeInstanceId, BTreeSet<Uuid>> = Default::default();

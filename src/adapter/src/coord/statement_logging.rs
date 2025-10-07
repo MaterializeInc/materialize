@@ -716,12 +716,10 @@ impl Coordinator {
             if !*accounted {
                 self.metrics
                     .statement_logging_unsampled_bytes
-                    .with_label_values(&[])
                     .inc_by(u64::cast_from(sql.len()));
                 if sample {
                     self.metrics
                         .statement_logging_actual_bytes
-                        .with_label_values(&[])
                         .inc_by(u64::cast_from(sql.len()));
                 }
                 *accounted = true;

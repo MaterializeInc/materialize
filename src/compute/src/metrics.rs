@@ -200,7 +200,7 @@ impl ComputeMetrics {
         let stashed_peek_seconds = self.stashed_peek_seconds.with_label_values(&[&worker]);
         let handle_command_duration_seconds = CommandMetrics::build(|typ| {
             self.handle_command_duration_seconds
-                .with_label_values(&[&worker, typ])
+                .with_label_values(&[worker.as_ref(), typ])
         });
         let replica_expiration_timestamp_seconds = self
             .replica_expiration_timestamp_seconds
@@ -263,7 +263,7 @@ impl WorkerMetrics {
         let command_counts = CommandMetrics::build(|typ| {
             self.metrics
                 .history_command_count
-                .with_label_values(&[&self.worker_label, typ])
+                .with_label_values(&[self.worker_label.as_ref(), typ])
         });
         let dataflow_count = self
             .metrics
@@ -300,27 +300,27 @@ impl WorkerMetrics {
         if !compatible {
             self.metrics
                 .reconciliation_replaced_dataflows_count_total
-                .with_label_values(&[&self.worker_label, "incompatible"])
+                .with_label_values(&[self.worker_label.as_ref(), "incompatible"])
                 .inc();
         } else if !uncompacted {
             self.metrics
                 .reconciliation_replaced_dataflows_count_total
-                .with_label_values(&[&self.worker_label, "compacted"])
+                .with_label_values(&[self.worker_label.as_ref(), "compacted"])
                 .inc();
         } else if !subscribe_free {
             self.metrics
                 .reconciliation_replaced_dataflows_count_total
-                .with_label_values(&[&self.worker_label, "subscribe"])
+                .with_label_values(&[self.worker_label.as_ref(), "subscribe"])
                 .inc();
         } else if !copy_to_free {
             self.metrics
                 .reconciliation_replaced_dataflows_count_total
-                .with_label_values(&[&self.worker_label, "copy-to"])
+                .with_label_values(&[self.worker_label.as_ref(), "copy-to"])
                 .inc();
         } else if !dependencies_retained {
             self.metrics
                 .reconciliation_replaced_dataflows_count_total
-                .with_label_values(&[&self.worker_label, "dependency"])
+                .with_label_values(&[self.worker_label.as_ref(), "dependency"])
                 .inc();
         } else {
             self.metrics
@@ -342,7 +342,7 @@ impl WorkerMetrics {
         let hydrated = if hydrated { "1" } else { "0" };
         self.metrics
             .collection_count
-            .with_label_values(&[&self.worker_label, collection_type, hydrated])
+            .with_label_values(&[self.worker_label.as_ref(), collection_type, hydrated])
             .inc();
     }
 
@@ -351,7 +351,7 @@ impl WorkerMetrics {
         let hydrated = if hydrated { "1" } else { "0" };
         self.metrics
             .collection_count
-            .with_label_values(&[&self.worker_label, collection_type, hydrated])
+            .with_label_values(&[self.worker_label.as_ref(), collection_type, hydrated])
             .dec();
     }
 

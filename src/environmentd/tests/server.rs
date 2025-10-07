@@ -783,7 +783,7 @@ async fn test_statement_logging_unsampled_metrics() {
         .metrics_registry
         .gather()
         .into_iter()
-        .find(|m| m.get_name() == "mz_statement_logging_unsampled_bytes")
+        .find(|m| m.name() == "mz_statement_logging_unsampled_bytes")
         .unwrap()
         .take_metric()[0]
         .get_counter()
@@ -2855,16 +2855,16 @@ async fn smoketest_webhook_source() {
         .metrics_registry
         .gather()
         .into_iter()
-        .find(|metric| metric.get_name() == "mz_http_requests_total")
+        .find(|metric| metric.name() == "mz_http_requests_total")
         .unwrap();
     let total_requests_metric = &total_requests_metric.get_metric()[0];
     assert_eq!(total_requests_metric.get_counter().get_value(), 100.0);
 
     let path_label = &total_requests_metric.get_label()[0];
-    assert_eq!(path_label.get_value(), "/api/webhook/:database/:schema/:id");
+    assert_eq!(path_label.value(), "/api/webhook/:database/:schema/:id");
 
     let status_label = &total_requests_metric.get_label()[2];
-    assert_eq!(status_label.get_value(), "200");
+    assert_eq!(status_label.value(), "200");
 
     // Wait for the events to be persisted.
     let (client, result) = mz_ore::retry::Retry::default()
@@ -3199,39 +3199,39 @@ async fn test_http_metrics() {
     let metrics = server.metrics_registry.gather();
     let http_metrics: Vec<_> = metrics
         .into_iter()
-        .filter(|metric| metric.get_name().starts_with("mz_http"))
+        .filter(|metric| metric.name().starts_with("mz_http"))
         .collect();
 
     // Make sure the duration metric exists.
     let duration_count = http_metrics
         .iter()
-        .filter(|metric| metric.get_name() == "mz_http_request_duration_seconds")
+        .filter(|metric| metric.name() == "mz_http_request_duration_seconds")
         .count();
     assert_eq!(duration_count, 1);
     // Make sure the active count metric exists.
     let active_count = http_metrics
         .iter()
-        .filter(|metric| metric.get_name() == "mz_http_requests_active")
+        .filter(|metric| metric.name() == "mz_http_requests_active")
         .count();
     assert_eq!(active_count, 1);
 
     // Make sure our metrics capture the one successful query and the one failure.
     let mut request_metrics: Vec<_> = http_metrics
         .into_iter()
-        .filter(|metric| metric.get_name() == "mz_http_requests_total")
+        .filter(|metric| metric.name() == "mz_http_requests_total")
         .collect();
     assert_eq!(request_metrics.len(), 1);
 
     let request_metric = request_metrics.pop().unwrap();
     let success_metric = &request_metric.get_metric()[0];
     assert_eq!(success_metric.get_counter().get_value(), 2.0);
-    assert_eq!(success_metric.get_label()[0].get_value(), "/api/sql");
-    assert_eq!(success_metric.get_label()[2].get_value(), "200");
+    assert_eq!(success_metric.get_label()[0].value(), "/api/sql");
+    assert_eq!(success_metric.get_label()[2].value(), "200");
 
     let failure_metric = &request_metric.get_metric()[1];
     assert_eq!(failure_metric.get_counter().get_value(), 1.0);
-    assert_eq!(failure_metric.get_label()[0].get_value(), "/api/sql");
-    assert_eq!(failure_metric.get_label()[2].get_value(), "422");
+    assert_eq!(failure_metric.get_label()[0].value(), "/api/sql");
+    assert_eq!(failure_metric.get_label()[2].value(), "422");
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
@@ -3537,7 +3537,7 @@ fn webhook_too_large_request() {
     let metrics: Vec<_> = metrics_registry.gather().into_iter().collect();
     let payload_too_large = metrics
         .iter()
-        .find(|metric_family| metric_family.get_name() == "mz_http_requests_total")
+        .find(|metric_family| metric_family.name() == "mz_http_requests_total")
         .unwrap()
         .get_metric()
         .iter()
@@ -3545,7 +3545,7 @@ fn webhook_too_large_request() {
             metric
                 .get_label()
                 .iter()
-                .find(|label_pair| label_pair.get_value() == "413")
+                .find(|label_pair| label_pair.value() == "413")
                 .is_some()
         })
         .unwrap()
@@ -3770,7 +3770,7 @@ async fn webhook_concurrent_swap() {
         .metrics_registry
         .gather()
         .into_iter()
-        .find(|m| m.get_name() == "mz_webhook_get_appender_count")
+        .find(|m| m.name() == "mz_webhook_get_appender_count")
         .unwrap()
         .take_metric()[0]
         .get_counter()

@@ -1033,7 +1033,6 @@ where
             .inner()
             .metrics()
             .parse_seconds
-            .with_label_values(&[])
             .observe(parse_start.elapsed().as_secs_f64());
         result
     }
