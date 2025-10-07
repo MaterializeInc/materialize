@@ -225,24 +225,7 @@ pub async fn find_cluster_services(
             if !service_ids_to_scrape
                 .contains(selector.get("environmentd.materialize.cloud/service-id")?)
             {
-                // let Some(name) = service.metadata.name.clone() else {
-                //     return None;
-                // };
-                // let Some(spec) = service.spec.clone() else {
-                //     return None;
-                // };
-                // let Some(selector) = spec.selector else {
-                //     return None;
-                // };
-                // let Some(ports) = spec.ports else { return None };
-
-                // // Filter by cluster services
-                // if let Some(service_id) = selector.get("environmentd.materialize.cloud/service-id") {
-                // if !service_ids_to_scrape.contains(service_id) {
                 return None;
-                // }
-                // } else {
-                // return None; // Skip services without the label
             }
 
             Some(ServiceInfo {
