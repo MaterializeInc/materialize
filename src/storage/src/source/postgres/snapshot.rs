@@ -144,9 +144,11 @@ use differential_dataflow::AsCollection;
 use futures::{StreamExt as _, TryStreamExt};
 use mz_ore::cast::CastFrom;
 use mz_ore::future::InTask;
-use mz_postgres_util::{Client, PostgresError, simple_query_opt};
+use mz_postgres_util::desc::PostgresTableDesc;
+use mz_postgres_util::{Client, Config, PostgresError, simple_query_opt};
 use mz_repr::{Datum, DatumVec, Diff, Row};
 use mz_sql_parser::ast::{Ident, display::AstDisplay};
+use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::parameters::PgSourceSnapshotConfig;
 use mz_storage_types::sources::{MzOffset, PostgresSourceConnection};
@@ -367,14 +369,18 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 use_snapshot(&client, &snapshot).await?;
             }
 
+
             let upstream_info = {
-                let schema_client = connection_config
-                    .connect(
-                        "snapshot schema info",
-                        &config.config.connection_context.ssh_tunnel_manager,
-                    )
-                    .await?;
-                match mz_postgres_util::publication_info(&schema_client, &connection.publication, Some(&reader_table_info.keys().copied().collect::<Vec<_>>()))
+                let table_oids = reader_table_info.keys().copied().collect::<Vec<_>>();
+                // As part of retrieving the schema info, RLS policies are checked to ensure the
+                // snapshot can successfully read the tables. RLS policy errors are treated as
+                // transient, as the customer can simply add the BYPASSRLS to the PG account
+                // used by MZ.
+                match retrieve_schema_info(
+                    &connection_config,
+                    &config.config.connection_context,
+                    &connection.publication,
+                    &table_oids)
                     .await
                 {
                     // If the replication stream cannot be obtained in a definite way there is
@@ -404,7 +410,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                             ReplicationError::Definite(Rc::new(err)),
                         );
                         return Ok(());
-                    }
+                    },
                     Err(e) => Err(TransientError::from(e))?,
                     Ok(i) => i,
                 }
@@ -760,4 +766,22 @@ async fn collect_table_statistics(
     }
 
     Ok(stats)
+}
+
+/// Validates that there are no blocking RLS polcicies on the tables and retrieves table schemas
+/// for the given publication.
+async fn retrieve_schema_info(
+    connection_config: &Config,
+    connection_context: &ConnectionContext,
+    publication: &str,
+    table_oids: &[Oid],
+) -> Result<BTreeMap<u32, PostgresTableDesc>, PostgresError> {
+    let schema_client = connection_config
+        .connect(
+            "snapshot schema info",
+            &connection_context.ssh_tunnel_manager,
+        )
+        .await?;
+    mz_postgres_util::validate_no_rls_policies(&schema_client, table_oids).await?;
+    mz_postgres_util::publication_info(&schema_client, publication, Some(table_oids)).await
 }

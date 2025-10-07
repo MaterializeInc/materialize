@@ -42,7 +42,7 @@ pub enum PgSourcePurificationError {
     #[error("insufficient privileges")]
     UserLacksSelectOnTables { tables: Vec<String> },
     #[error("one or more tables requires BYPASSRLS")]
-    UserMustBypassRLS { tables: Vec<String> },
+    BypassRLSRequired { tables: Vec<String> },
     #[error("referenced items not tables with REPLICA IDENTITY FULL")]
     NotTablesWReplicaIdentityFull { items: Vec<String> },
     #[error("TEXT COLUMNS refers to table not currently being added")]
@@ -79,7 +79,7 @@ impl PgSourcePurificationError {
                 "user lacks SELECT privileges for tables {}",
                 tables.join(", ")
             )),
-            Self::UserMustBypassRLS { tables } => Some(format!(
+            Self::BypassRLSRequired { tables } => Some(format!(
                 "user must have BYPASSRLS attribute to read tables {}",
                 tables.join(", "),
             )),
@@ -119,6 +119,7 @@ impl PgSourcePurificationError {
                 "Remove the {} option, as no tables are being added.",
                 option
             )),
+            Self::BypassRLSRequired { .. } => Some("Add the BYPASSRLS attribute to the Materialize user".into()),
             Self::InvalidConnection(e) => e.hint(),
             _ => None,
         }
