@@ -392,6 +392,13 @@ SHOW CREATE CLUSTER foo
 Show(ShowCreateCluster(ShowCreateClusterStatement { cluster_name: Unresolved(Ident("foo")) }))
 
 parse-statement
+SHOW CREATE TYPE foo
+----
+SHOW CREATE TYPE foo
+=>
+Show(ShowCreateType(ShowCreateTypeStatement { type_name: Other { name: Name(UnresolvedItemName([Ident("foo")])), typ_mod: [] }, redacted: false }))
+
+parse-statement
 SHOW COLUMNS FROM mytable
 ----
 SHOW COLUMNS FROM mytable
@@ -854,6 +861,13 @@ SHOW REDACTED CREATE CONNECTION foo
 SHOW REDACTED CREATE CONNECTION foo
 =>
 Show(ShowCreateConnection(ShowCreateConnectionStatement { connection_name: Name(UnresolvedItemName([Ident("foo")])), redacted: true }))
+
+parse-statement
+SHOW REDACTED CREATE TYPE foo
+----
+SHOW REDACTED CREATE TYPE foo
+=>
+Show(ShowCreateType(ShowCreateTypeStatement { type_name: Other { name: Name(UnresolvedItemName([Ident("foo")])), typ_mod: [] }, redacted: true }))
 
 parse-statement
 SHOW REDACTED COLUMNS foo

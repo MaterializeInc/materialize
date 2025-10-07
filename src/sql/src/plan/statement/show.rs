@@ -23,8 +23,8 @@ use mz_sql_parser::ast::display::{AstDisplay, FormatMode};
 use mz_sql_parser::ast::{
     CreateSubsourceOptionName, ExternalReferenceExport, ExternalReferences, ObjectType,
     ShowCreateClusterStatement, ShowCreateConnectionStatement, ShowCreateMaterializedViewStatement,
-    ShowObjectType, SqlServerConfigOptionName, SystemObjectType, UnresolvedItemName,
-    WithOptionValue,
+    ShowCreateTypeStatement, ShowObjectType, SqlServerConfigOptionName, SystemObjectType,
+    UnresolvedItemName, WithOptionValue,
 };
 use mz_sql_pretty::PrettyConfig;
 use query::QueryContext;
@@ -37,8 +37,8 @@ use crate::ast::{
 };
 use crate::catalog::{CatalogItemType, SessionCatalog};
 use crate::names::{
-    self, Aug, NameSimplifier, ObjectId, ResolvedClusterName, ResolvedDatabaseName, ResolvedIds,
-    ResolvedItemName, ResolvedRoleName, ResolvedSchemaName,
+    self, Aug, NameSimplifier, ObjectId, ResolvedClusterName, ResolvedDataType,
+    ResolvedDatabaseName, ResolvedIds, ResolvedItemName, ResolvedRoleName, ResolvedSchemaName,
 };
 use crate::parse;
 use crate::plan::scope::Scope;
@@ -246,6 +246,53 @@ pub fn plan_show_create_cluster(
 pub fn describe_show_create_cluster(
     _: &StatementContext,
     _: ShowCreateClusterStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(Some(
+        RelationDesc::builder()
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("create_sql", SqlScalarType::String.nullable(false))
+            .finish(),
+    )))
+}
+
+pub fn plan_show_create_type(
+    scx: &StatementContext,
+    ShowCreateTypeStatement {
+        type_name,
+        redacted,
+    }: ShowCreateTypeStatement<Aug>,
+) -> Result<ShowCreatePlan, PlanError> {
+    let ResolvedDataType::Named { id, full_name, .. } = type_name else {
+        sql_bail!("{type_name} is not a named type");
+    };
+
+    let type_item = scx.get_item(&id);
+
+    // check if a builtin type is being accessed
+    if id.is_system() {
+        // builtin types do not have a create sql
+        sql_bail!("cannot show create for system type {full_name}");
+    }
+
+    let name = type_item.name().item.as_ref();
+
+    // if custom type we make the sql human readable
+    let create_sql = humanize_sql_for_show_create(
+        scx.catalog,
+        type_item.id(),
+        type_item.create_sql(),
+        redacted,
+    )?;
+
+    Ok(ShowCreatePlan {
+        id: ObjectId::Item(id),
+        row: Row::pack_slice(&[Datum::String(name), Datum::String(&create_sql)]),
+    })
+}
+
+pub fn describe_show_create_type(
+    _: &StatementContext,
+    _: ShowCreateTypeStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(Some(
         RelationDesc::builder()
