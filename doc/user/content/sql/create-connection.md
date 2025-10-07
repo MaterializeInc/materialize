@@ -36,7 +36,7 @@ perform [authentication with an Amazon RDS MySQL database](#mysql-aws-connection
 | <div style="min-width:240px">Field</div>  | Value            | Description
 |-------------------------------------------|------------------|------------------------------
 | `ENDPOINT`                                | `text`           | *Advanced.* Override the default AWS endpoint URL. Allows targeting S3-compatible services like MinIO.
-| `REGION`                                  | `text`           | The AWS region to connect to.
+| `REGION`                                  | `text`           | The AWS region to connect to. Defaults to the current Materialize region.
 | `ACCESS KEY ID`                           | secret or `text` | The access key ID to connect with. Triggers credentials-based authentication.<br><br><strong>Warning!</strong> Use of credentials-based authentication is deprecated. AWS strongly encourages the use of role assumption-based authentication instead.
 | `SECRET ACCESS KEY`                       | secret           | The secret access key corresponding to the specified access key ID.<br><br>Required and only valid when `ACCESS KEY ID` is specified.
 | `SESSION TOKEN`                           | secret or `text` | The session token corresponding to the specified access key ID.<br><br>Only valid when `ACCESS KEY ID` is specified.
