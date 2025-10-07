@@ -11,7 +11,7 @@ workspace = true
 
 [dependencies]
 anyhow = "1.0.100"
-bincode = { version = "1.3.3" }
+bincode = { version = "2.0.1" }
 derivative = "2.2.0"
 itertools = { version = "0.14.0" }
 mz-ore = { path = "../ore", features = ["async", "metrics", "test"] }
