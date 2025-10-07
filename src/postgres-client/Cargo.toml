@@ -11,7 +11,7 @@ workspace = true
 
 [dependencies]
 anyhow = "1.0.100"
-deadpool-postgres = "0.10.3"
+deadpool-postgres = "0.14.1"
 mz-ore = { path = "../ore", default-features = false, features = ["metrics", "async", "bytes"] }
 mz-tls-util = { path = "../tls-util" }
 prometheus = { version = "0.13.4", default-features = false }

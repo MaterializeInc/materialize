@@ -36,7 +36,7 @@ azure_storage_blobs = { version = "0.21.0" }
 azure_core = "0.21.0"
 base64 = "0.22.1"
 bytes = "1.10.1"
-deadpool-postgres = "0.10.3"
+deadpool-postgres = "0.14.1"
 differential-dataflow = "0.17.0"
 fail = { version = "0.5.1", features = ["failpoints"] }
 futures-util = "0.3.31"
