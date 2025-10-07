@@ -19,11 +19,11 @@ mz-ore = { path = "../ore", default-features = false, features = ["async"] }
 mz-server-core = { path = "../server-core", default-features = false }
 rand = "0.8.5"
 schemars = { version = "1.0.4", features = ["uuid1"] }
-semver = "1.0.26"
+semver = "1.0.27"
 serde = "1.0.219"
-serde_json = "1.0.127"
+serde_json = "1.0.145"
 tracing = "0.1.37"
-uuid = { version = "1.17", features = ["serde", "v4"] }
+uuid = { version = "1.18", features = ["serde", "v4"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 async-trait = { version = "0.1.89", optional = true }

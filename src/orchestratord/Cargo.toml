@@ -34,17 +34,17 @@ mz-server-core = { path = "../server-core", default-features = false }
 prometheus = { version = "0.13.4", default-features = false }
 rand = "0.8.5"
 reqwest = { version = "0.12", features = ["cookies", "json"] }
-semver = "1.0.16"
+semver = "1.0.27"
 serde = { version = "1.0.219", features = ["derive"] }
-serde_json = "1.0.127"
+serde_json = "1.0.145"
 sha2 = "0.10.9"
-thiserror = "2.0.12"
+thiserror = "2.0.17"
 tokio = "1.44.1"
 tokio-postgres = "0.7.8"
 tower-http = "0.6.6"
 tracing = "0.1.37"
 urlencoding = "2.1.3"
-uuid = { version = "1.17", features = ["serde", "v4"] }
+uuid = { version = "1.18", features = ["serde", "v4"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [features]

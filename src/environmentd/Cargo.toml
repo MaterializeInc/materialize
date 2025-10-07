@@ -94,22 +94,22 @@ rdkafka-sys = { version = "4.3.0", features = [
     "zstd",
 ] }
 rand = "0.8.5"
-regex = { version = "1.11.1", optional = true }
+regex = { version = "1.11.3", optional = true }
 reqwest = { version = "0.11.13", features = ["json"] }
 rlimit = "0.10.2"
-semver = "1.0.26"
+semver = "1.0.27"
 sentry-tracing = "0.38.1"
 serde = { version = "1.0.219", features = ["derive"] }
-serde_json = "1.0.127"
+serde_json = "1.0.145"
 shell-words = "1.1.0"
-stacker = "0.1.21"
+stacker = "0.1.22"
 sysctl = "0.6.0"
 tempfile = "3.20.0"
-thiserror = "2.0.12"
+thiserror = "2.0.17"
 tokio = { version = "1.44.1", features = ["sync"] }
 tokio-postgres = { version = "0.7.8" }
 tokio-stream = { version = "0.1.17", features = ["net"] }
-tokio-metrics = "0.4.2"
+tokio-metrics = "0.4.5"
 tower = { version = "0.5.2", features = ["buffer", "limit", "load-shed"] }
 tower-http = { version = "0.6.6", features = [
     "cors",
@@ -126,7 +126,7 @@ tracing-opentelemetry = { version = "0.25.0" }
 tracing-subscriber = "0.3.19"
 tungstenite = { version = "0.24.0" }
 url = "2.3.1"
-uuid = "1.17.0"
+uuid = "1.18.1"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
@@ -156,7 +156,7 @@ rdkafka = { version = "0.29.0", features = [
     "zstd",
 ] }
 reqwest = { version = "0.11.13", features = ["blocking"] }
-serde_json = "1.0.127"
+serde_json = "1.0.145"
 serde_urlencoded = "0.7.1"
 similar-asserts = "1.7"
 timely = "0.24.0"
