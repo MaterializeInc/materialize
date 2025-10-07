@@ -151,8 +151,6 @@ skip = [
     { name = "itertools", version = "0.13.0" },
     # Used by pprof
     { name = "nix", version = "0.26.4" },
-    # Used by dynfmt
-    { name = "erased-serde", version = "0.3.26" },
     # Held back by mysql_async `v0.36.1`
     { name = "socket2", version = "0.5.10" },
     # Used by azure_core
@@ -170,6 +168,8 @@ skip = [
     { name = "phf_shared", version = "0.11.3" },
     { name = "phf_generator", version = "0.11.2" },
     { name = "phf_codegen", version = "0.11.3" },
+    # multer
+    { name = "spin", version = "0.9.8" },
 ]
 
 [[bans.deny]]
