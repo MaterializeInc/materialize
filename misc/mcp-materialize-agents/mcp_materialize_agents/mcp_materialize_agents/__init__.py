@@ -86,10 +86,10 @@ async def create_client(cfg: Config) -> AsyncIterator[AsyncConnectionPool]:
 
 TOOL_QUERY = (
     files("mcp_materialize_agents.mcp_materialize_agents") / "tools.sql"
-).read_text()
+).read_text(encoding="utf-8")
 INSTRUCTIONS = (
     files("mcp_materialize_agents.mcp_materialize_agents") / "system_prompt.md"
-).read_text()
+).read_text(encoding="utf-8")
 
 
 class DataProduct(BaseModel):
