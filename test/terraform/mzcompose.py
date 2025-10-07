@@ -828,6 +828,17 @@ class AWS(State):
         else:
             raise ValueError("Never completed")
 
+        # Get all pods in materialize-environment:
+        spawn.runv(
+            ["kubectl", "get", "pods", "-n", "materialize-environment"],
+            cwd=self.path,
+        )
+        # Describe all pods in materialize-environment:
+        spawn.runv(
+            ["kubectl", "describe", "pods", "-n", "materialize-environment"],
+            cwd=self.path,
+        )
+
 
 def workflow_aws_temporary(c: Composition, parser: WorkflowArgumentParser) -> None:
     """To run locally use `aws sso login` first."""
@@ -875,7 +886,8 @@ def workflow_aws_upgrade(c: Composition, parser: WorkflowArgumentParser) -> None
         aws.upgrade(tag)
         if args.test:
             # Try waiting a bit, otherwise connection error, should be handled better
-            time.sleep(180)
+            print("--- Waiting for 240 seconds")
+            time.sleep(240)
             print("--- Running tests")
             aws.connect(c)
 
