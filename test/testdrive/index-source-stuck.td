@@ -12,11 +12,12 @@
 > CREATE CLUSTER cluster1 REPLICAS (replica1 (SIZE 'scale=1,workers=1'));
 > CREATE CLUSTER cluster2 REPLICAS (replica1 (SIZE 'scale=1,workers=1'));
 > CREATE SOURCE src IN CLUSTER cluster1 FROM LOAD GENERATOR counter (UP TO 100);
-> CREATE MATERIALIZED VIEW mv IN CLUSTER cluster2 AS SELECT * FROM src;
+> CREATE TABLE src_tbl FROM SOURCE src;
+> CREATE MATERIALIZED VIEW mv IN CLUSTER cluster2 AS SELECT * FROM src_tbl;
 > SET cluster = cluster2;
 
 # Prevent us from getting stuck, see database-issues#8300
-> SELECT min(counter) FROM src
+> SELECT min(counter) FROM src_tbl
 1
 > SELECT min(counter) FROM mv
 1
@@ -32,12 +33,12 @@
 > SET transaction_isolation = serializable;
 
 # Should return instantly since we have selected serializable isolation
-> SELECT min(counter) FROM src;
+> SELECT min(counter) FROM src_tbl;
 1
 
 # Should return instantly, even inside of a transaction
 # > BEGIN
-# > SELECT * FROM src;
+# > SELECT * FROM src_tbl;
 # > COMMIT
 
 # Should return instantly since it only uses the materialized view and we have selected serializable isolation

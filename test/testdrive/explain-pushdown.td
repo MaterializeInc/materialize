@@ -15,11 +15,12 @@ ALTER SYSTEM SET enable_explain_pushdown = true
 > CREATE CLUSTER sources (SIZE 'scale=1,workers=1', REPLICATION FACTOR 0);
 
 > CREATE SOURCE counter IN CLUSTER sources FROM LOAD GENERATOR COUNTER (UP TO 100);
+> CREATE TABLE counter_tbl FROM SOURCE counter;
 
 # We expect the explain to time out, so no point waiting for very long...
 $ set-sql-timeout duration=5s force=true
 
-! EXPLAIN FILTER PUSHDOWN FOR SELECT count(*) FROM counter WHERE counter = 1;
+! EXPLAIN FILTER PUSHDOWN FOR SELECT count(*) FROM counter_tbl WHERE counter = 1;
 timeout
 
 $ set-sql-timeout duration=default force=true
@@ -31,5 +32,5 @@ $ set-sql-timeout duration=default force=true
 # If we scale the source cluster up, our query should eventually complete
 > ALTER CLUSTER sources SET (REPLICATION FACTOR 1);
 
-> EXPLAIN FILTER PUSHDOWN FOR SELECT count(*) FROM counter WHERE counter = 1;
-materialize.public.counter <number> <number> <number> <number>
+> EXPLAIN FILTER PUSHDOWN FOR SELECT count(*) FROM counter_tbl WHERE counter = 1;
+materialize.public.counter_tbl <number> <number> <number> <number>

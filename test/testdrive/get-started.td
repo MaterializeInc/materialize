@@ -32,7 +32,6 @@ ALTER SYSTEM SET enable_create_table_from_source = true
 name          type           cluster                        comment
 -------------------------------------------------------------------
 demo          load-generator ${arg.single-replica-cluster}  ""
-demo_progress progress       <null>                         ""
 
 > SHOW TABLES
 name          comment

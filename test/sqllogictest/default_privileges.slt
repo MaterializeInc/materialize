@@ -381,10 +381,11 @@ CREATE SOURCE materialize.public.s FROM LOAD GENERATOR COUNTER
 query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_sources WHERE name = 's'
 ----
+s  materialize=r/materialize
+s  mz_support=r/materialize
 s  r1=r/materialize
 s  r2=r/materialize
 s  r3=r/materialize
-s  materialize=r/materialize
 
 statement ok
 DROP SOURCE s
@@ -439,10 +440,11 @@ CREATE SOURCE d1.s11.s FROM LOAD GENERATOR COUNTER
 query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_sources WHERE name = 's'
 ----
+s  materialize=r/materialize
+s  mz_support=r/materialize
 s  r1=r/materialize
 s  r2=r/materialize
 s  r3=r/materialize
-s  materialize=r/materialize
 
 statement ok
 DROP SOURCE d1.s11.s
@@ -497,10 +499,11 @@ CREATE SOURCE d2.s22.s FROM LOAD GENERATOR COUNTER
 query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_sources WHERE name = 's'
 ----
+s  materialize=r/materialize
+s  mz_support=r/materialize
 s  r1=r/materialize
 s  r2=r/materialize
 s  r3=r/materialize
-s  materialize=r/materialize
 
 statement ok
 DROP SOURCE d2.s22.s
@@ -556,10 +559,11 @@ CREATE SOURCE d1.s1.s FROM LOAD GENERATOR COUNTER
 query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_sources WHERE name = 's'
 ----
+s  materialize=r/materialize
+s  mz_support=r/materialize
 s  r1=r/materialize
 s  r2=r/materialize
 s  r3=r/materialize
-s  materialize=r/materialize
 
 statement ok
 DROP SOURCE d1.s1.s
@@ -615,10 +619,11 @@ CREATE SOURCE d2.s2.s FROM LOAD GENERATOR COUNTER
 query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_sources WHERE name = 's'
 ----
+s  materialize=r/materialize
+s  mz_support=r/materialize
 s  r1=r/materialize
 s  r2=r/materialize
 s  r3=r/materialize
-s  materialize=r/materialize
 
 statement ok
 DROP SOURCE d2.s2.s
@@ -679,6 +684,7 @@ COMPLETE 0
 query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_sources WHERE name = 's'
 ----
+s  mz_support=r/r6
 s  r6=r/r6
 s  r8=r/r6
 
@@ -743,6 +749,7 @@ COMPLETE 0
 query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_sources WHERE name = 's'
 ----
+s  mz_support=r/r7
 s  r7=r/r7
 s  r8=r/r7
 
@@ -805,6 +812,7 @@ COMPLETE 0
 query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_sources WHERE name = 's'
 ----
+s  mz_support=r/r9
 s  r9=r/r9
 
 simple conn=r9,user=r9
@@ -866,6 +874,7 @@ COMPLETE 0
 query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_sources WHERE name = 's'
 ----
+s  mz_support=r/r9
 s  r9=r/r9
 
 simple conn=r9,user=r9
@@ -927,6 +936,7 @@ COMPLETE 0
 query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_sources WHERE name = 's'
 ----
+s  mz_support=r/r11
 s  r11=r/r11
 
 simple conn=r11,user=r11
@@ -987,6 +997,7 @@ COMPLETE 0
 query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_sources WHERE name = 's'
 ----
+s  mz_support=r/r11
 s  r11=r/r11
 
 simple conn=r11,user=r11
@@ -1048,6 +1059,7 @@ COMPLETE 0
 query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_sources WHERE name = 's'
 ----
+s  mz_support=r/r11
 s  r11=r/r11
 
 simple conn=r11,user=r11
@@ -1108,6 +1120,7 @@ COMPLETE 0
 query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_sources WHERE name = 's'
 ----
+s  mz_support=r/r11
 s  r11=r/r11
 
 simple conn=r11,user=r11
@@ -1285,6 +1298,7 @@ query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_sources WHERE name = 's'
 ----
 s  materialize=r/materialize
+s  mz_support=r/materialize
 
 statement ok
 DROP SOURCE s
@@ -1329,6 +1343,7 @@ query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_sources WHERE name = 's'
 ----
 s  materialize=r/materialize
+s  mz_support=r/materialize
 
 statement ok
 DROP SOURCE d1.s11.s
@@ -1373,6 +1388,7 @@ query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_sources WHERE name = 's'
 ----
 s  materialize=r/materialize
+s  mz_support=r/materialize
 
 statement ok
 DROP SOURCE d2.s22.s
@@ -1417,6 +1433,7 @@ query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_sources WHERE name = 's'
 ----
 s  materialize=r/materialize
+s  mz_support=r/materialize
 
 statement ok
 DROP SOURCE d1.s1.s
@@ -1461,6 +1478,7 @@ query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_sources WHERE name = 's'
 ----
 s  materialize=r/materialize
+s  mz_support=r/materialize
 
 statement ok
 DROP SOURCE d2.s2.s
@@ -1518,6 +1536,7 @@ COMPLETE 0
 query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_sources WHERE name = 's'
 ----
+s  mz_support=r/r6
 s  r6=r/r6
 
 simple conn=r6,user=r6
@@ -1578,6 +1597,7 @@ COMPLETE 0
 query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_sources WHERE name = 's'
 ----
+s  mz_support=r/r7
 s  r7=r/r7
 
 simple conn=r7,user=r7
@@ -1638,6 +1658,7 @@ COMPLETE 0
 query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_sources WHERE name = 's'
 ----
+s  mz_support=r/r9
 s  r9=r/r9
 
 simple conn=r9,user=r9
@@ -1698,6 +1719,7 @@ COMPLETE 0
 query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_sources WHERE name = 's'
 ----
+s  mz_support=r/r9
 s  r9=r/r9
 
 simple conn=r9,user=r9
@@ -1758,6 +1780,7 @@ COMPLETE 0
 query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_sources WHERE name = 's'
 ----
+s  mz_support=r/r11
 s  r11=r/r11
 
 simple conn=r11,user=r11
@@ -1818,6 +1841,7 @@ COMPLETE 0
 query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_sources WHERE name = 's'
 ----
+s  mz_support=r/r11
 s  r11=r/r11
 
 simple conn=r11,user=r11
@@ -1878,6 +1902,7 @@ COMPLETE 0
 query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_sources WHERE name = 's'
 ----
+s  mz_support=r/r11
 s  r11=r/r11
 
 simple conn=r11,user=r11
@@ -1938,6 +1963,7 @@ COMPLETE 0
 query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_sources WHERE name = 's'
 ----
+s  mz_support=r/r11
 s  r11=r/r11
 
 simple conn=r11,user=r11

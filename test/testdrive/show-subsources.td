@@ -24,9 +24,6 @@ $ set-arg-default single-replica-cluster=quickstart
 
 # By default, `SHOW SUBSOURCES` should show all sources in the schema.
 > SHOW SUBSOURCES
-name           type
--------------------------
-lga_progress   progress
 
 > SHOW TABLES
 name           comment
@@ -49,10 +46,6 @@ users          ""
   FROM LOAD GENERATOR COUNTER (UP TO 100)
 
 > SHOW SUBSOURCES
-name           type
--------------------------
-lga_progress   progress
-lgc_progress   progress
 
 > SHOW TABLES
 name           comment
@@ -65,28 +58,15 @@ users          ""
 
 > SET SCHEMA = other
 > SHOW SUBSOURCES
-name           type
--------------------------
-lgo_progress   progress
 
 # Verify that you can override the current schema with `FROM ...`.
 > SHOW SUBSOURCES FROM public
-name           type
--------------------------
-lga_progress   progress
-lgc_progress   progress
 
 # Verify that `ON ...` filters to the subsources of the named source.
 > SHOW SUBSOURCES ON lgo
-name           type
--------------------------
-lgo_progress   progress
 
 # Verify again with a cross-schema reference.
 > SHOW SUBSOURCES ON public.lgc
-name           type
--------------------------
-lgc_progress   progress
 
 # Verify that you cannot combine a schema filter with a source filter.
 ! SHOW SUBSOURCES FROM public ON lga

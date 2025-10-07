@@ -53,7 +53,6 @@ contains: unsupported scale factor -1
 name           type            cluster                          comment
 -----------------------------------------------------------------------
  gen           load-generator  ${arg.single-replica-cluster}    ""
- gen_progress  progress        <null>                           ""
 
 > SHOW TABLES
 name           comment

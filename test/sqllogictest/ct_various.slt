@@ -111,8 +111,11 @@ statement ok
 CREATE SOURCE counter FROM LOAD GENERATOR COUNTER
 
 statement ok
-CREATE CONTINUAL TASK input_not_monotonic FROM TRANSFORM counter USING
-    (SELECT max(counter) FROM counter)
+CREATE TABLE counter_tbl FROM SOURCE counter
+
+statement ok
+CREATE CONTINUAL TASK input_not_monotonic FROM TRANSFORM counter_tbl USING
+    (SELECT max(counter) FROM counter_tbl)
 
 # Give the load generator time to produce some data.
 statement ok

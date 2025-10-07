@@ -1324,12 +1324,14 @@ SCENARIOS = [
             > INSERT INTO t VALUES (1);
 
             # Create a source with 512 distinct timestamps.
-            > CREATE SOURCE counter FROM LOAD GENERATOR COUNTER (TICK INTERVAL '100ms', UP TO 512) WITH (TIMESTAMP INTERVAL '100ms', RETAIN HISTORY FOR '10d');
+            > CREATE SOURCE counter FROM LOAD GENERATOR COUNTER (TICK INTERVAL '100ms', UP TO 512) WITH (TIMESTAMP INTERVAL '100ms');
 
-            > CREATE MATERIALIZED VIEW cv WITH (RETAIN HISTORY FOR '10d') AS SELECT counter FROM counter, t;
+            > CREATE TABLE counter_tbl FROM SOURCE counter WITH (RETAIN HISTORY FOR '10d');
+
+            > CREATE MATERIALIZED VIEW cv WITH (RETAIN HISTORY FOR '10d') AS SELECT counter FROM counter_tbl, t;
 
             # Wait until counter is fully ingested.
-            > SELECT COUNT(*) FROM counter;
+            > SELECT COUNT(*) FROM counter_tbl;
             512
 
             > CREATE CLUSTER REPLICA clusterd.r1
