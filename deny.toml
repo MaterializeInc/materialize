@@ -165,6 +165,11 @@ skip = [
     { name = "typed-builder-macro", version = "0.21.2" },
     # prost needs an older version of `petgraph`.
     { name = "petgraph", version = "0.7.1" },
+    # chrono-tz
+    { name = "phf", version = "0.11.3" },
+    { name = "phf_shared", version = "0.11.3" },
+    { name = "phf_generator", version = "0.11.2" },
+    { name = "phf_codegen", version = "0.11.3" },
 ]
 
 [[bans.deny]]

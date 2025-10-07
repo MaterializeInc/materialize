@@ -15,7 +15,7 @@ chrono-tz = { version = "0.8.1", features = ["serde", "case-insensitive"] }
 itertools = "0.14.0"
 mz-lowertest = { path = "../lowertest", default-features = false }
 mz-ore = { path = "../ore", features = ["test"], default-features = false }
-phf = { version = "0.11.1", default-features = false }
+phf = { version = "0.13.1", default-features = false }
 serde = { version = "1.0.219", features = ["derive"] }
 uncased = "0.9.7"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
@@ -24,7 +24,7 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = tru
 anyhow = "1.0.100"
 chrono-tz = { version = "0.8.1", features = ["serde", "case-insensitive"] }
 mz-ore-build = { path = "../ore-build", default-features = false }
-phf_codegen = "0.11.3"
+phf_codegen = "0.13.1"
 uncased = "0.9.7"
 
 [package.metadata.cargo-udeps.ignore]
