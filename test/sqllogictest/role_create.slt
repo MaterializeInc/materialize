@@ -15,8 +15,9 @@ mode cockroach
 
 reset-server
 
+# Set password auth to false by default
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_rbac_checks TO true;
+ALTER SYSTEM SET enable_password_auth TO false;
 ----
 COMPLETE 0
 
