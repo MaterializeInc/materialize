@@ -194,7 +194,7 @@ fn validate_with_pubkey_v1(
     validation.set_issuer(&[ISSUER]);
     validation.validate_exp = true;
     validation.validate_nbf = true;
-    validation.validate_aud = true;
+    validation.validate_aud = false;
 
     let key = DecodingKey::from_rsa_pem(pubkey_pem.as_bytes())?;
 
