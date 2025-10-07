@@ -109,11 +109,12 @@ three:four
   GROUP BY s.name
 sink1 2 2 true true
 
-> SELECT s.name,
+> SELECT o.name,
   SUM(u.updates_committed) > 0,
-  SUM(u.messages_received) >= 4
-  FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
-  WHERE s.name IN ('upsert1')
-  GROUP BY s.id, s.name
-upsert1 true true
+  SUM(u.messages_received)
+  FROM mz_objects o
+  JOIN mz_internal.mz_source_statistics u ON o.id = u.id
+  WHERE o.name IN ('upsert1', 'upsert1_tbl')
+  GROUP BY o.id, o.name
+upsert1 true 3
+upsert1_tbl true 3

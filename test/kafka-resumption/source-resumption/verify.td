@@ -19,7 +19,7 @@ one          0
 two          1
 three        2
 
-> select * from topic_progress
+> select * from topic
 partition  offset
 --------------------
 (0,)    0

@@ -52,7 +52,6 @@ INSERT INTO t VALUES (2);
 
 > SELECT name, status FROM mz_internal.mz_source_statuses;
 pg_source           running
-pg_source_progress  running
 t                   ceased
 
 > SELECT

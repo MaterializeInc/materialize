@@ -88,10 +88,11 @@ def workflow_retain_history(c: Composition) -> None:
     c.sql(
         "CREATE MATERIALIZED VIEW retain_mv WITH (RETAIN HISTORY = FOR '2s') AS SELECT * FROM retain_t"
     )
+    c.sql("CREATE SOURCE retain_s FROM LOAD GENERATOR COUNTER")
     c.sql(
-        "CREATE SOURCE retain_s FROM LOAD GENERATOR COUNTER WITH (RETAIN HISTORY = FOR '5s')"
+        "CREATE TABLE retain_s_tbl FROM SOURCE retain_s WITH (RETAIN HISTORY = FOR '5s')"
     )
-    names = ["mv", "s"]
+    names = ["mv", "s_tbl"]
     check_retain_history_for(names)
 
     # Ensure that RETAIN HISTORY is respected on boot.
@@ -136,7 +137,6 @@ def workflow_github_5108(c: Composition) -> None:
               WHERE top_level_s.name = 'with_subsources' AND (s.type = 'progress' OR s.type = 'subsource');
             source          subsource
             -------------------------
-            with_subsources with_subsources_progress
 
             > SELECT DISTINCT
               s.name AS source,
@@ -173,7 +173,6 @@ def workflow_github_5108(c: Composition) -> None:
               WHERE top_level_s.name = 'with_subsources' AND (s.type = 'progress' OR s.type = 'subsource');
             source          subsource
             -------------------------
-            with_subsources with_subsources_progress
 
             > SELECT DISTINCT
               s.name AS source,

@@ -37,6 +37,10 @@ INSERT INTO pk_table VALUES (2, 'two');
 > CREATE TABLE "pk_table" FROM SOURCE pg_source (REFERENCE "pk_table");
 > COMMIT
 
+> SELECT * FROM pk_table
+1 one
+2 two
+
 ! CREATE SOURCE pg_source_2
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
 contains:PostgreSQL server has insufficient number of replication slots available

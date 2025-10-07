@@ -61,11 +61,11 @@ CREATE PUBLICATION mz_source_delete FOR TABLE t1 WITH ( publish = 'delete') ;
 # <https://github.com/MaterializeInc/database-issues/issues/4266> tracks
 # making this better
 $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=10s
-> SELECT COUNT(*) FROM mz_source_insert;
+> SELECT COUNT(*) FROM t1_insert;
 0
-> SELECT COUNT(*) FROM mz_source_update;
+> SELECT COUNT(*) FROM t1_update;
 0
-> SELECT COUNT(*) FROM mz_source_delete;
+> SELECT COUNT(*) FROM t1_delete;
 0
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres

@@ -851,8 +851,7 @@ simple
 SHOW SOURCES
 ----
 s,load-generator,quickstart,
-s_progress,progress,NULL,
-COMPLETE 2
+COMPLETE 1
 
 # Test a statement that doesn't work even in this mode because of ambiguous responses.
 statement ok

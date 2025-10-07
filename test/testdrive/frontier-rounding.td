@@ -28,8 +28,11 @@ $ kafka-create-topic topic=topic partitions=1
 
 > CREATE SOURCE src
   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-topic-${testdrive.seed}')
+> CREATE TABLE src_tbl FROM SOURCE src
 > CREATE SOURCE ctr FROM LOAD GENERATOR COUNTER
-> CREATE SOURCE actn FROM LOAD GENERATOR AUCTION FOR ALL TABLES
+> CREATE TABLE ctr_tbl FROM SOURCE ctr
+> CREATE SOURCE actn FROM LOAD GENERATOR AUCTION
+> CREATE TABLE actn_accounts FROM SOURCE actn (REFERENCE accounts)
 
 # sources
 > SELECT DISTINCT write_frontier::text::uint8 % 1000 = 1

@@ -152,6 +152,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         fivetran_destination_files_path="/share/tmp",
         entrypoint_extra=[
             f"--var=uses-redpanda={args.redpanda}",
+            "--max-errors=1000",
         ],
     )
 

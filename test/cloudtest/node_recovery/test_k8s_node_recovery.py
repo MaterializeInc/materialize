@@ -114,10 +114,12 @@ def populate(
               FROM LOAD GENERATOR COUNTER
               (TICK INTERVAL '500ms');
 
+            > CREATE TABLE source_tbl FROM SOURCE source;
+
             > SELECT COUNT(*) FROM (SHOW SOURCES) WHERE name = 'source';
             1
 
-            > CREATE MATERIALIZED VIEW mv (f1) IN CLUSTER {compute_cluster.name} AS SELECT counter + 1 FROM source;
+            > CREATE MATERIALIZED VIEW mv (f1) IN CLUSTER {compute_cluster.name} AS SELECT counter + 1 FROM source_tbl;
 
             > CREATE DEFAULT INDEX IN CLUSTER {compute_cluster.name} ON mv;
 
@@ -158,7 +160,7 @@ def validate_state(
                     f"""
                     > SET TRANSACTION_ISOLATION TO '{isolation_level}';
 
-                    > SELECT COUNT(*) {comparison_operator} {reached_index} FROM source; -- validate source with isolation {isolation_level}
+                    > SELECT COUNT(*) {comparison_operator} {reached_index} FROM source_tbl; -- validate source with isolation {isolation_level}
                     true
 
                     > SELECT COUNT(*) {comparison_operator} {reached_index} FROM mv; -- validate mv with isolation {isolation_level}
@@ -201,7 +203,9 @@ def get_current_counter_index(mz: MaterializeApplication) -> int:
     """
     This query has no timeout. Only use it if is expected to deliver.
     """
-    reached_value: int = mz.environmentd.sql_query("SELECT COUNT(*) FROM source")[0][0]
+    reached_value: int = mz.environmentd.sql_query("SELECT COUNT(*) FROM source_tbl")[
+        0
+    ][0]
     return reached_value
 
 

@@ -26,10 +26,11 @@ ALTER SYSTEM SET wallclock_lag_recording_interval = '1s'
 # reported and are reasonably small.
 
 > CREATE SOURCE src IN CLUSTER storage FROM LOAD GENERATOR counter (UP TO 100)
+> CREATE TABLE src_tbl FROM SOURCE src;
 
 > CREATE TABLE tbl (a int)
 
-> CREATE VIEW src_plus_tbl AS SELECT counter + a AS a FROM src, tbl
+> CREATE VIEW src_plus_tbl AS SELECT counter + a AS a FROM src_tbl, tbl
 > CREATE INDEX idx IN CLUSTER compute ON src_plus_tbl (a)
 > CREATE MATERIALIZED VIEW mv IN CLUSTER compute AS SELECT * FROM src_plus_tbl
 
@@ -66,7 +67,7 @@ mv_const     r2     true  true
 mv_const     <null> true  true
 snk          <null> true  true
 src          <null> true  true
-src_progress <null> true  true
+src_tbl      <null> true  true
 tbl          <null> true  true
 
 > SELECT DISTINCT ON(o.name)
@@ -81,7 +82,7 @@ mv           true  true
 mv_const     true  true
 snk          true  true
 src          true  true
-src_progress true  true
+src_tbl      true  true
 tbl          true  true
 
 > SELECT DISTINCT ON(o.name)
@@ -96,7 +97,7 @@ mv           true  true
 mv_const     true  true
 snk          true  true
 src          true  true
-src_progress true  true
+src_tbl      true  true
 tbl          true  true
 
 > SELECT o.name, l.lag >= '0s', l.lag < '20s'
@@ -109,7 +110,7 @@ mv           true  true
 mv_const     true  true
 snk          true  true
 src          true  true
-src_progress true  true
+src_tbl      true  true
 tbl          true  true
 
 > SELECT DISTINCT o.name, l.count > 0, l.labels
@@ -122,7 +123,7 @@ mv           true  {}
 mv_const     true  {}
 snk          true  {}
 src          true  {}
-src_progress true  {}
+src_tbl      true  {}
 tbl          true  {}
 
 # Test that history lag values are rounded to seconds.
@@ -146,7 +147,7 @@ mv_const     r2     true
 mv_const     <null> true
 snk          <null> true
 src          <null> true
-src_progress <null> true
+src_tbl      <null> true
 tbl          <null> true
 
 # Test annotation of histogram measurements with labels.
@@ -171,7 +172,8 @@ snk          true  "{}"
 snk          true  "{\"workload_class\":\"storage\"}"
 src          true  "{}"
 src          true  "{\"workload_class\":\"storage\"}"
-src_progress true  "{}"
+src_tbl      true  "{}"
+src_tbl      true  "{\"workload_class\":\"storage\"}"
 tbl          true  "{}"
 
 # Test changing the histogram period interval.
@@ -216,8 +218,9 @@ tbl_1hour 01:00:00 true true
 > CREATE CLUSTER compute SIZE 'scale=1,workers=1'
 
 > CREATE SOURCE src IN CLUSTER storage FROM LOAD GENERATOR counter (UP TO 100)
-> CREATE INDEX idx IN CLUSTER compute ON src (counter)
-> CREATE MATERIALIZED VIEW mv IN CLUSTER compute AS SELECT * FROM src
+> CREATE TABLE src_tbl FROM SOURCE src;
+> CREATE INDEX idx IN CLUSTER compute ON src_tbl (counter)
+> CREATE MATERIALIZED VIEW mv IN CLUSTER compute AS SELECT * FROM src_tbl
 > CREATE SINK snk
   IN CLUSTER storage
   FROM mv
@@ -240,10 +243,10 @@ src           <null>  <null>
   FROM mz_internal.mz_wallclock_global_lag_histogram l
   JOIN mz_objects o ON o.id = l.object_id
   WHERE l.object_id LIKE 'u%' AND o.cluster_id IS NOT NULL
-idx  <null>
-mv   <null>
-snk  <null>
-src  <null>
+idx     <null>
+mv      <null>
+snk     <null>
+src     <null>
 
 > DROP CLUSTER storage CASCADE
 > DROP CLUSTER compute CASCADE

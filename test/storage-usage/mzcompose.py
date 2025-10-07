@@ -185,8 +185,7 @@ database_objects = [
             ALTER TABLE pg_table REPLICA IDENTITY FULL;
 
             > CREATE SOURCE obj
-              FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
-            > CREATE TABLE pg_table FROM SOURCE obj (REFERENCE pg_table);
+              FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR TABLES (pg_table);
             """
         ),
         expected_size=4 * 1024,

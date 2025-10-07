@@ -32,30 +32,15 @@ one
 > SELECT * from data_tbl
 one
 
-> SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'data_progress';
+> SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'data_tbl';
 running
 
 # Ensure that we can select from automatically generated remap collection
-> SELECT partition::text, "offset" FROM data_progress
+> SELECT partition::text, "offset" FROM data
 [0,0] 1
 (0,) 0
 
 # Ensure we report the write frontier of the progress subsource
 $ set-regex match=(\s{12}0|\d{13,20}|u\d{1,5}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d\.\d\d\d\)|true|false) replacement=<>
-> EXPLAIN TIMESTAMP FOR SELECT * FROM data_progress
-"                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n              session wall time: <> <>\n\nsource materialize.public.data_progress (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n\nbinding constraints:\nlower:\n  (IsolationLevel(StrictSerializable)): [<> <>]\n"
-
-
-> BEGIN
-> CREATE SOURCE d
-  IN CLUSTER ${arg.single-replica-cluster}
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-${testdrive.seed}')
-  EXPOSE PROGRESS AS exposed_progress_data;
-
-> CREATE TABLE d_tbl FROM SOURCE d (REFERENCE "testdrive-data-${testdrive.seed}")
-  FORMAT TEXT;
-> COMMIT
-
-> SELECT partition::text, "offset" FROM exposed_progress_data
-[0,0] 1
-(0,) 0
+> EXPLAIN TIMESTAMP FOR SELECT * FROM data
+"                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n              session wall time: <> <>\n\nsource materialize.public.data (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n\nbinding constraints:\nlower:\n  (IsolationLevel(StrictSerializable)): [<> <>]\n"

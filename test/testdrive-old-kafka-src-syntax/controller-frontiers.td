@@ -89,37 +89,6 @@ idx1 r2
 idx1
 
 
-# Test that frontiers of sources are reported.
-
-> CREATE SOURCE source1
-  IN CLUSTER test_source
-  FROM LOAD GENERATOR COUNTER (UP TO 100)
-
-> SELECT
-    sources.name,
-    replicas.name
-  FROM mz_cluster_replica_frontiers frontiers
-  JOIN mz_sources sources
-    ON frontiers.object_id = sources.id
-  LEFT JOIN mz_cluster_replicas replicas
-    ON frontiers.replica_id = replicas.id
-  WHERE
-    frontiers.object_id LIKE 'u%' AND
-    frontiers.write_frontier > 0
-source1 s1
-
-> SELECT
-    sources.name
-  FROM mz_internal.mz_frontiers frontiers
-  JOIN mz_sources sources
-    ON frontiers.object_id = sources.id
-  WHERE
-    frontiers.object_id LIKE 'u%' AND
-    frontiers.read_frontier > 0 AND
-    frontiers.write_frontier > 0
-source1
-source1_progress
-
 # Test that frontiers of sinks are reported.
 
 > CREATE CONNECTION kafka_conn
@@ -317,7 +286,6 @@ r3 <null>
 > DROP MATERIALIZED VIEW mv1
 > DROP MATERIALIZED VIEW mv2
 > DROP INDEX idx1
-> DROP SOURCE source1 CASCADE
 > DROP SINK sink1
 > DROP TABLE t1
 

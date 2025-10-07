@@ -36,7 +36,6 @@ ALTER SYSTEM SET enable_create_table_from_source = true
 name                   type            cluster                comment
 --------------------------------------------------------------------------
 auction_house          load-generator  quickstart_tutorial    ""
-auction_house_progress progress        <null>                 ""
 
 > SHOW TABLES
 name                   comment

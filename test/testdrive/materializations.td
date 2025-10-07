@@ -368,9 +368,7 @@ a  b
 name              type    cluster                          comment
 -------------------------------------------------------------------
 data              kafka     ${arg.single-replica-cluster}  ""
-data_progress     progress  <null>                         ""
 mat_data          kafka     ${arg.single-replica-cluster}  ""
-mat_data_progress progress  <null>                         ""
 
 # If there exists another index, dropping the primary index will not #
 # unmaterialize the source. This also tests creating a default index when the

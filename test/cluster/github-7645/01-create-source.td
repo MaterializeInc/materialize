@@ -16,6 +16,8 @@ ALTER SYSTEM SET storage_statistics_interval = 2000
 
 > CREATE SOURCE count IN CLUSTER test_cluster FROM LOAD GENERATOR COUNTER
 
+> CREATE TABLE count_tbl FROM SOURCE count;
+
 > SELECT
     u.rehydration_latency IS NOT NULL
   FROM mz_sources s

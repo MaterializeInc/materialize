@@ -137,11 +137,9 @@ ORDER BY o.name
 ----
 accounts  FOR  1000
 auction_house  FOR  1000
-auction_house_progress  FOR  1000
 auctions  FOR  1000
 bids  FOR  1000
 counter  FOR  1000
-counter_progress  FOR  1000
 idx_a  FOR  420000
 idx_b  FOR  360000
 idx_c  FOR  240000
@@ -165,11 +163,9 @@ ORDER BY o.name
 ----
 accounts  FOR  1000
 auction_house  FOR  60000
-auction_house_progress  FOR  1000
 auctions  FOR  1000
 bids  FOR  1000
 counter  FOR  60000
-counter_progress  FOR  1000
 idx_a  FOR  420000
 idx_b  FOR  360000
 idx_c  FOR  240000
@@ -197,11 +193,9 @@ ORDER BY o.name
 ----
 accounts  FOR  1000
 auction_house  FOR  1000
-auction_house_progress  FOR  1000
 auctions  FOR  1000
 bids  FOR  1000
 counter  FOR  1000
-counter_progress  FOR  1000
 idx_a  FOR  420000
 idx_b  FOR  1000
 idx_c  FOR  1000

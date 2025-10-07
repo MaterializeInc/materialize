@@ -21,16 +21,12 @@ CREATE SOURCE s2 FROM LOAD GENERATOR COUNTER;
 query TTTTTT rowsort
 SELECT id, schema_id, name, type, connection_id, size FROM mz_sources WHERE id LIKE 'u%'
 ----
-u2  u3  s1  load-generator  NULL  NULL
-u4  u3  s2  load-generator  NULL  NULL
-u1  u3  s1_progress  progress  NULL  NULL
-u3  u3  s2_progress  progress  NULL  NULL
+u1  u3  s1  load-generator  NULL  NULL
+u2  u3  s2  load-generator  NULL  NULL
 
 # clusters.
 query TTTT
 SHOW SOURCES
 ----
 s1  load-generator  quickstart (empty)
-s1_progress  progress  NULL (empty)
 s2  load-generator  quickstart (empty)
-s2_progress  progress  NULL (empty)

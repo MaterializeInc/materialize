@@ -178,31 +178,28 @@ SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY 
 39  create  index  {"cluster_id":"u1","database":"materialize","id":"u6","item":"renamed_primary_idx","schema":"public"}  materialize
 40  drop  index  {"database":"materialize","id":"u6","item":"renamed_primary_idx","schema":"public"}  materialize
 41  drop  view  {"database":"materialize","id":"u2","item":"renamed","schema":"public"}  materialize
-42  create  source  {"cluster_id":null,"database":"materialize","id":"u7","item":"s_progress","schema":"public","type":"progress"}  materialize
-43  create  source  {"cluster_id":"u1","database":"materialize","id":"u8","item":"s","schema":"public","type":"load-generator"}  materialize
-44  drop  source  {"database":"materialize","id":"u8","item":"s","schema":"public"}  materialize
-45  drop  source  {"database":"materialize","id":"u7","item":"s_progress","schema":"public"}  materialize
-46  create  source  {"cluster_id":null,"database":"materialize","id":"u9","item":"multiplex_progress","schema":"public","type":"progress"}  materialize
-47  create  source  {"cluster_id":"u1","database":"materialize","id":"u10","item":"multiplex","schema":"public","type":"load-generator"}  materialize
-48  create  table  {"database":"materialize","id":"u11","item":"accounts","schema":"public"}  materialize
-49  create  table  {"database":"materialize","id":"u12","item":"auctions","schema":"public"}  materialize
-50  create  table  {"database":"materialize","id":"u13","item":"bids","schema":"public"}  materialize
-51  create  table  {"database":"materialize","id":"u14","item":"organizations","schema":"public"}  materialize
-52  create  table  {"database":"materialize","id":"u15","item":"users","schema":"public"}  materialize
-53  alter  cluster-replica  {"cluster_id":"u2","new_name":"s","old_name":"r","replica_id":"u2"}  materialize
-54  comment  cluster  {"id":"Cluster(User(2))","name":"foo"}  materialize
-55  comment  cluster  {"id":"Cluster(User(2))","name":"foo"}  materialize
-56  alter  cluster  {"id":"u2","new_name":"bar","old_name":"foo"}  materialize
-57  drop  cluster-replica  {"cluster_id":"u2","cluster_name":"bar","reason":"manual","replica_id":"u2","replica_name":"s"}  materialize
-58  drop  cluster  {"id":"u2","name":"bar"}  materialize
-59  alter  materialized-view  {"id":"u5","new_history":"'5m'","old_history":null}  materialize
-60  alter  materialized-view  {"id":"u5","new_history":null,"old_history":"FOR␠'5m'"}  materialize
-61  comment  materialized-view  {"id":"MaterializedView(User(5))","name":"materialize.public.v2"}  materialize
-62  create  connection  {"database":"materialize","id":"u16","item":"conn","schema":"public"}  materialize
-63  alter  connection  {"database":"materialize","id":"u16","item":"conn","schema":"public"}  materialize
-64  alter  system  {"name":"max_aws_privatelink_connections","value":"10"}  mz_system
-65  alter  system  {"name":"max_aws_privatelink_connections","value":null}  mz_system
-66  alter  system  null  mz_system
+42  create  source  {"cluster_id":"u1","database":"materialize","id":"u7","item":"s","schema":"public","type":"load-generator"}  materialize
+43  drop  source  {"database":"materialize","id":"u7","item":"s","schema":"public"}  materialize
+44  create  source  {"cluster_id":"u1","database":"materialize","id":"u8","item":"multiplex","schema":"public","type":"load-generator"}  materialize
+45  create  table  {"database":"materialize","id":"u9","item":"accounts","schema":"public"}  materialize
+46  create  table  {"database":"materialize","id":"u10","item":"auctions","schema":"public"}  materialize
+47  create  table  {"database":"materialize","id":"u11","item":"bids","schema":"public"}  materialize
+48  create  table  {"database":"materialize","id":"u12","item":"organizations","schema":"public"}  materialize
+49  create  table  {"database":"materialize","id":"u13","item":"users","schema":"public"}  materialize
+50  alter  cluster-replica  {"cluster_id":"u2","new_name":"s","old_name":"r","replica_id":"u2"}  materialize
+51  comment  cluster  {"id":"Cluster(User(2))","name":"foo"}  materialize
+52  comment  cluster  {"id":"Cluster(User(2))","name":"foo"}  materialize
+53  alter  cluster  {"id":"u2","new_name":"bar","old_name":"foo"}  materialize
+54  drop  cluster-replica  {"cluster_id":"u2","cluster_name":"bar","reason":"manual","replica_id":"u2","replica_name":"s"}  materialize
+55  drop  cluster  {"id":"u2","name":"bar"}  materialize
+56  alter  materialized-view  {"id":"u5","new_history":"'5m'","old_history":null}  materialize
+57  alter  materialized-view  {"id":"u5","new_history":null,"old_history":"FOR␠'5m'"}  materialize
+58  comment  materialized-view  {"id":"MaterializedView(User(5))","name":"materialize.public.v2"}  materialize
+59  create  connection  {"database":"materialize","id":"u14","item":"conn","schema":"public"}  materialize
+60  alter  connection  {"database":"materialize","id":"u14","item":"conn","schema":"public"}  materialize
+61  alter  system  {"name":"max_aws_privatelink_connections","value":"10"}  mz_system
+62  alter  system  {"name":"max_aws_privatelink_connections","value":null}  mz_system
+63  alter  system  null  mz_system
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET unsafe_mock_audit_event_timestamp = 666
@@ -215,7 +212,7 @@ CREATE TABLE tt ()
 query ITTTTT
 SELECT id, event_type, object_type, details, user, occurred_at FROM mz_audit_events ORDER BY id DESC LIMIT 1
 ----
-68  create  table  {"database":"materialize","id":"u17","item":"tt","schema":"public"}  materialize  1970-01-01␠00:00:00.666+00
+65  create  table  {"database":"materialize","id":"u15","item":"tt","schema":"public"}  materialize  1970-01-01␠00:00:00.666+00
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM RESET unsafe_mock_audit_event_timestamp
@@ -249,7 +246,7 @@ COMPLETE 0
 query ITTTT
 SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY id DESC LIMIT 1
 ----
-72  grant  table  {"grantee_id":"u3","grantor_id":"u1","object_id":"Iu3","privileges":"r"}  mz_system
+69  grant  table  {"grantee_id":"u3","grantor_id":"u1","object_id":"Iu3","privileges":"r"}  mz_system
 
 simple conn=mz_system,user=mz_system
 REVOKE SELECT ON t FROM r1;
@@ -259,7 +256,7 @@ COMPLETE 0
 query ITTTT
 SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY id DESC LIMIT 1
 ----
-73  revoke  table  {"grantee_id":"u3","grantor_id":"u1","object_id":"Iu3","privileges":"r"}  mz_system
+70  revoke  table  {"grantee_id":"u3","grantor_id":"u1","object_id":"Iu3","privileges":"r"}  mz_system
 
 simple conn=mz_system,user=mz_system
 ALTER DEFAULT PRIVILEGES FOR ROLE r1 IN SCHEMA public GRANT SELECT ON TABLES to PUBLIC;
@@ -269,7 +266,7 @@ COMPLETE 0
 query ITTTT
 SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY id DESC LIMIT 1
 ----
-74  grant  table  {"database_id":"u1","grantee_id":"p","privileges":"r","role_id":"u3","schema_id":"u3"}  mz_system
+71  grant  table  {"database_id":"u1","grantee_id":"p","privileges":"r","role_id":"u3","schema_id":"u3"}  mz_system
 
 simple conn=mz_system,user=mz_system
 ALTER DEFAULT PRIVILEGES FOR ROLE r1 IN SCHEMA public REVOKE SELECT ON TABLES FROM PUBLIC;
@@ -279,7 +276,7 @@ COMPLETE 0
 query ITTTT
 SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY id DESC LIMIT 1
 ----
-75  revoke  table  {"database_id":"u1","grantee_id":"p","privileges":"r","role_id":"u3","schema_id":"u3"}  mz_system
+72  revoke  table  {"database_id":"u1","grantee_id":"p","privileges":"r","role_id":"u3","schema_id":"u3"}  mz_system
 
 statement ok
 CREATE TABLE t1 (a INT);
@@ -292,7 +289,7 @@ COMPLETE 0
 query ITTTT
 SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY id DESC LIMIT 1
 ----
-77  alter  table  {"new_owner_id":"u3","object_id":"Iu18","old_owner_id":"u1"}  mz_system
+74  alter  table  {"new_owner_id":"u3","object_id":"Iu16","old_owner_id":"u1"}  mz_system
 
 # Test events for auto-created users, which have the username only in the event details, but not the user column.
 simple conn=c,user=new_user
@@ -304,4 +301,4 @@ COMPLETE 1
 query ITTTT
 SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY id DESC LIMIT 1
 ----
-78  create  role  {"id":"u4","name":"new_user"}  NULL
+75  create  role  {"id":"u4","name":"new_user"}  NULL

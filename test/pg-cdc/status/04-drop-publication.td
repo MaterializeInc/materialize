@@ -13,7 +13,6 @@ INSERT INTO t VALUES (1);
 
 > SELECT name, status FROM mz_internal.mz_source_statuses;
 pg_source           stalled
-pg_source_progress  running
 t                   ceased
 
 > SELECT error ILIKE '%publication "mz_source" does not exist' FROM mz_internal.mz_source_statuses WHERE name = 'pg_source';

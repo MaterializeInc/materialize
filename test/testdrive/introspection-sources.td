@@ -352,10 +352,11 @@ true true true true true
 # since we include monoids in the diff field.
 > CREATE CLUSTER counter_cluster SIZE = 'scale=1,workers=1';
 > CREATE SOURCE counter IN CLUSTER counter_cluster FROM LOAD GENERATOR COUNTER (TICK INTERVAL '2ms');
+> CREATE TABLE counter_tbl FROM SOURCE counter;
 
 > CREATE VIEW input AS
   SELECT counter % 1000 + 1 AS f1, counter % 10 + 1 AS f2
-  FROM counter;
+  FROM counter_tbl;
 > CREATE DEFAULT INDEX ON input;
 
 > CREATE VIEW m_minmax AS

@@ -22,7 +22,7 @@ four         3
 five         4
 six          5
 
-> select * from topic_progress
+> select * from topic
 partition  offset
 --------------------
 (0,)    0
