@@ -1460,3 +1460,13 @@ statement ok
 CREATE MATERIALIZED VIEW json_mv AS (
     SELECT * FROM jsons WHERE random_id = CAST(payload->>'my_field' AS uuid[])[random_index]
 )
+
+# Regression test for issue #9757
+
+query error db error: ERROR: number of array elements \(0\) does not match declared cardinality \(1\)
+SELECT ARRAY[NULL::BIGINT[], ARRAY[1::BIGINT, 2::BIGINT]];
+
+query T
+SELECT ARRAY[NULL::BIGINT[], ARRAY[]::BIGINT[], NULL::BIGINT[]];
+----
+{}
