@@ -250,8 +250,8 @@ fn parse_version_constraint(
         return Err(PosError {
             source: anyhow!(
                 "version-constraint: invalid property {} (found '{}', expected 'version' {begin_version_kw})",
-                line[2..closed_brace_pos].to_string(),
-                line[begin_version_kw..version_start].to_string()
+                &line[2..closed_brace_pos],
+                &line[begin_version_kw..version_start]
             ),
             pos: Some(pos),
         });
@@ -278,7 +278,7 @@ fn parse_version_constraint(
             return Err(PosError {
                 source: anyhow!(
                     "version-constraint: invalid version number {}",
-                    line[version_pos..closed_brace_pos].to_string()
+                    &line[version_pos..closed_brace_pos]
                 ),
                 pos: Some(pos),
             });
@@ -309,14 +309,14 @@ fn parse_version_constraint(
         ">=" | ">" => Err(PosError {
             source: anyhow!(
                 "version-constraint: found comparison operator {} with a set minimum version {min_version}",
-                line[version_start..version_pos].to_string()
+                &line[version_start..version_pos]
             ),
             pos: Some(pos),
         }),
         _ => Err(PosError {
             source: anyhow!(
                 "version-constraint: unknown comparison operator {}",
-                line[version_start..version_pos].to_string()
+                &line[version_start..version_pos]
             ),
             pos: Some(pos),
         }),

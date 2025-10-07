@@ -1421,7 +1421,7 @@ impl Coordinator {
                 StorageError::IdentifierMissing(_) => AdapterError::Unstructured(anyhow!(
                     "{} is a {}, which cannot be exported as a sink",
                     from.name().item.clone(),
-                    from.item().typ().to_string(),
+                    from.item().typ(),
                 )),
                 e => AdapterError::Storage(e),
             })
