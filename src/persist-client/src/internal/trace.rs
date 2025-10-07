@@ -741,16 +741,19 @@ impl Serialize for SpineId {
 
 /// Creates a `SpineId` that covers the range of ids in the set.
 pub fn id_range(ids: BTreeSet<SpineId>) -> SpineId {
-    let lower_spine_bound = ids
-        .first()
-        .map(|id| id.0)
-        .expect("at least one batch must be present");
-    let upper_spine_bound = ids
-        .last()
-        .map(|id| id.1)
-        .expect("at least one batch must be present");
+    let mut ids = ids.into_iter();
+    let Some(mut result) = ids.next() else {
+        panic!("at least one batch must be present")
+    };
 
-    SpineId(lower_spine_bound, upper_spine_bound)
+    for id in ids {
+        assert_eq!(
+            result.1, id.0,
+            "expected contiguous ids, but {result:?} is not adjacent to {id:?}"
+        );
+        result.1 = id.1;
+    }
+    result
 }
 
 impl SpineId {
@@ -1139,7 +1142,7 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
         // We also check that the id matches the range of ids we found.
         // At scale, sometimes regular compaction will race forced compaction,
         // for things like the catalog. In that case, we may have a
-        // a replacement that no longer lines up with the spine batches.
+        // replacement that no longer lines up with the spine batches.
         // I think this is because forced compaction ignores the active_compaction
         // and just goes for it. This is slightly annoying but probably the right behavior
         // for a functions whose prefix is `force_`, so we just return
