@@ -61,7 +61,7 @@ twine==6.2.0
 types-Markdown==3.9.0.20250906
 types-prettytable==3.4.2.6
 types-psutil==7.0.0.20250822
-types-PyMYSQL==1.1.0.20250711
+types-PyMYSQL==1.1.0.20250916
 types-PyYAML==6.0.12.20250915
 types-requests==2.32.4.20250913
 types-setuptools==80.9.0.20250822
