@@ -117,7 +117,7 @@ pub fn mzreflect_derive(input: TokenStream) -> TokenStream {
 /// 3. The types of the fields as [syn::Type]
 ///
 /// Fields with the attribute `#[mzreflect(ignore)]` are not returned.
-fn get_fields_names_types(f: &syn::Fields) -> (Vec<String>, Vec<String>, Vec<&syn::Type>) {
+fn get_fields_names_types(f: &Fields) -> (Vec<String>, Vec<String>, Vec<&syn::Type>) {
     match f {
         Fields::Named(named_fields) => {
             let (names, types): (Vec<_>, Vec<_>) = named_fields
@@ -151,15 +151,15 @@ fn get_fields_names_types(f: &syn::Fields) -> (Vec<String>, Vec<String>, Vec<&sy
 /// Returns None if the field has the attribute `#[mzreflect(ignore)]`.
 fn get_field_name_type(f: &syn::Field) -> Option<(String, (String, &syn::Type))> {
     for attr in f.attrs.iter() {
-        if let Ok(syn::Meta::List(meta_list)) = attr.parse_meta() {
-            if meta_list.path.segments.last().unwrap().ident == "mzreflect" {
-                for nested_meta in meta_list.nested.iter() {
-                    if let syn::NestedMeta::Meta(syn::Meta::Path(path)) = nested_meta {
-                        if path.segments.last().unwrap().ident == "ignore" {
-                            return None;
-                        }
-                    }
-                }
+        if attr.path().is_ident("mzreflect") {
+            let mut ignore = false;
+            attr.parse_nested_meta(|meta| {
+                ignore |= meta.path.is_ident("ignore");
+                Ok(())
+            })
+            .unwrap();
+            if ignore {
+                return None;
             }
         }
     }
