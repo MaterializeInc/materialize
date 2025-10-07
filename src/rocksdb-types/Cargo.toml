@@ -10,7 +10,7 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.98"
+anyhow = "1.0.100"
 mz-ore = { path = "../ore", features = ["async", "metrics", "test"] }
 serde = { version = "1.0.219", features = ["derive"] }
 uncased = "0.9.7"

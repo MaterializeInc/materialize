@@ -27,6 +27,7 @@ skip = [
     { name = "ordered-float", version = "4.6.0" },
     # held back by 'ciborium' which is depended on by 'criterion'
     { name = "half", version = "1.6.0" },
+    { name = "windows-link", version = "0.1.1" },
     { name = "windows-targets", version = "0.48.0" },
     { name = "windows-sys", version = "0.48.0" },
     { name = "windows_aarch64_gnullvm", version = "0.48.0" },
@@ -65,8 +66,11 @@ skip = [
     { name = "itertools", version = "0.10.5" },
 
     # A few crates -> `num_enum_derive` -> `proc-macro-crate` -> `toml_edit v0.19.14`.
+    { name = "toml", version = "0.8.22" },
     { name = "toml_edit", version = "0.19.14" },
+    { name = "toml_datetime", version = "0.6.11" },
     { name = "winnow", version = "0.5.4" },
+    { name = "serde_spanned", version = "0.6.9" },
 
     # There are some crates in our dependency tree that have yet to upgrade to
     # `hyper 1.*`. As of now these are:
@@ -129,8 +133,6 @@ skip = [
     # Used by tracing-capture
     { name = "predicates", version = "2.1.5" },
     # Used by launchdarkly-server-sdk (via moka)
-    { name = "windows-result", version = "0.2.0" },
-    { name = "windows-strings", version = "0.1.0" },
     { name = "windows-targets", version = "0.52.6" },
     { name = "windows_aarch64_gnullvm", version = "0.52.6" },
     { name = "windows_aarch64_msvc", version = "0.52.6" },
@@ -146,7 +148,6 @@ skip = [
     # Used by tower-lsp
     { name = "dashmap", version = "5.5.3" },
     # Used by bindgen
-    { name = "itertools", version = "0.12.1" },
     { name = "itertools", version = "0.13.0" },
     # Used by pprof
     { name = "nix", version = "0.26.4" },
@@ -160,6 +161,8 @@ skip = [
     { name = "darling_macro", version = "0.20.11" },
     { name = "darling_core", version = "0.20.11" },
     { name = "darling", version = "0.20.11" },
+    # prost needs an older version of `petgraph`.
+    { name = "petgraph", version = "0.7.1" },
 ]
 
 [[bans.deny]]
@@ -206,7 +209,6 @@ wrappers = [
     "domain",
     "eventsource-client",
     "fail",
-    "generator",
     "globset",
     "launchdarkly-server-sdk",
     "launchdarkly-server-sdk-evaluation",
@@ -242,7 +244,6 @@ name = "rustls"
 [[bans.deny]]
 name = "lazy_static"
 wrappers = [
-    "bindgen",
     "dynfmt",
     "findshlibs",
     "launchdarkly-server-sdk",

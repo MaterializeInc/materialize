@@ -13,12 +13,12 @@ workspace = true
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-anyhow = "1.0.98"
+anyhow = "1.0.100"
 camino = "1"
-cargo_toml = "0.22.1"
+cargo_toml = "0.22.3"
 clap = { version = "4.5.23", features = ["derive", "env"] }
 convert_case = "0.8"
-guppy = "0.17.19"
+guppy = "0.17.21"
 md-5 = "0.10.6"
 proc-macro2 = "1.0.95"
 protobuf-parse = "3.7.2"
