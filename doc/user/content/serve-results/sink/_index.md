@@ -11,30 +11,19 @@ menu:
 ---
 
 A [sink](/concepts/sinks/) describes the external system you want Materialize to
-write data to and details the encoding of that data.
+write data to and details the encoding of that data. You can sink data from a
+**materialized** view, a source, or a table.
 
-### Creating a sink
+## Sink methods
 
-When a user defines a sink over a **materialized** view, source, or table,
-Materialize automatically generates the required schema and writes down the
-stream of changes to that view or source. In effect, Materialize sinks act as
-change data capture (CDC) producers for the given source or view.
+To create a sink, you can:
 
-During creation, sinks need to load an entire snapshot of the data in memory.
+{{< yaml-table data="sink_external_systems" >}}
 
 ### Operational guideline
 
 - Avoid putting sinks on the same cluster that hosts sources to allow for
 [blue/green deployment](/manage/dbt/blue-green-deployments).
-
-### Available guides
-
-The following guides are available for sinking results from Materialize to external systems:
-
-- [Sinking results to Amazon S3](/serve-results/sink/s3/)
-- [Sinking results to Census](/serve-results/sink/census/)
-- [Sinking results to Kafka/Redpanda](/serve-results/sink/kafka/)
-- [Sinking results to Snowflake](/serve-results/sink/snowflake/)
 
 ### Troubleshooting
 
