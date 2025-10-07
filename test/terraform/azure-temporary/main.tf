@@ -60,7 +60,7 @@ resource "azurerm_resource_group" "materialize" {
 }
 
 module "materialize" {
-  source              = "git::https://github.com/MaterializeInc/terraform-azurerm-materialize.git?ref=v0.5.2"
+  source              = "git::https://github.com/MaterializeInc/terraform-azurerm-materialize.git?ref=v0.5.3"
   resource_group_name = azurerm_resource_group.materialize.name
   location            = "eastus2"
   prefix              = "mz-tf-test"
@@ -78,35 +78,6 @@ module "materialize" {
     operator = {
       args = {
         enableLicenseKeyChecks = true
-      }
-      clusters = {
-        # Overriding here because merging values doesn't work.
-        # Remove this when that is fixed.
-        swap_enabled = false
-      }
-      image = {
-        tag = var.orchestratord_version
-      }
-      cloudProvider = {
-        type   = "azure"
-        region = "eastus2"
-      }
-    }
-    observability = {
-      podMetrics = {
-        enabled = true
-      }
-    }
-    storage = {
-      storageClass = {
-        create      = true
-        name        = "openebs-lvm-instance-store-ext4"
-        provisioner = "local.csi.openebs.io"
-        parameters = {
-          storage  = "lvm"
-          fsType   = "ext4"
-          volgroup = "instance-store-vg"
-        }
       }
     }
   }
