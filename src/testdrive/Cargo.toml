@@ -58,7 +58,7 @@ postgres_array = { version = "0.11.0" }
 postgres-protocol = { version = "0.6.5" }
 prost = { version = "0.13.5", features = ["no-recursion-limit"] }
 prost-reflect = { version = "0.15.3", features = ["serde"] }
-prost-types = { version = "0.13.5" }
+prost-types = { version = "0.14.1" }
 rand = "0.8.5"
 rdkafka = { version = "0.29.0", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
 regex = "1.11.3"
