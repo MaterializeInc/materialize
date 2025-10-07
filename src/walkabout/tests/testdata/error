@@ -32,7 +32,7 @@ struct Foo {
     ty: Vec(A),
 }
 ----
-error: Container type has unexpected parenthesized type arguments: Vec (A)
+error: expected `,`
 
 visit
 struct Foo {

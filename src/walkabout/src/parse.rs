@@ -43,8 +43,7 @@ where
 
     let src =
         fs::read_to_string(path).with_context(|| format!("Failed to read {}", path.display()))?;
-    let file =
-        syn::parse_file(&src).with_context(|| format!("Failed to parse {}", path.display()))?;
+    let file = syn::parse_file(&src)?;
 
     for item in file.items {
         match item {
