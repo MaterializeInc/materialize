@@ -1897,7 +1897,7 @@ checksum = "d9998fb9f7e9b2111641485bf8beb32f92945f97f92a3d061f744cfef335f751"
 dependencies = [
  "parse-zoneinfo",
  "phf",
- "phf_codegen",
+ "phf_codegen 0.11.3",
  "uncased",
 ]
 
@@ -7271,7 +7271,7 @@ dependencies = [
  "mz-ore",
  "mz-ore-build",
  "phf",
- "phf_codegen",
+ "phf_codegen 0.13.1",
  "serde",
  "uncased",
  "workspace-hack",
@@ -7760,7 +7760,7 @@ dependencies = [
  "mz-ore",
  "mz-ore-build",
  "phf",
- "phf_codegen",
+ "phf_codegen 0.13.1",
  "serde",
  "uncased",
  "workspace-hack",
@@ -9308,7 +9308,7 @@ version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1fd6780a80ae0c52cc120a26a1a42c1ae51b247a253e4e06113d23d2c2edd078"
 dependencies = [
- "phf_shared",
+ "phf_shared 0.11.3",
 ]
 
 [[package]]
@@ -9317,8 +9317,18 @@ version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "aef8048c789fa5e851558d709946d6d79a8ff88c0440c587967f8e94bfb1216a"
 dependencies = [
- "phf_generator",
- "phf_shared",
+ "phf_generator 0.11.0",
+ "phf_shared 0.11.3",
+]
+
+[[package]]
+name = "phf_codegen"
+version = "0.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "49aa7f9d80421bca176ca8dbfebe668cc7a2684708594ec9f3c0db0805d5d6e1"
+dependencies = [
+ "phf_generator 0.13.1",
+ "phf_shared 0.13.1",
 ]
 
 [[package]]
@@ -9327,8 +9337,18 @@ version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5b450720b6f75cfbfabc195814bd3765f337a4f9a83186f8537297cac12f6705"
 dependencies = [
- "phf_shared",
+ "phf_shared 0.11.3",
  "rand 0.8.5",
+]
+
+[[package]]
+name = "phf_generator"
+version = "0.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "135ace3a761e564ec88c03a77317a7c6b80bb7f7135ef2544dbe054243b89737"
+dependencies = [
+ "fastrand 2.3.0",
+ "phf_shared 0.13.1",
 ]
 
 [[package]]
@@ -9339,6 +9359,15 @@ checksum = "67eabc2ef2a60eb7faa00097bd1ffdb5bd28e62bf39990626a582201b7a754e5"
 dependencies = [
  "siphasher",
  "uncased",
+]
+
+[[package]]
+name = "phf_shared"
+version = "0.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e57fef6bc5981e38c2ce2d63bfa546861309f875b8a75f092d1d54ae2d64f266"
+dependencies = [
+ "siphasher",
 ]
 
 [[package]]
@@ -13668,7 +13697,7 @@ dependencies = [
  "pathdiff",
  "percent-encoding",
  "phf",
- "phf_shared",
+ "phf_shared 0.11.3",
  "portable-atomic",
  "postgres",
  "postgres-types",

@@ -24,7 +24,7 @@ mz-ore = { path = "../ore", default-features = false, features = ["test"] }
 anyhow = "1.0.100"
 mz-ore-build = { path = "../ore-build", default-features = false }
 phf = { version = "0.11.1", features = ["uncased"] }
-phf_codegen = "0.11.3"
+phf_codegen = "0.13.1"
 uncased = "0.9.7"
 
 [features]
