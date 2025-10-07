@@ -17,7 +17,7 @@ enum-kinds = "0.5.1"
 itertools = "0.14.0"
 mz-ore = { path = "../ore", default-features = false, features = ["stack", "assert-no-tracing"] }
 mz-sql-lexer = { path = "../sql-lexer", default-features = false }
-phf = { version = "0.11.1", features = ["uncased"] }
+phf = { version = "0.13.1", features = ["uncased"] }
 serde = { version = "1.0.219", features = ["derive"] }
 smallvec = { version = "1.15.1", features = ["union"] }
 thiserror = "2.0.17"
