@@ -262,32 +262,32 @@ pub fn plan_show_create_type(
         redacted,
     }: ShowCreateTypeStatement<Aug>,
 ) -> Result<ShowCreatePlan, PlanError> {
-    if let ResolvedDataType::Named { id, full_name, .. } = type_name {
-        let type_item = scx.get_item(&id);
-
-        // check if a builtin type is being accessed
-        let create_sql = if id.is_system() {
-            // builtin types do not have a create sql
-            sql_bail!("cannot show create for system type {full_name}");
-        } else {
-            // if custom type we make the sql human readable
-            humanize_sql_for_show_create(
-                scx.catalog,
-                type_item.id(),
-                type_item.create_sql(),
-                redacted,
-            )?
-        };
-
-        let name = type_item.name().item.as_ref();
-
-        Ok(ShowCreatePlan {
-            id: ObjectId::Item(id),
-            row: Row::pack_slice(&[Datum::String(name), Datum::String(&create_sql)]),
-        })
-    } else {
+    let ResolvedDataType::Named { id, full_name, .. } = type_name else {
         sql_bail!("{type_name} is not a named type");
+    };
+
+    let type_item = scx.get_item(&id);
+
+    // check if a builtin type is being accessed
+    if id.is_system() {
+        // builtin types do not have a create sql
+        sql_bail!("cannot show create for system type {full_name}");
     }
+
+    let name = type_item.name().item.as_ref();
+
+    // if custom type we make the sql human readable
+    let create_sql = humanize_sql_for_show_create(
+        scx.catalog,
+        type_item.id(),
+        type_item.create_sql(),
+        redacted,
+    )?;
+
+    Ok(ShowCreatePlan {
+        id: ObjectId::Item(id),
+        row: Row::pack_slice(&[Datum::String(name), Datum::String(&create_sql)]),
+    })
 }
 
 pub fn describe_show_create_type(

@@ -3736,6 +3736,7 @@ impl AstDisplay for StartTransactionStatement {
 }
 impl_display!(StartTransactionStatement);
 
+/// `SHOW [REDACTED] CREATE TYPE <type>`
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ShowCreateTypeStatement<T: AstInfo> {
     pub type_name: T::DataType,
