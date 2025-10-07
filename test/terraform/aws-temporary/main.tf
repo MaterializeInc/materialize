@@ -51,7 +51,7 @@ variable "orchestratord_version" {
 }
 
 module "materialize_infrastructure" {
-  source = "git::https://github.com/MaterializeInc/terraform-aws-materialize.git?ref=v0.5.2"
+  source = "git::https://github.com/MaterializeInc/terraform-aws-materialize.git?ref=v0.5.3"
 
   providers = {
     aws        = aws
@@ -74,16 +74,10 @@ module "materialize_infrastructure" {
   install_cert_manager           = false
   use_self_signed_cluster_issuer = false
 
-  # TODO: This currently fails: https://github.com/MaterializeInc/terraform-aws-materialize/issues/71
   helm_values = {
     operator = {
       args = {
         enableLicenseKeyChecks = true
-      }
-      clusters = {
-        # Overriding here because merging values doesn't work.
-        # Remove this when that is fixed.
-        swap_enabled = false
       }
     },
   }
