@@ -164,7 +164,7 @@ pub(crate) async fn migrate(
     let force_source_table_syntax = state.system_config().force_source_table_syntax();
     // When this flag is set the legacy syntax is denied. But here we are about to perform a
     // migration which requires that we parse the current catalog state. To proceed we temporarily disable
-    // the flag and then reset it after migrationsa are done.
+    // the flag and then reset it after migrations are done.
     if force_source_table_syntax {
         state
             .system_config_mut()
@@ -384,7 +384,7 @@ fn rewrite_sources_to_tables(
         let full_source_name: FullItemName = catalog.resolve_full_name(source_name);
         let source_name: UnresolvedItemName = normalize::unresolve(full_source_name.clone());
 
-        // First, trip the connection options that we no longer need
+        // First, strip the connection options that we no longer need
         match &mut connection {
             CreateSourceConnection::Postgres { options, .. } => {
                 options.retain(|o| match o.name {
@@ -431,10 +431,12 @@ fn rewrite_sources_to_tables(
                     assert_eq!(external_references, None);
 
                     // This is a dummy replacement statement for the source object of multi-output
-                    // sources. It is describing the query `SELECT FROM foo_progress LIMIT 0` which has
-                    // the same schema and data of the dummy output we normally create. The degenerate
-                    // dependency on foo_progress is there so that a `DROP SOURCE foo_progress CASCADE`
-                    // also drops this dummy object.
+                    // sources. It is describing the query `TABLE source_name`. This ensures that
+                    // whoever was used to run select queries against the `source_name` + "_progress"
+                    // object still gets the same data after the migration. This switch does
+                    // changes the schema of the object with `source_item.id` but because we're turning
+                    // it into a view, which is not durable, it's ok. We'll never open a persist shard
+                    // for this global id anymore.
                     let dummy_source_stmt = Statement::CreateView(CreateViewStatement {
                         if_exists: IfExistsBehavior::Error,
                         temporary: false,
@@ -443,7 +445,6 @@ fn rewrite_sources_to_tables(
                             columns: vec![],
                             query: Query {
                                 ctes: CteBlock::Simple(vec![]),
-                                // TODO: this is weird, write a doc comment about it
                                 body: SetExpr::Table(RawItemName::Id(
                                     progress_item.id().to_string(),
                                     source_name.clone(),
@@ -731,7 +732,7 @@ fn rewrite_sources_to_tables(
                     columns: TableFromSourceColumns::Defined(columns),
                     if_not_exists,
                     source: new_raw_source_name,
-                    external_reference: Some(external_reference.clone()),
+                    external_reference: Some(external_reference),
                     with_options,
                     // Subsources don't have `envelope`, `include_metadata`, or `format` options.
                     envelope: None,
@@ -748,6 +749,10 @@ fn rewrite_sources_to_tables(
             }
         }
     }
+    assert!(
+        pending_progress_items.is_empty(),
+        "unexpected residual progress items: {pending_progress_items:?}"
+    );
 
     tx.update_items(updated_items)?;
 
