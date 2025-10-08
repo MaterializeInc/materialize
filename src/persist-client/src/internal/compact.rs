@@ -48,9 +48,7 @@ use crate::internal::gc::GarbageCollector;
 use crate::internal::machine::Machine;
 use crate::internal::maintenance::RoutineMaintenance;
 use crate::internal::metrics::ShardMetrics;
-use crate::internal::state::{
-    ENABLE_INCREMENTAL_COMPACTION, HollowBatch, RunMeta, RunOrder, RunPart,
-};
+use crate::internal::state::{HollowBatch, RunMeta, RunOrder, RunPart};
 use crate::internal::trace::{
     ActiveCompaction, ApplyMergeResult, CompactionInput, FueledMergeRes, IdHollowBatch, SpineId,
     id_range,
@@ -89,7 +87,6 @@ pub struct CompactRes<T> {
 pub struct CompactConfig {
     pub(crate) compaction_memory_bound_bytes: usize,
     pub(crate) compaction_yield_after_n_updates: usize,
-    pub(crate) incremental_compaction: bool,
     pub(crate) version: semver::Version,
     pub(crate) batch: BatchBuilderConfig,
     pub(crate) fetch_config: FetchConfig,
@@ -102,7 +99,6 @@ impl CompactConfig {
         CompactConfig {
             compaction_memory_bound_bytes: COMPACTION_MEMORY_BOUND_BYTES.get(value),
             compaction_yield_after_n_updates: value.compaction_yield_after_n_updates,
-            incremental_compaction: ENABLE_INCREMENTAL_COMPACTION.get(value),
             version: value.build_version.clone(),
             batch: BatchBuilderConfig::new(value, shard_id),
             fetch_config: FetchConfig::from_persist_config(value),
@@ -417,12 +413,13 @@ where
                         .iter()
                         .all(|x| x.batch.runs().all(|(meta, _)| meta.len.is_some()));
 
-                    let incremental_enabled = ENABLE_INCREMENTAL_COMPACTION
-                        .get(&machine_clone.applier.cfg)
+                    let compact_cfg =
+                        CompactConfig::new(&machine_clone.applier.cfg, machine_clone.shard_id());
+                    let incremental_enabled = compact_cfg.batch.enable_incremental_compaction
                         && all_runs_have_uuids
                         && all_runs_have_len;
                     let stream = Self::compact_stream(
-                        CompactConfig::new(&machine_clone.applier.cfg, machine_clone.shard_id()),
+                        compact_cfg,
                         Arc::clone(&machine_clone.applier.state_versions.blob),
                         Arc::clone(&metrics_clone),
                         Arc::clone(&machine_clone.applier.shard_metrics),
@@ -447,7 +444,7 @@ where
                         Self::apply(
                             FueledMergeRes {
                                 output: res.output,
-                                input: res.input,
+                                input: CompactionInput::Legacy,
                                 new_active_compaction: None,
                             },
                             &metrics_clone,
@@ -800,6 +797,9 @@ where
         Vec<(&'a Description<T>, &'a RunMeta, &'a [RunPart<T>])>,
         usize,
     )> {
+        // Assert that all of the inputs are contiguous / can be compacted together.
+        let _ = input_id_range(req.inputs.iter().map(|x| x.id).collect());
+
         // Iterate through batches by spine id.
         let mut batches: Vec<_> = req.inputs.iter().map(|x| (x.id, &*x.batch)).collect();
         batches.sort_by_key(|(id, _)| *id);

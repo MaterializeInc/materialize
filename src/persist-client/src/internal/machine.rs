@@ -47,12 +47,12 @@ use crate::internal::maintenance::{RoutineMaintenance, WriterMaintenance};
 use crate::internal::metrics::{CmdMetrics, Metrics, MetricsRetryStream, RetryMetrics};
 use crate::internal::paths::PartialRollupKey;
 use crate::internal::state::{
-    CompareAndAppendBreak, CriticalReaderState, ENABLE_INCREMENTAL_COMPACTION, HandleDebugState,
-    HollowBatch, HollowRollup, IdempotencyToken, LeasedReaderState, NoOpStateTransition, Since,
-    SnapshotErr, StateCollections, Upper,
+    CompareAndAppendBreak, CriticalReaderState, HandleDebugState, HollowBatch, HollowRollup,
+    IdempotencyToken, LeasedReaderState, NoOpStateTransition, Since, SnapshotErr, StateCollections,
+    Upper,
 };
 use crate::internal::state_versions::StateVersions;
-use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
+use crate::internal::trace::{ApplyMergeResult, CompactionInput, FueledMergeRes};
 use crate::internal::watch::StateWatch;
 use crate::read::{LeasedReaderId, READER_LEASE_DURATION};
 use crate::rpc::PubSubSender;
@@ -1076,7 +1076,6 @@ where
         res: &FueledMergeRes<T>,
     ) -> (ApplyMergeResult, RoutineMaintenance) {
         let metrics = Arc::clone(&self.applier.metrics);
-        let use_incremental_compaction = ENABLE_INCREMENTAL_COMPACTION.get(&self.applier.cfg);
 
         // SUBTLE! If Machine::merge_res returns false, the blobs referenced in
         // compaction output are deleted so we don't leak them. Naively passing
@@ -1109,7 +1108,7 @@ where
         let mut merge_result_ever_applied = ApplyMergeResult::NotAppliedNoMatch;
         let (_seqno, _apply_merge_result, maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.merge_res, |_, _, state| {
-                let ret = if use_incremental_compaction {
+                let ret = if res.input != CompactionInput::Legacy {
                     state.apply_merge_res::<D>(res, &Arc::clone(&metrics).columnar)
                 } else {
                     state.apply_merge_res_classic::<D>(res, &Arc::clone(&metrics).columnar)

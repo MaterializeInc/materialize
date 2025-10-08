@@ -741,15 +741,15 @@ impl Serialize for SpineId {
 
 /// Creates a `SpineId` that covers the range of ids in the set.
 pub fn id_range(ids: BTreeSet<SpineId>) -> SpineId {
-    let mut ids = ids.into_iter();
-    let Some(mut result) = ids.next() else {
+    let mut id_iter = ids.iter().copied();
+    let Some(mut result) = id_iter.next() else {
         panic!("at least one batch must be present")
     };
 
-    for id in ids {
+    for id in id_iter {
         assert_eq!(
             result.1, id.0,
-            "expected contiguous ids, but {result:?} is not adjacent to {id:?}"
+            "expected contiguous ids, but {result:?} is not adjacent to {id:?} in ids {ids:?}"
         );
         result.1 = id.1;
     }
