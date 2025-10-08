@@ -15,21 +15,27 @@ Materialize to an S3 compatible object storage service, such as Google
 Cloud Storage, or Cloudflare R2.
 
 ## Before you begin:
-- Make sure that you have setup your bucket
-- Obtain the S3 compatible URI for your bucket, as well as S3 access tokens (`ACCESS_KEY_ID` and `SECRET_ACCESS_KEY`). Instructions to obtain these vary by provider.
+- Make sure that you have setup your bucket.
+- Obtain the following for your bucket. Instructions to obtain these vary by provider.
+  - The S3 compatible URI (`S3_BUCKET_URI`)
+  - The S3 compatible access tokens (`ACCESS_KEY_ID` and `SECRET_ACCESS_KEY`)
 
 ## Step 1. Create a connection
 
 1. In the [SQL Shell](https://console.materialize.com/), or your preferred SQL
    client connected to Materialize, create an [AWS connection](/sql/create-connection/#aws),
    replacing `<ACCESS_KEY_ID>` and  `<SECRET_ACCESS_KEY>` with the credentials for your bucket. The AWS
-   connection can be used to connect to any S3 compatible object storage service.
+   connection can be used to connect to any S3 compatible object storage service, by specifying the endpoint and the region. 
+
+   For example, to connect to Google Cloud Storage, you can run the following:
 
     ```mzsql
     CREATE SECRET secret_access_key AS '<SECRET_ACCESS_KEY>';
     CREATE CONNECTION bucket_connection TO AWS (
         ACCESS KEY ID = '<ACCESS_KEY_ID>',
-        SECRET ACCESS KEY = SECRET secret_access_key
+        SECRET ACCESS KEY = SECRET secret_access_key,
+        ENDPOINT = 'https://storage.googleapis.com',
+        REGION = 'us'
     );
     ```
 
@@ -46,7 +52,7 @@ Cloud Storage, or Cloudflare R2.
 ## Step 2. Run a bulk export
 
 To export data to your target bucket, use the [`COPY TO`](/sql/copy-to/#copy-to-s3)
-command, and the AWS connection you created in the previous step. Replace the '<S3_BUCKET_URI>'
+command and the AWS connection you created in the previous step. Replace the `<S3_BUCKET_URI>`
 with the S3 compatible URI for your target bucket.
 
 {{< tabs >}}

@@ -176,7 +176,7 @@ CREATE CONNECTION aws_credentials TO AWS (
 ### S3 compatible object storage
 You can use an AWS connection to perform bulk exports to any S3 compatible object storage service,
 such as Google Cloud Storage. While connecting to S3 compatible object storage, you need to provide
-static access key credentials.
+static access key credentials, specify the endpoint, and the region.
 
 To create a connection that uses static access key credentials:
 
@@ -184,7 +184,9 @@ To create a connection that uses static access key credentials:
 CREATE SECRET secret_access_key AS '...';
 CREATE CONNECTION gcs_connection TO AWS (
     ACCESS KEY ID = 'ASIAV2KIV5LPTG6HGXG6',
-    SECRET ACCESS KEY = SECRET secret_access_key
+    SECRET ACCESS KEY = SECRET secret_access_key,
+    ENDPOINT = 'https://storage.googleapis.com',
+    REGION = 'us'
 );
 ```
 

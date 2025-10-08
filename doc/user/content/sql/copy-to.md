@@ -39,7 +39,7 @@ Name     | Values                 | Default value | Description
 COPY (SUBSCRIBE some_view) TO STDOUT WITH (FORMAT binary);
 ```
 
-## Copy to Amazon S3 {#copy-to-s3}
+## Copy to Amazon S3 and S3 compatible services {#copy-to-s3}
 
 {{< public-preview />}}
 
