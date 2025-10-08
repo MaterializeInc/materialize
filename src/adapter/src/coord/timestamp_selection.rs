@@ -56,7 +56,7 @@ pub enum TimestampContext<T> {
         /// the `chosen_ts`.
         oracle_ts: Option<T>,
     },
-    /// Read is execute without a timeline or timestamp.
+    /// Read is executed without a timeline or timestamp.
     NoTimestamp,
 }
 
