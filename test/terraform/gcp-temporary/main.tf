@@ -29,7 +29,7 @@ provider "helm" {
 }
 
 module "materialize" {
-  source = "github.com/MaterializeInc/terraform-google-materialize?ref=v0.5.0"
+  source = "github.com/MaterializeInc/terraform-google-materialize?ref=v0.5.3"
 
   project_id = var.project_id
   region     = var.region
@@ -65,11 +65,6 @@ module "materialize" {
     operator = {
       args = {
         enableLicenseKeyChecks = true
-      }
-      clusters = {
-        # Overriding here because merging values doesn't work.
-        # Remove this when that is fixed.
-        swap_enabled = false
       }
     },
   }
