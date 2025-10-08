@@ -260,6 +260,7 @@ where
         result_desc: RelationDesc,
         finishing: RowSetFinishing,
         map_filter_project: mz_expr::SafeMfpPlan,
+        target_read_hold: ReadHold<T>,
         target_replica: Option<ReplicaId>,
         peek_response_tx: oneshot::Sender<PeekResponse>,
     ) {
@@ -272,7 +273,7 @@ where
                 result_desc,
                 finishing,
                 map_filter_project,
-                None,
+                target_read_hold,
                 target_replica,
                 peek_response_tx,
             )
@@ -1721,7 +1722,7 @@ where
         result_desc: RelationDesc,
         finishing: RowSetFinishing,
         map_filter_project: mz_expr::SafeMfpPlan,
-        read_hold: Option<ReadHold<T>>,
+        mut read_hold: ReadHold<T>,
         target_replica: Option<ReplicaId>,
         peek_response_tx: oneshot::Sender<PeekResponse>,
     ) -> Result<(), PeekError> {
@@ -1729,19 +1730,6 @@ where
 
         // Acquire a read hold if one was not provided.
         let target_id = peek_target.id();
-        let mut read_hold = match read_hold {
-            Some(h) => h,
-            None => match &peek_target {
-                PeekTarget::Index { id } => self
-                    .acquire_read_hold(*id)
-                    .map_err(|_| ReadHoldInsufficient(target_id))?,
-                PeekTarget::Persist { .. } => {
-                    // For persist peeks, the controller should provide a storage read hold.
-                    // We don't support acquiring it here.
-                    return Err(ReadHoldInsufficient(target_id));
-                }
-            },
-        };
 
         // Downgrade the provided (or acquired) read hold to the peek time.
         if read_hold.id() != target_id {

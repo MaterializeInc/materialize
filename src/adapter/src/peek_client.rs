@@ -210,6 +210,11 @@ impl PeekClient {
     ///
     /// Note: self is taken &mut because of the lazy fetching in `get_compute_instance_client`.
     ///
+    /// Note: `input_read_holds` is an Option, because we don't need it for constant queries.
+    /// `input_read_holds` has holds for all inputs. For fast-path peeks, this includes the peek.
+    /// target For slow-path peeks (to be implemented later), we'll need to additionally call into
+    /// the Controller to acquire a hold on the peek target after we create the dataflow.
+    ///
     /// TODO(peek-seq): add statement logging
     /// TODO(peek-seq): cancellation (see pending_peeks/client_pending_peeks wiring in the old
     /// sequencing)
@@ -224,7 +229,7 @@ impl PeekClient {
         max_result_size: u64,
         max_returned_query_size: Option<u64>,
         row_set_finishing_seconds: Histogram,
-        _read_holds: Option<ReadHolds<Timestamp>>,
+        input_read_holds: Option<ReadHolds<Timestamp>>,
     ) -> Result<crate::ExecuteResponse, AdapterError> {
         match fast_path {
             // If the dataflow optimizes to a constant expression, we can immediately return the result.
@@ -285,6 +290,12 @@ impl PeekClient {
                 let literal_vec: Option<Vec<Row>> = literal_constraints;
                 let map_filter_project = mfp;
                 let finishing_for_instance = finishing.clone();
+                let target_read_hold = input_read_holds
+                    .expect("need a read hold for non-constant peeks")
+                    .compute_holds
+                    .get(&(compute_instance, idx_id))
+                    .expect("missing compute read hold on peek target")
+                    .clone();
                 client
                     .peek(
                         peek_target,
@@ -294,18 +305,7 @@ impl PeekClient {
                         result_desc,
                         finishing_for_instance,
                         map_filter_project,
-                        // We let `Instance::peek` acquire read holds instead of passing them in.
-                        // This is different from the old peek sequencing: That code is able to
-                        // acquire read holds in `ComputeController::peek` at no significant cost,
-                        // because that is a thick client to the controller. Here, we only have a
-                        // thin client, which would need to do a roundtrip to the controller task
-                        // for acquiring read holds, so it's better to let the instance do it in the
-                        // same call that kicks off the peek itself. (Another difference is that
-                        // the old peek sequencing's `ComputeController::peek` does not wait for
-                        // `Instance::peek` to finish before returning, which means that if it were
-                        // to let `Instance::peek` acquire the read holds, then we might acquire
-                        // read holds too late, leading to panic if the Coordinator drops its own
-                        // read holds in the meantime, e.g., due to cancelling the peek.)
+                        target_read_hold,
                         target_replica,
                         rows_tx,
                     )

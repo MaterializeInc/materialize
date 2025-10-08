@@ -907,7 +907,7 @@ where
                 result_desc,
                 finishing,
                 map_filter_project,
-                Some(read_hold),
+                read_hold,
                 target_replica,
                 peek_response_tx,
             )
