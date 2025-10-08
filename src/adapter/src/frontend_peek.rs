@@ -308,8 +308,6 @@ impl SessionClient {
             .in_immediate_multi_stmt_txn(&select_plan.when);
 
         // Fetch or generate a timestamp for this query and fetch or acquire read holds.
-        // We need to keep these read holds until `implement_fast_path_peek_plan`, which acquires
-        // its own read holds.
         let (determination, read_holds) = match session.get_transaction_timestamp_determination() {
             // Use the transaction's timestamp if it exists and this isn't an AS OF query.
             Some(
@@ -516,9 +514,6 @@ impl SessionClient {
                 read_holds,
             )
             .await?;
-
-        // Ok to lose `_read_holds` at this point, because `implement_fast_path_peek_plan` acquired
-        // its own read holds before returning.
 
         Ok(Some(resp))
     }
