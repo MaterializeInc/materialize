@@ -229,7 +229,7 @@ impl PeekClient {
         max_result_size: u64,
         max_returned_query_size: Option<u64>,
         row_set_finishing_seconds: Histogram,
-        input_read_holds: Option<ReadHolds<Timestamp>>,
+        input_read_holds: ReadHolds<Timestamp>,
     ) -> Result<crate::ExecuteResponse, AdapterError> {
         match fast_path {
             // If the dataflow optimizes to a constant expression, we can immediately return the result.
@@ -291,7 +291,6 @@ impl PeekClient {
                 let map_filter_project = mfp;
                 let finishing_for_instance = finishing.clone();
                 let target_read_hold = input_read_holds
-                    .expect("need a read hold for non-constant peeks")
                     .compute_holds
                     .get(&(compute_instance, idx_id))
                     .expect("missing compute read hold on peek target")

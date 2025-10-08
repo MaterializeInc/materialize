@@ -311,11 +311,15 @@ impl SessionClient {
         let (determination, read_holds) = match session.get_transaction_timestamp_determination() {
             // Use the transaction's timestamp if it exists and this isn't an AS OF query.
             Some(
-                determination @ TimestampDetermination {
+                _determination @ TimestampDetermination {
                     timestamp_context: TimestampContext::TimelineTimestamp { .. },
                     ..
                 },
-            ) if in_immediate_multi_stmt_txn => (determination, None),
+            ) if in_immediate_multi_stmt_txn => {
+                // TODO(peek-seq): handle multi-statement transactions: return the above
+                // `determination` and the holds from txn_read_holds.
+                return Ok(None);
+            }
             _ => {
                 let determine_bundle = if in_immediate_multi_stmt_txn {
                     // TODO(peek-seq): handle multi-statement transactions
@@ -340,18 +344,6 @@ impl SessionClient {
                         real_time_recency_ts,
                     )
                     .await?;
-                // We only need read holds if the read depends on a timestamp.
-                let read_holds = match determination.timestamp_context.timestamp() {
-                    Some(_ts) => Some(read_holds),
-                    None => {
-                        // We don't need the read holds and shouldn't add them
-                        // to the txn.
-                        //
-                        // TODO(peek-seq): Handle this within determine_timestamp?
-                        drop(read_holds);
-                        None
-                    }
-                };
                 (determination, read_holds)
             }
         };
