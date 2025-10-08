@@ -1276,7 +1276,7 @@ impl Coordinator {
             }
             _ => {}
         }
-        self.catalog_transact(session, ops.clone()).await?;
+        self.catalog_transact(session, ops).await?;
         for (cluster_id, replica_name) in create_cluster_replicas {
             let replica_id = self
                 .catalog()
