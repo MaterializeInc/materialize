@@ -3191,7 +3191,7 @@ pub static MZ_ROLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
         .with_column("oid", SqlScalarType::Oid.nullable(false))
         .with_column("name", SqlScalarType::String.nullable(false))
         .with_column("inherit", SqlScalarType::Bool.nullable(false))
-        .with_column("rolcanlogin", SqlScalarType::Bool.nullable(false))
+        .with_column("rolcanlogin", SqlScalarType::Bool.nullable(true))
         .with_column("rolsuper", SqlScalarType::Bool.nullable(true))
         .with_key(vec![0])
         .with_key(vec![1])
@@ -9839,7 +9839,7 @@ pub static PG_ROLES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     rolinherit,
     rolcreaterole,
     rolcreatedb,
-    rolcanlogin,
+    COALESCE(rolcanlogin, false) AS rolcanlogin,
     rolreplication,
     rolconnlimit,
     '********' as rolpassword,
@@ -10598,7 +10598,7 @@ SELECT
     inherit AS rolinherit,
     mz_catalog.has_system_privilege(r.oid, 'CREATEROLE') AS rolcreaterole,
     mz_catalog.has_system_privilege(r.oid, 'CREATEDB') AS rolcreatedb,
-    r.rolcanlogin AS rolcanlogin,
+    COALESCE(r.rolcanlogin, false) AS rolcanlogin,
     -- MZ doesn't support replication in the same way Postgres does
     false AS rolreplication,
     -- MZ doesn't how row level security
