@@ -147,7 +147,8 @@ To create an AWS connection that will assume the `WarehouseExport` role:
 
 ```mzsql
 CREATE CONNECTION aws_role_assumption TO AWS (
-    ASSUME ROLE ARN = 'arn:aws:iam::000000000000:role/WarehouseExport'
+    ASSUME ROLE ARN = 'arn:aws:iam::000000000000:role/WarehouseExport',
+    REGION = 'us-east-1'
 );
 ```
 {{< /tab >}}
@@ -315,7 +316,8 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 
 ```mzsql
 CREATE CONNECTION aws_msk TO AWS (
-    ASSUME ROLE ARN = 'arn:aws:iam::000000000000:role/MaterializeMSK'
+    ASSUME ROLE ARN = 'arn:aws:iam::000000000000:role/MaterializeMSK',
+    REGION = 'us-east-1'
 );
 
 CREATE CONNECTION kafka_msk TO KAFKA (
@@ -734,7 +736,8 @@ an SSH bastion server to accept connections from Materialize, check [this guide]
 
 ```mzsql
 CREATE CONNECTION aws_rds_mysql TO AWS (
-    ASSUME ROLE ARN = 'arn:aws:iam::000000000000:role/MaterializeRDS'
+    ASSUME ROLE ARN = 'arn:aws:iam::000000000000:role/MaterializeRDS',
+    REGION = 'us-west-1'
 );
 
 CREATE CONNECTION mysql_connection TO MYSQL (
