@@ -2745,3 +2745,35 @@ def workflow_ddl(c: Composition) -> None:
             """
             )
         )
+
+
+def workflow_stuck_collection(c: Composition) -> None:
+    """Verify that stuck collections don't hold up a 0dt deployment."""
+
+    c.down(destroy_volumes=True)
+
+    c.up("mz_old")
+
+    c.sql(
+        "ALTER SYSTEM SET with_0dt_caught_up_check_cutoff = '10s'",
+        service="mz_old",
+        port=6877,
+        user="mz_system",
+    )
+
+    c.sql(
+        """
+        CREATE CLUSTER paused SIZE 'scale=1,workers=1', REPLICATION FACTOR 0;
+        CREATE CLUSTER test SIZE 'scale=1,workers=1';
+
+        CREATE TABLE t (a int);
+        CREATE MATERIALIZED VIEW mv IN CLUSTER paused AS SELECT * FROM t;
+        CREATE INDEX idx IN CLUSTER test ON mv (a);
+        """,
+        service="mz_old",
+    )
+
+    c.up("mz_new")
+    c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
+    c.promote_mz("mz_new")
+    c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None)
