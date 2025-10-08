@@ -30,6 +30,7 @@ CREATE POLICY restrict_mzuser ON foo FOR SELECT TO mz_user USING (visible = TRUE
 
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
+> CREATE CLUSTER rls SIZE = 'scale=1,workers=1', REPLICATION FACTOR = 1;
 
 > CREATE SECRET pgpass AS 'postgres'
 
@@ -44,6 +45,7 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
 # Policy that affects the user is detected
 > BEGIN
 > CREATE SOURCE mz_source
+  IN CLUSTER rls
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
 ! CREATE TABLE foo FROM SOURCE mz_source (REFERENCE foo);
 contains:one or more tables requires BYPASSRLS
@@ -56,6 +58,7 @@ CREATE POLICY restrict_mzuser ON foo FOR SELECT USING (visible = TRUE);
 
 > BEGIN
 > CREATE SOURCE mz_source
+  IN CLUSTER rls
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
 ! CREATE TABLE foo FROM SOURCE mz_source (REFERENCE foo);
 contains:one or more tables requires BYPASSRLS
@@ -67,6 +70,7 @@ ALTER ROLE mz_user BYPASSRLS;
 
 > BEGIN
 > CREATE SOURCE mz_source
+  IN CLUSTER rls
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
 > CREATE TABLE foo FROM SOURCE mz_source (REFERENCE foo);
 > COMMIT;
@@ -83,5 +87,41 @@ DELETE FROM foo WHERE id = 2;
 UPDATE foo SET val = 'apple' WHERE id = 1;
 
 > SELECT * FROM foo
+1 apple true
+3 c true
+
+## Test that MZ also detects RLS restrictions during snapshot, causing the dataflow to emit
+## a transient error.
+> ALTER CLUSTER rls SET (REPLICATION FACTOR = 0);
+
+> SELECT status
+  FROM mz_internal.mz_source_statuses
+  WHERE name = 'mz_source';
+paused
+
+# purification has happened, and the source was ok
+> CREATE TABLE bar FROM SOURCE mz_source (REFERENCE foo);
+
+# when the snapshot starts, RLS will again be in place.  The dataflow should return a
+# transient error.
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+ALTER ROLE mz_user NOBYPASSRLS;
+
+> ALTER CLUSTER rls SET (REPLICATION FACTOR = 1);
+
+> SELECT status, error LIKE '%one or more tables requires BYPASSRLS%'
+  FROM mz_internal.mz_source_statuses
+  WHERE name = 'bar';
+stalled true
+
+# Enabling BYPASSRLS allows the snapshot to continue without recreating the source.
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+ALTER ROLE mz_user BYPASSRLS;
+
+> SELECT * FROM bar;
+1 apple true
+3 c true
+
+> SELECT * FROM foo;
 1 apple true
 3 c true
