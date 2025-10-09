@@ -52,7 +52,7 @@ use crate::internal::state::{
     Upper,
 };
 use crate::internal::state_versions::StateVersions;
-use crate::internal::trace::{ApplyMergeResult, CompactionInput, FueledMergeRes};
+use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
 use crate::internal::watch::StateWatch;
 use crate::read::{LeasedReaderId, READER_LEASE_DURATION};
 use crate::rpc::PubSubSender;
@@ -1108,11 +1108,7 @@ where
         let mut merge_result_ever_applied = ApplyMergeResult::NotAppliedNoMatch;
         let (_seqno, _apply_merge_result, maintenance) = self
             .apply_unbatched_idempotent_cmd(&metrics.cmds.merge_res, |_, _, state| {
-                let ret = if res.input != CompactionInput::Legacy {
-                    state.apply_merge_res::<D>(res, &Arc::clone(&metrics).columnar)
-                } else {
-                    state.apply_merge_res_classic::<D>(res, &Arc::clone(&metrics).columnar)
-                };
+                let ret = state.apply_merge_res::<D>(res, &Arc::clone(&metrics).columnar);
                 if let Continue(result) = ret {
                     // record if we've ever applied the merge
                     if result.applied() {

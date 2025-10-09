@@ -66,7 +66,6 @@ use serde::{Serialize, Serializer};
 use timely::PartialOrder;
 use timely::progress::frontier::AntichainRef;
 use timely::progress::{Antichain, Timestamp};
-use tracing::error;
 
 use crate::internal::paths::WriterKey;
 use crate::internal::state::{HollowBatch, RunId};
@@ -657,20 +656,6 @@ impl<T: Timestamp + Lattice> Trace<T> {
 }
 
 impl<T: Timestamp + Lattice + Codec64> Trace<T> {
-    pub fn apply_merge_res_checked_classic<D: Codec64 + Semigroup + PartialEq>(
-        &mut self,
-        res: &FueledMergeRes<T>,
-        metrics: &ColumnarMetrics,
-    ) -> ApplyMergeResult {
-        for batch in self.spine.spine_batches_mut().rev() {
-            let result = batch.maybe_replace_checked_classic::<D>(res, metrics);
-            if result.matched() {
-                return result;
-            }
-        }
-        ApplyMergeResult::NotAppliedNoMatch
-    }
-
     pub fn apply_merge_res_checked<D: Codec64 + Semigroup + PartialEq>(
         &mut self,
         res: &FueledMergeRes<T>,
@@ -1099,10 +1084,7 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
             CompactionInput::PartialBatch(id, runs) => {
                 self.handle_partial_batch_replacement::<D>(res, *id, runs, new_diffs_sum, metrics)
             }
-            CompactionInput::Legacy => {
-                error!("legacy compaction input is not supported");
-                return ApplyMergeResult::NotAppliedNoMatch;
-            }
+            CompactionInput::Legacy => self.maybe_replace_checked_classic::<D>(res, metrics),
         };
 
         let num_batches_after = self.parts.len();
