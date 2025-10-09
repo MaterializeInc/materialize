@@ -964,6 +964,7 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
         run_ids: &[RunId],
         metrics: &ColumnarMetrics,
     ) -> Option<D> {
+        let mut run_ids: BTreeSet<RunId> = run_ids.into_iter().cloned().collect();
         if run_ids.is_empty() {
             return None;
         }
@@ -971,11 +972,16 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
         let parts = batch
             .runs()
             .filter(|(meta, _)| {
-                run_ids.contains(&meta.id.expect("id should be present at this point"))
+                let id = meta.id.expect("id should be present at this point");
+                run_ids.remove(&id)
             })
             .flat_map(|(_, parts)| parts);
 
-        Self::diffs_sum(parts, metrics)
+        let sum = Self::diffs_sum(parts, metrics);
+
+        assert!(run_ids.is_empty(), "all runs must be present in the batch");
+
+        sum
     }
 
     fn maybe_replace_with_tombstone(&mut self, desc: &Description<T>) -> ApplyMergeResult {
@@ -1149,7 +1155,7 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
             metrics,
         );
 
-        self.validate_diffs_sum_match(old_diffs_sum, new_diffs_sum, "id range replacement");
+        Self::validate_diffs_sum_match(old_diffs_sum, new_diffs_sum, "id range replacement");
 
         self.perform_subset_replacement(
             &res.output,
@@ -1203,12 +1209,12 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
         let old_batch_diff_sum = Self::diffs_sum::<D>(batch.parts.iter(), metrics);
         let old_diffs_sum = Self::diffs_sum_for_runs::<D>(batch, &run_ids, metrics);
 
-        self.validate_diffs_sum_match(old_diffs_sum, new_diffs_sum, "partial batch replacement");
+        Self::validate_diffs_sum_match(old_diffs_sum, new_diffs_sum, "partial batch replacement");
 
         match Self::construct_batch_with_runs_replaced(batch, &run_ids, &res.output) {
             Ok(new_batch) => {
                 let new_batch_diff_sum = Self::diffs_sum::<D>(new_batch.parts.iter(), metrics);
-                self.validate_diffs_sum_match(
+                Self::validate_diffs_sum_match(
                     old_batch_diff_sum,
                     new_batch_diff_sum,
                     "sanity checking diffs sum for replaced runs",
@@ -1225,7 +1231,6 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
     }
 
     fn validate_diffs_sum_match<D>(
-        &self,
         old_diffs_sum: Option<D>,
         new_diffs_sum: Option<D>,
         context: &str,
