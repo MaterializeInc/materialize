@@ -274,13 +274,13 @@ pub(crate) async fn migrate(
 ///
 /// |  Global ID  |  SQL Name     | Create SQL                 | Schema   | Durable |
 /// +-------------+---------------+----------------------------+----------+---------|
-/// | source_id   | source_name   | CREATE SOURCE (old-style) | empty     | yes     |
-/// | progress_id | progress_name | CREATE SUBSOURCE .."      | progress  | yes     |
+/// | (source_id   | source_name)   | CREATE SOURCE (old-style)  | empty    | yes     |
+/// | progress_id | progress_name | CREATE SUBSOURCE .."       | progress | yes     |
 ///
 /// to this mapping:
 ///
 /// |  Global ID  |  SQL Name     | Create SQL                | Schema        | Durable |
-/// +-------------+---------------+-------------------------------------------+---------+
+/// +-------------+---------------+---------------------------+---------------+---------+
 /// | source_id   | progress_name | CREATE VIEW               | progress data | no      |
 /// | progress_id | source_name   | CREATE SOURCE (new-style) | progress data | yes     |
 ///
@@ -294,17 +294,17 @@ pub(crate) async fn migrate(
 ///
 /// Visually, we are changing this mapping:
 ///
-/// |  Global ID  |  SQL Name     | Create SQL                 | Schema     | Durable |
-/// +-------------+---------------+----------------------------+------------+---------|
-/// | source_id   | source_name   | CREATE SOURCE (old-style) | source data | yes     |
-/// | progress_id | progress_name | CREATE SUBSOURCE .."      | progress    | yes     |
+/// |  Global ID  |  SQL Name     | Create SQL                 | Schema      | Durable |
+/// +-------------+---------------+----------------------------+-------------+---------|
+/// | source_id   | source_name   | CREATE SOURCE (old-style)  | source data | yes     |
+/// | progress_id | progress_name | CREATE SUBSOURCE .."       | progress    | yes     |
 ///
 /// to this mapping:
 ///
-/// |  Global ID  |  SQL Name     | Create SQL                 | Schema     | Durable |
-/// +-------------+---------------+----------------------------+------------+---------|
-/// | source_id   | source_name   | CREATE TABLE FROM SOURCE  | source data | yes     |
-/// | progress_id | progress_name | CREATE SOURCE (new-style) | progress    | yes     |
+/// |  Global ID  |  SQL Name     | Create SQL                 | Schema      | Durable |
+/// +-------------+---------------+----------------------------+-------------+---------|
+/// | source_id   | source_name   | CREATE TABLE FROM SOURCE   | source data | yes     |
+/// | progress_id | progress_name | CREATE SOURCE (new-style)  | progress    | yes     |
 ///
 /// ## Subsource migration
 ///
@@ -424,10 +424,10 @@ fn rewrite_sources_to_tables(
                 }) => {
                     // Assert the expected state of the source
                     assert_eq!(col_names, &[]);
-                    assert_eq!(include_metadata, &[]);
+                    assert_eq!(key_constraint, None);
                     assert_eq!(format, None);
                     assert_eq!(envelope, None);
-                    assert_eq!(key_constraint, None);
+                    assert_eq!(include_metadata, &[]);
                     assert_eq!(external_references, None);
 
                     // This is a dummy replacement statement for the source object of multi-output
@@ -486,7 +486,8 @@ fn rewrite_sources_to_tables(
                     connection,
                 } => {
                     let constraints = if let Some(_key_constraint) = key_constraint {
-                        // Should we ignore not enforced primary key constraints here?
+                        // Primary key not enforced is not enabled for anyone
+                        // TODO: remove the feature altogether
                         vec![]
                     } else {
                         vec![]
