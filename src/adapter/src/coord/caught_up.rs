@@ -145,7 +145,7 @@ impl Coordinator {
             BTreeSet::new()
         };
 
-        let compute_caught_up = self
+        let caught_up = self
             .clusters_caught_up(
                 allowed_lag.into(),
                 cutoff.into(),
@@ -156,26 +156,32 @@ impl Coordinator {
             )
             .await;
 
-        tracing::info!(%compute_caught_up, "checked caught-up status of collections");
+        tracing::info!(%caught_up, "checked caught-up status of collections");
 
-        if compute_caught_up {
+        if caught_up {
             let ctx = self.caught_up_check.take().expect("known to exist");
             ctx.trigger.fire();
         }
     }
 
-    /// Returns `true` if all non-transient, non-excluded collections have their write
-    /// frontier (aka. upper) within `allowed_lag` of the "live" frontier
-    /// reported in `live_frontiers`. The "live" frontiers are frontiers as
-    /// reported by a currently running `environmentd` deployment, during a 0dt
-    /// upgrade.
+    /// Returns whether all clusters are considered caught-up.
     ///
-    /// Collections whose write frontier is behind `now` by more than the cutoff
-    /// are ignored.
+    /// Informally, a cluster is considered caught-up if it is at least as healthy as its
+    /// counterpart in the leader environment. To determine that, we use the following rules:
     ///
-    /// For this check, zero-replica clusters are always considered caught up.
-    /// Their collections would never normally be considered caught up but it's
-    /// clearly intentional that they have no replicas.
+    ///  (1) A cluster is caught-up if all non-transient, non-excluded collections installed on it
+    ///      are either caught-up or ignored.
+    ///  (2) A collection is caught-up when it is (a) hydrated and (b) its write frontier is within
+    ///      `allowed_lag` of the "live" frontier, the collection's frontier reported by the leader
+    ///      environment.
+    ///  (3) A collection is ignored if its "live" frontier is behind `now` by more than `cutoff`.
+    ///      Such a collection is unhealthy in the leader environment, so we don't care about its
+    ///      health in the read-only environment either.
+    ///  (4) On a cluster that is crash-looping, all collections are ignored.
+    ///
+    /// For this check, zero-replica clusters are always considered caught up. Their collections
+    /// would never normally be considered caught up but it's clearly intentional that they have no
+    /// replicas.
     async fn clusters_caught_up(
         &self,
         allowed_lag: Timestamp,
@@ -219,17 +225,9 @@ impl Coordinator {
         result
     }
 
-    /// Returns `true` if all non-transient, non-excluded collections have their write
-    /// frontier (aka. upper) within `allowed_lag` of the "live" frontier
-    /// reported in `live_frontiers`. The "live" frontiers are frontiers as
-    /// reported by a currently running `environmentd` deployment, during a 0dt
-    /// upgrade.
+    /// Returns whether the given cluster is considered caught-up.
     ///
-    /// Collections whose write frontier is behind `now` by more than the cutoff
-    /// are ignored.
-    ///
-    /// This also returns `true` in case this cluster does not have any
-    /// replicas.
+    /// See [`Coordinator::clusters_caught_up`] for details.
     async fn collections_caught_up(
         &self,
         cluster: &Cluster,
@@ -245,7 +243,7 @@ impl Coordinator {
         }
 
         // Check if all replicas in this cluster are crash/OOM-looping. As long
-        // as there is at least  one healthy replica, the cluster is okay-ish.
+        // as there is at least one healthy replica, the cluster is okay-ish.
         let cluster_has_only_problematic_replicas = cluster
             .replicas()
             .all(|replica| problematic_replicas.contains(&replica.replica_id));
@@ -318,10 +316,21 @@ impl Coordinator {
                     "live write frontier of collection {id} is too far behind 'now'"
                 );
                 tracing::info!(
-                    "ALL replicas of cluster {} are crash/OOM-looping and it has at least one collection that is too far behind 'now', ignoring cluster for caught-up checks",
+                    "ALL replicas of cluster {} are crash/OOM-looping and it has at least one \
+                     collection that is too far behind 'now'; ignoring cluster for caught-up \
+                     checks",
                     cluster.id
                 );
                 return Ok(true);
+            } else if beyond_all_hope {
+                tracing::info!(
+                    ?live_write_frontier,
+                    ?cutoff,
+                    ?now,
+                    "live write frontier of collection {id} is too far behind 'now'; \
+                     ignoring for caught-up checks"
+                );
+                continue;
             }
 
             // We can't do easy comparisons and subtractions, so we bump up the
