@@ -642,6 +642,17 @@ pub async fn ensure_snapshot_isolation_enabled(client: &mut Client) -> Result<()
     Ok(())
 }
 
+/// Ensure the SQL Server Agent is running.
+///
+/// See: <https://learn.microsoft.com/en-us/sql/relational-databases/system-dynamic-management-views/sys-dm-server-services-transact-sql?view=azuresqldb-current&viewFallbackFrom=sql-server-ver17>
+pub async fn ensure_sql_server_agent_running(client: &mut Client) -> Result<(), SqlServerError> {
+    static AGENT_STATUS_QUERY: &str = "SELECT status_desc FROM sys.dm_server_services WHERE servicename LIKE 'SQL Server Agent%';";
+    let result = client.simple_query(AGENT_STATUS_QUERY).await?;
+
+    check_system_result(&result, "SQL Server Agent status".to_string(), "Running")?;
+    Ok(())
+}
+
 pub async fn get_tables(client: &mut Client) -> Result<Vec<SqlServerTableRaw>, SqlServerError> {
     let result = client
         .simple_query(&format!("{GET_COLUMNS_FOR_TABLES_WITH_CDC_QUERY};"))

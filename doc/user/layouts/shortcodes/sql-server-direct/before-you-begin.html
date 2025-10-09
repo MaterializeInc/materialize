@@ -5,3 +5,14 @@ which is not readily available on older versions of SQL Server.
 
 - Ensure you have access to your SQL Server instance via the [`sqlcmd` client](https://learn.microsoft.com/en-us/sql/tools/sqlcmd/sqlcmd-utility),
   or your preferred SQL client.
+
+- Ensure SQL Server Agent is running.
+  ```mzsql
+  USE msdb;
+  SELECT
+    servicename,
+    status_desc,
+    startup_type_desc
+  FROM sys.dm_server_services
+  WHERE servicename LIKE 'SQL Server Agent%';
+  ```
