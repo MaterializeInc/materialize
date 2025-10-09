@@ -826,6 +826,41 @@ class AWS(State):
         else:
             raise ValueError("Never completed")
 
+        # Wait a bit for the status to stabilize
+        print("--- Waiting and get status:")
+        time.sleep(180)
+        # Get all pods in materialize-environment:
+        spawn.runv(
+            ["kubectl", "get", "pods", "-n", "materialize-environment"],
+            cwd=self.path,
+        )
+        # Describe all pods in materialize-environment:
+        spawn.runv(
+            ["kubectl", "describe", "pods", "-n", "materialize-environment"],
+            cwd=self.path,
+        )
+        pod_names = (
+            spawn.capture(
+                [
+                    "kubectl",
+                    "get",
+                    "pods",
+                    "-n",
+                    "materialize-environment",
+                    "-o",
+                    "name",
+                ],
+                cwd=self.path,
+            )
+            .strip()
+            .split("\n")
+        )
+        for pod in pod_names:
+            spawn.runv(
+                ["kubectl", "logs", pod, "-n", "materialize-environment"],
+                cwd=self.path,
+            )
+
 
 def workflow_aws_temporary(c: Composition, parser: WorkflowArgumentParser) -> None:
     """To run locally use `aws sso login` first."""
