@@ -106,12 +106,13 @@ query T rowsort
 SELECT DISTINCT(privilege) FROM item_privileges WHERE type = 'view' OR type = 'materialized view' OR type = 'source'
 ----
 =r/mz_system
-mz_system=r/mz_system
-mz_monitor=r/mz_system
-mz_support=r/mz_system
-mz_analytics=r/mz_system
 materialize=r/materialize
+mz_analytics=r/mz_system
+mz_monitor=r/mz_system
 mz_monitor_redacted=r/mz_system
+mz_support=r/mz_system
+mz_system=arwd/mz_system
+mz_system=r/mz_system
 
 query T
 SELECT DISTINCT(privilege) FROM item_privileges WHERE type = 'table'
