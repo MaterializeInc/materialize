@@ -39,9 +39,7 @@ Name     | Values                 | Default value | Description
 COPY (SUBSCRIBE some_view) TO STDOUT WITH (FORMAT binary);
 ```
 
-## Copy to Amazon S3 {#copy-to-s3}
-
-{{< public-preview />}}
+## Copy to Amazon S3 and S3 compatible services {#copy-to-s3}
 
 Copying results to Amazon S3 (or S3-compatible services) is useful to perform
 tasks like periodic backups for auditing, or downstream processing in
