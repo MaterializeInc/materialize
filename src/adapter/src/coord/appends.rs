@@ -926,6 +926,8 @@ pub struct GroupCommitPermit {
 /// So as an optimization we do not wait for these writes to complete. But if a [`Session`] tries
 /// to query any of these builtin objects, we need to block that query on the writes completing to
 /// maintain linearizability.
+///
+/// Warning: this already clears the wait flag (i.e., it calls `clear_builtin_table_updates`).
 pub(crate) fn waiting_on_startup_appends(
     catalog: &Catalog,
     session: &mut Session,
