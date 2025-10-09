@@ -653,14 +653,15 @@ where
                 &cfg,
                 &*metrics,
                 run_reserved_memory_bytes,
+                req.desc.since()
             );
             let total_chunked_runs = chunked_runs.len();
 
             let parts_before = req.inputs.iter().map(|x| x.batch.parts.len()).sum::<usize>();
-            let parts_after = chunked_runs.iter().flat_map(|(_, runs, _)| runs.iter().map(|(_, _, parts)| parts.len())).sum::<usize>();
+            let parts_after = chunked_runs.iter().flat_map(|(_, _, runs, _)| runs.iter().map(|(_, _, parts)| parts.len())).sum::<usize>();
             assert_eq!(parts_before, parts_after, "chunking should not change the number of parts");
 
-            for (applied, (input, runs, run_chunk_max_memory_usage)) in
+            for (applied, (input, desc, runs, run_chunk_max_memory_usage)) in
                 chunked_runs.into_iter().enumerate()
             {
                 metrics.compaction.chunks_compacted.inc();
@@ -678,32 +679,8 @@ where
                 let mut run_cfg = cfg.clone();
                 run_cfg.batch.batch_builder_max_outstanding_parts = 1 + extra_outstanding_parts;
 
-                let descriptions:  Vec<_> = runs.iter()
-                    .map(|(desc, _, _)| *desc)
-                    .collect();
-
-                let input = if incremental_enabled {
-                    input
-                } else {
-                    input_id_range(req.inputs.iter().map(|x| x.id).collect())
-                };
-
                 let desc = if incremental_enabled {
-                    let desc_lower = descriptions
-                        .iter()
-                        .map(|desc| desc.lower())
-                        .cloned()
-                        .reduce(|a, b| a.meet(&b))
-                        .unwrap_or_else(|| req.desc.lower().clone());
-
-                    let desc_upper = descriptions
-                        .iter()
-                        .map(|desc| desc.upper())
-                        .cloned()
-                        .reduce(|a, b| a.join(&b))
-                        .unwrap_or_else(|| req.desc.upper().clone());
-
-                    Description::new(desc_lower, desc_upper, req.desc.since().clone())
+                    desc
                 } else {
                     req.desc.clone()
                 };
@@ -792,8 +769,10 @@ where
         cfg: &CompactConfig,
         metrics: &Metrics,
         run_reserved_memory_bytes: usize,
+        since: &Antichain<T>,
     ) -> Vec<(
         CompactionInput,
+        Description<T>,
         Vec<(&'a Description<T>, &'a RunMeta, &'a [RunPart<T>])>,
         usize,
     )> {
@@ -806,6 +785,7 @@ where
 
         let mut chunks = vec![];
         let mut current_chunk_ids = BTreeSet::new();
+        let mut current_chunk_descs = Vec::new();
         let mut current_chunk_runs = vec![];
         let mut current_chunk_max_memory_usage = 0;
 
@@ -815,6 +795,22 @@ where
                 .map(|p| p.max_part_bytes())
                 .max()
                 .unwrap_or(cfg.batch.blob_target_size)
+        }
+
+        fn desc_range<T: Timestamp>(
+            descs: impl IntoIterator<Item = Description<T>>,
+            since: Antichain<T>,
+        ) -> Description<T> {
+            let mut descs = descs.into_iter();
+            let first = descs.next().expect("non-empty set of descriptions");
+            let lower = first.lower().clone();
+            let mut upper = first.upper().clone();
+            for desc in descs {
+                assert_eq!(&upper, desc.lower());
+                upper = desc.upper().clone();
+            }
+            let upper = upper.clone();
+            Description::new(lower, upper, since)
         }
 
         for (spine_id, batch) in batches {
@@ -862,6 +858,7 @@ where
                     metrics.compaction.memory_violations.inc();
                 }
                 current_chunk_ids.insert(spine_id);
+                current_chunk_descs.push(batch.desc.clone());
                 current_chunk_runs.extend(runs);
                 current_chunk_max_memory_usage += batch_size;
                 continue;
@@ -871,6 +868,7 @@ where
             if !current_chunk_ids.is_empty() {
                 chunks.push((
                     input_id_range(std::mem::take(&mut current_chunk_ids)),
+                    desc_range(mem::take(&mut current_chunk_descs), since.clone()),
                     std::mem::take(&mut current_chunk_runs),
                     current_chunk_max_memory_usage,
                 ));
@@ -880,6 +878,7 @@ where
             // If the batch fits within limits, try and accumulate future batches into it.
             if batch_size <= run_reserved_memory_bytes {
                 current_chunk_ids.insert(spine_id);
+                current_chunk_descs.push(batch.desc.clone());
                 current_chunk_runs.extend(runs);
                 current_chunk_max_memory_usage += batch_size;
                 continue;
@@ -889,6 +888,7 @@ where
             // Process this batch alone, splitting into single-batch chunks as needed.
             let mut run_iter = runs.into_iter().peekable();
             debug_assert!(current_chunk_ids.is_empty());
+            debug_assert!(current_chunk_descs.is_empty());
             debug_assert!(current_chunk_runs.is_empty());
             debug_assert_eq!(current_chunk_max_memory_usage, 0);
             let mut current_chunk_run_ids = BTreeSet::new();
@@ -913,6 +913,7 @@ where
                                 spine_id,
                                 mem::take(&mut current_chunk_run_ids),
                             ),
+                            desc_range([batch.desc.clone()], since.clone()),
                             std::mem::take(&mut current_chunk_runs),
                             current_chunk_max_memory_usage,
                         ));
@@ -924,6 +925,7 @@ where
             if !current_chunk_runs.is_empty() {
                 chunks.push((
                     CompactionInput::PartialBatch(spine_id, mem::take(&mut current_chunk_run_ids)),
+                    desc_range([batch.desc.clone()], since.clone()),
                     std::mem::take(&mut current_chunk_runs),
                     current_chunk_max_memory_usage,
                 ));
@@ -935,6 +937,7 @@ where
         if !current_chunk_ids.is_empty() {
             chunks.push((
                 input_id_range(current_chunk_ids),
+                desc_range(current_chunk_descs, since.clone()),
                 current_chunk_runs,
                 current_chunk_max_memory_usage,
             ));
