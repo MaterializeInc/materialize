@@ -34,8 +34,12 @@ DENY SELECT ON OBJECT::cdc.dbo_t1_privileges_ct(__$start_lsn) TO authorization_u
 CREATE LOGIN authorization_user_table_perms WITH PASSWORD = '${arg.default-sql-server-password}';
 CREATE USER authorization_user_table_perms FOR LOGIN authorization_user_table_perms;
 ALTER ROLE db_datareader ADD MEMBER authorization_user_table_perms;
-
 DENY SELECT ON OBJECT::dbo.t1_privileges TO authorization_user_table_perms;
+
+USE master;
+GRANT VIEW SERVER STATE TO authorization_user_column_perms;
+GRANT VIEW SERVER STATE TO authorization_user_column_perms_capture_instance;
+GRANT VIEW SERVER STATE TO authorization_user_table_perms;
 
 > CREATE SECRET IF NOT EXISTS sql_server_pass AS '${arg.default-sql-server-password}'
 
