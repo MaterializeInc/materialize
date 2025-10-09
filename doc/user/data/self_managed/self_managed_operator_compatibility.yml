@@ -6,6 +6,18 @@ columns:
   - column: "Notes"
 
 rows:
+  - "Materialize Operator": "v25.2.10"
+    "orchestratord version": "v0.159.1"
+    "environmentd version": "v0.147.17"
+    "Release date": "2025-10-9"
+    "Notes": "Adds support for GCP using `COPY TO s3`, resolves console bug involving sources in object explorer, fixes 0dt cluster reconfiguration issue."
+
+  - "Materialize Operator": "v25.2.9"
+    "orchestratord version": "v0.159.0"
+    "environmentd version": "v0.147.17"
+    "Release date": "2025-10-8"
+    "Notes": "Please use 25.2.10"
+
   - "Materialize Operator": "v25.2.5"
     "orchestratord version": "v0.154.0."
     "environmentd version": "v0.147.6"

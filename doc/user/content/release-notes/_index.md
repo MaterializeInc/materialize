@@ -7,6 +7,15 @@ menu:
     name: "Release notes"
     identifier: "release-notes"
 ---
+## v25.2.10
+
+### Bug fixes
+- Fix bug where console could not load source objects in object explorer.
+- Fix bug where 0dt cluster reconfiguration would wait for all dataflows to be ready rather than just for the cluster being modified.
+- Adds GCP compatibility to `COPY TO S3`([docs](/serve-results/sink/s3_compatible/))
+
+
+
 ## v25.2.8
 
 ### Bug fixes
