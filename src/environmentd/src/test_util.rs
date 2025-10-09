@@ -1173,6 +1173,17 @@ impl TestServerWithRuntime {
         }
     }
 
+    /// Disable LaunchDarkly feature flags.
+    pub fn disable_feature_flags(&self, flags: &[&'static str]) {
+        let mut internal_client = self.connect_internal(postgres::NoTls).unwrap();
+
+        for flag in flags {
+            internal_client
+                .batch_execute(&format!("ALTER SYSTEM SET {} = false;", flag))
+                .unwrap();
+        }
+    }
+
     /// Return a [`postgres::Config`] for connecting to the __public__ SQL port of the running
     /// `environmentd` server.
     pub fn pg_config(&self) -> postgres::Config {

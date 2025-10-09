@@ -186,7 +186,13 @@ impl SessionClient {
         // last use of `conn_catalog` here.)
         if let Some(_) = coord::appends::waiting_on_startup_appends(&*catalog, session, &plan) {
             // TODO(peek-seq): Don't fall back to the coordinator's peek sequencing here, but call
-            // `defer_op`.
+            // `defer_op`. Needs `ExecuteContext`.
+            // This fallback is currently causing a bug: `waiting_on_startup_appends` has the
+            // side effect that it already clears the wait flag, and therefore the old peek
+            // sequencing that we fall back to here won't do waiting. This is tested by
+            // `test_mz_sessions` and `test_pg_cancel_dropped_role`, where I've disabled the
+            // frontend peek sequencing for now. This bug will just go away once we don't fall back
+            // to the old peek sequencing here, but properly call `defer_op` instead.
             debug!("Bailing out from try_frontend_peek_inner, because waiting_on_startup_appends");
             return Ok(None);
         }
