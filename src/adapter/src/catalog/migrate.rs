@@ -274,7 +274,7 @@ pub(crate) async fn migrate(
 ///
 /// |  Global ID  |  SQL Name     | Create SQL                 | Schema   | Durable |
 /// +-------------+---------------+----------------------------+----------+---------|
-/// | (source_id   | source_name)   | CREATE SOURCE (old-style)  | empty    | yes     |
+/// | source_id   | source_name   | CREATE SOURCE (old-style)  | empty    | yes     |
 /// | progress_id | progress_name | CREATE SUBSOURCE .."       | progress | yes     |
 ///
 /// to this mapping:
