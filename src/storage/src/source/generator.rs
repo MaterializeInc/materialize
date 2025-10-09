@@ -375,7 +375,7 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
                         if resume_offset <= offset && health_cap.is_some() {
                             let health_cap = health_cap.take().expect("known to exist");
                             let export_ids = export_ids.iter().copied();
-                            for id in export_ids.map(Some).chain(None) {
+                            for id in export_ids.map(Some).chain(std::iter::once(None)) {
                                 health_output.give(
                                     &health_cap,
                                     HealthStatusMessage {

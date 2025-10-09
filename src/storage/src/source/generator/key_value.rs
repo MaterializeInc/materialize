@@ -256,7 +256,7 @@ pub fn render<G: Scope<Timestamp = MzOffset>>(
     let status = export_ids
         .into_iter()
         .map(Some)
-        .chain(None)
+        .chain(std::iter::once(None))
         .map(|id| HealthStatusMessage {
             id,
             namespace: StatusNamespace::Generator,
