@@ -39,6 +39,13 @@ async fn test_expected_spans() {
         .start()
         .await;
 
+    // This test checks for specific functions of the old peek sequencing, so we disable the new
+    // peek sequencing for now.
+    // TODO(peek-seq): Modify the test to check for the new peek sequencing instead of the old one.
+    server
+        .disable_feature_flags(&["enable_frontend_peek_sequencing"])
+        .await;
+
     let client = server.connect().await.unwrap();
 
     // Assert that there are no expected spans.
