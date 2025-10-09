@@ -67,15 +67,19 @@ SERVICES = [
     ),
 ]
 
-SCENARIO_TPCH_STRONG = "tpch_strong"
-SCENARIO_TPCH_MV_STRONG = "tpch_mv_strong"
 SCENARIO_AUCTION_STRONG = "auction_strong"
 SCENARIO_AUCTION_WEAK = "auction_weak"
+SCENARIO_TPCH_MV_STRONG = "tpch_mv_strong"
+SCENARIO_TPCH_QUERIES_STRONG = "tpch_queries_strong"
+SCENARIO_TPCH_QUERIES_WEAK = "tpch_queries_weak"
+SCENARIO_TPCH_STRONG = "tpch_strong"
 ALL_SCENARIOS = [
-    SCENARIO_TPCH_STRONG,
-    SCENARIO_TPCH_MV_STRONG,
     SCENARIO_AUCTION_STRONG,
     SCENARIO_AUCTION_WEAK,
+    SCENARIO_TPCH_MV_STRONG,
+    SCENARIO_TPCH_QUERIES_STRONG,
+    SCENARIO_TPCH_QUERIES_WEAK,
+    SCENARIO_TPCH_STRONG,
 ]
 
 
@@ -120,7 +124,7 @@ class ScenarioRunner:
         self,
         scenario: str,
         scenario_version: str,
-        scale: int,
+        scale: int | float,
         mode: str,
         connection: ConnectionHandler,
         results_writer: csv.DictWriter,
@@ -173,6 +177,7 @@ class ScenarioRunner:
         name: str,
         setup: list[str],
         query: list[str],
+        after: list[str] = [],
         repetitions: int = 1,
         size_of_index: str | None = None,
         setup_delay: float = 0.0,
@@ -200,6 +205,8 @@ class ScenarioRunner:
                 self.add_result(
                     category, name, repetition, size_bytes, (end_time - start_time)
                 )
+                for after_part in after:
+                    self.run_query(after_part)
 
             self.connection.retryable(inner)
 
@@ -224,7 +231,7 @@ class Scenario(ABC):
     # makes comparing results between versions useless.
     VERSION: str = "1.0.0"
 
-    def __init__(self, scale: int, replica_size: str) -> None:
+    def __init__(self, scale: int | float, replica_size: str | None) -> None:
         self.scale = scale
         self.replica_size = replica_size
 
@@ -421,6 +428,830 @@ class TpchScenarioMV(Scenario):
                 "WITH data AS (SELECT * FROM mv_lineitem WHERE l_orderkey = 123412341234 and l_linenumber = 123) SELECT * FROM data, t;",
             ],
         )
+
+
+class TpchScenarioQueriesIndexedInputs(Scenario):
+
+    def name(self) -> str:
+        return "tpch_queries_indexed_inputs"
+
+    def materialize_views(self) -> list[str]:
+        return ["lineitem"]
+
+    def setup(self) -> list[str]:
+        return [
+            "DROP SOURCE IF EXISTS lgtpch CASCADE;",
+            "DROP CLUSTER IF EXISTS lg CASCADE;",
+            f"CREATE CLUSTER lg SIZE '{self.replica_size}';",
+            f"CREATE SOURCE lgtpch IN CLUSTER lg FROM LOAD GENERATOR TPCH (SCALE FACTOR {self.scale}, TICK INTERVAL 1) FOR ALL TABLES;",
+            "SELECT COUNT(*) > 0 FROM region;",
+            """
+            CREATE VIEW revenue (supplier_no, total_revenue) AS
+            SELECT
+                l_suppkey,
+                sum(l_extendedprice * (1 - l_discount))
+            FROM
+                lineitem
+            WHERE
+                l_shipdate >= DATE '1996-01-01'
+              AND l_shipdate < DATE '1996-01-01' + INTERVAL '3' month
+            GROUP BY
+                l_suppkey;
+            """,
+            """
+            CREATE VIEW vq01 AS
+            SELECT
+                l_returnflag,
+                l_linestatus,
+                sum(l_quantity) AS sum_qty,
+                sum(l_extendedprice) AS sum_base_price,
+                sum(l_extendedprice * (1 - l_discount)) AS sum_disc_price,
+                sum(l_extendedprice * (1 - l_discount) * (1 + l_tax)) AS sum_charge,
+                avg(l_quantity) AS avg_qty,
+                avg(l_extendedprice) AS avg_price,
+                avg(l_discount) AS avg_disc,
+                count(*) AS count_order
+            FROM
+                lineitem
+            WHERE
+                l_shipdate <= DATE '1998-12-01' - INTERVAL '60' day
+            GROUP BY
+                l_returnflag,
+                l_linestatus
+            ORDER BY
+                l_returnflag,
+                l_linestatus;
+            """,
+            """
+            -- name: Q02
+            CREATE VIEW vq02 AS
+            SELECT
+                s_acctbal,
+                s_name,
+                n_name,
+                p_partkey,
+                p_mfgr,
+                s_address,
+                s_phone,
+                s_comment
+            FROM
+                part, supplier, partsupp, nation, region
+            WHERE
+                p_partkey = ps_partkey
+              AND s_suppkey = ps_suppkey
+              AND p_size = CAST (15 AS smallint)
+              AND p_type LIKE '%%BRASS'
+              AND s_nationkey = n_nationkey
+              AND n_regionkey = r_regionkey
+              AND r_name = 'EUROPE'
+              AND ps_supplycost
+                = (
+                      SELECT
+                          min(ps_supplycost)
+                      FROM
+                          partsupp, supplier, nation, region
+                      WHERE
+                          p_partkey = ps_partkey
+                        AND s_suppkey = ps_suppkey
+                        AND s_nationkey = n_nationkey
+                        AND n_regionkey = r_regionkey
+                        AND r_name = 'EUROPE'
+                  )
+            ORDER BY
+                s_acctbal DESC, n_name, s_name, p_partkey;
+            """,
+            """
+            -- name: Q03
+            CREATE VIEW vq03 AS
+            SELECT
+                l_orderkey,
+                sum(l_extendedprice * (1 - l_discount)) AS revenue,
+                o_orderdate,
+                o_shippriority
+            FROM
+                customer,
+                orders,
+                lineitem
+            WHERE
+                c_mktsegment = 'BUILDING'
+              AND c_custkey = o_custkey
+              AND l_orderkey = o_orderkey
+              AND o_orderdate < DATE '1995-03-15'
+              AND l_shipdate > DATE '1995-03-15'
+            GROUP BY
+                l_orderkey,
+                o_orderdate,
+                o_shippriority
+            ORDER BY
+                revenue DESC,
+                o_orderdate;
+            """,
+            """
+            -- name: Q04
+            CREATE VIEW vq04 AS
+            SELECT
+                o_orderpriority,
+                count(*) AS order_count
+            FROM
+                orders
+            WHERE
+                o_orderdate >= DATE '1993-07-01'
+              AND o_orderdate < DATE '1993-07-01' + INTERVAL '3' month
+              AND EXISTS (
+                SELECT
+                    *
+                FROM
+                    lineitem
+                WHERE
+                    l_orderkey = o_orderkey
+                  AND l_commitdate < l_receiptdate
+            )
+            GROUP BY
+                o_orderpriority
+            ORDER BY
+                o_orderpriority;
+            """,
+            """
+            -- name: Q05
+            CREATE VIEW vq05 AS
+            SELECT
+                n_name,
+                sum(l_extendedprice * (1 - l_discount)) AS revenue
+            FROM
+                customer,
+                orders,
+                lineitem,
+                supplier,
+                nation,
+                region
+            WHERE
+                c_custkey = o_custkey
+              AND l_orderkey = o_orderkey
+              AND l_suppkey = s_suppkey
+              AND c_nationkey = s_nationkey
+              AND s_nationkey = n_nationkey
+              AND n_regionkey = r_regionkey
+              AND r_name = 'ASIA'
+              AND o_orderdate >= DATE '1994-01-01'
+              AND o_orderdate < DATE '1995-01-01'
+            GROUP BY
+                n_name
+            ORDER BY
+                revenue DESC;
+            """,
+            """
+            -- name: Q06
+            CREATE VIEW vq06 AS
+            SELECT
+                sum(l_extendedprice * l_discount) AS revenue
+            FROM
+                lineitem
+            WHERE
+                l_quantity < 24
+              AND l_shipdate >= DATE '1994-01-01'
+              AND l_shipdate < DATE '1994-01-01' + INTERVAL '1' year
+              AND l_discount BETWEEN 0.06 - 0.01 AND 0.07;
+            """,
+            """
+            -- name: Q07
+            CREATE VIEW vq07 AS
+            SELECT
+                supp_nation,
+                cust_nation,
+                l_year,
+                sum(volume) AS revenue
+            FROM
+                (
+                    SELECT
+                        n1.n_name AS supp_nation,
+                        n2.n_name AS cust_nation,
+                        extract(year FROM l_shipdate) AS l_year,
+                        l_extendedprice * (1 - l_discount) AS volume
+                    FROM
+                        supplier,
+                        lineitem,
+                        orders,
+                        customer,
+                        nation n1,
+                        nation n2
+                    WHERE
+                        s_suppkey = l_suppkey
+                      AND o_orderkey = l_orderkey
+                      AND c_custkey = o_custkey
+                      AND s_nationkey = n1.n_nationkey
+                      AND c_nationkey = n2.n_nationkey
+                      AND (
+                        (n1.n_name = 'FRANCE' AND n2.n_name = 'GERMANY')
+                            or (n1.n_name = 'GERMANY' AND n2.n_name = 'FRANCE')
+                        )
+                      AND l_shipdate BETWEEN DATE '1995-01-01' AND DATE '1996-12-31'
+                ) AS shipping
+            GROUP BY
+                supp_nation,
+                cust_nation,
+                l_year
+            ORDER BY
+                supp_nation,
+                cust_nation,
+                l_year;
+            """,
+            """
+            -- name: Q08
+            CREATE VIEW vq08 AS
+            SELECT
+                o_year,
+                sum(case
+                        when nation = 'BRAZIL' then volume
+                        else 0
+                    end) / sum(volume) AS mkt_share
+            FROM
+                (
+                    SELECT
+                        extract(year FROM o_orderdate) AS o_year,
+                        l_extendedprice * (1 - l_discount) AS volume,
+                        n2.n_name AS nation
+                    FROM
+                        part,
+                        supplier,
+                        lineitem,
+                        orders,
+                        customer,
+                        nation n1,
+                        nation n2,
+                        region
+                    WHERE
+                        p_partkey = l_partkey
+                      AND s_suppkey = l_suppkey
+                      AND l_orderkey = o_orderkey
+                      AND o_custkey = c_custkey
+                      AND c_nationkey = n1.n_nationkey
+                      AND n1.n_regionkey = r_regionkey
+                      AND r_name = 'AMERICA'
+                      AND s_nationkey = n2.n_nationkey
+                      AND o_orderdate BETWEEN DATE '1995-01-01' AND DATE '1996-12-31'
+                      AND p_type = 'ECONOMY ANODIZED STEEL'
+                ) AS all_nations
+            GROUP BY
+                o_year
+            ORDER BY
+                o_year;
+            """,
+            """
+            -- name: Q09
+            CREATE VIEW vq09 AS
+            SELECT
+                nation,
+                o_year,
+                sum(amount) AS sum_profit
+            FROM
+                (
+                    SELECT
+                        n_name AS nation,
+                        extract(year FROM o_orderdate) AS o_year,
+                        l_extendedprice * (1 - l_discount) - ps_supplycost * l_quantity AS amount
+                    FROM
+                        part,
+                        supplier,
+                        lineitem,
+                        partsupp,
+                        orders,
+                        nation
+                    WHERE
+                        s_suppkey = l_suppkey
+                      AND ps_suppkey = l_suppkey
+                      AND ps_partkey = l_partkey
+                      AND p_partkey = l_partkey
+                      AND o_orderkey = l_orderkey
+                      AND s_nationkey = n_nationkey
+                      AND p_name like '%%green%%'
+                ) AS profit
+            GROUP BY
+                nation,
+                o_year
+            ORDER BY
+                nation,
+                o_year DESC;
+            """,
+            """
+            -- name: Q10
+            CREATE VIEW vq10 AS
+            SELECT
+                c_custkey,
+                c_name,
+                sum(l_extendedprice * (1 - l_discount)) AS revenue,
+                c_acctbal,
+                n_name,
+                c_address,
+                c_phone,
+                c_comment
+            FROM
+                customer,
+                orders,
+                lineitem,
+                nation
+            WHERE
+                c_custkey = o_custkey
+              AND l_orderkey = o_orderkey
+              AND o_orderdate >= DATE '1993-10-01'
+              AND o_orderdate < DATE '1994-01-01'
+              AND o_orderdate < DATE '1993-10-01' + INTERVAL '3' month
+              AND l_returnflag = 'R'
+              AND c_nationkey = n_nationkey
+            GROUP BY
+                c_custkey,
+                c_name,
+                c_acctbal,
+                c_phone,
+                n_name,
+                c_address,
+                c_comment
+            ORDER BY
+                revenue DESC;
+            """,
+            """
+            -- name: Q11
+            CREATE VIEW vq11 AS
+            SELECT
+                ps_partkey,
+                sum(ps_supplycost * ps_availqty) AS value
+            FROM
+                partsupp,
+                supplier,
+                nation
+            WHERE
+                ps_suppkey = s_suppkey
+              AND s_nationkey = n_nationkey
+              AND n_name = 'GERMANY'
+            GROUP BY
+                ps_partkey having
+                sum(ps_supplycost * ps_availqty) > (
+                    SELECT
+                        sum(ps_supplycost * ps_availqty) * 0.0001
+                    FROM
+                        partsupp,
+                        supplier,
+                        nation
+                    WHERE
+                        ps_suppkey = s_suppkey
+                      AND s_nationkey = n_nationkey
+                      AND n_name = 'GERMANY'
+                )
+            ORDER BY
+                value DESC;
+            """,
+            """
+            -- name: Q12
+            CREATE VIEW vq12 AS
+            SELECT
+                l_shipmode,
+                sum(case
+                        when o_orderpriority = '1-URGENT'
+                            or o_orderpriority = '2-HIGH'
+                            then 1
+                        else 0
+                    end) AS high_line_count,
+                sum(case
+                        when o_orderpriority <> '1-URGENT'
+                            AND o_orderpriority <> '2-HIGH'
+                            then 1
+                        else 0
+                    end) AS low_line_count
+            FROM
+                orders,
+                lineitem
+            WHERE
+                o_orderkey = l_orderkey
+              AND l_shipmode IN ('MAIL', 'SHIP')
+              AND l_commitdate < l_receiptdate
+              AND l_shipdate < l_commitdate
+              AND l_receiptdate >= DATE '1994-01-01'
+              AND l_receiptdate < DATE '1994-01-01' + INTERVAL '1' year
+            GROUP BY
+                l_shipmode
+            ORDER BY
+                l_shipmode;
+            """,
+            """
+            -- name: Q13
+            CREATE VIEW vq13 AS
+            SELECT
+                c_count,
+                count(*) AS custdist
+            FROM
+                (
+                    SELECT
+                        c_custkey,
+                        count(o_orderkey) c_count -- workaround for no column aliases
+                    FROM
+                        customer LEFT OUTER JOIN orders ON
+                            c_custkey = o_custkey
+                                AND o_comment NOT LIKE '%%special%%requests%%'
+                    GROUP BY
+                        c_custkey
+                ) AS c_orders -- (c_custkey, c_count) -- no column aliases yet
+            GROUP BY
+                c_count
+            ORDER BY
+                custdist DESC,
+                c_count DESC;
+            """,
+            """
+            -- name: Q14
+            CREATE VIEW vq14 AS
+            SELECT
+                100.00 * sum(case
+                                 when p_type like 'PROMO%%'
+                                     then l_extendedprice * (1 - l_discount)
+                                 else 0
+                    end) / sum(l_extendedprice * (1 - l_discount)) AS promo_revenue
+            FROM
+                lineitem,
+                part
+            WHERE
+                l_partkey = p_partkey
+              AND l_shipdate >= DATE '1995-09-01'
+              AND l_shipdate < DATE '1995-09-01' + INTERVAL '1' month;
+            """,
+            """
+            -- name: Q15
+            CREATE VIEW vq15 AS
+            SELECT
+                s_suppkey,
+                s_name,
+                s_address,
+                s_phone,
+                total_revenue
+            FROM
+                supplier,
+                revenue
+            WHERE
+                s_suppkey = supplier_no
+              AND total_revenue = (
+                SELECT
+                    max(total_revenue)
+                FROM
+                    revenue
+            )
+            ORDER BY
+                s_suppkey;
+            """,
+            """
+            -- name: Q16
+            CREATE VIEW vq16 AS
+            SELECT
+                p_brand,
+                p_type,
+                p_size,
+                count(DISTINCT ps_suppkey) AS supplier_cnt
+            FROM
+                partsupp,
+                part
+            WHERE
+                p_partkey = ps_partkey
+              AND p_brand <> 'Brand#45'
+              AND p_type NOT LIKE 'MEDIUM POLISHED%%'
+              AND p_size IN (49, 14, 23, 45, 19, 3, 36, 9)
+              AND ps_suppkey NOT IN (
+                SELECT
+                    s_suppkey
+                FROM
+                    supplier
+                WHERE
+                    s_comment like '%%Customer%%Complaints%%'
+            )
+            GROUP BY
+                p_brand,
+                p_type,
+                p_size
+            ORDER BY
+                supplier_cnt DESC,
+                p_brand,
+                p_type,
+                p_size;
+            """,
+            """
+            -- name: Q17
+            CREATE VIEW vq17 AS
+            SELECT
+                sum(l_extendedprice) / 7.0 AS avg_yearly
+            FROM
+                lineitem,
+                part
+            WHERE
+                p_partkey = l_partkey
+              AND p_brand = 'Brand#23'
+              AND p_container = 'MED BOX'
+              AND l_quantity < (
+                SELECT
+                    0.2 * avg(l_quantity)
+                FROM
+                    lineitem
+                WHERE
+                    l_partkey = p_partkey
+            );
+            """,
+            """
+            -- name: Q18
+            CREATE VIEW vq18 AS
+            SELECT
+                c_name,
+                c_custkey,
+                o_orderkey,
+                o_orderdate,
+                o_totalprice,
+                sum(l_quantity)
+            FROM
+                customer,
+                orders,
+                lineitem
+            WHERE
+                o_orderkey IN (
+                    SELECT
+                        l_orderkey
+                    FROM
+                        lineitem
+                    GROUP BY
+                        l_orderkey having
+                        sum(l_quantity) > 300
+                )
+              AND c_custkey = o_custkey
+              AND o_orderkey = l_orderkey
+            GROUP BY
+                c_name,
+                c_custkey,
+                o_orderkey,
+                o_orderdate,
+                o_totalprice
+            ORDER BY
+                o_totalprice DESC,
+                o_orderdate;
+            """,
+            """
+            -- name: Q19
+            CREATE VIEW vq19 AS
+            SELECT
+                sum(l_extendedprice* (1 - l_discount)) AS revenue
+            FROM
+                lineitem,
+                part
+            WHERE
+                (
+                    p_partkey = l_partkey
+                        AND p_brand = 'Brand#12'
+                        AND p_container IN ('SM CASE', 'SM BOX', 'SM PACK', 'SM PKG')
+                        AND l_quantity >= CAST (1 AS smallint) AND l_quantity <= CAST (1 + 10 AS smallint)
+                        AND p_size BETWEEN CAST (1 AS smallint) AND CAST (5 AS smallint)
+                        AND l_shipmode IN ('AIR', 'AIR REG')
+                        AND l_shipinstruct = 'DELIVER IN PERSON'
+                    )
+               or
+                (
+                    p_partkey = l_partkey
+                        AND p_brand = 'Brand#23'
+                        AND p_container IN ('MED BAG', 'MED BOX', 'MED PKG', 'MED PACK')
+                        AND l_quantity >= CAST (10 AS smallint) AND l_quantity <= CAST (10 + 10 AS smallint)
+                        AND p_size BETWEEN CAST (1 AS smallint) AND CAST (10 AS smallint)
+                        AND l_shipmode IN ('AIR', 'AIR REG')
+                        AND l_shipinstruct = 'DELIVER IN PERSON'
+                    )
+               or
+                (
+                    p_partkey = l_partkey
+                        AND p_brand = 'Brand#34'
+                        AND p_container IN ('LG CASE', 'LG BOX', 'LG PACK', 'LG PKG')
+                        AND l_quantity >= CAST (20 AS smallint) AND l_quantity <= CAST (20 + 10 AS smallint)
+                        AND p_size BETWEEN CAST (1 AS smallint) AND CAST (15 AS smallint)
+                        AND l_shipmode IN ('AIR', 'AIR REG')
+                        AND l_shipinstruct = 'DELIVER IN PERSON'
+                    );
+            """,
+            """
+            -- name: Q20
+            CREATE VIEW vq20 AS
+                --SELECT
+            --    s_name,
+            --    s_address
+            --FROM
+            --    supplier,
+            --    nation
+            --WHERE
+            --    s_suppkey IN (
+            --        SELECT
+            --            ps_suppkey
+            --        FROM
+            --            partsupp
+            --        WHERE
+            --            ps_partkey IN (
+            --                SELECT
+            --                    p_partkey
+            --                FROM
+            --                    part
+            --                WHERE
+            --                    p_name like 'forest%%'
+            --            )
+            --            AND ps_availqty > (
+            --                SELECT
+            --                    0.5 * sum(l_quantity)
+            --                FROM
+            --                    lineitem
+            --                WHERE
+            --                    l_partkey = ps_partkey
+            --                    AND l_suppkey = ps_suppkey
+            --                    AND l_shipdate >= DATE '1995-01-01'
+            --                    AND l_shipdate < DATE '1995-01-01' + INTERVAL '1' year
+            --            )
+            --    )
+            --    AND s_nationkey = n_nationkey
+            --    AND n_name = 'CANADA'
+            --ORDER BY
+            --    s_name;
+            SELECT
+                s_name,
+                s_address
+            FROM
+                supplier,
+                nation,
+                (
+                    SELECT DISTINCT t2.ps_suppkey
+                    FROM
+                        (
+                            SELECT
+                                ps_partkey, ps_suppkey, ps_availqty
+                            FROM
+                                part, partsupp
+                            WHERE
+                                p_name like 'forest%%'
+                              AND ps_partkey = p_partkey
+                        ) AS t2
+                            ,
+                        (
+                            SELECT
+                                ps_partkey, ps_suppkey, 0.5 * sum(l_quantity) as qty
+                            FROM
+                                part, partsupp, lineitem
+                            WHERE
+                                p_name LIKE 'forest%%'
+                              AND ps_partkey = p_partkey
+                              AND l_partkey = ps_partkey
+                              AND l_suppkey = ps_suppkey
+                              AND l_shipdate >= DATE '1995-01-01'
+                              AND l_shipdate < DATE '1995-01-01' + INTERVAL '1' year
+                            GROUP BY ps_partkey, ps_suppkey
+                        ) AS t3
+                    WHERE t2.ps_partkey = t3.ps_partkey
+                      AND t2.ps_suppkey = t3.ps_suppkey
+                      AND t2.ps_availqty > t3.qty
+                ) as sj
+            WHERE
+                s_nationkey = n_nationkey
+              AND n_name = 'CANADA'
+              AND sj.ps_suppkey = s_suppkey
+            ORDER BY
+                s_name;
+            """,
+            """
+            -- name: Q21
+            CREATE VIEW vq21 AS
+            SELECT
+                s_name,
+                count(*) AS numwait
+            FROM
+                supplier,
+                lineitem l1,
+                orders,
+                nation
+            WHERE
+                s_suppkey = l1.l_suppkey
+              AND o_orderkey = l1.l_orderkey
+              AND o_orderstatus = 'F'
+              AND l1.l_receiptdate > l1.l_commitdate
+              AND EXISTS (
+                SELECT
+                    *
+                FROM
+                    lineitem l2
+                WHERE
+                    l2.l_orderkey = l1.l_orderkey
+                  AND l2.l_suppkey <> l1.l_suppkey
+            )
+              AND not EXISTS (
+                SELECT
+                    *
+                FROM
+                    lineitem l3
+                WHERE
+                    l3.l_orderkey = l1.l_orderkey
+                  AND l3.l_suppkey <> l1.l_suppkey
+                  AND l3.l_receiptdate > l3.l_commitdate
+            )
+              AND s_nationkey = n_nationkey
+              AND n_name = 'SAUDI ARABIA'
+            GROUP BY
+                s_name
+            ORDER BY
+                numwait DESC,
+                s_name;
+            """,
+            """
+            -- name: Q22
+            CREATE VIEW vq22 AS
+            SELECT
+                cntrycode,
+                count(*) AS numcust,
+                sum(c_acctbal) AS totacctbal
+            FROM
+                (
+                    SELECT
+                        substring(c_phone, 1, 2) AS cntrycode, c_acctbal
+                    FROM
+                        customer
+                    WHERE
+                        substring(c_phone, 1, 2)
+                            IN ('13', '31', '23', '29', '30', '18', '17')
+                      AND c_acctbal
+                        > (
+                              SELECT
+                                  avg(c_acctbal)
+                              FROM
+                                  customer
+                              WHERE
+                                  c_acctbal > 0.00
+                                AND substring(c_phone, 1, 2)
+                                  IN (
+                                      '13',
+                                      '31',
+                                      '23',
+                                      '29',
+                                      '30',
+                                      '18',
+                                      '17'
+                                        )
+                          )
+                      AND NOT
+                        EXISTS(
+                        SELECT
+                            *
+                        FROM
+                            orders
+                        WHERE
+                            o_custkey = c_custkey
+                    )
+                )
+                    AS custsale
+            GROUP BY
+                cntrycode
+            ORDER BY
+                cntrycode;
+            """,
+        ]
+
+    def drop(self) -> list[str]:
+        return ["DROP CLUSTER IF EXISTS lg CASCADE;"]
+
+    def run(self, runner: ScenarioRunner) -> None:
+        # Create indexes on inputs
+        runner.measure(
+            "arrangement_formation",
+            "create_index_inputs",
+            setup=["SELECT * FROM t;"],
+            query=[
+                "CREATE INDEX pk_nation_nationkey ON nation (n_nationkey ASC);",
+                "CREATE INDEX fk_nation_regionkey ON nation (n_regionkey ASC);",
+                "CREATE INDEX pk_region_regionkey ON region (r_regionkey ASC);",
+                "CREATE INDEX pk_part_partkey ON part (p_partkey ASC);",
+                "CREATE INDEX pk_supplier_suppkey ON supplier (s_suppkey ASC);",
+                "CREATE INDEX fk_supplier_nationkey ON supplier (s_nationkey ASC);",
+                "CREATE INDEX pk_partsupp_partkey_suppkey ON partsupp (ps_partkey ASC, ps_suppkey ASC);",
+                "CREATE INDEX fk_partsupp_partkey ON partsupp (ps_partkey ASC);",
+                "CREATE INDEX fk_partsupp_suppkey ON partsupp (ps_suppkey ASC);",
+                "CREATE INDEX pk_customer_custkey ON customer (c_custkey ASC);",
+                "CREATE INDEX fk_customer_nationkey ON customer (c_nationkey ASC);",
+                "CREATE INDEX pk_orders_orderkey ON orders (o_orderkey ASC);",
+                "CREATE INDEX fk_orders_custkey ON orders (o_custkey ASC);",
+                "CREATE INDEX pk_lineitem_orderkey_linenumber ON lineitem (l_orderkey ASC, l_linenumber ASC);",
+                "CREATE INDEX fk_lineitem_orderkey ON lineitem (l_orderkey ASC);",
+                "CREATE INDEX fk_lineitem_partkey ON lineitem (l_partkey ASC);",
+                "CREATE INDEX fk_lineitem_suppkey ON lineitem (l_suppkey ASC);",
+                "CREATE INDEX fk_lineitem_partsuppkey ON lineitem (l_partkey ASC, l_suppkey ASC);",
+                "SELECT count(*) > 0 FROM lineitem;",
+            ],
+        )
+
+        # Create index for each query
+        for i in range(1, 23):
+            runner.measure(
+                "arrangement_formation",
+                f"create_index_vq{i:02}",
+                setup=["SELECT * FROM t;"],
+                query=[
+                    f"DROP INDEX IF EXISTS vq{i:02}_primary_idx CASCADE;",
+                    f"CREATE DEFAULT INDEX ON vq{i:02};",
+                    f"SELECT count(*) > 0 FROM vq{i:02};",
+                ],
+                after=[f"DROP INDEX IF EXISTS vq{i:02}_primary_idx CASCADE;"],
+                size_of_index=f"vq{i:02}_primary_idx",
+                repetitions=3,
+            )
 
 
 class AuctionScenario(Scenario):
@@ -896,7 +1727,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "--max-scale", type=int, default=32, help="Maximum scale to test."
     )
-    parser.add_argument("--scale-tpch", type=int, default=8, help="TPCH scale factor.")
+    parser.add_argument(
+        "--scale-tpch", type=float, default=8, help="TPCH scale factor."
+    )
+    parser.add_argument(
+        "--scale-tpch-queries", type=float, default=4, help="TPCH queries scale factor."
+    )
     parser.add_argument(
         "--scale-auction", type=int, default=3, help="TPCH scale factor."
     )
@@ -912,7 +1748,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     unknown = scenarios - set(ALL_SCENARIOS)
     if unknown:
         raise ValueError(f"Unknown scenarios: {unknown}")
-    print(f"Running scenarios: {', '.join(scenarios)}")
+    print(f"--- Running scenarios: {', '.join(scenarios)}")
 
     if args.target == "cloud":
         target: BenchTarget = CloudTarget(c)
@@ -952,7 +1788,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             conn = ConnectionHandler(target.new_connection)
 
             if scenario == SCENARIO_TPCH_STRONG:
-                print("--- Running TPC-H Index strong scaling")
+                print("--- SCENARIO: Running TPC-H Index strong scaling")
                 run_scenario_strong(
                     scenario=TpchScenario(
                         args.scale_tpch, target.replica_size_for_scale(1)
@@ -963,7 +1799,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     max_scale=max_scale,
                 )
             if scenario == SCENARIO_TPCH_MV_STRONG:
-                print("--- Running TPC-H Materialized view strong scaling")
+                print("--- SCENARIO: Running TPC-H Materialized view strong scaling")
                 run_scenario_strong(
                     scenario=TpchScenarioMV(
                         args.scale_tpch, target.replica_size_for_scale(1)
@@ -973,8 +1809,30 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     target=target,
                     max_scale=max_scale,
                 )
+            if scenario == SCENARIO_TPCH_QUERIES_STRONG:
+                print("--- SCENARIO: Running TPC-H Queries strong scaling")
+                run_scenario_strong(
+                    scenario=TpchScenarioQueriesIndexedInputs(
+                        args.scale_tpch_queries, target.replica_size_for_scale(1)
+                    ),
+                    results_writer=results_writer,
+                    connection=conn,
+                    target=target,
+                    max_scale=max_scale,
+                )
+            if scenario == SCENARIO_TPCH_QUERIES_WEAK:
+                print("--- SCENARIO: Running TPC-H Queries weak scaling")
+                run_scenario_weak(
+                    scenario=TpchScenarioQueriesIndexedInputs(
+                        args.scale_tpch_queries, None
+                    ),
+                    results_writer=results_writer,
+                    connection=conn,
+                    target=target,
+                    max_scale=max_scale,
+                )
             if scenario == SCENARIO_AUCTION_STRONG:
-                print("--- Running Auction strong scaling")
+                print("--- SCENARIO: Running Auction strong scaling")
                 run_scenario_strong(
                     scenario=AuctionScenario(
                         args.scale_auction, target.replica_size_for_scale(1)
@@ -985,9 +1843,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     max_scale=max_scale,
                 )
             if scenario == SCENARIO_AUCTION_WEAK:
-                print("--- Running Auction weak scaling")
+                print("--- SCENARIO: Running Auction weak scaling")
                 run_scenario_weak(
-                    scenario=AuctionScenario(args.scale_auction, "none"),
+                    scenario=AuctionScenario(args.scale_auction, None),
                     results_writer=results_writer,
                     connection=conn,
                     target=target,
