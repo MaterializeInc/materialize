@@ -1180,6 +1180,23 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
         };
         let replacement_range = i..(i + 1);
 
+        let replacement_desc = &res.output.desc;
+        let existing_desc = &batch.batch.desc;
+        assert_eq!(
+            replacement_desc.lower(),
+            existing_desc.lower(),
+            "batch lower should match, but {:?} != {:?}",
+            replacement_desc.lower(),
+            existing_desc.lower()
+        );
+        assert_eq!(
+            replacement_desc.upper(),
+            existing_desc.upper(),
+            "batch upper should match, but {:?} != {:?}",
+            replacement_desc.upper(),
+            existing_desc.upper()
+        );
+
         let batch = &batch.batch;
         let run_ids = runs.iter().cloned().collect::<Vec<_>>();
 
