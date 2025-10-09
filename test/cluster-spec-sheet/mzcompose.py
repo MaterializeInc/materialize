@@ -1284,182 +1284,126 @@ def analyze_file(file: str):
     plot_dir = os.path.join("test", "cluster-spec-sheet", "plots", base_name)
     os.makedirs(plot_dir, exist_ok=True)
 
-    def save_plot(data_frame: pd.DataFrame, benchmark: str, variant: str, unit: str):
-        all_files = []
-
-        base_file_name = os.path.join(plot_dir, f"{benchmark}_{variant}_{unit}")
-        file_path = f"{base_file_name}.svg"
-        plt.savefig(MZ_ROOT / file_path)
-        all_files.append(file_path)
-        file_path = f"{base_file_name}.html"
-        data_frame.to_html(MZ_ROOT / file_path)
-        all_files.append(file_path)
-        print(f"+++ Plot for {benchmark} {variant} [{unit}]")
-        print(data_frame.to_string())
-
-        upload_file(all_files, benchmark, variant, unit)
-
+    df_all = df
     # Plot the results
+    for index in (
+        df_all[["scenario", "category", "mode"]]
+        .drop_duplicates()
+        .itertuples(index=False)
+    ):
+        (benchmark, category, mode) = (index.scenario, index.category, index.mode)
+        indexes = (
+            (df_all["scenario"] == benchmark)
+            & (df_all["category"] == category)
+            & (df_all["mode"] == mode)
+        )
+        df = df_all[indexes]
+        title = f"{str(benchmark).replace("_", " ")} - {str(category).replace('_', ' ')} ({mode})"
+        slug = f"{benchmark}_{category}_{mode}".replace(" ", "_")
 
-    # TPCH create index
-    df2 = plot_time_ms(
-        df,
-        'category != "peek_serving" and (scenario == "tpch" or scenario == "tpch_mv")',
-        "TPCH create index/MV",
-    )
-    if df2 is not None:
-        save_plot(df2, "tpch", "create_index_mv", "time_ms")
+        plot(
+            plot_dir,
+            df,
+            "time_ms",
+            f"{title} (time)",
+            f"{slug}_time_ms",
+            "Time [ms]",
+            "Normalized time",
+        )
+        plot(
+            plot_dir,
+            df,
+            "credit_time",
+            f"{title} (credits)",
+            f"{slug}_credits",
+            "Cost [centi-credits]",
+            "Normalized cost",
+        )
 
-    df2 = plot_credit_time(
-        df,
-        'category != "peek_serving" and (scenario == "tpch" or scenario == "tpch_mv")',
-        "TPCH create index/MV",
-    )
-    if df2 is not None:
-        save_plot(df2, "tpch", "create_index_mv", "credits")
 
-    # Auction arrangement formation strong scaling
-    df2 = plot_time_ms(
-        df,
-        'category == "arrangement_formation" and scenario == "auction" and mode == "strong"',
-        "Auction arrangement formation",
-    )
-    if df2 is not None:
-        save_plot(df2, "auction", "arrangement_formation_strong", "time_ms")
+def save_plot(plot_dir: str, data_frame: pd.DataFrame, title: str, slug: str):
+    all_files = []
 
-    df2 = plot_credit_time(
-        df,
-        'category == "arrangement_formation" and scenario == "auction" and mode == "strong"',
-        "Auction arrangement formation",
-    )
-    if df2 is not None:
-        save_plot(df2, "auction", "arrangement_formation_strong", "credits")
+    base_file_name = os.path.join(plot_dir, slug)
+    file_path = f"{base_file_name}.svg"
+    plt.savefig(MZ_ROOT / file_path, bbox_inches="tight")
+    all_files.append(file_path)
+    file_path = f"{base_file_name}.html"
+    data_frame.to_html(MZ_ROOT / file_path)
+    all_files.append(file_path)
+    print(f"+++ Plot for {title}")
+    print(data_frame.to_string())
 
-    # Auction primitive operators strong scaling
-    df2 = plot_time_ms(
-        df,
-        'category == "primitive_operators" and scenario == "auction" and mode == "strong"',
-        "Auction primitive operators",
-    )
-    if df2 is not None:
-        save_plot(df2, "auction", "primitive_operators_strong", "time_ms")
-
-    df2 = plot_credit_time(
-        df,
-        'category == "primitive_operators" and scenario == "auction" and mode == "strong"',
-        "Auction primitive operators",
-    )
-    if df2 is not None:
-        save_plot(df2, "auction", "primitive_operators_strong", "credits")
-
-    # Auction arrangement formation strong scaling
-    df2 = plot_time_ms(
-        df,
-        'category == "arrangement_formation" and scenario == "auction" and mode == "weak"',
-        "Auction arrangement formation",
-    )
-    if df2 is not None:
-        save_plot(df2, "auction", "arrangement_formation_weak", "time_ms")
-
-    df2 = plot_credit_time(
-        df,
-        'category == "arrangement_formation" and scenario == "auction" and mode == "weak"',
-        "Auction arrangement formation",
-    )
-    if df2 is not None:
-        save_plot(df2, "auction", "arrangement_formation_weak", "credits")
-
-    # Auction primitive operators weak scaling
-    df2 = plot_time_ms(
-        df,
-        'category == "primitive_operators" and scenario == "auction" and mode == "weak"',
-        "Auction primitive operators",
-    )
-    if df2 is not None:
-        save_plot(df2, "auction", "primitive_operators_weak", "time_ms")
-
-    df2 = plot_credit_time(
-        df,
-        'category == "primitive_operators" and scenario == "auction" and mode == "weak"',
-        "Auction primitive operators",
-    )
-    if df2 is not None:
-        save_plot(df2, "auction", "primitive_operators_weak", "credits")
+    upload_file(all_files, title)
 
 
 def upload_file(
     file_paths: list[str],
-    scenario_name: str,
-    variant: str,
-    unit: str,
+    title: str,
 ):
     if buildkite.is_in_buildkite():
         for file_path in file_paths:
             buildkite.upload_artifact(file_path, cwd=MZ_ROOT, quiet=True)
-        print(f"+++ Plot for {scenario_name} ({variant} [{unit}]")
+        print(f"+++ Plot for {title}")
         for file_path in file_paths:
             print(
                 buildkite.inline_image(
                     f"artifact://{file_path}",
-                    f"Plot for {scenario_name} ({variant}) [{unit}]",
+                    f"Plot for {title}",
                 )
             )
     else:
         print(f"Saving plots to {file_paths}")
 
 
-def plot_time_ms(data: pd.DataFrame, query: str, title: str) -> pd.DataFrame | None:
-    df2 = (
-        data.query(query)
-        .pivot_table(
-            index=["credits_per_h"],
-            columns=["scenario", "category", "test_name", "mode"],
-            values=["time_ms"],
-            aggfunc="min",
-        )
-        .sort_index(axis=1)
-    )
+def plot(
+    plot_dir: str,
+    data: pd.DataFrame,
+    value: str,
+    title: str,
+    slug: str,
+    data_label: str,
+    normalized_label: str,
+):
+    df2 = data.pivot_table(
+        index=["credits_per_h"],
+        columns=["test_name"],
+        values=[value],
+        aggfunc="min",
+    ).sort_index(axis=1)
     (level, dropped) = labels_to_drop(df2)
     filtered = df2.droplevel(level, axis=1).dropna(axis=1, how="all")
     if filtered.empty:
         print(f"Warning: No data to plot for {title}")
-        return None
-    filtered.plot(
+        return
+    plot = filtered.plot(
         kind="bar",
         figsize=(12, 6),
-        ylabel="Time [ms]",
+        ylabel=data_label,
         logy=False,
-        title=f"{title}\n{dropped}",
+        title=f"{title}",
         grid=True,
     )
-    return filtered
-
-
-def plot_credit_time(data: pd.DataFrame, query: str, title: str) -> pd.DataFrame | None:
-    df2 = (
-        data.query(query)
-        .pivot_table(
-            index=["credits_per_h"],
-            columns=["scenario", "category", "test_name", "mode"],
-            values=["credit_time"],
-            aggfunc="min",
-        )
-        .sort_index(axis=1)
+    plot.legend(
+        loc="upper left",
+        bbox_to_anchor=(1.0, 1.0),
     )
-    (level, dropped) = labels_to_drop(df2)
-    filtered = df2.droplevel(level, axis=1).dropna(axis=1, how="all")
-    if filtered.empty:
-        print(f"Warning: No data to plot for {title}")
-        return None
-    filtered.plot(
+    save_plot(plot_dir, filtered, title, slug)
+
+    filtered = filtered.div(filtered.iloc[0])
+    plot = filtered.plot(
         kind="bar",
         figsize=(12, 6),
-        ylabel="Cost [centi-credits]",
+        ylabel=normalized_label,
         logy=False,
-        title=f"{title}\n{dropped}",
+        title=f"{title}",
         grid=True,
     )
-    return filtered
+    plot.legend(
+        loc="upper left",
+        bbox_to_anchor=(1.0, 1.0),
+    )
+    save_plot(plot_dir, filtered, f"{title} (Normalized)", f"{slug}_normalized")
 
 
 def labels_to_drop(
