@@ -23,7 +23,7 @@ use md5::Md5;
 use mz_lowertest::MzReflect;
 use mz_ore::cast::{CastFrom, ReinterpretCast};
 use mz_pgtz::timezone::TimezoneSpec;
-use mz_repr::adt::array::{ArrayDimension, InvalidArrayError};
+use mz_repr::adt::array::{ArrayDimension, ArrayDimensions, InvalidArrayError};
 use mz_repr::adt::mz_acl_item::{AclItem, AclMode, MzAclItem};
 use mz_repr::adt::range::{InvalidRangeError, Range, RangeBound, parse_range_bound_flags};
 use mz_repr::adt::system::Oid;
@@ -85,41 +85,38 @@ fn array_create_multidim<'a>(
     datums: &[Datum<'a>],
     temp_storage: &'a RowArena,
 ) -> Result<Datum<'a>, EvalError> {
-    // `true` if any element null or has a dimension of 0.
-    let mut have_empty = false;
-    let mut dim = None;
+    let mut dim: Option<ArrayDimensions> = None;
     for datum in datums {
-        if datum.is_null() {
-            have_empty = true;
-            continue;
-        }
-        let actual = datum.unwrap_array().dims().len();
-        if actual == 0 {
-            have_empty = true;
-        }
-        match dim {
-            Some(expected) if actual != expected => {
-                // All non-null arrays must have the same dimensionality.
+        let actual_dims = match datum {
+            Datum::Null => ArrayDimensions::default(),
+            Datum::Array(arr) => arr.dims(),
+            d => panic!("unexpected datum {d}"),
+        };
+        if let Some(expected) = &dim {
+            if actual_dims.ndims() != expected.ndims() {
+                let actual = actual_dims.ndims().into();
+                let expected = expected.ndims().into();
+                // All input arrays must have the same dimensionality.
                 return Err(InvalidArrayError::WrongCardinality { actual, expected }.into());
             }
-            _ => dim = Some(actual),
+            if let Some((e, a)) = expected
+                .into_iter()
+                .zip_eq(actual_dims.into_iter())
+                .find(|(e, a)| e != a)
+            {
+                let actual = a.length;
+                let expected = e.length;
+                // All input arrays must have the same dimensionality.
+                return Err(InvalidArrayError::WrongCardinality { actual, expected }.into());
+            }
         }
+        dim = Some(actual_dims);
     }
-    if have_empty {
-        return match dim {
-            // Per PostgreSQL, if all input arrays are zero dimensional, so is the
-            // output.
-            None | Some(0) => {
-                Ok(temp_storage.try_make_datum(|packer| packer.try_push_array(&[], &[]))?)
-            }
-            // Mixing zero-dimensional arrays with non-zero-dimensional arrays is
-            // not allowed.
-            Some(expected) => {
-                let actual = 0;
-                Err(InvalidArrayError::WrongCardinality { actual, expected }.into())
-            }
-        };
+    // Per PostgreSQL, if all input arrays are zero dimensional, so is the output.
+    if dim.as_ref().map_or(true, ArrayDimensions::is_empty) {
+        return Ok(temp_storage.try_make_datum(|packer| packer.try_push_array(&[], &[]))?);
     }
+
     let mut dims = vec![ArrayDimension {
         lower_bound: 1,
         length: datums.len(),

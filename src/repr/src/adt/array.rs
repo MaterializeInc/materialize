@@ -54,6 +54,12 @@ pub struct ArrayDimensions<'a> {
     pub(crate) data: &'a [u8],
 }
 
+impl Default for ArrayDimensions<'static> {
+    fn default() -> Self {
+        Self { data: &[] }
+    }
+}
+
 impl ArrayDimensions<'_> {
     /// Returns the number of dimensions in the array as a [`u8`].
     pub fn ndims(&self) -> u8 {
