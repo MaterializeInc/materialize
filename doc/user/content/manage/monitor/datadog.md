@@ -18,10 +18,6 @@ the following additional services:
 * A Prometheus SQL Exporter.
 * A Datadog Agent configured with an [OpenMetrics check](https://docs.datadoghq.com/integrations/openmetrics/).
 
-{{< note >}}
-In the future, we plan to support a native Datadog integration that
-continually reports metrics via the Datadog API.
-{{< /note >}}
 
 ## Step 1. Set up a Prometheus SQL Exporter
 
