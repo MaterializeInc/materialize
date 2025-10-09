@@ -1206,13 +1206,15 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
         let batch = &batch.batch;
         let run_ids = runs.iter().cloned().collect::<Vec<_>>();
 
-        let old_batch_diff_sum = Self::diffs_sum::<D>(batch.parts.iter(), metrics);
-        let old_diffs_sum = Self::diffs_sum_for_runs::<D>(batch, &run_ids, metrics);
-
-        Self::validate_diffs_sum_match(old_diffs_sum, new_diffs_sum, "partial batch replacement");
-
         match Self::construct_batch_with_runs_replaced(batch, &run_ids, &res.output) {
             Ok(new_batch) => {
+                let old_diffs_sum = Self::diffs_sum_for_runs::<D>(batch, &run_ids, metrics);
+                Self::validate_diffs_sum_match(
+                    old_diffs_sum,
+                    new_diffs_sum,
+                    "partial batch replacement",
+                );
+                let old_batch_diff_sum = Self::diffs_sum::<D>(batch.parts.iter(), metrics);
                 let new_batch_diff_sum = Self::diffs_sum::<D>(new_batch.parts.iter(), metrics);
                 Self::validate_diffs_sum_match(
                     old_batch_diff_sum,
