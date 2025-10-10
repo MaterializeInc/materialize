@@ -259,8 +259,12 @@ def environment(args: argparse.Namespace):
         with open(args.license_key_file) as f:
             license_key = f.read()
             license_key_args = {"license_key": license_key}
+        environment_id_args = {}
     else:
         license_key_args = {}
+        environment_id_args = {
+            "environment_id": environment_id,
+        }
 
     backend_secret_name = f"materialize-backend-{environment_id}"
 
@@ -286,9 +290,9 @@ def environment(args: argparse.Namespace):
             "spec": {
                 "environmentdImageRef": environmentd_image_ref,
                 "backendSecretName": backend_secret_name,
-                "environmentId": environment_id,
                 "authenticatorKind": "None",
                 "enableRbac": args.enable_rbac,
+                **environment_id_args,
             },
         },
     ]
