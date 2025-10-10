@@ -541,29 +541,38 @@ class SelfManagedv25_2_Upgrade(Scenario):
     def actions(self) -> list[Action]:
         print(f"Upgrading from tag {self.base_version()}")
 
-        def upgrade_actions(version: MzVersion | None) -> list[Action]:
+        def upgrade_actions(version: MzVersion | None, generation: int) -> list[Action]:
+            previous_service_name = f"mz_{generation - 1}"
+            service_name = f"mz_{generation}"
             return [
-                KillMz(
-                    capture_logs=True
-                ),  # We always use True here otherwise docker-compose will lose the pre-upgrade logs
-                StartMz(
+                start_mz_read_only(
                     self,
                     tag=version,
+                    deploy_generation=generation,
+                    mz_service=service_name,
                 ),
-                Validate(self),
+                WaitReadyMz(service_name),
+                PromoteMz(service_name),
+                Validate(self, mz_service=service_name),
+                KillMz(capture_logs=True, mz_service=previous_service_name),
             ]
 
         actions = [
             StartMz(
                 self,
                 tag=self.base_version(),
+                mz_service="mz_1",
             ),
-            Initialize(self),
-            Manipulate(self, phase=1),
-            Manipulate(self, phase=2),
+            Initialize(self, mz_service="mz_1"),
+            Manipulate(self, phase=1, mz_service="mz_1"),
+            Manipulate(self, phase=2, mz_service="mz_1"),
+            Validate(self, mz_service="mz_1"),
         ]
 
-        for version in self.v25_2_versions[1:] + [None]:
-            actions.extend(upgrade_actions(version))
+        versions_to_upgrade = self.v25_2_versions[1:] + [None]
+
+        for i, version in enumerate(versions_to_upgrade):
+            generation = i + 2
+            actions.extend(upgrade_actions(version, generation))
 
         return actions

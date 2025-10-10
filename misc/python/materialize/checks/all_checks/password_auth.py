@@ -9,10 +9,15 @@
 from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
-from materialize.checks.checks import Check
+from materialize.checks.checks import Check, Executor
+from materialize.mzcompose import MzVersion
 
 
 class PasswordAuth(Check):
+
+    def _can_run(self, e: Executor) -> bool:
+        return self.base_version >= MzVersion.parse_mz("v0.147.0-dev")
+
     def manipulate(self) -> list[Testdrive]:
         return [
             Testdrive(dedent(s))
