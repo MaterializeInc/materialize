@@ -9,6 +9,7 @@
 
 
 from materialize.checks.actions import Action, Initialize, Manipulate, Sleep, Validate
+from materialize.checks.all_checks.password_auth import PasswordAuth
 from materialize.checks.checks import Check
 from materialize.checks.executors import Executor
 from materialize.checks.features import Features
@@ -541,16 +542,18 @@ class SelfManagedv25_2_Upgrade(Scenario):
     def actions(self) -> list[Action]:
         print(f"Upgrading from tag {self.base_version()}")
 
-        def upgrade_actions(version: MzVersion | None) -> list[Action]:
+        def upgrade_actions(version: MzVersion | None, generation: int) -> list[Action]:
+            service_name = f"mz_{generation}"
             return [
-                KillMz(
-                    capture_logs=True
-                ),  # We always use True here otherwise docker-compose will lose the pre-upgrade logs
-                StartMz(
+                start_mz_read_only(
                     self,
                     tag=version,
+                    deploy_generation=generation,
+                    mz_service=service_name,
                 ),
-                Validate(self),
+                WaitReadyMz(service_name),
+                PromoteMz(service_name),
+                Validate(self, mz_service=service_name),
             ]
 
         actions = [
@@ -563,7 +566,7 @@ class SelfManagedv25_2_Upgrade(Scenario):
             Manipulate(self, phase=2),
         ]
 
-        for version in self.v25_2_versions[1:] + [None]:
-            actions.extend(upgrade_actions(version))
+        for generation, version in enumerate(self.v25_2_versions[1:] + [None]):
+            actions.extend(upgrade_actions(version, generation + 1))
 
         return actions
