@@ -38,6 +38,7 @@ Cloud Storage, or Cloudflare R2.
         REGION = 'us'
     );
     ```
+
 {{< warning >}}
   `VALIDATE CONNECTION` only works for AWS S3 connections. Using `VALIDATE CONNECTION` to test a connection to S3 compatible object storage service will result in an error. However, you can still use the connection to copy data.
 {{< /warning >}}
