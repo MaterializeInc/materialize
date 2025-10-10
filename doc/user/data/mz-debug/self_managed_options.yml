@@ -5,16 +5,14 @@ rows:
   - Option: "`--k8s-namespace <NAMESPACE>`"
     Description: |
 
-      <a name="k8s-namespace"></a> The Kubernetes namespace of the Materialize instance. This is
-      required.
+      <a name="k8s-namespace"></a> **Required**. The Kubernetes namespace of the Materialize instance.
 
   - Option: "`--mz-instance-name <MZ_INSTANCE_NAME>`"
     Description: |
 
-      <a name="mz-instance-name"></a> The Materialize instance to target. This is
-      required.
+      <a name="mz-instance-name"></a> **Required**. The Materialize instance to target.
 
-  - Option: "`--dump-k8s`"
+  - Option: "`--dump-k8s <boolean>`"
     Description: |
 
       <a name="dump-k8s"></a>
@@ -34,7 +32,7 @@ rows:
 
       Defaults to the `KUBERNETES_CONTEXT` environment variable.
 
-  - Option: "`--k8s-dump-secret-values`"
+  - Option: "`--k8s-dump-secret-values <boolean>`"
     Description: |
 
       <a name="k8s-dump-secret-values"></a> If `true`, include unredacted secrets in the

@@ -64,34 +64,37 @@ Each resource type directory also contains a `describe.txt` file with the output
 
 {{% integrations/mz-debug/memory-profiles %}}
 
-## Examples
-### Viewing Materialize instance names in the Kubernetes namespace `materialize-environment`
+
+
+## Prerequisite: Get the Materialize instance name
+
+To use `mz-debug`, you need to specify the <a href="#k8s-namespace">Kubernetes namespace (`--k8s-namespace`)</a> and the <a href="#mz-instance-name">Materialize instance name (`--mz-instance-name`)</a>. To retrieve the Materialize instance name, you can use kubectl. For example, the following retrieves the name of the Materialize instance(s) running in the Kubernetes namespace `materialize-environment`:
 ```
 kubectl --namespace materialize-environment get materializes.materialize.cloud
 ```
-The output should look something like:
+The command should return the NAME of the Materialize instance(s) in the namespace:
 ```
 NAME
 12345678-1234-1234-1234-123456789012
 ```
 
-### Debugging a Materialize instance that lives in the Kubernetes namespace `materialize-environment` with Materialize instance `12345678-1234-1234-1234-123456789012`
+## Examples
+
+### Debug a Materialize instance running in a namespace
+
+The following example uses `mz-debug` to collect debug information for the Materialize instance (`12345678-1234-1234-1234-123456789012` obtained in the Prerequisite) running in the Kubernetes namespace `materialize-environment`:
 
 ```shell
-mz-debug self-managed --k8s-namespace materialize-environment --mz-instance-name 12345678-1234-1234-1234-123456789012
+mz-debug self-managed --k8s-namespace materialize-environment \
+--mz-instance-name 12345678-1234-1234-1234-123456789012
 ```
 
-### Debugging a Materialize instance with supporting infrastructure in other namespaces (e.g. `materialize`)
+### Include information from additional kubernetes namespaces
+
+When debugging a Materialize instance, you can also include information from other namespaces via <a href="#additional-k8s-namespace">`--additional-k8s-namespace`</a>. The following example collects debug information for the Materialize instance running in the Kubernetes namespace `materialize-environment` as well as debug information for the namespace `materialize`:
 
 ```shell
-mz-debug self-managed --k8s-namespace materialize-environment --mz-instance-name 12345678-1234-1234-1234-123456789012 --additional-k8s-namespace materialize
-```
-
-### Debug namespaces without automatic port-forwarding
-
-```shell
-mz-debug self-managed \
-    --k8s-namespace materialize-environment \
-    --mz-instance-name 12345678-1234-1234-1234-123456789012 \
-    --mz-connection-url 'postgres://root@127.0.0.1:6875/materialize?sslmode=disable'
+mz-debug self-managed --k8s-namespace materialize-environment \
+--mz-instance-name 12345678-1234-1234-1234-123456789012 \
+--additional-k8s-namespace materialize
 ```
