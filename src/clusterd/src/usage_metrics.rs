@@ -183,28 +183,42 @@ mod linux {
     ///
     /// We make the following simplifying assumptions that hold for a standard Kubernetes
     /// environment:
-    //  * The current process is a member of exactly one cgroups v2 hierarchy.
+    //  * The current process is a member of a cgroups v2 hierarchy.
     //  * The cgroups hierarchy is mounted at `/sys/fs/cgroup`.
     //  * The limits are applied to the current cgroup directly (and not one of its ancestors).
     fn get_cgroup_limits() -> (Option<u64>, Option<u64>) {
         let Ok(proc_cgroup) = fs::read_to_string("/proc/self/cgroup") else {
             return (None, None);
         };
-        let Some(cgroup_path) = proc_cgroup.split(':').nth(2) else {
+
+        // Find the cgroups v2 hierarchy. Entries in `/proc/self/cgroup` have the form
+        // `hierarchy-id:controller-list:cgroup-path`. For cgroups v2, the first field is 0 and the
+        // second field is empty.
+        let mut lines = proc_cgroup.lines();
+        let Some(cgroup_path) = lines.find_map(|l| l.strip_prefix("0::")) else {
             error!("invalid `/proc/self/cgroup` format: {proc_cgroup}");
             return (None, None);
         };
 
+        // The cgroup path is a relative path but may include a leading `/`. Strip that so
+        // `Path::join` works as expected.
+        let cgroup_path = cgroup_path.strip_prefix("/").unwrap_or(cgroup_path);
+
         let root = Path::new("/sys/fs/cgroup").join(cgroup_path);
+        if !root.exists() {
+            error!("invalid cgroup root: {}", root.display());
+            return (None, None);
+        }
+
         let memory_file = root.join("memory.max");
         let swap_file = root.join("memory.swap.max");
 
         let memory = fs::read_to_string(memory_file)
             .ok()
-            .and_then(|s| s.parse().ok());
+            .and_then(|s| s.trim().parse().ok());
         let swap = fs::read_to_string(swap_file)
             .ok()
-            .and_then(|s| s.parse().ok());
+            .and_then(|s| s.trim().parse().ok());
 
         (memory, swap)
     }
