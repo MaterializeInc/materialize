@@ -2,7 +2,17 @@ columns:
   - column: "Option"
   - column: "Description"
 rows:
-  - Option: "`--dump-k8s`"
+  - Option: "`--k8s-namespace <NAMESPACE>`"
+    Description: |
+
+      <a name="k8s-namespace"></a> **Required**. The Kubernetes namespace of the Materialize instance.
+
+  - Option: "`--mz-instance-name <MZ_INSTANCE_NAME>`"
+    Description: |
+
+      <a name="mz-instance-name"></a> **Required**. The Materialize instance to target.
+
+  - Option: "`--dump-k8s <boolean>`"
     Description: |
 
       <a name="dump-k8s"></a>
@@ -10,13 +20,10 @@ rows:
 
       Defaults to `true`.
 
-  - Option: "`--k8s-namespace <NAMESPACE>`"
+  - Option: "`--additional-k8s-namespace <NAMESPACE>`"
     Description: |
 
-      <a name="k8s-namespace"></a> The namespaces to dump. Specify multiple
-      times to dump multiple namespaces.
-
-      Required if [`--dump-k8s`](#dump-k8s) is true.
+      <a name="additional-k8s-namespace"></a> Additional k8s namespaces to dump.
 
   - Option: "`--k8s-context <CONTEXT>`"
     Description: |
@@ -25,7 +32,7 @@ rows:
 
       Defaults to the `KUBERNETES_CONTEXT` environment variable.
 
-  - Option: "`--k8s-dump-secret-values`"
+  - Option: "`--k8s-dump-secret-values <boolean>`"
     Description: |
 
       <a name="k8s-dump-secret-values"></a> If `true`, include unredacted secrets in the

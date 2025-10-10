@@ -52,15 +52,21 @@ pub struct SelfManagedDebugModeArgs {
     /// If true, the tool will dump debug information in Kubernetes cluster such as logs, pod describes, etc.
     #[clap(long, default_value = "true", action = clap::ArgAction::Set)]
     dump_k8s: bool,
+
+    /// The k8s namespace that the Materialize instance is running in. This is necessary to interact
+    /// with the k8s API for gathering logs, port forwarding information, and information about the user's
+    /// environment.
+    #[clap(long)]
+    k8s_namespace: String,
+    /// The name of the Materialize instance to target.
+    #[clap(long)]
+    mz_instance_name: String,
     /// A list of namespaces to dump.
     #[clap(
-        long = "k8s-namespace",
-        // We require both `require`s because `required_if_eq` doesn't work for default values.
-        required_unless_present = "dump_k8s",
-        required_if_eq("dump_k8s", "true"),
+        long = "additional-k8s-namespace",
         action = clap::ArgAction::Append
     )]
-    k8s_namespaces: Vec<String>,
+    additional_k8s_namespaces: Option<Vec<String>>,
     /// The kubernetes context to use.
     #[clap(long, env = "KUBERNETES_CONTEXT")]
     k8s_context: Option<String>,
@@ -151,7 +157,9 @@ struct SelfManagedContext {
     dump_k8s: bool,
     k8s_client: KubernetesClient,
     k8s_context: Option<String>,
-    k8s_namespaces: Vec<String>,
+    k8s_namespace: String,
+    mz_instance_name: String,
+    k8s_additional_namespaces: Option<Vec<String>>,
     k8s_dump_secret_values: bool,
     mz_connection_info: SelfManagedMzConnectionInfo,
     http_connection_auth_mode: AuthMode,
@@ -277,7 +285,8 @@ async fn initialize_context(
                 global_args.mz_username,
                 global_args.mz_password,
                 &k8s_client,
-                &args.k8s_namespaces,
+                &args.k8s_namespace,
+                &args.mz_instance_name,
             )
             .await
             {
@@ -298,7 +307,8 @@ async fn initialize_context(
                     let port_forwarder = create_pg_wire_port_forwarder(
                         &k8s_client,
                         &args.k8s_context,
-                        &args.k8s_namespaces,
+                        &args.k8s_namespace,
+                        &args.mz_instance_name,
                     )
                     .await?;
                     port_forwarder.spawn_port_forward().await
@@ -324,7 +334,9 @@ async fn initialize_context(
                 dump_k8s: args.dump_k8s,
                 k8s_client,
                 k8s_context: args.k8s_context.clone(),
-                k8s_namespaces: args.k8s_namespaces.clone(),
+                k8s_namespace: args.k8s_namespace.clone(),
+                mz_instance_name: args.mz_instance_name.clone(),
+                k8s_additional_namespaces: args.additional_k8s_namespaces.clone(),
                 k8s_dump_secret_values: args.k8s_dump_secret_values,
                 mz_connection_info,
                 http_connection_auth_mode: auth_mode,
@@ -392,7 +404,8 @@ async fn run(context: Context) -> Result<(), anyhow::Error> {
             k8s_client,
             dump_k8s,
             k8s_context,
-            k8s_namespaces,
+            k8s_namespace,
+            k8s_additional_namespaces,
             k8s_dump_secret_values,
             ..
         }) => {
@@ -400,7 +413,8 @@ async fn run(context: Context) -> Result<(), anyhow::Error> {
                 let dumper = K8sDumper::new(
                     &context,
                     k8s_client.clone(),
-                    k8s_namespaces.clone(),
+                    k8s_namespace.clone(),
+                    k8s_additional_namespaces.clone(),
                     k8s_context.clone(),
                     *k8s_dump_secret_values,
                 );
