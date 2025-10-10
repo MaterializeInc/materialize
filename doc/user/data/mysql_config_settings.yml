@@ -1,0 +1,28 @@
+columns:
+  - column: "MySQL Configuration"
+  - column: "Value"
+  - column: "Notes"
+rows:
+  - MySQL Configuration: "`log_bin`"
+    Value: "`ON`"
+    Notes: ""
+
+  - MySQL Configuration: "`binlog_format`"
+    Value: "`ROW`"
+    Notes: "[Deprecated as of MySQL 8.0.34](https://dev.mysql.com/doc/refman/8.0/en/replication-options-binary-log.html#sysvar_binlog_format). Newer versions of MySQL default to row-based logging."
+
+  - MySQL Configuration: "`binlog_row_image`"
+    Value: "`FULL`"
+    Notes: ""
+
+  - MySQL Configuration: "`gtid_mode`"
+    Value: "`ON`"
+    Notes: "{{ $gtid_mode_note }}"
+
+  - MySQL Configuration: "`enforce_gtid_consistency`"
+    Value: "`ON`"
+    Notes: ""
+
+  - MySQL Configuration: "`replica_preserve_commit_order`"
+    Value: "`ON`"
+    Notes: "Only required when connecting Materialize to a read-replica."
