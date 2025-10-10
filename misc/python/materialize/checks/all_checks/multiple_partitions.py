@@ -38,7 +38,7 @@ class MultiplePartitions(Check):
                 > CREATE TABLE multiple_partitions_source FROM SOURCE multiple_partitions_source_src (REFERENCE "testdrive-multiple-partitions-topic-${testdrive.seed}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE UPSERT;
 
-                >[version>=15900] CREATE VIEW multiple_partitions_source_src_progress AS SELECT * FROM multiple_partitions_source_src;
+                >[version>=16000] CREATE VIEW multiple_partitions_source_src_progress AS SELECT * FROM multiple_partitions_source_src;
 
                 $ kafka-add-partitions topic=multiple-partitions-topic total-partitions=2
 
