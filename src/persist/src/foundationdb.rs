@@ -297,7 +297,7 @@ impl FdbConsensus {
         let mut limit = *limit;
         let data_key = self.data.subspace(&key).expect("valid directory");
         let seqno_start = data_key.pack(&from);
-        let seqno_end = data_key.pack(&0xff);
+        let seqno_end = data_key.pack(&SeqNo::maximum());
 
         // let output = trx.get_range(&data_key.range().into(), 1, false).await?;
         // for key_value in &output {
