@@ -23,6 +23,7 @@ use mz_postgres_client::metrics::PostgresClientMetrics;
 
 use crate::azure::{AzureBlob, AzureBlobConfig};
 use crate::file::{FileBlob, FileBlobConfig};
+use crate::foundationdb::{FdbConsensus, FdbConsensusConfig, ValidatingConsensus};
 use crate::location::{Blob, Consensus, Determinate, ExternalError};
 use crate::mem::{MemBlob, MemBlobConfig, MemConsensus};
 use crate::metrics::S3BlobMetrics;
@@ -212,6 +213,8 @@ impl BlobConfig {
 /// Config for an implementation of [Consensus].
 #[derive(Debug, Clone)]
 pub enum ConsensusConfig {
+    /// Config for [FdbConsensus].
+    FoundationDB(FdbConsensusConfig),
     /// Config for [PostgresConsensus].
     Postgres(PostgresConsensusConfig),
     /// Config for [MemConsensus], only available in testing.
@@ -222,6 +225,17 @@ impl ConsensusConfig {
     /// Opens the associated implementation of [Consensus].
     pub async fn open(self) -> Result<Arc<dyn Consensus>, ExternalError> {
         match self {
+            ConsensusConfig::FoundationDB(config) => {
+                Ok(Arc::new(FdbConsensus::open(config).await?))
+            }
+            // ConsensusConfig::FoundationDB(config) => {
+            //     let inner = FdbConsensus::open(config).await?;
+            //     inner.drop_and_recreate().await?;
+            //     Ok(Arc::new(ValidatingConsensus {
+            //         inner,
+            //         validator: MemConsensus::default(),
+            //     }))
+            // }
             ConsensusConfig::Postgres(config) => {
                 Ok(Arc::new(PostgresConsensus::open(config).await?))
             }
@@ -237,6 +251,12 @@ impl ConsensusConfig {
         dyncfg: Arc<ConfigSet>,
     ) -> Result<Self, ExternalError> {
         let config = match url.scheme() {
+            "fdb" | "foundationdb" => {
+                let network = FdbConsensusConfig::get_network();
+                Ok(ConsensusConfig::FoundationDB(FdbConsensusConfig::new(
+                    network.into(),
+                )?))
+            }
             "postgres" | "postgresql" => Ok(ConsensusConfig::Postgres(
                 PostgresConsensusConfig::new(url, knobs, metrics, dyncfg)?,
             )),
