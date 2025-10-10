@@ -36,7 +36,6 @@ use foundationdb::{
 use futures_util::future::FutureExt;
 use std::io::Write;
 use std::sync::{Arc, OnceLock};
-use tracing::info;
 
 impl From<FdbError> for ExternalError {
     fn from(x: FdbError) -> Self {
@@ -236,11 +235,8 @@ impl FdbConsensus {
             // println!("key: {key}, seqno bytes: {:?}", seq_no);
             let seqno: SeqNo = unpack(seq_no).expect("valid data");
 
-            let seq_no_space = data_key.subspace(&seqno);
-            let data = trx
-                .get(&seq_no_space.bytes(), false)
-                .await?
-                .expect("valid data");
+            let seq_no_space = data_key.pack(&seqno);
+            let data = trx.get(&seq_no_space, false).await?.expect("valid data");
             let data = unpack::<Vec<u8>>(&data).expect("valid data");
             // println!(
             //     "key: {key}, key_value bytes: {} seqno: {:?}",
@@ -280,13 +276,13 @@ impl FdbConsensus {
         //     foundationdb::tuple::Bytes::from(seqno_key.bytes())
         // );
 
-        let data_seqno_key = data_key.subspace(&new.seqno);
-        trx.set(&data_seqno_key.bytes(), &pack(&new.data.as_ref()));
+        let data_seqno_key = data_key.pack(&new.seqno);
+        trx.set(&data_seqno_key, &pack(&new.data.as_ref()));
         // println!(
         //     "cas data_seqno_key: {:?}",
         //     foundationdb::tuple::Bytes::from(data_seqno_key.bytes())
         // );
-        let written = trx.get(&data_seqno_key.bytes(), false).await?;
+        let written = trx.get(&data_seqno_key, false).await?;
         let unpacked: Vec<u8> = unpack(&written.unwrap()).expect("valid data");
         assert_eq!(&*unpacked, &*new.data);
         Ok(CaSResult::Committed)
@@ -370,14 +366,11 @@ impl FdbConsensus {
                 ExternalError::Determinate(anyhow!("no entries for key: {}", key).into()).into(),
             );
         }
+        let data_key = self.data.subspace(&key).expect("valid directory");
+        let key_space_start = data_key.pack(&SeqNo::minimum());
+        let key_space_end = data_key.pack(&seqno);
 
-        let key_space_start = self
-            .data
-            .subspace(&(key, &SeqNo::minimum()))
-            .expect("valid directory");
-        let key_space_end = self.data.subspace(&(key, seqno)).expect("valid directory");
-
-        trx.clear_range(&key_space_start.bytes(), &key_space_end.bytes());
+        trx.clear_range(&key_space_start, &key_space_end);
         Ok(())
     }
 }
@@ -423,11 +416,11 @@ impl Consensus for FdbConsensus {
                 TransactOption::default(),
             )
             .await?;
-        info!(
-            "FdbConsensus::head({}) -> {:?}",
-            key,
-            ok.as_ref().map(|ok| ok.seqno)
-        );
+        // info!(
+        //     "FdbConsensus::head({}) -> {:?}",
+        //     key,
+        //     ok.as_ref().map(|ok| ok.seqno)
+        // );
         Ok(ok)
     }
 
@@ -437,13 +430,13 @@ impl Consensus for FdbConsensus {
         expected: Option<SeqNo>,
         new: VersionedData,
     ) -> Result<CaSResult, ExternalError> {
-        info!(
-            "FdbConsensus::compare_and_set({}, {:?}, <{} bytes at seqno {}>)",
-            key,
-            expected,
-            new.data.len(),
-            new.seqno
-        );
+        // info!(
+        //     "FdbConsensus::compare_and_set({}, {:?}, <{} bytes at seqno {}>)",
+        //     key,
+        //     expected,
+        //     new.data.len(),
+        //     new.seqno
+        // );
         if let Some(expected) = expected {
             if new.seqno <= expected {
                 return Err(Error::from(
@@ -477,7 +470,7 @@ impl Consensus for FdbConsensus {
         from: SeqNo,
         limit: usize,
     ) -> Result<Vec<VersionedData>, ExternalError> {
-        info!("FdbConsensus::scan({}, {:?}, {})", key, from, limit);
+        // info!("FdbConsensus::scan({}, {:?}, {})", key, from, limit);
         let ok = self
             .db
             .transact_boxed(
@@ -490,7 +483,7 @@ impl Consensus for FdbConsensus {
     }
 
     async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError> {
-        info!("FdbConsensus::truncate({}, {:?})", key, seqno);
+        // info!("FdbConsensus::truncate({}, {:?})", key, seqno);
         self.db
             .transact_boxed(
                 (key, seqno),
