@@ -27,6 +27,11 @@ fetch-batch input=b_empty_output
 ----
 <empty>
 
+write-batch output=b0 lower=0 upper=1
+zero 0 1
+----
+parts=1 len=1
+
 write-batch output=b_empty lower=1 upper=2
 ----
 parts=0 len=0

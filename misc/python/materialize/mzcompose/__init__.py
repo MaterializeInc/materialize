@@ -316,6 +316,15 @@ def get_variable_system_parameters(
             ["67108864", "134217728", "536870912", "1073741824"],
         ),
         VariableSystemParameter(
+            "persist_enable_incremental_compaction",
+            ("true" if version >= MzVersion.parse_mz("v0.160.0-dev") else "false"),
+            (
+                ["true", "false"]
+                if version >= MzVersion.parse_mz("v0.159.0-dev")
+                else ["false"]
+            ),
+        ),
+        VariableSystemParameter(
             "persist_use_critical_since_catalog", "true", ["true", "false"]
         ),
         VariableSystemParameter(
@@ -559,7 +568,6 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "compute_peek_response_stash_read_memory_budget_bytes",
     "compute_peek_stash_num_batches",
     "compute_peek_stash_batch_size",
-    "persist_enable_incremental_compaction",
     "storage_statistics_retention_duration",
     "enable_paused_cluster_readhold_downgrade",
     "enable_builtin_migration_schema_evolution",

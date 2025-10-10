@@ -109,6 +109,12 @@ fn test_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
                     x.add_dynamic("persist_batch_max_run_len", ::mz_dyncfg::ConfigVal::Usize(4));
                     x
                 },
+
+                 {
+                    let mut x = ::mz_dyncfg::ConfigUpdates::default();
+                    x.add_dynamic("persist_enable_incremental_compaction", ::mz_dyncfg::ConfigVal::Bool(true));
+                    x
+                },
             ];
 
             for (idx, dyncfgs) in dyncfgs.into_iter().enumerate() {

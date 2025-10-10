@@ -851,12 +851,12 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                                         // Field has been deprecated but kept around to
                                         // roundtrip state.
                                         deprecated_schema: None,
-                                        id: if cfg.incremental_compaction {
+                                        id: if cfg.batch.enable_incremental_compaction {
                                             Some(RunId::new())
                                         } else {
                                             None
                                         },
-                                        len: if cfg.incremental_compaction {
+                                        len: if cfg.batch.enable_incremental_compaction {
                                             Some(completed_run.num_updates)
                                         } else {
                                             None
