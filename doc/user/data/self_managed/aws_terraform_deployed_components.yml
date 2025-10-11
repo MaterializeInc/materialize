@@ -1,0 +1,33 @@
+columns:
+  - column: "Component"
+  - column: "Version"
+
+rows:
+  - Component: "Kubernetes (EKS) cluster"
+    Version: "All"
+  - Component: "Dedicated VPC"
+    Version: "All"
+  - Component: "S3 for blob storage"
+    Version: "All"
+  - Component: "RDS PostgreSQL cluster and database"
+    Version: "All"
+  - Component: "Materialize Operator"
+    Version: "All"
+  - Component: |
+      Materialize instances (Deployed during subsequent runs after the Operator is running)
+    Version: "All"
+  - Component: |
+      AWS Load Balancer Controller and Network Load Balancers for each
+      Materialize instance
+    Version: |
+      [v0.3.0+](/installation/appendix-terraforms/#materialize-on-aws-terraform-module)
+  - Component: |
+      OpenEBS and NVMe instance storage to enable spill-to-disk
+    Version: |
+      [v0.3.1+](/installation/appendix-terraforms/#materialize-on-aws-terraform-module)
+  - Component: |
+      `cert-manager` and a self-signed `ClusterIssuer`.
+      `ClusterIssuer` is
+      deployed on subsequent runs after the `cert-manager` is running.
+    Version: |
+      [v0.4.0+](/installation/appendix-terraforms/#materialize-on-aws-terraform-module)
