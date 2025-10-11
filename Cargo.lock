@@ -6949,6 +6949,7 @@ dependencies = [
  "mz-build-info",
  "mz-cloud-provider",
  "mz-cloud-resources",
+ "mz-license-keys",
  "mz-orchestrator-kubernetes",
  "mz-orchestrator-tracing",
  "mz-ore",

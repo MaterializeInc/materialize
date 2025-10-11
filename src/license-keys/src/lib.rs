@@ -17,11 +17,6 @@ mod signing;
 pub use signing::{get_pubkey_pem, make_license_key};
 
 const ISSUER: &str = "Materialize, Inc.";
-// this will be used specifically by cloud to avoid needing to issue separate
-// license keys for each environment when it comes up - just being able to
-// share a single license key that allows all environments and never expires
-// will be much simpler to maintain
-const ANY_ENVIRONMENT_AUD: &str = "00000000-0000-0000-0000-000000000000";
 // list of public keys which are allowed to validate license keys. this is a
 // list to allow for key rotation if necessary.
 const PUBLIC_KEYS: &[&str] = &[include_str!("license_keys/production.pub")];
@@ -114,10 +109,10 @@ impl Default for ValidatedLicenseKey {
     }
 }
 
-pub fn validate(license_key: &str, environment_id: &str) -> anyhow::Result<ValidatedLicenseKey> {
+pub fn validate(license_key: &str) -> anyhow::Result<ValidatedLicenseKey> {
     let mut err = None;
     for pubkey in PUBLIC_KEYS {
-        match validate_with_pubkey(license_key, pubkey, environment_id) {
+        match validate_with_pubkey(license_key, pubkey) {
             Ok(key) => {
                 return Ok(key);
             }
@@ -137,7 +132,6 @@ pub fn validate(license_key: &str, environment_id: &str) -> anyhow::Result<Valid
 fn validate_with_pubkey(
     license_key: &str,
     pubkey_pem: &str,
-    environment_id: &str,
 ) -> anyhow::Result<ValidatedLicenseKey> {
     // don't just read the version out of the payload before verifying it,
     // trusting unsigned data to determine how to verify the signature is a
@@ -146,7 +140,7 @@ fn validate_with_pubkey(
     // ensure that the version matches what we validated.
 
     // try current version first, so we can prefer that for error messages
-    let res = validate_with_pubkey_v1(license_key, pubkey_pem, environment_id);
+    let res = validate_with_pubkey_v1(license_key, pubkey_pem);
     let err = match res {
         Ok(key) => return Ok(key),
         Err(e) => e,
@@ -186,15 +180,13 @@ struct Payload {
 fn validate_with_pubkey_v1(
     license_key: &str,
     pubkey_pem: &str,
-    environment_id: &str,
 ) -> anyhow::Result<ValidatedLicenseKey> {
     let mut validation = Validation::new(Algorithm::PS256);
     validation.set_required_spec_claims(&["exp", "nbf", "aud", "iss", "sub"]);
-    validation.set_audience(&[environment_id, ANY_ENVIRONMENT_AUD]);
     validation.set_issuer(&[ISSUER]);
     validation.validate_exp = true;
     validation.validate_nbf = true;
-    validation.validate_aud = true;
+    validation.validate_aud = false;
 
     let key = DecodingKey::from_rsa_pem(pubkey_pem.as_bytes())?;
 
