@@ -3289,6 +3289,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4443176a9f2c162692bd3d352d745ef9413eec5782a80d8fd6f8a1ac692a07f7"
 
 [[package]]
+name = "fallible-iterator"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2acce4a10f12dc2fb14a218589d4f1f62ef011b2d0cc4b3cb1bba8e94da14649"
+
+[[package]]
 name = "fancy-regex"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6241,7 +6247,7 @@ dependencies = [
  "datadriven",
  "derivative",
  "fail",
- "fallible-iterator",
+ "fallible-iterator 0.3.0",
  "flate2",
  "futures",
  "headers",
@@ -6371,7 +6377,7 @@ dependencies = [
  "differential-dataflow",
  "encoding",
  "enum-iterator",
- "fallible-iterator",
+ "fallible-iterator 0.3.0",
  "hex",
  "hmac",
  "insta",
@@ -7251,7 +7257,7 @@ dependencies = [
  "bytes",
  "clap",
  "datadriven",
- "fallible-iterator",
+ "fallible-iterator 0.3.0",
  "mz-ore",
  "postgres-protocol",
  "serde",
@@ -7853,7 +7859,7 @@ dependencies = [
  "chrono",
  "clap",
  "dec",
- "fallible-iterator",
+ "fallible-iterator 0.3.0",
  "futures",
  "itertools 0.14.0",
  "junit-report",
@@ -9466,7 +9472,7 @@ version = "0.19.8"
 source = "git+https://github.com/MaterializeInc/rust-postgres#c4b473b478b3adfbf8667d2fbe895d8423f1290b"
 dependencies = [
  "bytes",
- "fallible-iterator",
+ "fallible-iterator 0.2.0",
  "futures-util",
  "log",
  "tokio",
@@ -9492,7 +9498,7 @@ dependencies = [
  "base64 0.22.1",
  "byteorder",
  "bytes",
- "fallible-iterator",
+ "fallible-iterator 0.2.0",
  "hmac",
  "md-5",
  "memchr",
@@ -9523,7 +9529,7 @@ source = "git+https://github.com/MaterializeInc/rust-postgres#c4b473b478b3adfbf8
 dependencies = [
  "bytes",
  "chrono",
- "fallible-iterator",
+ "fallible-iterator 0.2.0",
  "postgres-protocol",
  "serde",
  "serde_json",
@@ -9536,7 +9542,7 @@ version = "0.11.0"
 source = "git+https://github.com/MaterializeInc/rust-postgres-array#f58d0101e5198e04e8692629018d9b58f8543534"
 dependencies = [
  "bytes",
- "fallible-iterator",
+ "fallible-iterator 0.2.0",
  "postgres-protocol",
  "postgres-types",
 ]
@@ -12224,7 +12230,7 @@ dependencies = [
  "async-trait",
  "byteorder",
  "bytes",
- "fallible-iterator",
+ "fallible-iterator 0.2.0",
  "futures-channel",
  "futures-util",
  "log",
