@@ -659,19 +659,35 @@ CREATE CLUSTER REPLICA quickstart.replica AVAILABILITY ZONE 'a', STORAGECTL ADDR
 # Test that the contents of mz_cluster_replicas look sensible
 
 statement ok
-CREATE CLUSTER foo REPLICAS (size_1 (SIZE 'scale=1,workers=1'), size_32 (SIZE 'scale=1,workers=32'), size_2_2 (SIZE 'scale=2,workers=2'), size_1_8g (SIZE 'scale=1,workers=1,mem=8GiB'))
+CREATE CLUSTER foo REPLICAS (
+    size_1 (SIZE 'scale=1,workers=1'),
+    size_32 (SIZE 'scale=1,workers=32'),
+    size_2_2 (SIZE 'scale=2,workers=2'),
+    size_1_8g (SIZE 'scale=1,workers=1,mem=8GiB')
+)
 
-query TTTTTTT
-SELECT r.name, r.size, s.processes, s.cpu_nano_cores, s.memory_bytes, s.workers, s.credits_per_hour FROM mz_cluster_replicas r JOIN mz_catalog.mz_cluster_replica_sizes s ON r.size = s.size ORDER BY r.name
+query TTTTTTTT
+SELECT
+    r.name,
+    r.size,
+    s.processes,
+    s.cpu_nano_cores,
+    s.memory_bytes,
+    s.disk_bytes,
+    s.workers,
+    s.credits_per_hour
+FROM mz_cluster_replicas r
+JOIN mz_catalog.mz_cluster_replica_sizes s ON r.size = s.size
+ORDER BY r.name
 ----
-r1  scale=1,workers=2  1  18446744073709000000  18446744073709551615  2  1
-r1  scale=1,workers=2  1  18446744073709000000  18446744073709551615  2  1
-r1  scale=1,workers=2  1  18446744073709000000  18446744073709551615  2  1
-r1  scale=1,workers=2  1  18446744073709000000  18446744073709551615  2  1
-size_1  scale=1,workers=1  1  18446744073709000000  18446744073709551615  1  1
-size_1_8g  scale=1,workers=1,mem=8GiB  1  18446744073709000000  8589934592  1  1
-size_2_2  scale=2,workers=2  2  18446744073709000000  18446744073709551615  2  2
-size_32  scale=1,workers=32  1  18446744073709000000  18446744073709551615  32  1
+r1  scale=1,workers=2  1  18446744073709000000  18446744073709551615  18446744073709551615  2  1
+r1  scale=1,workers=2  1  18446744073709000000  18446744073709551615  18446744073709551615  2  1
+r1  scale=1,workers=2  1  18446744073709000000  18446744073709551615  18446744073709551615  2  1
+r1  scale=1,workers=2  1  18446744073709000000  18446744073709551615  18446744073709551615  2  1
+size_1  scale=1,workers=1  1  18446744073709000000  18446744073709551615  18446744073709551615  1  1
+size_1_8g  scale=1,workers=1,mem=8GiB  1  18446744073709000000  8589934592  18446744073709551615  1  1
+size_2_2  scale=2,workers=2  2  18446744073709000000  18446744073709551615  18446744073709551615  2  2
+size_32  scale=1,workers=32  1  18446744073709000000  18446744073709551615  18446744073709551615  32  1
 
 statement ok
 DROP CLUSTER foo CASCADE
