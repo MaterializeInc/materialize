@@ -192,7 +192,7 @@ impl SourceRender for SqlServerSourceConnection {
         let export_ids = config.source_exports.keys().copied();
         let health_init = export_ids
             .map(Some)
-            .chain(None)
+            .chain(std::iter::once(None))
             .map(|id| HealthStatusMessage {
                 id,
                 namespace: Self::STATUS_NAMESPACE,

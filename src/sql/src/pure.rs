@@ -206,7 +206,8 @@ fn validate_source_export_names<T>(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PurifiedStatement {
     PurifiedCreateSource {
-        create_progress_subsource_stmt: CreateSubsourceStatement<Aug>,
+        // The progress subsource, if we are offloading progress info to a separate relation
+        create_progress_subsource_stmt: Option<CreateSubsourceStatement<Aug>>,
         create_source_stmt: CreateSourceStatement<Aug>,
         // Map of subsource names to external details
         subsources: BTreeMap<UnresolvedItemName, PurifiedSourceExport>,
@@ -671,6 +672,8 @@ async fn purify_create_source(
 ) -> Result<PurifiedStatement, PlanError> {
     let CreateSourceStatement {
         name: source_name,
+        col_names,
+        key_constraint,
         connection: source_connection,
         format,
         envelope,
@@ -680,6 +683,14 @@ async fn purify_create_source(
         with_options,
         ..
     } = &mut create_source_stmt;
+
+    let uses_old_syntax = !col_names.is_empty()
+        || key_constraint.is_some()
+        || format.is_some()
+        || envelope.is_some()
+        || !include_metadata.is_empty()
+        || external_references.is_some()
+        || progress_subsource.is_some();
 
     if let Some(DeferredItemName::Named(_)) = progress_subsource {
         sql_bail!("Cannot manually ID qualify progress subsource")
@@ -1190,64 +1201,70 @@ async fn purify_create_source(
     // part of the `CREATE SOURCE` statement in the catalog.
     *external_references = None;
 
-    // Generate progress subsource
+    // Generate progress subsource for old syntax
+    let create_progress_subsource_stmt = if uses_old_syntax {
+        // Take name from input or generate name
+        let name = match progress_subsource {
+            Some(name) => match name {
+                DeferredItemName::Deferred(name) => name.clone(),
+                DeferredItemName::Named(_) => unreachable!("already checked for this value"),
+            },
+            None => {
+                let (item, prefix) = source_name.0.split_last().unwrap();
+                let item_name =
+                    Ident::try_generate_name(item.to_string(), "_progress", |candidate| {
+                        let mut suggested_name = prefix.to_vec();
+                        suggested_name.push(candidate.clone());
 
-    // Take name from input or generate name
-    let name = match progress_subsource {
-        Some(name) => match name {
-            DeferredItemName::Deferred(name) => name.clone(),
-            DeferredItemName::Named(_) => unreachable!("already checked for this value"),
-        },
-        None => {
-            let (item, prefix) = source_name.0.split_last().unwrap();
-            let item_name = Ident::try_generate_name(item.to_string(), "_progress", |candidate| {
-                let mut suggested_name = prefix.to_vec();
-                suggested_name.push(candidate.clone());
+                        let partial =
+                            normalize::unresolved_item_name(UnresolvedItemName(suggested_name))?;
+                        let qualified = scx.allocate_qualified_name(partial)?;
+                        let item_exists = scx.catalog.get_item_by_name(&qualified).is_some();
+                        let type_exists = scx.catalog.get_type_by_name(&qualified).is_some();
+                        Ok::<_, PlanError>(!item_exists && !type_exists)
+                    })?;
 
-                let partial = normalize::unresolved_item_name(UnresolvedItemName(suggested_name))?;
-                let qualified = scx.allocate_qualified_name(partial)?;
-                let item_exists = scx.catalog.get_item_by_name(&qualified).is_some();
-                let type_exists = scx.catalog.get_type_by_name(&qualified).is_some();
-                Ok::<_, PlanError>(!item_exists && !type_exists)
-            })?;
+                let mut full_name = prefix.to_vec();
+                full_name.push(item_name);
+                let full_name = normalize::unresolved_item_name(UnresolvedItemName(full_name))?;
+                let qualified_name = scx.allocate_qualified_name(full_name)?;
+                let full_name = scx.catalog.resolve_full_name(&qualified_name);
 
-            let mut full_name = prefix.to_vec();
-            full_name.push(item_name);
-            let full_name = normalize::unresolved_item_name(UnresolvedItemName(full_name))?;
-            let qualified_name = scx.allocate_qualified_name(full_name)?;
-            let full_name = scx.catalog.resolve_full_name(&qualified_name);
+                UnresolvedItemName::from(full_name.clone())
+            }
+        };
 
-            UnresolvedItemName::from(full_name.clone())
-        }
-    };
+        let (columns, constraints) = scx.relation_desc_into_table_defs(progress_desc)?;
 
-    let (columns, constraints) = scx.relation_desc_into_table_defs(progress_desc)?;
+        // Create the subsource statement
+        let mut progress_with_options: Vec<_> = with_options
+            .iter()
+            .filter_map(|opt| match opt.name {
+                CreateSourceOptionName::TimestampInterval => None,
+                CreateSourceOptionName::RetainHistory => Some(CreateSubsourceOption {
+                    name: CreateSubsourceOptionName::RetainHistory,
+                    value: opt.value.clone(),
+                }),
+            })
+            .collect();
+        progress_with_options.push(CreateSubsourceOption {
+            name: CreateSubsourceOptionName::Progress,
+            value: Some(WithOptionValue::Value(Value::Boolean(true))),
+        });
 
-    // Create the subsource statement
-    let mut progress_with_options: Vec<_> = with_options
-        .iter()
-        .filter_map(|opt| match opt.name {
-            CreateSourceOptionName::TimestampInterval => None,
-            CreateSourceOptionName::RetainHistory => Some(CreateSubsourceOption {
-                name: CreateSubsourceOptionName::RetainHistory,
-                value: opt.value.clone(),
-            }),
+        Some(CreateSubsourceStatement {
+            name,
+            columns,
+            // Progress subsources do not refer to the source to which they belong.
+            // Instead the primary source depends on it (the opposite is true of
+            // ingestion exports, which depend on the primary source).
+            of_source: None,
+            constraints,
+            if_not_exists: false,
+            with_options: progress_with_options,
         })
-        .collect();
-    progress_with_options.push(CreateSubsourceOption {
-        name: CreateSubsourceOptionName::Progress,
-        value: Some(WithOptionValue::Value(Value::Boolean(true))),
-    });
-    let create_progress_subsource_stmt = CreateSubsourceStatement {
-        name,
-        columns,
-        // Progress subsources do not refer to the source to which they belong.
-        // Instead the primary source depends on it (the opposite is true of
-        // ingestion exports, which depend on the primary source).
-        of_source: None,
-        constraints,
-        if_not_exists: false,
-        with_options: progress_with_options,
+    } else {
+        None
     };
 
     purify_source_format(

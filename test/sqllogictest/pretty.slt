@@ -88,7 +88,7 @@ CREATE SOURCE s FROM LOAD GENERATOR COUNTER
 query T multiline
 SELECT regexp_replace(create_sql, 'u[0-9]+', 'uX', 'g') FROM mz_sources WHERE name = 's'
 ----
-CREATE SOURCE "materialize"."public"."s" IN CLUSTER [uX] FROM LOAD GENERATOR COUNTER EXPOSE PROGRESS AS [uX AS "materialize"."public"."s_progress"]
+CREATE SOURCE "materialize"."public"."s" IN CLUSTER [uX] FROM LOAD GENERATOR COUNTER
 EOF
 
 statement ok

@@ -56,7 +56,12 @@ CREATE TABLE mysql_table (a int);
 
 > CREATE SOURCE auction
   IN CLUSTER sources
-  FROM LOAD GENERATOR AUCTION FOR ALL TABLES
+  FROM LOAD GENERATOR AUCTION
+> CREATE TABLE accounts FROM SOURCE auction (REFERENCE accounts)
+> CREATE TABLE auctions FROM SOURCE auction (REFERENCE auctions)
+> CREATE TABLE bids FROM SOURCE auction (REFERENCE bids)
+> CREATE TABLE organizations FROM SOURCE auction (REFERENCE organizations)
+> CREATE TABLE users FROM SOURCE auction (REFERENCE users)
 
 > CREATE SOURCE kafka
   IN CLUSTER sources
@@ -106,10 +111,6 @@ pg             paused
 pg_tbl         paused
 mysql          paused
 mysql_tbl      paused
-auction_progress  running
-kafka_progress    running
-pg_progress       running
-mysql_progress    running
 
 > ALTER CLUSTER sources SET (REPLICATION FACTOR 1)
 
@@ -169,10 +170,6 @@ pg             running
 pg_tbl         running
 mysql          running
 mysql_tbl      running
-auction_progress  running
-kafka_progress    running
-pg_progress       running
-mysql_progress    running
 
 > ALTER CLUSTER sources SET (REPLICATION FACTOR 0)
 
@@ -241,10 +238,6 @@ pg             paused
 pg_tbl         paused
 mysql          paused
 mysql_tbl      paused
-auction_progress  running
-kafka_progress    running
-pg_progress       running
-mysql_progress    running
 
 > ALTER CLUSTER sources SET (REPLICATION FACTOR 1)
 
@@ -340,10 +333,6 @@ pg             running
 pg_tbl         running
 mysql          running
 mysql_tbl      running
-auction_progress  running
-kafka_progress    running
-pg_progress       running
-mysql_progress    running
 
 # Ensure `dropped` status also shows up.
 

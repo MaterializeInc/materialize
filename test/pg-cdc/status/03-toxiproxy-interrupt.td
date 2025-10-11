@@ -26,7 +26,6 @@ true
 # Ensure we don't lose ceased status even if source is stalled
 > SELECT name, status FROM mz_internal.mz_source_statuses;
 pg_source           stalled
-pg_source_progress  running
 t                   ceased
 
 $ http-request method=POST url=http://toxiproxy:8474/proxies/postgres content-type=application/json

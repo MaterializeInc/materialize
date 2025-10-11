@@ -381,10 +381,10 @@ CREATE SOURCE materialize.public.s FROM LOAD GENERATOR COUNTER
 query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_sources WHERE name = 's'
 ----
+s  materialize=r/materialize
 s  r1=r/materialize
 s  r2=r/materialize
 s  r3=r/materialize
-s  materialize=r/materialize
 
 statement ok
 DROP SOURCE s
@@ -439,10 +439,10 @@ CREATE SOURCE d1.s11.s FROM LOAD GENERATOR COUNTER
 query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_sources WHERE name = 's'
 ----
+s  materialize=r/materialize
 s  r1=r/materialize
 s  r2=r/materialize
 s  r3=r/materialize
-s  materialize=r/materialize
 
 statement ok
 DROP SOURCE d1.s11.s
@@ -497,10 +497,10 @@ CREATE SOURCE d2.s22.s FROM LOAD GENERATOR COUNTER
 query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_sources WHERE name = 's'
 ----
+s  materialize=r/materialize
 s  r1=r/materialize
 s  r2=r/materialize
 s  r3=r/materialize
-s  materialize=r/materialize
 
 statement ok
 DROP SOURCE d2.s22.s
@@ -556,10 +556,10 @@ CREATE SOURCE d1.s1.s FROM LOAD GENERATOR COUNTER
 query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_sources WHERE name = 's'
 ----
+s  materialize=r/materialize
 s  r1=r/materialize
 s  r2=r/materialize
 s  r3=r/materialize
-s  materialize=r/materialize
 
 statement ok
 DROP SOURCE d1.s1.s
@@ -615,10 +615,10 @@ CREATE SOURCE d2.s2.s FROM LOAD GENERATOR COUNTER
 query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_sources WHERE name = 's'
 ----
+s  materialize=r/materialize
 s  r1=r/materialize
 s  r2=r/materialize
 s  r3=r/materialize
-s  materialize=r/materialize
 
 statement ok
 DROP SOURCE d2.s2.s

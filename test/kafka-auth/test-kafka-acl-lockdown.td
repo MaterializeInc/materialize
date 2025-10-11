@@ -56,9 +56,9 @@ banana
 
 > SELECT EXISTS (
     SELECT 1
-    FROM mz_sources
-    JOIN mz_internal.mz_source_status_history ON mz_sources.id = mz_source_status_history.source_id
-    WHERE name = 'broken'
+    FROM mz_objects
+    JOIN mz_internal.mz_source_status_history ON mz_objects.id = mz_source_status_history.source_id
+    WHERE name = 'broken_tbl'
     AND error ILIKE '%error when polling consumer for source%Group authorization failed%'
   )
 true

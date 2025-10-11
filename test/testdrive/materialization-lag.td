@@ -34,11 +34,12 @@ ALTER SYSTEM SET max_clusters = 15
 > CREATE SOURCE src
   IN CLUSTER source
   FROM LOAD GENERATOR counter
+> CREATE TABLE src_tbl FROM SOURCE src;
 
 > CREATE TABLE tbl (a int)
 
 > CREATE VIEW src_plus_tbl
-  AS SELECT counter + a AS a FROM src, tbl
+  AS SELECT counter + a AS a FROM src_tbl, tbl
 
 > CREATE INDEX idx
   IN CLUSTER compute
@@ -182,16 +183,16 @@ snk
   JOIN mz_objects o ON (o.id = object_id)
   JOIN mz_objects d ON (d.id = slowest_local_input_id)
   WHERE o.name = 'idx'
-idx src
+idx src_tbl
 
 > SELECT o.name, d.name
   FROM mz_internal.mz_materialization_lag
   JOIN mz_objects o ON (o.id = object_id)
   JOIN mz_objects d ON (d.id = slowest_global_input_id)
   WHERE o.name in ('idx', 'mv', 'snk')
-idx src
-mv  src
-snk src
+idx src_tbl
+mv  src_tbl
+snk src_tbl
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM RESET max_clusters
