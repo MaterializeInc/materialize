@@ -482,7 +482,7 @@ steps:
           composition: ssh-connection
           args: [--extended]
     agents:
-      queue: hetzner-aarch64-4cpu-8gb
+      queue: hetzner-x86-64-4cpu-8gb
 
   - group: Zippy
     key: zippy

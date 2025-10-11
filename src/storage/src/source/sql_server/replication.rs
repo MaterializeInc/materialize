@@ -159,7 +159,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                     source.extras.restore_history_id.clone(),
                     current_restore_history_id.clone()
                 );
-                tracing::error!(?definite_error, "Restore detected, exiting replication");
+                tracing::warn!(?definite_error, "Restore detected, exiting");
 
                 return_definite_error(
                         definite_error,
