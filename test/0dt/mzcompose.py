@@ -1806,6 +1806,22 @@ def workflow_builtin_item_migrations_replacement(c: Composition) -> None:
     Verify builtin item migrations by shard replacement, with schema evolution
     disabled.
     """
+
+    def get_persist_shard_id(item_id: str, service: str) -> str:
+        # `mz_storage_shards` is not linearizable, so we might have to wait for
+        # the shard to show up.
+        for _ in range(5):
+            result = c.sql_query(
+                f"SELECT shard_id FROM mz_internal.mz_storage_shards WHERE object_id = '{item_id}'",
+                service=service,
+                reuse_connection=False,
+            )
+            if result:
+                return result[0][0]
+            time.sleep(1)
+
+        raise RuntimeError(f"no shard found for item {item_id}")
+
     c.down(destroy_volumes=True)
     c.up("mz_old")
     c.sql(
@@ -1826,14 +1842,9 @@ def workflow_builtin_item_migrations_replacement(c: Composition) -> None:
         "SELECT id FROM mz_materialized_views WHERE name = 'mv'",
         service="mz_old",
     )[0][0]
-    mz_tables_shard_id = c.sql_query(
-        f"SELECT shard_id FROM mz_internal.mz_storage_shards WHERE object_id = '{mz_tables_gid}'",
-        service="mz_old",
-    )[0][0]
-    mv_shard_id = c.sql_query(
-        f"SELECT shard_id FROM mz_internal.mz_storage_shards WHERE object_id = '{mv_gid}'",
-        service="mz_old",
-    )[0][0]
+
+    mz_tables_shard_id = get_persist_shard_id(mz_tables_gid, "mz_old")
+    mv_shard_id = get_persist_shard_id(mv_gid, "mz_old")
 
     with c.override(
         Materialized(
@@ -1878,16 +1889,8 @@ def workflow_builtin_item_migrations_replacement(c: Composition) -> None:
         )[0][0]
         assert new_mz_tables_gid == mz_tables_gid
         assert new_mv_gid == mv_gid
-        new_mz_tables_shard_id = c.sql_query(
-            f"SELECT shard_id FROM mz_internal.mz_storage_shards WHERE object_id = '{mz_tables_gid}'",
-            service="mz_new",
-            reuse_connection=False,
-        )[0][0]
-        new_mv_shard_id = c.sql_query(
-            f"SELECT shard_id FROM mz_internal.mz_storage_shards WHERE object_id = '{mv_gid}'",
-            service="mz_new",
-            reuse_connection=False,
-        )[0][0]
+        new_mz_tables_shard_id = get_persist_shard_id(mz_tables_gid, "mz_new")
+        new_mv_shard_id = get_persist_shard_id(mv_gid, "mz_new")
         assert new_mz_tables_shard_id != mz_tables_shard_id
         assert new_mv_shard_id == mv_shard_id
 
@@ -1902,6 +1905,22 @@ def workflow_builtin_item_migrations_schema_evolution(c: Composition) -> None:
     """
     Verify builtin item migrations by schema evolution.
     """
+
+    def get_persist_shard_id(item_id: str, service: str) -> str:
+        # `mz_storage_shards` is not linearizable, so we might have to wait for
+        # the shard to show up.
+        for _ in range(5):
+            result = c.sql_query(
+                f"SELECT shard_id FROM mz_internal.mz_storage_shards WHERE object_id = '{item_id}'",
+                service=service,
+                reuse_connection=False,
+            )
+            if result:
+                return result[0][0]
+            time.sleep(1)
+
+        raise RuntimeError(f"no shard found for item {item_id}")
+
     c.down(destroy_volumes=True)
     c.up("mz_old")
     c.sql(
@@ -1922,14 +1941,9 @@ def workflow_builtin_item_migrations_schema_evolution(c: Composition) -> None:
         "SELECT id FROM mz_materialized_views WHERE name = 'mv'",
         service="mz_old",
     )[0][0]
-    mz_tables_shard_id = c.sql_query(
-        f"SELECT shard_id FROM mz_internal.mz_storage_shards WHERE object_id = '{mz_tables_gid}'",
-        service="mz_old",
-    )[0][0]
-    mv_shard_id = c.sql_query(
-        f"SELECT shard_id FROM mz_internal.mz_storage_shards WHERE object_id = '{mv_gid}'",
-        service="mz_old",
-    )[0][0]
+
+    mz_tables_shard_id = get_persist_shard_id(mz_tables_gid, "mz_old")
+    mv_shard_id = get_persist_shard_id(mv_gid, "mz_old")
 
     with c.override(
         Materialized(
@@ -1962,16 +1976,8 @@ def workflow_builtin_item_migrations_schema_evolution(c: Composition) -> None:
         )[0][0]
         assert new_mz_tables_gid == mz_tables_gid
         assert new_mv_gid == mv_gid
-        new_mz_tables_shard_id = c.sql_query(
-            f"SELECT shard_id FROM mz_internal.mz_storage_shards WHERE object_id = '{mz_tables_gid}'",
-            service="mz_new",
-            reuse_connection=False,
-        )[0][0]
-        new_mv_shard_id = c.sql_query(
-            f"SELECT shard_id FROM mz_internal.mz_storage_shards WHERE object_id = '{mv_gid}'",
-            service="mz_new",
-            reuse_connection=False,
-        )[0][0]
+        new_mz_tables_shard_id = get_persist_shard_id(mz_tables_gid, "mz_new")
+        new_mv_shard_id = get_persist_shard_id(mv_gid, "mz_new")
         assert new_mz_tables_shard_id == mz_tables_shard_id
         assert new_mv_shard_id == mv_shard_id
 
