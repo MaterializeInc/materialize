@@ -29,17 +29,10 @@ It is **not supported** for single server databases.
 {{</ note >}}
 
 Before creating a source in Materialize, you **must** configure Azure DB for
-MySQL for GTID-based binlog replication. This requires enabling binlog replication and
-the following additional configuration changes:
+MySQL for GTID-based binlog replication. Ensure the upstream MySQL database has
+been configured for GTID-based binlog replication:
 
-Configuration parameter          | Value  | Details
----------------------------------|--------| -------------------------------
-`log_bin`                        | `ON`   |
-`binlog_format`                  | `ROW`  | This configuration is [deprecated as of MySQL 8.0.34](https://dev.mysql.com/doc/refman/8.0/en/replication-options-binary-log.html#sysvar_binlog_format). Newer versions of MySQL default to row-based logging.
-`binlog_row_image`               | `FULL` |
-`gtid_mode`                      | `ON`   |
-`enforce_gtid_consistency`       | `ON`   |
-`replica_preserve_commit_order`  | `ON`   | Only required when connecting Materialize to a read-replica for replication, rather than the primary server.
+{{% mysql-direct/ingesting-data/mysql-configs %}}
 
 For guidance on enabling GTID-based binlog replication in Azure DB, see the
 [Azure documentation](https://learn.microsoft.com/en-us/azure/mysql/flexible-server/how-to-data-in-replication?tabs=shell%2Ccommand-line#configure-the-source-mysql-server).

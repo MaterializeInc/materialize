@@ -76,23 +76,14 @@ source will never show partial results based on partially replicated
 transactions.
 
 Before creating a source in Materialize, you **must** configure the upstream
-MySQL database for GTID-based binlog replication. This requires the following
-configuration changes:
+MySQL database for GTID-based binlog replication. Ensure the upstream MySQL
+database has been configured for GTID-based binlog replication:
 
-<br>
+{{% mysql-direct/ingesting-data/mysql-configs %}}
 
-Configuration parameter          | Value  | Details
----------------------------------|--------| -------------------------------
-`log_bin`                        | `ON`   |
-`binlog_format`                  | `ROW`  | This configuration is [deprecated as of MySQL 8.0.34](https://dev.mysql.com/doc/refman/8.0/en/replication-options-binary-log.html#sysvar_binlog_format). Newer versions of MySQL default to row-based logging.
-`binlog_row_image`               | `FULL` |
-`gtid_mode`                      | `ON`   |
-`enforce_gtid_consistency`       | `ON`   |
-`replica_preserve_commit_order`  | `ON`   | Only required when connecting Materialize to a read-replica for replication, rather than the primary server.
-
-If you're running MySQL using a managed service, further configuration changes
-might be required. For step-by-step instructions on enabling GTID-based binlog
-replication for your MySQL service, see the integration guides.
+If you're running MySQL using a managed service, additional configuration
+changes might be required. For step-by-step instructions on enabling GTID-based
+binlog replication for your MySQL service, see the integration guides.
 
 #### Binlog retention
 
