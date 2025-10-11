@@ -2268,6 +2268,9 @@ impl CatalogState {
                 gids.remove(&gid.to_string());
             }
         }
+        // We exclude role_auth_by_id because it contains password information
+        // which should not be included in the dump.
+        dump_obj.remove("role_auth_by_id");
 
         // Emit as pretty-printed JSON.
         Ok(serde_json::to_string_pretty(&dump).expect("cannot fail on serde_json::Value"))
