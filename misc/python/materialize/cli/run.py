@@ -349,6 +349,8 @@ def main() -> int:
             # Common stack overflows in Debug mode
             if not args.release and not args.optimized:
                 env["RUST_MIN_STACK"] = RUST_MIN_STACK
+            # Always enable soft assertions in SLTs for un-redacted debug formatting and additional testing.
+            env["MZ_SOFT_ASSERTIONS"] = "1"
     elif args.program == "test":
         if args.bazel:
             raise UIError("testing with Bazel is not yet supported")
