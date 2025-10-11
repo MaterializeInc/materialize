@@ -12344,6 +12344,11 @@ pub static MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW: LazyLock<BuiltinView> = Lazy
                 "max_memory_and_disk_at",
                 SqlScalarType::TimestampTz { precision: None }.nullable(false),
             )
+            .with_column("heap_percent", SqlScalarType::Float64.nullable(true))
+            .with_column(
+                "max_heap_at",
+                SqlScalarType::TimestampTz { precision: None }.nullable(false),
+            )
             .with_column("max_cpu_percent", SqlScalarType::Float64.nullable(true))
             .with_column(
                 "max_cpu_at",
@@ -12379,6 +12384,7 @@ replica_metrics_history AS (
     (SUM(m.cpu_nano_cores::float8) / NULLIF(s.cpu_nano_cores, 0)) / s.processes AS cpu_percent,
     (SUM(m.memory_bytes::float8) / NULLIF(s.memory_bytes, 0)) / s.processes AS memory_percent,
     (SUM(m.disk_bytes::float8) / NULLIF(s.disk_bytes, 0)) / s.processes AS disk_percent,
+    (SUM(m.heap_bytes::float8) / NULLIF(m.heap_limit, 0)) / s.processes AS heap_percent,
     SUM(m.disk_bytes::float8) AS disk_bytes,
     SUM(m.memory_bytes::float8) AS memory_bytes,
     s.disk_bytes::numeric * s.processes AS total_disk_bytes,
@@ -12394,6 +12400,7 @@ replica_metrics_history AS (
     s.cpu_nano_cores,
     s.memory_bytes,
     s.disk_bytes,
+    m.heap_limit,
     s.processes
 ),
 replica_utilization_history_binned AS (
@@ -12404,6 +12411,7 @@ replica_utilization_history_binned AS (
     m.memory_bytes,
     m.disk_percent,
     m.disk_bytes,
+    m.heap_percent,
     m.total_disk_bytes,
     m.total_memory_bytes,
     m.size,
@@ -12482,6 +12490,16 @@ max_memory_and_disk AS (
     replica_id,
     COALESCE(memory_and_disk_percent, 0) DESC
 ),
+max_heap AS (
+  SELECT DISTINCT ON (bucket_start, replica_id)
+    bucket_start,
+    replica_id,
+    heap_percent,
+    occurred_at
+  FROM replica_utilization_history_binned
+  OPTIONS (DISTINCT ON INPUT GROUP SIZE = 480)
+  ORDER BY bucket_start, replica_id, COALESCE(heap_percent, 0) DESC
+),
 -- For each (replica, bucket), get its offline events at that time
 replica_offline_event_history AS (
   SELECT date_bin(
@@ -12513,8 +12531,9 @@ replica_offline_event_history AS (
   GROUP BY bucket_start,
     replica_id
 )
-SELECT max_memory.bucket_start,
-  max_memory.replica_id,
+SELECT
+  bucket_start,
+  replica_id,
   max_memory.memory_percent,
   max_memory.occurred_at as max_memory_at,
   max_disk.disk_percent,
@@ -12523,34 +12542,33 @@ SELECT max_memory.bucket_start,
   max_memory_and_disk.memory_percent as max_memory_and_disk_memory_percent,
   max_memory_and_disk.disk_percent as max_memory_and_disk_disk_percent,
   max_memory_and_disk.occurred_at as max_memory_and_disk_at,
+  max_heap.heap_percent,
+  max_heap.occurred_at as max_heap_at,
   max_cpu.cpu_percent as max_cpu_percent,
   max_cpu.occurred_at as max_cpu_at,
   replica_offline_event_history.offline_events,
-  max_memory.bucket_start + INTERVAL '8 HOURS' as bucket_end,
+  bucket_start + INTERVAL '8 HOURS' as bucket_end,
   replica_name_history.new_name AS name,
   replica_history.cluster_id,
   replica_history.size
 FROM max_memory
-  JOIN max_disk ON max_memory.bucket_start = max_disk.bucket_start
-  AND max_memory.replica_id = max_disk.replica_id
-  JOIN max_cpu ON max_memory.bucket_start = max_cpu.bucket_start
-  AND max_memory.replica_id = max_cpu.replica_id
-  JOIN max_memory_and_disk ON max_memory.bucket_start = max_memory_and_disk.bucket_start
-  AND max_memory.replica_id = max_memory_and_disk.replica_id
-  JOIN replica_history ON max_memory.replica_id = replica_history.replica_id,
-  LATERAL (
-    SELECT new_name
-    FROM mz_internal.mz_cluster_replica_name_history as replica_name_history
-    WHERE max_memory.replica_id = replica_name_history.id -- We treat NULLs as the beginning of time
-      AND max_memory.bucket_start + INTERVAL '8 HOURS' >= COALESCE(
-        replica_name_history.occurred_at,
-        '1970-01-01'::timestamp
-      )
-    ORDER BY replica_name_history.occurred_at DESC
-    LIMIT '1'
-  ) AS replica_name_history
-  LEFT JOIN replica_offline_event_history ON max_memory.bucket_start = replica_offline_event_history.bucket_start
-  AND max_memory.replica_id = replica_offline_event_history.replica_id"#,
+JOIN max_disk USING (bucket_start, replica_id)
+JOIN max_cpu USING (bucket_start, replica_id)
+JOIN max_memory_and_disk USING (bucket_start, replica_id)
+JOIN max_heap USING (bucket_start, replica_id)
+JOIN replica_history USING (replica_id)
+CROSS JOIN LATERAL (
+  SELECT new_name
+  FROM mz_internal.mz_cluster_replica_name_history as replica_name_history
+  WHERE replica_id = replica_name_history.id -- We treat NULLs as the beginning of time
+    AND bucket_start + INTERVAL '8 HOURS' >= COALESCE(
+      replica_name_history.occurred_at,
+      '1970-01-01'::timestamp
+    )
+  ORDER BY replica_name_history.occurred_at DESC
+  LIMIT '1'
+) AS replica_name_history
+LEFT JOIN replica_offline_event_history USING (bucket_start, replica_id)"#,
         access: vec![PUBLIC_SELECT],
     }
 });
