@@ -10,6 +10,8 @@ from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import TESTDRIVE_NOP, Check
+from materialize.checks.executors import Executor
+from materialize.mz_version import MzVersion
 
 
 class CreateRole(Check):
@@ -105,5 +107,97 @@ class BuiltinRoles(CreateRole):
             mz_monitor
             mz_monitor_redacted
             """
+            )
+        )
+
+
+class PasswordAuthentication(Check):
+    def _can_run(self, e: Executor):
+        return self.base_version >= MzVersion.parse("v0.159.0-dev")
+
+    def initialize(self) -> Testdrive:
+        return Testdrive(
+            dedent(
+                """
+                # Create roles with passwords and LOGIN privilege
+                > CREATE ROLE auth_user1 WITH LOGIN PASSWORD 'password1'
+                > CREATE ROLE auth_user2 WITH LOGIN PASSWORD 'password2'
+                > CREATE ROLE auth_user_nopass WITH LOGIN
+
+                # Grant privileges
+                > GRANT CREATE ON DATABASE materialize TO auth_user1
+                > GRANT USAGE ON DATABASE materialize TO auth_user2
+                """
+            )
+        )
+
+    def manipulate(self) -> list[Testdrive]:
+        return [
+            Testdrive(
+                dedent(
+                    """
+                    # Test connection with correct password
+                    $ postgres-connect name=user1_conn url=postgres://auth_user1:password1@${testdrive.materialize-password-sql-addr}
+
+                    $ postgres-connect name=user1_conn_sasl url=postgres://auth_user1:password1@${testdrive.materialize-sasl-sql-addr}
+
+                    $ postgres-execute connection=user1_conn
+                    CREATE TABLE auth_test_table1 (id INT, data TEXT);
+                    INSERT INTO auth_test_table1 VALUES (1, 'test from user1');
+
+                    # Create another user with password and LOGIN
+                    > CREATE ROLE auth_user3 WITH LOGIN PASSWORD 'password3'
+                    > GRANT SELECT ON TABLE auth_test_table1 TO auth_user3
+                    """
+                )
+            ),
+            Testdrive(
+                dedent(
+                    """
+                    # Test connection with user2
+                    $ postgres-connect name=user2_conn url=postgres://auth_user2:password2@${testdrive.materialize-password-sql-addr}
+
+                    $ postgres-connect name=user2_conn_sasl url=postgres://auth_user2:password2@${testdrive.materialize-sasl-sql-addr}
+
+                    $ postgres-execute connection=user2_conn
+                    SELECT * FROM auth_test_table1;
+
+                    # Test connection with user3
+                    $ postgres-connect name=user3_conn url=postgres://auth_user3:password3@${testdrive.materialize-password-sql-addr}
+
+                    $ postgres-connect name=user3_conn_sasl url=postgres://auth_user3:password3@${testdrive.materialize-sasl-sql-addr}
+
+                    $ postgres-execute connection=user3_conn
+                    SELECT 1;
+
+                    # Test that user without password can connect to non-password port
+                    $ postgres-connect name=nopass_conn url=postgres://auth_user_nopass@${testdrive.materialize-sql-addr}
+
+                    $ postgres-execute connection=nopass_conn
+                    SELECT 1;
+                    """
+                )
+            ),
+        ]
+
+    def validate(self) -> Testdrive:
+        return Testdrive(
+            dedent(
+                """
+                # Validate all auth users exist
+                > SELECT name FROM mz_roles WHERE name LIKE 'auth_user%' ORDER BY name;
+                auth_user1
+                auth_user2
+                auth_user3
+                auth_user_nopass
+
+                # Test connection with user2
+                $ postgres-connect name=user2_conn url=postgres://auth_user2:password2@${testdrive.materialize-password-sql-addr}
+
+                $ postgres-connect name=user2_conn_sasl url=postgres://auth_user2:password2@${testdrive.materialize-sasl-sql-addr}
+
+                > SELECT * FROM auth_test_table1 ORDER BY id;
+                1 "test from user1"
+                """
             )
         )
