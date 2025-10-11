@@ -43,6 +43,7 @@ mod command;
 mod coord;
 mod error;
 mod explain;
+mod frontend_peek;
 mod notice;
 mod optimize;
 mod util;
@@ -53,10 +54,13 @@ pub mod config;
 pub mod continual_task;
 pub mod flags;
 pub mod metrics;
+pub mod peek_client;
 pub mod session;
 pub mod statement_logging;
 pub mod telemetry;
 pub mod webhook;
+
+pub use crate::peek_client::PeekClient;
 
 pub use crate::client::{Client, Handle, SessionClient};
 pub use crate::command::{ExecuteResponse, ExecuteResponseKind, StartupResponse};

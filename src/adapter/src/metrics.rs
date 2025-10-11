@@ -13,6 +13,7 @@ use mz_ore::stats::{histogram_milliseconds_buckets, histogram_seconds_buckets};
 use mz_sql::ast::{AstInfo, Statement, StatementKind, SubscribeOutput};
 use mz_sql::session::user::User;
 use mz_sql_parser::ast::statement_kind_label_value;
+use prometheus::core::{AtomicU64, GenericCounter};
 use prometheus::{Histogram, HistogramVec, IntCounter, IntCounterVec, IntGaugeVec};
 
 #[derive(Debug, Clone)]
@@ -234,6 +235,12 @@ impl Metrics {
             session_startup_table_writes_seconds: self
                 .session_startup_table_writes_seconds
                 .with_label_values(&[]),
+            query_total: self.query_total.clone(),
+            determine_timestamp: self.determine_timestamp.clone(),
+            timestamp_difference_for_strict_serializable_ms: self
+                .timestamp_difference_for_strict_serializable_ms
+                .clone(),
+            optimization_notices: self.optimization_notices.clone(),
         }
     }
 }
@@ -243,6 +250,10 @@ impl Metrics {
 pub struct SessionMetrics {
     row_set_finishing_seconds: Histogram,
     session_startup_table_writes_seconds: Histogram,
+    query_total: IntCounterVec,
+    determine_timestamp: IntCounterVec,
+    timestamp_difference_for_strict_serializable_ms: HistogramVec,
+    optimization_notices: IntCounterVec,
 }
 
 impl SessionMetrics {
@@ -252,6 +263,26 @@ impl SessionMetrics {
 
     pub(crate) fn session_startup_table_writes_seconds(&self) -> &Histogram {
         &self.session_startup_table_writes_seconds
+    }
+
+    pub(crate) fn query_total(&self, label_values: &[&str]) -> GenericCounter<AtomicU64> {
+        self.query_total.with_label_values(label_values)
+    }
+
+    pub(crate) fn determine_timestamp(&self, label_values: &[&str]) -> GenericCounter<AtomicU64> {
+        self.determine_timestamp.with_label_values(label_values)
+    }
+
+    pub(crate) fn timestamp_difference_for_strict_serializable_ms(
+        &self,
+        label_values: &[&str],
+    ) -> Histogram {
+        self.timestamp_difference_for_strict_serializable_ms
+            .with_label_values(label_values)
+    }
+
+    pub(crate) fn optimization_notices(&self, label_values: &[&str]) -> GenericCounter<AtomicU64> {
+        self.optimization_notices.with_label_values(label_values)
     }
 }
 
