@@ -19,6 +19,7 @@ import os
 import random
 import subprocess
 import time
+import uuid
 from collections.abc import Callable
 from typing import Any
 
@@ -142,12 +143,12 @@ class Modification:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Modification":
         name = data["modification"]
-        for subclass in all_subclasses(Modification):
+        for subclass in modification_subclasses():
             if subclass.__name__ == name:
                 break
         else:
             raise ValueError(
-                f"No modification with name {name} found, only know {[subclass.__name__ for subclass in all_subclasses(Modification)]}"
+                f"No modification with name {name} found, only know {[subclass.__name__ for subclass in modification_subclasses()]}"
             )
         return subclass(data["value"])
 
@@ -167,6 +168,14 @@ class Modification:
         raise NotImplementedError
 
     def validate(self, mods: dict[type["Modification"], Any]) -> None:
+        raise NotImplementedError
+
+
+class UpgradeModification(Modification):
+    def upgrade(self, definition: dict[str, Any]) -> None:
+        raise NotImplementedError
+
+    def validate_upgrade(self, mods: dict[type["Modification"], Any]) -> None:
         raise NotImplementedError
 
 
@@ -861,6 +870,60 @@ class ConsoleResources(Modification):
         retry(check_pods, 240)
 
 
+class Upgrade(UpgradeModification):
+    @classmethod
+    def values(cls) -> list[Any]:
+        # just inPlaceRollout for now
+        return [
+            True,
+            False,
+        ]
+
+    @classmethod
+    def default(cls) -> Any:
+        return False
+
+    def modify(self, definition: dict[str, Any]) -> None:
+        # TODO: setting inPlaceRollout = true for the initial rollout doesn't
+        # currently work correctly
+        self.image = definition["materialize"]["spec"]["environmentdImageRef"]
+
+    def validate(self, mods: dict[type[Modification], Any]) -> None:
+        def check_pods() -> None:
+            environmentds = get_environmentd_data()["items"]
+            assert len(environmentds) == 1
+            assert environmentds[0]["spec"]["containers"][0]["image"] == self.image
+
+        retry(check_pods, 240)
+
+    def upgrade(self, definition: dict[str, Any]) -> None:
+        definition["materialize"]["spec"]["inPlaceRollout"] = self.value
+        definition["materialize"]["spec"][
+            "environmentdImageRef"
+        ] = f'{definition["materialize"]["spec"]["environmentdImageRef"]}-upgrade'
+        definition["materialize"]["spec"]["requestRollout"] = str(uuid.uuid4())
+        self.image = definition["materialize"]["spec"]["environmentdImageRef"]
+
+    def validate_upgrade(self, mods: dict[type[Modification], Any]) -> None:
+        if self.value:
+            generation = "1"
+        else:
+            generation = "2"
+
+        def check_pods() -> None:
+            environmentds = get_environmentd_data()["items"]
+            assert len(environmentds) == 1
+            assert environmentds[0]["spec"]["containers"][0]["image"] == self.image
+            assert (
+                environmentds[0]["metadata"]["annotations"][
+                    "materialize.cloud/generation"
+                ]
+                == generation
+            )
+
+        retry(check_pods, 240)
+
+
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "--recreate-cluster",
@@ -915,10 +978,22 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     get_image(c.compose["services"][service]["image"], None),
                 ]
             )
+            spawn.runv(
+                [
+                    "docker",
+                    "tag",
+                    c.compose["services"][service]["image"],
+                    f'{get_image(c.compose["services"][service]["image"], None)}-upgrade',
+                ]
+            )
         spawn.runv(
             ["kind", "load", "docker-image", "--name", cluster]
             + [
                 get_image(c.compose["services"][service]["image"], None)
+                for service in services
+            ]
+            + [
+                f'{get_image(c.compose["services"][service]["image"], None)}-upgrade'
                 for service in services
             ]
         )
@@ -952,7 +1027,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     rng = random.Random(args.seed)
 
-    mod_classes = sorted(list(all_subclasses(Modification)), key=repr)
+    mod_classes = sorted(list(modification_subclasses()), key=repr)
     if args.modification:
         mod_classes = [
             mod_class
@@ -1066,7 +1141,7 @@ def run_scenario(
             mod.modify(definition)
     run(definition)
     mod_dict = {mod.__class__: mod.value for mod in mods}
-    for subclass in all_subclasses(Modification):
+    for subclass in modification_subclasses():
         if subclass not in mod_dict:
             mod_dict[subclass] = subclass.default()
     try:
@@ -1077,6 +1152,25 @@ def run_scenario(
             f"Reproduce with bin/mzcompose --find orchestratord run default --scenario='{scenario}'"
         )
         raise
+
+    upgrade_mods = [mod for mod in mods if isinstance(mod, UpgradeModification)]
+    if len(upgrade_mods) > 0:
+        if modify:
+            for mod in upgrade_mods:
+                mod.upgrade(definition)
+        upgrade(definition)
+        upgrade_mod_dict = {mod.__class__: mod.value for mod in upgrade_mods}
+        for subclass in modification_subclasses():
+            if subclass not in upgrade_mod_dict:
+                upgrade_mod_dict[subclass] = subclass.default()
+        try:
+            for mod in upgrade_mods:
+                mod.validate_upgrade(mod_dict)
+        except:
+            print(
+                f"Reproduce with bin/mzcompose --find orchestratord run default --scenario='{scenario}'"
+            )
+            raise
 
 
 def run(definition: dict[str, Any]):
@@ -1239,3 +1333,84 @@ def run(definition: dict[str, Any]):
         raise ValueError("Never completed")
     # Wait a bit for the status to stabilize
     time.sleep(10)
+
+
+def upgrade(definition: dict[str, Any]):
+    try:
+        spawn.runv(
+            ["kubectl", "apply", "-f", "-"],
+            stdin=yaml.dump_all(
+                [
+                    definition["namespace"],
+                    definition["secret"],
+                    definition["materialize"],
+                ]
+            ).encode(),
+        )
+    except subprocess.CalledProcessError as e:
+        print(f"Failed to apply: {e.stdout}\nSTDERR:{e.stderr}")
+        raise
+    pass
+
+    for i in range(60):
+        try:
+            spawn.capture(
+                [
+                    "kubectl",
+                    "get",
+                    "materializes",
+                    "-n",
+                    "materialize-environment",
+                ],
+                stderr=subprocess.DEVNULL,
+            )
+            break
+        except subprocess.CalledProcessError:
+            pass
+        time.sleep(1)
+    else:
+        raise ValueError("Never completed")
+
+    for i in range(480):
+        try:
+            status = spawn.capture(
+                [
+                    "kubectl",
+                    "get",
+                    "pods",
+                    "-l",
+                    "app=environmentd",
+                    "-n",
+                    "materialize-environment",
+                    "-o",
+                    "jsonpath={.items[0].status.phase}",
+                ],
+                stderr=subprocess.DEVNULL,
+            )
+            if status in ["Running", "Error", "CrashLoopBackOff"]:
+                break
+        except subprocess.CalledProcessError:
+            pass
+        time.sleep(1)
+    else:
+        # Helps to debug
+        spawn.runv(
+            [
+                "kubectl",
+                "describe",
+                "pod",
+                "-l",
+                "app=environmentd",
+                "-n",
+                "materialize-environment",
+            ]
+        )
+        raise ValueError("Never completed")
+    # Wait a bit for the status to stabilize
+    time.sleep(10)
+
+
+def modification_subclasses() -> set[type]:
+    return set(
+        [cls for cls in all_subclasses(Modification) if cls != UpgradeModification]
+    )
