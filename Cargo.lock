@@ -1428,6 +1428,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "bincode"
+version = "2.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "36eaf5d7b090263e8150820482d5d93cd964a81e4019913c972f4edcc6edb740"
+dependencies = [
+ "bincode_derive",
+ "serde",
+ "unty",
+]
+
+[[package]]
+name = "bincode_derive"
+version = "2.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bf95709a440f45e986983918d0e8a1f30a9b1df04918fc828670606804ac3c09"
+dependencies = [
+ "virtue",
+]
+
+[[package]]
 name = "bindgen"
 version = "0.72.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5699,7 +5719,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "base64 0.22.1",
- "bincode",
+ "bincode 2.0.1",
  "bytes",
  "bytesize",
  "chrono",
@@ -7466,7 +7486,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "arrow",
- "bincode",
+ "bincode 2.0.1",
  "bitflags 1.3.2",
  "bytemuck",
  "bytes",
@@ -7537,7 +7557,7 @@ name = "mz-rocksdb"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "bincode",
+ "bincode 2.0.1",
  "derivative",
  "itertools 0.14.0",
  "mz-ore",
@@ -7643,7 +7663,7 @@ dependencies = [
  "anyhow",
  "async-stream",
  "async-trait",
- "bincode",
+ "bincode 2.0.1",
  "clap",
  "crossbeam-channel",
  "futures",
@@ -7931,7 +7951,7 @@ dependencies = [
  "async-stream",
  "async-trait",
  "axum",
- "bincode",
+ "bincode 2.0.1",
  "bytes",
  "bytesize",
  "chrono",
@@ -8309,7 +8329,7 @@ version = "0.0.0"
 dependencies = [
  "ahash 0.8.12",
  "allocation-counter",
- "bincode",
+ "bincode 2.0.1",
  "bytemuck",
  "columnar",
  "columnation",
@@ -12048,7 +12068,7 @@ version = "0.24.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1681958c221f563c8e049a98f0a2fb0d9482ace269729a7309881e0a3b887db0"
 dependencies = [
- "bincode",
+ "bincode 1.3.3",
  "byteorder",
  "columnar",
  "columnation",
@@ -12994,6 +13014,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
+name = "unty"
+version = "0.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6d49784317cd0d1ee7ec5c716dd598ec5b4483ea832a2dced265471cc0f690ae"
+
+[[package]]
 name = "ureq"
 version = "2.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -13072,6 +13098,12 @@ name = "version_check"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "49874b5167b65d7193b8aba1567f5c7d93d001cafc34600cee003eda787e483f"
+
+[[package]]
+name = "virtue"
+version = "0.0.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "051eb1abcf10076295e815102942cc58f9d5e3b4560e46e53c21e8ff6f3af7b1"
 
 [[package]]
 name = "vsimd"
