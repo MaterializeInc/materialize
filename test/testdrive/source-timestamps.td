@@ -36,6 +36,8 @@ CREATE PUBLICATION mz_source FOR ALL TABLES
   IN CLUSTER test
   FROM POSTGRES CONNECTION pg_conn (PUBLICATION 'mz_source')
 
+> CREATE TABLE pg_t FROM SOURCE pg_src (REFERENCE t);
+
 $ mysql-connect name=mysql url=mysql://root@mysql password=p@ssw0rd
 
 $ mysql-execute name=mysql
@@ -53,6 +55,8 @@ CREATE TABLE t (x int)
 > CREATE SOURCE mysql_src
   IN CLUSTER test
   FROM MYSQL CONNECTION mysql_conn;
+
+> CREATE TABLE mysql_t FROM SOURCE mysql_src (REFERENCE t);
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET kafka_default_metadata_fetch_interval = '1s'
