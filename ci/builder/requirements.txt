@@ -5,8 +5,8 @@
 # wheels for a wide variety of platforms, including M1 Macs.
 
 black==24.4.2
-boto3-stubs[ec2,iam,kinesis,s3,sqs,ssm,sts,s3tables]==1.40.45
-boto3==1.40.45
+boto3-stubs[ec2,iam,kinesis,s3,sqs,ssm,sts,s3tables]==1.40.50
+boto3==1.40.50
 click==8.1.3
 cryptography==46.0.2
 colored==2.3.1
@@ -14,7 +14,7 @@ docker==7.1.0
 ec2instanceconnectcli==1.0.3
 python-frontmatter==1.1.0
 humanize==4.13.0
-ipympl==0.9.7
+ipympl==0.9.8
 ipywidgets==8.1.7
 junit-xml==1.9
 junitparser==4.0.2
@@ -23,14 +23,14 @@ jupyter-black==0.4.0
 kubernetes==25.3.0
 kubernetes-stubs==22.6.0.post1
 launchdarkly-api==17.2.0
-matplotlib==3.10.1
+matplotlib==3.10.7
 matplotlib-stubs==0.3.4
-networkx==3.4.2
+networkx==3.5
 networkx-stubs==0.0.1
 # Keep on 2.2.6 for Python 3.10 compatibility
 numpy==2.2.6
 pandas==2.3.3
-pandas-stubs==2.2.3.250308
+pandas-stubs==2.3.2.250926
 parameterized==0.9.0
 paramiko==4.0.0
 pdoc==15.0.4
@@ -52,7 +52,7 @@ pyyaml==6.0.3
 requests==2.32.5
 ruamel.yaml==0.18.15
 ruff==0.0.292
-scipy==1.15.2
+scipy==1.16.2
 semver==3.0.4
 shtab==1.7.2
 sqlparse==0.5.3
@@ -70,8 +70,8 @@ typing-extensions==4.15.0
 xxhash==3.6.0
 yamllint==1.37.1
 confluent-kafka==2.6.1
-fastavro==1.12.0
-websocket-client==1.8.0
+fastavro==1.12.1
+websocket-client==1.9.0
 pyarrow-stubs==19.4
 # macOS x86-64 agent doesn't support pyarrow 20.0 currently, only upgrade once fixed or we get rid of it
 pyarrow==19.0.1
