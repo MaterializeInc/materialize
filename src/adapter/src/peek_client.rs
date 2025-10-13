@@ -59,15 +59,10 @@ pub struct PeekClient {
     pub optimizer_metrics: OptimizerMetrics,
     /// Per-timeline oracles from the coordinator. Lazily populated.
     oracles: BTreeMap<Timeline, Arc<dyn TimestampOracle<Timestamp> + Send + Sync>>,
-    // TODO(peek-seq): This is initialized only at session startup. We'll be able to properly check
-    // the actual feature flag value (without a Coordinator call) once we'll always have a catalog
-    // snapshot at hand.
-    pub enable_frontend_peek_sequencing: bool,
 }
 
 impl PeekClient {
-    /// Creates a PeekClient. Leaves `enable_frontend_peek_sequencing` false! This should be filled
-    /// in later.
+    /// Creates a PeekClient.
     pub fn new(
         coordinator_client: Client,
         storage_collections: StorageCollectionsHandle,
@@ -80,8 +75,7 @@ impl PeekClient {
             storage_collections,
             transient_id_gen,
             optimizer_metrics,
-            oracles: Default::default(),            // lazily populated
-            enable_frontend_peek_sequencing: false, // should be filled in later!
+            oracles: Default::default(), // lazily populated
         }
     }
 
