@@ -405,7 +405,7 @@ steps:
     steps:
       - id: ssh-connection
         label: SSH connection tests
-        depends_on: build-aarch64
+        depends_on: build-x86_64
         timeout_in_minutes: 40
         inputs: [test/ssh-connection]
         parallelism: 3
@@ -413,7 +413,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: ssh-connection
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: hetzner-x86-64-8cpu-16gb
 
       - id: fivetran-destination-tests
         label: Fivetran Destination tests
@@ -481,6 +481,7 @@ steps:
     timeout_in_minutes: 45
     parallelism: 16
     agents:
+      # Uses SQL Server, which is not yet available for ARM
       queue: hetzner-x86-64-8cpu-16gb
     plugins:
       - ./ci/plugins/mzcompose:
