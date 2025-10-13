@@ -418,7 +418,7 @@ def arrangement_sizes(
 
                     # Extract arrangement sizes into a DataFrame.
                     df = pd.DataFrame.from_records(
-                        db.arrangement_sizes(item["id"]),
+                        list(db.arrangement_sizes(item["id"])),
                         coerce_float=True,
                     )
 
