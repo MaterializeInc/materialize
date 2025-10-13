@@ -37,6 +37,10 @@ CONFIGURE_OPTIONS = [
     "--enable-prof",
     "--enable-stats",
     "--with-malloc-conf=background_thread:true",
+    # Workaround to avoid deadlocking when jemalloc profiling causes nested
+    # backtrace collection. See database-issues#9159.
+    "--enable-prof-libunwind",
+    "--with-lg-page=12",
 ]
 
 configure_make(
@@ -76,4 +80,5 @@ configure_make(
         "install_include",
     ],
     visibility = ["//visibility:public"],
+    deps = ["@libunwind-nognu//:unwind"],
 )

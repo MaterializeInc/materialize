@@ -115,23 +115,19 @@ impl Default for ValidatedLicenseKey {
 }
 
 pub fn validate(license_key: &str, environment_id: &str) -> anyhow::Result<ValidatedLicenseKey> {
-    let mut err = None;
+    let mut err = anyhow!("no public key found");
     for pubkey in PUBLIC_KEYS {
         match validate_with_pubkey(license_key, pubkey, environment_id) {
             Ok(key) => {
                 return Ok(key);
             }
             Err(e) => {
-                err = Some(e);
+                err = e;
             }
         }
     }
 
-    if let Some(err) = err {
-        Err(err)
-    } else {
-        Err(anyhow!("no public key found"))
-    }
+    Err(err)
 }
 
 fn validate_with_pubkey(
