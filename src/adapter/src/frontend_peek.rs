@@ -35,12 +35,13 @@ use crate::optimize::Optimize;
 use crate::optimize::dataflows::{ComputeInstanceSnapshot, DataflowBuilder};
 use crate::session::{Session, TransactionOps, TransactionStatus};
 use crate::{
-    AdapterError, AdapterNotice, CollectionIdBundle, ExecuteResponse, ReadHolds, SessionClient,
-    TimelineContext, TimestampContext, TimestampProvider, optimize,
+    AdapterError, AdapterNotice, CollectionIdBundle, ExecuteResponse, ReadHolds,
+    TimelineContext, TimestampContext, TimestampProvider, optimize, PeekClient,
 };
 use crate::{coord, metrics};
+use crate::command::{Command, CatalogSnapshot};
 
-impl SessionClient {
+impl PeekClient {
     pub(crate) async fn try_frontend_peek_inner(
         &mut self,
         portal_name: &str,
@@ -82,7 +83,7 @@ impl SessionClient {
         // sequencing. I think the best way to solve this is with that optimization where we
         // continuously keep a catalog snapshot in the session, and only get a new one when the
         // catalog revision has changed, which we could see with an atomic read.
-        let catalog = self.catalog_snapshot("try_frontend_peek").await;
+        let CatalogSnapshot { catalog } = self.call_coordinator(|tx| Command::CatalogSnapshot { tx }).await;
 
         if let Err(_) = Coordinator::verify_portal(&*catalog, session, portal_name) {
             // TODO(peek-seq): Don't fall back to the coordinator's peek sequencing here, but retire already.
@@ -214,8 +215,8 @@ impl SessionClient {
         let compute_instance_snapshot =
             ComputeInstanceSnapshot::new_without_collections(cluster.id());
 
-        let (_, view_id) = self.peek_client().transient_id_gen.allocate_id();
-        let (_, index_id) = self.peek_client().transient_id_gen.allocate_id();
+        let (_, view_id) = self.transient_id_gen.allocate_id();
+        let (_, index_id) = self.transient_id_gen.allocate_id();
 
         let optimizer_config = optimize::OptimizerConfig::from(catalog.system_config())
             .override_from(&catalog.get_cluster(cluster.id()).config.features());
@@ -234,7 +235,7 @@ impl SessionClient {
             view_id,
             index_id,
             optimizer_config,
-            self.peek_client().optimizer_metrics.clone(),
+            self.optimizer_metrics.clone(),
         );
 
         let target_replica_name = session.vars().cluster_replica();
@@ -281,7 +282,7 @@ impl SessionClient {
 
         let oracle_read_ts = match timeline {
             Some(timeline) if needs_linearized_read_ts => {
-                let oracle = self.peek_client_mut().ensure_oracle(timeline).await?;
+                let oracle = self.ensure_oracle(timeline).await?;
                 let oracle_read_ts = oracle.read_ts().await;
                 Some(oracle_read_ts)
             }
@@ -498,7 +499,6 @@ impl SessionClient {
 
         // Implement the peek, and capture the response.
         let resp = self
-            .peek_client_mut()
             .implement_fast_path_peek_plan(
                 fast_path_plan,
                 determination.timestamp_context.timestamp_or_default(),
@@ -542,7 +542,6 @@ impl SessionClient {
         let isolation_level = session.vars().transaction_isolation();
 
         let (read_holds, upper) = self
-            .peek_client_mut()
             .acquire_read_holds_and_collection_write_frontiers(id_bundle)
             .await
             .expect("missing collection");
