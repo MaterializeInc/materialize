@@ -714,6 +714,8 @@ where
                     false
                 }
             }
+        } else if let Some(ingestion) = self.active_ingestions.get(id) {
+            ingestion.active_replicas.contains(replica_id)
         } else if let Some(export) = self.active_exports.get(id) {
             export.active_replicas.contains(replica_id)
         } else {
