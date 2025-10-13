@@ -441,7 +441,7 @@ def switch_jobs_to_aws(pipeline: Any, priority: int) -> None:
                 for job in build["jobs"]:
                     if "state" not in job:
                         continue
-                    if "agent_query_rules" not in job:
+                    if not job.get("agent_query_rules"):
                         continue
                     queue = job["agent_query_rules"][0].removeprefix("queue=")
                     if not queue.startswith("hetzner-"):
