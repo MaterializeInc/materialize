@@ -39,7 +39,6 @@ use crate::{
     TimelineContext, TimestampContext, TimestampProvider, optimize, PeekClient,
 };
 use crate::{coord, metrics};
-use crate::command::{Command, CatalogSnapshot};
 
 impl PeekClient {
     pub(crate) async fn try_frontend_peek_inner(
@@ -83,7 +82,7 @@ impl PeekClient {
         // sequencing. I think the best way to solve this is with that optimization where we
         // continuously keep a catalog snapshot in the session, and only get a new one when the
         // catalog revision has changed, which we could see with an atomic read.
-        let CatalogSnapshot { catalog } = self.call_coordinator(|tx| Command::CatalogSnapshot { tx }).await;
+        let catalog = self.catalog_snapshot("try_frontend_peek_inner").await;
 
         if let Err(_) = Coordinator::verify_portal(&*catalog, session, portal_name) {
             // TODO(peek-seq): Don't fall back to the coordinator's peek sequencing here, but retire already.
