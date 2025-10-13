@@ -244,8 +244,18 @@ where
         &self,
         ids: Vec<GlobalId>,
     ) -> Result<Vec<(GlobalId, ReadHold<T>, Antichain<T>)>, CollectionMissing> {
-        self.call_sync(move |i| i.acquire_read_holds_and_collection_write_frontiers(ids))
-            .await
+        self.call_sync(move |i| {
+            let mut result = Vec::new();
+            for id in ids.into_iter() {
+                result.push((
+                    id,
+                    i.acquire_read_hold(id)?,
+                    i.collection_write_frontier(id)?,
+                ));
+            }
+            Ok(result)
+        })
+        .await
     }
 
     /// Issue a peek by calling into the instance task, letting the instance acquire read holds if
@@ -2403,23 +2413,6 @@ where
             let collection = self.expect_collection_mut(id);
             let _ = collection.implied_read_hold.try_downgrade(new_capability);
         }
-    }
-
-    /// Acquires a `ReadHold` and collection write frontier for each of the identified compute
-    /// collections.
-    fn acquire_read_holds_and_collection_write_frontiers(
-        &self,
-        ids: Vec<GlobalId>,
-    ) -> Result<Vec<(GlobalId, ReadHold<T>, Antichain<T>)>, CollectionMissing> {
-        let mut result = Vec::new();
-        for id in ids.into_iter() {
-            result.push((
-                id,
-                self.acquire_read_hold(id)?,
-                self.collection_write_frontier(id)?,
-            ));
-        }
-        Ok(result)
     }
 
     /// Acquires a `ReadHold` for the identified compute collection.
