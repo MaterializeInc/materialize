@@ -33,7 +33,9 @@ terraform {
 The Materialize provider supports two distinct configuration modes depending on
 your deployment type:
 
-### Materialize Cloud (SaaS)
+{{< tabs >}}
+{{< tab "Materialize Cloud" >}}
+### Materialize Cloud
 
 For Materialize Cloud environments, configure the provider with your app password
 and region. This configuration provides access to **all provider resources**,
@@ -64,6 +66,9 @@ provider "materialize" {
 }
 ```
 
+{{</ tab >}}
+
+{{< tab "Self-hosted" >}}
 ### Self-hosted Materialize
 
 For self-hosted Materialize instances, configure the provider with connection
@@ -118,6 +123,9 @@ The following parameters are available for self-hosted configurations:
 | `database` | Database name | `MZ_DATABASE` | `materialize` |
 | `password` | Database password | `MZ_PASSWORD` | - |
 | `sslmode` | SSL mode (`disable`, `require`, `verify-ca`, `verify-full`) | `MZ_SSLMODE` | `require` |
+
+{{< /tab >}}
+{{< /tabs >}}
 
 {{< warning >}}
 **Migration warning:**
