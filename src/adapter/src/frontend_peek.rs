@@ -35,8 +35,8 @@ use crate::optimize::Optimize;
 use crate::optimize::dataflows::{ComputeInstanceSnapshot, DataflowBuilder};
 use crate::session::{Session, TransactionOps, TransactionStatus};
 use crate::{
-    AdapterError, AdapterNotice, CollectionIdBundle, ExecuteResponse, ReadHolds,
-    TimelineContext, TimestampContext, TimestampProvider, optimize, PeekClient,
+    AdapterError, AdapterNotice, CollectionIdBundle, ExecuteResponse, PeekClient, ReadHolds,
+    TimelineContext, TimestampContext, TimestampProvider, optimize,
 };
 use crate::{coord, metrics};
 
