@@ -27,12 +27,12 @@ use mz_compute_types::ComputeInstanceId;
 use mz_ore::channel::OneshotReceiverExt;
 use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::{IdAllocator, IdAllocatorInnerBitSet, MAX_ORG_ID, org_id_conn_bits};
+use mz_ore::instrument;
 use mz_ore::now::{EpochMillis, NowFn, to_datetime};
 use mz_ore::result::ResultExt;
 use mz_ore::task::AbortOnDropHandle;
 use mz_ore::thread::JoinOnDropHandle;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_ore::{instrument, soft_assert_or_log};
 use mz_repr::{CatalogItemId, ColumnIndex, Row, SqlScalarType};
 use mz_sql::ast::{Raw, Statement};
 use mz_sql::catalog::{EnvironmentId, SessionCatalog};
@@ -1104,53 +1104,10 @@ impl SessionClient {
         portal_name: &str,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
         if self.enable_frontend_peek_sequencing {
-            // Take ownership of the session and split-borrow the pieces we need.
-            let Self {
-                session: slot,
-                peek_client,
-                ..
-            } = self;
-            let session = slot.take().expect("SessionClient invariant");
-
-            // RAII guard that always puts the session back into `slot` (`SessionClient::session`).
-            struct SessionReinserter<'a> {
-                slot: &'a mut Option<Session>,
-                session: Option<Session>,
-            }
-            impl<'a> SessionReinserter<'a> {
-                fn session_mut(&mut self) -> &mut Session {
-                    self.session.as_mut().expect("session present")
-                }
-                fn put_back(&mut self) {
-                    if let Some(sess) = self.session.take() {
-                        soft_assert_or_log!(self.slot.is_none(), "the `take` above removed it");
-                        *self.slot = Some(sess);
-                    }
-                }
-            }
-            impl<'a> Drop for SessionReinserter<'a> {
-                fn drop(&mut self) {
-                    if self.slot.is_none() {
-                        if let Some(sess) = self.session.take() {
-                            *self.slot = Some(sess);
-                        }
-                    }
-                }
-            }
-
-            let mut guard = SessionReinserter {
-                slot,
-                session: Some(session),
-            };
-
-            let res = peek_client
-                .try_frontend_peek_inner(portal_name, guard.session_mut())
-                .await;
-
-            // Ensure reinsertion on the normal path, too.
-            guard.put_back();
-
-            res
+            let session = self.session.as_mut().expect("SessionClient invariant");
+            self.peek_client
+                .try_frontend_peek_inner(portal_name, session)
+                .await
         } else {
             Ok(None)
         }
