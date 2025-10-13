@@ -1021,9 +1021,9 @@ ArrangeBy[[Column(0,␠"oid"),␠Column(1,␠"adrelid"),␠Column(2,␠"adnum"),
 ArrangeBy[[Column(0,␠"oid"),␠Column(1,␠"adrelid"),␠Column(2,␠"adnum"),␠Column(3,␠"adbin"),␠Column(4,␠"adsrc")]]-errors  1
 ArrangeBy[[Column(0,␠"oid")]]  2
 ArrangeBy[[Column(0,␠"oid")]]-errors  1
-ArrangeBy[[Column(0,␠"replica_id"),␠Column(3,␠"bucket_start")]]  3
+ArrangeBy[[Column(0,␠"replica_id"),␠Column(3,␠"bucket_start")]]  5
 ArrangeBy[[Column(0,␠"replica_id"),␠Column(4,␠"bucket_start")]]  1
-ArrangeBy[[Column(0,␠"replica_id")]]  11
+ArrangeBy[[Column(0,␠"replica_id")]]  12
 ArrangeBy[[Column(0,␠"replica_id")]]-errors  5
 ArrangeBy[[Column(0,␠"schema_id")]]  6
 ArrangeBy[[Column(0,␠"schema_id")]]-errors  6
@@ -1058,7 +1058,7 @@ ArrangeBy[[Column(1,␠"prepared_statement_id")]]  1
 ArrangeBy[[Column(1,␠"referenced_object_id")]]  2
 ArrangeBy[[Column(1,␠"relname")]]  1
 ArrangeBy[[Column(1,␠"relname")]]-errors  1
-ArrangeBy[[Column(1,␠"replica_id")]]  2
+ArrangeBy[[Column(1,␠"replica_id")]]  1
 ArrangeBy[[Column(1,␠"session_id")]]  1
 ArrangeBy[[Column(1,␠"shard_id"),␠Column(2,␠"collection_timestamp")]]  1
 ArrangeBy[[Column(1,␠"shard_id")]]  1
@@ -1069,8 +1069,8 @@ ArrangeBy[[Column(1,␠"source_id")]]  2
 ArrangeBy[[Column(1,␠"source_id")]]-errors  1
 ArrangeBy[[Column(1,␠"y")]]  1
 ArrangeBy[[Column(13,␠"database_id")]]  1
-ArrangeBy[[Column(15,␠"cluster_id")]]  1
-ArrangeBy[[Column(15,␠"cluster_id")]]-errors  1
+ArrangeBy[[Column(17,␠"cluster_id")]]  1
+ArrangeBy[[Column(17,␠"cluster_id")]]-errors  1
 ArrangeBy[[Column(2)]]  1
 ArrangeBy[[Column(2,␠"cluster_id")]]  1
 ArrangeBy[[Column(2,␠"database_id")]]  1
@@ -1106,7 +1106,7 @@ ArrangeBy[[]]  11
 Arranged␠DistinctBy  49
 Arranged␠MinsMaxesHierarchical␠input  14
 Arranged␠ReduceInaccumulable  3
-Arranged␠TopK␠input  108
+Arranged␠TopK␠input  111
 Distinct␠recursive␠err  3
 DistinctBy  49
 DistinctByErrorCheck  49
@@ -1116,7 +1116,7 @@ ReduceInaccumulable␠Error␠Check  3
 ReduceMinsMaxes  3
 ReduceMinsMaxes␠Error␠Check  1
 Reduced␠Fallibly␠MinsMaxesHierarchical  14
-Reduced␠TopK␠input  108
+Reduced␠TopK␠input  111
 Threshold␠local  10
 
 statement ok
