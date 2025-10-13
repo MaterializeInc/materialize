@@ -1103,68 +1103,63 @@ impl SessionClient {
             // then we couldn't do other things with self. However, if this future is dropped before we
             // reinsert the session, we must put it back to avoid "losing" the session.
             //
-            // To make this cancel-safe, use a small RAII guard that owns the Session and reinserts it
-            // into self.session in its Drop implementation if we haven't already put it back.
-            struct SessionReinserter {
-                target: *mut Option<Session>,
+            // To make this cancel-safe without unsafe code, reuse the oneshot guard pattern used in
+            // send_with_cancel: create a channel to return the Session, guard the receiver so dropping
+            // it after a send reinserts the Session into self.session, and ensure the sender sends the
+            // Session back in all paths (normal completion or drop).
+
+            // Take ownership of the Session now.
+            let session = self.session.take().expect("SessionClient invariant");
+
+            // Destructure self to get mutable references to the session slot and the PeekClient,
+            // so we can operate on them independently without borrowing all of `self`.
+            let Self { session: client_session, peek_client, .. } = self;
+
+            // Channel used to return the Session back into client_session.
+            let (tx, rx) = oneshot::channel::<Session>();
+
+            // Guarded receiver: if dropped after the Session has been sent, reinsert it.
+            let guarded_rx = rx.with_guard(|returned: Session| {
+                *client_session = Some(returned);
+            });
+
+            // RAII helper that ensures the Session is sent back via the channel.
+            struct SessionReturner {
+                tx: Option<oneshot::Sender<Session>>,
                 session: Option<Session>,
             }
-            impl SessionReinserter {
-                fn new(target: &mut Option<Session>, session: Session) -> Self {
-                    SessionReinserter {
-                        // Store a raw pointer to avoid borrow conflicts while we also borrow &mut self
-                        // during try_frontend_peek_inner. We only ever touch this pointer in Drop or
-                        // in reinsert_now after await completes.
-                        target: target as *mut Option<Session>,
-                        session: Some(session),
-                    }
-                }
+            impl SessionReturner {
                 fn session_mut(&mut self) -> &mut Session {
                     self.session.as_mut().expect("session present")
                 }
-                fn reinsert_now(&mut self) {
-                    if let Some(session) = self.session.take() {
-                        // SAFETY: While this guard is alive we never access self.session through
-                        // &mut self elsewhere. try_frontend_peek_inner takes a &mut Session directly,
-                        // so no code reads self.session. Therefore writing back here is exclusive.
-                        unsafe {
-                            debug_assert!((*self.target).is_none(), "session slot not empty");
-                            *self.target = Some(session);
-                        }
+                fn send_now(&mut self) {
+                    if let (Some(tx), Some(session)) = (self.tx.take(), self.session.take()) {
+                        // Ignore send errors: if the receiver was already dropped, its guard will
+                        // have attempted reinsertion if a value was present, and if it's still alive
+                        // it will observe the value when we drop guarded_rx below.
+                        let _ = tx.send(session);
                     }
                 }
             }
-            impl Drop for SessionReinserter {
+            impl Drop for SessionReturner {
                 fn drop(&mut self) {
-                    // If the future was dropped before we manually reinserted the session, put it back now.
-                    if let Some(session) = self.session.take() {
-                        unsafe {
-                            // See safety comment in reinsert_now.
-                            // If the slot already contains a session (should not happen), prefer not to overwrite.
-                            if (*self.target).is_none() {
-                                *self.target = Some(session);
-                            } else {
-                                // Drop the session to avoid duplicating it. In practice this path should not occur.
-                                // (We intentionally do nothing.)
-                            }
-                        }
+                    if let (Some(tx), Some(session)) = (self.tx.take(), self.session.take()) {
+                        let _ = tx.send(session);
                     }
                 }
             }
-            // SAFETY: SessionReinserter contains a raw pointer to `self.session`. The future that
-            // holds this guard also holds `&mut self`, so `self` (and thus the pointer target) lives
-            // for the entire lifetime of the future. The future may move across threads, but the
-            // pointer remains valid and is only accessed from that future; there is no concurrent
-            // access. Therefore it is safe to mark the guard as Send.
-            unsafe impl Send for SessionReinserter {}
 
-            let session = self.session.take().expect("SessionClient invariant");
-            let mut reinserter = SessionReinserter::new(&mut self.session, session);
-            let r = self
-                .try_frontend_peek_inner(portal_name, reinserter.session_mut())
+            let mut returner = SessionReturner { tx: Some(tx), session: Some(session) };
+
+            let r = peek_client
+                .try_frontend_peek_inner(portal_name, returner.session_mut())
                 .await;
-            // Always put it back, even if we got an error.
-            reinserter.reinsert_now();
+
+            // Always send the Session back, even if we got an error.
+            returner.send_now();
+            // Drop the guarded receiver now to immediately reinsert into self.session.
+            drop(guarded_rx);
+
             r
         } else {
             Ok(None)
