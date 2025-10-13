@@ -28,30 +28,102 @@ terraform {
 }
 ```
 
-## Authentication
+## Provider configuration
 
-To configure the provider to communicate with your Materialize region, you
-need to authenticate with a Materialize username, app password, and other
-specifics from your account.
+The Materialize provider supports two distinct configuration modes depending on
+your deployment type:
+
+### Materialize Cloud (SaaS)
+
+For Materialize Cloud environments, configure the provider with your app password
+and region. This configuration provides access to **all provider resources**,
+including:
+
+- App passwords, users, SSO, and SCIM resources
+- All database resources (clusters, sources, sinks, schemas, etc.)
 
 We recommend saving sensitive input variables as environment variables to avoid
-checking secrets into source control. In Terraform, you can export Materialize
-app passwords as a [Terraform environment variable](https://developer.hashicorp.com/terraform/cli/config/environment-variables#tf_var_name)
+checking secrets into source control. In Terraform, you can export variables as
+[Terraform environment variables](https://developer.hashicorp.com/terraform/cli/config/environment-variables#tf_var_name)
 with the `TF_VAR_<name>` format.
 
 ```shell
-export TF_VAR_MZ_PASSWORD=<app_password>
+export TF_VAR_materialize_password=<app_password>
 ```
 
-In the `main.tf` file, add the provider configuration and any variable
-references:
+In your `main.tf` file, add the provider configuration:
 
 ```hcl
-variable "MZ_PASSWORD" {}
+variable "materialize_password" {
+  sensitive = true
+}
 
 provider "materialize" {
-  password       = var.MZ_PASSWORD
-  default_region = <region>
-  database       = <database>
+  password       = var.materialize_password  # or use MZ_PASSWORD env var
+  default_region = "aws/us-east-1"           # or use MZ_DEFAULT_REGION env var
 }
 ```
+
+### Self-hosted Materialize
+
+For self-hosted Materialize instances, configure the provider with connection
+parameters similar to a standard PostgreSQL connection.
+
+{{< warning >}}
+**Important limitations for self-hosted mode:**
+
+Self-hosted configurations do **not** support Frontegg-dependent resources:
+- `materialize_app_password`
+- `materialize_user`
+- `materialize_sso_config` and related SSO resources
+- `materialize_scim_config` and related SCIM resources
+
+Only database resources are available (clusters, sources, sinks, schemas, etc.).
+These organization and identity management resources require Materialize Cloud's
+identity provider and will produce error messages if used in self-hosted mode.
+{{< /warning >}}
+
+Configure the provider for self-hosted deployments:
+
+```shell
+export TF_VAR_materialize_password=<database_password>
+```
+
+In your `main.tf` file:
+
+```hcl
+variable "materialize_password" {
+  sensitive = true
+}
+
+provider "materialize" {
+  host     = "materialized"        # or use MZ_HOST env var
+  port     = 6875                  # or use MZ_PORT env var
+  username = "materialize"         # or use MZ_USER env var
+  database = "materialize"         # or use MZ_DATABASE env var
+  password = var.materialize_password  # or use MZ_PASSWORD env var
+  sslmode  = "disable"             # or use MZ_SSLMODE env var
+}
+```
+
+#### Configuration parameters
+
+The following parameters are available for self-hosted configurations:
+
+| Parameter | Description | Environment Variable | Default |
+|-----------|-------------|---------------------|---------|
+| `host` | Materialize host address | `MZ_HOST` | - |
+| `port` | Materialize port | `MZ_PORT` | `6875` |
+| `username` | Database username | `MZ_USER` | `materialize` |
+| `database` | Database name | `MZ_DATABASE` | `materialize` |
+| `password` | Database password | `MZ_PASSWORD` | - |
+| `sslmode` | SSL mode (`disable`, `require`, `verify-ca`, `verify-full`) | `MZ_SSLMODE` | `require` |
+
+{{< warning >}}
+**Migration warning:**
+
+Switching between SaaS and self-hosted modes requires careful state file
+management as resource references and regional configurations differ between
+modes. We strongly recommend using a consistent configuration mode from the
+beginning to avoid complex state migrations.
+{{< /warning >}}
