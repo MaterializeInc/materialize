@@ -270,7 +270,6 @@ impl Client {
             storage_collections,
             transient_id_gen,
             optimizer_metrics,
-            // enable_frontend_peek_sequencing is initialized below, once we have a ConnCatalog
         );
 
         let mut client = SessionClient {
@@ -280,6 +279,7 @@ impl Client {
             environment_id: self.environment_id.clone(),
             segment_client: self.segment_client.clone(),
             peek_client,
+            enable_frontend_peek_sequencing: false, // initialized below, once we have a ConnCatalog
         };
 
         let session = client.session();
@@ -411,7 +411,7 @@ Issue a SQL query to get started. Need help?
             }
         }
 
-        client.peek_client.enable_frontend_peek_sequencing = ENABLE_FRONTEND_PEEK_SEQUENCING
+        client.enable_frontend_peek_sequencing = ENABLE_FRONTEND_PEEK_SEQUENCING
             .require(catalog.system_vars())
             .is_ok();
 
@@ -545,6 +545,11 @@ pub struct SessionClient {
     environment_id: EnvironmentId,
     /// Client for frontend peek sequencing; populated at connection startup.
     peek_client: PeekClient,
+    /// Whether frontend peek sequencing is enabled; initialized at connection startup.
+    // TODO(peek-seq): Currently, this is initialized only at session startup. We'll be able to
+    // check the actual feature flag value at every peek (without a Coordinator call) once we'll
+    // always have a catalog snapshot at hand.
+    pub enable_frontend_peek_sequencing: bool,
 }
 
 impl SessionClient {
@@ -1098,7 +1103,7 @@ impl SessionClient {
         &mut self,
         portal_name: &str,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
-        if self.peek_client().enable_frontend_peek_sequencing {
+        if self.enable_frontend_peek_sequencing {
             // Take ownership of the session and split-borrow the pieces we need.
             let Self {
                 session: slot,
