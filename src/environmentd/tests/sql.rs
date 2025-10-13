@@ -2088,7 +2088,10 @@ fn test_load_generator() {
     let server = test_util::TestHarness::default()
         .unsafe_mode()
         .start_blocking();
-    server.enable_feature_flags(&["enable_create_table_from_source"]);
+    server.enable_feature_flags(&[
+        "enable_create_table_from_source",
+        "enable_load_generator_counter",
+    ]);
     let mut client = server.connect(postgres::NoTls).unwrap();
 
     client

@@ -11,7 +11,8 @@ $ set-arg-default default-replica-size=scale=1,workers=1
 $ set-arg-default single-replica-cluster=quickstart
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_clock_load_generator = true;
+ALTER SYSTEM SET enable_load_generator_clock = true;
+ALTER SYSTEM SET enable_load_generator_datums = true;
 
 > CREATE SOURCE counter_empty
   IN CLUSTER ${arg.single-replica-cluster}

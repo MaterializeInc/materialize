@@ -2066,17 +2066,21 @@ pub(crate) fn load_generator_ast_to_generator(
     let load_generator = match loadgen {
         ast::LoadGenerator::Auction => LoadGenerator::Auction,
         ast::LoadGenerator::Clock => {
-            scx.require_feature_flag(&crate::session::vars::ENABLE_CLOCK_LOAD_GENERATOR)?;
+            scx.require_feature_flag(&vars::ENABLE_LOAD_GENERATOR_CLOCK)?;
             LoadGenerator::Clock
         }
         ast::LoadGenerator::Counter => {
+            scx.require_feature_flag(&vars::ENABLE_LOAD_GENERATOR_COUNTER)?;
             let LoadGeneratorOptionExtracted {
                 max_cardinality, ..
             } = extracted;
             LoadGenerator::Counter { max_cardinality }
         }
         ast::LoadGenerator::Marketing => LoadGenerator::Marketing,
-        ast::LoadGenerator::Datums => LoadGenerator::Datums,
+        ast::LoadGenerator::Datums => {
+            scx.require_feature_flag(&vars::ENABLE_LOAD_GENERATOR_DATUMS)?;
+            LoadGenerator::Datums
+        }
         ast::LoadGenerator::Tpch => {
             let LoadGeneratorOptionExtracted { scale_factor, .. } = extracted;
 

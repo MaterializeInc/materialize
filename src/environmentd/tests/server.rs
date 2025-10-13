@@ -218,6 +218,9 @@ fn test_statement_logging_immediate() {
     mz_client
         .batch_execute("ALTER SYSTEM SET statement_logging_default_sample_rate = 1")
         .unwrap();
+    mz_client
+        .batch_execute("ALTER SYSTEM SET enable_load_generator_counter = true")
+        .unwrap();
 
     let successful_immediates: &[&str] = &[
         "CREATE VIEW v AS SELECT 1;",
