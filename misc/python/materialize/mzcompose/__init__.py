@@ -317,10 +317,10 @@ def get_variable_system_parameters(
         ),
         VariableSystemParameter(
             "persist_enable_incremental_compaction",
-            ("true" if version >= MzVersion.parse_mz("v0.160.0-dev") else "false"),
+            ("true" if version >= MzVersion.parse_mz("v0.161.0-dev") else "false"),
             (
                 ["true", "false"]
-                if version >= MzVersion.parse_mz("v0.159.0-dev")
+                if version >= MzVersion.parse_mz("v0.161.0-dev")
                 else ["false"]
             ),
         ),
