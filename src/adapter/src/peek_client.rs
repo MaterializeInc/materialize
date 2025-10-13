@@ -226,10 +226,9 @@ impl PeekClient {
     ///
     /// Note: self is taken &mut because of the lazy fetching in `get_compute_instance_client`.
     ///
-    /// Note: `input_read_holds` is an Option, because we don't need it for constant queries.
-    /// `input_read_holds` has holds for all inputs. For fast-path peeks, this includes the peek.
-    /// target For slow-path peeks (to be implemented later), we'll need to additionally call into
-    /// the Controller to acquire a hold on the peek target after we create the dataflow.
+    /// Note: `input_read_holds` has holds for all inputs. For fast-path peeks, this includes the
+    /// peek target. For slow-path peeks (to be implemented later), we'll need to additionally call
+    /// into the Controller to acquire a hold on the peek target after we create the dataflow.
     ///
     /// TODO(peek-seq): add statement logging
     /// TODO(peek-seq): cancellation (see pending_peeks/client_pending_peeks wiring in the old
