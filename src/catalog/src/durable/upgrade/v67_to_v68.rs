@@ -9,22 +9,22 @@
 
 use crate::durable::traits::{UpgradeFrom, UpgradeInto};
 use crate::durable::upgrade::MigrationAction;
-use crate::durable::upgrade::wire_compatible::{WireCompatible, wire_compatible};
+use crate::durable::upgrade::wire_compatible::{JsonCompatible, json_compatible};
 use crate::durable::upgrade::{objects_v67 as v67, objects_v68 as v68};
 
-wire_compatible!(v67::GlobalId with v68::GlobalId);
-wire_compatible!(v67::CatalogItem with v68::CatalogItem);
-wire_compatible!(v67::SchemaId with v68::SchemaId);
-wire_compatible!(v67::CommentValue with v68::CommentValue);
-wire_compatible!(v67::RoleId with v68::RoleId);
-wire_compatible!(v67::MzAclItem with v68::MzAclItem);
-wire_compatible!(v67::DatabaseId with v68::DatabaseId);
-wire_compatible!(v67::ResolvedSchema with v68::ResolvedSchema);
-wire_compatible!(v67::ClusterId with v68::ClusterId);
-wire_compatible!(v67::ClusterReplicaId with v68::ClusterReplicaId);
-wire_compatible!(v67::SourceReferencesValue with v68::SourceReferencesValue);
-wire_compatible!(v67::GidMappingKey with v68::GidMappingKey);
-wire_compatible!(v67::ClusterIntrospectionSourceIndexKey with v68::ClusterIntrospectionSourceIndexKey);
+json_compatible!(v67::GlobalId with v68::GlobalId);
+json_compatible!(v67::CatalogItem with v68::CatalogItem);
+json_compatible!(v67::SchemaId with v68::SchemaId);
+json_compatible!(v67::CommentValue with v68::CommentValue);
+json_compatible!(v67::RoleId with v68::RoleId);
+json_compatible!(v67::MzAclItem with v68::MzAclItem);
+json_compatible!(v67::DatabaseId with v68::DatabaseId);
+json_compatible!(v67::ResolvedSchema with v68::ResolvedSchema);
+json_compatible!(v67::ClusterId with v68::ClusterId);
+json_compatible!(v67::ClusterReplicaId with v68::ClusterReplicaId);
+json_compatible!(v67::SourceReferencesValue with v68::SourceReferencesValue);
+json_compatible!(v67::GidMappingKey with v68::GidMappingKey);
+json_compatible!(v67::ClusterIntrospectionSourceIndexKey with v68::ClusterIntrospectionSourceIndexKey);
 
 /// In v68 we switched catalog items to be keyed on a `CatalogItemId`, this required a few changes:
 ///
@@ -278,7 +278,7 @@ impl UpgradeFrom<v67::state_update_kind::SourceReferences>
     fn upgrade_from(old: v67::state_update_kind::SourceReferences) -> Self {
         v68::state_update_kind::SourceReferences {
             key: old.key.map(|old| old.upgrade_into()),
-            value: old.value.map(|old| WireCompatible::convert(&old)),
+            value: old.value.map(|old| JsonCompatible::convert(&old)),
         }
     }
 }
