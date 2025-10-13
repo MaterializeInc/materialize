@@ -10,7 +10,7 @@
 # Stage 1: Build a minimum CI Builder image that we can use for the initial
 # steps like `mkpipeline` and `Build`, as well as any tests that are self
 # contained and use other Docker images.
-FROM ubuntu:plucky-20250910 AS ci-builder-min
+FROM ubuntu:plucky-20251001 AS ci-builder-min
 
 WORKDIR /workdir
 
