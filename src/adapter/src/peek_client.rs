@@ -258,23 +258,23 @@ impl PeekClient {
 
                 let mut results = Vec::new();
                 for (row, count) in rows {
-                    if count.is_negative() {
-                        return Err(AdapterError::Unstructured(anyhow::anyhow!(
-                            "Negative multiplicity in constant result: {}",
-                            count
-                        )));
-                    }
-                    if count.is_positive() {
-                        let count = usize::cast_from(
-                            u64::try_from(count.into_inner())
-                                .expect("known to be positive from check above"),
-                        );
-                        results.push((
-                            row,
-                            std::num::NonZeroUsize::new(count)
-                                .expect("known to be non-zero from check above"),
-                        ));
-                    }
+                    let count = match u64::try_from(count.into_inner()) {
+                        Ok(u) => usize::cast_from(u),
+                        Err(_) => {
+                            return Err(AdapterError::Unstructured(anyhow::anyhow!(
+                                "Negative multiplicity in constant result: {}",
+                                count
+                            )));
+                        }
+                    };
+                    match std::num::NonZeroUsize::new(count) {
+                        Some(nzu) => {
+                            results.push((row, nzu));
+                        }
+                        None => {
+                            // No need to retain 0 diffs.
+                        }
+                    };
                 }
                 let row_collection = RowCollection::new(results, &finishing.order_by);
                 match finishing.finish(
