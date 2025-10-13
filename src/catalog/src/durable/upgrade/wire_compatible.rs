@@ -10,10 +10,10 @@
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
-/// Denotes that `Self` is wire compatible with type `T`.
+/// Denotes that `Self` is JSON compatible with type `T`.
 ///
-/// You should not implement this yourself, instead use the `wire_compatible!` macro.
-pub unsafe trait WireCompatible<T>: Serialize + DeserializeOwned
+/// You should not implement this yourself, instead use the `json_compatible!` macro.
+pub unsafe trait JsonCompatible<T>: Serialize + DeserializeOwned
 where
     T: Serialize + DeserializeOwned,
 {
@@ -24,25 +24,25 @@ where
     }
 }
 
-// SAFETY: A message type is trivially wire compatible with itself.
-unsafe impl<T: Serialize + DeserializeOwned + Clone> WireCompatible<T> for T {
+// SAFETY: A type is trivially JSON compatible with itself.
+unsafe impl<T: Serialize + DeserializeOwned + Clone> JsonCompatible<T> for T {
     fn convert(old: &Self) -> Self {
         old.clone()
     }
 }
 
-/// Defines one protobuf type as wire compatible with another.
+/// Defines one type as JSON compatible with another.
 ///
 /// ```text
-/// wire_compatible!(objects_v28::DatabaseKey with objects_v27::DatabaseKey);
+/// json_compatible!(objects_v28::DatabaseKey with objects_v27::DatabaseKey);
 /// ```
 ///
-/// Internally this will implement the `WireCompatible<B> for <A>`, e.g.
-/// `WireCompatible<objects_v27::DatabaseKey> for objects_v28::DatabaseKey` and generate `proptest`
+/// Internally this will implement `JsonCompatible<B> for <A>`, e.g.
+/// `JsonCompatible<objects_v27::DatabaseKey> for objects_v28::DatabaseKey` and generate `proptest`
 /// cases that will create arbitrary objects of type `B` and assert they can be deserialized with
 /// type `A`, and vice versa.
 #[macro_export]
-macro_rules! wire_compatible {
+macro_rules! json_compatible {
     ($a:ident $(:: $a_sub:ident)* with $b:ident $(:: $b_sub:ident)*) => {
         ::static_assertions::assert_impl_all!(
             $a $(::$a_sub)* : ::proptest::arbitrary::Arbitrary, ::serde::Serialize, ::serde::de::DeserializeOwned,
@@ -51,10 +51,10 @@ macro_rules! wire_compatible {
             $b $(::$b_sub)*  : ::proptest::arbitrary::Arbitrary, ::serde::Serialize, ::serde::de::DeserializeOwned,
         );
 
-        // SAFETY: Below we assert that these types are wire compatible by generating arbitrary
+        // SAFETY: Below we assert that these types are JSON compatible by generating arbitrary
         // structs, encoding in one, and then decoding in the other.
-        unsafe impl $crate::durable::upgrade::wire_compatible::WireCompatible< $b $(::$b_sub)* > for $a $(::$a_sub)* {}
-        unsafe impl $crate::durable::upgrade::wire_compatible::WireCompatible< $a $(::$a_sub)* > for $b $(::$b_sub)* {}
+        unsafe impl $crate::durable::upgrade::wire_compatible::JsonCompatible< $b $(::$b_sub)* > for $a $(::$a_sub)* {}
+        unsafe impl $crate::durable::upgrade::wire_compatible::JsonCompatible< $a $(::$a_sub)* > for $b $(::$b_sub)* {}
 
         ::paste::paste! {
             ::proptest::proptest! {
@@ -65,14 +65,14 @@ macro_rules! wire_compatible {
 
                 #[mz_ore::test]
                 #[cfg_attr(miri, ignore)] // slow
-                fn [<proptest_wire_compat_ $a:snake $(_$a_sub:snake)* _to_ $b:snake $(_$b_sub:snake)* >](a: $a $(::$a_sub)* ) {
+                fn [<proptest_json_compat_ $a:snake $(_$a_sub:snake)* _to_ $b:snake $(_$b_sub:snake)* >](a: $a $(::$a_sub)* ) {
                     let a_bytes = ::serde_json::to_vec(&a).expect("JSON serializable");
                     let b_decoded = ::serde_json::from_slice::<$b $(::$b_sub)*>(&a_bytes);
                     ::proptest::prelude::prop_assert!(b_decoded.is_ok());
 
                     // Maybe superfluous, but this is a method called in production.
                     let b_decoded = b_decoded.expect("asserted Ok");
-                    let b_converted: $b $(::$b_sub)* = $crate::durable::upgrade::wire_compatible::WireCompatible::convert(&a);
+                    let b_converted: $b $(::$b_sub)* = $crate::durable::upgrade::wire_compatible::JsonCompatible::convert(&a);
                     assert_eq!(b_decoded, b_converted);
 
                     let b_bytes = ::serde_json::to_vec(&b_decoded).expect("JSON serializable");
@@ -81,14 +81,14 @@ macro_rules! wire_compatible {
 
                 #[mz_ore::test]
                 #[cfg_attr(miri, ignore)] // slow
-                fn [<proptest_wire_compat_ $b:snake $(_$b_sub:snake)* _to_ $a:snake $(_$a_sub:snake)* >](b: $b $(::$b_sub)* ) {
+                fn [<proptest_json_compat_ $b:snake $(_$b_sub:snake)* _to_ $a:snake $(_$a_sub:snake)* >](b: $b $(::$b_sub)* ) {
                     let b_bytes = ::serde_json::to_vec(&b).expect("JSON serializable");
                     let a_decoded = ::serde_json::from_slice::<$a $(::$a_sub)*>(&b_bytes);
                     ::proptest::prelude::prop_assert!(a_decoded.is_ok());
 
                     // Maybe superfluous, but this is a method called in production.
                     let a_decoded = a_decoded.expect("asserted Ok");
-                    let a_converted: $a $(::$a_sub)* = $crate::durable::upgrade::wire_compatible::WireCompatible::convert(&b);
+                    let a_converted: $a $(::$a_sub)* = $crate::durable::upgrade::wire_compatible::JsonCompatible::convert(&b);
                     assert_eq!(a_decoded, a_converted);
 
                     let a_bytes = ::serde_json::to_vec(&a_decoded).expect("JSON serializable");
@@ -98,4 +98,4 @@ macro_rules! wire_compatible {
         }
     };
 }
-pub use wire_compatible;
+pub use json_compatible;
