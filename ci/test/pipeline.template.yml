@@ -62,6 +62,7 @@ steps:
         agents:
           queue: l-builder-linux-x86_64
         env:
+          CI_BAZEL_BUILD: 0
           CI_BAZEL_LTO: 0
         branches: "v*.*"
 
@@ -76,6 +77,7 @@ steps:
         agents:
           queue: l-builder-linux-aarch64
         env:
+          CI_BAZEL_BUILD: 0
           CI_BAZEL_LTO: 0
         branches: "v*.*"
 
