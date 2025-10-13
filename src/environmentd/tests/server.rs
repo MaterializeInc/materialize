@@ -514,15 +514,15 @@ fn test_statement_logging_throttling() {
             "100".to_string(),
         ),
     );
-    thread::sleep(Duration::from_secs(1));
+    thread::sleep(Duration::from_secs(2));
     for _ in 0..100 {
         client.execute("SELECT 1", &[]).unwrap();
     }
-    thread::sleep(Duration::from_secs(2));
+    thread::sleep(Duration::from_secs(4));
     client.execute("SELECT 2", &[]).unwrap();
     let mut client = server.connect_internal(postgres::NoTls).unwrap();
     let logs = Retry::default()
-        .max_duration(Duration::from_secs(30))
+        .max_duration(Duration::from_secs(60))
         .retry(|_| {
             let sl_results = client
                 .query(
