@@ -1100,13 +1100,71 @@ impl SessionClient {
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
         if self.peek_client().enable_frontend_peek_sequencing {
             // We need to snatch the session out of self here, because if we just had a reference to it,
-            // then we couldn't do other things with self.
-            let mut session = self.session.take().expect("SessionClient invariant");
+            // then we couldn't do other things with self. However, if this future is dropped before we
+            // reinsert the session, we must put it back to avoid "losing" the session.
+            //
+            // To make this cancel-safe, use a small RAII guard that owns the Session and reinserts it
+            // into self.session in its Drop implementation if we haven't already put it back.
+            struct SessionReinserter {
+                target: *mut Option<Session>,
+                session: Option<Session>,
+            }
+            impl SessionReinserter {
+                fn new(target: &mut Option<Session>, session: Session) -> Self {
+                    SessionReinserter {
+                        // Store a raw pointer to avoid borrow conflicts while we also borrow &mut self
+                        // during try_frontend_peek_inner. We only ever touch this pointer in Drop or
+                        // in reinsert_now after await completes.
+                        target: target as *mut Option<Session>,
+                        session: Some(session),
+                    }
+                }
+                fn session_mut(&mut self) -> &mut Session {
+                    self.session.as_mut().expect("session present")
+                }
+                fn reinsert_now(&mut self) {
+                    if let Some(session) = self.session.take() {
+                        // SAFETY: While this guard is alive we never access self.session through
+                        // &mut self elsewhere. try_frontend_peek_inner takes a &mut Session directly,
+                        // so no code reads self.session. Therefore writing back here is exclusive.
+                        unsafe {
+                            debug_assert!((*self.target).is_none(), "session slot not empty");
+                            *self.target = Some(session);
+                        }
+                    }
+                }
+            }
+            impl Drop for SessionReinserter {
+                fn drop(&mut self) {
+                    // If the future was dropped before we manually reinserted the session, put it back now.
+                    if let Some(session) = self.session.take() {
+                        unsafe {
+                            // See safety comment in reinsert_now.
+                            // If the slot already contains a session (should not happen), prefer not to overwrite.
+                            if (*self.target).is_none() {
+                                *self.target = Some(session);
+                            } else {
+                                // Drop the session to avoid duplicating it. In practice this path should not occur.
+                                // (We intentionally do nothing.)
+                            }
+                        }
+                    }
+                }
+            }
+            // SAFETY: SessionReinserter contains a raw pointer to `self.session`. The future that
+            // holds this guard also holds `&mut self`, so `self` (and thus the pointer target) lives
+            // for the entire lifetime of the future. The future may move across threads, but the
+            // pointer remains valid and is only accessed from that future; there is no concurrent
+            // access. Therefore it is safe to mark the guard as Send.
+            unsafe impl Send for SessionReinserter {}
+
+            let session = self.session.take().expect("SessionClient invariant");
+            let mut reinserter = SessionReinserter::new(&mut self.session, session);
             let r = self
-                .try_frontend_peek_inner(portal_name, &mut session)
+                .try_frontend_peek_inner(portal_name, reinserter.session_mut())
                 .await;
             // Always put it back, even if we got an error.
-            self.session = Some(session);
+            reinserter.reinsert_now();
             r
         } else {
             Ok(None)
