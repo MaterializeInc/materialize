@@ -48,29 +48,25 @@ pub const MIN_CATALOG_VERSION: u64 = 67;
 mod tests {
     use std::collections::BTreeSet;
     use std::fs;
-    use std::io::{BufRead, BufReader};
+    use std::path::PathBuf;
 
     use crate::{CATALOG_VERSION, MIN_CATALOG_VERSION};
 
-    // Note: Feel free to update this path if the protos move.
-    const PROTO_DIRECTORY: &str = "protos";
-
     #[mz_ore::test]
     fn test_assert_snapshots_exist() {
-        // Get all of the files in the snapshot directory, with the `.proto` extension.
-        let mut filenames: BTreeSet<_> = fs::read_dir(PROTO_DIRECTORY)
-            .expect("failed to read protos dir")
+        let src_dir: PathBuf = [env!("CARGO_MANIFEST_DIR"), "src"].iter().collect();
+
+        // Get all the versioned object definition files.
+        let mut filenames: BTreeSet<_> = fs::read_dir(src_dir)
+            .expect("failed to read src dir")
             .map(|entry| entry.expect("failed to read dir entry").file_name())
             .map(|filename| filename.to_str().expect("utf8").to_string())
-            .filter(|filename| filename.ends_with("proto"))
+            .filter(|filename| filename.starts_with("objects_v"))
             .collect();
-
-        // Assert objects.proto exists.
-        assert!(filenames.remove("objects.proto"));
 
         // Assert snapshots exist for all of the versions we support.
         for version in MIN_CATALOG_VERSION..=CATALOG_VERSION {
-            let filename = format!("objects_v{version}.proto");
+            let filename = format!("objects_v{version}.rs");
             assert!(
                 filenames.remove(&filename),
                 "Missing snapshot for v{version}."
@@ -90,39 +86,24 @@ mod tests {
         // Assert there aren't any extra snapshots.
         assert!(
             filenames.is_empty(),
-            "Found snapshots for unsupported catalog versions {filenames:?}.\nIf you just increased `MIN_CATALOG_VERSION`, then please delete the old snapshots. If you created a new snapshot, please bump `CATALOG_VERSION`."
+            "Found snapshots for unsupported catalog versions {filenames:?}.\n\
+             If you just increased `MIN_CATALOG_VERSION`, then please delete the old snapshots. \
+             If you created a new snapshot, please bump `CATALOG_VERSION`."
         );
     }
 
     #[mz_ore::test]
     fn test_assert_current_snapshot() {
-        // Read the content from both files.
-        let current = fs::File::open(format!("{PROTO_DIRECTORY}/objects.proto"))
-            .map(BufReader::new)
-            .expect("read current");
-        let snapshot = fs::File::open(format!(
-            "{PROTO_DIRECTORY}/objects_v{CATALOG_VERSION}.proto"
-        ))
-        .map(BufReader::new)
-        .expect("read snapshot");
+        let src_dir: PathBuf = [env!("CARGO_MANIFEST_DIR"), "src"].iter().collect();
+        let current_rs = src_dir.join("objects.rs");
+        let snapshot_rs = src_dir.join(format!("objects_v{CATALOG_VERSION}.rs"));
 
-        // Read in all of the lines so we can compare the content of †he files.
-        let current: Vec<_> = current
-            .lines()
-            .map(|r| r.expect("failed to read line from current"))
-            // Filter out the package name, since we expect that to be different.
-            .filter(|line| line != "package objects;")
-            .collect();
-        let snapshot: Vec<_> = snapshot
-            .lines()
-            .map(|r| r.expect("failed to read line from current"))
-            // Filter out the package name, since we expect that to be different.
-            .filter(|line| line != &format!("package objects_v{CATALOG_VERSION};"))
-            .collect();
+        let current = fs::read_to_string(current_rs).expect("read current");
+        let snapshot = fs::read_to_string(snapshot_rs).expect("read snapshot");
 
-        // Note: objects.proto and objects_v<CATALOG_VERSION>.proto should be exactly the same. The
+        // Note: objects.rs and objects_v<CATALOG_VERSION>.rs should be exactly the same. The
         // reason being, when bumping the catalog to the next version, CATALOG_VERSION + 1, we need a
-        // snapshot to migrate _from_, which should be a snapshot of how the protos are today.
+        // snapshot to migrate _from_, which should be a snapshot of how the types are today.
         // Hence why the two files should be exactly the same.
         similar_asserts::assert_eq!(current, snapshot);
     }
