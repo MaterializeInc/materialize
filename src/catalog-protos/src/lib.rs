@@ -17,6 +17,19 @@
 //! protobuf files.
 
 pub mod audit_log;
+pub mod objects;
+pub mod objects_v67;
+pub mod objects_v68;
+pub mod objects_v69;
+pub mod objects_v70;
+pub mod objects_v71;
+pub mod objects_v72;
+pub mod objects_v73;
+pub mod objects_v74;
+pub mod objects_v75;
+pub mod objects_v76;
+pub mod objects_v77;
+pub mod objects_v78;
 pub mod serialization;
 
 /// The current version of the `Catalog`.
@@ -30,23 +43,6 @@ pub const CATALOG_VERSION: u64 = 78;
 ///
 /// After bumping this we can delete the old migrations.
 pub const MIN_CATALOG_VERSION: u64 = 67;
-
-macro_rules! proto_objects {
-    ( $( $x:ident ),* ) => {
-        paste::paste! {
-            $(
-                pub mod [<objects_ $x>] {
-                    include!(concat!(env!("OUT_DIR"), "/objects_", stringify!($x), ".rs"));
-                }
-            )*
-            pub mod objects {
-                include!(concat!(env!("OUT_DIR"), "/objects.rs"));
-            }
-        }
-    };
-}
-
-proto_objects!(v67, v68, v69, v70, v71, v72, v73, v74, v75, v76, v77, v78);
 
 #[cfg(test)]
 mod tests {
