@@ -5660,6 +5660,7 @@ dependencies = [
  "mz-repr",
  "mz-sql",
  "mz-storage-types",
+ "num_enum 0.7.5",
  "paste",
  "proptest",
  "proptest-derive",
