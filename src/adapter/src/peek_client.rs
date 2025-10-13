@@ -28,8 +28,8 @@ use timely::progress::Antichain;
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
-use crate::command::{Command, CatalogSnapshot};
 use crate::catalog::Catalog;
+use crate::command::{CatalogSnapshot, Command};
 use crate::coord;
 use crate::coord::Coordinator;
 use crate::coord::peek::FastPathPlan;
