@@ -53,8 +53,8 @@ macro_rules! json_compatible {
 
         // SAFETY: Below we assert that these types are JSON compatible by generating arbitrary
         // structs, encoding in one, and then decoding in the other.
-        unsafe impl $crate::durable::upgrade::wire_compatible::JsonCompatible< $b $(::$b_sub)* > for $a $(::$a_sub)* {}
-        unsafe impl $crate::durable::upgrade::wire_compatible::JsonCompatible< $a $(::$a_sub)* > for $b $(::$b_sub)* {}
+        unsafe impl $crate::durable::upgrade::json_compatible::JsonCompatible< $b $(::$b_sub)* > for $a $(::$a_sub)* {}
+        unsafe impl $crate::durable::upgrade::json_compatible::JsonCompatible< $a $(::$a_sub)* > for $b $(::$b_sub)* {}
 
         ::paste::paste! {
             ::proptest::proptest! {
@@ -72,7 +72,7 @@ macro_rules! json_compatible {
 
                     // Maybe superfluous, but this is a method called in production.
                     let b_decoded = b_decoded.expect("asserted Ok");
-                    let b_converted: $b $(::$b_sub)* = $crate::durable::upgrade::wire_compatible::JsonCompatible::convert(&a);
+                    let b_converted: $b $(::$b_sub)* = $crate::durable::upgrade::json_compatible::JsonCompatible::convert(&a);
                     assert_eq!(b_decoded, b_converted);
 
                     let b_bytes = ::serde_json::to_vec(&b_decoded).expect("JSON serializable");
@@ -88,7 +88,7 @@ macro_rules! json_compatible {
 
                     // Maybe superfluous, but this is a method called in production.
                     let a_decoded = a_decoded.expect("asserted Ok");
-                    let a_converted: $a $(::$a_sub)* = $crate::durable::upgrade::wire_compatible::JsonCompatible::convert(&b);
+                    let a_converted: $a $(::$a_sub)* = $crate::durable::upgrade::json_compatible::JsonCompatible::convert(&b);
                     assert_eq!(a_decoded, a_converted);
 
                     let a_bytes = ::serde_json::to_vec(&a_decoded).expect("JSON serializable");

@@ -9,7 +9,7 @@
 
 use crate::durable::traits::{UpgradeFrom, UpgradeInto};
 use crate::durable::upgrade::MigrationAction;
-use crate::durable::upgrade::wire_compatible::{JsonCompatible, json_compatible};
+use crate::durable::upgrade::json_compatible::{JsonCompatible, json_compatible};
 use crate::durable::upgrade::{objects_v75 as v75, objects_v76 as v76};
 
 json_compatible!(v75::ClusterKey with v76::ClusterKey);

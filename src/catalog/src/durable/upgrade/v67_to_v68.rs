@@ -9,7 +9,7 @@
 
 use crate::durable::traits::{UpgradeFrom, UpgradeInto};
 use crate::durable::upgrade::MigrationAction;
-use crate::durable::upgrade::wire_compatible::{JsonCompatible, json_compatible};
+use crate::durable::upgrade::json_compatible::{JsonCompatible, json_compatible};
 use crate::durable::upgrade::{objects_v67 as v67, objects_v68 as v68};
 
 json_compatible!(v67::GlobalId with v68::GlobalId);

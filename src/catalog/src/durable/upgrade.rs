@@ -60,9 +60,9 @@
 //!
 //! When in doubt, reach out to the Surfaces team, and we'll be more than happy to help :)
 
+pub mod json_compatible;
 #[cfg(test)]
 mod tests;
-pub mod wire_compatible;
 
 use mz_ore::{soft_assert_eq_or_log, soft_assert_ne_or_log};
 use mz_repr::Diff;
