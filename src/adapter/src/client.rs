@@ -1099,68 +1099,46 @@ impl SessionClient {
         portal_name: &str,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
         if self.peek_client().enable_frontend_peek_sequencing {
-            // We need to snatch the session out of self here, because if we just had a reference to it,
-            // then we couldn't do other things with self. However, if this future is dropped before we
-            // reinsert the session, we must put it back to avoid "losing" the session.
-            //
-            // To make this cancel-safe without unsafe code, reuse the oneshot guard pattern used in
-            // send_with_cancel: create a channel to return the Session, guard the receiver so dropping
-            // it after a send reinserts the Session into self.session, and ensure the sender sends the
-            // Session back in all paths (normal completion or drop).
+            // Take ownership of the session and split-borrow the pieces we need.
+            let Self { session: slot, peek_client, .. } = self;
+            let session = slot.take().expect("SessionClient invariant");
 
-            // Take ownership of the Session now.
-            let session = self.session.take().expect("SessionClient invariant");
-
-            // Destructure self to get mutable references to the session slot and the PeekClient,
-            // so we can operate on them independently without borrowing all of `self`.
-            let Self { session: client_session, peek_client, .. } = self;
-
-            // Channel used to return the Session back into client_session.
-            let (tx, rx) = oneshot::channel::<Session>();
-
-            // Guarded receiver: if dropped after the Session has been sent, reinsert it.
-            let guarded_rx = rx.with_guard(|returned: Session| {
-                *client_session = Some(returned);
-            });
-
-            // RAII helper that ensures the Session is sent back via the channel.
-            struct SessionReturner {
-                tx: Option<oneshot::Sender<Session>>,
+            // RAII guard that always puts the session back into the slot.
+            struct SessionReinserter<'a> {
+                slot: &'a mut Option<Session>,
                 session: Option<Session>,
             }
-            impl SessionReturner {
+            impl<'a> SessionReinserter<'a> {
                 fn session_mut(&mut self) -> &mut Session {
                     self.session.as_mut().expect("session present")
                 }
-                fn send_now(&mut self) {
-                    if let (Some(tx), Some(session)) = (self.tx.take(), self.session.take()) {
-                        // Ignore send errors: if the receiver was already dropped, its guard will
-                        // have attempted reinsertion if a value was present, and if it's still alive
-                        // it will observe the value when we drop guarded_rx below.
-                        let _ = tx.send(session);
+                fn put_back(&mut self) {
+                    if let Some(sess) = self.session.take() {
+                        debug_assert!(self.slot.is_none());
+                        *self.slot = Some(sess);
                     }
                 }
             }
-            impl Drop for SessionReturner {
+            impl<'a> Drop for SessionReinserter<'a> {
                 fn drop(&mut self) {
-                    if let (Some(tx), Some(session)) = (self.tx.take(), self.session.take()) {
-                        let _ = tx.send(session);
+                    if self.slot.is_none() {
+                        if let Some(sess) = self.session.take() {
+                            *self.slot = Some(sess);
+                        }
                     }
                 }
             }
 
-            let mut returner = SessionReturner { tx: Some(tx), session: Some(session) };
+            let mut guard = SessionReinserter { slot, session: Some(session) };
 
-            let r = peek_client
-                .try_frontend_peek_inner(portal_name, returner.session_mut())
+            let res = peek_client
+                .try_frontend_peek_inner(portal_name, guard.session_mut())
                 .await;
 
-            // Always send the Session back, even if we got an error.
-            returner.send_now();
-            // Drop the guarded receiver now to immediately reinsert into self.session.
-            drop(guarded_rx);
+            // Ensure reinsertion on the normal path, too.
+            guard.put_back();
 
-            r
+            res
         } else {
             Ok(None)
         }
