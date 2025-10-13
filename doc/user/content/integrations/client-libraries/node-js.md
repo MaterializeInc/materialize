@@ -149,7 +149,7 @@ const client = new Client({
 async function main() {
     await client.connect();
     const res = await client.query(
-        `CREATE SOURCE counter FROM LOAD GENERATOR COUNTER;`
+        `CREATE SOURCE auction FROM LOAD GENERATOR AUCTION FOR ALL TABLES;`
         );
     console.log(res);
 }
@@ -176,9 +176,9 @@ const client = new Client({
 async function main() {
     await client.connect();
     const res = await client.query(
-        `CREATE MATERIALIZED VIEW IF NOT EXISTS counter_sum AS
-            SELECT sum(counter)
-        FROM counter;`
+        `CREATE MATERIALIZED VIEW IF NOT EXISTS amount_sum AS
+            SELECT sum(amount)
+        FROM bids;`
         );
     console.log(res);
 }
@@ -209,7 +209,7 @@ async function main() {
   await client.connect();
 
   await client.query('BEGIN');
-  await client.query('DECLARE c CURSOR FOR SUBSCRIBE counter_sum WITH (SNAPSHOT = FALSE)');
+  await client.query('DECLARE c CURSOR FOR SUBSCRIBE amount_sum WITH (SNAPSHOT = FALSE)');
 
   while (true) {
     const res = await client.query('FETCH ALL c');
@@ -265,8 +265,8 @@ client.connect((err, client) => {
 To clean up the sources, views, and tables that we created, first connect to Materialize using a [PostgreSQL client](/integrations/sql-clients/) and then, run the following commands:
 
 ```mzsql
-DROP MATERIALIZED VIEW IF EXISTS counter_sum;
-DROP SOURCE IF EXISTS counter;
+DROP MATERIALIZED VIEW IF EXISTS amount_sum;
+DROP SOURCE IF EXISTS auction CASCADE;
 DROP TABLE IF EXISTS countries;
 ```
 

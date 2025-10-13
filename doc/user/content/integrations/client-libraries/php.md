@@ -118,7 +118,7 @@ Typically, you create sources, views, and indexes when deploying Materialize, al
 // Include the Postgres connection details
 require 'connect.php';
 
-$sql = "CREATE SOURCE counter FROM LOAD GENERATOR COUNTER;";
+$sql = "CREATE SOURCE auction FROM LOAD GENERATOR AUCTION FOR ALL TABLES;";
 
 $statement = $connection->prepare($sql);
 $statement->execute();
@@ -139,7 +139,7 @@ For more information, see [`CREATE SOURCE`](/sql/create-source/).
 // Include the Postgres connection details
 require 'connect.php';
 
-$sql = "CREATE MATERIALIZED VIEW IF NOT EXISTS counter_sum AS SELECT SUM(value) FROM counter;";
+$sql = "CREATE MATERIALIZED VIEW IF NOT EXISTS amount_sum AS SELECT SUM(amount) FROM bids;";
 
 $statement = $connection->prepare($sql);
 $statement->execute();
@@ -166,7 +166,7 @@ require 'connect.php';
 // Begin a transaction
 $connection->beginTransaction();
 // Declare a cursor
-$statement = $connection->prepare('DECLARE c CURSOR FOR SUBSCRIBE counter_sum WITH (FETCH = true);');
+$statement = $connection->prepare('DECLARE c CURSOR FOR SUBSCRIBE amount_sum WITH (FETCH = true);');
 // Execute the statement
 $statement->execute();
 
@@ -214,8 +214,8 @@ An `mz_diff` value of `-1` indicates Materialize is deleting one row with the in
 To clean up the sources, views, and tables that we created, first connect to Materialize using a [PostgreSQL client](/integrations/sql-clients/) and then, run the following commands:
 
 ```mzsql
-DROP MATERIALIZED VIEW IF EXISTS counter_sum;
-DROP SOURCE IF EXISTS counter;
+DROP MATERIALIZED VIEW IF EXISTS ammount_sum;
+DROP SOURCE IF EXISTS auction CASCADE;
 DROP TABLE IF EXISTS countries;
 ```
 

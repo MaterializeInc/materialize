@@ -102,7 +102,7 @@ conn = PG.connect(host:"MATERIALIZE_HOST", port: 6875, user: "MATERIALIZE_USERNA
 
 # Create a source
 src = conn.exec(
-    "CREATE SOURCE IF NOT EXISTS counter FROM LOAD GENERATOR counter;"
+    "CREATE SOURCE IF NOT EXISTS auction FROM LOAD GENERATOR AUCTION FOR ALL TABLES;"
 );
 
 puts src.inspect
@@ -125,9 +125,9 @@ conn = PG.connect(host:"MATERIALIZE_HOST", port: 6875, user: "MATERIALIZE_USERNA
 
 # Create a view
 view = conn.exec(
-    "CREATE MATERIALIZED VIEW IF NOT EXISTS counter_sum AS
-      SELECT sum(counter)
-    FROM counter;"
+    "CREATE MATERIALIZED VIEW IF NOT EXISTS amount_sum AS
+      SELECT sum(amount)
+    FROM bids;"
 );
 puts view.inspect
 
@@ -153,7 +153,7 @@ require 'pg'
 # Locally running instance:
 conn = PG.connect(host:"MATERIALIZE_HOST", port: 6875, user: "MATERIALIZE_USERNAME", password: "MATERIALIZE_PASSWORD")
 conn.exec('BEGIN')
-conn.exec('DECLARE c CURSOR FOR SUBSCRIBE counter_sum')
+conn.exec('DECLARE c CURSOR FOR SUBSCRIBE amount_sum')
 
 while true
   conn.exec('FETCH c') do |result|
@@ -182,8 +182,8 @@ An `mz_diff` value of `-1` indicates Materialize is deleting one row with the in
 To clean up the sources, views, and tables that we created, first connect to Materialize using a [PostgreSQL client](/integrations/sql-clients/) and then, run the following commands:
 
 ```mzsql
-DROP MATERIALIZED VIEW IF EXISTS counter_sum;
-DROP SOURCE IF EXISTS counter;
+DROP MATERIALIZED VIEW IF EXISTS amount_sum;
+DROP SOURCE IF EXISTS auction CASCADE;
 DROP TABLE IF EXISTS countries;
 ```
 

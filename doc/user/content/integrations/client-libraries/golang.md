@@ -107,9 +107,8 @@ Typically, you create sources, views, and indexes when deploying Materialize, bu
 
 ```go
 createSourceSQL := `
-    CREATE SOURCE IF NOT EXISTS counter
-    FROM LOAD GENERATOR COUNTER
-    (TICK INTERVAL '500ms');
+    CREATE SOURCE IF NOT EXISTS auction
+    FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
 `
 
 _, err = conn.Exec(ctx, createSourceSQL)
@@ -123,9 +122,9 @@ For more information, see [`CREATE SOURCE`](/sql/create-source/).
 
 ```go
 createViewSQL := `
-    CREATE MATERIALIZED VIEW IF NOT EXISTS counter_sum AS
-        SELECT sum(counter)
-    FROM counter;
+    CREATE MATERIALIZED VIEW IF NOT EXISTS amount_sum AS
+        SELECT sum(amount)
+    FROM bids;
 `
 
 _, err = conn.Exec(ctx, createViewSQL)
@@ -150,7 +149,7 @@ if err != nil {
 }
 defer tx.Rollback(ctx)
 
-_, err = tx.Exec(ctx, "DECLARE c CURSOR FOR SUBSCRIBE counter_sum")
+_, err = tx.Exec(ctx, "DECLARE c CURSOR FOR SUBSCRIBE amount_sum")
 if err != nil {
     log.Fatal(err)
     return
@@ -180,7 +179,7 @@ if err != nil {
 }
 ```
 
-The [SUBSCRIBE output format](/sql/subscribe/#output) of `subscribeResult` contains all of the columns of `counter_sum`, prepended with several additional columns that describe the nature of the update.  When a row of a subscribed view is **updated,** two objects will show up in the result set:
+The [SUBSCRIBE output format](/sql/subscribe/#output) of `subscribeResult` contains all of the columns of `amount_sum`, prepended with several additional columns that describe the nature of the update.  When a row of a subscribed view is **updated,** two objects will show up in the result set:
 
 ```go
 {MzTimestamp:1646868332570 MzDiff:1 row...}
@@ -194,8 +193,8 @@ An `MzDiff` value of `-1` indicates that Materialize is deleting one row with th
 To clean up the sources, views, and tables that we created, first connect to Materialize using a [PostgreSQL client](/integrations/sql-clients/) and then, run the following commands:
 
 ```mzsql
-DROP MATERIALIZED VIEW IF EXISTS counter_sum;
-DROP SOURCE IF EXISTS counter;
+DROP MATERIALIZED VIEW IF EXISTS amount_sum;
+DROP SOURCE IF EXISTS auction CASCADE;
 DROP TABLE IF EXISTS countries;
 ```
 

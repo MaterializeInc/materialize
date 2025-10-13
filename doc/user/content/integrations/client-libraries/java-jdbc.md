@@ -275,7 +275,7 @@ public class App {
 
     public void source() {
 
-        String SQL = "CREATE SOURCE counter FROM LOAD GENERATOR COUNTER;";
+        String SQL = "CREATE SOURCE auction FROM LOAD GENERATOR AUCTION FOR ALL TABLES;";
 
         try (Connection conn = connect()) {
             Statement st = conn.createStatement();
@@ -301,9 +301,9 @@ For more information, see [`CREATE SOURCE`](/sql/create-source/).
 ```java
     public void view() {
 
-        String SQL = "CREATE MATERIALIZED VIEW IF NOT EXISTS counter_sum AS "
-                   + "SELECT sum(counter)"
-                   + "FROM counter;";
+        String SQL = "CREATE MATERIALIZED VIEW IF NOT EXISTS amount_sum AS "
+                   + "SELECT sum(amount)"
+                   + "FROM bids;";
 
         try (Connection conn = connect()) {
             Statement st = conn.createStatement();
@@ -358,7 +358,7 @@ public class App {
 
             Statement stmt = conn.createStatement();
             stmt.execute("BEGIN");
-            stmt.execute("DECLARE c CURSOR FOR SUBSCRIBE counter_sum");
+            stmt.execute("DECLARE c CURSOR FOR SUBSCRIBE amount_sum");
             while (true) {
                 ResultSet rs = stmt.executeQuery("FETCH ALL c");
                 if(rs.next()) {
@@ -394,8 +394,8 @@ A `mz_diff` value of `-1` indicates that Materialize is deleting one row with th
 To clean up the sources, views, and tables that we created, first connect to Materialize using a [PostgreSQL client](/integrations/sql-clients/) and then, run the following commands:
 
 ```mzsql
-DROP MATERIALIZED VIEW IF EXISTS counter_sum;
-DROP SOURCE IF EXISTS counter;
+DROP MATERIALIZED VIEW IF EXISTS amount_sum;
+DROP SOURCE IF EXISTS auction CASCADE;
 DROP TABLE IF EXISTS countries;
 ```
 
