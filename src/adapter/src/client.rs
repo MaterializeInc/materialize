@@ -27,7 +27,7 @@ use mz_compute_types::ComputeInstanceId;
 use mz_ore::channel::OneshotReceiverExt;
 use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::{IdAllocator, IdAllocatorInnerBitSet, MAX_ORG_ID, org_id_conn_bits};
-use mz_ore::instrument;
+use mz_ore::{instrument, soft_assert_or_log};
 use mz_ore::now::{EpochMillis, NowFn, to_datetime};
 use mz_ore::result::ResultExt;
 use mz_ore::task::AbortOnDropHandle;
@@ -1103,7 +1103,7 @@ impl SessionClient {
             let Self { session: slot, peek_client, .. } = self;
             let session = slot.take().expect("SessionClient invariant");
 
-            // RAII guard that always puts the session back into the slot.
+            // RAII guard that always puts the session back into `slot` (`SessionClient::session`).
             struct SessionReinserter<'a> {
                 slot: &'a mut Option<Session>,
                 session: Option<Session>,
@@ -1114,7 +1114,7 @@ impl SessionClient {
                 }
                 fn put_back(&mut self) {
                     if let Some(sess) = self.session.take() {
-                        debug_assert!(self.slot.is_none());
+                        soft_assert_or_log!(self.slot.is_none(), "the `take` above removed it");
                         *self.slot = Some(sess);
                     }
                 }
