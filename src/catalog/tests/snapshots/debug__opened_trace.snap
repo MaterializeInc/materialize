@@ -1,5 +1,6 @@
 ---
 source: src/catalog/tests/debug.rs
+assertion_line: 233
 expression: test_trace
 ---
 Trace {
@@ -12,8 +13,8 @@ Trace {
                             V1(
                                 AuditLogEventV1 {
                                     id: 1,
-                                    event_type: Grant,
-                                    object_type: Cluster,
+                                    event_type: 4,
+                                    object_type: 1,
                                     user: None,
                                     occurred_at: Some(
                                         EpochMillis {
@@ -49,8 +50,8 @@ Trace {
                             V1(
                                 AuditLogEventV1 {
                                     id: 2,
-                                    event_type: Grant,
-                                    object_type: Database,
+                                    event_type: 4,
+                                    object_type: 4,
                                     user: None,
                                     occurred_at: Some(
                                         EpochMillis {
@@ -86,8 +87,8 @@ Trace {
                             V1(
                                 AuditLogEventV1 {
                                     id: 3,
-                                    event_type: Grant,
-                                    object_type: Schema,
+                                    event_type: 4,
+                                    object_type: 10,
                                     user: None,
                                     occurred_at: Some(
                                         EpochMillis {
@@ -123,8 +124,8 @@ Trace {
                             V1(
                                 AuditLogEventV1 {
                                     id: 4,
-                                    event_type: Grant,
-                                    object_type: Type,
+                                    event_type: 4,
+                                    object_type: 14,
                                     user: None,
                                     occurred_at: Some(
                                         EpochMillis {
@@ -160,8 +161,8 @@ Trace {
                             V1(
                                 AuditLogEventV1 {
                                     id: 5,
-                                    event_type: Create,
-                                    object_type: Database,
+                                    event_type: 1,
+                                    object_type: 4,
                                     user: None,
                                     occurred_at: Some(
                                         EpochMillis {
@@ -194,8 +195,8 @@ Trace {
                             V1(
                                 AuditLogEventV1 {
                                     id: 6,
-                                    event_type: Grant,
-                                    object_type: Database,
+                                    event_type: 4,
+                                    object_type: 4,
                                     user: None,
                                     occurred_at: Some(
                                         EpochMillis {
@@ -230,8 +231,8 @@ Trace {
                             V1(
                                 AuditLogEventV1 {
                                     id: 7,
-                                    event_type: Create,
-                                    object_type: Schema,
+                                    event_type: 1,
+                                    object_type: 10,
                                     user: None,
                                     occurred_at: Some(
                                         EpochMillis {
@@ -269,8 +270,8 @@ Trace {
                             V1(
                                 AuditLogEventV1 {
                                     id: 8,
-                                    event_type: Create,
-                                    object_type: NetworkPolicy,
+                                    event_type: 1,
+                                    object_type: 18,
                                     user: None,
                                     occurred_at: Some(
                                         EpochMillis {
@@ -303,8 +304,8 @@ Trace {
                             V1(
                                 AuditLogEventV1 {
                                     id: 9,
-                                    event_type: Create,
-                                    object_type: Cluster,
+                                    event_type: 1,
+                                    object_type: 1,
                                     user: None,
                                     occurred_at: Some(
                                         EpochMillis {
@@ -337,8 +338,8 @@ Trace {
                             V1(
                                 AuditLogEventV1 {
                                     id: 10,
-                                    event_type: Grant,
-                                    object_type: Cluster,
+                                    event_type: 4,
+                                    object_type: 1,
                                     user: None,
                                     occurred_at: Some(
                                         EpochMillis {
@@ -373,8 +374,8 @@ Trace {
                             V1(
                                 AuditLogEventV1 {
                                     id: 11,
-                                    event_type: Create,
-                                    object_type: ClusterReplica,
+                                    event_type: 1,
+                                    object_type: 2,
                                     user: None,
                                     occurred_at: Some(
                                         EpochMillis {
@@ -426,8 +427,8 @@ Trace {
                             V1(
                                 AuditLogEventV1 {
                                     id: 12,
-                                    event_type: Grant,
-                                    object_type: System,
+                                    event_type: 4,
+                                    object_type: 16,
                                     user: None,
                                     occurred_at: Some(
                                         EpochMillis {
@@ -827,7 +828,7 @@ Trace {
                         ),
                         database_id: None,
                         schema_id: None,
-                        object_type: Type,
+                        object_type: 7,
                         grantee: Some(
                             RoleId {
                                 value: Some(
@@ -865,45 +866,7 @@ Trace {
                         ),
                         database_id: None,
                         schema_id: None,
-                        object_type: Cluster,
-                        grantee: Some(
-                            RoleId {
-                                value: Some(
-                                    System(
-                                        2,
-                                    ),
-                                ),
-                            },
-                        ),
-                    },
-                    DefaultPrivilegesValue {
-                        privileges: Some(
-                            AclMode {
-                                bitflags: 256,
-                            },
-                        ),
-                    },
-                ),
-                2,
-                Overflowing(
-                    1,
-                ),
-            ),
-            (
-                (
-                    DefaultPrivilegesKey {
-                        role_id: Some(
-                            RoleId {
-                                value: Some(
-                                    Public(
-                                        Empty,
-                                    ),
-                                ),
-                            },
-                        ),
-                        database_id: None,
-                        schema_id: None,
-                        object_type: Database,
+                        object_type: 9,
                         grantee: Some(
                             RoleId {
                                 value: Some(
@@ -941,7 +904,45 @@ Trace {
                         ),
                         database_id: None,
                         schema_id: None,
-                        object_type: Schema,
+                        object_type: 13,
+                        grantee: Some(
+                            RoleId {
+                                value: Some(
+                                    System(
+                                        2,
+                                    ),
+                                ),
+                            },
+                        ),
+                    },
+                    DefaultPrivilegesValue {
+                        privileges: Some(
+                            AclMode {
+                                bitflags: 256,
+                            },
+                        ),
+                    },
+                ),
+                2,
+                Overflowing(
+                    1,
+                ),
+            ),
+            (
+                (
+                    DefaultPrivilegesKey {
+                        role_id: Some(
+                            RoleId {
+                                value: Some(
+                                    Public(
+                                        Empty,
+                                    ),
+                                ),
+                            },
+                        ),
+                        database_id: None,
+                        schema_id: None,
+                        object_type: 14,
                         grantee: Some(
                             RoleId {
                                 value: Some(

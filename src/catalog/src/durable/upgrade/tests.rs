@@ -19,8 +19,8 @@ use mz_storage_types::sources::SourceData;
 use crate::durable::objects::state_update::StateUpdateKindJson;
 use crate::durable::upgrade::AllVersionsStateUpdateKind;
 
-const PROTO_DIRECTORY: &str = "../catalog-protos/protos";
-const PROTO_EXT: &str = "proto";
+const PROTO_DIRECTORY: &str = "../catalog-protos/src";
+const PROTO_EXT: &str = "rs";
 
 static SNAPSHOT_DIRECTORY: &str = "src/durable/upgrade/snapshots";
 const SNAPSHOT_EXT: &str = "txt";
@@ -29,13 +29,7 @@ const SNAPSHOT_EXT: &str = "txt";
 #[cfg_attr(miri, ignore)] // too slow
 fn test_proto_serialization_stability() {
     let protos: BTreeSet<_> = read_file_names(PROTO_DIRECTORY, PROTO_EXT)
-        // Remove `objects.proto`.
-        //
-        // `objects.proto` is allowed to change and we don't have a good
-        // mechanism to force people to update `objects.txt` any time `objects.proto` changes. To
-        // avoid this rot we just don't test the contents of `objects.proto`. Additionally,
-        // `objects.proto` will always be identical to the most recent `objects_vX.proto`.
-        .filter(|name| name != "objects")
+        .filter(|name| name.starts_with("objects_v"))
         .collect();
 
     let snapshot_files: BTreeSet<_> = read_file_names(SNAPSHOT_DIRECTORY, SNAPSHOT_EXT).collect();
@@ -43,14 +37,17 @@ fn test_proto_serialization_stability() {
     let unknown_snapshots: Vec<_> = snapshot_files.difference(&protos).collect();
     if !unknown_snapshots.is_empty() {
         panic!(
-            "Have snapshots, but no proto files on disk? If a .proto file was deleted, then the .txt snapshot file must be deleted too. {unknown_snapshots:#?}"
+            "Have snapshots, but no proto files on disk? \
+             If an objects_v*.rs file was deleted, then the .txt snapshot file must be deleted \
+             too. {unknown_snapshots:#?}"
         );
     }
 
     let unencoded_protos: Vec<_> = protos.difference(&snapshot_files).collect();
     if !unencoded_protos.is_empty() {
         panic!(
-            "Missing encodings for some proto objects, try generating them with `generate_missing_encodings`. {unencoded_protos:#?}"
+            "Missing encodings for some proto objects, try generating them with \
+             `generate_missing_encodings`. {unencoded_protos:#?}"
         );
     }
 
