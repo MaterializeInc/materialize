@@ -1063,7 +1063,7 @@ class Composition:
             SELECT name, status, error, details
             FROM mz_internal.mz_source_statuses
             WHERE NOT(
-                status IN ('running', 'starting', 'paused') OR
+                status IN ('running', 'created', 'paused') OR
                 (type = 'progress' AND status = 'created')
             )
             AND {exclusion_clause}
