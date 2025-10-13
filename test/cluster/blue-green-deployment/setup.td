@@ -30,6 +30,7 @@ ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;
 # For now sources are not considered in blue-green deployments, so create them separately
 > DROP SOURCE IF EXISTS counter CASCADE
 > CREATE SOURCE counter FROM LOAD GENERATOR counter (TICK INTERVAL '1s')
+> CREATE TABLE counter_tbl FROM SOURCE counter;
 
 > DROP SOURCE IF EXISTS tpch CASCADE
 > BEGIN
@@ -47,9 +48,9 @@ ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;
 > COMMIT
 
 > CREATE SCHEMA prod
-> CREATE MATERIALIZED VIEW prod.counter_mv IN CLUSTER prod AS SELECT count(*) FROM counter
-> CREATE MATERIALIZED VIEW prod.counter_mv2 IN CLUSTER prod_deploy WITH (REFRESH EVERY '60 seconds') AS SELECT count(*), 'some new value' FROM counter
-> CREATE DEFAULT INDEX IN CLUSTER prod ON counter
+> CREATE MATERIALIZED VIEW prod.counter_mv IN CLUSTER prod AS SELECT count(*) FROM counter_tbl
+> CREATE MATERIALIZED VIEW prod.counter_mv2 IN CLUSTER prod_deploy WITH (REFRESH EVERY '60 seconds') AS SELECT count(*), 'some new value' FROM counter_tbl
+> CREATE DEFAULT INDEX IN CLUSTER prod ON counter_tbl
 > CREATE MATERIALIZED VIEW prod.tpch_mv
   IN CLUSTER prod AS
   SELECT

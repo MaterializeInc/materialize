@@ -142,7 +142,6 @@ ALTER SYSTEM SET mysql_source_snapshot_max_execution_time = 1000
 > CREATE TABLE pk_table FROM SOURCE test_slot_source (REFERENCE public.pk_table);
 
 > SHOW SUBSOURCES ON test_slot_source
-test_slot_source_progress progress
 
 > SHOW TABLES
 pk_table ""
@@ -287,7 +286,6 @@ contains: CREATE SOURCE specifies DETAILS option
 
 > SHOW SOURCES
 mz_source             mysql      cdc_cluster  ""
-mz_source_progress    progress   <null>        ""
 
 > SHOW TABLES
 conflict_table        ""
@@ -328,10 +326,7 @@ conflict_schema conflict_table
 > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'mz_source';
 running
 
-> SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'mz_source_progress';
-running
-
-> SELECT count(*) FROM mz_source_progress WHERE transaction_id > 0
+> SELECT count(*) FROM mz_source WHERE transaction_id > 0
 1
 
 # There is no such thing like mz_internal.mz_mysql_sources because MySQL does not have replication slots.
@@ -680,7 +675,6 @@ contains:TEXT COLUMNS refers to table not currently being added
 
 > SELECT * FROM (SHOW SOURCES) WHERE name LIKE '%enum%';
 enum_source             mysql     cdc_cluster  ""
-enum_source_progress    progress  <null>       ""
 
 > SELECT * FROM (SHOW TABLES) WHERE name LIKE '%enum%';
 another_enum_table      ""
@@ -718,7 +712,6 @@ INSERT INTO pk_table VALUES (99999, 'abc');
 
 > SHOW SOURCES
 another_source          mysql  cdc_cluster     ""
-another_source_progress progress <null>        ""
 
 > SHOW TABLES
 another_table           ""

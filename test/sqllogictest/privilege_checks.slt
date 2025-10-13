@@ -510,15 +510,21 @@ CREATE SOURCE s IN CLUSTER quickstart FROM LOAD GENERATOR COUNTER;
 ----
 COMPLETE 0
 
+simple conn=mz_system,user=mz_system
+CREATE TABLE s_tbl FROM SOURCE s;
+----
+COMPLETE 0
+
 simple conn=mz_support,user=mz_support
 SET CLUSTER TO "quickstart";
 ----
 COMPLETE 0
 
 simple conn=mz_support,user=mz_support
-SELECT * FROM s_progress LIMIT 0;
+SELECT * FROM s LIMIT 0;
 ----
-COMPLETE 0
+db error: ERROR: permission denied for SOURCE "materialize.public.s"
+DETAIL: The 'mz_support' role needs SELECT privileges on SOURCE "materialize.public.s"
 
 simple conn=mz_support,user=mz_support
 SET CLUSTER TO mz_catalog_server;
@@ -526,7 +532,7 @@ SET CLUSTER TO mz_catalog_server;
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
-DROP SOURCE s;
+DROP SOURCE s CASCADE;
 ----
 COMPLETE 0
 

@@ -621,6 +621,7 @@ fn pg_test_inner(path: &Path, mz_flags: bool) {
         if mz_flags {
             server.enable_feature_flags(&[
                 "enable_copy_to_expr",
+                "enable_create_table_from_source",
                 "enable_raise_statement",
                 "unsafe_enable_unorchestrated_cluster_replicas",
                 "unsafe_enable_unsafe_functions",

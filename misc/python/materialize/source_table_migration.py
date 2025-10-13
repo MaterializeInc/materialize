@@ -33,10 +33,6 @@ def _verify_source(
     try:
         print(f"Checking source: {source_name}")
 
-        # must not crash
-        statement = f"SELECT count(*) FROM {source_name};"
-        c.sql_query(statement)
-
         statement = f"SHOW CREATE SOURCE {source_name};"
         result = c.sql_query(statement)
         sql = result[0][1]

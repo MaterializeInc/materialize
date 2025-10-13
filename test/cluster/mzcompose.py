@@ -2055,8 +2055,9 @@ def workflow_test_drop_during_reconciliation(c: Composition) -> None:
             SET cluster = cluster1;
 
             CREATE SOURCE s FROM LOAD GENERATOR COUNTER;
-            CREATE DEFAULT INDEX on s;
-            CREATE MATERIALIZED VIEW mv AS SELECT * FROM s;
+            CREATE TABLE s_tbl FROM SOURCE s;
+            CREATE DEFAULT INDEX on s_tbl;
+            CREATE MATERIALIZED VIEW mv AS SELECT * FROM s_tbl;
             """
         )
 
@@ -2806,6 +2807,7 @@ def workflow_test_storage_controller_metrics(c: Composition) -> None:
             > CREATE MATERIALIZED VIEW mv AS SELECT * FROM t
 
             > CREATE SOURCE src FROM LOAD GENERATOR COUNTER
+            > CREATE TABLE src_tbl FROM SOURCE src
 
             > CREATE CONNECTION kafka_conn
                 TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
@@ -2822,7 +2824,7 @@ def workflow_test_storage_controller_metrics(c: Composition) -> None:
             true
             > SELECT count(*) > 0 FROM mv
             true
-            > SELECT count(*) > 0 FROM src
+            > SELECT count(*) > 0 FROM src_tbl
             true
             """
         )
@@ -2852,7 +2854,7 @@ def workflow_test_storage_controller_metrics(c: Composition) -> None:
     count = metrics_u2.get_storage_commands_total("update_configuration")
     assert count == 1, f"got {count}"
     count = metrics_u2.get_storage_commands_total("run_ingestion")
-    assert count == 1, f"got {count}"
+    assert count == 2, f"got {count}"
     count = metrics_u2.get_storage_commands_total("allow_compaction")
     assert count > 0, f"got {count}"
     count = metrics_u2.get_storage_commands_total("run_sink")
@@ -2914,7 +2916,7 @@ def workflow_test_storage_controller_metrics(c: Composition) -> None:
     c.sql(
         """
         DROP sink snk;
-        DROP SOURCE src;
+        DROP SOURCE src CASCADE;
         DROP MATERIALIZED VIEW mv;
         DROP TABLE t;
         DROP TABLE t_alter;
@@ -3711,7 +3713,7 @@ def workflow_blue_green_deployment(
                     total_runtime = 0
                     queries = [
                         "SELECT * FROM prod.counter_mv",
-                        "SET CLUSTER = prod; SELECT max(counter) FROM counter",
+                        "SET CLUSTER = prod; SELECT max(counter) FROM counter_tbl",
                         "SELECT count(*) FROM prod.tpch_mv",
                     ]
 
@@ -3860,12 +3862,14 @@ def workflow_cluster_drop_concurrent(
         with c.sql_cursor() as cursor:
             # This should hang instantly as the timestamp is far in the future,
             # until the cluster is dropped
-            cursor.execute("SELECT * FROM counter AS OF 18446744073709551615")
+            cursor.execute("SELECT * FROM counter_tbl AS OF 18446744073709551615")
 
     def subscribe():
         cursor = c.sql_cursor()
         cursor.execute("BEGIN")
-        cursor.execute("DECLARE subscribe CURSOR FOR SUBSCRIBE (SELECT * FROM counter)")
+        cursor.execute(
+            "DECLARE subscribe CURSOR FOR SUBSCRIBE (SELECT * FROM counter_tbl)"
+        )
         # This should hang until the cluster is dropped
         cursor.execute("FETCH ALL subscribe")
 
@@ -3893,9 +3897,9 @@ def workflow_cluster_drop_concurrent(
                 try:
                     thread.join(timeout=10)
                 except InternalError_ as e:
-                    assert 'query could not complete because relation "materialize.public.counter" was dropped' in str(
+                    assert 'query could not complete because relation "materialize.public.counter_tbl" was dropped' in str(
                         e
-                    ) or 'subscribe has been terminated because underlying relation "materialize.public.counter" was dropped' in str(
+                    ) or 'subscribe has been terminated because underlying relation "materialize.public.counter_tbl" was dropped' in str(
                         e
                     )
             for thread in threads:

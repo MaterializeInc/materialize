@@ -62,7 +62,6 @@ contains:catalog item 't' already exists
 
 > SHOW sources
  mz_source          postgres  quickstart  ""
- mz_source_progress progress  <null>      ""
 
 > SHOW TABLES
 t                  ""

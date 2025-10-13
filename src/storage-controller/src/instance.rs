@@ -295,19 +295,17 @@ where
         for command in self.history.iter() {
             match command {
                 StorageCommand::RunIngestion(ingestion) => {
-                    // NOTE(aljoscha): We filter out the remap collection because we
-                    // don't get any status updates about it from the replica side. So
-                    // we don't want to synthesize a 'paused' status here.
-                    //
-                    // TODO(aljoscha): I think we want to fix this eventually, and make
-                    // sure we get status updates for the remap shard as well. Currently
-                    // its handling in the source status collection is a bit difficult
-                    // because we don't have updates for it in the status history
-                    // collection.
-                    let subsource_ids = ingestion
-                        .description
-                        .collection_ids()
-                        .filter(|id| id != &ingestion.description.remap_collection_id);
+                    let old_style_ingestion =
+                        ingestion.id != ingestion.description.remap_collection_id;
+                    let subsource_ids = ingestion.description.collection_ids().filter(|id| {
+                        // NOTE(aljoscha): We filter out the remap collection for old style
+                        // ingestions because it doesn't get any status updates about it from the
+                        // replica side. So we don't want to synthesize a 'paused' status here.
+                        // New style ingestion do, since the source itself contains the remap data.
+                        let should_discard =
+                            old_style_ingestion && id == &ingestion.description.remap_collection_id;
+                        !should_discard
+                    });
                     for id in subsource_ids {
                         status_updates.push(make_update(id, "source"));
                     }
@@ -677,6 +675,18 @@ where
                     Box::new(std::iter::empty())
                 }
             }
+        } else if let Some(ingestion) = self.active_ingestions.get(id) {
+            Box::new(
+                self.replicas
+                    .iter_mut()
+                    .filter_map(move |(replica_id, replica)| {
+                        if ingestion.active_replicas.contains(replica_id) {
+                            Some(replica)
+                        } else {
+                            None
+                        }
+                    }),
+            )
         } else if let Some(export) = self.active_exports.get(id) {
             Box::new(
                 self.replicas
@@ -704,6 +714,8 @@ where
                     false
                 }
             }
+        } else if let Some(ingestion) = self.active_ingestions.get(id) {
+            ingestion.active_replicas.contains(replica_id)
         } else if let Some(export) = self.active_exports.get(id) {
             export.active_replicas.contains(replica_id)
         } else {

@@ -51,17 +51,6 @@ class Range(Check):
                 NULL,
                 NULL
               );
-
-            $ kafka-create-topic topic=ranges
-
-            $ kafka-ingest format=avro topic=ranges schema=${schema} repeat=10
-            {"f1": "A${kafka-ingest.iteration}"}
-
-            > CREATE SOURCE range_source
-              FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-ranges-${testdrive.seed}')
-            > CREATE TABLE range_source_tbl FROM SOURCE range_source (REFERENCE "testdrive-ranges-${testdrive.seed}")
-              FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-              ENVELOPE NONE
             """
             )
         )
@@ -106,8 +95,7 @@ class Range(Check):
                     i8_range -|- INT8RANGE(100, 150) AS i8_adjacent,
                     i8_range + '[3,20]'::INT8RANGE AS i8_merge,
                     i8_range * '[8,20]'::INT8RANGE AS i8_intersec,
-                    i8_range - '[8,120]'::INT8RANGE AS i8_diff,
-                    (SELECT partition FROM range_source_progress LIMIT 1) AS progress_range
+                    i8_range - '[8,120]'::INT8RANGE AS i8_diff
                   FROM range_table;
 
                 > INSERT INTO range_table SELECT * FROM range_table WHERE index = 1;
@@ -133,18 +121,18 @@ class Range(Check):
             2 <null> <null> <null> <null> <null> <null>
 
             > SELECT * FROM range_view1 ORDER BY index ASC;
-            1 [2,9) [2,101) [400,600] "[2023-01-01 00:00:00,2023-03-01 00:00:00)" "[2023-01-01 00:00:00 UTC,2023-03-01 00:00:00 UTC)" [2023-01-01,2023-03-01) [2,6) [2,4) [2,101) [2,6) [2,101) 2 101 false true false false false false false false true true true true false true true true true false true false [2,101) [8,21) [2,8) [0,0]
-            1 [2,9) [2,101) [400,600] "[2023-01-01 00:00:00,2023-03-01 00:00:00)" "[2023-01-01 00:00:00 UTC,2023-03-01 00:00:00 UTC)" [2023-01-01,2023-03-01) [2,6) [2,4) [2,101) [2,6) [2,101) 2 101 false true false false false false false false true true true true false true true true true false true false [2,101) [8,21) [2,8) [0,0]
-            1 [2,9) [2,101) [400,600] "[2023-01-01 00:00:00,2023-03-01 00:00:00)" "[2023-01-01 00:00:00 UTC,2023-03-01 00:00:00 UTC)" [2023-01-01,2023-03-01) [2,6) [2,4) [2,101) [2,6) [2,101) 2 101 false true false false false false false false true true true true false true true true true false true false [2,101) [8,21) [2,8) [0,0]
-            1 [2,9) [2,101) [400,600] "[2023-01-01 00:00:00,2023-03-01 00:00:00)" "[2023-01-01 00:00:00 UTC,2023-03-01 00:00:00 UTC)" [2023-01-01,2023-03-01) [2,6) [2,4) [2,101) [2,6) [2,101) 2 101 false true false false false false false false true true true true false true true true true false true false [2,101) [8,21) [2,8) [0,0]
-            2 <null> <null> <null> <null> <null> <null> [2,6) [2,4) [2,6) [2,6) <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> [0,0]
+            1 [2,9) [2,101) [400,600] "[2023-01-01 00:00:00,2023-03-01 00:00:00)" "[2023-01-01 00:00:00 UTC,2023-03-01 00:00:00 UTC)" [2023-01-01,2023-03-01) [2,6) [2,4) [2,101) [2,6) [2,101) 2 101 false true false false false false false false true true true true false true true true true false true false [2,101) [8,21) [2,8)
+            1 [2,9) [2,101) [400,600] "[2023-01-01 00:00:00,2023-03-01 00:00:00)" "[2023-01-01 00:00:00 UTC,2023-03-01 00:00:00 UTC)" [2023-01-01,2023-03-01) [2,6) [2,4) [2,101) [2,6) [2,101) 2 101 false true false false false false false false true true true true false true true true true false true false [2,101) [8,21) [2,8)
+            1 [2,9) [2,101) [400,600] "[2023-01-01 00:00:00,2023-03-01 00:00:00)" "[2023-01-01 00:00:00 UTC,2023-03-01 00:00:00 UTC)" [2023-01-01,2023-03-01) [2,6) [2,4) [2,101) [2,6) [2,101) 2 101 false true false false false false false false true true true true false true true true true false true false [2,101) [8,21) [2,8)
+            1 [2,9) [2,101) [400,600] "[2023-01-01 00:00:00,2023-03-01 00:00:00)" "[2023-01-01 00:00:00 UTC,2023-03-01 00:00:00 UTC)" [2023-01-01,2023-03-01) [2,6) [2,4) [2,101) [2,6) [2,101) 2 101 false true false false false false false false true true true true false true true true true false true false [2,101) [8,21) [2,8)
+            2 <null> <null> <null> <null> <null> <null> [2,6) [2,4) [2,6) [2,6) <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null>
 
             > SELECT * FROM range_view2 ORDER BY index ASC;
-            1 [2,9) [2,101) [400,600] "[2023-01-01 00:00:00,2023-03-01 00:00:00)" "[2023-01-01 00:00:00 UTC,2023-03-01 00:00:00 UTC)" [2023-01-01,2023-03-01) [2,6) [2,4) [2,101) [2,6) [2,101) 2 101 false true false false false false false false true true true true false true true true true false true false [2,101) [8,21) [2,8) [0,0]
-            1 [2,9) [2,101) [400,600] "[2023-01-01 00:00:00,2023-03-01 00:00:00)" "[2023-01-01 00:00:00 UTC,2023-03-01 00:00:00 UTC)" [2023-01-01,2023-03-01) [2,6) [2,4) [2,101) [2,6) [2,101) 2 101 false true false false false false false false true true true true false true true true true false true false [2,101) [8,21) [2,8) [0,0]
-            1 [2,9) [2,101) [400,600] "[2023-01-01 00:00:00,2023-03-01 00:00:00)" "[2023-01-01 00:00:00 UTC,2023-03-01 00:00:00 UTC)" [2023-01-01,2023-03-01) [2,6) [2,4) [2,101) [2,6) [2,101) 2 101 false true false false false false false false true true true true false true true true true false true false [2,101) [8,21) [2,8) [0,0]
-            1 [2,9) [2,101) [400,600] "[2023-01-01 00:00:00,2023-03-01 00:00:00)" "[2023-01-01 00:00:00 UTC,2023-03-01 00:00:00 UTC)" [2023-01-01,2023-03-01) [2,6) [2,4) [2,101) [2,6) [2,101) 2 101 false true false false false false false false true true true true false true true true true false true false [2,101) [8,21) [2,8) [0,0]
-            2 <null> <null> <null> <null> <null> <null> [2,6) [2,4) [2,6) [2,6) <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> [0,0]
+            1 [2,9) [2,101) [400,600] "[2023-01-01 00:00:00,2023-03-01 00:00:00)" "[2023-01-01 00:00:00 UTC,2023-03-01 00:00:00 UTC)" [2023-01-01,2023-03-01) [2,6) [2,4) [2,101) [2,6) [2,101) 2 101 false true false false false false false false true true true true false true true true true false true false [2,101) [8,21) [2,8)
+            1 [2,9) [2,101) [400,600] "[2023-01-01 00:00:00,2023-03-01 00:00:00)" "[2023-01-01 00:00:00 UTC,2023-03-01 00:00:00 UTC)" [2023-01-01,2023-03-01) [2,6) [2,4) [2,101) [2,6) [2,101) 2 101 false true false false false false false false true true true true false true true true true false true false [2,101) [8,21) [2,8)
+            1 [2,9) [2,101) [400,600] "[2023-01-01 00:00:00,2023-03-01 00:00:00)" "[2023-01-01 00:00:00 UTC,2023-03-01 00:00:00 UTC)" [2023-01-01,2023-03-01) [2,6) [2,4) [2,101) [2,6) [2,101) 2 101 false true false false false false false false true true true true false true true true true false true false [2,101) [8,21) [2,8)
+            1 [2,9) [2,101) [400,600] "[2023-01-01 00:00:00,2023-03-01 00:00:00)" "[2023-01-01 00:00:00 UTC,2023-03-01 00:00:00 UTC)" [2023-01-01,2023-03-01) [2,6) [2,4) [2,101) [2,6) [2,101) 2 101 false true false false false false false false true true true true false true true true true false true false [2,101) [8,21) [2,8)
+            2 <null> <null> <null> <null> <null> <null> [2,6) [2,4) [2,6) [2,6) <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null> <null>
             """
             )
         )

@@ -140,7 +140,6 @@ ALTER TABLE pg_table REPLICA IDENTITY FULL;
   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
 
 > SHOW SUBSOURCES ON pg_source
-pg_source_progress progress
 
 ! CREATE TABLE pg_table_1 FROM SOURCE pg_source (REFERENCE "pg_table");
 contains:referenced tables use unsupported types
@@ -264,7 +263,6 @@ INSERT INTO mysql_table VALUES ('var1', 1234), ('var0', 0);
   FROM MYSQL CONNECTION mysql_conn;
 
 > SHOW SUBSOURCES ON mysql_source
-mysql_source_progress progress
 
 ! CREATE TABLE mysql_table_1 FROM SOURCE mysql_source (REFERENCE "public"."mysql_table");
 contains:referenced tables use unsupported types

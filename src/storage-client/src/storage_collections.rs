@@ -895,6 +895,7 @@ where
     fn determine_collection_dependencies(
         &self,
         self_collections: &BTreeMap<GlobalId, CollectionState<T>>,
+        source_id: GlobalId,
         data_source: &DataSource<T>,
     ) -> Result<Vec<GlobalId>, StorageError<T>> {
         let dependencies = match &data_source {
@@ -926,7 +927,13 @@ where
                 }
             }
             // Ingestions depend on their remap collection.
-            DataSource::Ingestion(ingestion) => vec![ingestion.remap_collection_id],
+            DataSource::Ingestion(ingestion) => {
+                if ingestion.remap_collection_id == source_id {
+                    vec![]
+                } else {
+                    vec![ingestion.remap_collection_id]
+                }
+            }
             DataSource::Sink { desc } => vec![desc.sink.from],
         };
 
@@ -1957,8 +1964,11 @@ where
             let data_shard_since = since_handle.since().clone();
 
             // Determine if this collection has any dependencies.
-            let storage_dependencies = self
-                .determine_collection_dependencies(&*self_collections, &description.data_source)?;
+            let storage_dependencies = self.determine_collection_dependencies(
+                &*self_collections,
+                id,
+                &description.data_source,
+            )?;
 
             // Determine the initial since of the collection.
             let initial_since = match storage_dependencies

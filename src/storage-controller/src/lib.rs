@@ -610,17 +610,17 @@ where
             replica_id: Some(replica_id),
         };
 
-        for id in instance.active_ingestions() {
-            if let Some(active_replicas) = self.dropped_objects.get_mut(id) {
+        for ingestion_id in instance.active_ingestions() {
+            if let Some(active_replicas) = self.dropped_objects.get_mut(ingestion_id) {
                 active_replicas.remove(&replica_id);
                 if active_replicas.is_empty() {
-                    self.dropped_objects.remove(id);
+                    self.dropped_objects.remove(ingestion_id);
                 }
             }
 
             let ingestion = self
                 .collections
-                .get_mut(id)
+                .get_mut(ingestion_id)
                 .expect("instance contains unknown ingestion");
 
             let ingestion_description = match &ingestion.data_source {
@@ -631,18 +631,16 @@ where
                 ),
             };
 
-            // NOTE(aljoscha): We filter out the remap collection because we
-            // don't get any status updates about it from the replica side. So
-            // we don't want to synthesize a 'paused' status here.
-            //
-            // TODO(aljoscha): I think we want to fix this eventually, and make
-            // sure we get status updates for the remap shard as well. Currently
-            // its handling in the source status collection is a bit difficult
-            // because we don't have updates for it in the status history
-            // collection.
-            let subsource_ids = ingestion_description
-                .collection_ids()
-                .filter(|id| id != &ingestion_description.remap_collection_id);
+            let old_style_ingestion = *ingestion_id != ingestion_description.remap_collection_id;
+            let subsource_ids = ingestion_description.collection_ids().filter(|id| {
+                // NOTE(aljoscha): We filter out the remap collection for old style
+                // ingestions because it doesn't get any status updates about it from the
+                // replica side. So we don't want to synthesize a 'paused' status here.
+                // New style ingestion do, since the source itself contains the remap data.
+                let should_discard =
+                    old_style_ingestion && id == &ingestion_description.remap_collection_id;
+                !should_discard
+            });
             for id in subsource_ids {
                 source_status_updates.push(make_update(id, "source"));
             }
@@ -1986,10 +1984,12 @@ where
                     // for now...
                     match &collection.data_source {
                         DataSource::Ingestion(ingestion_desc) => {
-                            self.dropped_objects.insert(
-                                ingestion_desc.remap_collection_id,
-                                active_replicas.clone(),
-                            );
+                            if *id != ingestion_desc.remap_collection_id {
+                                self.dropped_objects.insert(
+                                    ingestion_desc.remap_collection_id,
+                                    active_replicas.clone(),
+                                );
+                            }
                         }
                         _ => {}
                     }
@@ -3248,7 +3248,11 @@ where
                 // since stays one step behind the upper, and, 2) that the remap
                 // shard's since stays one step behind their upper. Hence they
                 // track themselves and the remap shard as dependencies.
-                vec![self_id, ingestion.remap_collection_id]
+                let mut dependencies = vec![self_id];
+                if self_id != ingestion.remap_collection_id {
+                    dependencies.push(ingestion.remap_collection_id);
+                }
+                dependencies
             }
             DataSource::Sink { desc } => {
                 // Sinks hold back their own frontier and the frontier of their input.

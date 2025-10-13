@@ -17,11 +17,11 @@ $ set-sql-timeout duration=180s
 # In strict serializable mode we may select a timestamp that is ahead of on of the sources uppers and hang forever.
 > SET transaction_isolation = serializable
 
-> SELECT * from remote1
+> SELECT * from remote1_tbl
 one
 two
 three
-> SELECT * from remote2
+> SELECT * from remote2_tbl
 one
 two
 three
@@ -31,11 +31,11 @@ four
 $ kafka-ingest format=bytes topic=remote2
 four
 
-> SELECT * from remote1
+> SELECT * from remote1_tbl
 one
 two
 three
-> SELECT * from remote2
+> SELECT * from remote2_tbl
 one
 two
 three

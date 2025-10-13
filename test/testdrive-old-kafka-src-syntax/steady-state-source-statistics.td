@@ -64,10 +64,6 @@ goofus,gallant
   INCLUDE OFFSET
   ENVELOPE UPSERT
 
-> CREATE SOURCE counter
-  IN CLUSTER ${arg.single-replica-cluster}
-  FROM LOAD GENERATOR COUNTER (UP TO 100);
-
 # Adding a select here so that the ingests after this
 # triggers lookup from the upsert state
 > SELECT key, f1, f2 FROM upsert
@@ -87,17 +83,6 @@ mammalmore    moose   2
   GROUP BY s.name
   ORDER BY s.name
 upsert true true
-
-> SELECT
-    s.name,
-    SUM(u.offset_known) > 0,
-    SUM(u.offset_committed) > 0
-  FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
-  WHERE s.name IN ('counter')
-  GROUP BY s.name
-  ORDER BY s.name
-counter true true
 
 $ set-from-sql var=previous-offset-known
 SELECT
@@ -128,4 +113,3 @@ birdmore      geese   56
 upsert true true
 
 > DROP SOURCE upsert CASCADE
-> DROP SOURCE counter CASCADE

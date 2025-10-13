@@ -21,8 +21,11 @@ DROP CLUSTER REPLICA test.r1;
 statement ok
 CREATE SOURCE counter IN CLUSTER test FROM LOAD GENERATOR COUNTER
 
+statement ok
+CREATE TABLE counter_tbl FROM SOURCE counter
+
 query I
-SELECT min(counter) FROM counter
+SELECT min(counter) FROM counter_tbl
 ----
 1
 
@@ -41,7 +44,10 @@ DROP CLUSTER REPLICA test.r2;
 statement ok
 CREATE SOURCE counter IN CLUSTER test FROM LOAD GENERATOR COUNTER
 
+statement ok
+CREATE TABLE counter_tbl FROM SOURCE counter
+
 query I
-SELECT min(counter) FROM counter
+SELECT min(counter) FROM counter_tbl
 ----
 1

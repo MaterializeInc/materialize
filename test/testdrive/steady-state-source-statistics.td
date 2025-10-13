@@ -72,6 +72,8 @@ goofus,gallant
   IN CLUSTER ${arg.single-replica-cluster}
   FROM LOAD GENERATOR COUNTER (UP TO 100);
 
+> CREATE TABLE counter_tbl FROM SOURCE counter;
+
 # Adding a select here so that the ingests after this
 # triggers lookup from the upsert state
 > SELECT key, f1, f2 FROM upsert_tbl
