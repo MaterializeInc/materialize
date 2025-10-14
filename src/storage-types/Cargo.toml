@@ -96,6 +96,11 @@ default = ["mz-build-tools/default", "workspace-hack"]
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
 
+[package.metadata.cargo-gazelle.lib]
+# Something about building this crate is non-deterministic, which leads to
+# build failures when pipelining is enabled (see database-issues#33851).
+disable_pipelining = true
+
 [package.metadata.cargo-gazelle.test.lib]
 data = ["src/snapshots/**"]
 env = { INSTA_WORKSPACE_ROOT = "." }
