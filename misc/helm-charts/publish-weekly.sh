@@ -30,13 +30,14 @@ VERSION=$1
 
 echo "--- Publishing Weekly Helm Chart $VERSION with Materialize $VERSION"
 rm -rf gh-pages
-git clone --branch "$GITHUB_PAGES_BRANCH" --depth 1 git@github.com:MaterializeInc/materialize.git gh-pages
+git clone --branch "$GITHUB_PAGES_BRANCH" --depth 1 https://github.com/MaterializeInc/materialize.git gh-pages
 
 mkdir -p $RELEASE_DIR
 CHART=operator-weekly
 CHART_PATH="$CHARTS_DIR/$CHART"
 echo "Processing chart: $CHART version: $VERSION"
-git checkout "origin/$VERSION"
+git fetch --tags origin
+git checkout "$VERSION"
 # Check if version already exists
 if [ -f "gh-pages/$CHART-$VERSION.tgz" ]; then
   echo "Chart $CHART version $VERSION already exists, skipping"
