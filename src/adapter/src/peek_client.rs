@@ -32,7 +32,7 @@ use crate::catalog::Catalog;
 use crate::command::{CatalogSnapshot, Command};
 use crate::coord::Coordinator;
 use crate::coord::peek::FastPathPlan;
-use crate::{AdapterError, Client, CollectionIdBundle, ReadHolds};
+use crate::{AdapterError, Client, CollectionIdBundle, ReadHolds, statement_logging};
 
 /// Storage collections trait alias we need to consult for since/frontiers.
 pub type StorageCollectionsHandle = Arc<
@@ -244,103 +244,65 @@ impl PeekClient {
         peek_stash_read_batch_size_bytes: usize,
         peek_stash_read_memory_budget_bytes: usize,
     ) -> Result<crate::ExecuteResponse, AdapterError> {
-        match fast_path {
-            // If the dataflow optimizes to a constant expression, we can immediately return the result.
-            FastPathPlan::Constant(rows_res, _) => {
-                let mut rows = match rows_res {
-                    Ok(rows) => rows,
-                    Err(e) => return Err(e.into()),
+        // If the dataflow optimizes to a constant expression, we can immediately return the result.
+        if let FastPathPlan::Constant(rows_res, _) = fast_path {
+            let mut rows = match rows_res {
+                Ok(rows) => rows,
+                Err(e) => return Err(e.into()),
+            };
+            consolidate(&mut rows);
+
+            let mut results = Vec::new();
+            for (row, count) in rows {
+                let count = match u64::try_from(count.into_inner()) {
+                    Ok(u) => usize::cast_from(u),
+                    Err(_) => {
+                        return Err(AdapterError::Unstructured(anyhow::anyhow!(
+                            "Negative multiplicity in constant result: {}",
+                            count
+                        )));
+                    }
                 };
-                consolidate(&mut rows);
-
-                let mut results = Vec::new();
-                for (row, count) in rows {
-                    let count = match u64::try_from(count.into_inner()) {
-                        Ok(u) => usize::cast_from(u),
-                        Err(_) => {
-                            return Err(AdapterError::Unstructured(anyhow::anyhow!(
-                                "Negative multiplicity in constant result: {}",
-                                count
-                            )));
-                        }
-                    };
-                    match std::num::NonZeroUsize::new(count) {
-                        Some(nzu) => {
-                            results.push((row, nzu));
-                        }
-                        None => {
-                            // No need to retain 0 diffs.
-                        }
-                    };
-                }
-                let row_collection = RowCollection::new(results, &finishing.order_by);
-                match finishing.finish(
-                    row_collection,
-                    max_result_size,
-                    max_returned_query_size,
-                    &row_set_finishing_seconds,
-                ) {
-                    Ok((rows, _bytes)) => Ok(Coordinator::send_immediate_rows(rows)),
-                    // TODO(peek-seq): make this a structured error. (also in the old sequencing)
-                    Err(e) => Err(AdapterError::ResultSize(e)),
-                }
+                match std::num::NonZeroUsize::new(count) {
+                    Some(nzu) => {
+                        results.push((row, nzu));
+                    }
+                    None => {
+                        // No need to retain 0 diffs.
+                    }
+                };
             }
+            let row_collection = RowCollection::new(results, &finishing.order_by);
+            return match finishing.finish(
+                row_collection,
+                max_result_size,
+                max_returned_query_size,
+                &row_set_finishing_seconds,
+            ) {
+                Ok((rows, _bytes)) => Ok(Coordinator::send_immediate_rows(rows)),
+                // TODO(peek-seq): make this a structured error. (also in the old sequencing)
+                Err(e) => Err(AdapterError::ResultSize(e)),
+            };
+        }
+
+        let (peek_target, target_read_hold, literal_constraints, mfp, strategy) = match fast_path {
             FastPathPlan::PeekExisting(_coll_id, idx_id, literal_constraints, mfp) => {
-                let (rows_tx, rows_rx) = oneshot::channel();
-                let uuid = Uuid::new_v4();
-
-                // At this stage we don't know column names for the result because we
-                // only know the peek's result type as a bare SqlRelationType.
-                let cols = (0..intermediate_result_type.arity()).map(|i| format!("peek_{i}"));
-                let result_desc = RelationDesc::new(intermediate_result_type.clone(), cols);
-
-                // Issue peek to the instance
-                let client = self
-                    .ensure_compute_instance_client(compute_instance)
-                    .await
-                    .expect("missing compute instance client");
                 let peek_target = PeekTarget::Index { id: idx_id };
-                let finishing_for_instance = finishing.clone();
                 let target_read_hold = input_read_holds
                     .compute_holds
                     .get(&(compute_instance, idx_id))
-                    .expect("missing compute read hold on peek target")
+                    .expect("missing compute read hold on PeekExisting peek target")
                     .clone();
-                client
-                    .peek(
-                        peek_target,
-                        literal_constraints,
-                        uuid,
-                        timestamp,
-                        result_desc,
-                        finishing_for_instance,
-                        mfp,
-                        target_read_hold,
-                        target_replica,
-                        rows_tx,
-                    )
-                    .await;
-
-                let peek_response_stream = Coordinator::create_peek_response_stream(
-                    rows_rx,
-                    finishing,
-                    max_result_size,
-                    max_returned_query_size,
-                    row_set_finishing_seconds,
-                    self.persist_client.clone(),
-                    peek_stash_read_batch_size_bytes,
-                    peek_stash_read_memory_budget_bytes,
-                );
-                Ok(crate::ExecuteResponse::SendingRowsStreaming {
-                    rows: Box::pin(peek_response_stream),
-                    instance_id: compute_instance,
-                    strategy: crate::statement_logging::StatementExecutionStrategy::FastPath,
-                })
+                let strategy = statement_logging::StatementExecutionStrategy::FastPath;
+                (
+                    peek_target,
+                    target_read_hold,
+                    literal_constraints,
+                    mfp,
+                    strategy,
+                )
             }
             FastPathPlan::PeekPersist(coll_id, literal_constraint, mfp) => {
-                let (rows_tx, rows_rx) = oneshot::channel();
-                let uuid = Uuid::new_v4();
-
                 let literal_constraints = literal_constraint.map(|r| vec![r]);
                 let metadata = self
                     .storage_collections
@@ -351,55 +313,69 @@ impl PeekClient {
                     id: coll_id,
                     metadata,
                 };
-
-                // At this stage we don't know column names for the result because we
-                // only know the peek's result type as a bare SqlRelationType.
-                let cols = (0..intermediate_result_type.arity()).map(|i| format!("peek_{i}"));
-                let result_desc = RelationDesc::new(intermediate_result_type.clone(), cols);
-
-                let finishing_for_instance = finishing.clone();
                 let target_read_hold = input_read_holds
                     .storage_holds
                     .get(&coll_id)
                     .expect("missing storage read hold on PeekPersist peek target")
                     .clone();
-
-                // Issue peek to the instance
-                let client = self
-                    .ensure_compute_instance_client(compute_instance)
-                    .await
-                    .expect("missing compute instance client");
-                client
-                    .peek(
-                        peek_target,
-                        literal_constraints,
-                        uuid,
-                        timestamp,
-                        result_desc,
-                        finishing_for_instance,
-                        mfp,
-                        target_read_hold,
-                        target_replica,
-                        rows_tx,
-                    )
-                    .await;
-
-                let peek_response_stream = Coordinator::create_peek_response_stream(
-                    rows_rx,
-                    finishing,
-                    max_result_size,
-                    max_returned_query_size,
-                    row_set_finishing_seconds,
-                    self.persist_client.clone(),
-                    peek_stash_read_batch_size_bytes,
-                    peek_stash_read_memory_budget_bytes,
-                );
-                Ok(crate::ExecuteResponse::SendingRowsStreaming {
-                    rows: Box::pin(peek_response_stream),
-                    instance_id: compute_instance,
-                    strategy: crate::statement_logging::StatementExecutionStrategy::PersistFastPath,
-                })
+                let strategy = statement_logging::StatementExecutionStrategy::PersistFastPath;
+                (
+                    peek_target,
+                    target_read_hold,
+                    literal_constraints,
+                    mfp,
+                    strategy,
+                )
             }
-        }
+            _ => {
+                // FastPathPlan::Constant handled above.
+                unreachable!()
+            }
+        };
+
+        let (rows_tx, rows_rx) = oneshot::channel();
+        let uuid = Uuid::new_v4();
+
+        // At this stage we don't know column names for the result because we
+        // only know the peek's result type as a bare SqlRelationType.
+        let cols = (0..intermediate_result_type.arity()).map(|i| format!("peek_{i}"));
+        let result_desc = RelationDesc::new(intermediate_result_type.clone(), cols);
+
+        // Issue the peek to the instance
+        let client = self
+            .ensure_compute_instance_client(compute_instance)
+            .await
+            .expect("missing compute instance client");
+        let finishing_for_instance = finishing.clone();
+        client
+            .peek(
+                peek_target,
+                literal_constraints,
+                uuid,
+                timestamp,
+                result_desc,
+                finishing_for_instance,
+                mfp,
+                target_read_hold,
+                target_replica,
+                rows_tx,
+            )
+            .await;
+
+        let peek_response_stream = Coordinator::create_peek_response_stream(
+            rows_rx,
+            finishing,
+            max_result_size,
+            max_returned_query_size,
+            row_set_finishing_seconds,
+            self.persist_client.clone(),
+            peek_stash_read_batch_size_bytes,
+            peek_stash_read_memory_budget_bytes,
+        );
+        Ok(crate::ExecuteResponse::SendingRowsStreaming {
+            rows: Box::pin(peek_response_stream),
+            instance_id: compute_instance,
+            strategy,
+        })
     }
 }
