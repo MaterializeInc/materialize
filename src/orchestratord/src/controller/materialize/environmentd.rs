@@ -1268,11 +1268,19 @@ fn create_environmentd_statefulset_object(
         args.push("--orchestrator-kubernetes-enable-prometheus-scrape-annotations".into());
     }
 
+    // the --disable-license-key-checks environmentd flag only existed
+    // between these versions
     if config.disable_license_key_checks {
         if mz.meets_minimum_version(&V143) && !mz.meets_minimum_version(&V153) {
             args.push("--disable-license-key-checks".into());
         }
-    } else if mz.meets_minimum_version(&V140_DEV0) {
+    }
+
+    // as of version 0.153, the ability to disable license key checks was
+    // removed, so we should always set up license keys in that case
+    if (mz.meets_minimum_version(&V140_DEV0) && !config.disable_license_key_checks)
+        || mz.meets_minimum_version(&V153)
+    {
         volume_mounts.push(VolumeMount {
             name: "license-key".to_string(),
             mount_path: "/license_key".to_string(),
