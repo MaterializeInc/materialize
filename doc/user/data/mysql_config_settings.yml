@@ -9,7 +9,7 @@ rows:
 
   - MySQL Configuration: "`binlog_format`"
     Value: "`ROW`"
-    Notes: "[Deprecated as of MySQL 8.0.34](https://dev.mysql.com/doc/refman/8.0/en/replication-options-binary-log.html#sysvar_binlog_format). Newer versions of MySQL default to row-based logging."
+    Notes: "{{ $binlog_format_note }}"
 
   - MySQL Configuration: "`binlog_row_image`"
     Value: "`FULL`"

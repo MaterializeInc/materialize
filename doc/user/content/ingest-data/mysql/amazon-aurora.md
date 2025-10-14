@@ -24,21 +24,61 @@ to Materialize using the [MySQL source](/sql/create-source/mysql/).
 ### 1. Enable GTID-based binlog replication
 
 {{< note >}}
-GTID-based replication is supported for Amazon Aurora MySQL v2 and v3, as well
+GTID-based replication is supported for Amazon Aurora MySQL v2 and v3 as well
 as Aurora Serverless v2.
 {{</ note >}}
 
-Before creating a source in Materialize, you **must** configure Amazon Aurora
-MySQL for GTID-based binlog replication. Ensure the upstream MySQL database has
-been configured for GTID-based binlog replication:
+1. Before creating a source in Materialize, you **must** configure Amazon Aurora
+   MySQL for GTID-based binlog replication. Ensure the upstream MySQL database  has been configured for GTID-based binlog replication:
 
-{{% mysql-direct/ingesting-data/mysql-configs
-    gtid_mode_note="In the AWS console, this parameter appears as `gtid-mode`."
-    additional_data="`binlog retention hours` | **168** |"
- %}}
+   {{% mysql-direct/ingesting-data/mysql-configs
+      gtid_mode_note="In the AWS console, this parameter appears as `gtid-mode`."
+      binlog_format_note=" "
+   %}}
 
-For guidance on enabling GTID-based binlog replication in Aurora, see the
-[Amazon Aurora MySQL documentation](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/mysql-replication-gtid.html).
+   For guidance on enabling GTID-based binlog replication in Aurora, see the
+   [Amazon Aurora MySQL
+    documentation](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/mysql-replication-gtid.html).
+
+1. In addition to the step above, you **must** also ensure that
+   [binlog retention](/sql/create-source/mysql/#binlog-retention) is set to a
+   reasonable value. To check the current value of the `binlog retention hours`
+   configuration parameter, connect to your RDS instance and run:
+
+   ```mysql
+   CALL mysql.rds_show_configuration;
+   ```
+
+   If the value returned is `NULL`, or less than `168` (i.e. 7 days), run:
+
+   ```mysql
+   CALL mysql.rds_set_configuration('binlog retention hours', 168);
+   ```
+
+   Although 7 days is a reasonable retention period, we recommend using the
+   default MySQL retention period (30 days) in order to not compromise
+   Materialize’s ability to resume replication in case of failures or
+   restarts.
+
+1. To validate that all configuration parameters are set to the expected values
+   after the above configuration changes, run:
+
+    ```mysql
+    -- Validate "binlog retention hours" configuration parameter
+    CALL mysql.rds_show_configuration;
+    ```
+
+    ```mysql
+    -- Validate parameter group configuration parameters
+    SHOW VARIABLES WHERE variable_name IN (
+      'log_bin',
+      'binlog_format',
+      'binlog_row_image',
+      'gtid_mode',
+      'enforce_gtid_consistency',
+      'replica_preserve_commit_order'
+    );
+    ```
 
 ### 2. Create a user for replication
 
