@@ -8,7 +8,10 @@
 // by the Apache License, Version 2.0.
 
 use std::str::FromStr;
-use tokio_postgres::{Client, types::PgLsn};
+use tokio_postgres::{
+    Client,
+    types::{Oid, PgLsn},
+};
 
 use mz_ssh_util::tunnel_manager::SshTunnelManager;
 
@@ -84,6 +87,63 @@ pub async fn available_replication_slots(client: &Client) -> Result<i64, Postgre
         available_replication_slots.get("available_replication_slots");
 
     Ok(available_replication_slots)
+}
+
+/// Returns true if BYPASSRLS is set for the current user, false otherwise.
+///
+/// See <https://www.postgresql.org/docs/current/ddl-rowsecurity.html>
+pub async fn bypass_rls_attribute(client: &Client) -> Result<bool, PostgresError> {
+    let rls_attribute = client
+        .query_one(
+            "SELECT rolbypassrls FROM pg_roles WHERE rolname = CURRENT_USER;",
+            &[],
+        )
+        .await?;
+    Ok(rls_attribute.get("rolbypassrls"))
+}
+
+/// Returns an error if the tables identified by the oid's have RLS policies which
+/// affect the current user. Two checks are made:
+///
+/// 1. Identify which tables, from the provided oid's, have RLS policies that affecct the user or
+///    public.
+/// 2. If there are policies that affect the user, check if the BYPASSRLS attribute is set. If set,
+///    the role is unaffected by the policies.
+pub async fn validate_no_rls_policies(
+    client: &Client,
+    table_oids: &[Oid],
+) -> Result<(), PostgresError> {
+    if table_oids.is_empty() {
+        return Ok(());
+    }
+    let tables_with_rls_for_user = client
+        .query(
+            "SELECT
+                    format('%I.%I', pc.relnamespace::regnamespace, pc.relname) AS qualified_name
+                FROM pg_policy pp
+                JOIN pg_class pc ON pc.oid = polrelid
+                WHERE
+                    polrelid = ANY($1::oid[])
+                    AND
+                    (0 = ANY(polroles) OR CURRENT_USER::regrole::oid = ANY(polroles));",
+            &[&table_oids],
+        )
+        .await
+        .map_err(PostgresError::from)?;
+
+    let mut tables_with_rls_for_user = tables_with_rls_for_user
+        .into_iter()
+        .map(|row| row.get("qualified_name"))
+        .collect::<Vec<String>>();
+
+    // If the user has the BYPASSRLS flag set, then the policies don't apply, so we can
+    // return success.
+    if tables_with_rls_for_user.is_empty() || bypass_rls_attribute(client).await? {
+        Ok(())
+    } else {
+        tables_with_rls_for_user.sort();
+        Err(PostgresError::BypassRLSRequired(tables_with_rls_for_user))
+    }
 }
 
 pub async fn drop_replication_slots(
