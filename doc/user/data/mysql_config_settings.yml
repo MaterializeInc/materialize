@@ -1,0 +1,28 @@
+columns:
+  - column: "MySQL Configuration"
+  - column: "Value"
+  - column: "Notes"
+rows:
+  - MySQL Configuration: "`log_bin`"
+    Value: "`ON`"
+    Notes: ""
+
+  - MySQL Configuration: "`binlog_format`"
+    Value: "`ROW`"
+    Notes: "{{ $binlog_format_note }}"
+
+  - MySQL Configuration: "`binlog_row_image`"
+    Value: "`FULL`"
+    Notes: ""
+
+  - MySQL Configuration: "`gtid_mode`"
+    Value: "`ON`"
+    Notes: "{{ $gtid_mode_note }}"
+
+  - MySQL Configuration: "`enforce_gtid_consistency`"
+    Value: "`ON`"
+    Notes: ""
+
+  - MySQL Configuration: "`replica_preserve_commit_order`"
+    Value: "`ON`"
+    Notes: "Only required when connecting Materialize to a read-replica."
