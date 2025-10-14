@@ -1979,10 +1979,28 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_load_generator_counter,
+        desc: "Create a LOAD GENERATOR COUNTER",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_load_generator_clock,
+        desc: "Create a LOAD GENERATOR CLOCK",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_load_generator_datums,
+        desc: "Create a LOAD GENERATOR DATUMS",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
         name: enable_load_generator_key_value,
         desc: "Create a LOAD GENERATOR KEY VALUE",
         default: false,
-        enable_for_item_parsing: false,
+        enable_for_item_parsing: true,
     },
     {
         name: enable_expressions_in_limit_syntax,
@@ -2097,12 +2115,6 @@ feature_flags!(
         name: enable_aws_msk_iam_auth,
         desc: "Enable AWS MSK IAM authentication for Kafka connections",
         default: true,
-        enable_for_item_parsing: true,
-    },
-    {
-        name: enable_clock_load_generator,
-        desc: "Enable the clock load generator",
-        default: false,
         enable_for_item_parsing: true,
     },
     {

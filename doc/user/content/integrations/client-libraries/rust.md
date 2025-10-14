@@ -113,9 +113,8 @@ pub(crate) fn create_source() -> Result<u64, Error> {
 
     client.execute(
         "
-        CREATE SOURCE IF NOT EXISTS counter
-        FROM LOAD GENERATOR COUNTER
-        (TICK INTERVAL '500ms');
+        CREATE SOURCE IF NOT EXISTS auction
+        FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
     ",
         &[],
     )
@@ -134,9 +133,9 @@ pub(crate) fn create_materialized_view() -> Result<u64, Error> {
 
     client.execute(
         "
-        CREATE MATERIALIZED VIEW IF NOT EXISTS counter_sum AS
-        SELECT sum(counter)
-        FROM counter;
+        CREATE MATERIALIZED VIEW IF NOT EXISTS amount_sum AS
+        SELECT sum(amount)
+        FROM bids;
     ",
         &[],
     )
@@ -153,7 +152,7 @@ use crate::connection::create_client;
 pub(crate) fn subscribe() {
     let mut client = create_client().expect("Error creating client.");
     let mut transaction = client.transaction().expect("Error creating transaction.");
-    transaction.execute("DECLARE c CURSOR FOR SUBSCRIBE (SELECT sum::text FROM counter_sum) WITH (SNAPSHOT = false);", &[]).expect("Error creating cursor.");
+    transaction.execute("DECLARE c CURSOR FOR SUBSCRIBE (SELECT sum::text FROM amount_sum) WITH (SNAPSHOT = false);", &[]).expect("Error creating cursor.");
 
     loop {
         let results = transaction.query("FETCH ALL c;", &[]).expect("Error running fetch.");
@@ -164,15 +163,15 @@ pub(crate) fn subscribe() {
 }
 ```
 
-The [SUBSCRIBE output format](/sql/subscribe/#output) of the `counter_sum` view contains all of the columns of the view, prepended with several additional columns that describe the nature of the update.
+The [SUBSCRIBE output format](/sql/subscribe/#output) of the `amount_sum` view contains all of the columns of the view, prepended with several additional columns that describe the nature of the update.
 
 ## Clean up
 
 To clean up the sources, views, and tables that we created, first connect to Materialize using a [PostgreSQL client](/integrations/sql-clients/) and then, run the following commands:
 
 ```mzsql
-DROP MATERIALIZED VIEW IF EXISTS counter_sum;
-DROP SOURCE IF EXISTS counter;
+DROP MATERIALIZED VIEW IF EXISTS amount_sum;
+DROP SOURCE IF EXISTS auction CASCADE;
 DROP TABLE IF EXISTS countries;
 ```
 

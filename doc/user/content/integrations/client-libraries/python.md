@@ -119,7 +119,7 @@ conn = psycopg2.connect(dsn)
 conn.autocommit = True
 
 with conn.cursor() as cur:
-    cur.execute("CREATE SOURCE counter FROM LOAD GENERATOR COUNTER;")
+    cur.execute("CREATE SOURCE auction FROM LOAD GENERATOR AUCTION FOR ALL TABLES;")
 
 with conn.cursor() as cur:
     cur.execute("SHOW SOURCES")
@@ -141,9 +141,9 @@ conn = psycopg2.connect(dsn)
 conn.autocommit = True
 
 with conn.cursor() as cur:
-    cur.execute("CREATE MATERIALIZED VIEW IF NOT EXISTS counter_sum AS " \
-            "SELECT sum(counter)" \
-            "FROM counter;")
+    cur.execute("CREATE MATERIALIZED VIEW IF NOT EXISTS amount_sum AS " \
+            "SELECT sum(amount)" \
+            "FROM bids;")
 
 with conn.cursor() as cur:
     cur.execute("SHOW VIEWS")
@@ -168,7 +168,7 @@ dsn = "user=MATERIALIZE_USERNAME password=MATERIALIZE_PASSWORD host=MATERIALIZE_
 conn = psycopg2.connect(dsn)
 
 with conn.cursor() as cur:
-    cur.execute("DECLARE c CURSOR FOR SUBSCRIBE counter_sum")
+    cur.execute("DECLARE c CURSOR FOR SUBSCRIBE amount_sum")
     while True:
         cur.execute("FETCH ALL c")
         for row in cur:
@@ -204,7 +204,7 @@ dsn = "user=MATERIALIZE_USERNAME password=MATERIALIZE_PASSWORD host=MATERIALIZE_
 conn = psycopg.connect(dsn)
 
 with conn.cursor() as cur:
-    for row in cur.stream("SUBSCRIBE counter_sum"):
+    for row in cur.stream("SUBSCRIBE amount_sum"):
         print(row)
 ```
 
@@ -213,8 +213,8 @@ with conn.cursor() as cur:
 To clean up the sources, views, and tables that we created, first connect to Materialize using a [PostgreSQL client](/integrations/sql-clients/) and then, run the following commands:
 
 ```mzsql
-DROP MATERIALIZED VIEW IF EXISTS counter_sum;
-DROP SOURCE IF EXISTS counter;
+DROP MATERIALIZED VIEW IF EXISTS amount_sum;
+DROP SOURCE IF EXISTS auction CASCADE;
 DROP TABLE IF EXISTS countries;
 ```
 

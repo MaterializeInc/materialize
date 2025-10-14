@@ -241,12 +241,12 @@ timestamp `4` implies that there are no more updates for either timestamp
 Many drivers buffer all results until a query is complete, and so will never return.
 Below are the recommended ways to work around this.
 
-### Creating a counter load generator
+### Creating an auction load generator
 
-As an example, we'll create a [counter load generator](/sql/create-source/load-generator/#creating-a-counter-load-generator) that emits a row every second:
+As an example, we'll create a [auction load generator](/sql/create-source/load-generator/#creating-an-auction-load-generator) that emits a row every second:
 
 ```mzsql
-CREATE SOURCE counter FROM LOAD GENERATOR COUNTER;
+CREATE SOURCE auction FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
 ```
 
 ### Subscribing with `FETCH`
@@ -254,13 +254,13 @@ CREATE SOURCE counter FROM LOAD GENERATOR COUNTER;
 The recommended way to use `SUBSCRIBE` is with [`DECLARE`](/sql/declare) and [`FETCH`](/sql/fetch).
 These must be used within a transaction, with [a single `DECLARE`](/sql/begin/#read-only-transactions) per transaction.
 This allows you to limit the number of rows and the time window of your requests.
-Next, let's subscribe to the `counter` load generator source that we've created above.
+Next, let's subscribe to the `bids` table of the `auction` load generator source that we've created above.
 
 First, declare a `SUBSCRIBE` cursor:
 
 ```mzsql
 BEGIN;
-DECLARE c CURSOR FOR SUBSCRIBE (SELECT * FROM counter);
+DECLARE c CURSOR FOR SUBSCRIBE (SELECT * FROM bids);
 ```
 
 Then, use [`FETCH`](/sql/fetch) in a loop to retrieve each batch of results as soon as it's ready:
@@ -294,7 +294,7 @@ FETCH ALL c WITH (timeout='0s');
 If you want to use `SUBSCRIBE` from an interactive SQL session (e.g.`psql`), wrap the query in `COPY`:
 
 ```mzsql
-COPY (SUBSCRIBE (SELECT * FROM counter)) TO STDOUT;
+COPY (SUBSCRIBE (SELECT * FROM bids)) TO STDOUT;
 ```
 
 | Additional guides |
@@ -537,12 +537,12 @@ to sort the rows within each distinct timestamp.
 
 * If [`PROGRESS`](#progress) is set, progress messages are unaffected.
 
-### Dropping the `counter` load generator source
+### Dropping the `auction` load generator source
 
-When you're done, you can drop the `counter` load generator source:
+When you're done, you can drop the `auction` load generator source:
 
 ```mzsql
-DROP SOURCE counter;
+DROP SOURCE auction CASCADE;
 ```
 
 ### Durable subscriptions

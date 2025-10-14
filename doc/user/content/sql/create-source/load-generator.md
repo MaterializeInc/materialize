@@ -31,7 +31,6 @@ Field | Use
 ------|-----
 _src_name_  | The name for the source.
 **IN CLUSTER** _cluster_name_ | The [cluster](/sql/create-cluster) to maintain this source.
-**COUNTER**  | Use the [counter](#counter) load generator.
 **AUCTION**  | Use the [auction](#auction) load generator.
 **MARKETING**| Use the [marketing](#marketing) load generator.
 **TPCH**     | Use the [tpch](#tpch) load generator.
@@ -40,14 +39,6 @@ _src_name_  | The name for the source.
 **AS OF**  | The tick at which to start producing data. Defaults to 0. {{< warn-if-unreleased-inline "v0.101" >}}
 **UP TO**  | The tick before which to stop producing data. Defaults to infinite. {{< warn-if-unreleased-inline "v0.101" >}}
 **SCALE FACTOR**   | The scale factor for the `TPCH` generator. Defaults to `0.01` (~ 10MB).
-**MAX CARDINALITY** | Valid for the `COUNTER` generator. Causes the generator to delete old values to keep the collection at most a given size. Defaults to unlimited.
-**KEYS**                    | Valid for [`KEY VALUE` generator](#key-value).
-**SNAPSHOT ROUNDS**         | Valid for [`KEY VALUE` generator](#key-value).
-**TRANSACTIONAL SNAPSHOT**  | Valid for [`KEY VALUE` generator](#key-value).
-**VALUE SIZE**              | Valid for [`KEY VALUE` generator](#key-value).
-**SEED**                    | Valid for [`KEY VALUE` generator](#key-value).
-**PARTITIONS**              | Valid for [`KEY VALUE` generator](#key-value).
-**BATCH SIZE**              | Valid for [`KEY VALUE` generator](#key-value).
 **FOR ALL TABLES** | Creates subsources for all tables in the load generator.
 **EXPOSE PROGRESS AS** _progress_subsource_name_ | The name of the progress subsource for the source. If this is not specified, the subsource will be named `<src_name>_progress`. For more information, see [Monitoring source progress](#monitoring-source-progress).
 **RETAIN HISTORY FOR** <br>_retention_period_ | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`.
@@ -58,11 +49,6 @@ Materialize has several built-in load generators, which provide a quick way to
 get up and running with no external dependencies before plugging in your own
 data sources. If you would like to see an additional load generator, please
 submit a [feature request].
-
-### Counter
-
-The counter load generator produces the sequence `1`, `2`, `3`, …. Each tick
-interval, the next number in the sequence is emitted.
 
 ### Auction
 
@@ -183,37 +169,6 @@ The TPCH source must be used with `FOR ALL TABLES`, which will create the standa
 If `TICK INTERVAL` is specified, after the initial data load, an order and its lineitems will be changed at this interval.
 If not specified, the dataset will not change over time.
 
-### KEY VALUE
-
-{{< private-preview />}}
-
-The `KEY VALUE` load generator produces keyed data that is intended to be passed though the [`UPSERT` envelope](/sql/create-source/#upsert-envelope).
-Its size and performance can be configured in detailed ways.
-
-The schema of the data is:
-
-Field      | Type       | Description
------------|------------|------------
-key        | [`uint8`]  | The key for the value
-partition  | [`uint8`]  | The partition this key belongs to
-value      | [`bytea`]  | Random data associated with the key.
-offset     | [`uint8`]  | The offset of the data (if `INCLUDE OFFSET` is configured).
-
-The following options are supported:
-
-- `KEYS`: The number of keys in the source. For now, this must be divisible by `PARTITIONS` * `BATCH SIZE`,
-    though this constraint may be lifted in the future.
-- `SNAPSHOT ROUNDS`: The number of rounds of data (1 update per key in each round) to produce
-    as the source starts up. Can be used to scale the size of the snapshot without changing the number
-    of keys.
-- `TRANSACTIONAL SNAPSHOT`: Whether or not to emit the snapshot as a singular transaction.
-- `VALUE SIZE`: The number of bytes in each `value`.
-- `TICK INTERVAL`: The _minimum interval_ (as an [`interval`]) to produce batches of data (within each partition) after snapshotting.
-- `SEED`: A per-source [`uint8`] seed for seeding the random data.
-- `PARTITIONS`: The number of partitions to spread the keys across. Can be used to scale concurrency independent of
-    the replica size.
-- `BATCH SIZE`: The number of keys per partition to produce in each update (based on `TICK INTERVAL`).
-
 ### Monitoring source progress
 
 By default, load generator sources expose progress metadata as a subsource that
@@ -239,30 +194,6 @@ more details on monitoring source ingestion progress and debugging related
 issues, see [Troubleshooting](/ops/troubleshooting/).
 
 ## Examples
-
-### Creating a counter load generator
-
-To create a load generator source that emits the next number in the sequence every
-500 milliseconds:
-
-```mzsql
-CREATE SOURCE counter
-  FROM LOAD GENERATOR COUNTER
-  (TICK INTERVAL '500ms');
-```
-
-To examine the counter:
-
-```mzsql
-SELECT * FROM counter;
-```
-```nofmt
- counter
----------
-       1
-       2
-       3
-```
 
 ### Creating an auction load generator
 
