@@ -15,6 +15,7 @@ contexts.
 
 import argparse
 import os
+import re
 from enum import Enum
 
 from materialize import buildkite
@@ -261,8 +262,32 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     features = Features(args.features)
 
     if args.scenario:
-        assert args.scenario in globals(), f"scenario {args.scenario} does not exist"
-        scenarios = [globals()[args.scenario]]
+        # Get all available scenarios
+        base_scenarios = {SystemVarChange}
+        all_scenarios = all_subclasses(Scenario) - base_scenarios
+
+        # Create a mapping of scenario names to scenario classes
+        scenario_map = {scenario.__name__: scenario for scenario in all_scenarios}
+
+        # Compile the regex pattern
+        try:
+            pattern = re.compile(args.scenario)
+        except re.error as e:
+            raise ValueError(f"Invalid regex pattern '{args.scenario}': {e}")
+
+        # Filter scenarios by regex match
+        scenarios = [
+            scenario for name, scenario in scenario_map.items() if pattern.search(name)
+        ]
+
+        if not scenarios:
+            available = sorted(scenario_map.keys())
+            raise ValueError(
+                f"No scenarios matched pattern '{args.scenario}'. "
+                f"Available scenarios: {', '.join(available)}"
+            )
+
+        print(f"Matched scenarios: {[s.__name__ for s in scenarios]}")
     else:
         base_scenarios = {SystemVarChange}
         scenarios = all_subclasses(Scenario) - base_scenarios

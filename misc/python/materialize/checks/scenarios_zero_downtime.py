@@ -16,6 +16,7 @@ from materialize.checks.actions import (
     Manipulate,
     Validate,
 )
+from materialize.checks.all_checks.drop_index import DropIndex
 from materialize.checks.checks import Check
 from materialize.checks.common import wait_ready_and_promote
 from materialize.checks.executors import Executor
@@ -32,6 +33,7 @@ from materialize.checks.scenarios_upgrade import (
 )
 from materialize.mz_version import MzVersion
 from materialize.mzcompose import get_default_system_parameters
+from materialize.version_list import VersionsFromDocs
 
 
 class ZeroDowntimeRestartEntireMz(Scenario):
@@ -309,3 +311,71 @@ class ZeroDowntimeUpgradeEntireMzFourVersions(Scenario):
             *wait_ready_and_promote("mz_5"),
             Validate(self, mz_service="mz_5"),
         ]
+
+
+# class ZeroDowntimeBasic(Scenario):
+#     """0dt upgrade of the entire Mz instance from the last released version."""
+
+#     def __init__(
+#         self,
+#         checks: list[type[Check]],
+#         executor: Executor,
+#         features: Features,
+#         seed: str | None = None,
+#     ):
+#         super().__init__([DropIndex], executor, features, seed)
+
+#     def base_version(self) -> MzVersion:
+#         # TODO (SangJunBak): Create a factory function and replace this with the input version from the factory
+#         # 146, 155 do not work.
+#         return MzVersion.parse_mz("v0.130.0")
+
+
+def create_zero_downtime_basic(
+    name: str,
+    base_version: MzVersion,
+) -> type[Scenario]:
+
+    def actions(self) -> list[Action]:
+        return [
+            StartMz(
+                self,
+                tag=self.base_version(),
+                mz_service="mz_1",
+            ),
+            Initialize(self, mz_service="mz_1"),
+            Manipulate(self, phase=1, mz_service="mz_1"),
+            Manipulate(self, phase=2, mz_service="mz_1"),
+            start_mz_read_only(
+                self,
+                tag=None,
+                deploy_generation=1,
+                mz_service="mz_2",
+            ),
+            *wait_ready_and_promote("mz_2"),
+            Validate(self, mz_service="mz_2"),
+        ]
+
+    return type(
+        name,
+        (Scenario,),
+        {"base_version": lambda self: base_version, "actions": actions},
+    )
+
+
+versions_from_docs = sorted(
+    [
+        version
+        for version in VersionsFromDocs(respect_released_tag=True).all_versions()
+        if version >= MzVersion.parse_mz("v0.140.0")
+    ]
+)
+
+
+zero_downtime_basic_scenarios = [
+    create_zero_downtime_basic(
+        name=f"ZeroDowntimeBasic_{version}",
+        base_version=version,
+    )
+    for version in versions_from_docs
+]
