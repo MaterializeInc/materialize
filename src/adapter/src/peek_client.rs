@@ -17,9 +17,9 @@ use mz_compute_types::ComputeInstanceId;
 use mz_expr::row::RowCollection;
 use mz_ore::cast::CastFrom;
 use mz_persist_client::PersistClient;
+use mz_repr::RelationDesc;
 use mz_repr::Timestamp;
 use mz_repr::global_id::TransientIdGen;
-use mz_repr::{RelationDesc, Row};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_storage_types::sources::Timeline;
 use mz_timestamp_oracle::TimestampOracle;
@@ -300,8 +300,6 @@ impl PeekClient {
                     .await
                     .expect("missing compute instance client");
                 let peek_target = PeekTarget::Index { id: idx_id };
-                let literal_vec: Option<Vec<Row>> = literal_constraints;
-                let map_filter_project = mfp;
                 let finishing_for_instance = finishing.clone();
                 let target_read_hold = input_read_holds
                     .compute_holds
@@ -311,12 +309,12 @@ impl PeekClient {
                 client
                     .peek(
                         peek_target,
-                        literal_vec,
+                        literal_constraints,
                         uuid,
                         timestamp,
                         result_desc,
                         finishing_for_instance,
-                        map_filter_project,
+                        mfp,
                         target_read_hold,
                         target_replica,
                         rows_tx,
@@ -339,15 +337,68 @@ impl PeekClient {
                     strategy: crate::statement_logging::StatementExecutionStrategy::FastPath,
                 })
             }
-            FastPathPlan::PeekPersist(..) => {
-                // TODO(peek-seq): Implement this. (We currently bail out in
-                // `try_frontend_peek_inner`, similarly to slow-path peeks.)
-                // Note that `Instance::peek` has the following comment:
-                // "For persist peeks, the controller should provide a storage read hold.
-                // We don't support acquiring it here."
-                // Can we do this from here?
-                // (Note that if we want to bail out for this case, we need to bail out earlier!)
-                unimplemented!("PeekPersist not yet supported in frontend peek sequencing")
+            FastPathPlan::PeekPersist(coll_id, literal_constraint, mfp) => {
+                let (rows_tx, rows_rx) = oneshot::channel();
+                let uuid = Uuid::new_v4();
+
+                let literal_constraints = literal_constraint.map(|r| vec![r]);
+                let metadata = self
+                    .storage_collections
+                    .collection_metadata(coll_id)
+                    .expect("storage collection for fast-path peek")
+                    .clone();
+                let peek_target = PeekTarget::Persist {
+                    id: coll_id,
+                    metadata,
+                };
+
+                // At this stage we don't know column names for the result because we
+                // only know the peek's result type as a bare SqlRelationType.
+                let cols = (0..intermediate_result_type.arity()).map(|i| format!("peek_{i}"));
+                let result_desc = RelationDesc::new(intermediate_result_type.clone(), cols);
+
+                let finishing_for_instance = finishing.clone();
+                let target_read_hold = input_read_holds
+                    .storage_holds
+                    .get(&coll_id)
+                    .expect("missing storage read hold on PeekPersist peek target")
+                    .clone();
+
+                // Issue peek to the instance
+                let client = self
+                    .ensure_compute_instance_client(compute_instance)
+                    .await
+                    .expect("missing compute instance client");
+                client
+                    .peek(
+                        peek_target,
+                        literal_constraints,
+                        uuid,
+                        timestamp,
+                        result_desc,
+                        finishing_for_instance,
+                        mfp,
+                        target_read_hold,
+                        target_replica,
+                        rows_tx,
+                    )
+                    .await;
+
+                let peek_response_stream = Coordinator::create_peek_response_stream(
+                    rows_rx,
+                    finishing,
+                    max_result_size,
+                    max_returned_query_size,
+                    row_set_finishing_seconds,
+                    self.persist_client.clone(),
+                    peek_stash_read_batch_size_bytes,
+                    peek_stash_read_memory_budget_bytes,
+                );
+                Ok(crate::ExecuteResponse::SendingRowsStreaming {
+                    rows: Box::pin(peek_response_stream),
+                    instance_id: compute_instance,
+                    strategy: crate::statement_logging::StatementExecutionStrategy::PersistFastPath,
+                })
             }
         }
     }

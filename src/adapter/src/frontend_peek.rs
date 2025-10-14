@@ -432,13 +432,8 @@ impl PeekClient {
                 return Ok(None);
             }
             PeekPlan::FastPath(p @ FastPathPlan::Constant(_, _))
-            | PeekPlan::FastPath(p @ FastPathPlan::PeekExisting(_, _, _, _)) => p,
-            PeekPlan::FastPath(FastPathPlan::PeekPersist(_, _, _)) => {
-                debug!(
-                    "Bailing out from try_frontend_peek_inner, because it's a Persist fast path peek"
-                );
-                return Ok(None);
-            }
+            | PeekPlan::FastPath(p @ FastPathPlan::PeekExisting(_, _, _, _))
+            | PeekPlan::FastPath(p @ FastPathPlan::PeekPersist(_, _, _)) => p,
         };
 
         // Warning: Do not bail out from the new peek sequencing after this point, because the
