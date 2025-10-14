@@ -3,6 +3,10 @@ columns:
   - column: "Notable changes"
 
 rows:
+- "Terraform version": |
+    [v0.5.5](https://github.com/MaterializeInc/terraform-aws-materialize/releases/)
+  "Notable changes": |
+    - Uses `terraform-helm-materialize` v0.1.26.
 
 - "Terraform version": |
     [v0.5.4](https://github.com/MaterializeInc/terraform-aws-materialize/releases/)
