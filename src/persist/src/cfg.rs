@@ -23,7 +23,7 @@ use mz_postgres_client::metrics::PostgresClientMetrics;
 
 use crate::azure::{AzureBlob, AzureBlobConfig};
 use crate::file::{FileBlob, FileBlobConfig};
-use crate::foundationdb::{FdbConsensus, FdbConsensusConfig, ValidatingConsensus};
+use crate::foundationdb::{FdbConsensus, FdbConsensusConfig};
 use crate::location::{Blob, Consensus, Determinate, ExternalError};
 use crate::mem::{MemBlob, MemBlobConfig, MemConsensus};
 use crate::metrics::S3BlobMetrics;
@@ -228,14 +228,6 @@ impl ConsensusConfig {
             ConsensusConfig::FoundationDB(config) => {
                 Ok(Arc::new(FdbConsensus::open(config).await?))
             }
-            // ConsensusConfig::FoundationDB(config) => {
-            //     let inner = FdbConsensus::open(config).await?;
-            //     inner.drop_and_recreate().await?;
-            //     Ok(Arc::new(ValidatingConsensus {
-            //         inner,
-            //         validator: MemConsensus::default(),
-            //     }))
-            // }
             ConsensusConfig::Postgres(config) => {
                 Ok(Arc::new(PostgresConsensus::open(config).await?))
             }
@@ -251,12 +243,9 @@ impl ConsensusConfig {
         dyncfg: Arc<ConfigSet>,
     ) -> Result<Self, ExternalError> {
         let config = match url.scheme() {
-            "fdb" | "foundationdb" => {
-                let network = FdbConsensusConfig::get_network();
-                Ok(ConsensusConfig::FoundationDB(FdbConsensusConfig::new(
-                    network.into(),
-                )?))
-            }
+            "fdb" | "foundationdb" => Ok(ConsensusConfig::FoundationDB(FdbConsensusConfig::new(
+                url.clone(),
+            )?)),
             "postgres" | "postgresql" => Ok(ConsensusConfig::Postgres(
                 PostgresConsensusConfig::new(url, knobs, metrics, dyncfg)?,
             )),

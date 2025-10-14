@@ -916,11 +916,9 @@ mod tests {
     }
 
     pub async fn new_test_client(dyncfgs: &ConfigUpdates) -> PersistClient {
-        let mut location = PersistLocation::new_in_mem();
-        location.consensus_uri = "foundationdb://".parse().unwrap();
         let cache = new_test_client_cache(dyncfgs);
         cache
-            .open(location)
+            .open(PersistLocation::new_in_mem())
             .await
             .expect("client construction failed")
     }
