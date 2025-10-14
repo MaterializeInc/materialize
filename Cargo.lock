@@ -598,7 +598,7 @@ checksum = "3b43422f69d8ff38f95f1b2bb76517c91589a924d1559a0e935d7c8ce0274c11"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.106",
+ "syn 2.0.111",
 ]
 
 [[package]]
@@ -1444,7 +1444,7 @@ dependencies = [
  "regex",
  "rustc-hash 1.1.0",
  "shlex",
- "syn 2.0.106",
+ "syn 2.0.111",
 ]
 
 [[package]]
@@ -3443,7 +3443,7 @@ checksum = "9be610412e5a92d89855fb15b099a57792b7dbdcf8ac74c5a0e24d9b7b1b6f7f"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.106",
+ "syn 2.0.111",
  "try_map",
 ]
 
