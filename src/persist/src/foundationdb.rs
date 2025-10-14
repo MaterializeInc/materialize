@@ -294,7 +294,7 @@ impl FdbConsensus {
             .map(|data| unpack(&data))
             .transpose()?;
 
-        if expected.is_some() && (expected != &seqno) {
+        if expected != &seqno {
             return Ok(CaSResult::ExpectationMismatch);
         }
 
