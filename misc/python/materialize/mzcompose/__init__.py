@@ -118,6 +118,7 @@ def get_minimal_system_parameters(
         "ore_overflowing_behavior": "panic",
         "unsafe_enable_table_keys": "true",
         "with_0dt_deployment_max_wait": "1800s",
+        "log_filter": "debug",
         # End of list (ordered by name)
     }
 

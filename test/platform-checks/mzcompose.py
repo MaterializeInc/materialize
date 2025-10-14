@@ -258,6 +258,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "--external-blob-store", action=argparse.BooleanOptionalAction, default=True
     )
 
+    parser.add_argument(
+        "--teardown",
+        default="False",
+        choices=["True", "False"],
+        help="Teardown the environment per scenario ran",
+    )
+
     args = parser.parse_args()
     features = Features(args.features)
 
@@ -340,14 +347,17 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             execution_mode = args.execution_mode
 
             if execution_mode in [ExecutionMode.SEQUENTIAL, ExecutionMode.PARALLEL]:
-                setup(c, args.external_blob_store)
-                scenario = scenario_class(
-                    checks=checks,
-                    executor=executor,
-                    features=features,
-                    seed=args.seed,
-                )
-                scenario.run()
+                try:
+                    setup(c, args.external_blob_store)
+                    scenario = scenario_class(
+                        checks=checks,
+                        executor=executor,
+                        features=features,
+                        seed=args.seed,
+                    )
+                    scenario.run()
+                except Exception as e:
+                    print(e)
             elif execution_mode is ExecutionMode.ONEATATIME:
                 for check in checks:
                     print(
@@ -356,13 +366,18 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     c.override_current_testcase_name(
                         f"Check '{check}' with scenario '{scenario_class}'"
                     )
-                    setup(c, args.external_blob_store)
-                    scenario = scenario_class(
-                        checks=[check],
-                        executor=executor,
-                        features=features,
-                        seed=args.seed,
-                    )
-                    scenario.run()
+                    try:
+                        setup(c, args.external_blob_store)
+                        scenario = scenario_class(
+                            checks=[check],
+                            executor=executor,
+                            features=features,
+                            seed=args.seed,
+                        )
+                        scenario.run()
+                    except Exception as e:
+                        print(e)
             else:
                 raise RuntimeError(f"Unsupported execution mode: {execution_mode}")
+            if args.teardown == "True":
+                teardown(c)

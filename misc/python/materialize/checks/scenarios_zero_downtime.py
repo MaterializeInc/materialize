@@ -16,7 +16,6 @@ from materialize.checks.actions import (
     Manipulate,
     Validate,
 )
-from materialize.checks.all_checks.drop_index import DropIndex
 from materialize.checks.checks import Check
 from materialize.checks.common import wait_ready_and_promote
 from materialize.checks.executors import Executor
@@ -313,24 +312,6 @@ class ZeroDowntimeUpgradeEntireMzFourVersions(Scenario):
         ]
 
 
-# class ZeroDowntimeBasic(Scenario):
-#     """0dt upgrade of the entire Mz instance from the last released version."""
-
-#     def __init__(
-#         self,
-#         checks: list[type[Check]],
-#         executor: Executor,
-#         features: Features,
-#         seed: str | None = None,
-#     ):
-#         super().__init__([DropIndex], executor, features, seed)
-
-#     def base_version(self) -> MzVersion:
-#         # TODO (SangJunBak): Create a factory function and replace this with the input version from the factory
-#         # 146, 155 do not work.
-#         return MzVersion.parse_mz("v0.130.0")
-
-
 def create_zero_downtime_basic(
     name: str,
     base_version: MzVersion,
@@ -359,7 +340,10 @@ def create_zero_downtime_basic(
     return type(
         name,
         (Scenario,),
-        {"base_version": lambda self: base_version, "actions": actions},
+        {
+            "base_version": lambda self: base_version,
+            "actions": actions,
+        },
     )
 
 
@@ -367,14 +351,14 @@ versions_from_docs = sorted(
     [
         version
         for version in VersionsFromDocs(respect_released_tag=True).all_versions()
-        if version >= MzVersion.parse_mz("v0.140.0")
+        if version >= MzVersion.parse_mz("v0.107.0")
     ]
 )
 
 
 zero_downtime_basic_scenarios = [
     create_zero_downtime_basic(
-        name=f"ZeroDowntimeBasic_{version}",
+        name=f"MultiVersionZeroDowntimeBasic_{version}",
         base_version=version,
     )
     for version in versions_from_docs
