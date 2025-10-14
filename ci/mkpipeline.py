@@ -911,7 +911,8 @@ def remove_dependencies_on_prs(
 def move_build_to_bazel_lto(pipeline: Any, bazel_lto: bool) -> None:
     if not bazel_lto:
         return
-    pipeline.setdefault("env", {})["CI_BAZEL_BUILD"] = 1
+    # TODO: Use Bazel again when database-issues#9797 is fixed
+    pipeline.setdefault("env", {})["CI_BAZEL_BUILD"] = 0
     pipeline["env"]["CI_BAZEL_LTO"] = 1
     for step in steps(pipeline):
         if step.get("id") == "build-x86_64":

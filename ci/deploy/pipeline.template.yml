@@ -11,7 +11,8 @@
 priority: 30
 
 env:
-  CI_BAZEL_BUILD: 1
+  # TODO: Use Bazel again when database-issues#9797 is fixed
+  CI_BAZEL_BUILD: 0
   CI_BAZEL_REMOTE_CACHE: $BAZEL_REMOTE_CACHE
   CI_BAZEL_LTO: 0
 

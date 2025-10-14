@@ -58,7 +58,8 @@ steps:
   - wait
   - label: mkpipeline
     env:
-      CI_BAZEL_BUILD: 1
+      # TODO: Use Bazel again when database-issues#9797 is fixed
+      CI_BAZEL_BUILD: 0
       CI_BAZEL_REMOTE_CACHE: "https://bazel-remote.dev.materialize.com"
     command: bin/ci-builder run min bin/pyactivate -m ci.mkpipeline $pipeline $@
     priority: 200
