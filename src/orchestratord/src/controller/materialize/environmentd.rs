@@ -20,7 +20,7 @@ use k8s_openapi::{
         apps::v1::{StatefulSet, StatefulSetSpec, StatefulSetUpdateStrategy},
         core::v1::{
             Capabilities, ConfigMap, ConfigMapVolumeSource, Container, ContainerPort, EnvVar,
-            EnvVarSource, KeyToPath, Pod, PodSecurityContext, PodSpec, PodTemplateSpec, Probe,
+            EnvVarSource, KeyToPath, PodSecurityContext, PodSpec, PodTemplateSpec, Probe,
             SeccompProfile, Secret, SecretKeySelector, SecretVolumeSource, SecurityContext,
             Service, ServiceAccount, ServicePort, ServiceSpec, TCPSocketAction, Toleration, Volume,
             VolumeMount,
@@ -182,7 +182,6 @@ impl Resources {
         let role_api: Api<Role> = Api::namespaced(client.clone(), namespace);
         let role_binding_api: Api<RoleBinding> = Api::namespaced(client.clone(), namespace);
         let statefulset_api: Api<StatefulSet> = Api::namespaced(client.clone(), namespace);
-        let pod_api: Api<Pod> = Api::namespaced(client.clone(), namespace);
         let certificate_api: Api<Certificate> = Api::namespaced(client.clone(), namespace);
         let configmap_api: Api<ConfigMap> = Api::namespaced(client.clone(), namespace);
 
@@ -1742,8 +1741,4 @@ enum BecomeLeaderResult {
 #[derive(Debug, Deserialize, PartialEq, Eq)]
 struct SkipCatchupError {
     message: String,
-}
-
-fn statefulset_pod_name(statefulset: &StatefulSet, idx: u64) -> String {
-    format!("{}-{}", statefulset.name_unchecked(), idx)
 }
