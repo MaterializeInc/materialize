@@ -24,26 +24,61 @@ to Materialize using the [MySQL source](/sql/create-source/mysql/).
 ### 1. Enable GTID-based binlog replication
 
 {{< note >}}
-GTID-based replication is supported for Amazon Aurora MySQL v2 and v3, as well
+GTID-based replication is supported for Amazon Aurora MySQL v2 and v3 as well
 as Aurora Serverless v2.
 {{</ note >}}
 
-Before creating a source in Materialize, you **must** configure Amazon Aurora
-MySQL for GTID-based binlog replication. This requires enabling binlog replication and
-the following additional configuration changes:
+1. Before creating a source in Materialize, you **must** configure Amazon Aurora
+   MySQL for GTID-based binlog replication. Ensure the upstream MySQL database  has been configured for GTID-based binlog replication:
 
-Configuration parameter          | Value  | Details
----------------------------------|--------| -------------------------------
-`log_bin`                        | `ON`   |
-`binlog_format`                  | `ROW`  | This configuration is [deprecated as of MySQL 8.0.34](https://dev.mysql.com/doc/refman/8.0/en/replication-options-binary-log.html#sysvar_binlog_format). Newer versions of MySQL default to row-based logging.
-`binlog_row_image`               | `FULL` |
-`gtid_mode`                      | `ON`   | In the AWS console, this parameter appears as `gtid-mode`.
-`enforce_gtid_consistency`       | `ON`   |
-`binlog retention hours`         | 168    |
-`replica_preserve_commit_order`  | `ON`   | Only required when connecting Materialize to a read-replica for replication, rather than the primary server.
+   {{% mysql-direct/ingesting-data/mysql-configs
+      gtid_mode_note="In the AWS console, this parameter appears as `gtid-mode`."
+      binlog_format_note=" "
+   %}}
 
-For guidance on enabling GTID-based binlog replication in Aurora, see the
-[Amazon Aurora MySQL documentation](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/mysql-replication-gtid.html).
+   For guidance on enabling GTID-based binlog replication in Aurora, see the
+   [Amazon Aurora MySQL
+    documentation](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/mysql-replication-gtid.html).
+
+1. In addition to the step above, you **must** also ensure that
+   [binlog retention](/sql/create-source/mysql/#binlog-retention) is set to a
+   reasonable value. To check the current value of the `binlog retention hours`
+   configuration parameter, connect to your RDS instance and run:
+
+   ```mysql
+   CALL mysql.rds_show_configuration;
+   ```
+
+   If the value returned is `NULL`, or less than `168` (i.e. 7 days), run:
+
+   ```mysql
+   CALL mysql.rds_set_configuration('binlog retention hours', 168);
+   ```
+
+   Although 7 days is a reasonable retention period, we recommend using the
+   default MySQL retention period (30 days) in order to not compromise
+   Materialize’s ability to resume replication in case of failures or
+   restarts.
+
+1. To validate that all configuration parameters are set to the expected values
+   after the above configuration changes, run:
+
+    ```mysql
+    -- Validate "binlog retention hours" configuration parameter
+    CALL mysql.rds_show_configuration;
+    ```
+
+    ```mysql
+    -- Validate parameter group configuration parameters
+    SHOW VARIABLES WHERE variable_name IN (
+      'log_bin',
+      'binlog_format',
+      'binlog_row_image',
+      'gtid_mode',
+      'enforce_gtid_consistency',
+      'replica_preserve_commit_order'
+    );
+    ```
 
 ### 2. Create a user for replication
 

@@ -28,8 +28,8 @@ GTID-based binlog replication. For guidance on enabling GTID-based
 binlog replication in RDS, see the [Amazon RDS for MySQL documentation](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/mysql-replication-gtid.html).
 
 1. [Enable automated backups in your RDS instance](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_WorkingWithAutomatedBackups.html#USER_WorkingWithAutomatedBackups.Enabling)
-by setting the backup retention period to a value greater than `0` to enable
-binary logging.
+by setting the backup retention period to a value greater than `0`.  This
+enables binary logging (`log_bin`).
 
 1. [Create a custom RDS parameter group](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_WorkingWithDBInstanceParamGroups.html#USER_WorkingWithParamGroups.Creating).
 
@@ -39,15 +39,9 @@ binary logging.
 1. Edit the new parameter group to set the configuration parameters to the
    following values:
 
-
-   | Configuration parameter          | Value | Details |
-   |----------------------------------|-------|---------|
-   | `log_bin_use_v1_row_events`      | `ON`  | AWS Management Console equivalent to MySQL's `log_bin` configuration parameter. |
-   | `binlog_format`                  | `ROW` | This configuration is [deprecated as of MySQL 8.0.34](https://dev.mysql.com/doc/refman/8.0/en/replication-options-binary-log.html#sysvar_binlog_format). Newer versions of MySQL default to row-based logging. |
-   | `binlog_row_image`               | `FULL`|         |
-   | `gtid-mode`                      | `ON`  | AWS Management Console equivalent to MySQL's `gtid_mode` configuration parameter. |
-   | `enforce_gtid_consistency`       | `ON`  |         |
-   | `replica_preserve_commit_order`  | `ON`  | Only required when connecting Materialize to a read-replica for replication, rather than the primary server. |
+   {{% mysql-direct/ingesting-data/mysql-configs
+    gtid_mode_note="In the AWS console, this parameter appears as `gtid-mode`."
+    omit_row="MySQL Configuration:`log_bin`" %}}
 
 
 1. [Associate the RDS parameter group to your database](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_WorkingWithDBInstanceParamGroups.html#USER_WorkingWithParamGroups.Associating).
