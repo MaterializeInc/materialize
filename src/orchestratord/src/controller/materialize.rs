@@ -28,7 +28,7 @@ use uuid::Uuid;
 use crate::metrics::Metrics;
 use mz_cloud_provider::CloudProvider;
 use mz_cloud_resources::crd::materialize::v1alpha1::{
-    Materialize, MaterializeCertSpec, MaterializeStatus,
+    Materialize, MaterializeCertSpec, MaterializeRolloutStrategy, MaterializeStatus,
 };
 use mz_license_keys::validate;
 use mz_orchestrator_kubernetes::KubernetesImagePullPolicy;
@@ -491,6 +491,17 @@ impl k8s_controller::Context for Context {
                     .await?;
                 let mz = &mz;
                 let status = mz.status();
+
+                if mz.spec.rollout_strategy
+                    == MaterializeRolloutStrategy::ImmediatelyPromoteCausingDowntime
+                {
+                    // The only reason someone would choose this strategy is if they didn't have
+                    // space for the two generations of pods.
+                    // Lets make room for the new ones by deleting the old generation.
+                    resources
+                        .teardown_generation(&client, mz, active_generation)
+                        .await?;
+                }
 
                 trace!("applying environment resources");
                 match resources
