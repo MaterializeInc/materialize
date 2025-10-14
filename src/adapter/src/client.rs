@@ -263,6 +263,7 @@ impl Client {
             storage_collections,
             transient_id_gen,
             optimizer_metrics,
+            persist_client,
         } = response;
 
         let peek_client = PeekClient::new(
@@ -270,6 +271,7 @@ impl Client {
             storage_collections,
             transient_id_gen,
             optimizer_metrics,
+            persist_client,
         );
 
         let mut client = SessionClient {

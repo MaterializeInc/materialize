@@ -13,10 +13,10 @@ use std::sync::Arc;
 use differential_dataflow::consolidation::consolidate;
 use mz_compute_client::controller::error::CollectionMissing;
 use mz_compute_client::protocol::command::PeekTarget;
-use mz_compute_client::protocol::response::PeekResponse;
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::row::RowCollection;
 use mz_ore::cast::CastFrom;
+use mz_persist_client::PersistClient;
 use mz_repr::Timestamp;
 use mz_repr::global_id::TransientIdGen;
 use mz_repr::{RelationDesc, Row};
@@ -30,7 +30,6 @@ use uuid::Uuid;
 
 use crate::catalog::Catalog;
 use crate::command::{CatalogSnapshot, Command};
-use crate::coord;
 use crate::coord::Coordinator;
 use crate::coord::peek::FastPathPlan;
 use crate::{AdapterError, Client, CollectionIdBundle, ReadHolds};
@@ -59,6 +58,7 @@ pub struct PeekClient {
     pub optimizer_metrics: OptimizerMetrics,
     /// Per-timeline oracles from the coordinator. Lazily populated.
     oracles: BTreeMap<Timeline, Arc<dyn TimestampOracle<Timestamp> + Send + Sync>>,
+    persist_client: PersistClient,
 }
 
 impl PeekClient {
@@ -68,6 +68,7 @@ impl PeekClient {
         storage_collections: StorageCollectionsHandle,
         transient_id_gen: Arc<TransientIdGen>,
         optimizer_metrics: OptimizerMetrics,
+        persist_client: PersistClient,
     ) -> Self {
         Self {
             coordinator_client,
@@ -76,6 +77,7 @@ impl PeekClient {
             transient_id_gen,
             optimizer_metrics,
             oracles: Default::default(), // lazily populated
+            persist_client,
         }
     }
 
@@ -239,6 +241,8 @@ impl PeekClient {
         max_returned_query_size: Option<u64>,
         row_set_finishing_seconds: Histogram,
         input_read_holds: ReadHolds<Timestamp>,
+        peek_stash_read_batch_size_bytes: usize,
+        peek_stash_read_memory_budget_bytes: usize,
     ) -> Result<crate::ExecuteResponse, AdapterError> {
         match fast_path {
             // If the dataflow optimizes to a constant expression, we can immediately return the result.
@@ -319,39 +323,16 @@ impl PeekClient {
                     )
                     .await;
 
-                // TODO(peek-seq): call `create_peek_response_stream` instead. For that, we'll need
-                // to pass in a PersistClient from afar.
-                let peek_response_stream = async_stream::stream!({
-                    match rows_rx.await {
-                        Ok(PeekResponse::Rows(rows)) => {
-                            match finishing.finish(
-                                rows,
-                                max_result_size,
-                                max_returned_query_size,
-                                &row_set_finishing_seconds,
-                            ) {
-                                Ok((rows, _size_bytes)) => {
-                                    yield coord::peek::PeekResponseUnary::Rows(Box::new(rows))
-                                }
-                                Err(e) => yield coord::peek::PeekResponseUnary::Error(e),
-                            }
-                        }
-                        Ok(PeekResponse::Stashed(_response)) => {
-                            // TODO(peek-seq): support this (through `create_peek_response_stream`)
-                            yield coord::peek::PeekResponseUnary::Error("stashed peek responses not yet supported in frontend peek sequencing".into());
-                        }
-                        Ok(PeekResponse::Error(err)) => {
-                            yield coord::peek::PeekResponseUnary::Error(err);
-                        }
-                        Ok(PeekResponse::Canceled) => {
-                            yield coord::peek::PeekResponseUnary::Canceled;
-                        }
-                        Err(e) => {
-                            yield coord::peek::PeekResponseUnary::Error(e.to_string());
-                        }
-                    }
-                });
-
+                let peek_response_stream = Coordinator::create_peek_response_stream(
+                    rows_rx,
+                    finishing,
+                    max_result_size,
+                    max_returned_query_size,
+                    row_set_finishing_seconds,
+                    self.persist_client.clone(),
+                    peek_stash_read_batch_size_bytes,
+                    peek_stash_read_memory_budget_bytes,
+                );
                 Ok(crate::ExecuteResponse::SendingRowsStreaming {
                     rows: Box::pin(peek_response_stream),
                     instance_id: compute_instance,

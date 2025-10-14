@@ -885,7 +885,7 @@ impl crate::coord::Coordinator {
 
     /// Creates an async stream that processes peek responses and yields rows.
     #[mz_ore::instrument(level = "debug")]
-    fn create_peek_response_stream(
+    pub(crate) fn create_peek_response_stream(
         rows_rx: tokio::sync::oneshot::Receiver<PeekResponse>,
         finishing: RowSetFinishing,
         max_result_size: u64,
