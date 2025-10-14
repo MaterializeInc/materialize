@@ -22,7 +22,7 @@ operator:
     # -- Log filtering settings for startup logs
     startupLogFilter: "INFO,mz_orchestratord=TRACE"
     enableInternalStatementLogging: true
-    enableLicenseKeyChecks: true
+    enableLicenseKeyChecks: false
 
   # -- Additional columns to display when printing the Materialize CRD in table format.
   additionalMaterializeCRDColumns:
