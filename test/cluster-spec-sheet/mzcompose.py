@@ -2014,7 +2014,6 @@ def run_scenario_strong(
         runner.run_query("DROP CLUSTER IF EXISTS c CASCADE")
         runner.run_query(f"CREATE CLUSTER c SIZE '{replica_size}'")
         runner.run_query("SET cluster = 'c';")
-        runner.run_query("SET transaction_isolation = 'serializable';")
         runner.run_query("SELECT * FROM t;")
 
         runner.replica_size = replica_size
@@ -2073,7 +2072,6 @@ def run_scenario_weak(
         runner.run_query("DROP CLUSTER IF EXISTS c CASCADE")
         runner.run_query(f"CREATE CLUSTER c SIZE '{replica_size}'")
         runner.run_query("SET cluster = 'c';")
-        runner.run_query("SET transaction_isolation = 'serializable';")
         runner.run_query("SELECT * FROM t;")
 
         scenario.run(runner)
