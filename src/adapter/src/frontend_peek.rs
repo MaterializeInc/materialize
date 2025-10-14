@@ -496,6 +496,13 @@ impl PeekClient {
 
         let row_set_finishing_seconds = session.metrics().row_set_finishing_seconds().clone();
 
+        let peek_stash_read_batch_size_bytes =
+            mz_compute_types::dyncfgs::PEEK_RESPONSE_STASH_READ_BATCH_SIZE_BYTES
+                .get(catalog.system_config().dyncfgs());
+        let peek_stash_read_memory_budget_bytes =
+            mz_compute_types::dyncfgs::PEEK_RESPONSE_STASH_READ_MEMORY_BUDGET_BYTES
+                .get(catalog.system_config().dyncfgs());
+
         // Implement the peek, and capture the response.
         let resp = self
             .implement_fast_path_peek_plan(
@@ -509,6 +516,8 @@ impl PeekClient {
                 max_query_result_size,
                 row_set_finishing_seconds,
                 read_holds,
+                peek_stash_read_batch_size_bytes,
+                peek_stash_read_memory_budget_bytes,
             )
             .await?;
 

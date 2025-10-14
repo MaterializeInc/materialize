@@ -21,6 +21,7 @@ use mz_compute_types::ComputeInstanceId;
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert_no_log;
 use mz_ore::tracing::OpenTelemetryContext;
+use mz_persist_client::PersistClient;
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::global_id::TransientIdGen;
 use mz_repr::role_id::RoleId;
@@ -249,6 +250,7 @@ pub struct StartupResponse {
     >,
     pub transient_id_gen: Arc<TransientIdGen>,
     pub optimizer_metrics: OptimizerMetrics,
+    pub persist_client: PersistClient,
 }
 
 /// The response to [`Client::authenticate`](crate::Client::authenticate).
