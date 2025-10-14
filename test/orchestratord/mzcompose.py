@@ -157,11 +157,15 @@ class Modification:
 
     @classmethod
     def bad_values(cls) -> list[Any]:
-        return []
+        return cls.failed_reconciliation_values()
 
     @classmethod
     def good_values(cls) -> list[Any]:
         return [value for value in cls.values() if value not in cls.bad_values()]
+
+    @classmethod
+    def failed_reconciliation_values(cls) -> list[Any]:
+        return []
 
     def modify(self, definition: dict[str, Any]) -> None:
         raise NotImplementedError
@@ -177,7 +181,7 @@ class LicenseKey(Modification):
         return ["valid", "invalid"]
 
     @classmethod
-    def bad_values(cls) -> list[Any]:
+    def failed_reconciliation_values(cls) -> list[Any]:
         return ["invalid"]
 
     @classmethod
@@ -198,13 +202,17 @@ class LicenseKey(Modification):
 
     def validate(self, mods: dict[type[Modification], Any]) -> None:
         environmentd = get_environmentd_data()
+        if self.value == "invalid":
+            assert len(environmentd["items"]) == 0
+            return
+
         envs = environmentd["items"][0]["spec"]["containers"][0]["env"]
         if self.value == "del" or (mods[LicenseKeyCheck] == False):
             for env in envs:
                 assert (
                     env["name"] != "MZ_LICENSE_KEY"
                 ), f"Expected MZ_LICENSE_KEY to be missing, but is in {envs}"
-        elif self.value in ["valid", "invalid"]:
+        elif self.value == "valid":
             for env in envs:
                 if env["name"] != "MZ_LICENSE_KEY":
                     continue
@@ -218,10 +226,7 @@ class LicenseKey(Modification):
                     False
                 ), f"Expected to find MZ_LICENSE_KEY in env variables, but only found {envs}"
             ready = environmentd["items"][0]["status"]["containerStatuses"][0]["ready"]
-            expected = self.value != "invalid"
-            assert (
-                ready == expected
-            ), f"Expected environmentd to be in ready state {expected}, but is {ready}"
+            assert ready, "Expected environmentd to be in ready state"
 
 
 class LicenseKeyCheck(Modification):
@@ -1061,10 +1066,13 @@ def run_scenario(
     scenario = json.dumps([mod.to_dict() for mod in mods])
     print(f"--- Running with {scenario}")
     definition = copy.deepcopy(original_definition)
+    expect_fail = False
     if modify:
         for mod in mods:
             mod.modify(definition)
-    run(definition)
+            if mod.value in mod.failed_reconciliation_values():
+                expect_fail = True
+    run(definition, expect_fail)
     mod_dict = {mod.__class__: mod.value for mod in mods}
     for subclass in all_subclasses(Modification):
         if subclass not in mod_dict:
@@ -1079,7 +1087,7 @@ def run_scenario(
         raise
 
 
-def run(definition: dict[str, Any]):
+def run(definition: dict[str, Any], expect_fail: bool):
     try:
         spawn.capture(
             ["kubectl", "delete", "namespace", "materialize-environment"],
@@ -1219,9 +1227,27 @@ def run(definition: dict[str, Any]):
                 stderr=subprocess.DEVNULL,
             )
             if status in ["Running", "Error", "CrashLoopBackOff"]:
+                assert not expect_fail
                 break
         except subprocess.CalledProcessError:
-            pass
+            if expect_fail:
+                logs = spawn.capture(
+                    [
+                        "kubectl",
+                        "logs",
+                        "-l",
+                        "app.kubernetes.io/instance=operator",
+                        "-n",
+                        "materialize",
+                    ],
+                    stderr=subprocess.DEVNULL,
+                )
+                if (
+                    f"ERROR k8s_controller::controller: Materialize reconciliation error. err=reconciler for object Materialize.v1alpha1.materialize.cloud/{definition['materialize']['metadata']['name']}.materialize-environment failed"
+                    in logs
+                ):
+                    break
+
         time.sleep(1)
     else:
         # Helps to debug
