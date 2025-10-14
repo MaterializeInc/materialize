@@ -99,7 +99,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
             // error.
             let current_restore_history_id = get_latest_restore_history_id(&mut client).await?;
             if current_restore_history_id != extras.restore_history_id {
-                tracing::error!("Restore happened, exiting");
+                tracing::warn!("Restore detected, exiting");
                 return Ok(());
              }
 
