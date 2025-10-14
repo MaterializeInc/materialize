@@ -271,11 +271,11 @@ def main() -> int:
         if args.program == "environmentd":
             _handle_lingering_services(kill=args.reset)
             scratch = MZ_ROOT / "scratch"
-            # dbconn = _connect_sql(args.postgres)
-            # for schema in ["consensus", "tsoracle", "storage"]:
-            #     if args.reset:
-            #         _run_sql(dbconn, f"DROP SCHEMA IF EXISTS {schema} CASCADE")
-            #     _run_sql(dbconn, f"CREATE SCHEMA IF NOT EXISTS {schema}")
+            dbconn = _connect_sql(args.postgres)
+            for schema in ["consensus", "tsoracle", "storage"]:
+                if args.reset:
+                    _run_sql(dbconn, f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+                _run_sql(dbconn, f"CREATE SCHEMA IF NOT EXISTS {schema}")
             # Keep this after clearing out Postgres. Otherwise there is a race
             # where a ctrl-c could leave persist with references in Postgres to
             # files that have been deleted. There's no race if we reset in the
@@ -320,7 +320,7 @@ def main() -> int:
                 f"--orchestrator-process-prometheus-service-discovery-directory={MZDATA}/prometheus",
                 f"--orchestrator-process-scratch-directory={scratch}",
                 "--secrets-controller=local-file",
-                f"--persist-consensus-url={args.consensus}?options=--search_path=consensus",
+                f"--persist-consensus-url={consensus}?options=--search_path=consensus",
                 f"--persist-blob-url={args.blob}",
                 f"--timestamp-oracle-url={args.postgres}?options=--search_path=tsoracle",
                 f"--environment-id={environment_id}",
