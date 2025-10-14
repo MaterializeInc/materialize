@@ -31,7 +31,7 @@ This design doc fleshes out the sketch from that original design, and gives a mo
 
 As part of the columnar migration, Persist introduced a new `Schema` trait which controls how a particular set of rows should be tranlated into a columnar format. (For example, the key type of an typical shard is `SourceData` and its schema type is `RelationDesc`; the arrow datatype will generally be a struct, with fields that vary depending on the exact set of columns and values in that schema.) Persist uses schema implementations like this to map inputs and outputs to and from its columnar representation at the edges, but otherwise works internally in terms of the underlying Arrow datatypes. This allows Persist to strongly enforce its internal requirements around data ordering and encoding, while allowing relations and their encoding to vary over time.
 
-A Persist shard maintains an ordered sequence of schemas. This sequence is appended to with the `PersistClient::compare_and_evolve_schema` method. If the sequence is empty, this sets the initial schema of the shard. If the sequence is non-empty, this will check that the schema obeys the schema-migration rules; if it does, it will add the given schema as the latest schema of the shard. A monotonically-increasing `SchemaId` identifies a particular schema in this sequence.
+A Persist shard maintains an ordered sequence of schemas. Clients may append a new schema to the sequence. If the sequence is empty, this sets the initial schema of the shard. If the sequence is non-empty, this will check that the schema obeys the schema-migration rules; if it does, it will add the given schema as the latest schema of the shard. A monotonically-increasing `SchemaId` identifies a particular schema in this sequence.
 
 ### DataType migration rules
 
@@ -94,6 +94,14 @@ At time of writing, we have only implemented adding nullable columns to the end 
 So far, the demand for more advanced schema migrations has been limited. When we want to allow more advanced schema migrations, we’ll want to relax some of the assumptions above.
 
 We’ve also implemented a few ad-hoc conversions, to deal with issues we found during the initial rollout — for example, compatibility issues around nullability or maps vs. lists. We will need to keep these special cases around until all the old data has been rewritten, which may be some time.
+
+There are a number of other places where the current implementation is less general than the design... for example, the `compare_and_evolve_schema` method in the Persist API allows changing the schema of the shard, but initializing the schema is done implicitly elsewhere. In cases where the implementation and this design doc disagree, we expect to evolve the Persist API to more closely resemble this design over time.
+
+### About the standard schema implementation
+
+While Persist is designed to be agnostic to the exact data and schema types, in practice most collections are collections of `Row`s with `RelationDesc` schemas. Some brief notes on the nonobvious aspects of that mapping:
+- We choose the field names in the Arrow `DataType` based on the numeric column ids in the relation desc, not the field names. This allows renaming fields without any type changes at the Persist level at all.
+- In today's Materialize, nullability metadata is not reliable... changes to the optimizer can mean a column is marked as nullable this week but non-nullable next week. To avoid bootstrap failures, the `RelationDesc` schema implementation just marks all columns as possibly nullable. For use-cases like tables where nullability shouldn't change unexpectedly, the caller may need additional assertions to enforce their own higher-level semantics.
 
 ## Alternatives
 
