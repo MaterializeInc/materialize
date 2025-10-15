@@ -156,46 +156,70 @@ $ set-regex match=\d{13} replacement=<TIMESTAMP>
 # Test that certain `*_per_worker` relations include the same data for each
 # worker. The corresponding global relations rely on this to justify showing
 # only the data from worker 0.
+#
+# These queries get confused by transient dataflows that get created and
+# dropped quickly, so we filter these out.
 
 > SELECT DISTINCT count(*)
-  FROM mz_introspection.mz_dataflows_per_worker
-  GROUP BY id, name
+  FROM mz_introspection.mz_dataflows_per_worker d
+  JOIN mz_introspection.mz_compute_exports e ON d.id = e.dataflow_id
+  WHERE e.export_id NOT LIKE 't%'
+  GROUP BY d.id
 16
 
 > SELECT DISTINCT count(*)
-  FROM mz_introspection.mz_dataflow_addresses_per_worker
-  GROUP BY id, address
+  FROM mz_introspection.mz_dataflow_addresses_per_worker a
+  JOIN mz_introspection.mz_dataflow_operator_dataflows od USING (id)
+  JOIN mz_introspection.mz_compute_exports e USING (dataflow_id)
+  WHERE e.export_id NOT LIKE 't%'
+  GROUP BY a.id
 16
 
 > SELECT DISTINCT count(*)
-  FROM mz_introspection.mz_dataflow_channels_per_worker
-  GROUP BY id, from_index, from_port, to_index, to_port
+  FROM mz_introspection.mz_dataflow_channels_per_worker c
+  JOIN mz_introspection.mz_dataflow_channel_operators co USING (id)
+  JOIN mz_introspection.mz_dataflow_operator_dataflows d ON co.from_operator_id = d.id
+  JOIN mz_introspection.mz_compute_exports e USING (dataflow_id)
+  WHERE e.export_id NOT LIKE 't%'
+  GROUP BY c.id
 16
 
 > SELECT DISTINCT count(*)
-  FROM mz_introspection.mz_dataflow_operators_per_worker
-  GROUP BY id, name
+  FROM mz_introspection.mz_dataflow_operators_per_worker o
+  JOIN mz_introspection.mz_dataflow_operator_dataflows od USING (id)
+  JOIN mz_introspection.mz_compute_exports e USING (dataflow_id)
+  WHERE e.export_id NOT LIKE 't%'
+  GROUP BY o.id
 16
 
 > SELECT DISTINCT count(*)
-  FROM mz_introspection.mz_dataflow_operator_dataflows_per_worker
-  GROUP BY id, name, dataflow_id, dataflow_name
+  FROM mz_introspection.mz_dataflow_operator_dataflows_per_worker od
+  JOIN mz_introspection.mz_compute_exports e USING (dataflow_id)
+  WHERE e.export_id NOT LIKE 't%'
+  GROUP BY od.id
 16
 
 > SELECT DISTINCT count(*)
-  FROM mz_introspection.mz_dataflow_channel_operators_per_worker
-  GROUP BY id, from_operator_id, to_operator_id
+  FROM mz_introspection.mz_dataflow_channel_operators_per_worker co
+  JOIN mz_introspection.mz_dataflow_operator_dataflows d ON co.from_operator_id = d.id
+  JOIN mz_introspection.mz_compute_exports e USING (dataflow_id)
+  WHERE e.export_id NOT LIKE 't%'
+  GROUP BY co.id
 16
 
 > SELECT DISTINCT count(*)
-  FROM mz_introspection.mz_compute_exports_per_worker
-  GROUP BY export_id, dataflow_id
+  FROM mz_introspection.mz_compute_exports_per_worker e
+  WHERE e.export_id NOT LIKE 't%'
+  GROUP BY e.export_id
 16
 
 > CREATE DEFAULT INDEX ON t
 > SELECT DISTINCT count(*)
-  FROM mz_introspection.mz_arrangement_sharing_per_worker
-  GROUP BY operator_id, count
+  FROM mz_introspection.mz_arrangement_sharing_per_worker s
+  JOIN mz_introspection.mz_dataflow_operator_dataflows od ON s.operator_id = od.id
+  JOIN mz_introspection.mz_compute_exports e USING (dataflow_id)
+  WHERE e.export_id NOT LIKE 't%'
+  GROUP BY s.operator_id
 16
 
 > DROP INDEX t_primary_idx
