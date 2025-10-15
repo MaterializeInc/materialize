@@ -826,32 +826,89 @@ class AWS(State):
 
         # Wait a bit for the status to stabilize
         print("--- Waiting and get status:")
-        time.sleep(180)
+        time.sleep(120)
         self._kubectl_debug_namespace("materialize-environment")
 
-        # Wait for the upgrade to actually complete by checking the version
-        print(f"--- Verifying upgrade to {tag} completed")
+        self._verify_upgrade_completed(tag)
+
+    def _verify_upgrade_completed(self, expected_tag: str) -> None:
+        """Verify that the upgrade has completed by checking the Docker image of environmentd pods."""
+        print(
+            f"--- Verifying upgrade to {expected_tag} completed by checking Docker images"
+        )
+
+        expected_image = f"materialize/environmentd:{expected_tag}"
+
         for i in range(60):
             try:
-                # Try to connect and check the version
+                # Get all environmentd pod images
+                pod_images = (
+                    spawn.capture(
+                        [
+                            "kubectl",
+                            "get",
+                            "pods",
+                            "-l",
+                            "app=environmentd",
+                            "-n",
+                            "materialize-environment",
+                            "-o",
+                            "jsonpath={.items[*].spec.containers[0].image}",
+                        ],
+                        cwd=self.path,
+                    )
+                    .strip()
+                    .split()
+                )
+
+                print(f"--- Found environmentd pod images: {pod_images}")
+
+                # Check if all pods are using the expected image
+                if pod_images and all(image == expected_image for image in pod_images):
+                    pod_count = len(pod_images)
+                    if pod_count == 1:
+                        print(
+                            f"--- Upgrade verification successful: Single pod running {expected_image}"
+                        )
+                        return
+                    else:
+                        print(
+                            f"--- Still {pod_count} environmentd pods running, waiting for rollout to complete..."
+                        )
+                else:
+                    print(
+                        f"--- Pod images don't match expected {expected_image}, waiting..."
+                    )
+
                 time.sleep(5)
-                with psycopg.connect(
-                    "postgres://materialize@127.0.0.1:6875/materialize"
-                ) as conn:
-                    with conn.cursor() as cur:
-                        cur.execute("SELECT mz_version()")
-                        version = cur.fetchall()[0][0]
-                        if version.startswith(tag.split("--")[0] + " "):
-                            print(f"--- Upgrade to {tag} verified: {version}")
-                            return
-                        else:
-                            print(
-                                f"--- Still waiting for upgrade, current version: {version}"
-                            )
-            except Exception as e:
-                print(f"--- Connection failed during upgrade verification: {e}")
+            except subprocess.CalledProcessError as e:
+                print(f"--- Failed to get pod images: {e}")
+                time.sleep(5)
         else:
-            print("--- WARNING: Upgrade verification timed out")
+            print("--- WARNING: Upgrade verification timed out after 5 minutes")
+            # Still log the final state for debugging
+            try:
+                pod_images = (
+                    spawn.capture(
+                        [
+                            "kubectl",
+                            "get",
+                            "pods",
+                            "-l",
+                            "app=environmentd",
+                            "-n",
+                            "materialize-environment",
+                            "-o",
+                            "jsonpath={.items[*].spec.containers[0].image}",
+                        ],
+                        cwd=self.path,
+                    )
+                    .strip()
+                    .split()
+                )
+                print(f"--- Final pod images: {pod_images}, expected: {expected_image}")
+            except:
+                pass
 
 
 def workflow_aws_temporary(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -899,9 +956,9 @@ def workflow_aws_upgrade(c: Composition, parser: WorkflowArgumentParser) -> None
             aws.upgrade(str(previous_tag))
         aws.upgrade(tag)
         if args.test:
-            # Try waiting a bit, otherwise connection error, should be handled better
-            time.sleep(240)
             print("--- Running tests")
+            # Try waiting a bit, otherwise connection error, should be handled better
+            time.sleep(180)
             aws.connect(c)
 
             with psycopg.connect(
