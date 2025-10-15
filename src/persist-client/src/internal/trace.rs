@@ -66,6 +66,7 @@ use serde::{Serialize, Serializer};
 use timely::PartialOrder;
 use timely::progress::frontier::AntichainRef;
 use timely::progress::{Antichain, Timestamp};
+use tracing::warn;
 
 use crate::internal::paths::WriterKey;
 use crate::internal::state::{HollowBatch, RunId};
@@ -307,7 +308,18 @@ impl<T: Timestamp + Lattice> Trace<T> {
             |id: SpineId, expected_desc: Option<&Description<T>>| -> Result<_, String> {
                 if let Some(batch) = hollow_batches.remove(&id) {
                     if let Some(desc) = expected_desc {
-                        assert_eq!(*desc, batch.desc);
+                        // We don't expect the desc's upper and lower to change for a given spine id.
+                        assert_eq!(desc.lower(), batch.desc.lower());
+                        assert_eq!(desc.upper(), batch.desc.upper());
+                        // Due to the way thin spine batches are diffed, the sinces can be out of sync.
+                        // This should be rare, and hopefully impossible once we change how diffs work.
+                        if desc.since() != batch.desc.since() {
+                            warn!(
+                                "unexpected since out of sync for spine batch: {:?} != {:?}",
+                                desc.since().elements(),
+                                batch.desc.since().elements()
+                            );
+                        }
                     }
                     return Ok(IdHollowBatch { id, batch });
                 }
