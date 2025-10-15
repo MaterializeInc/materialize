@@ -829,6 +829,30 @@ class AWS(State):
         time.sleep(180)
         self._kubectl_debug_namespace("materialize-environment")
 
+        # Wait for the upgrade to actually complete by checking the version
+        print(f"--- Verifying upgrade to {tag} completed")
+        for i in range(60):
+            try:
+                # Try to connect and check the version
+                time.sleep(5)
+                with psycopg.connect(
+                    "postgres://materialize@127.0.0.1:6875/materialize"
+                ) as conn:
+                    with conn.cursor() as cur:
+                        cur.execute("SELECT mz_version()")
+                        version = cur.fetchall()[0][0]
+                        if version.startswith(tag.split("--")[0] + " "):
+                            print(f"--- Upgrade to {tag} verified: {version}")
+                            return
+                        else:
+                            print(
+                                f"--- Still waiting for upgrade, current version: {version}"
+                            )
+            except Exception as e:
+                print(f"--- Connection failed during upgrade verification: {e}")
+        else:
+            print("--- WARNING: Upgrade verification timed out")
+
 
 def workflow_aws_temporary(c: Composition, parser: WorkflowArgumentParser) -> None:
     """To run locally use `aws sso login` first."""
