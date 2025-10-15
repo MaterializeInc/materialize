@@ -250,6 +250,105 @@ class State:
         self.balancerd_port_forward_process = None
         self.version = 0
 
+    def _kubectl_get_pods(self, namespace: str) -> None:
+        """Get and display all pods in a namespace."""
+        print(f"Getting all pods in {namespace}:")
+        spawn.runv(
+            ["kubectl", "get", "pods", "-n", namespace],
+            cwd=self.path,
+        )
+
+    def _kubectl_describe_pods(self, namespace: str) -> None:
+        """Describe all pods in a namespace."""
+        print(f"Describing all pods in {namespace}:")
+        spawn.runv(
+            ["kubectl", "describe", "pods", "-n", namespace],
+            cwd=self.path,
+        )
+
+    def _kubectl_log_all_pods(
+        self, namespace: str, all_containers: bool = False
+    ) -> None:
+        """Get logs from all pods in a namespace."""
+        print(f"Logging all pods in {namespace}:")
+        try:
+            pod_names = (
+                spawn.capture(
+                    [
+                        "kubectl",
+                        "get",
+                        "pods",
+                        "-n",
+                        namespace,
+                        "-o",
+                        "name",
+                    ],
+                    cwd=self.path,
+                )
+                .strip()
+                .split("\n")
+            )
+            for pod_name in pod_names:
+                if pod_name:
+                    cmd = ["kubectl", "logs", pod_name, "-n", namespace]
+                    if all_containers:
+                        cmd.append("--all-containers=true")
+                    spawn.runv(cmd, cwd=self.path)
+        except subprocess.CalledProcessError:
+            print(f"Failed to get logs from pods in {namespace}")
+
+    def _kubectl_log_and_describe_specific_pods(
+        self, namespace: str, pod_filter: str = ""
+    ) -> None:
+        """Get logs and describe specific pods in a namespace, optionally filtered by name pattern."""
+        try:
+            pod_names = spawn.capture(
+                [
+                    "kubectl",
+                    "get",
+                    "pods",
+                    "-n",
+                    namespace,
+                    "-o",
+                    "jsonpath={.items[*].metadata.name}",
+                ],
+                cwd=self.path,
+            ).strip()
+
+            pods = [p for p in pod_names.split() if not pod_filter or pod_filter in p]
+            for pod in pods:
+                print(f"Describing pod {pod}:")
+                spawn.runv(
+                    [
+                        "kubectl",
+                        "describe",
+                        "pod",
+                        pod,
+                        "-n",
+                        namespace,
+                    ],
+                    cwd=self.path,
+                )
+                print(f"Getting logs from pod {pod}:")
+                spawn.runv(
+                    [
+                        "kubectl",
+                        "logs",
+                        pod,
+                        "-n",
+                        namespace,
+                    ],
+                    cwd=self.path,
+                )
+        except subprocess.CalledProcessError:
+            print(f"Failed to get logs/describe pods in {namespace}")
+
+    def _kubectl_debug_namespace(self, namespace: str) -> None:
+        """Comprehensive debugging output for a namespace - get, describe, and log all pods."""
+        self._kubectl_get_pods(namespace)
+        self._kubectl_describe_pods(namespace)
+        self._kubectl_log_all_pods(namespace)
+
     def kubectl_setup(
         self, tag: str, metadata_backend_url: str, persist_backend_url: str
     ) -> None:
@@ -263,35 +362,7 @@ class State:
                     ["kubectl", "get", "pods", "-n", "materialize"],
                     cwd=self.path,
                 )
-                print("Logging all pods in materialize:")
-                pod_names = (
-                    spawn.capture(
-                        [
-                            "kubectl",
-                            "get",
-                            "pods",
-                            "-n",
-                            "materialize",
-                            "-o",
-                            "name",
-                        ],
-                        cwd=self.path,
-                    )
-                    .strip()
-                    .split("\n")
-                )
-                for pod_name in pod_names:
-                    spawn.runv(
-                        [
-                            "kubectl",
-                            "logs",
-                            "-n",
-                            "materialize",
-                            pod_name,
-                            "--all-containers=true",
-                        ],
-                        cwd=self.path,
-                    )
+                self._kubectl_log_all_pods("materialize", all_containers=True)
                 status = spawn.capture(
                     [
                         "kubectl",
@@ -391,42 +462,9 @@ class State:
                     ["kubectl", "get", "pods", "-n", "materialize-environment"],
                     cwd=self.path,
                 )
-                pod_names = spawn.capture(
-                    [
-                        "kubectl",
-                        "get",
-                        "pods",
-                        "-n",
-                        "materialize-environment",
-                        "-o",
-                        "jsonpath={.items[*].metadata.name}",
-                    ],
-                    cwd=self.path,
-                ).strip()
-                envd_pods = [p for p in pod_names.split() if "environmentd" in p]
-                for pod in envd_pods:
-                    spawn.runv(
-                        [
-                            "kubectl",
-                            "describe",
-                            "pod",
-                            pod,
-                            "-n",
-                            "materialize-environment",
-                        ],
-                        cwd=self.path,
-                    )
-                    # Get the logs of the pod:
-                    spawn.runv(
-                        [
-                            "kubectl",
-                            "logs",
-                            pod,
-                            "-n",
-                            "materialize-environment",
-                        ],
-                        cwd=self.path,
-                    )
+                self._kubectl_log_and_describe_specific_pods(
+                    "materialize-environment", "environmentd"
+                )
                 status = spawn.capture(
                     [
                         "kubectl",
@@ -446,28 +484,7 @@ class State:
             except subprocess.CalledProcessError:
                 time.sleep(1)
         else:
-            print("Getting all pods:")
-            spawn.runv(
-                [
-                    "kubectl",
-                    "get",
-                    "pods",
-                    "-n",
-                    "materialize-environment",
-                ],
-                cwd=self.path,
-            )
-            print("Describing all pods in materialize-environment:")
-            spawn.runv(
-                [
-                    "kubectl",
-                    "describe",
-                    "pods",
-                    "-n",
-                    "materialize-environment",
-                ],
-                cwd=self.path,
-            )
+            self._kubectl_debug_namespace("materialize-environment")
             raise ValueError("Never completed")
 
         # Can take a while for balancerd to come up
@@ -492,28 +509,7 @@ class State:
             except subprocess.CalledProcessError:
                 time.sleep(1)
         else:
-            print("Getting all pods:")
-            spawn.runv(
-                [
-                    "kubectl",
-                    "get",
-                    "pods",
-                    "-n",
-                    "materialize-environment",
-                ],
-                cwd=self.path,
-            )
-            print("Describing all pods in materialize-environment:")
-            spawn.runv(
-                [
-                    "kubectl",
-                    "describe",
-                    "pods",
-                    "-n",
-                    "materialize-environment",
-                ],
-                cwd=self.path,
-            )
+            self._kubectl_debug_namespace("materialize-environment")
             raise ValueError("Never completed")
 
     def cleanup(self) -> None:
@@ -831,37 +827,7 @@ class AWS(State):
         # Wait a bit for the status to stabilize
         print("--- Waiting and get status:")
         time.sleep(180)
-        # Get all pods in materialize-environment:
-        spawn.runv(
-            ["kubectl", "get", "pods", "-n", "materialize-environment"],
-            cwd=self.path,
-        )
-        # Describe all pods in materialize-environment:
-        spawn.runv(
-            ["kubectl", "describe", "pods", "-n", "materialize-environment"],
-            cwd=self.path,
-        )
-        pod_names = (
-            spawn.capture(
-                [
-                    "kubectl",
-                    "get",
-                    "pods",
-                    "-n",
-                    "materialize-environment",
-                    "-o",
-                    "name",
-                ],
-                cwd=self.path,
-            )
-            .strip()
-            .split("\n")
-        )
-        for pod in pod_names:
-            spawn.runv(
-                ["kubectl", "logs", pod, "-n", "materialize-environment"],
-                cwd=self.path,
-            )
+        self._kubectl_debug_namespace("materialize-environment")
 
 
 def workflow_aws_temporary(c: Composition, parser: WorkflowArgumentParser) -> None:
