@@ -11,8 +11,8 @@
 //!
 //! We're storing the consensus data in a subspace at `/mz/consensus`. Each key maps to a subspace
 //! with the following structure:
-//! ./seqno/<key> -> <seqno>
-//! ./data/<key>/<seqno> -> <data>
+//! * `./seqno/<key> -> <seqno>`
+//! * `./data/<key>/<seqno> -> <data>`
 
 use std::io::Write;
 use std::sync::OnceLock;
@@ -304,13 +304,15 @@ impl FdbConsensus {
         trx.set(&data_seqno_key, &pack(&new.data.as_ref()));
         Ok(CaSResult::Committed)
     }
+
     async fn scan_trx(
         &self,
         trx: &Transaction,
         data_key: &Subspace,
         from: &SeqNo,
         limit: &usize,
-    ) -> Result<Vec<VersionedData>, FdbTransactError> {
+        entries: &mut Vec<VersionedData>,
+    ) -> Result<(), FdbTransactError> {
         let mut limit = *limit;
         let seqno_start = data_key.pack(&from);
         let seqno_end = data_key.pack(&SeqNo::maximum());
@@ -318,10 +320,11 @@ impl FdbConsensus {
         let mut range = RangeOption::from(seqno_start..=seqno_end);
         range.limit = Some(limit);
 
-        let mut entries = Vec::new();
+        entries.clear();
 
         loop {
             let output = trx.get_range(&range, 1, false).await?;
+            entries.reserve(output.len());
             for key_value in &output {
                 let seqno = data_key.unpack(key_value.key())?;
                 let value: Vec<u8> = unpack(key_value.value())?;
@@ -342,9 +345,7 @@ impl FdbConsensus {
                 break;
             }
         }
-
-        entries.sort_by_key(|e| e.seqno);
-        Ok(entries)
+        Ok(())
     }
     async fn truncate_trx(
         &self,
@@ -462,15 +463,19 @@ impl Consensus for FdbConsensus {
         limit: usize,
     ) -> Result<Vec<VersionedData>, ExternalError> {
         let data_key = self.data.subspace(&key);
-        let ok = self
-            .db
+        let mut entries = Vec::new();
+        self.db
             .transact_boxed(
-                (&data_key, from, limit),
-                |trx, (data_key, from, limit)| self.scan_trx(trx, data_key, from, limit).boxed(),
+                (&data_key, from, limit, &mut entries),
+                |trx, (data_key, from, limit, entries)| {
+                    self.scan_trx(trx, data_key, from, limit, entries).boxed()
+                },
                 TransactOption::default(),
             )
             .await?;
-        Ok(ok)
+
+        entries.sort_by_key(|e| e.seqno);
+        Ok(entries)
     }
 
     async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError> {
