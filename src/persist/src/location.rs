@@ -441,7 +441,7 @@ pub trait Consensus: std::fmt::Debug + Send + Sync {
     /// data at this key.
     async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError>;
 
-    /// Returns true if [`truncate`] returns the number of versions deleted.
+    /// Returns true if [`Self::truncate`] returns the number of versions deleted.
     fn truncate_counts(&self) -> bool {
         true
     }
@@ -507,6 +507,10 @@ impl<A: Consensus + 'static> Consensus for Tasked<A> {
             async move { backing.truncate(&key, seqno).await }.instrument(Span::current()),
         )
         .await?
+    }
+
+    fn truncate_counts(&self) -> bool {
+        self.0.truncate_counts()
     }
 }
 

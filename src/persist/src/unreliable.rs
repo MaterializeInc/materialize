@@ -228,6 +228,10 @@ impl Consensus for UnreliableConsensus {
             .run_op("truncate", || self.consensus.truncate(key, seqno))
             .await
     }
+
+    fn truncate_counts(&self) -> bool {
+        self.consensus.truncate_counts()
+    }
 }
 
 #[cfg(test)]

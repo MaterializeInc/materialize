@@ -213,7 +213,7 @@ impl BlobConfig {
 /// Config for an implementation of [Consensus].
 #[derive(Debug, Clone)]
 pub enum ConsensusConfig {
-    /// Config for [FdbConsensus].
+    /// Config for FoundationDB.
     FoundationDB(FdbConsensusConfig),
     /// Config for [PostgresConsensus].
     Postgres(PostgresConsensusConfig),
