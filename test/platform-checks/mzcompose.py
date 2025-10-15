@@ -293,6 +293,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 f"No scenarios matched pattern '{args.scenario}'. "
                 f"Available scenarios: {', '.join(available)}"
             )
+        scenarios.sort(key=lambda s: s.__name__)
 
         print(f"Matched scenarios: {[s.__name__ for s in scenarios]}")
     else:
@@ -357,7 +358,16 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     )
                     scenario.run()
                 except Exception as e:
-                    print(e)
+                    c.invoke(
+                        "logs",
+                        "--no-color",
+                        "--timestamps",
+                        "--tail",
+                        "20",
+                        "mz_1",
+                        "mz_2",
+                    )
+                    print("Error in scenario", e)
             elif execution_mode is ExecutionMode.ONEATATIME:
                 for check in checks:
                     print(
@@ -376,8 +386,18 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                         )
                         scenario.run()
                     except Exception as e:
-                        print(e)
+                        c.invoke(
+                            "logs",
+                            "--no-color",
+                            "--timestamps",
+                            "--tail",
+                            "20",
+                            "mz_1",
+                            "mz_2",
+                        )
+                        print("Error in scenario", e)
             else:
                 raise RuntimeError(f"Unsupported execution mode: {execution_mode}")
             if args.teardown == "True":
+
                 teardown(c)
