@@ -38,7 +38,6 @@ module "materialize_infrastructure" {
   operator_version             = var.operator_version
   orchestratord_version        = var.orchestratord_version
 
-  # TODO: This currently fails: https://github.com/MaterializeInc/terraform-aws-materialize/issues/71
   helm_values = {
     operator = {
       args = {
