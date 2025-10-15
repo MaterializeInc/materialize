@@ -347,7 +347,7 @@ class State:
         """Comprehensive debugging output for a namespace - get, describe, and log all pods."""
         self._kubectl_get_pods(namespace)
         self._kubectl_describe_pods(namespace)
-        self._kubectl_log_all_pods(namespace)
+        # self._kubectl_log_all_pods(namespace)
 
     def kubectl_setup(
         self, tag: str, metadata_backend_url: str, persist_backend_url: str
