@@ -281,28 +281,20 @@ mod enabled {
         let merge_threads = threads.as_deref() == Some("merge");
 
         fn render_jemalloc_stats(stats: &JemallocStats) -> Vec<(&str, String)> {
-            vec![
-                (
-                    "Allocated",
-                    ByteSize(u64::cast_from(stats.allocated)).to_string_as(true),
-                ),
-                (
-                    "In active pages",
-                    ByteSize(u64::cast_from(stats.active)).to_string_as(true),
-                ),
-                (
-                    "Allocated for allocator metadata",
-                    ByteSize(u64::cast_from(stats.metadata)).to_string_as(true),
-                ),
+            let stats = [
+                ("Allocated", stats.allocated),
+                ("In active pages", stats.active),
+                ("Allocated for allocator metadata", stats.metadata),
                 (
                     "Maximum number of bytes in physically resident data pages mapped by the allocator",
-                    ByteSize(u64::cast_from(stats.resident)).to_string_as(true),
+                    stats.resident,
                 ),
-                (
-                    "Bytes unused, but retained by allocator",
-                    ByteSize(u64::cast_from(stats.retained)).to_string_as(true),
-                ),
-            ]
+                ("Bytes unused, but retained by allocator", stats.retained),
+            ];
+            stats
+                .into_iter()
+                .map(|(k, v)| (k, ByteSize(u64::cast_from(v)).display().si().to_string()))
+                .collect()
         }
 
         match action.as_str() {
