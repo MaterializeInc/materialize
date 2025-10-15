@@ -21,16 +21,16 @@ ALTER SYSTEM SET max_result_size = '1MB'
 10000 values hashing to b223cca8b360eae4e49568512e2de29f
 
 ! SELECT * FROM generate_series(1, 10000), repeat('a', 100);
-contains:result exceeds max size of 1048.6 KB
+contains:result exceeds max size of 1.0 MiB
 
 > CREATE TABLE t1 (a int4, b text)
 > INSERT INTO t1 SELECT * FROM generate_series(1, 10000), repeat('a', 100);
 
 ! SELECT * FROM t1
-contains:result exceeds max size of 1048.6 KB
+contains:result exceeds max size of 1.0 MiB
 
 ! INSERT INTO t1 SELECT * FROM t1;
-contains:result exceeds max size of 1048.6 KB
+contains:result exceeds max size of 1.0 MiB
 
 > INSERT INTO t1 SELECT * FROM generate_series(1, 100), repeat('a', 100);
 
@@ -40,7 +40,7 @@ contains:result exceeds max size of 1048.6 KB
 
 # No output should be produced. Instead an error .. notice?
 ! FETCH 1 c;
-contains:result exceeds max size of 1048.6 KB
+contains:result exceeds max size of 1.0 MiB
 
 > ROLLBACK;
 
@@ -55,7 +55,7 @@ contains:result exceeds max size of 1048.6 KB
 4
 
 ! SELECT * FROM generate_series(1, 10001), repeat('a', 100)
-contains:result exceeds max size of 1048.6 KB
+contains:result exceeds max size of 1.0 MiB
 
 > SELECT 1::int4 FROM generate_series(1, 10001)
 10001 values hashing to 7e844fba503f0b3f02daa3de7c80938e
@@ -63,16 +63,16 @@ contains:result exceeds max size of 1048.6 KB
 > CREATE TABLE t2 (a int4, b text)
 
 ! INSERT INTO t2 SELECT * FROM generate_series(1, 10001), repeat('a', 100);
-contains:result exceeds max size of 1048.6 KB
+contains:result exceeds max size of 1.0 MiB
 
 > INSERT INTO t2 SELECT * FROM generate_series(1, 5000), repeat('a', 100);
 > INSERT INTO t2 SELECT * FROM generate_series(5001, 10000), repeat('a', 100);
 
 ! SELECT * FROM t2
-contains:result exceeds max size of 1048.6 KB
+contains:result exceeds max size of 1.0 MiB
 
 ! INSERT INTO t2 SELECT * FROM t2;
-contains:result exceeds max size of 1048.6 KB
+contains:result exceeds max size of 1.0 MiB
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM RESET max_result_size

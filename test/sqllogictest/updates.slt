@@ -210,7 +210,7 @@ ALTER SYSTEM SET max_result_size = '1MB'
 ----
 COMPLETE 0
 
-statement error db error: ERROR: result exceeds max size of 1048.6 KB
+statement error db error: ERROR: result exceeds max size of 1\.0 MiB
 INSERT INTO t SELECT * FROM t_big
 
 simple conn=mz_system,user=mz_system

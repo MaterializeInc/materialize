@@ -231,7 +231,7 @@ ALTER SYSTEM SET enable_compute_peek_response_stash = false
 ----
 COMPLETE 0
 
-query error db error: ERROR: result exceeds max size of 1048.6 KB
+query error db error: ERROR: result exceeds max size of 1\.0 MiB
 SELECT * FROM large_rows LIMIT 99;
 
 simple conn=mz_system,user=mz_system
