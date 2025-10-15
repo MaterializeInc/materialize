@@ -7,7 +7,7 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-cfg-if = "1.0.3"
+cfg-if = "1.0.4"
 protobuf-src = { version = "2.1.1", optional = true }
 which = "8"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
