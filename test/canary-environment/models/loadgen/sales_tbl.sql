@@ -12,7 +12,7 @@
     materialized='source_table'
 ) }}
 FROM SOURCE {{ ref('sales') }}
-(REFERENCE "datagen_demo_snowflakeschema_sales")
+(REFERENCE "qa_canary_sales")
 KEY FORMAT BYTES
 VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
 INCLUDE TIMESTAMP as kafka_timestamp
