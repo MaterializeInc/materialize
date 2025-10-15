@@ -26,11 +26,11 @@ aws-credential-types = { version = "1.2.8", default-features = false, features =
 aws-runtime = { version = "1.5.12", default-features = false, features = ["event-stream", "http-02x"] }
 aws-sdk-sts = { version = "1.41.0", default-features = false, features = ["rt-tokio"] }
 aws-sigv4 = { version = "1.3.5", features = ["http0-compat", "sign-eventstream"] }
-aws-smithy-async = { version = "1.2.5", default-features = false, features = ["rt-tokio"] }
+aws-smithy-async = { version = "1.2.6", default-features = false, features = ["rt-tokio"] }
 aws-smithy-http = { version = "0.60.12", default-features = false, features = ["event-stream"] }
 aws-smithy-runtime = { version = "1.9.3", default-features = false, features = ["client", "connector-hyper-0-14-x"] }
-aws-smithy-runtime-api = { version = "1.9.0", features = ["client", "http-02x", "http-auth", "test-util"] }
-aws-smithy-types = { version = "1.3.2", default-features = false, features = ["byte-stream-poll-next", "http-body-0-4-x", "http-body-1-x", "rt-tokio", "test-util"] }
+aws-smithy-runtime-api = { version = "1.9.1", features = ["client", "http-02x", "http-auth", "test-util"] }
+aws-smithy-types = { version = "1.3.3", default-features = false, features = ["byte-stream-poll-next", "http-body-0-4-x", "http-body-1-x", "rt-tokio", "test-util"] }
 axum = { version = "0.7.9", features = ["ws"] }
 axum-core = { version = "0.4.5", default-features = false, features = ["tracing"] }
 base16ct = { version = "0.2.0", default-features = false, features = ["alloc"] }
@@ -154,6 +154,7 @@ unicode-bidi = { version = "0.3.18" }
 unicode-normalization = { version = "0.1.24" }
 url = { version = "2.5.4", features = ["serde"] }
 uuid = { version = "1.18.1", features = ["serde", "v4", "v5", "v7"] }
+winnow = { version = "0.7.13" }
 zeroize = { version = "1.8.2", features = ["serde"] }
 zstd = { version = "0.13.3" }
 zstd-safe = { version = "7.2.4", default-features = false, features = ["arrays", "legacy", "std", "zdict_builder"] }
@@ -169,11 +170,11 @@ aws-credential-types = { version = "1.2.8", default-features = false, features =
 aws-runtime = { version = "1.5.12", default-features = false, features = ["event-stream", "http-02x"] }
 aws-sdk-sts = { version = "1.41.0", default-features = false, features = ["rt-tokio"] }
 aws-sigv4 = { version = "1.3.5", features = ["http0-compat", "sign-eventstream"] }
-aws-smithy-async = { version = "1.2.5", default-features = false, features = ["rt-tokio"] }
+aws-smithy-async = { version = "1.2.6", default-features = false, features = ["rt-tokio"] }
 aws-smithy-http = { version = "0.60.12", default-features = false, features = ["event-stream"] }
 aws-smithy-runtime = { version = "1.9.3", default-features = false, features = ["client", "connector-hyper-0-14-x"] }
-aws-smithy-runtime-api = { version = "1.9.0", features = ["client", "http-02x", "http-auth", "test-util"] }
-aws-smithy-types = { version = "1.3.2", default-features = false, features = ["byte-stream-poll-next", "http-body-0-4-x", "http-body-1-x", "rt-tokio", "test-util"] }
+aws-smithy-runtime-api = { version = "1.9.1", features = ["client", "http-02x", "http-auth", "test-util"] }
+aws-smithy-types = { version = "1.3.3", default-features = false, features = ["byte-stream-poll-next", "http-body-0-4-x", "http-body-1-x", "rt-tokio", "test-util"] }
 axum = { version = "0.7.9", features = ["ws"] }
 axum-core = { version = "0.4.5", default-features = false, features = ["tracing"] }
 base16ct = { version = "0.2.0", default-features = false, features = ["alloc"] }
@@ -303,6 +304,7 @@ unicode-bidi = { version = "0.3.18" }
 unicode-normalization = { version = "0.1.24" }
 url = { version = "2.5.4", features = ["serde"] }
 uuid = { version = "1.18.1", features = ["serde", "v4", "v5", "v7"] }
+winnow = { version = "0.7.13" }
 zeroize = { version = "1.8.2", features = ["serde"] }
 zstd = { version = "0.13.3" }
 zstd-safe = { version = "7.2.4", default-features = false, features = ["arrays", "legacy", "std", "zdict_builder"] }

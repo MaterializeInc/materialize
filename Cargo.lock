@@ -13679,6 +13679,7 @@ dependencies = [
  "unicode-normalization",
  "url",
  "uuid",
+ "winnow 0.7.13",
  "zeroize",
  "zstd",
  "zstd-safe",
