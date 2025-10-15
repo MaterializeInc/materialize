@@ -281,6 +281,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             version_check(c)
 
         # Takes about 40 min to spin up
+        print("--- Spinnung up Redpanda Cloud (takes ~40 min)")
         redpanda = (
             Redpanda(c, cleanup=args.cleanup)
             if any(["redpanda" in filename for filename in files])
@@ -288,7 +289,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         )
 
         try:
-            print("Running .td files ...")
+            print("--- Running .td files ...")
             td(c, text="> CREATE CLUSTER canary_sources SIZE '25cc'")
 
             def process(filename: str) -> None:
@@ -298,6 +299,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             test_failed = False
         finally:
             if args.cleanup and redpanda is not None:
+                print("--- Deleting Redpanda Cloud")
                 redpanda.delete()
     finally:
         if args.cleanup:

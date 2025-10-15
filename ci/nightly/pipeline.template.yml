@@ -1367,7 +1367,7 @@ steps:
       plugins:
         - ./ci/plugins/mzcompose:
             composition: cloud-canary
-      branches: "main v*.* *cloud*"
+      branches: "main v*.* *cloud* *canar*"
 
     - id: mz-e2e
       label: "Mz E2E Test"
