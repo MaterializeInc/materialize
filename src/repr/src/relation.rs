@@ -268,11 +268,31 @@ pub struct ReprColumnType {
     pub nullable: bool,
 }
 
-impl From<SqlColumnType> for ReprColumnType {
-    fn from(sql_column_type: SqlColumnType) -> Self {
+impl From<&SqlColumnType> for ReprColumnType {
+    fn from(sql_column_type: &SqlColumnType) -> Self {
+        let scalar_type = &sql_column_type.scalar_type;
+        let scalar_type = scalar_type.into();
+        let nullable = sql_column_type.nullable;
+
         ReprColumnType {
-            scalar_type: sql_column_type.scalar_type.into(),
-            nullable: sql_column_type.nullable,
+            scalar_type,
+            nullable,
+        }
+    }
+}
+
+impl SqlColumnType {
+    /// Lossily translates a [`ReprColumnType`] back to a [`SqlColumnType`].
+    ///
+    /// See [`SqlScalarType::from_repr`] for an example of lossiness.
+    pub fn from_repr(repr: &ReprColumnType) -> Self {
+        let scalar_type = &repr.scalar_type;
+        let scalar_type = SqlScalarType::from_repr(scalar_type);
+        let nullable = repr.nullable;
+
+        SqlColumnType {
+            scalar_type,
+            nullable,
         }
     }
 }

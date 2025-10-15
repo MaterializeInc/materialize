@@ -3948,6 +3948,119 @@ impl Arbitrary for SqlScalarType {
     }
 }
 
+impl Arbitrary for ReprScalarType {
+    type Parameters = ();
+    type Strategy = BoxedStrategy<ReprScalarType>;
+
+    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+        // A strategy for generating the leaf cases of ReprScalarType
+        let leaf = Union::new(vec![
+            Just(ReprScalarType::Bool).boxed(),
+            Just(ReprScalarType::UInt8).boxed(),
+            Just(ReprScalarType::UInt16).boxed(),
+            Just(ReprScalarType::UInt32).boxed(),
+            Just(ReprScalarType::UInt64).boxed(),
+            Just(ReprScalarType::Int16).boxed(),
+            Just(ReprScalarType::Int32).boxed(),
+            Just(ReprScalarType::Int64).boxed(),
+            Just(ReprScalarType::Float32).boxed(),
+            Just(ReprScalarType::Float64).boxed(),
+            Just(ReprScalarType::Numeric).boxed(),
+            Just(ReprScalarType::Date).boxed(),
+            Just(ReprScalarType::Time).boxed(),
+            any::<Option<TimestampPrecision>>()
+                .prop_map(|precision| ReprScalarType::Timestamp { precision })
+                .boxed(),
+            any::<Option<TimestampPrecision>>()
+                .prop_map(|precision| ReprScalarType::TimestampTz { precision })
+                .boxed(),
+            Just(ReprScalarType::MzTimestamp).boxed(),
+            Just(ReprScalarType::Interval).boxed(),
+            Just(ReprScalarType::Bytes).boxed(),
+            Just(ReprScalarType::String).boxed(),
+            Just(ReprScalarType::Jsonb).boxed(),
+            Just(ReprScalarType::Uuid).boxed(),
+            Just(ReprScalarType::AclItem).boxed(),
+            Just(ReprScalarType::MzAclItem).boxed(),
+            Just(ReprScalarType::Int2Vector).boxed(),
+        ])
+        // None of the leaf ReprScalarTypes types are really "simpler" than others
+        // so don't waste time trying to shrink.
+        .no_shrink()
+        .boxed();
+
+        // There are a limited set of types we support in ranges.
+        let range_leaf = Union::new(vec![
+            Just(ReprScalarType::Int32).boxed(),
+            Just(ReprScalarType::Int64).boxed(),
+            Just(ReprScalarType::Date).boxed(),
+            Just(ReprScalarType::Numeric).boxed(),
+            any::<Option<TimestampPrecision>>()
+                .prop_map(|precision| ReprScalarType::Timestamp { precision })
+                .boxed(),
+            any::<Option<TimestampPrecision>>()
+                .prop_map(|precision| ReprScalarType::TimestampTz { precision })
+                .boxed(),
+        ]);
+        let range = range_leaf
+            .prop_map(|inner_type| ReprScalarType::Range {
+                element_type: Box::new(inner_type),
+            })
+            .boxed();
+
+        // The Array type is not recursive, so we define it separately.
+        let array = leaf
+            .clone()
+            .prop_map(|inner_type| ReprScalarType::Array(Box::new(inner_type)))
+            .boxed();
+
+        let leaf = Union::new_weighted(vec![(30, leaf), (1, array), (1, range)]);
+
+        leaf.prop_recursive(2, 3, 5, |inner| {
+            Union::new(vec![
+                // List
+                inner
+                    .clone()
+                    .prop_map(|x| ReprScalarType::List {
+                        element_type: Box::new(x),
+                    })
+                    .boxed(),
+                // Map
+                inner
+                    .clone()
+                    .prop_map(|x| ReprScalarType::Map {
+                        value_type: Box::new(x),
+                    })
+                    .boxed(),
+                // Record
+                {
+                    // Now we have to use `inner` to create a Record type. First we
+                    // create strategy that creates SqlColumnType.
+                    let column_type_strat =
+                        (inner.clone(), any::<bool>()).prop_map(|(scalar_type, nullable)| {
+                            ReprColumnType {
+                                scalar_type,
+                                nullable,
+                            }
+                        });
+
+                    // Then we use that to create the fields of the record case.
+                    // fields has type vec<(ColumnName,SqlColumnType)>
+                    let fields_strat = prop::collection::vec(column_type_strat, 0..10);
+
+                    // Now we combine it with the default strategies to get Records.
+                    fields_strat
+                        .prop_map(|fields| ReprScalarType::Record {
+                            fields: fields.into_boxed_slice(),
+                        })
+                        .boxed()
+                },
+            ])
+        })
+        .boxed()
+    }
+}
+
 /// The type of a [`Datum`] as it is represented.
 ///
 /// Each variant here corresponds to one or more variants of [`SqlScalarType`].
@@ -4000,8 +4113,8 @@ pub enum ReprScalarType {
     AclItem,
 }
 
-impl From<SqlScalarType> for ReprScalarType {
-    fn from(typ: SqlScalarType) -> Self {
+impl From<&SqlScalarType> for ReprScalarType {
+    fn from(typ: &SqlScalarType) -> Self {
         match typ {
             SqlScalarType::Bool => ReprScalarType::Bool,
             SqlScalarType::Int16 => ReprScalarType::Int16,
@@ -4015,8 +4128,12 @@ impl From<SqlScalarType> for ReprScalarType {
             SqlScalarType::Numeric { max_scale: _ } => ReprScalarType::Numeric,
             SqlScalarType::Date => ReprScalarType::Date,
             SqlScalarType::Time => ReprScalarType::Time,
-            SqlScalarType::Timestamp { precision } => ReprScalarType::Timestamp { precision },
-            SqlScalarType::TimestampTz { precision } => ReprScalarType::TimestampTz { precision },
+            SqlScalarType::Timestamp { precision } => ReprScalarType::Timestamp {
+                precision: *precision,
+            },
+            SqlScalarType::TimestampTz { precision } => ReprScalarType::TimestampTz {
+                precision: *precision,
+            },
             SqlScalarType::Interval => ReprScalarType::Interval,
             SqlScalarType::PgLegacyChar => ReprScalarType::UInt8,
             SqlScalarType::PgLegacyName => ReprScalarType::String,
@@ -4027,13 +4144,13 @@ impl From<SqlScalarType> for ReprScalarType {
             SqlScalarType::Jsonb => ReprScalarType::Jsonb,
             SqlScalarType::Uuid => ReprScalarType::Uuid,
             SqlScalarType::Array(element_type) => {
-                ReprScalarType::Array(Box::new((*element_type).into()))
+                ReprScalarType::Array(Box::new(element_type.as_ref().into()))
             }
             SqlScalarType::List {
                 element_type,
                 custom_id: _,
             } => ReprScalarType::List {
-                element_type: Box::new((*element_type).into()),
+                element_type: Box::new(element_type.as_ref().into()),
             },
             SqlScalarType::Record {
                 fields,
@@ -4046,7 +4163,7 @@ impl From<SqlScalarType> for ReprScalarType {
                 value_type,
                 custom_id: _,
             } => ReprScalarType::Map {
-                value_type: Box::new((*value_type).into()),
+                value_type: Box::new(value_type.as_ref().into()),
             },
             SqlScalarType::RegProc => ReprScalarType::UInt32,
             SqlScalarType::RegType => ReprScalarType::UInt32,
@@ -4054,10 +4171,92 @@ impl From<SqlScalarType> for ReprScalarType {
             SqlScalarType::Int2Vector => ReprScalarType::Int2Vector,
             SqlScalarType::MzTimestamp => ReprScalarType::MzTimestamp,
             SqlScalarType::Range { element_type } => ReprScalarType::Range {
-                element_type: Box::new((*element_type).into()),
+                element_type: Box::new(element_type.as_ref().into()),
             },
             SqlScalarType::MzAclItem => ReprScalarType::MzAclItem,
             SqlScalarType::AclItem => ReprScalarType::AclItem,
+        }
+    }
+}
+
+impl SqlScalarType {
+    /// Lossily translates a [`ReprScalarType`] back to a [`SqlScalarType`].
+    ///
+    /// NB that `ReprScalarType::from` is a left inverse of this function, but
+    /// not a right inverse.
+    ///
+    /// Here is an example: `SqlScalarType::VarChar` maps to `ReprScalarType::String`,
+    /// which maps back to `SqlScalarType::String`.
+    ///
+    /// ```
+    /// use mz_repr::{ReprScalarType, SqlScalarType};
+    ///
+    /// let sql = SqlScalarType::VarChar { max_length: None };
+    /// let repr = ReprScalarType::from(&sql);
+    /// assert_eq!(repr, ReprScalarType::String);
+    ///
+    /// let sql_rt = SqlScalarType::from_repr(&repr);
+    /// assert_ne!(sql_rt, sql);
+    /// assert_eq!(sql_rt, SqlScalarType::String);
+    /// ```
+    pub fn from_repr(repr: &ReprScalarType) -> Self {
+        match repr {
+            ReprScalarType::Bool => SqlScalarType::Bool,
+            ReprScalarType::Int16 => SqlScalarType::Int16,
+            ReprScalarType::Int32 => SqlScalarType::Int32,
+            ReprScalarType::Int64 => SqlScalarType::Int64,
+            ReprScalarType::UInt8 => SqlScalarType::PgLegacyChar,
+            ReprScalarType::UInt16 => SqlScalarType::UInt16,
+            ReprScalarType::UInt32 => SqlScalarType::UInt32,
+            ReprScalarType::UInt64 => SqlScalarType::UInt64,
+            ReprScalarType::Float32 => SqlScalarType::Float32,
+            ReprScalarType::Float64 => SqlScalarType::Float64,
+            ReprScalarType::Numeric => SqlScalarType::Numeric { max_scale: None },
+            ReprScalarType::Date => SqlScalarType::Date,
+            ReprScalarType::Time => SqlScalarType::Time,
+            ReprScalarType::Timestamp { precision } => SqlScalarType::Timestamp {
+                precision: *precision,
+            },
+            ReprScalarType::TimestampTz { precision } => SqlScalarType::TimestampTz {
+                precision: *precision,
+            },
+            ReprScalarType::MzTimestamp => SqlScalarType::MzTimestamp,
+            ReprScalarType::Interval => SqlScalarType::Interval,
+            ReprScalarType::Bytes => SqlScalarType::Bytes,
+            ReprScalarType::Jsonb => SqlScalarType::Jsonb,
+            ReprScalarType::String => SqlScalarType::String,
+            ReprScalarType::Uuid => SqlScalarType::Uuid,
+            ReprScalarType::Array(element_type) => {
+                SqlScalarType::Array(Box::new(SqlScalarType::from_repr(element_type)))
+            }
+            ReprScalarType::Int2Vector => SqlScalarType::Int2Vector,
+            ReprScalarType::List { element_type } => SqlScalarType::List {
+                element_type: Box::new(SqlScalarType::from_repr(element_type)),
+                custom_id: None,
+            },
+            ReprScalarType::Record { fields } => SqlScalarType::Record {
+                fields: fields
+                    .iter()
+                    .enumerate()
+                    .map(|typ| {
+                        (
+                            ColumnName::from(format!("field_{}", typ.0)),
+                            SqlColumnType::from_repr(typ.1),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+                custom_id: None,
+            },
+            ReprScalarType::Map { value_type } => SqlScalarType::Map {
+                value_type: Box::new(SqlScalarType::from_repr(value_type)),
+                custom_id: None,
+            },
+            ReprScalarType::Range { element_type } => SqlScalarType::Range {
+                element_type: Box::new(SqlScalarType::from_repr(element_type)),
+            },
+            ReprScalarType::MzAclItem => SqlScalarType::MzAclItem,
+            ReprScalarType::AclItem => SqlScalarType::AclItem,
         }
     }
 }
@@ -4771,9 +4970,9 @@ mod tests {
         #[cfg_attr(miri, ignore)]
         fn sql_repr_types_agree_on_valid_data((src, datum) in any::<SqlColumnType>().prop_flat_map(|src| {
             let datum = arb_datum_for_column(src.clone());
-            (Just(src.clone()), datum) }
+            (Just(src), datum) }
         )) {
-            let tgt: ReprColumnType = src.clone().into();
+            let tgt = ReprColumnType::from(&src);
             let datum = Datum::from(&datum);
             assert_eq!(datum.is_instance_of_sql(&src), datum.is_instance_of(&tgt), "translated to repr type {tgt:#?}");
         }
@@ -4786,10 +4985,24 @@ mod tests {
         #[mz_ore::test]
         #[cfg_attr(miri, ignore)]
         fn sql_repr_types_agree_on_random_data(src in any::<SqlColumnType>(), datum in arb_datum()) {
-            let tgt: ReprColumnType = src.clone().into();
+            let tgt = ReprColumnType::from(&src);
             let datum = Datum::from(&datum);
 
             assert_eq!(datum.is_instance_of_sql(&src), datum.is_instance_of(&tgt), "translated to repr type {tgt:#?}");
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(10000))]
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)]
+        fn repr_type_to_sql_type_roundtrip(repr_type in any::<ReprScalarType>()) {
+            // ReprScalarType::from is a left inverse of SqlScalarType::from.
+            //
+            // It is _not_ a right inverse, because SqlScalarType::from is lossy.
+            // For example, many SqlScalarType variants map to ReprScalarType::String.
+            let sql_type = SqlScalarType::from_repr(&repr_type);
+            assert_eq!(repr_type, ReprScalarType::from(&sql_type));
         }
     }
 
