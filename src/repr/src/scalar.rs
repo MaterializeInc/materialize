@@ -1591,7 +1591,7 @@ impl fmt::Display for Datum<'_> {
 #[derive(
     Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Ord, PartialOrd, Hash, EnumKind, MzReflect,
 )]
-#[enum_kind(ScalarBaseType, derive(PartialOrd, Ord, Hash))]
+#[enum_kind(SqlScalarBaseType, derive(PartialOrd, Ord, Hash))]
 pub enum SqlScalarType {
     /// The type of [`Datum::True`] and [`Datum::False`].
     Bool,
@@ -3212,7 +3212,7 @@ impl SqlScalarType {
                                 && a.1.scalar_type.eq_inner(&b.1.scalar_type, structure_only)
                         })
             }
-            (s, o) => ScalarBaseType::from(s) == ScalarBaseType::from(o),
+            (s, o) => SqlScalarBaseType::from(s) == SqlScalarBaseType::from(o),
         }
     }
 
@@ -4068,7 +4068,10 @@ impl Arbitrary for ReprScalarType {
 /// There is a direct correspondence between `Datum` variants and `ReprScalarType`
 /// variants: every `Datum` variant corresponds to exactly one `ReprScalarType` variant
 /// (with an exception for `Datum::Array`, which could be both an `Int2Vector` and an `Array`).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Ord, PartialOrd, Hash, MzReflect)]
+#[derive(
+    Clone, Debug, EnumKind, PartialEq, Eq, Serialize, Deserialize, Ord, PartialOrd, Hash, MzReflect,
+)]
+#[enum_kind(ReprScalarBaseType, derive(PartialOrd, Ord, Hash))]
 pub enum ReprScalarType {
     Bool,
     Int16,

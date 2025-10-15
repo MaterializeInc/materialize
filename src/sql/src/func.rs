@@ -21,7 +21,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::str::StrExt;
 use mz_pgrepr::oid;
 use mz_repr::role_id::RoleId;
-use mz_repr::{ColumnName, Datum, ScalarBaseType, SqlRelationType, SqlScalarType};
+use mz_repr::{ColumnName, Datum, SqlRelationType, SqlScalarBaseType, SqlScalarType};
 
 use crate::ast::{SelectStatement, Statement};
 use crate::catalog::{CatalogType, TypeCategory, TypeReference};
@@ -856,9 +856,9 @@ impl From<SqlScalarType> for ParamType {
     }
 }
 
-impl From<ScalarBaseType> for ParamType {
-    fn from(s: ScalarBaseType) -> ParamType {
-        use ScalarBaseType::*;
+impl From<SqlScalarBaseType> for ParamType {
+    fn from(s: SqlScalarBaseType) -> ParamType {
+        use SqlScalarBaseType::*;
         let s = match s {
             Array | List | Map | Record | Range => {
                 panic!("use polymorphic parameters rather than {:?}", s);
@@ -938,8 +938,8 @@ impl From<ParamType> for ReturnType {
     }
 }
 
-impl From<ScalarBaseType> for ReturnType {
-    fn from(s: ScalarBaseType) -> ReturnType {
+impl From<SqlScalarBaseType> for ReturnType {
+    fn from(s: SqlScalarBaseType) -> ReturnType {
         ParamType::from(s).into()
     }
 }
@@ -1802,7 +1802,7 @@ macro_rules! privilege_fn {
 /// Correlates a built-in function name to its implementations.
 pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
     use ParamType::*;
-    use ScalarBaseType::*;
+    use SqlScalarBaseType::*;
     let mut builtins = builtins! {
         // Literal OIDs collected from PG 13 using a version of this query
         // ```sql
@@ -3537,7 +3537,7 @@ pub static INFORMATION_SCHEMA_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> =
 
 pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
     use ParamType::*;
-    use ScalarBaseType::*;
+    use SqlScalarBaseType::*;
     builtins! {
         "constant_time_eq" => Scalar {
             params!(Bytes, Bytes) => BinaryFunc::from(func::ConstantTimeEqBytes) => Bool, oid::FUNC_CONSTANT_TIME_EQ_BYTES_OID;
@@ -3952,7 +3952,7 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
 
 pub static MZ_INTERNAL_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
     use ParamType::*;
-    use ScalarBaseType::*;
+    use SqlScalarBaseType::*;
     builtins! {
         "aclitem_grantor" => Scalar {
             params!(AclItem) => UnaryFunc::AclItemGrantor(func::AclItemGrantor) => Oid, oid::FUNC_ACL_ITEM_GRANTOR_OID;
@@ -4339,7 +4339,7 @@ pub static MZ_INTERNAL_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLo
 
 pub static MZ_UNSAFE_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
     use ParamType::*;
-    use ScalarBaseType::*;
+    use SqlScalarBaseType::*;
     builtins! {
         "mz_all" => Aggregate {
             params!(Any) => AggregateFunc::All => Bool, oid::FUNC_MZ_ALL_OID;
@@ -4459,7 +4459,7 @@ fn array_to_string(
 pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
     use BinaryFunc as BF;
     use ParamType::*;
-    use ScalarBaseType::*;
+    use SqlScalarBaseType::*;
     builtins! {
         // Literal OIDs collected from PG 13 using a version of this query
         // ```sql
