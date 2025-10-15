@@ -148,8 +148,7 @@ build --@rules_rust//:extra_rustc_flag="-Ccodegen-units=64"
 # Enabling pipelined builds allows dependent libraries to begin compiling with
 # just `.rmeta` instead of the full `.rlib`. This is what Cargo does and offers
 # a significant speedup in end-to-end build times!
-# TODO: Reenable when database-issues#9797 is fixed
-build --@rules_rust//rust/settings:pipelined_compilation=False
+build --@rules_rust//rust/settings:pipelined_compilation=True
 
 # `cargo check` like config, still experimental!
 #
