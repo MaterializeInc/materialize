@@ -911,7 +911,7 @@ impl Coordinator {
                     self.metrics
                         .timestamp_difference_for_strict_serializable_ms
                         .with_label_values(&[
-                            &compute_instance.to_string(),
+                            compute_instance.to_string().as_ref(),
                             constraint_based.as_str(),
                         ])
                         .observe(f64::cast_lossy(u64::from(

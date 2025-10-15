@@ -164,13 +164,13 @@ where
             let duration_metric = this
                 .metrics
                 .request_duration
-                .with_label_values(&[this.source, this.path]);
+                .with_label_values::<&str>(&[this.source, this.path]);
             *this.timer = Some(duration_metric.start_timer());
 
             // Increment our counter of currently active requests.
             this.metrics
                 .requests_active
-                .with_label_values(&[this.source, this.path])
+                .with_label_values::<&str>(&[this.source, this.path])
                 .inc();
         }
 
@@ -184,7 +184,7 @@ where
                 // Record the completion of this request.
                 this.metrics
                     .requests
-                    .with_label_values(&[this.source, this.path, status.as_str()])
+                    .with_label_values::<&str>(&[this.source, this.path, status.as_str()])
                     .inc();
 
                 // Record the duration of this request.
@@ -195,7 +195,7 @@ where
                 // We've completed this request, so decrement the count.
                 this.metrics
                     .requests_active
-                    .with_label_values(&[this.source, this.path])
+                    .with_label_values::<&str>(&[this.source, this.path])
                     .dec();
 
                 Poll::Ready(Ok(resp))
@@ -214,7 +214,7 @@ impl<F> PinnedDrop for PrometheusFuture<F> {
             // Make sure to decrement the in-progress count if we weren't polled to completion.
             this.metrics
                 .requests_active
-                .with_label_values(&[this.source, this.path])
+                .with_label_values::<&str>(&[this.source, this.path])
                 .dec();
 
             // Our request didn't complete, so don't record the timing.
@@ -252,14 +252,14 @@ mod test {
         // We don't log total requests until the request completes.
         let total_requests_exists = metrics
             .iter()
-            .find(|metric| metric.get_name().contains("requests_total"))
+            .find(|metric| metric.name().contains("requests_total"))
             .is_some();
         assert!(!total_requests_exists);
 
         // We should have one request in-flight.
         let active_requests = metrics
             .iter()
-            .find(|metric| metric.get_name().contains("requests_active"))
+            .find(|metric| metric.name().contains("requests_active"))
             .unwrap();
         assert_eq!(active_requests.get_metric()[0].get_gauge().get_value(), 1.0);
 
@@ -271,14 +271,14 @@ mod test {
         // Our in-flight request count should have been decremented.
         let active_requests = metrics
             .iter()
-            .find(|metric| metric.get_name().contains("requests_active"))
+            .find(|metric| metric.name().contains("requests_active"))
             .unwrap();
         assert_eq!(active_requests.get_metric()[0].get_gauge().get_value(), 0.0);
 
         // We should have discarded the in-flight timer.
         let active_requests = metrics
             .iter()
-            .find(|metric| metric.get_name().contains("request_duration_seconds"))
+            .find(|metric| metric.name().contains("request_duration_seconds"))
             .unwrap();
         assert_eq!(
             active_requests.get_metric()[0]

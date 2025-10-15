@@ -385,7 +385,7 @@ pub(crate) fn info_log_non_zero_metrics(metric_families: &[MetricFamily]) {
                 MetricType::COUNTER => m.get_counter().get_value(),
                 MetricType::GAUGE => m.get_gauge().get_value(),
                 x => {
-                    info!("unhandled {} metric type: {:?}", mf.get_name(), x);
+                    info!("unhandled {} metric type: {:?}", mf.name(), x);
                     continue;
                 }
             };
@@ -400,13 +400,13 @@ pub(crate) fn info_log_non_zero_metrics(metric_families: &[MetricFamily]) {
                     if labels != "{" {
                         labels.push_str(",");
                     }
-                    labels.push_str(lb.get_name());
+                    labels.push_str(lb.name());
                     labels.push_str(":");
-                    labels.push_str(lb.get_value());
+                    labels.push_str(lb.name());
                 }
                 labels.push_str("}");
             }
-            info!("{}{} {}", mf.get_name(), labels, val);
+            info!("{}{} {}", mf.name(), labels, val);
         }
     }
 }

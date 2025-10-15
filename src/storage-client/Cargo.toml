@@ -29,7 +29,7 @@ mz-repr = { path = "../repr" }
 mz-service = { path = "../service" }
 mz-storage-types = { path = "../storage-types" }
 mz-txn-wal = { path = "../txn-wal" }
-prometheus = { version = "0.13.4", default-features = false }
+prometheus = { version = "0.14.0", default-features = false }
 rdkafka = { version = "0.29.0", features = [
     "cmake-build",
     "ssl-vendored",

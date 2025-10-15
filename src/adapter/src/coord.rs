@@ -3302,7 +3302,7 @@ impl Coordinator {
             }));
 
             let (idle_tx, mut idle_rx) = tokio::sync::mpsc::channel(1);
-            let idle_metric = self.metrics.queue_busy_seconds.with_label_values(&[]);
+            let idle_metric = self.metrics.queue_busy_seconds.clone();
             let last_message_watchdog = Arc::clone(&last_message);
 
             spawn(|| "coord watchdog", async move {
@@ -3371,9 +3371,7 @@ impl Coordinator {
             let mut messages = Vec::with_capacity(MESSAGE_BATCH);
             let mut cmd_messages = Vec::with_capacity(MESSAGE_BATCH);
 
-            let message_batch = self.metrics
-                .message_batch
-                .with_label_values(&[]);
+            let message_batch = self.metrics.message_batch.clone();
 
             loop {
                 // Before adding a branch to this select loop, please ensure that the branch is

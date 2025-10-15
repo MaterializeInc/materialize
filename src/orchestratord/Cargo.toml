@@ -32,7 +32,7 @@ mz-orchestrator-kubernetes = { path = "../orchestrator-kubernetes", default-feat
 mz-orchestrator-tracing = { path = "../orchestrator-tracing", default-features = false }
 mz-prof-http = { path = "../prof-http", default-features = false }
 mz-server-core = { path = "../server-core", default-features = false }
-prometheus = { version = "0.13.4", default-features = false }
+prometheus = { version = "0.14.0", default-features = false }
 rand = "0.8.5"
 reqwest = { version = "0.12", features = ["cookies", "json"] }
 semver = "1.0.27"

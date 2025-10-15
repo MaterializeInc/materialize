@@ -902,31 +902,31 @@ mod tests {
 
         let exec_family = reports
             .iter()
-            .find(|m| m.get_name() == "exec_time_hist")
+            .find(|m| m.name() == "exec_time_hist")
             .expect("metric not found");
         let exec_metric = exec_family.get_metric();
         assert_eq!(exec_metric.len(), 1);
-        assert_eq!(exec_metric[0].get_label()[0].get_value(), "async_sleep_e");
+        assert_eq!(exec_metric[0].get_label()[0].value(), "async_sleep_e");
 
         let exec_histogram = exec_metric[0].get_histogram();
         assert_eq!(exec_histogram.get_sample_count(), 1);
         // The 4th bucket is 1ms, which we should complete faster than, but is still much quicker
         // than the 5 seconds we slept for.
-        assert_eq!(exec_histogram.get_bucket()[3].get_cumulative_count(), 1);
+        assert_eq!(exec_histogram.get_bucket()[3].cumulative_count(), 1);
 
         let wall_family = reports
             .iter()
-            .find(|m| m.get_name() == "wall_time_hist")
+            .find(|m| m.name() == "wall_time_hist")
             .expect("metric not found");
         let wall_metric = wall_family.get_metric();
         assert_eq!(wall_metric.len(), 1);
-        assert_eq!(wall_metric[0].get_label()[0].get_value(), "async_sleep_w");
+        assert_eq!(wall_metric[0].get_label()[0].value(), "async_sleep_w");
 
         let wall_histogram = wall_metric[0].get_histogram();
         assert_eq!(wall_histogram.get_sample_count(), 1);
         // The 13th bucket is 512ms, which the wall time should be longer than, but is also much
         // faster than the actual execution time of the async sleep.
-        assert_eq!(wall_histogram.get_bucket()[12].get_cumulative_count(), 0);
+        assert_eq!(wall_histogram.get_bucket()[12].cumulative_count(), 0);
 
         // Reset the registery to make collecting metrics easier.
         let registry = MetricsRegistry::new();
@@ -949,11 +949,11 @@ mod tests {
 
         let exec_family = reports
             .iter()
-            .find(|m| m.get_name() == "exec_time_cnt")
+            .find(|m| m.name() == "exec_time_cnt")
             .expect("metric not found");
         let exec_metric = exec_family.get_metric();
         assert_eq!(exec_metric.len(), 1);
-        assert_eq!(exec_metric[0].get_label()[0].get_value(), "thread_sleep_e");
+        assert_eq!(exec_metric[0].get_label()[0].value(), "thread_sleep_e");
 
         let exec_counter = exec_metric[0].get_counter();
         // Since we're synchronously sleeping the execution time will be long.
@@ -961,7 +961,7 @@ mod tests {
 
         let wall_family = reports
             .iter()
-            .find(|m| m.get_name() == "wall_time_cnt")
+            .find(|m| m.name() == "wall_time_cnt")
             .expect("metric not found");
         let wall_metric = wall_family.get_metric();
         assert_eq!(wall_metric.len(), 1);

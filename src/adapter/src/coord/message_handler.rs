@@ -220,10 +220,7 @@ impl Coordinator {
             .map(|(_id, m)| m.data_shard)
             .collect();
 
-        let collection_metric = self
-            .metrics
-            .storage_usage_collection_time_seconds
-            .with_label_values(&[]);
+        let collection_metric = self.metrics.storage_usage_collection_time_seconds.clone();
 
         // Spawn an asynchronous task to compute the storage usage, which
         // requires a slow scan of the underlying storage engine.

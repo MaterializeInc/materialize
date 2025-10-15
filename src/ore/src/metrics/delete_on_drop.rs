@@ -288,10 +288,10 @@ mod test {
         let metrics = reg.gather();
         assert_eq!(metrics.len(), 1);
         let reported_vec = &metrics[0];
-        assert_eq!(reported_vec.get_name(), "test_metric");
+        assert_eq!(reported_vec.name(), "test_metric");
         let dims = reported_vec.get_metric();
         assert_eq!(dims.len(), 1);
-        assert_eq!(dims[0].get_label()[0].get_value(), "one");
+        assert_eq!(dims[0].get_label()[0].value(), "one");
 
         drop(metric_1);
         let metrics = reg.gather();
@@ -309,10 +309,10 @@ mod test {
         let metrics = reg.gather();
         assert_eq!(metrics.len(), 1);
         let reported_vec = &metrics[0];
-        assert_eq!(reported_vec.get_name(), "test_metric");
+        assert_eq!(reported_vec.name(), "test_metric");
         let dims = reported_vec.get_metric();
         assert_eq!(dims.len(), 1);
-        assert_eq!(dims[0].get_label()[0].get_value(), "owned");
+        assert_eq!(dims[0].get_label()[0].value(), "owned");
 
         drop(metric_owned);
         let metrics = reg.gather();
@@ -334,10 +334,10 @@ mod test {
         let metrics = reg.gather();
         assert_eq!(metrics.len(), 1);
         let reported_vec = &metrics[0];
-        assert_eq!(reported_vec.get_name(), "test_metric");
+        assert_eq!(reported_vec.name(), "test_metric");
         let dims = reported_vec.get_metric();
         assert_eq!(dims.len(), 1);
-        assert_eq!(dims[0].get_label()[0].get_value(), "one");
+        assert_eq!(dims[0].get_label()[0].value(), "one");
 
         drop(metric_1);
         let metrics = reg.gather();
@@ -355,10 +355,10 @@ mod test {
         let metrics = reg.gather();
         assert_eq!(metrics.len(), 1);
         let reported_vec = &metrics[0];
-        assert_eq!(reported_vec.get_name(), "test_metric");
+        assert_eq!(reported_vec.name(), "test_metric");
         let dims = reported_vec.get_metric();
         assert_eq!(dims.len(), 1);
-        assert_eq!(dims[0].get_label()[0].get_value(), "owned");
+        assert_eq!(dims[0].get_label()[0].value(), "owned");
 
         drop(metric_owned);
         let metrics = reg.gather();

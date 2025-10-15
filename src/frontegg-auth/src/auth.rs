@@ -441,8 +441,7 @@ impl AuthenticatorInner {
             let inner = Arc::clone(self);
             async move {
                 tracing::debug!(?password.client_id, "starting refresh task");
-                let gauge = inner.metrics.refresh_tasks_active.with_label_values(&[]);
-                gauge.inc();
+                inner.metrics.refresh_tasks_active.inc();
 
                 loop {
                     let valid_for = Duration::try_from_secs_i64(claims.exp - inner.now.as_secs())
@@ -531,7 +530,7 @@ impl AuthenticatorInner {
                 }
 
                 tracing::debug!(?password.client_id, "shutting down refresh task");
-                gauge.dec();
+                inner.metrics.refresh_tasks_active.dec();
             }
         });
 

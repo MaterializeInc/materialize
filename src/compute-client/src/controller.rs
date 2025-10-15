@@ -264,9 +264,9 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
                 for metric in metrics {
                     'metric: for metric in metric.mut_metric() {
                         for label in metric.get_label() {
-                            if label.get_name() == "instance_id" {
+                            if label.name() == "instance_id" {
                                 if let Some(workload_class) = instance_workload_classes
-                                    .get(label.get_value())
+                                    .get(label.value())
                                     .cloned()
                                     .flatten()
                                 {
