@@ -109,7 +109,7 @@ impl Client {
 
     /// Fetches metadata about a particular database.
     ///
-    /// The underlying API call is `GET /database/:id/metadata`.
+    /// The underlying API call is `GET /database/{:id}/metadata`.
     pub async fn database_metadata(&self, id: usize) -> Result<DatabaseMetadata, reqwest::Error> {
         let url = self.api_url(&["database", &id.to_string(), "metadata"]);
         self.send_request(self.inner.get(url)).await
