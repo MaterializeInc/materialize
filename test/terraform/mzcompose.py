@@ -910,7 +910,7 @@ def workflow_aws_upgrade(c: Composition, parser: WorkflowArgumentParser) -> None
         aws.upgrade(tag)
         if args.test:
             # Try waiting a bit, otherwise connection error, should be handled better
-            time.sleep(180)
+            time.sleep(240)
             print("--- Running tests")
             aws.connect(c)
 
