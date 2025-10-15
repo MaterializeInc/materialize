@@ -22,15 +22,15 @@ aho-corasick = { version = "1.1.3" }
 arrayvec = { version = "0.7.6" }
 async-compression = { git = "https://github.com/MaterializeInc/async-compression.git", rev = "fe7411eb6104a02a89e2c3a76ab326dd6594214d", default-features = false, features = ["brotli", "bzip2-sys", "gzip", "tokio", "xz", "zlib", "zstd"] }
 aws-config = { version = "1.2.1", default-features = false, features = ["sso"] }
-aws-credential-types = { version = "1.2.7", default-features = false, features = ["hardcoded-credentials", "test-util"] }
-aws-runtime = { version = "1.5.11", default-features = false, features = ["event-stream", "http-02x"] }
+aws-credential-types = { version = "1.2.8", default-features = false, features = ["hardcoded-credentials", "test-util"] }
+aws-runtime = { version = "1.5.12", default-features = false, features = ["event-stream", "http-02x"] }
 aws-sdk-sts = { version = "1.41.0", default-features = false, features = ["rt-tokio"] }
-aws-sigv4 = { version = "1.3.4", features = ["http0-compat", "sign-eventstream"] }
-aws-smithy-async = { version = "1.2.5", default-features = false, features = ["rt-tokio"] }
+aws-sigv4 = { version = "1.3.5", features = ["http0-compat", "sign-eventstream"] }
+aws-smithy-async = { version = "1.2.6", default-features = false, features = ["rt-tokio"] }
 aws-smithy-http = { version = "0.60.12", default-features = false, features = ["event-stream"] }
-aws-smithy-runtime = { version = "1.9.2", default-features = false, features = ["client", "connector-hyper-0-14-x"] }
-aws-smithy-runtime-api = { version = "1.9.0", features = ["client", "http-02x", "http-auth", "test-util"] }
-aws-smithy-types = { version = "1.3.2", default-features = false, features = ["byte-stream-poll-next", "http-body-0-4-x", "http-body-1-x", "rt-tokio", "test-util"] }
+aws-smithy-runtime = { version = "1.9.3", default-features = false, features = ["client", "connector-hyper-0-14-x"] }
+aws-smithy-runtime-api = { version = "1.9.1", features = ["client", "http-02x", "http-auth", "test-util"] }
+aws-smithy-types = { version = "1.3.3", default-features = false, features = ["byte-stream-poll-next", "http-body-0-4-x", "http-body-1-x", "rt-tokio", "test-util"] }
 axum = { version = "0.7.9", features = ["ws"] }
 axum-core = { version = "0.4.5", default-features = false, features = ["tracing"] }
 base16ct = { version = "0.2.0", default-features = false, features = ["alloc"] }
@@ -78,7 +78,7 @@ hyper = { version = "0.14.27", features = ["client", "http1", "http2", "stream",
 hyper-util = { version = "0.1.17", features = ["client-legacy", "server-auto", "service", "tracing"] }
 insta = { version = "1.43.2", features = ["json"] }
 itertools = { version = "0.13.0" }
-libc = { version = "0.2.176", features = ["extra_traits", "use_std"] }
+libc = { version = "0.2.177", features = ["extra_traits", "use_std"] }
 libz-sys = { version = "1.1.22", features = ["static"] }
 lock_api = { version = "0.4.14", features = ["serde"] }
 log = { version = "0.4.28", default-features = false, features = ["std"] }
@@ -154,6 +154,7 @@ unicode-bidi = { version = "0.3.18" }
 unicode-normalization = { version = "0.1.24" }
 url = { version = "2.5.4", features = ["serde"] }
 uuid = { version = "1.18.1", features = ["serde", "v4", "v5", "v7"] }
+winnow = { version = "0.7.13" }
 zeroize = { version = "1.8.2", features = ["serde"] }
 zstd = { version = "0.13.3" }
 zstd-safe = { version = "7.2.4", default-features = false, features = ["arrays", "legacy", "std", "zdict_builder"] }
@@ -165,15 +166,15 @@ aho-corasick = { version = "1.1.3" }
 arrayvec = { version = "0.7.6" }
 async-compression = { git = "https://github.com/MaterializeInc/async-compression.git", rev = "fe7411eb6104a02a89e2c3a76ab326dd6594214d", default-features = false, features = ["brotli", "bzip2-sys", "gzip", "tokio", "xz", "zlib", "zstd"] }
 aws-config = { version = "1.2.1", default-features = false, features = ["sso"] }
-aws-credential-types = { version = "1.2.7", default-features = false, features = ["hardcoded-credentials", "test-util"] }
-aws-runtime = { version = "1.5.11", default-features = false, features = ["event-stream", "http-02x"] }
+aws-credential-types = { version = "1.2.8", default-features = false, features = ["hardcoded-credentials", "test-util"] }
+aws-runtime = { version = "1.5.12", default-features = false, features = ["event-stream", "http-02x"] }
 aws-sdk-sts = { version = "1.41.0", default-features = false, features = ["rt-tokio"] }
-aws-sigv4 = { version = "1.3.4", features = ["http0-compat", "sign-eventstream"] }
-aws-smithy-async = { version = "1.2.5", default-features = false, features = ["rt-tokio"] }
+aws-sigv4 = { version = "1.3.5", features = ["http0-compat", "sign-eventstream"] }
+aws-smithy-async = { version = "1.2.6", default-features = false, features = ["rt-tokio"] }
 aws-smithy-http = { version = "0.60.12", default-features = false, features = ["event-stream"] }
-aws-smithy-runtime = { version = "1.9.2", default-features = false, features = ["client", "connector-hyper-0-14-x"] }
-aws-smithy-runtime-api = { version = "1.9.0", features = ["client", "http-02x", "http-auth", "test-util"] }
-aws-smithy-types = { version = "1.3.2", default-features = false, features = ["byte-stream-poll-next", "http-body-0-4-x", "http-body-1-x", "rt-tokio", "test-util"] }
+aws-smithy-runtime = { version = "1.9.3", default-features = false, features = ["client", "connector-hyper-0-14-x"] }
+aws-smithy-runtime-api = { version = "1.9.1", features = ["client", "http-02x", "http-auth", "test-util"] }
+aws-smithy-types = { version = "1.3.3", default-features = false, features = ["byte-stream-poll-next", "http-body-0-4-x", "http-body-1-x", "rt-tokio", "test-util"] }
 axum = { version = "0.7.9", features = ["ws"] }
 axum-core = { version = "0.4.5", default-features = false, features = ["tracing"] }
 base16ct = { version = "0.2.0", default-features = false, features = ["alloc"] }
@@ -185,7 +186,7 @@ brotli = { version = "8.0.2" }
 bstr = { version = "1.12.0" }
 bytemuck = { version = "1.23.1", default-features = false, features = ["latest_stable_rust"] }
 bytes = { version = "1.10.1", features = ["serde"] }
-cc = { version = "1.2.40", default-features = false, features = ["parallel"] }
+cc = { version = "1.2.41", default-features = false, features = ["parallel"] }
 chrono = { version = "0.4.41", features = ["serde"] }
 clang-sys = { version = "1.3.0", default-features = false, features = ["clang_11_0", "runtime"] }
 clap = { version = "4.5.23", features = ["derive", "env", "string", "wrap_help"] }
@@ -224,7 +225,7 @@ hyper = { version = "0.14.27", features = ["client", "http1", "http2", "stream",
 hyper-util = { version = "0.1.17", features = ["client-legacy", "server-auto", "service", "tracing"] }
 insta = { version = "1.43.2", features = ["json"] }
 itertools = { version = "0.13.0" }
-libc = { version = "0.2.176", features = ["extra_traits", "use_std"] }
+libc = { version = "0.2.177", features = ["extra_traits", "use_std"] }
 libz-sys = { version = "1.1.22", features = ["static"] }
 lock_api = { version = "0.4.14", features = ["serde"] }
 log = { version = "0.4.28", default-features = false, features = ["std"] }
@@ -303,6 +304,7 @@ unicode-bidi = { version = "0.3.18" }
 unicode-normalization = { version = "0.1.24" }
 url = { version = "2.5.4", features = ["serde"] }
 uuid = { version = "1.18.1", features = ["serde", "v4", "v5", "v7"] }
+winnow = { version = "0.7.13" }
 zeroize = { version = "1.8.2", features = ["serde"] }
 zstd = { version = "0.13.3" }
 zstd-safe = { version = "7.2.4", default-features = false, features = ["arrays", "legacy", "std", "zdict_builder"] }
