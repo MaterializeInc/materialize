@@ -36,12 +36,63 @@
   {{ if not (.Params.disable_toc) }}
   <div class="toc">
     <h2 class="gradient_text dark">On this page</h2>
-    {{ .TableOfContents }}
+    <nav id="TableOfContents">{{ .TableOfContents }}</nav>
   </div>
   {{end}}
 </aside>
 
 <script>
+  // Regenerate TOC to include headings from tab-panes
+  document.addEventListener("DOMContentLoaded", function() {
+    const tocNav = document.getElementById("TableOfContents");
+    if (!tocNav) return;
+
+    // Find all h2 and h3 headings in the main content, including those in tab-panes
+    const headings = document.querySelectorAll(".content h2, .content h3");
+    if (headings.length === 0) return;
+
+    // Build a hierarchical structure
+    const tocItems = [];
+    let currentH2 = null;
+
+    headings.forEach(heading => {
+      if (!heading.id) return; // Skip headings without IDs
+
+      const level = heading.tagName.toLowerCase();
+      const item = {
+        id: heading.id,
+        text: heading.textContent,
+        level: level
+      };
+
+      if (level === 'h2') {
+        currentH2 = { ...item, children: [] };
+        tocItems.push(currentH2);
+      } else if (level === 'h3' && currentH2) {
+        currentH2.children.push(item);
+      }
+    });
+
+    // Generate TOC HTML
+    if (tocItems.length > 0) {
+      let tocHTML = '<ul>';
+      tocItems.forEach(h2Item => {
+        tocHTML += `<li><a href="#${h2Item.id}">${h2Item.text}</a>`;
+        if (h2Item.children.length > 0) {
+          tocHTML += '<ul>';
+          h2Item.children.forEach(h3Item => {
+            tocHTML += `<li><a href="#${h3Item.id}">${h3Item.text}</a></li>`;
+          });
+          tocHTML += '</ul>';
+        }
+        tocHTML += '</li>';
+      });
+      tocHTML += '</ul>';
+
+      tocNav.innerHTML = tocHTML;
+    }
+  });
+
   // A custom "scrollspy" plugin that highlights the TOC link for the
   // currently-visible section.
 
@@ -106,5 +157,46 @@
   $(".toc a").click(function (e) {
     console.log($(this).attr("href"), window.location.hash);
     if ($(this).attr("href") == window.location.hash) e.preventDefault();
+  });
+
+  // Activate tab when clicking on a TOC link that points to content within a tab
+  $(document).on("click", ".toc a", function(e) {
+    const targetId = $(this).attr("href").substring(1); // Remove the # from href
+    const targetElement = document.getElementById(targetId);
+
+    if (targetElement) {
+      // Check if the target is inside a tab-pane
+      const tabPane = targetElement.closest(".tab-pane");
+
+      if (tabPane) {
+        // Find the parent tab group
+        const tabGroup = tabPane.closest(".code-tabs");
+
+        if (tabGroup) {
+          // Find the index of this tab-pane
+          const tabContent = tabGroup.querySelector(".tab-content");
+          const allPanes = Array.from(tabContent.children).filter(child =>
+            child.classList.contains("tab-pane")
+          );
+          const tabIndex = allPanes.indexOf(tabPane);
+
+          if (tabIndex !== -1) {
+            // Activate the tab
+            const navTabs = tabGroup.querySelector(".nav-tabs");
+            const navItems = navTabs.querySelectorAll(".nav-item");
+
+            // Remove active class from all tabs and panes
+            navItems.forEach(item => item.classList.remove("active"));
+            allPanes.forEach(pane => pane.classList.remove("active"));
+
+            // Add active class to the target tab and pane
+            if (navItems[tabIndex]) {
+              navItems[tabIndex].classList.add("active");
+            }
+            tabPane.classList.add("active");
+          }
+        }
+      }
+    }
   });
 </script>
