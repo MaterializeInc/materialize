@@ -1,8 +1,5 @@
-{{ $orchestratord_version := site.Data.self_managed.latest_versions.orchestratord_version }}
-{{ $environmentd_version :=
-site.Data.self_managed.latest_versions.environmentd_version }}
-{{ $operator_version :=
-site.Data.self_managed.latest_versions.operator_helm_chart_version }}
+{{ $environmentd_version := site.Data.self_managed.latest_versions.environmentd_version }}
+{{ $operator_version := site.Data.self_managed.latest_versions.operator_helm_chart_version }}
 
 1. Open a Terminal window.
 
@@ -21,7 +18,7 @@ site.Data.self_managed.latest_versions.operator_helm_chart_version }}
 1. Get the sample configuration files for the new version.
 
    ```shell
-   mz_operator_version={{ $orchestratord_version }}
+   mz_operator_version=self-managed-{{ $operator_version }}
 
    curl -o upgrade-values.yaml https://raw.githubusercontent.com/MaterializeInc/materialize/refs/tags/$mz_operator_version/misc/helm-charts/operator/values.yaml
    ```
