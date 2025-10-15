@@ -26,6 +26,7 @@ mz-alloc-default = { path = "../alloc-default", optional = true, default-feature
 mz-build-info = { path = "../build-info", default-features = false }
 mz-cloud-provider = { path = "../cloud-provider", default-features = false }
 mz-cloud-resources = { path = "../cloud-resources", default-features = false }
+mz-license-keys = { path = "../license-keys", default-features = false }
 mz-ore = { path = "../ore", default-features = false, features = ["panic"] }
 mz-orchestrator-kubernetes = { path = "../orchestrator-kubernetes", default-features = false }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing", default-features = false }

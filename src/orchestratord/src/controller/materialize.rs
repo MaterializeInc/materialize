@@ -14,9 +14,10 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use anyhow::Context as _;
 use http::HeaderValue;
 use k8s_openapi::{
-    api::core::v1::{Affinity, ResourceRequirements, Toleration},
+    api::core::v1::{Affinity, ResourceRequirements, Secret, Toleration},
     apimachinery::pkg::apis::meta::v1::{Condition, Time},
 };
 use kube::{Api, Client, Resource, ResourceExt, api::PostParams, runtime::controller::Action};
@@ -29,6 +30,7 @@ use mz_cloud_provider::CloudProvider;
 use mz_cloud_resources::crd::materialize::v1alpha1::{
     Materialize, MaterializeCertSpec, MaterializeStatus,
 };
+use mz_license_keys::validate;
 use mz_orchestrator_kubernetes::KubernetesImagePullPolicy;
 use mz_orchestrator_tracing::TracingCliArgs;
 use mz_ore::{cast::CastFrom, cli::KeyValueArg, instrument};
@@ -340,6 +342,7 @@ impl k8s_controller::Context for Context {
         mz: &Self::Resource,
     ) -> Result<Option<Action>, Self::Error> {
         let mz_api: Api<Materialize> = Api::namespaced(client.clone(), &mz.namespace());
+        let secret_api: Api<Secret> = Api::namespaced(client.clone(), &mz.namespace());
 
         let status = mz.status();
         if mz.status.is_none() {
@@ -349,13 +352,47 @@ impl k8s_controller::Context for Context {
             return Ok(None);
         }
 
+        let backend_secret = secret_api.get(&mz.spec.backend_secret_name).await?;
+        let license_key_environment_id: Option<Uuid> = if let Some(license_key) = backend_secret
+            .data
+            .as_ref()
+            .and_then(|data| data.get("license_key"))
+        {
+            let license_key = validate(
+                str::from_utf8(&license_key.0)
+                    .context("invalid utf8")?
+                    .trim(),
+            )?;
+            let environment_id = license_key
+                .environment_id
+                .parse()
+                .context("invalid environment id in license key")?;
+            Some(environment_id)
+        } else {
+            None
+        };
+
         if mz.spec.request_rollout.is_nil() || mz.spec.environment_id.is_nil() {
             let mut mz = mz.clone();
             if mz.spec.request_rollout.is_nil() {
                 mz.spec.request_rollout = Uuid::new_v4();
             }
             if mz.spec.environment_id.is_nil() {
-                mz.spec.environment_id = Uuid::new_v4();
+                if let Some(environment_id) = license_key_environment_id {
+                    if environment_id.is_nil() {
+                        // this makes it easier to use a license key in
+                        // development with no environment id set
+                        mz.spec.environment_id = Uuid::new_v4();
+                    } else {
+                        mz.spec.environment_id = environment_id;
+                    }
+                } else {
+                    return Err(Error::Anyhow(anyhow::anyhow!(
+                        "environment_id is not set in materialize resource {}/{} but no license key was given",
+                        mz.namespace(),
+                        mz.name_unchecked()
+                    )));
+                }
             }
             mz_api
                 .replace(&mz.name_unchecked(), &PostParams::default(), &mz)
@@ -364,6 +401,19 @@ impl k8s_controller::Context for Context {
             // We can't do that as part of the above check because you can't
             // update both the spec and the status in a single api call.
             return Ok(None);
+        }
+
+        if let Some(environment_id) = license_key_environment_id {
+            // we still allow a nil environment id in the license key to be
+            // accepted for any provided environment id, to support cloud
+            if !environment_id.is_nil() && mz.spec.environment_id != environment_id {
+                return Err(Error::Anyhow(anyhow::anyhow!(
+                    "environment_id is set in materialize resource {}/{} but does not match the environment_id set in the associated license key {}",
+                    mz.namespace(),
+                    mz.name_unchecked(),
+                    environment_id,
+                )));
+            }
         }
 
         // we compare the hash against the environment resources generated

@@ -166,7 +166,7 @@ pub mod v1alpha1 {
 
         // The value used by environmentd (via the --environment-id flag) to
         // uniquely identify this instance. Must be globally unique, and
-        // defaults to a random value.
+        // is required if a license key is not provided.
         // NOTE: This value MUST NOT be changed in an existing instance,
         // since it affects things like the way data is stored in the persist
         // backend.

@@ -15,8 +15,6 @@ use mz_license_keys::validate;
 struct Opt {
     #[clap(long)]
     license_key_file: String,
-    #[clap(long)]
-    environment_id: String,
 }
 
 fn main() {
@@ -24,7 +22,7 @@ fn main() {
 
     let license_key = std::fs::read_to_string(&opt.license_key_file).unwrap();
 
-    let validated_key = validate(license_key.trim(), &opt.environment_id).unwrap();
+    let validated_key = validate(license_key.trim()).unwrap();
 
     println!("valid license key");
     println!("{validated_key:?}");

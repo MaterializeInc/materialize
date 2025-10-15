@@ -368,7 +368,7 @@ async fn main() {
     }
 
     let license_key = if let Some(license_key_text) = args.license_key {
-        mz_license_keys::validate(license_key_text.trim(), "00000000-0000-0000-000000000000")
+        mz_license_keys::validate(license_key_text.trim())
             .unwrap_or_else(|e| die!("testdrive: failed to validate license key: {}", e))
     } else {
         ValidatedLicenseKey::default()
