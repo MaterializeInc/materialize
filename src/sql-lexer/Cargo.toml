@@ -13,7 +13,7 @@ workspace = true
 mz-ore = { path = "../ore", default-features = false, features = ["stack"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 serde = { version = "1.0.219", features = ["derive"] }
-phf = { version = "0.11.1", features = ["uncased"] }
+phf = { version = "0.13.1", features = ["uncased"] }
 uncased = "0.9.7"
 
 [dev-dependencies]
@@ -23,8 +23,8 @@ mz-ore = { path = "../ore", default-features = false, features = ["test"] }
 [build-dependencies]
 anyhow = "1.0.100"
 mz-ore-build = { path = "../ore-build", default-features = false }
-phf = { version = "0.11.1", features = ["uncased"] }
-phf_codegen = "0.11.3"
+phf = { version = "0.13.1", features = ["uncased"] }
+phf_codegen = "0.13.1"
 uncased = "0.9.7"
 
 [features]

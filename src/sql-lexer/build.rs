@@ -71,7 +71,7 @@ fn main() -> Result<()> {
 
         let mut phf = phf_codegen::Map::new();
         for kw in &keywords {
-            phf.entry(UncasedStr::new(kw), &format!("Keyword::{}", kw));
+            phf.entry(UncasedStr::new(kw), format!("Keyword::{kw}"));
         }
         buf.writeln(format!(
             "pub static KEYWORDS: phf::Map<&'static UncasedStr, Keyword> = {};",
