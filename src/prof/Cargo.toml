@@ -18,7 +18,7 @@ itertools = "0.14.0"
 jemalloc_pprof = { version = "0.8", optional = true }
 pprof_util = "0.8"
 mz-ore = { path = "../ore", default-features = false, features = ["async"] }
-pprof = "0.14.0"
+pprof = "0.15.0"
 prost = { version = "0.13.5", features = ["no-recursion-limit"] }
 tikv-jemalloc-ctl = { version = "0.6", features = ["use_std", "stats"], optional = true }
 tracing = "0.1.37"
