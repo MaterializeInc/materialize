@@ -4227,11 +4227,11 @@ impl SqlScalarType {
             ReprScalarType::String => SqlScalarType::String,
             ReprScalarType::Uuid => SqlScalarType::Uuid,
             ReprScalarType::Array(element_type) => {
-                SqlScalarType::Array(Box::new(SqlScalarType::from_repr(&element_type)))
+                SqlScalarType::Array(Box::new(SqlScalarType::from_repr(element_type)))
             }
             ReprScalarType::Int2Vector => SqlScalarType::Int2Vector,
             ReprScalarType::List { element_type } => SqlScalarType::List {
-                element_type: Box::new(SqlScalarType::from_repr(&element_type)),
+                element_type: Box::new(SqlScalarType::from_repr(element_type)),
                 custom_id: None,
             },
             ReprScalarType::Record { fields } => SqlScalarType::Record {
@@ -4241,7 +4241,7 @@ impl SqlScalarType {
                     .map(|typ| {
                         (
                             ColumnName::from(format!("field_{}", typ.0)),
-                            SqlColumnType::from_repr(&typ.1),
+                            SqlColumnType::from_repr(typ.1),
                         )
                     })
                     .collect::<Vec<_>>()
@@ -4249,11 +4249,11 @@ impl SqlScalarType {
                 custom_id: None,
             },
             ReprScalarType::Map { value_type } => SqlScalarType::Map {
-                value_type: Box::new(SqlScalarType::from_repr(&value_type)),
+                value_type: Box::new(SqlScalarType::from_repr(value_type)),
                 custom_id: None,
             },
             ReprScalarType::Range { element_type } => SqlScalarType::Range {
-                element_type: Box::new(SqlScalarType::from_repr(&element_type)),
+                element_type: Box::new(SqlScalarType::from_repr(element_type)),
             },
             ReprScalarType::MzAclItem => SqlScalarType::MzAclItem,
             ReprScalarType::AclItem => SqlScalarType::AclItem,
