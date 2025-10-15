@@ -1,8 +1,8 @@
-{{ $orchestratord_version := site.Data.self_managed.latest_versions.orchestratord_version }}
+{{ $operator_helm_chart_version := site.Data.self_managed.latest_versions.operator_helm_chart_version }}
 {{ $environmentd_version := site.Data.self_managed.latest_versions.environmentd_version }}
 
 ```shell
-mz_operator_version={{ $orchestratord_version }}
+mz_operator_version=self-managed-{{ $operator_helm_chart_version}}
 mz_version={{ $environmentd_version }}
 
 curl -o sample-values.yaml https://raw.githubusercontent.com/MaterializeInc/materialize/refs/tags/$mz_operator_version/misc/helm-charts/operator/values.yaml
