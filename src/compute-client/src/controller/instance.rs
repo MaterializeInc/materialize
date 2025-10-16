@@ -258,9 +258,7 @@ where
         .await
     }
 
-    /// Issue a peek by calling into the instance task, letting the instance acquire read holds if
-    /// none are provided. This ensures the read holds are established before returning to the
-    /// caller.
+    /// Issue a peek by calling into the instance task.
     pub async fn peek(
         &self,
         peek_target: PeekTarget,
@@ -1738,10 +1736,9 @@ where
     ) -> Result<(), PeekError> {
         use PeekError::*;
 
-        // Acquire a read hold if one was not provided.
         let target_id = peek_target.id();
 
-        // Downgrade the provided (or acquired) read hold to the peek time.
+        // Downgrade the provided read hold to the peek time.
         if read_hold.id() != target_id {
             return Err(ReadHoldIdMismatch(read_hold.id()));
         }
