@@ -47,6 +47,10 @@ pub enum PgSourcePurificationError {
     NotTablesWReplicaIdentityFull { items: Vec<String> },
     #[error("TEXT COLUMNS refers to table not currently being added")]
     DanglingTextColumns { items: Vec<PartialItemName> },
+    #[error("EXCLUDE COLUMNS refers to table not currently being added")]
+    DanglingExcludeColumns { items: Vec<PartialItemName> },
+    #[error("duplicated column name references: {0:?}")]
+    DuplicatedColumnNames(Vec<String>),
     #[error("referenced tables use unsupported types")]
     UnrecognizedTypes { cols: Vec<(String, Oid)> },
     #[error("{0} is not a POSTGRES CONNECTION")]

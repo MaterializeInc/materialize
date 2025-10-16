@@ -19,7 +19,8 @@ use mz_repr::{SqlColumnType, SqlRelationType, SqlScalarType};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
     ColumnDef, CreateSubsourceOption, CreateSubsourceOptionName, CreateSubsourceStatement,
-    ExternalReferences, Ident, TableConstraint, UnresolvedItemName, Value, WithOptionValue,
+    ExternalReferences, Ident, PgConfigOptionName, TableConstraint, UnresolvedItemName, Value,
+    WithOptionValue,
 };
 use mz_storage_types::sources::SourceExportStatementDetails;
 use mz_storage_types::sources::postgres::CastType;
@@ -53,22 +54,22 @@ pub(super) async fn validate_requested_references_privileges(
     Ok(())
 }
 
-/// Generate a mapping of `Oid`s to column names that should be ingested as text
-/// (rather than their type in the upstream database).
+/// Map a list of column references to a map of table oids to column names.
 ///
-/// Additionally, modify `text_columns` so that they contain database-qualified
+/// Additionally, modify `columns` so that they contain database-qualified
 /// references to the columns.
-pub(super) fn generate_text_columns(
+pub(super) fn map_column_refs(
     retrieved_references: &RetrievedSourceReferences,
-    text_columns: &mut [UnresolvedItemName],
+    columns: &mut [UnresolvedItemName],
+    option_type: PgConfigOptionName,
 ) -> Result<BTreeMap<u32, BTreeSet<String>>, PlanError> {
-    let mut text_cols_dict: BTreeMap<u32, BTreeSet<String>> = BTreeMap::new();
+    let mut cols_map: BTreeMap<u32, BTreeSet<String>> = BTreeMap::new();
 
-    for name in text_columns {
+    for name in columns {
         let (qual, col) = match name.0.split_last().expect("must have at least one element") {
             (col, qual) if qual.is_empty() => {
                 return Err(PlanError::InvalidOptionValue {
-                    option_name: "TEXT COLUMNS".to_string(),
+                    option_name: option_type.to_ast_string_simple(),
                     err: Box::new(PlanError::UnderqualifiedColumnName(
                         col.as_str().to_string(),
                     )),
@@ -82,7 +83,7 @@ pub(super) fn generate_text_columns(
             resolved_reference
                 .external_reference()
                 .map_err(|e| PlanError::InvalidOptionValue {
-                    option_name: "TEXT COLUMNS".to_string(),
+                    option_name: option_type.to_ast_string_simple(),
                     err: Box::new(e.into()),
                 })?;
 
@@ -101,7 +102,7 @@ pub(super) fn generate_text_columns(
                 })
                 .collect();
             return Err(PlanError::InvalidOptionValue {
-                option_name: "TEXT COLUMNS".to_string(),
+                option_name: option_type.to_ast_string_simple(),
                 err: Box::new(PlanError::UnknownColumn {
                     table: Some(
                         normalize::unresolved_item_name(fully_qualified_name)
@@ -118,20 +119,20 @@ pub(super) fn generate_text_columns(
         fully_qualified_name.0.push(col_ident);
         *name = fully_qualified_name;
 
-        let new = text_cols_dict
+        let new = cols_map
             .entry(desc.oid)
             .or_default()
             .insert(col.as_str().to_string());
 
         if !new {
             return Err(PlanError::InvalidOptionValue {
-                option_name: "TEXT COLUMNS".to_string(),
+                option_name: option_type.to_ast_string_simple(),
                 err: Box::new(PlanError::UnexpectedDuplicateReference { name: name.clone() }),
             });
         }
     }
 
-    Ok(text_cols_dict)
+    Ok(cols_map)
 }
 
 pub fn generate_create_subsource_statements(
@@ -150,6 +151,7 @@ pub fn generate_create_subsource_statements(
             columns,
             constraints,
             text_columns,
+            exclude_columns,
             details,
             external_reference,
         } = generate_source_export_statement_values(scx, purified_export, &mut unsupported_cols)?;
@@ -171,6 +173,13 @@ pub fn generate_create_subsource_statements(
             with_options.push(CreateSubsourceOption {
                 name: CreateSubsourceOptionName::TextColumns,
                 value: Some(WithOptionValue::Sequence(text_columns)),
+            });
+        }
+
+        if let Some(exclude_columns) = exclude_columns {
+            with_options.push(CreateSubsourceOption {
+                name: CreateSubsourceOptionName::ExcludeColumns,
+                value: Some(WithOptionValue::Sequence(exclude_columns)),
             });
         }
 
@@ -210,6 +219,7 @@ pub(super) struct PostgresExportStatementValues {
     pub(super) columns: Vec<ColumnDef<Aug>>,
     pub(super) constraints: Vec<TableConstraint<Aug>>,
     pub(super) text_columns: Option<Vec<WithOptionValue<Aug>>>,
+    pub(super) exclude_columns: Option<Vec<WithOptionValue<Aug>>>,
     pub(super) details: SourceExportStatementDetails,
     pub(super) external_reference: UnresolvedItemName,
 }
@@ -219,26 +229,32 @@ pub(super) fn generate_source_export_statement_values(
     purified_export: PurifiedSourceExport,
     unsupported_cols: &mut Vec<(String, mz_repr::adt::system::Oid)>,
 ) -> Result<PostgresExportStatementValues, PlanError> {
-    let (text_columns, table) = match purified_export.details {
-        PurifiedExportDetails::Postgres {
-            text_columns,
-            table,
-        } => (text_columns, table),
-        _ => unreachable!("purified export details must be postgres"),
+    let PurifiedExportDetails::Postgres {
+        table,
+        text_columns,
+        exclude_columns,
+    } = purified_export.details
+    else {
+        unreachable!("purified export details must be postgres")
     };
 
-    let text_column_set = text_columns
-        .as_ref()
-        .map(|v| BTreeSet::from_iter(v.iter().map(Ident::as_str)));
+    let text_column_set = BTreeSet::from_iter(text_columns.iter().flatten().map(Ident::as_str));
+    let exclude_column_set =
+        BTreeSet::from_iter(exclude_columns.iter().flatten().map(Ident::as_str));
 
     // Figure out the schema of the subsource
     let mut columns = vec![];
     for c in table.columns.iter() {
         let name = Ident::new(c.name.clone())?;
 
-        let ty = match text_column_set {
-            Some(ref names) if names.contains(c.name.as_str()) => mz_pgrepr::Type::Text,
-            _ => match mz_pgrepr::Type::from_oid_and_typmod(c.type_oid, c.type_mod) {
+        if exclude_column_set.contains(c.name.as_str()) {
+            continue;
+        }
+
+        let ty = if text_column_set.contains(c.name.as_str()) {
+            mz_pgrepr::Type::Text
+        } else {
+            match mz_pgrepr::Type::from_oid_and_typmod(c.type_oid, c.type_mod) {
                 Ok(t) => t,
                 Err(_) => {
                     let mut full_name = purified_export.external_reference.0.clone();
@@ -249,7 +265,7 @@ pub(super) fn generate_source_export_statement_values(
                     ));
                     continue;
                 }
-            },
+            }
         };
 
         let data_type = scx.resolve_type(ty)?;
@@ -311,10 +327,19 @@ pub(super) fn generate_source_export_statement_values(
             .collect()
     });
 
+    let exclude_columns = exclude_columns.map(|mut columns| {
+        columns.sort();
+        columns
+            .into_iter()
+            .map(WithOptionValue::Ident::<Aug>)
+            .collect()
+    });
+
     Ok(PostgresExportStatementValues {
         columns,
         constraints,
         text_columns,
+        exclude_columns,
         details,
         external_reference: purified_export.external_reference,
     })
@@ -339,6 +364,7 @@ pub(super) async fn purify_source_exports(
     retrieved_references: &RetrievedSourceReferences,
     requested_references: &Option<ExternalReferences>,
     mut text_columns: Vec<UnresolvedItemName>,
+    mut exclude_columns: Vec<UnresolvedItemName>,
     unresolved_source_name: &UnresolvedItemName,
     reference_policy: &SourceReferencePolicy,
 ) -> Result<PurifiedSourceExports, PlanError> {
@@ -359,6 +385,16 @@ pub(super) async fn purify_source_exports(
                 Err(
                     PgSourcePurificationError::UnnecessaryOptionsWithoutReferences(
                         "TEXT COLUMNS".to_string(),
+                    ),
+                )?
+            }
+
+            // If no external reference is specified, it does not make sense to include
+            // exclude columns.
+            if !exclude_columns.is_empty() {
+                Err(
+                    PgSourcePurificationError::UnnecessaryOptionsWithoutReferences(
+                        "EXCLUDE COLUMNS".to_string(),
                     ),
                 )?
             }
@@ -389,7 +425,16 @@ pub(super) async fn purify_source_exports(
 
     validate_requested_references_privileges(client, &table_oids).await?;
 
-    let mut text_column_map = generate_text_columns(retrieved_references, &mut text_columns)?;
+    let mut text_column_map = map_column_refs(
+        retrieved_references,
+        &mut text_columns,
+        PgConfigOptionName::TextColumns,
+    )?;
+    let mut exclude_column_map = map_column_refs(
+        retrieved_references,
+        &mut exclude_columns,
+        PgConfigOptionName::ExcludeColumns,
+    )?;
 
     // Normalize options to contain full qualified values.
     text_columns.sort();
@@ -403,12 +448,27 @@ pub(super) async fn purify_source_exports(
         .into_iter()
         .map(|r| {
             let desc = r.meta.postgres_desc().expect("known postgres");
-            (
+            let text_columns = text_column_map.remove(&desc.oid);
+            let exclude_columns = exclude_column_map.remove(&desc.oid);
+            if let (Some(text_cols), Some(exclude_cols)) = (&text_columns, &exclude_columns) {
+                let intersection: Vec<_> = text_cols.intersection(exclude_cols).collect();
+                if !intersection.is_empty() {
+                    return Err(PgSourcePurificationError::DuplicatedColumnNames(
+                        intersection.iter().map(|s| (*s).to_string()).collect(),
+                    ));
+                }
+            }
+            Ok((
                 r.name,
                 PurifiedSourceExport {
                     external_reference: r.external_reference,
                     details: PurifiedExportDetails::Postgres {
-                        text_columns: text_column_map.remove(&desc.oid).map(|v| {
+                        text_columns: text_columns.map(|v| {
+                            v.into_iter()
+                                .map(|s| Ident::new(s).expect("validated above"))
+                                .collect()
+                        }),
+                        exclude_columns: exclude_columns.map(|v| {
                             v.into_iter()
                                 .map(|s| Ident::new(s).expect("validated above"))
                                 .collect()
@@ -416,9 +476,9 @@ pub(super) async fn purify_source_exports(
                         table: desc.clone(),
                     },
                 },
-            )
+            ))
         })
-        .collect();
+        .collect::<Result<BTreeMap<_, _>, _>>()?;
 
     if !text_column_map.is_empty() {
         // If any any item was not removed from the text_column_map, it wasn't being
@@ -443,9 +503,41 @@ pub(super) async fn purify_source_exports(
         }
 
         dangling_text_column_refs.sort();
-        Err(PgSourcePurificationError::DanglingTextColumns {
-            items: dangling_text_column_refs,
-        })?;
+        return Err(PlanError::from(
+            PgSourcePurificationError::DanglingTextColumns {
+                items: dangling_text_column_refs,
+            },
+        ));
+    }
+
+    if !exclude_column_map.is_empty() {
+        // If any any item was not removed from the exclude_column_map, it wasn't being
+        // added.
+        let mut dangling_exclude_column_refs = vec![];
+        let all_references = retrieved_references.all_references();
+
+        for id in exclude_column_map.keys() {
+            let desc = all_references
+                .iter()
+                .find_map(|reference| {
+                    let desc = reference.postgres_desc().expect("is postgres");
+                    if desc.oid == *id { Some(desc) } else { None }
+                })
+                .expect("validated when generating exclude columns");
+
+            dangling_exclude_column_refs.push(PartialItemName {
+                database: None,
+                schema: Some(desc.namespace.clone()),
+                item: desc.name.clone(),
+            });
+        }
+
+        dangling_exclude_column_refs.sort();
+        return Err(PlanError::from(
+            PgSourcePurificationError::DanglingExcludeColumns {
+                items: dangling_exclude_column_refs,
+            },
+        ));
     }
 
     Ok(PurifiedSourceExports {
@@ -458,7 +550,8 @@ pub(crate) fn generate_column_casts(
     scx: &StatementContext,
     table: &PostgresTableDesc,
     text_columns: &Vec<Ident>,
-) -> Result<Vec<(CastType, MirScalarExpr)>, PlanError> {
+    exclude_columns: &Vec<Ident>,
+) -> Result<Vec<(CastType, Option<MirScalarExpr>)>, PlanError> {
     // Generate the cast expressions required to convert the text encoded columns into
     // the appropriate target types, creating a Vec<MirScalarExpr>
     // The postgres source reader will then eval each of those on the incoming rows
@@ -491,6 +584,7 @@ pub(crate) fn generate_column_casts(
     };
 
     let text_columns = BTreeSet::from_iter(text_columns.iter().map(Ident::as_str));
+    let exclude_columns = BTreeSet::from_iter(exclude_columns.iter().map(Ident::as_str));
 
     // Then, for each column we will generate a MirRelationExpr that extracts the nth
     // column and casts it to the appropriate target type
@@ -503,6 +597,9 @@ pub(crate) fn generate_column_casts(
             // we'll be able to ingest its values as text in
             // storage.
             (CastType::Text, mz_pgrepr::Type::Text)
+        } else if exclude_columns.contains(column.name.as_str()) {
+            table_cast.push((CastType::Exclude, None));
+            continue;
         } else {
             match mz_pgrepr::Type::from_oid_and_typmod(column.type_oid, column.type_mod) {
                 Ok(t) => (CastType::Natural, t),
@@ -513,21 +610,26 @@ pub(crate) fn generate_column_casts(
                 Err(_) => {
                     table_cast.push((
                         CastType::Natural,
-                        HirScalarExpr::call_variadic(
-                            mz_expr::VariadicFunc::ErrorIfNull,
-                            vec![
-                                HirScalarExpr::literal_null(SqlScalarType::String),
-                                HirScalarExpr::literal(
-                                    mz_repr::Datum::from(
-                                        format!("Unsupported type with OID {}", column.type_oid)
+                        Some(
+                            HirScalarExpr::call_variadic(
+                                mz_expr::VariadicFunc::ErrorIfNull,
+                                vec![
+                                    HirScalarExpr::literal_null(SqlScalarType::String),
+                                    HirScalarExpr::literal(
+                                        mz_repr::Datum::from(
+                                            format!(
+                                                "Unsupported type with OID {}",
+                                                column.type_oid
+                                            )
                                             .as_str(),
+                                        ),
+                                        SqlScalarType::String,
                                     ),
-                                    SqlScalarType::String,
-                                ),
-                            ],
-                        )
-                        .lower_uncorrelated()
-                        .expect("no correlation"),
+                                ],
+                            )
+                            .lower_uncorrelated()
+                            .expect("no correlation"),
+                        ),
                     ));
                     continue;
                 }
@@ -590,7 +692,7 @@ pub(crate) fn generate_column_casts(
             }
         })?;
 
-        table_cast.push((cast_type, mir_cast));
+        table_cast.push((cast_type, Some(mir_cast)));
     }
     Ok(table_cast)
 }
