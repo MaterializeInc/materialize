@@ -152,7 +152,7 @@ impl PeekClient {
     /// Therefore, using `StorageCollections::collections_frontiers` is sufficient.
     ///
     /// Note: self is taken &mut because of the lazy fetching in `get_compute_instance_client`.
-    pub async fn acquire_read_holds_and_collection_write_frontiers(
+    pub async fn acquire_read_holds_and_least_valid_write(
         &mut self,
         id_bundle: &CollectionIdBundle,
     ) -> Result<(ReadHolds<Timestamp>, Antichain<Timestamp>), CollectionMissing> {
@@ -209,16 +209,6 @@ impl PeekClient {
 
     /// Implement a fast-path peek plan.
     /// This is similar to `Coordinator::implement_peek_plan`, but only for fast path peeks.
-    ///
-    /// Supported variants:
-    /// - FastPathPlan::Constant
-    /// - FastPathPlan::PeekExisting (PeekTarget::Index only)
-    ///
-    /// This fn assumes that the caller has already acquired read holds for the peek at the
-    /// appropriate timestamp. Before this fn returns, it passes on the responsibility of holding
-    /// back the frontiers to Compute, so then the caller can forget its own read holds.
-    ///
-    /// Note: FastPathPlan::PeekPersist is not yet supported here; we may add this later.
     ///
     /// Note: self is taken &mut because of the lazy fetching in `get_compute_instance_client`.
     ///

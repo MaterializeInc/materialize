@@ -28,7 +28,7 @@ use tracing::{Span, debug};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::catalog::CatalogState;
-use crate::coord::peek::{FastPathPlan, PeekPlan};
+use crate::coord::peek::PeekPlan;
 use crate::coord::timestamp_selection::TimestampDetermination;
 use crate::coord::{Coordinator, ExplainContext, TargetCluster};
 use crate::optimize::Optimize;
@@ -75,13 +75,12 @@ impl PeekClient {
             }
         }
 
-        // This is from handle_execute_inner, but we do it already here because of lifetime issues,
-        // and also to be able to give a catalog to `verify_portal`.
-        //
         // TODO(peek-seq): This snapshot is wasted when we end up bailing out from the frontend peek
-        // sequencing. I think the best way to solve this is with that optimization where we
+        // sequencing. We could solve this is with that optimization where we
         // continuously keep a catalog snapshot in the session, and only get a new one when the
         // catalog revision has changed, which we could see with an atomic read.
+        // But anyhow, this problem will just go away when we reach the point that we never fall
+        // back to the old sequencing.
         let catalog = self.catalog_snapshot("try_frontend_peek_inner").await;
 
         if let Err(_) = Coordinator::verify_portal(&*catalog, session, portal_name) {
@@ -130,8 +129,7 @@ impl PeekClient {
         let select_plan = match &plan {
             Plan::Select(select_plan) => select_plan,
             _ => {
-                debug!("Bailing out from try_frontend_peek_inner, because it's not a SELECT");
-                return Ok(None);
+                unreachable!("checked above at the Statement level that it's a SELECT")
             }
         };
         let explain_ctx = ExplainContext::None; // EXPLAIN is not handled here for now, only SELECT
@@ -156,15 +154,13 @@ impl PeekClient {
 
         // TODO(peek-seq): statement logging: set_statement_execution_cluster
 
-        if let Err(e) = coord::catalog_serving::check_cluster_restrictions(
+        coord::catalog_serving::check_cluster_restrictions(
             target_cluster_name.as_str(),
             &conn_catalog,
             &plan,
-        ) {
-            return Err(e);
-        }
+        )?;
 
-        if let Err(e) = rbac::check_plan(
+        rbac::check_plan(
             &conn_catalog,
             |_id| {
                 // This is only used by `Plan::SideEffectingFunc`, so it is irrelevant for us here
@@ -175,9 +171,7 @@ impl PeekClient {
             &plan,
             Some(target_cluster_id),
             &resolved_ids,
-        ) {
-            return Err(e.into());
-        }
+        )?;
 
         // Check if we're still waiting for any of the builtin table appends from when we
         // started the Session to complete.
@@ -210,12 +204,8 @@ impl PeekClient {
 
         // # From peek_validate
 
-        //let compute_instance_snapshot = self.peek_client().snapshot(cluster.id()).await.unwrap();
         let compute_instance_snapshot =
             ComputeInstanceSnapshot::new_without_collections(cluster.id());
-
-        let (_, view_id) = self.transient_id_gen.allocate_id();
-        let (_, index_id) = self.transient_id_gen.allocate_id();
 
         let optimizer_config = optimize::OptimizerConfig::from(catalog.system_config())
             .override_from(&catalog.get_cluster(cluster.id()).config.features());
@@ -226,6 +216,9 @@ impl PeekClient {
                 is_managed: cluster.is_managed(),
             });
         }
+
+        let (_, view_id) = self.transient_id_gen.allocate_id();
+        let (_, index_id) = self.transient_id_gen.allocate_id();
 
         let mut optimizer = optimize::peek::Optimizer::new(
             Arc::clone(&catalog),
@@ -370,7 +363,10 @@ impl PeekClient {
             );
             return Ok(None);
         }
+
+        // TODO(peek-seq): wire up statistics
         let stats = Box::new(EmptyStatisticsOracle);
+
         let session_meta = session.meta();
         let now = catalog.config().now.clone();
         let select_plan = select_plan.clone();
@@ -425,15 +421,12 @@ impl PeekClient {
 
         // TODO(peek-seq): plan_insights stuff
 
-        // This match is based on what `implement_fast_path_peek_plan` supports.
         let fast_path_plan = match peek_plan {
             PeekPlan::SlowPath(_) => {
                 debug!("Bailing out from try_frontend_peek_inner, because it's a slow-path peek");
                 return Ok(None);
             }
-            PeekPlan::FastPath(p @ FastPathPlan::Constant(_, _))
-            | PeekPlan::FastPath(p @ FastPathPlan::PeekExisting(_, _, _, _))
-            | PeekPlan::FastPath(p @ FastPathPlan::PeekPersist(_, _, _)) => p,
+            PeekPlan::FastPath(p) => p,
         };
 
         // Warning: Do not bail out from the new peek sequencing after this point, because the
@@ -545,7 +538,7 @@ impl PeekClient {
         let isolation_level = session.vars().transaction_isolation();
 
         let (read_holds, upper) = self
-            .acquire_read_holds_and_collection_write_frontiers(id_bundle)
+            .acquire_read_holds_and_least_valid_write(id_bundle)
             .await
             .expect("missing collection");
         let (det, read_holds) = <Coordinator as TimestampProvider>::determine_timestamp_for_inner(
@@ -598,7 +591,7 @@ impl PeekClient {
                     session
                         .metrics()
                         .timestamp_difference_for_strict_serializable_ms(&[
-                            &compute_instance.to_string().as_ref(),
+                            compute_instance.to_string().as_ref(),
                             constraint_based.as_str(),
                         ])
                         .observe(f64::cast_lossy(u64::from(
