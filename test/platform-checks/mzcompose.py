@@ -206,6 +206,25 @@ def teardown(c: Composition) -> None:
     c.rm_volumes("mzdata", "tmp", force=True)
 
 
+def fast_teardown(c: Composition) -> None:
+    c.rm(
+        *[
+            s.name
+            for s in SERVICES
+            if s.name != "debezium"
+            and s.name != "kafka"
+            and s.name != "schema-registry"
+            and s.name != "azurite"
+            and s.name != "mysql"
+            and s.name != "ssh-bastion-host"
+            and s.name != "zookeeper"
+        ],
+        stop=True,
+        destroy_volumes=True,
+    )
+    c.rm_volumes("mzdata", "tmp", force=True)
+
+
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     # c.silent = True
     parser.add_argument(
@@ -395,9 +414,19 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                             "mz_1",
                             "mz_2",
                         )
-                        print("Error in scenario", e)
+                        print(
+                            f"Error: {e}"
+                            + (
+                                f" (version: {executor.current_mz_version})"
+                                if hasattr(executor, "current_mz_version")
+                                else ""
+                            )
+                        )
+                    finally:
+                        if args.teardown == "True":
+                            fast_teardown(c)
+
             else:
                 raise RuntimeError(f"Unsupported execution mode: {execution_mode}")
             if args.teardown == "True":
-
-                teardown(c)
+                fast_teardown(c)

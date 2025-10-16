@@ -1091,7 +1091,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=MultiVersionZeroDowntimeBasic, "--seed=$BUILDKITE_JOB_ID", "--teardown=True"]
+              args: [--scenario=MultiVersionZeroDowntimeBasic, "--seed=$BUILDKITE_JOB_ID", "--teardown=True", "--execution-mode=oneatatime"]
 
       - id: checks-0dt-bump-version
         label: "Checks 0dt upgrade to a bumped version"
