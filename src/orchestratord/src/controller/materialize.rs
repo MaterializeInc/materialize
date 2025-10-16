@@ -547,14 +547,6 @@ impl k8s_controller::Context for Context {
                         Ok(None)
                     }
                     Err(e) => {
-                        // TODO should we actually tear things down here?
-                        // I don't think we should. This might have some weird behavior if we hit
-                        // transient errors. We might end up tearing down many hours of progress on
-                        // rehydration due to a transient failure to reapply an already working K8S
-                        // object.
-                        resources
-                            .teardown_generation(&client, mz, next_generation)
-                            .await?;
                         self.update_status(
                             &mz_api,
                             mz,
