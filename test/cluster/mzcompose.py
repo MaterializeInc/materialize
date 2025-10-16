@@ -3201,7 +3201,7 @@ def workflow_test_metrics_retention_across_restart(c: Composition) -> None:
     #  * indexes (like `mz_cluster_replicas_ind`)
 
     # Generally, metrics tables are indexed in `mz_catalog_server` and
-    # not indexed in the `default` cluster, so we can use that to
+    # not indexed in the `quickstart` cluster, so we can use that to
     # collect the `since` frontiers we want.
     def collect_sinces() -> tuple[int, int]:
         with c.sql_cursor() as cur:

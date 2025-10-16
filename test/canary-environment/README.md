@@ -62,9 +62,9 @@ export CONFLUENT_CLOUD_FIELDENG_KAFKA_PASSWORD=...
 
 ## Clusters
 
-Two clusters have been created in the sanbox environment: `qa_canary_environment_storage`
+Two clusters have been created in the sandbox environment: `qa_canary_environment_storage`
 and `qa_canary_environment_compute` and all database objects are created in them. The use
-of the `default` cluster is strongly discouraged.
+of the `quickstart` cluster is strongly discouraged.
 
 # Creating the objects
 
