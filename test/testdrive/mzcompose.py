@@ -158,14 +158,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         blob_store_is_azure=args.azurite,
         fivetran_destination=True,
         fivetran_destination_files_path="/share/tmp",
-        entrypoint_extra=(
-            [
-                f"--var=uses-redpanda={args.redpanda}",
-            ]
-            + ["--consistency-checks=disable"]
-            if args.foundationdb
-            else []
-        ),
+        no_consistency_checks=True,
+        entrypoint_extra=[
+            f"--var=uses-redpanda={args.redpanda}",
+        ],
     )
     if args.foundationdb:
         c.up("foundationdb")

@@ -248,9 +248,10 @@ class Materialized(Service):
                 else external_metadata_store
             )
             depends_graph[metadata_store] = {"condition": "service_healthy"}
-            command += [
-                f"--persist-consensus-url=postgres://root@{address}:26257?options=--search_path=consensus",
-            ]
+            if not consensus_foundationdb:
+                command += [
+                    f"--persist-consensus-url=postgres://root@{address}:26257?options=--search_path=consensus",
+                ]
             environment += [
                 f"MZ_TIMESTAMP_ORACLE_URL=postgres://root@{address}:26257?options=--search_path=tsoracle",
                 "MZ_NO_BUILTIN_POSTGRES=1",
@@ -341,9 +342,7 @@ class Materialized(Service):
 
                 volumes += [f"{os.getcwd()}/license_key:/license_key/license_key"]
 
-        if (
-            image_version is None or image_version >= "v0.160.0-dev"
-        ) and consensus_foundationdb:
+        if consensus_foundationdb:
             print("Using foundationdb for consensus")
             volumes += [
                 f"{MZ_ROOT}/misc/foundationdb/fdb.cluster:/etc/foundationdb/fdb.cluster"

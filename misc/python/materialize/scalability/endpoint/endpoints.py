@@ -162,6 +162,7 @@ class MaterializeContainer(MaterializeNonRemote):
                     image=self.image,
                     external_metadata_store=True,
                     metadata_store="cockroach",
+                    consensus_foundationdb=self.image is None,
                 )
             ):
                 # explicitly specified image cannot be found and alternative exists
@@ -182,8 +183,18 @@ class MaterializeContainer(MaterializeNonRemote):
                 sanity_restart=False,
                 external_metadata_store=True,
                 metadata_store="cockroach",
+                consensus_foundationdb=self.image is None,
             )
         ):
+            self.composition.up("foundationdb")
+            self.composition.run(
+                "foundationdb",
+                "-C",
+                "/etc/foundationdb/fdb.cluster",
+                "--exec",
+                "configure new single memory",
+                entrypoint="fdbcli",
+            )
             self.composition.up("materialized")
             self.composition.verify_build_profile()
 
