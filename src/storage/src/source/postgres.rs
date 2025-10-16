@@ -269,7 +269,7 @@ impl SourceRender for PostgresSourceConnection {
 #[derive(Clone, Debug)]
 struct SourceOutputInfo {
     desc: PostgresTableDesc,
-    casts: Vec<(CastType, MirScalarExpr)>,
+    casts: Vec<(CastType, Option<MirScalarExpr>)>,
     resume_upper: Antichain<MzOffset>,
     export_id: GlobalId,
 }
@@ -464,7 +464,7 @@ fn verify_schema(
     oid: u32,
     expected_desc: &PostgresTableDesc,
     upstream_info: &BTreeMap<u32, PostgresTableDesc>,
-    casts: &[(CastType, MirScalarExpr)],
+    casts: &[(CastType, Option<MirScalarExpr>)],
 ) -> Result<(), DefiniteError> {
     let current_desc = upstream_info.get(&oid).ok_or(DefiniteError::TableDropped)?;
 
@@ -473,7 +473,7 @@ fn verify_schema(
         .iter()
         .zip_eq(casts.iter())
         .flat_map(|(col, (cast_type, _))| match cast_type {
-            CastType::Text => Some(col.col_num),
+            CastType::Exclude | CastType::Text => Some(col.col_num),
             CastType::Natural => None,
         })
         .collect();
@@ -486,17 +486,19 @@ fn verify_schema(
 
 /// Casts a text row into the target types
 fn cast_row(
-    casts: &[(CastType, MirScalarExpr)],
+    casts: &[(CastType, Option<MirScalarExpr>)],
     datums: &[Datum<'_>],
     row: &mut Row,
 ) -> Result<(), DefiniteError> {
     let arena = mz_repr::RowArena::new();
     let mut packer = row.packer();
     for (_, column_cast) in casts {
-        let datum = column_cast
-            .eval(datums, &arena)
-            .map_err(DefiniteError::CastError)?;
-        packer.push(datum);
+        if let Some(column_cast) = column_cast {
+            let datum = column_cast
+                .eval(datums, &arena)
+                .map_err(DefiniteError::CastError)?;
+            packer.push(datum);
+        }
     }
     Ok(())
 }

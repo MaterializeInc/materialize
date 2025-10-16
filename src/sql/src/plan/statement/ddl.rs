@@ -534,7 +534,8 @@ generate_extracted_config!(
     PgConfigOption,
     (Details, String),
     (Publication, String),
-    (TextColumns, Vec::<UnresolvedItemName>, Default(vec![]))
+    (TextColumns, Vec::<UnresolvedItemName>, Default(vec![])),
+    (ExcludeColumns, Vec::<UnresolvedItemName>, Default(vec![]))
 );
 
 generate_extracted_config!(
@@ -1162,6 +1163,10 @@ fn plan_postgres_source_connection(
         // in these options for round-tripping of a `CREATE SOURCE` statement. This should
         // be removed once we drop support for implicitly created subsources.
         text_columns: _,
+        // exclude columns are already part of the source-exports and are only included
+        // in these options for round-tripping of a `CREATE SOURCE` statement. This should
+        // be removed once we drop support for implicitly created subsources.
+        exclude_columns: _,
         seen: _,
     } = options.clone().try_into()?;
     let details = details
@@ -1639,6 +1644,7 @@ pub fn plan_create_subsource(
                         scx,
                         &table,
                         &text_columns,
+                        &exclude_columns,
                     )?,
                     table,
                 })
@@ -1796,6 +1802,7 @@ pub fn plan_create_table_from_source(
                     scx,
                     &table,
                     &text_columns,
+                    &exclude_columns,
                 )?,
                 table,
             })

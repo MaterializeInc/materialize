@@ -58,8 +58,7 @@ use mz_storage_types::sources::load_generator::LoadGeneratorOutput;
 use mz_storage_types::sources::mysql::MySqlSourceDetails;
 use mz_storage_types::sources::postgres::PostgresSourcePublicationDetails;
 use mz_storage_types::sources::{
-    GenericSourceConnection, SourceConnection, SourceDesc, SourceExportStatementDetails,
-    SqlServerSourceExtras,
+    GenericSourceConnection, SourceDesc, SourceExportStatementDetails, SqlServerSourceExtras,
 };
 use prost::Message;
 use protobuf_native::MessageLite;
@@ -255,6 +254,7 @@ pub enum PurifiedExportDetails {
     Postgres {
         table: PostgresTableDesc,
         text_columns: Option<Vec<Ident>>,
+        exclude_columns: Option<Vec<Ident>>,
     },
     SqlServer {
         table: SqlServerTableDesc,
@@ -866,6 +866,7 @@ async fn purify_create_source(
             let crate::plan::statement::PgConfigOptionExtracted {
                 publication,
                 text_columns,
+                exclude_columns,
                 details,
                 ..
             } = options.clone().try_into()?;
@@ -895,6 +896,7 @@ async fn purify_create_source(
                 &retrieved_source_references,
                 external_references,
                 text_columns,
+                exclude_columns,
                 source_name,
                 &reference_policy,
             )
@@ -1103,11 +1105,11 @@ async fn purify_create_source(
             {
                 text_cols_option.value = Some(WithOptionValue::Sequence(normalized_text_columns));
             }
-            if let Some(ignore_cols_option) = options
+            if let Some(exclude_cols_option) = options
                 .iter_mut()
                 .find(|option| option.name == MySqlConfigOptionName::ExcludeColumns)
             {
-                ignore_cols_option.value =
+                exclude_cols_option.value =
                     Some(WithOptionValue::Sequence(normalized_exclude_columns));
             }
         }
@@ -1397,8 +1399,6 @@ async fn purify_alter_source_add_subsources(
         ),
     };
 
-    let connection_name = desc.connection.name();
-
     let crate::plan::statement::ddl::AlterSourceAddSubsourceOptionExtracted {
         text_columns,
         exclude_columns,
@@ -1418,14 +1418,6 @@ async fn purify_alter_source_add_subsources(
                 .validate(connection_id, storage_configuration)
                 .await?;
 
-            if !exclude_columns.is_empty() {
-                sql_bail!(
-                    "{} is a {} source, which does not support EXCLUDE COLUMNS.",
-                    partial_source_name,
-                    connection_name
-                )
-            }
-
             let reference_client = SourceReferenceClient::Postgres {
                 client: &client,
                 publication: &pg_source_connection.publication,
@@ -1441,6 +1433,7 @@ async fn purify_alter_source_add_subsources(
                 &retrieved_source_references,
                 &Some(ExternalReferences::SubsetTables(external_references)),
                 text_columns,
+                exclude_columns,
                 &unresolved_source_name,
                 &SourceReferencePolicy::Required,
             )
@@ -1509,11 +1502,11 @@ async fn purify_alter_source_add_subsources(
             {
                 text_cols_option.value = Some(WithOptionValue::Sequence(normalized_text_columns));
             }
-            if let Some(ignore_cols_option) = options
+            if let Some(exclude_cols_option) = options
                 .iter_mut()
                 .find(|option| option.name == AlterSourceAddSubsourceOptionName::ExcludeColumns)
             {
-                ignore_cols_option.value =
+                exclude_cols_option.value =
                     Some(WithOptionValue::Sequence(normalized_exclude_columns));
             }
         }
@@ -1570,11 +1563,12 @@ async fn purify_alter_source_add_subsources(
             {
                 text_cols_option.value = Some(WithOptionValue::Sequence(normalized_text_columns));
             }
-            if let Some(ignore_cols_option) = options
+            if let Some(exclude_cols_option) = options
                 .iter_mut()
                 .find(|option| option.name == AlterSourceAddSubsourceOptionName::ExcludeColumns)
             {
-                ignore_cols_option.value = Some(WithOptionValue::Sequence(normalized_excl_columns));
+                exclude_cols_option.value =
+                    Some(WithOptionValue::Sequence(normalized_excl_columns));
             }
         }
         _ => unreachable!(),
@@ -1724,8 +1718,6 @@ async fn purify_create_table_from_source(
         }
     };
     let unresolved_source_name: UnresolvedItemName = source_name.full_item_name().clone().into();
-    let qualified_source_name = item.name();
-    let connection_name = desc.connection.name();
 
     let crate::plan::statement::ddl::TableFromSourceOptionExtracted {
         text_columns,
@@ -1786,15 +1778,6 @@ async fn purify_create_table_from_source(
                 .validate(pg_source_connection.connection_id, storage_configuration)
                 .await?;
 
-            // TODO(roshan): Add support for PG sources to allow this
-            if !exclude_columns.is_empty() {
-                sql_bail!(
-                    "{} is a {} source, which does not support EXCLUDE COLUMNS.",
-                    scx.catalog.minimal_qualification(qualified_source_name),
-                    connection_name
-                )
-            }
-
             let reference_client = SourceReferenceClient::Postgres {
                 client: &client,
                 publication: &pg_source_connection.publication,
@@ -1813,6 +1796,7 @@ async fn purify_create_table_from_source(
                 &retrieved_source_references,
                 &requested_references,
                 qualified_text_columns,
+                qualified_exclude_columns,
                 &unresolved_source_name,
                 &SourceReferencePolicy::Required,
             )
@@ -1977,6 +1961,7 @@ async fn purify_create_table_from_source(
                 columns: gen_columns,
                 constraints: gen_constraints,
                 text_columns: gen_text_columns,
+                exclude_columns: gen_exclude_columns,
                 details: gen_details,
                 external_reference: _,
             } = postgres::generate_source_export_statement_values(
@@ -2001,6 +1986,20 @@ async fn purify_create_table_from_source(
                     }
                     None => soft_panic_or_log!(
                         "text_columns should be Some if text_cols_option is present"
+                    ),
+                }
+            }
+            if let Some(exclude_cols_option) = with_options
+                .iter_mut()
+                .find(|option| option.name == TableFromSourceOptionName::ExcludeColumns)
+            {
+                match gen_exclude_columns {
+                    Some(gen_exclude_columns) => {
+                        exclude_cols_option.value =
+                            Some(WithOptionValue::Sequence(gen_exclude_columns))
+                    }
+                    None => soft_panic_or_log!(
+                        "exclude_columns should be Some if exclude_cols_option is present"
                     ),
                 }
             }
@@ -2044,17 +2043,17 @@ async fn purify_create_table_from_source(
                     ),
                 }
             }
-            if let Some(ignore_cols_option) = with_options
+            if let Some(exclude_cols_option) = with_options
                 .iter_mut()
                 .find(|option| option.name == TableFromSourceOptionName::ExcludeColumns)
             {
                 match gen_exclude_columns {
                     Some(gen_exclude_columns) => {
-                        ignore_cols_option.value =
+                        exclude_cols_option.value =
                             Some(WithOptionValue::Sequence(gen_exclude_columns))
                     }
                     None => soft_panic_or_log!(
-                        "exclude_columns should be Some if ignore_cols_option is present"
+                        "exclude_columns should be Some if exclude_cols_option is present"
                     ),
                 }
             }

@@ -3489,7 +3489,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_pg_connection_option(&mut self) -> Result<PgConfigOption<Raw>, ParserError> {
-        let name = match self.expect_one_of_keywords(&[DETAILS, PUBLICATION, TEXT])? {
+        let name = match self.expect_one_of_keywords(&[DETAILS, PUBLICATION, TEXT, EXCLUDE])? {
             DETAILS => PgConfigOptionName::Details,
             PUBLICATION => PgConfigOptionName::Publication,
             TEXT => {
@@ -3510,6 +3510,27 @@ impl<'a> Parser<'a> {
 
                 return Ok(PgConfigOption {
                     name: PgConfigOptionName::TextColumns,
+                    value,
+                });
+            }
+            EXCLUDE => {
+                self.expect_keyword(COLUMNS)?;
+
+                let _ = self.consume_token(&Token::Eq);
+
+                let value = self
+                    .parse_option_sequence(Parser::parse_item_name)?
+                    .map(|inner| {
+                        WithOptionValue::Sequence(
+                            inner
+                                .into_iter()
+                                .map(WithOptionValue::UnresolvedItemName)
+                                .collect_vec(),
+                        )
+                    });
+
+                return Ok(PgConfigOption {
+                    name: PgConfigOptionName::ExcludeColumns,
                     value,
                 });
             }
