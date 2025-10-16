@@ -37,8 +37,8 @@ APP_PASSWORD = os.getenv("MZ_CLI_APP_PASSWORD")
 # The DevEx account in the Confluent Cloud is used to provide Kafka services
 KAFKA_BOOTSTRAP_SERVER = "pkc-n00kk.us-east-1.aws.confluent.cloud:9092"
 # The actual values are stored in the i2 repository
-CONFLUENT_API_KEY = os.getenv("CONFLUENT_CLOUD_DEVEX_KAFKA_USERNAME")
-CONFLUENT_API_SECRET = os.getenv("CONFLUENT_CLOUD_DEVEX_KAFKA_PASSWORD")
+CONFLUENT_API_KEY = os.getenv("CONFLUENT_CLOUD_QA_CANARY_KAFKA_USERNAME")
+CONFLUENT_API_SECRET = os.getenv("CONFLUENT_CLOUD_QA_CANARY_KAFKA_PASSWORD")
 
 SERVICES = [
     Mz(

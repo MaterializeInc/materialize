@@ -1376,7 +1376,7 @@ steps:
       concurrency: 1
       concurrency_group: 'mz-e2e-test'
       agents:
-        # Requires real Mz access, CONFLUENT_CLOUD_DEVEX_KAFKA_USERNAME, etc.
+        # Requires real Mz access, CONFLUENT_CLOUD_QA_CANARY_KAFKA_USERNAME, etc.
         queue: linux-aarch64-small
       plugins:
         - ./ci/plugins/mzcompose:
