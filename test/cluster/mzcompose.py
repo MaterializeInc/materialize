@@ -5708,3 +5708,79 @@ def workflow_test_lgalloc_limiter(c: Composition) -> None:
         c.testdrive("> SELECT count(*) FROM mv\n1000000")
 
         c.kill("clusterd1")
+
+
+def workflow_alter_sink_hang(c: Composition) -> None:
+    """
+    Test that a hanging `ALTER SINK SET FROM` command does not block other DDL.
+    """
+
+    c.down(destroy_volumes=True)
+
+    with c.override(Testdrive(no_reset=True)):
+        c.up(
+            "materialized",
+            "kafka",
+            "schema-registry",
+        )
+        c.up("testdrive", persistent=True)
+
+        c.testdrive(
+            dedent(
+                """
+                > CREATE CLUSTER test SIZE 'scale=1,workers=1'
+                > SET cluster = test
+
+                > CREATE TABLE t1 (a int)
+
+                > CREATE CONNECTION kafka_conn
+                    TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
+                > CREATE CONNECTION csr_conn
+                    TO CONFLUENT SCHEMA REGISTRY (URL '${testdrive.schema-registry-url}')
+                > CREATE SINK snk FROM t1
+                    INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk-${testdrive.seed}')
+                    FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+                    ENVELOPE DEBEZIUM
+                """
+            )
+        )
+
+        c.sql("INSERT INTO t1 VALUES (1)")
+
+        c.kill("kafka")
+
+        c.sql(
+            """
+            INSERT INTO t1 VALUES (2);
+
+            CREATE TABLE t2 (a int);
+            INSERT INTO t2 VALUES (3);
+            """
+        )
+
+        def alter_sink():
+            c.sql("ALTER SINK snk SET FROM t2")
+
+        alter_thread = Thread(target=alter_sink)
+        alter_thread.start()
+
+        # Sleep a bit to give the ALTER SINK a chance to run.
+        time.sleep(1)
+
+        # Verify that DDL still works while the ALTER SINK is hanging.
+        c.testdrive(
+            dedent(
+                """
+                > CREATE CLUSTER test2 SIZE 'scale=1,workers=1'
+                > SET cluster = test2
+
+                > SELECT * FROM t1
+                1
+                2
+                """
+            )
+        )
+
+        # Cleanup: unblock the ALTER SINK and wait for it to complete.
+        c.up("kafka")
+        alter_thread.join()
