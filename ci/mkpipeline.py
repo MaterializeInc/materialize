@@ -982,7 +982,7 @@ def have_paths_changed(globs: Iterable[str]) -> bool:
 
         # Make sure we have an up to date view of main.
         command = ["git", "fetch"]
-        if spawn.capture(["git rev-parse", "--is-shallow-repository"]) == "true":
+        if spawn.capture(["git", "rev-parse", "--is-shallow-repository"]) == "true":
             command.append("--unshallow")
         spawn.runv(command + ["origin", "main"])
 
