@@ -96,8 +96,6 @@ class StartMz(MzcomposeAction):
         with c.override(mz, fail_on_new_service=False):
             c.up(
                 "materialized" if self.mz_service is None else self.mz_service,
-                wait=False,
-                max_tries=2,
             )
 
             # If we start up Materialize with a deploy-generation , then it
