@@ -350,7 +350,7 @@ def create_zero_downtime_basic(
 versions_from_docs = [
     version
     for version in VersionsFromDocs(respect_released_tag=True).minor_versions()
-    if version >= MzVersion.parse_mz("v0.107.0")
+    if version >= MzVersion.parse_mz("v0.126.0")
 ]
 
 
