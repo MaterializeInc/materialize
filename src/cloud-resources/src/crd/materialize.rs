@@ -63,7 +63,7 @@ pub mod v1alpha1 {
         // Default. Create a new generation of pods, leaving the old generation around until the
         // new ones are ready to take over.
         // This minimizes downtime, and is what almost everyone should use.
-        WaitForReady,
+        WaitUntilReady,
 
         // WARNING!!!
         // THIS WILL CAUSE YOUR MATERIALIZE INSTANCE TO BE UNAVAILABLE FOR SOME TIME!!!
@@ -73,13 +73,13 @@ pub mod v1alpha1 {
         // without waiting for the new generation of pods to be ready.
         //
         // This strategy should ONLY be used by customers with physical hardware who do not have
-        // enough hardware for the WaitForReady strategy. If you think you want this, please
+        // enough hardware for the WaitUntilReady strategy. If you think you want this, please
         // consult with Materialize engineering to discuss your situation.
         ImmediatelyPromoteCausingDowntime,
     }
     impl Default for MaterializeRolloutStrategy {
         fn default() -> Self {
-            Self::WaitForReady
+            Self::WaitUntilReady
         }
     }
 

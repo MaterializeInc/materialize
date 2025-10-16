@@ -287,9 +287,9 @@ helm upgrade my-materialize-operator materialize/misc/helm-charts/operator -f my
 
 To upgrade your Materialize instances, you'll need to update the Materialize custom resource and trigger a rollout.
 
-By default, the operator performs rolling upgrades (`rolloutStrategy: WaitForReady`) which minimizes downtime but require additional Kubernetes cluster resources during the transition.
+By default, the operator performs rolling upgrades (`rolloutStrategy: WaitUntilReady`) which minimizes downtime but require additional Kubernetes cluster resources during the transition.
 
-For environments without enough capacity to perform the `WaitForReady` strategy, and where downtime is acceptable, there is the `ImmediatelyPromoteCausingDowntime` strategy. This strategy will cause downtime and is not recommended. If you think you need this, please reach out to Materialize engineering to discuss your situation.
+For environments without enough capacity to perform the `WaitUntilReady` strategy, and where downtime is acceptable, there is the `ImmediatelyPromoteCausingDowntime` strategy. This strategy will cause downtime and is not recommended. If you think you need this, please reach out to Materialize engineering to discuss your situation.
 
 #### Determining the Version
 
