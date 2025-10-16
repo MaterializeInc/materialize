@@ -6,7 +6,7 @@ columns:
   - column: "Notes"
 
 rows:
-  - "Materialize Operator": "v25.2.10"
+  - "Materialize Operator": "v25.2.11"
     "orchestratord version": "v0.159.1"
     "environmentd version": "v0.147.17"
     "Release date": "2025-10-14"
