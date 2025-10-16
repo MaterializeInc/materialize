@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 
+from dataclasses import dataclass
 from materialize.checks.actions import Action, Initialize, Manipulate, Sleep, Validate
 from materialize.checks.checks import Check
 from materialize.checks.executors import Executor
@@ -514,7 +515,7 @@ class ActivateSourceVersioningMigration(Scenario):
 
 class SelfManagedv25_2_Upgrade(Scenario):
     """
-    Upgrade from the oldest v25.2 patch release to the latest v25.2 patch release.
+    Upgrade from the oldest v25.2 patch release to the latest v25.2 patch release to main.
     """
 
     def __init__(
@@ -541,14 +542,17 @@ class SelfManagedv25_2_Upgrade(Scenario):
     def actions(self) -> list[Action]:
         print(f"Upgrading from tag {self.base_version()}")
 
-        def upgrade_actions(version: MzVersion | None, generation: int) -> list[Action]:
-            previous_service_name = f"mz_{generation - 1}"
-            service_name = f"mz_{generation}"
+        def upgrade_actions(
+            version: MzVersion | None,
+            deploy_generation: int,
+            service_name: str,
+            previous_service_name: str,
+        ) -> list[Action]:
             return [
                 start_mz_read_only(
                     self,
                     tag=version,
-                    deploy_generation=generation,
+                    deploy_generation=deploy_generation,
                     mz_service=service_name,
                 ),
                 WaitReadyMz(service_name),
@@ -557,22 +561,48 @@ class SelfManagedv25_2_Upgrade(Scenario):
                 KillMz(capture_logs=True, mz_service=previous_service_name),
             ]
 
-        actions = [
-            StartMz(
-                self,
-                tag=self.base_version(),
-                mz_service="mz_1",
-            ),
-            Initialize(self, mz_service="mz_1"),
-            Manipulate(self, phase=1, mz_service="mz_1"),
-            Manipulate(self, phase=2, mz_service="mz_1"),
-            Validate(self, mz_service="mz_1"),
+        @dataclass
+        class MzServiceInfo:
+            version: MzVersion | None
+            service_name: str
+
+        actions = []
+        versions = self.v25_2_versions + [None]
+
+        mz_services = [
+            MzServiceInfo(
+                version=version,
+                # We alternate between mz_1 and mz_2
+                service_name=f"mz_{(i % 2) + 1}",
+            )
+            for i, version in enumerate(versions)
         ]
 
-        versions_to_upgrade = self.v25_2_versions[1:] + [None]
-
-        for i, version in enumerate(versions_to_upgrade):
-            generation = i + 2
-            actions.extend(upgrade_actions(version, generation))
+        for i, service in enumerate(mz_services):
+            if i == 0:
+                actions.extend(
+                    [
+                        StartMz(
+                            self,
+                            tag=service.version,
+                            mz_service=service.service_name,
+                        ),
+                        Initialize(self, mz_service=service.service_name),
+                        Manipulate(self, phase=1, mz_service=service.service_name),
+                        Manipulate(self, phase=2, mz_service=service.service_name),
+                        Validate(self, mz_service=service.service_name),
+                    ]
+                )
+            else:
+                # Because upgrades start on generation 1, we can set it to the index
+                deploy_generation = i
+                actions.extend(
+                    upgrade_actions(
+                        service.version,
+                        deploy_generation,
+                        service.service_name,
+                        mz_services[i - 1].service_name,
+                    )
+                )
 
         return actions

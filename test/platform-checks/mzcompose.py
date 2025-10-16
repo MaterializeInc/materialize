@@ -62,11 +62,6 @@ def create_mzs(
     external_metadata_store: bool = True,
     external_blob_store: bool = True,
 ) -> list[TestdriveService | Materialized]:
-
-    # TODO (SangJunBak): Make the number of Materialized services dynamic
-    # based on the number of generations we want to use in a platform check.
-    mzs = [f"mz_{i}" for i in range(1, 12)]
-
     return [
         Materialized(
             name=mz_name,
@@ -79,7 +74,7 @@ def create_mzs(
             default_replication_factor=default_replication_factor,
             support_external_clusterd=True,
         )
-        for mz_name in ["materialized", *mzs]
+        for mz_name in ["materialized", "mz_1", "mz_2", "mz_3", "mz_4", "mz_5"]
     ] + [
         TestdriveService(
             default_timeout=TESTDRIVE_DEFAULT_TIMEOUT,
