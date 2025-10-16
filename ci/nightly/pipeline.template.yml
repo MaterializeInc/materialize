@@ -1126,19 +1126,28 @@ steps:
               args: [-m=long, test/cloudtest/test_upgrade.py, --no-test-parallelism]
         sanitizer: skip
         skip: "TODO(def-) Reenable in one version when labels are fixed in old version"
-      - id: checks-self-managed-25-2-upgrade
-        label: "Checks Self-Managed upgrade across all v25.2 patch releases, whole-Mz restart"
+      - id: checks-self-managed-25-2-upgrade-manipulate-before-upgrade
+        label: "Checks Self-Managed upgrade across all v25.2 patch releases, manipulate before upgrade"
         depends_on: build-x86_64
         timeout_in_minutes: 180
-        # Sometimes runs into query timeouts or entire test timeouts with parallelism 1, too much state, same in all other platform-checks
         parallelism: 3
         agents:
-          # A larger instance is needed due to frequent OOMs, same in all other platform-checks
           queue: hetzner-x86-64-8cpu-16gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=SelfManagedv25_2_Upgrade, "--seed=$BUILDKITE_JOB_ID", --features=azurite]
+              args: [--scenario=SelfManagedv25Point2_Upgrade_ManipulateBeforeUpgrade, "--seed=$BUILDKITE_JOB_ID"]
+      - id: checks-self-managed-25-2-upgrade-manipulate-during-upgrade
+        label: "Checks Self-Managed upgrade across all v25.2 patch releases, manipulate during upgrade"
+        depends_on: build-x86_64
+        timeout_in_minutes: 180
+        parallelism: 3
+        agents:
+          queue: hetzner-x86-64-8cpu-16gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=SelfManagedv25Point2_Upgrade_ManipulateDuringUpgrade, "--seed=$BUILDKITE_JOB_ID"]
 
   - group: "K8s node recovery cloudtest"
     key: k8s-node-recovery
