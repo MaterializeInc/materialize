@@ -4587,7 +4587,6 @@ pub struct AlterSinkReadyContext {
     otel_ctx: OpenTelemetryContext,
     plan: AlterSinkPlan,
     plan_validity: PlanValidity,
-    resolved_ids: ResolvedIds,
     read_hold: ReadHolds<Timestamp>,
 }
 
