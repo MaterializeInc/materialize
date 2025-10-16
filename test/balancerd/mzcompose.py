@@ -508,7 +508,7 @@ def workflow_long_query(c: Composition) -> None:
         cursor.execute(f"SELECT 'ABC{medium_pad}XYZ';")
         raise RuntimeError("execute() expected to fail")
     except ProgramLimitExceeded as e:
-        assert "statement batch size cannot exceed 1000.0 KB" in str(e)
+        assert "statement batch size cannot exceed 976.6 KiB" in str(e)
     except:
         raise RuntimeError("execute() threw an unexpected exception")
 
