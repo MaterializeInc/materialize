@@ -147,7 +147,10 @@ mod test {
 
         let mut may_contain: Vec<_> = tests
             .iter()
-            .map(|t| t.eval(&[], &arena).expect("literal datum"))
+            .map(|t| {
+                t.eval_pop(&[], &arena, &mut Vec::new())
+                    .expect("literal datum")
+            })
             .filter(|d| output.range.may_contain(*d))
             .map(|d| d.to_string())
             .collect();

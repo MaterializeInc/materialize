@@ -153,7 +153,7 @@ impl Coordinator {
                 catalog_state: self.catalog().state(),
             },
         )?;
-        let evaled = secret_as.eval(&[], &temp_storage)?;
+        let evaled = secret_as.eval_pop(&[], &temp_storage, &mut Vec::new())?;
 
         if evaled == Datum::Null {
             coord_bail!("secret value can not be null");

@@ -271,13 +271,19 @@ where
                             .flat_map_fallible::<CB<_>, CB<_>, _, _, _, _>(name, {
                                 // Reuseable allocation for unpacking.
                                 let mut datums = DatumVec::new();
+                                let mut output = DatumVec::new();
                                 move |row| {
                                     let mut row_builder = SharedRow::get();
                                     let temp_storage = RowArena::new();
                                     let mut datums_local = datums.borrow_with(&row);
                                     // TODO(mcsherry): re-use `row` allocation.
                                     final_closure
-                                        .apply(&mut datums_local, &temp_storage, &mut row_builder)
+                                        .apply(
+                                            &mut datums_local,
+                                            &temp_storage,
+                                            &mut output.borrow(),
+                                            &mut row_builder,
+                                        )
                                         .map(|row| row.cloned())
                                         .map_err(DataflowError::from)
                                         .transpose()
@@ -342,14 +348,16 @@ where
     let (updates, errs) = updates.map_fallible::<CB<_>, CB<_>, _, _, _>(name, {
         // Reuseable allocation for unpacking.
         let mut datums = DatumVec::new();
+        let mut output = DatumVec::new();
         move |(row, time)| {
             let temp_storage = RowArena::new();
             let datums_local = datums.borrow_with(&row);
+            let output = &mut output.borrow();
             let mut row_builder = SharedRow::get();
             row_builder.packer().try_extend(
                 prev_key
                     .iter()
-                    .map(|e| e.eval(&datums_local, &temp_storage)),
+                    .map(|e| e.eval_pop(&datums_local, &temp_storage, output)),
             )?;
             let key = row_builder.clone();
             row_builder
@@ -360,7 +368,9 @@ where
             Ok((key, row_value, time))
         }
     });
+
     let mut datums = DatumVec::new();
+    let mut output_vec = DatumVec::new();
 
     if closure.could_error() {
         let (oks, errs2) = differential_dogs3::operators::half_join::half_join_internal_unsafe(
@@ -395,7 +405,12 @@ where
                 datums_local.extend(stream_row.iter());
                 datums_local.extend(lookup_row.to_datum_iter());
 
-                let row = closure.apply(&mut datums_local, &temp_storage, &mut row_builder);
+                let row = closure.apply(
+                    &mut datums_local,
+                    &temp_storage,
+                    &mut output_vec.borrow(),
+                    &mut row_builder,
+                );
 
                 for (time, diff2) in output.drain(..) {
                     let row = row.as_ref().map(|row| row.cloned()).map_err(Clone::clone);
@@ -451,7 +466,12 @@ where
                 datums_local.extend(lookup_row.to_datum_iter());
 
                 if let Some(row) = closure
-                    .apply(&mut datums_local, &temp_storage, &mut row_builder)
+                    .apply(
+                        &mut datums_local,
+                        &temp_storage,
+                        &mut output_vec.borrow(),
+                        &mut row_builder,
+                    )
                     .expect("Closure claimed to never error")
                 {
                     for (time, diff2) in output.drain(..) {
@@ -495,6 +515,7 @@ where
             .stream
             .unary_fallible(Pipeline, "UpdateStream", move |_, _| {
                 let mut datums = DatumVec::new();
+                let mut output = DatumVec::new();
                 Box::new(move |input, ok_output, err_output| {
                     input.for_each(|time, data| {
                         let mut row_builder = SharedRow::get();
@@ -524,6 +545,7 @@ where
                                                     .apply(
                                                         &mut datums_local,
                                                         &temp_storage,
+                                                        &mut output.borrow(),
                                                         &mut row_builder,
                                                     )
                                                     .map(|row| row.cloned())

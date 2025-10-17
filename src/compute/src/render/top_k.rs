@@ -85,11 +85,12 @@ where
                     // the expression might still return a negative limit and
                     // thus needs to be checked.
                     let expr = expr.clone();
-                    let mut datum_vec = mz_repr::DatumVec::new();
+                    let mut datum_vec = DatumVec::new();
+                    let mut output = DatumVec::new();
                     let errors = ok_input.flat_map(move |row| {
                         let temp_storage = mz_repr::RowArena::new();
                         let datums = datum_vec.borrow_with(&row);
-                        match expr.eval(&datums[..], &temp_storage) {
+                        match expr.eval_pop(&datums[..], &temp_storage, &mut output.borrow()) {
                             Ok(l) if l != Datum::Null && l.unwrap_int64() < 0 => {
                                 Some(EvalError::NegLimit.into())
                             }
@@ -545,7 +546,8 @@ where
         > + 'static,
     Arranged<G, TraceAgent<Tr>>: ArrangementSize,
 {
-    let mut datum_vec = mz_repr::DatumVec::new();
+    let mut datum_vec = DatumVec::new();
+    let mut output = DatumVec::new();
 
     // We only want to arrange parts of the input that are not part of the actual output
     // such that `input.concat(&negated_output)` yields the correct TopK
@@ -575,7 +577,7 @@ where
                     let mut key_datums = datum_vec.borrow();
                     key_datums.extend(hash_key);
                     let datum_limit = expr
-                        .eval(&key_datums, &temp_storage)
+                        .eval_pop(&key_datums, &temp_storage, &mut output.borrow())
                         .unwrap_or(Datum::Int64(0));
                     Some(match datum_limit {
                         Datum::Null => Diff::MAX,
@@ -675,7 +677,8 @@ where
     S: Scope,
     S::Timestamp: Lattice,
 {
-    let mut datum_vec = mz_repr::DatumVec::new();
+    let mut datum_vec = DatumVec::new();
+    let mut output_vec = DatumVec::new();
 
     let mut aggregates = BTreeMap::new();
     let shared = Rc::new(RefCell::new(monoids::Top1MonoidShared {
@@ -709,8 +712,8 @@ where
                             // Unpack `key` and determine the limit.
                             // If the limit errors, use a zero limit; errors are surfaced elsewhere.
                             let datum_limit = limit
-                                .eval(&key_datums, &temp_storage)
-                                .unwrap_or(mz_repr::Datum::Int64(0));
+                                .eval_pop(&key_datums, &temp_storage, &mut output_vec.borrow())
+                                .unwrap_or(Datum::Int64(0));
                             if datum_limit == Datum::Null {
                                 i64::MAX
                             } else {

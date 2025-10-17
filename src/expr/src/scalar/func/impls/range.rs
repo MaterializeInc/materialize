@@ -28,14 +28,17 @@ impl LazyUnaryFunc for CastRangeToString {
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
         a: &'a MirScalarExpr,
-    ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
-        if a.is_null() {
-            return Ok(Datum::Null);
+        output: &mut Vec<Datum<'a>>,
+    ) -> Result<(), EvalError> {
+        a.eval(datums, temp_storage, output)?;
+        if output.last() == Some(&Datum::Null) {
+            return Ok(());
         }
+        let a = output.pop().unwrap();
         let mut buf = String::new();
         stringify_datum(&mut buf, a, &self.ty)?;
-        Ok(Datum::String(temp_storage.push_string(buf)))
+        output.push(Datum::String(temp_storage.push_string(buf)));
+        Ok(())
     }
 
     fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
@@ -79,15 +82,18 @@ impl LazyUnaryFunc for RangeLower {
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
         a: &'a MirScalarExpr,
-    ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
-        if a.is_null() {
-            return Ok(Datum::Null);
+        output: &mut Vec<Datum<'a>>,
+    ) -> Result<(), EvalError> {
+        a.eval(datums, temp_storage, output)?;
+        if output.last() == Some(&Datum::Null) {
+            return Ok(());
         }
+        let a = output.pop().unwrap();
         let r = a.unwrap_range();
-        Ok(Datum::from(
+        output.push(Datum::from(
             r.inner.map(|inner| inner.lower.bound).flatten(),
-        ))
+        ));
+        Ok(())
     }
 
     fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
@@ -134,15 +140,18 @@ impl LazyUnaryFunc for RangeUpper {
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
         a: &'a MirScalarExpr,
-    ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
-        if a.is_null() {
-            return Ok(Datum::Null);
+        output: &mut Vec<Datum<'a>>,
+    ) -> Result<(), EvalError> {
+        a.eval(datums, temp_storage, output)?;
+        if output.last() == Some(&Datum::Null) {
+            return Ok(());
         }
+        let a = output.pop().unwrap();
         let r = a.unwrap_range();
-        Ok(Datum::from(
+        output.push(Datum::from(
             r.inner.map(|inner| inner.upper.bound).flatten(),
-        ))
+        ));
+        Ok(())
     }
 
     fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {

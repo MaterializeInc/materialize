@@ -69,18 +69,19 @@ impl JoinClosure {
         &'a self,
         datums: &mut Vec<Datum<'a>>,
         temp_storage: &'a RowArena,
+        output: &mut Vec<Datum<'a>>,
         row: &'row mut Row,
     ) -> Result<Option<&'row Row>, mz_expr::EvalError> {
         for exprs in self.ready_equivalences.iter() {
             // Each list of expressions should be equal to the same value.
-            let val = exprs[0].eval(&datums[..], temp_storage)?;
+            let val = exprs[0].eval_pop(&datums[..], temp_storage, output)?;
             for expr in exprs[1..].iter() {
-                if expr.eval(datums, temp_storage)? != val {
+                if expr.eval_pop(datums, temp_storage, output)? != val {
                     return Ok(None);
                 }
             }
         }
-        self.before.evaluate_into(datums, temp_storage, row)
+        self.before.evaluate_into(datums, temp_storage, output, row)
     }
 
     /// Construct an instance of the closure from available columns.

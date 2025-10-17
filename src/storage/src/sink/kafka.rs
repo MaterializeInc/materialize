@@ -1470,6 +1470,7 @@ fn encode_collection<G: Scope>(
 
             let mut row_buf = Row::default();
             let mut datums = DatumVec::new();
+            let mut output_vec = DatumVec::new();
 
             while let Some(event) = input.next().await {
                 if let Event::Data(cap, rows) = event {
@@ -1501,7 +1502,8 @@ fn encode_collection<G: Scope>(
                             }
 
                             if let Some(partition_by) = &connection.partition_by {
-                                hash = Some(evaluate_partition_by(partition_by, &row));
+                                let mut temp_storage = RowArena::new();
+                                hash = Some(evaluate_partition_by(partition_by, &row, &mut temp_storage, &mut output_vec.borrow()));
                             }
                         }
                         let (key, hash) = match key {
@@ -1570,7 +1572,12 @@ fn encode_headers(datum: Datum) -> Vec<KafkaHeader> {
 /// `UInt64`. If the expression produces an error when evaluated, or if the
 /// expression is of a signed integer type and produces a negative value, this
 /// function returns 0.
-fn evaluate_partition_by(partition_by: &MirScalarExpr, row: &[Datum]) -> u64 {
+fn evaluate_partition_by<'a>(
+    partition_by: &'a MirScalarExpr,
+    row: &[Datum<'a>],
+    temp_storage: &'a RowArena,
+    output: &mut Vec<Datum<'a>>,
+) -> u64 {
     // NOTE(benesch): The way this function converts errors and invalid values
     // to 0 is somewhat surpising. Ideally, we would put the sink in a
     // permanently errored state if the partition by expression produces an
@@ -1578,8 +1585,7 @@ fn evaluate_partition_by(partition_by: &MirScalarExpr, row: &[Datum]) -> u64 {
     // report errors (see materialize#17688), so the current behavior was determined to be
     // the best available option. The behavior is clearly documented in the
     // user-facing `CREATE SINK` docs.
-    let temp_storage = RowArena::new();
-    match partition_by.eval(row, &temp_storage) {
+    match partition_by.eval_pop(row, temp_storage, output) {
         Ok(Datum::UInt64(u)) => u,
         Ok(datum) => {
             // If we are here the only valid type that we should be seeing is

@@ -769,6 +769,7 @@ where
         let mfp_plan = mfp.into_plan().unwrap();
 
         let mut datum_vec = DatumVec::new();
+        let mut output_vec = DatumVec::new();
         // Wrap in an `Rc` so that lifetimes work out.
         let until = std::rc::Rc::new(until);
 
@@ -789,6 +790,7 @@ where
                     diff.clone(),
                     move |time| !until.less_equal(time),
                     &mut row_builder,
+                    &mut output_vec.borrow(),
                 )
                 .map(move |x| match x {
                     Ok((row, event_time, diff)) => {
@@ -907,6 +909,7 @@ where
                         let mut key_buf = Row::default();
                         let mut val_buf = Row::default();
                         let mut datums = DatumVec::new();
+                        let mut output = DatumVec::new();
                         let mut temp_storage = RowArena::new();
                         while let Some((time, data)) = input.next() {
                             let mut ok_session = ok.session_with_builder(&time);
@@ -914,7 +917,10 @@ where
                             for (row, time, diff) in data.iter() {
                                 temp_storage.clear();
                                 let datums = datums.borrow_with(row);
-                                let key_iter = key.iter().map(|k| k.eval(&datums, &temp_storage));
+                                let mut output = output.borrow();
+                                let key_iter = key
+                                    .iter()
+                                    .map(|k| k.eval_pop(&datums, &temp_storage, &mut output));
                                 match key_buf.packer().try_extend(key_iter) {
                                     Ok(()) => {
                                         let val_datum_iter = thinning.iter().map(|c| datums[*c]);

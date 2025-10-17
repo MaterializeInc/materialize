@@ -11,7 +11,7 @@ use std::fmt;
 
 use mz_lowertest::MzReflect;
 use mz_repr::adt::array::ArrayDimension;
-use mz_repr::{Datum, Row, RowArena, RowPacker, SqlColumnType, SqlScalarType};
+use mz_repr::{Datum, DatumListIter, Row, RowArena, RowPacker, SqlColumnType, SqlScalarType};
 use serde::{Deserialize, Serialize};
 
 use crate::scalar::func::{LazyUnaryFunc, stringify_datum};
@@ -26,10 +26,13 @@ impl LazyUnaryFunc for CastArrayToListOneDim {
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
         a: &'a MirScalarExpr,
-    ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
+        output: &mut Vec<Datum<'a>>,
+    ) -> Result<(), EvalError> {
+        a.eval(datums, temp_storage, output)?;
+        let a = output.pop().unwrap();
         if a.is_null() {
-            return Ok(Datum::Null);
+            output.push(Datum::Null);
+            return Ok(());
         }
 
         let arr = a.unwrap_array();
@@ -45,7 +48,8 @@ impl LazyUnaryFunc for CastArrayToListOneDim {
             });
         }
 
-        Ok(Datum::List(arr.elements()))
+        output.push(Datum::List(arr.elements()));
+        Ok(())
     }
 
     /// The output SqlColumnType of this function
@@ -98,14 +102,18 @@ impl LazyUnaryFunc for CastArrayToString {
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
         a: &'a MirScalarExpr,
-    ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
+        output: &mut Vec<Datum<'a>>,
+    ) -> Result<(), EvalError> {
+        a.eval(datums, temp_storage, output)?;
+        let a = output.pop().unwrap();
         if a.is_null() {
-            return Ok(Datum::Null);
+            output.push(Datum::Null);
+            return Ok(());
         }
         let mut buf = String::new();
         stringify_datum(&mut buf, a, &self.ty)?;
-        Ok(Datum::String(temp_storage.push_string(buf)))
+        output.push(Datum::String(temp_storage.push_string(buf)));
+        Ok(())
     }
 
     fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
@@ -152,20 +160,23 @@ impl LazyUnaryFunc for CastArrayToJsonb {
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
         a: &'a MirScalarExpr,
-    ) -> Result<Datum<'a>, EvalError> {
+        output: &mut Vec<Datum<'a>>,
+    ) -> Result<(), EvalError> {
         fn pack<'a>(
-            temp_storage: &RowArena,
-            elems: &mut impl Iterator<Item = Datum<'a>>,
+            temp_storage: &'a RowArena,
+            elems: &mut DatumListIter<'a>,
             dims: &[ArrayDimension],
-            cast_element: &MirScalarExpr,
+            cast_element: &'a MirScalarExpr,
             packer: &mut RowPacker,
+            output: &mut Vec<Datum<'a>>,
         ) -> Result<(), EvalError> {
             packer.push_list_with(|packer| match dims {
                 [] => Ok(()),
                 [dim] => {
                     for _ in 0..dim.length {
                         let elem = elems.next().unwrap();
-                        let elem = match cast_element.eval(&[elem], temp_storage)? {
+                        cast_element.eval(&[elem], temp_storage, output)?;
+                        let elem = match output.pop().unwrap() {
                             Datum::Null => Datum::JsonNull,
                             d => d,
                         };
@@ -175,29 +186,31 @@ impl LazyUnaryFunc for CastArrayToJsonb {
                 }
                 [dim, rest @ ..] => {
                     for _ in 0..dim.length {
-                        pack(temp_storage, elems, rest, cast_element, packer)?;
+                        pack(temp_storage, elems, rest, cast_element, packer, output)?;
                     }
                     Ok(())
                 }
             })
         }
 
-        let a = a.eval(datums, temp_storage)?;
-        if a.is_null() {
-            return Ok(Datum::Null);
+        a.eval(datums, temp_storage, output)?;
+        if output.last() == Some(&Datum::Null) {
+            return Ok(());
         }
-        let a = a.unwrap_array();
+        let a = output.pop().unwrap().unwrap_array();
         let elements = a.elements();
         let dims = a.dims().into_iter().collect::<Vec<_>>();
         let mut row = Row::default();
         pack(
             temp_storage,
-            &mut elements.into_iter(),
+            &mut elements.iter(),
             &dims,
             &self.cast_element,
             &mut row.packer(),
+            output,
         )?;
-        Ok(temp_storage.push_unary_row(row))
+        output.push(temp_storage.push_unary_row(row));
+        Ok(())
     }
 
     fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
@@ -248,22 +261,28 @@ impl LazyUnaryFunc for CastArrayToArray {
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
         a: &'a MirScalarExpr,
-    ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
+        output: &mut Vec<Datum<'a>>,
+    ) -> Result<(), EvalError> {
+        a.eval(datums, temp_storage, output)?;
+        let a = output.pop().unwrap();
         if a.is_null() {
-            return Ok(Datum::Null);
+            output.push(Datum::Null);
+            return Ok(());
         }
 
         let arr = a.unwrap_array();
         let dims = arr.dims().into_iter().collect::<Vec<ArrayDimension>>();
 
-        let casted_datums = arr
-            .elements()
-            .iter()
-            .map(|datum| self.cast_expr.eval(&[datum], temp_storage))
-            .collect::<Result<Vec<Datum<'a>>, EvalError>>()?;
+        let mut casted_datums = Vec::new();
+        for datum in arr.elements().iter() {
+            self.cast_expr.eval(&[datum], temp_storage, output)?;
+            casted_datums.push(output.pop().unwrap());
+        }
 
-        Ok(temp_storage.try_make_datum(|packer| packer.try_push_array(&dims, casted_datums))?)
+        output.push(
+            temp_storage.try_make_datum(|packer| packer.try_push_array(&dims, casted_datums))?,
+        );
+        Ok(())
     }
 
     fn output_type(&self, _input_type: SqlColumnType) -> SqlColumnType {

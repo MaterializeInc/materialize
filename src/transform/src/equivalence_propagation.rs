@@ -165,16 +165,18 @@ impl EquivalencePropagation {
             MirRelationExpr::Constant { rows, typ: _ } => {
                 if let Ok(rows) = rows {
                     let mut datum_vec = mz_repr::DatumVec::new();
+                    let mut output_vec = mz_repr::DatumVec::new();
                     // Delete any rows that violate the equivalences.
                     // Do not delete rows that produce errors, as they are semantically important.
                     rows.retain(|(row, _count)| {
                         let temp_storage = mz_repr::RowArena::new();
                         let datums = datum_vec.borrow_with(row);
+                        let mut output_vec = output_vec.borrow();
                         outer_equivalences.classes.iter().all(|class| {
                             // Any subset of `Ok` results must equate, or we can drop the row.
-                            let mut oks = class
-                                .iter()
-                                .filter_map(|e| e.eval(&datums[..], &temp_storage).ok());
+                            let mut oks = class.iter().filter_map(|e| {
+                                e.eval_pop(&datums[..], &temp_storage, &mut output_vec).ok()
+                            });
                             if let Some(e1) = oks.next() {
                                 oks.all(|e2| e1 == e2)
                             } else {

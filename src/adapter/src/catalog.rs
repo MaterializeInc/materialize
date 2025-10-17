@@ -3417,7 +3417,7 @@ mod tests {
                 // Populate unmaterialized functions.
                 prep_scalar_expr(&mut mir, prep_style.clone()).expect("must succeed");
 
-                if let Ok(eval_result_datum) = mir.eval(&[], &arena) {
+                if let Ok(eval_result_datum) = mir.eval_pop(&[], &arena, &mut Vec::new()) {
                     if let Some(return_styp) = return_styp {
                         let mir_typ = mir.typ(&[]);
                         // MIR type inference should be consistent with the type

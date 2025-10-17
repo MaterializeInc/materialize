@@ -197,7 +197,7 @@ impl AppendWebhookValidator {
 
             // Run our validation
             let valid = expression
-                .eval(&datums[..], &temp_storage)
+                .eval_pop(&datums[..], &temp_storage, &mut Vec::new())
                 .map_err(|_| AppendWebhookError::ValidationError)?;
             match valid {
                 Datum::True => Ok::<_, AppendWebhookError>(true),

@@ -16,7 +16,6 @@
 use std::cmp;
 
 use chrono::NaiveDate;
-use fallible_iterator::FallibleIterator;
 use hmac::{Hmac, Mac};
 use itertools::Itertools;
 use md5::Md5;
@@ -45,13 +44,18 @@ pub fn and<'a>(
     datums: &[Datum<'a>],
     temp_storage: &'a RowArena,
     exprs: &'a [MirScalarExpr],
-) -> Result<Datum<'a>, EvalError> {
+    output: &mut Vec<Datum<'a>>,
+) -> Result<(), EvalError> {
     // If any is false, then return false. Else, if any is null, then return null. Else, return true.
     let mut null = false;
     let mut err = None;
     for expr in exprs {
-        match expr.eval(datums, temp_storage) {
-            Ok(Datum::False) => return Ok(Datum::False), // short-circuit
+        match expr.eval_pop(datums, temp_storage, output) {
+            Ok(Datum::False) => {
+                output.push(Datum::False);
+                // short-circuit
+                return Ok(());
+            }
             Ok(Datum::True) => {}
             // No return in these two cases, because we might still see a false
             Ok(Datum::Null) => null = true,
@@ -59,11 +63,12 @@ pub fn and<'a>(
             _ => unreachable!(),
         }
     }
-    match (err, null) {
-        (Some(err), _) => Err(err),
-        (None, true) => Ok(Datum::Null),
-        (None, false) => Ok(Datum::True),
-    }
+    output.push(match (err, null) {
+        (Some(err), _) => return Err(err),
+        (None, true) => Datum::Null,
+        (None, false) => Datum::True,
+    });
+    Ok(())
 }
 
 /// Constructs a new multidimensional array out of an arbitrary number of
@@ -310,14 +315,18 @@ fn coalesce<'a>(
     datums: &[Datum<'a>],
     temp_storage: &'a RowArena,
     exprs: &'a [MirScalarExpr],
-) -> Result<Datum<'a>, EvalError> {
+    output: &mut Vec<Datum<'a>>,
+) -> Result<(), EvalError> {
     for e in exprs {
-        let d = e.eval(datums, temp_storage)?;
+        e.eval(datums, temp_storage, output)?;
+        let d = output.pop().unwrap();
         if !d.is_null() {
-            return Ok(d);
+            output.push(d);
+            return Ok(());
         }
     }
-    Ok(Datum::Null)
+    output.push(Datum::Null);
+    Ok(())
 }
 
 fn create_range<'a>(
@@ -413,21 +422,21 @@ fn error_if_null<'a>(
     datums: &[Datum<'a>],
     temp_storage: &'a RowArena,
     exprs: &'a [MirScalarExpr],
-) -> Result<Datum<'a>, EvalError> {
-    let first = exprs[0].eval(datums, temp_storage)?;
-    match first {
+    output: &mut Vec<Datum<'a>>,
+) -> Result<(), EvalError> {
+    exprs[0].eval(datums, temp_storage, output)?;
+    match output.last().unwrap() {
         Datum::Null => {
-            let err_msg = match exprs[1].eval(datums, temp_storage)? {
-                Datum::Null => {
-                    return Err(EvalError::Internal(
-                        "unexpected NULL in error side of error_if_null".into(),
-                    ));
-                }
-                o => o.unwrap_str(),
-            };
-            Err(EvalError::IfNullError(err_msg.into()))
+            output.pop();
+            exprs[1].eval(datums, temp_storage, output)?;
+            match output.pop().unwrap() {
+                Datum::Null => Err(EvalError::Internal(
+                    "unexpected NULL in error side of error_if_null".into(),
+                )),
+                o => Err(EvalError::IfNullError(o.unwrap_str().into())),
+            }
         }
-        _ => Ok(first),
+        _ => Ok(()),
     }
 }
 
@@ -435,12 +444,20 @@ fn greatest<'a>(
     datums: &[Datum<'a>],
     temp_storage: &'a RowArena,
     exprs: &'a [MirScalarExpr],
-) -> Result<Datum<'a>, EvalError> {
-    let datums = fallible_iterator::convert(exprs.iter().map(|e| e.eval(datums, temp_storage)));
-    Ok(datums
-        .filter(|d| Ok(!d.is_null()))
-        .max()?
-        .unwrap_or(Datum::Null))
+    output: &mut Vec<Datum<'a>>,
+) -> Result<(), EvalError> {
+    let mut max = Datum::Null;
+    for e in exprs {
+        e.eval(datums, temp_storage, output)?;
+        let d = output.pop().unwrap();
+        if d.is_null() {
+            continue;
+        }
+        if max.is_null() || d > max {
+            max = d;
+        }
+    }
+    Ok(())
 }
 
 pub fn hmac_string<'a>(
@@ -544,12 +561,19 @@ fn least<'a>(
     datums: &[Datum<'a>],
     temp_storage: &'a RowArena,
     exprs: &'a [MirScalarExpr],
-) -> Result<Datum<'a>, EvalError> {
-    let datums = fallible_iterator::convert(exprs.iter().map(|e| e.eval(datums, temp_storage)));
-    Ok(datums
-        .filter(|d| Ok(!d.is_null()))
-        .min()?
-        .unwrap_or(Datum::Null))
+    output: &mut Vec<Datum<'a>>,
+) -> Result<(), EvalError> {
+    let mut min = Datum::Null;
+    for e in exprs {
+        let d = e.eval_pop(datums, temp_storage, output)?;
+        if d.is_null() {
+            continue;
+        }
+        if min.is_null() || d < min {
+            min = d;
+        }
+    }
+    Ok(())
 }
 
 fn list_create<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
@@ -684,25 +708,31 @@ pub fn or<'a>(
     datums: &[Datum<'a>],
     temp_storage: &'a RowArena,
     exprs: &'a [MirScalarExpr],
-) -> Result<Datum<'a>, EvalError> {
+    output: &mut Vec<Datum<'a>>,
+) -> Result<(), EvalError> {
     // If any is true, then return true. Else, if any is null, then return null. Else, return false.
     let mut null = false;
     let mut err = None;
     for expr in exprs {
-        match expr.eval(datums, temp_storage) {
+        match expr.eval_pop(datums, temp_storage, output) {
             Ok(Datum::False) => {}
-            Ok(Datum::True) => return Ok(Datum::True), // short-circuit
+            Ok(Datum::True) => {
+                output.push(Datum::True);
+                // short-circuit
+                return Ok(());
+            }
             // No return in these two cases, because we might still see a true
             Ok(Datum::Null) => null = true,
             Err(this_err) => err = std::cmp::max(err.take(), Some(this_err)),
             _ => unreachable!(),
         }
     }
-    match (err, null) {
-        (Some(err), _) => Err(err),
-        (None, true) => Ok(Datum::Null),
-        (None, false) => Ok(Datum::False),
-    }
+    output.push(match (err, null) {
+        (Some(err), _) => return Err(err),
+        (None, true) => Datum::Null,
+        (None, false) => Datum::False,
+    });
+    Ok(())
 }
 
 fn pad_leading<'a>(
@@ -1137,107 +1167,113 @@ impl VariadicFunc {
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
         exprs: &'a [MirScalarExpr],
-    ) -> Result<Datum<'a>, EvalError> {
+        output: &mut Vec<Datum<'a>>,
+    ) -> Result<(), EvalError> {
         // Evaluate all non-eager functions directly
         match self {
-            VariadicFunc::Coalesce => return coalesce(datums, temp_storage, exprs),
-            VariadicFunc::Greatest => return greatest(datums, temp_storage, exprs),
-            VariadicFunc::And => return and(datums, temp_storage, exprs),
-            VariadicFunc::Or => return or(datums, temp_storage, exprs),
-            VariadicFunc::ErrorIfNull => return error_if_null(datums, temp_storage, exprs),
-            VariadicFunc::Least => return least(datums, temp_storage, exprs),
+            VariadicFunc::Coalesce => return coalesce(datums, temp_storage, exprs, output),
+            VariadicFunc::Greatest => return greatest(datums, temp_storage, exprs, output),
+            VariadicFunc::And => return and(datums, temp_storage, exprs, output),
+            VariadicFunc::Or => return or(datums, temp_storage, exprs, output),
+            VariadicFunc::ErrorIfNull => return error_if_null(datums, temp_storage, exprs, output),
+            VariadicFunc::Least => return least(datums, temp_storage, exprs, output),
             _ => {}
         };
 
         // Compute parameters to eager functions
-        let ds = exprs
-            .iter()
-            .map(|e| e.eval(datums, temp_storage))
-            .collect::<Result<Vec<_>, _>>()?;
+        for e in exprs {
+            e.eval(datums, temp_storage, output)?;
+        }
+        let ds = &output[output.len() - exprs.len()..];
         // Check NULL propagation
         if self.propagates_nulls() && ds.iter().any(|d| d.is_null()) {
-            return Ok(Datum::Null);
+            output.truncate(output.len() - exprs.len());
+            output.push(Datum::Null);
+            return Ok(());
         }
 
         // Evaluate eager functions
-        match self {
+        let datum = match self {
             VariadicFunc::Coalesce
             | VariadicFunc::Greatest
             | VariadicFunc::And
             | VariadicFunc::Or
             | VariadicFunc::ErrorIfNull
             | VariadicFunc::Least => unreachable!(),
-            VariadicFunc::Concat => Ok(text_concat_variadic(&ds, temp_storage)),
-            VariadicFunc::ConcatWs => Ok(text_concat_ws(&ds, temp_storage)),
-            VariadicFunc::MakeTimestamp => make_timestamp(&ds),
-            VariadicFunc::PadLeading => pad_leading(&ds, temp_storage),
-            VariadicFunc::Substr => substr(&ds),
-            VariadicFunc::Replace => Ok(replace(&ds, temp_storage)),
-            VariadicFunc::Translate => Ok(translate(&ds, temp_storage)),
-            VariadicFunc::JsonbBuildArray => Ok(jsonb_build_array(&ds, temp_storage)),
-            VariadicFunc::JsonbBuildObject => jsonb_build_object(&ds, temp_storage),
-            VariadicFunc::MapBuild { .. } => Ok(map_build(&ds, temp_storage)),
+            VariadicFunc::Concat => text_concat_variadic(&ds, temp_storage),
+            VariadicFunc::ConcatWs => text_concat_ws(&ds, temp_storage),
+            VariadicFunc::MakeTimestamp => make_timestamp(&ds)?,
+            VariadicFunc::PadLeading => pad_leading(&ds, temp_storage)?,
+            VariadicFunc::Substr => substr(&ds)?,
+            VariadicFunc::Replace => replace(&ds, temp_storage),
+            VariadicFunc::Translate => translate(&ds, temp_storage),
+            VariadicFunc::JsonbBuildArray => jsonb_build_array(&ds, temp_storage),
+            VariadicFunc::JsonbBuildObject => jsonb_build_object(&ds, temp_storage)?,
+            VariadicFunc::MapBuild { .. } => map_build(&ds, temp_storage),
             VariadicFunc::ArrayCreate {
                 elem_type: SqlScalarType::Array(_),
-            } => array_create_multidim(&ds, temp_storage),
-            VariadicFunc::ArrayCreate { .. } => array_create_scalar(&ds, temp_storage),
+            } => array_create_multidim(&ds, temp_storage)?,
+            VariadicFunc::ArrayCreate { .. } => array_create_scalar(&ds, temp_storage)?,
             VariadicFunc::ArrayToString { elem_type } => {
-                array_to_string(&ds, elem_type, temp_storage)
+                array_to_string(&ds, elem_type, temp_storage)?
             }
-            VariadicFunc::ArrayIndex { offset } => Ok(array_index(&ds, *offset)),
+            VariadicFunc::ArrayIndex { offset } => array_index(&ds, *offset),
 
             VariadicFunc::ListCreate { .. } | VariadicFunc::RecordCreate { .. } => {
-                Ok(list_create(&ds, temp_storage))
+                list_create(&ds, temp_storage)
             }
-            VariadicFunc::ListIndex => Ok(list_index(&ds)),
-            VariadicFunc::ListSliceLinear => Ok(list_slice_linear(&ds, temp_storage)),
-            VariadicFunc::SplitPart => split_part(&ds),
-            VariadicFunc::RegexpMatch => regexp_match_dynamic(&ds, temp_storage),
-            VariadicFunc::HmacString => hmac_string(&ds, temp_storage),
-            VariadicFunc::HmacBytes => hmac_bytes(&ds, temp_storage),
+            VariadicFunc::ListIndex => list_index(&ds),
+            VariadicFunc::ListSliceLinear => list_slice_linear(&ds, temp_storage),
+            VariadicFunc::SplitPart => split_part(&ds)?,
+            VariadicFunc::RegexpMatch => regexp_match_dynamic(&ds, temp_storage)?,
+            VariadicFunc::HmacString => hmac_string(&ds, temp_storage)?,
+            VariadicFunc::HmacBytes => hmac_bytes(&ds, temp_storage)?,
             VariadicFunc::DateBinTimestamp => date_bin(
                 ds[0].unwrap_interval(),
                 ds[1].unwrap_timestamp(),
                 ds[2].unwrap_timestamp(),
-            ),
+            )?,
             VariadicFunc::DateBinTimestampTz => date_bin(
                 ds[0].unwrap_interval(),
                 ds[1].unwrap_timestamptz(),
                 ds[2].unwrap_timestamptz(),
-            ),
-            VariadicFunc::DateDiffTimestamp => date_diff_timestamp(ds[0], ds[1], ds[2]),
-            VariadicFunc::DateDiffTimestampTz => date_diff_timestamptz(ds[0], ds[1], ds[2]),
-            VariadicFunc::DateDiffDate => date_diff_date(ds[0], ds[1], ds[2]),
-            VariadicFunc::DateDiffTime => date_diff_time(ds[0], ds[1], ds[2]),
-            VariadicFunc::RangeCreate { .. } => create_range(&ds, temp_storage),
-            VariadicFunc::MakeAclItem => make_acl_item(&ds),
-            VariadicFunc::MakeMzAclItem => make_mz_acl_item(&ds),
-            VariadicFunc::ArrayPosition => array_position(&ds),
-            VariadicFunc::ArrayFill { .. } => array_fill(&ds, temp_storage),
-            VariadicFunc::TimezoneTime => parse_timezone(ds[0].unwrap_str(), TimezoneSpec::Posix)
-                .map(|tz| {
-                    timezone_time(
-                        tz,
-                        ds[1].unwrap_time(),
-                        &ds[2].unwrap_timestamptz().naive_utc(),
-                    )
-                    .into()
-                }),
+            )?,
+            VariadicFunc::DateDiffTimestamp => date_diff_timestamp(ds[0], ds[1], ds[2])?,
+            VariadicFunc::DateDiffTimestampTz => date_diff_timestamptz(ds[0], ds[1], ds[2])?,
+            VariadicFunc::DateDiffDate => date_diff_date(ds[0], ds[1], ds[2])?,
+            VariadicFunc::DateDiffTime => date_diff_time(ds[0], ds[1], ds[2])?,
+            VariadicFunc::RangeCreate { .. } => create_range(&ds, temp_storage)?,
+            VariadicFunc::MakeAclItem => make_acl_item(&ds)?,
+            VariadicFunc::MakeMzAclItem => make_mz_acl_item(&ds)?,
+            VariadicFunc::ArrayPosition => array_position(&ds)?,
+            VariadicFunc::ArrayFill { .. } => array_fill(&ds, temp_storage)?,
+            VariadicFunc::TimezoneTime => {
+                let tz = parse_timezone(ds[0].unwrap_str(), TimezoneSpec::Posix)?;
+                timezone_time(
+                    tz,
+                    ds[1].unwrap_time(),
+                    &ds[2].unwrap_timestamptz().naive_utc(),
+                )
+                .into()
+            }
             VariadicFunc::RegexpSplitToArray => {
                 let flags = if ds.len() == 2 {
                     Datum::String("")
                 } else {
                     ds[2]
                 };
-                regexp_split_to_array(ds[0], ds[1], flags, temp_storage)
+                regexp_split_to_array(ds[0], ds[1], flags, temp_storage)?
             }
-            VariadicFunc::RegexpReplace => regexp_replace_dynamic(&ds, temp_storage),
+            VariadicFunc::RegexpReplace => regexp_replace_dynamic(&ds, temp_storage)?,
             VariadicFunc::StringToArray => {
                 let null_string = if ds.len() == 2 { Datum::Null } else { ds[2] };
 
-                string_to_array(ds[0], ds[1], null_string, temp_storage)
+                string_to_array(ds[0], ds[1], null_string, temp_storage)?
             }
-        }
+        };
+        output.truncate(output.len() - exprs.len());
+        output.push(datum);
+        Ok(())
     }
 
     pub fn is_associative(&self) -> bool {

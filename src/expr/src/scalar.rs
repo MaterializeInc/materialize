@@ -325,8 +325,12 @@ impl MirScalarExpr {
         assert!(matches!(literal, MirScalarExpr::Literal(..)));
 
         let temp_storage = &RowArena::new();
-        let eval = |e: &MirScalarExpr| {
-            MirScalarExpr::literal(e.eval(&[], temp_storage), e.typ(&[]).scalar_type)
+        let eval = move |e: &MirScalarExpr| {
+            let mut output = Vec::new();
+            let res = e
+                .eval(&[], temp_storage, &mut output)
+                .map(|()| output.pop().unwrap());
+            MirScalarExpr::literal(res, e.typ(&[]).scalar_type)
         };
 
         if let MirScalarExpr::CallUnary {
@@ -386,8 +390,12 @@ impl MirScalarExpr {
         assert!(matches!(literal, MirScalarExpr::Literal(..)));
 
         let temp_storage = &RowArena::new();
-        let eval = |e: &MirScalarExpr| {
-            MirScalarExpr::literal(e.eval(&[], temp_storage), e.typ(&[]).scalar_type)
+        let eval = move |e: &MirScalarExpr| {
+            let mut output = Vec::new();
+            let res = e
+                .eval(&[], temp_storage, &mut output)
+                .map(|()| output.pop().unwrap());
+            MirScalarExpr::literal(res, e.typ(&[]).scalar_type)
         };
 
         if let MirScalarExpr::CallUnary { func, .. } = other_side {
@@ -694,8 +702,12 @@ impl MirScalarExpr {
     /// ```
     pub fn reduce(&mut self, column_types: &[SqlColumnType]) {
         let temp_storage = &RowArena::new();
-        let eval = |e: &MirScalarExpr| {
-            MirScalarExpr::literal(e.eval(&[], temp_storage), e.typ(column_types).scalar_type)
+        let eval = move |e: &MirScalarExpr| {
+            let mut output = Vec::new();
+            let res = e
+                .eval(&[], temp_storage, &mut output)
+                .map(|()| output.pop().unwrap());
+            MirScalarExpr::literal(res, e.typ(&[]).scalar_type)
         };
 
         // Simplifications run in a loop until `self` no longer changes.
@@ -1960,15 +1972,22 @@ impl MirScalarExpr {
         }
     }
 
-    pub fn eval<'a>(
+    pub fn eval<'a, 'b>(
         &'a self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-    ) -> Result<Datum<'a>, EvalError> {
+        output: &'b mut Vec<Datum<'a>>,
+    ) -> Result<(), EvalError> {
         match self {
-            MirScalarExpr::Column(index, _name) => Ok(datums[*index].clone()),
+            MirScalarExpr::Column(index, _name) => {
+                output.push(datums[*index]);
+                Ok(())
+            }
             MirScalarExpr::Literal(res, _column_type) => match res {
-                Ok(row) => Ok(row.unpack_first()),
+                Ok(row) => {
+                    output.push(row.unpack_first());
+                    Ok(())
+                }
                 Err(e) => Err(e.clone()),
             },
             // Unmaterializable functions must be transformed away before
@@ -1977,19 +1996,36 @@ impl MirScalarExpr {
             MirScalarExpr::CallUnmaterializable(x) => Err(EvalError::Internal(
                 format!("cannot evaluate unmaterializable function: {:?}", x).into(),
             )),
-            MirScalarExpr::CallUnary { func, expr } => func.eval(datums, temp_storage, expr),
-            MirScalarExpr::CallBinary { func, expr1, expr2 } => {
-                func.eval(datums, temp_storage, expr1, expr2)
+            MirScalarExpr::CallUnary { func, expr } => {
+                func.eval(datums, temp_storage, expr, output)
             }
-            MirScalarExpr::CallVariadic { func, exprs } => func.eval(datums, temp_storage, exprs),
-            MirScalarExpr::If { cond, then, els } => match cond.eval(datums, temp_storage)? {
-                Datum::True => then.eval(datums, temp_storage),
-                Datum::False | Datum::Null => els.eval(datums, temp_storage),
-                d => Err(EvalError::Internal(
-                    format!("if condition evaluated to non-boolean datum: {:?}", d).into(),
-                )),
-            },
+            MirScalarExpr::CallBinary { func, expr1, expr2 } => {
+                func.eval(datums, temp_storage, expr1, expr2, output)
+            }
+            MirScalarExpr::CallVariadic { func, exprs } => {
+                func.eval(datums, temp_storage, exprs, output)
+            }
+            MirScalarExpr::If { cond, then, els } => {
+                cond.eval(datums, temp_storage, output)?;
+                match output.pop().expect("must exist") {
+                    Datum::True => then.eval(datums, temp_storage, output),
+                    Datum::False | Datum::Null => els.eval(datums, temp_storage, output),
+                    d => Err(EvalError::Internal(
+                        format!("if condition evaluated to non-boolean datum: {:?}", d).into(),
+                    )),
+                }
+            }
         }
+    }
+
+    pub fn eval_pop<'a>(
+        &'a self,
+        datums: &[Datum<'a>],
+        temp_storage: &'a RowArena,
+        output: &mut Vec<Datum<'a>>,
+    ) -> Result<Datum<'a>, EvalError> {
+        self.eval(datums, temp_storage, output)?;
+        Ok(output.pop().expect("must exist"))
     }
 
     /// True iff the expression contains

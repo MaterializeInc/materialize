@@ -361,9 +361,10 @@ macro_rules! derive_unary {
                 datums: &[Datum<'a>],
                 temp_storage: &'a RowArena,
                 a: &'a MirScalarExpr,
-            ) -> Result<Datum<'a>, EvalError> {
+                output: &mut Vec<Datum<'a>>,
+            ) -> Result<(), EvalError> {
                 match self {
-                    $(Self::$name(f) => f.eval(datums, temp_storage, a),)*
+                    $(Self::$name(f) => f.eval(datums, temp_storage, a, output),)*
                 }
             }
 

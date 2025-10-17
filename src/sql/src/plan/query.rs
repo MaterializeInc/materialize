@@ -63,8 +63,8 @@ use mz_repr::adt::numeric::{NUMERIC_DATUM_MAX_PRECISION, NumericMaxScale};
 use mz_repr::adt::timestamp::TimestampPrecision;
 use mz_repr::adt::varchar::VarCharMaxLength;
 use mz_repr::{
-    CatalogItemId, ColumnIndex, ColumnName, Datum, RelationDesc, RelationVersionSelector, Row,
-    RowArena, SqlColumnType, SqlRelationType, SqlScalarType, UNKNOWN_COLUMN_NAME, strconv,
+    CatalogItemId, ColumnIndex, ColumnName, Datum, DatumVec, RelationDesc, RelationVersionSelector,
+    Row, RowArena, SqlColumnType, SqlRelationType, SqlScalarType, UNKNOWN_COLUMN_NAME, strconv,
 };
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit::Visit;
@@ -1321,6 +1321,7 @@ pub fn plan_params<'a>(
     let mut packer = datums.packer();
     let mut actual_types = Vec::new();
     let temp_storage = &RowArena::new();
+    let mut output = DatumVec::new();
     for (i, (mut expr, expected_ty)) in params.into_iter().zip_eq(&desc.param_types).enumerate() {
         transform_ast::transform(scx, &mut expr)?;
 
@@ -1335,7 +1336,7 @@ pub fn plan_params<'a>(
             ));
         }
         let ex = ex.lower_uncorrelated()?;
-        let evaled = ex.eval(&[], temp_storage)?;
+        let evaled = ex.eval_pop(&[], temp_storage, &mut output.borrow())?;
         packer.push(evaled);
         actual_types.push(actual_ty);
     }
@@ -1476,7 +1477,7 @@ fn plan_query_inner(qcx: &mut QueryContext, q: &Query<Aug>) -> Result<PlannedQue
                 // TODO: Don't use ? on eval, but instead wrap the error and add the information
                 // that the error happened in a LIMIT clause, so that we have better error msg for
                 // something like `SELECT 5 LIMIT 'aaa'`.
-                match limit.eval(&[], &arena)? {
+                match limit.eval_pop(&[], &arena, &mut Vec::new())? {
                     d @ Datum::Int64(v) if v >= 0 => {
                         HirScalarExpr::literal(d, SqlScalarType::Int64)
                     }

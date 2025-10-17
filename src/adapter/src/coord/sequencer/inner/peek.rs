@@ -175,7 +175,7 @@ impl Coordinator {
             let mut to = to.lower_uncorrelated()?;
             prep_scalar_expr(&mut to, style)?;
             let temp_storage = RowArena::new();
-            let evaled = to.eval(&[], &temp_storage)?;
+            let evaled = to.eval_pop(&[], &temp_storage, &mut Vec::new())?;
             if evaled == Datum::Null {
                 coord_bail!("COPY TO target value can not be null");
             }

@@ -556,6 +556,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     // We now process the slot updates and apply the cast expressions
     let mut final_row = Row::default();
     let mut datum_vec = DatumVec::new();
+    let mut output_vec = DatumVec::new();
     let mut next_worker = (0..u64::cast_from(scope.peers()))
         // Round robin on 1000-records basis to avoid creating tiny containers when there are a
         // small number of updates and a large number of workers.
@@ -575,7 +576,12 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                             .expect("table_info contains all outputs");
                         let event = event.and_then(|row| {
                             let datums = datum_vec.borrow_with(&row);
-                            super::cast_row(&output.casts, &datums, &mut final_row)?;
+                            super::cast_row(
+                                &output.casts,
+                                &datums,
+                                &mut output_vec,
+                                &mut final_row,
+                            )?;
                             Ok(SourceMessage {
                                 key: Row::default(),
                                 value: final_row.clone(),

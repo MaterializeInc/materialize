@@ -58,7 +58,7 @@ impl Coordinator {
             // TODO(cf3): Add structured errors for the below uses of `coord_bail!`
             // and AdapterError::Unstructured.
             let temp_storage = RowArena::new();
-            let eval_result = from.eval(&[], &temp_storage)?;
+            let eval_result = from.eval_pop(&[], &temp_storage, &mut Vec::new())?;
             let eval_string = match eval_result {
                 Datum::Null => coord_bail!("COPY FROM target value cannot be NULL"),
                 Datum::String(url_str) => url_str,
