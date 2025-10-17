@@ -11,6 +11,12 @@ mode cockroach
 
 reset-server
 
+# Set password auth to false initially
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_password_auth TO false;
+----
+COMPLETE 0
+
 # Verify initial roles.
 query TTB rowsort
 SELECT id, name, inherit FROM mz_roles WHERE id LIKE 's%' OR id LIKE 'g%'

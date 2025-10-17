@@ -8,6 +8,8 @@
 # by the Apache License, Version 2.0.
 
 
+from dataclasses import dataclass
+
 from materialize.checks.actions import Action, Initialize, Manipulate, Sleep, Validate
 from materialize.checks.checks import Check
 from materialize.checks.executors import Executor
@@ -25,6 +27,7 @@ from materialize.checks.scenarios import Scenario
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.services.materialized import LEADER_STATUS_HEALTHCHECK
 from materialize.version_list import (
+    fetch_self_managed_versions,
     get_published_minor_mz_versions,
     get_self_managed_versions,
 )
@@ -509,3 +512,188 @@ class ActivateSourceVersioningMigration(Scenario):
             ),
             Validate(self),
         ]
+
+
+def upgrade_actions(
+    scenario: Scenario,
+    version: MzVersion | None,
+    deploy_generation: int,
+    service_name: str,
+    previous_service_name: str,
+    should_validate: bool = True,
+) -> list[Action]:
+    return [
+        start_mz_read_only(
+            scenario,
+            tag=version,
+            deploy_generation=deploy_generation,
+            mz_service=service_name,
+        ),
+        WaitReadyMz(service_name),
+        PromoteMz(service_name),
+        *([Validate(scenario, mz_service=service_name)] if should_validate else []),
+        KillMz(capture_logs=True, mz_service=previous_service_name),
+    ]
+
+
+@dataclass
+class MzServiceUpgradeInfo:
+    version: MzVersion | None
+    service_name: str
+
+
+def get_self_managed_v25_2_versions() -> list[MzVersion]:
+    self_managed_versions = fetch_self_managed_versions()
+    return sorted(
+        [
+            v.version
+            for v in self_managed_versions
+            if v.helm_version.major == 25 and v.helm_version.minor == 2
+        ]
+    )
+
+
+class SelfManagedv25Point2_Upgrade_ManipulateBeforeUpgrade(Scenario):
+    """
+    Upgrade from the oldest v25.2 patch release to the latest v25.2 patch release to main.
+    Run all manipulation phases before any upgrades.
+    """
+
+    def __init__(
+        self,
+        checks: list[type[Check]],
+        executor: Executor,
+        features: Features,
+        seed: str | None = None,
+    ):
+        self.v25_2_versions = get_self_managed_v25_2_versions()
+        super().__init__(checks, executor, features, seed)
+
+    def base_version(self) -> MzVersion:
+        return self.v25_2_versions[0]
+
+    def actions(self) -> list[Action]:
+        print(f"Upgrading from tag {self.base_version()}")
+
+        actions = []
+        versions = self.v25_2_versions + [None]
+
+        mz_services = [
+            MzServiceUpgradeInfo(
+                version=version,
+                # We alternate between mz_1 and mz_2
+                service_name=f"mz_{(i % 2) + 1}",
+            )
+            for i, version in enumerate(versions)
+        ]
+
+        for i, service in enumerate(mz_services):
+            if i == 0:
+                actions.extend(
+                    [
+                        StartMz(
+                            self,
+                            tag=service.version,
+                            mz_service=service.service_name,
+                        ),
+                        Initialize(self, mz_service=service.service_name),
+                        Manipulate(self, phase=1, mz_service=service.service_name),
+                        Manipulate(self, phase=2, mz_service=service.service_name),
+                        Validate(self, mz_service=service.service_name),
+                    ]
+                )
+            else:
+                # Because upgrades start on generation 1, we can set it to the index
+                deploy_generation = i
+                actions.extend(
+                    upgrade_actions(
+                        self,
+                        service.version,
+                        deploy_generation,
+                        service.service_name,
+                        mz_services[i - 1].service_name,
+                    )
+                )
+
+        return actions
+
+
+class SelfManagedv25Point2_Upgrade_ManipulateDuringUpgrade(Scenario):
+    """
+    Upgrade from the oldest v25.2 patch release to the latest v25.2 patch release to main.
+    Run the first manipulation phase before all upgrades and the second during the upgrade.
+    """
+
+    def __init__(
+        self,
+        checks: list[type[Check]],
+        executor: Executor,
+        features: Features,
+        seed: str | None = None,
+    ):
+        self.v25_2_versions = get_self_managed_v25_2_versions()
+        super().__init__(checks, executor, features, seed)
+
+    def base_version(self) -> MzVersion:
+        return self.v25_2_versions[0]
+
+    def actions(self) -> list[Action]:
+        print(f"Upgrading from tag {self.base_version()}")
+
+        actions = []
+        versions = self.v25_2_versions + [None]
+
+        mz_services = [
+            MzServiceUpgradeInfo(
+                version=version,
+                # We alternate between mz_1 and mz_2
+                service_name=f"mz_{(i % 2) + 1}",
+            )
+            for i, version in enumerate(versions)
+        ]
+
+        for i, service in enumerate(mz_services):
+            if i == 0:
+                actions.extend(
+                    [
+                        StartMz(
+                            self,
+                            tag=service.version,
+                            mz_service=service.service_name,
+                        ),
+                        Initialize(self, mz_service=service.service_name),
+                        Manipulate(self, phase=1, mz_service=service.service_name),
+                    ]
+                )
+            else:
+                # Because upgrades start on generation 1, we can set it to the index
+                deploy_generation = i
+
+                if i == 1:
+                    # Manipulate the MZ instance after the first upgrade.
+                    actions.extend(
+                        upgrade_actions(
+                            self,
+                            service.version,
+                            deploy_generation,
+                            service.service_name,
+                            mz_services[i - 1].service_name,
+                            # We can't validate on the first upgrade since all manipulations haven't completed yet.
+                            should_validate=False,
+                        )
+                        + [
+                            Manipulate(self, phase=2, mz_service=service.service_name),
+                        ]
+                    )
+                else:
+                    actions.extend(
+                        upgrade_actions(
+                            self,
+                            service.version,
+                            deploy_generation,
+                            service.service_name,
+                            mz_services[i - 1].service_name,
+                        )
+                    )
+
+        return actions
