@@ -68,16 +68,16 @@ provider "materialize" {
 
 {{</ tab >}}
 
-{{< tab "Self-hosted" >}}
-### Self-hosted Materialize
+{{< tab "Self-managed" >}}
+### Self-managed Materialize
 
-For self-hosted Materialize instances, configure the provider with connection
+For self-managed Materialize instances, configure the provider with connection
 parameters similar to a standard PostgreSQL connection.
 
 {{< warning >}}
-**Important limitations for self-hosted mode:**
+**Important limitations for self-managed mode:**
 
-Self-hosted configurations do **not** support Frontegg-dependent resources:
+The following resources apply only to Materialize Cloud's identity provider and are not supported in self-managed configurations:
 - `materialize_app_password`
 - `materialize_user`
 - `materialize_sso_config` and related SSO resources
@@ -85,10 +85,10 @@ Self-hosted configurations do **not** support Frontegg-dependent resources:
 
 Only database resources are available (clusters, sources, sinks, schemas, etc.).
 These organization and identity management resources require Materialize Cloud's
-identity provider and will produce error messages if used in self-hosted mode.
+identity provider and will produce error messages if used in self-managed mode.
 {{< /warning >}}
 
-Configure the provider for self-hosted deployments:
+Configure the provider for self-managed deployments:
 
 ```shell
 export TF_VAR_materialize_password=<database_password>
@@ -113,7 +113,7 @@ provider "materialize" {
 
 #### Configuration parameters
 
-The following parameters are available for self-hosted configurations:
+The following parameters are available for self-managed configurations:
 
 | Parameter | Description | Environment Variable | Default |
 |-----------|-------------|---------------------|---------|
@@ -130,8 +130,8 @@ The following parameters are available for self-hosted configurations:
 {{< warning >}}
 **Migration warning:**
 
-Switching between SaaS and self-hosted modes requires careful state file
-management as resource references and regional configurations differ between
-modes. We strongly recommend using a consistent configuration mode from the
-beginning to avoid complex state migrations.
+Switching between Materialize Cloud and self-managed modes requires careful state
+file management, as resource references and regional configurations differ between
+the two. To avoid complex state migrations, we recommend choosing consistent configuration
+mode from the beginning to avoid complex state migrations.
 {{< /warning >}}
