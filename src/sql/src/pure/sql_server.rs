@@ -20,7 +20,7 @@ use mz_sql_parser::ast::{
     Value, WithOptionValue,
 };
 use mz_sql_server_util::desc::{
-    SqlServerColumnDesc, SqlServerQualifiedTableName, SqlServerTableDesc,
+    SqlServerColumnDecodeType, SqlServerColumnDesc, SqlServerQualifiedTableName, SqlServerTableDesc,
 };
 use mz_storage_types::sources::{SourceExportStatementDetails, SourceReferenceResolver};
 use prost::Message;
@@ -147,12 +147,15 @@ pub(super) async fn purify_source_exports(
 
         for column in table.columns.iter() {
             let col_excluded = is_excluded(column.name.as_ref());
-            if !column.is_supported() && !col_excluded {
+            if let SqlServerColumnDecodeType::Unsupported { context } = &column.decode_type
+                && !col_excluded
+            {
                 Err(SqlServerSourcePurificationError::UnsupportedColumn {
                     schema_name: Arc::clone(&table.schema_name),
                     tbl_name: Arc::clone(&table.name),
                     col_name: Arc::clone(&column.name),
                     col_type: Arc::clone(&column.raw_type),
+                    context: context.clone(),
                 })?
             }
 
