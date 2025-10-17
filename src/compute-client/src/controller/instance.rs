@@ -51,9 +51,7 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::debug_span;
 use uuid::Uuid;
 
-use crate::controller::error::{
-    CollectionLookupError, CollectionMissing, ERROR_TARGET_REPLICA_FAILED, HydrationCheckBadTarget,
-};
+use crate::controller::error::{CollectionLookupError, CollectionMissing, ERROR_TARGET_REPLICA_FAILED, HydrationCheckBadTarget, InstanceMissing};
 use crate::controller::replica::{ReplicaClient, ReplicaConfig};
 use crate::controller::{
     ComputeControllerResponse, ComputeControllerTimestamp, IntrospectionUpdates, PeekNotification,
@@ -139,6 +137,8 @@ pub struct Client<T: ComputeControllerTimestamp> {
     /// A sender for read hold changes for collections installed on the instance.
     #[derivative(Debug = "ignore")]
     read_hold_tx: read_holds::ChangeTx<T>,
+    /// The ID of the instance.
+    id: ComputeInstanceId,
 }
 
 impl<T: ComputeControllerTimestamp> Client<T> {
@@ -163,7 +163,7 @@ impl<T: ComputeControllerTimestamp> Client<T> {
 
     /// Call a method to be run on the instance task, by sending a message to the instance and
     /// waiting for a response message.
-    pub(super) async fn call_sync<F, R>(&self, f: F) -> R
+    pub(super) async fn call_sync<F, R>(&self, f: F) -> Result<R, InstanceMissing>
     where
         F: FnOnce(&mut Instance<T>) -> R + Send + 'static,
         R: Send + 'static,
@@ -177,9 +177,9 @@ impl<T: ComputeControllerTimestamp> Client<T> {
                 let result = f(instance);
                 let _ = tx.send(result);
             }))
-            .expect("instance not dropped");
+            .map_err(|_send_error| InstanceMissing(self.id))?;
 
-        rx.await.expect("instance not dropped")
+        Ok(rx.await.map_err(|_| InstanceMissing(self.id))?)
     }
 }
 
@@ -235,6 +235,7 @@ where
         Self {
             command_tx,
             read_hold_tx,
+            id,
         }
     }
 
@@ -243,7 +244,7 @@ where
     pub async fn acquire_read_holds_and_collection_write_frontiers(
         &self,
         ids: Vec<GlobalId>,
-    ) -> Result<Vec<(GlobalId, ReadHold<T>, Antichain<T>)>, CollectionMissing> {
+    ) -> Result<Vec<(GlobalId, ReadHold<T>, Antichain<T>)>, CollectionLookupError> {
         self.call_sync(move |i| {
             let mut result = Vec::new();
             for id in ids.into_iter() {
@@ -255,7 +256,7 @@ where
             }
             Ok(result)
         })
-        .await
+        .await?
     }
 
     /// Issue a peek by calling into the instance task.
@@ -271,7 +272,7 @@ where
         target_read_hold: ReadHold<T>,
         target_replica: Option<ReplicaId>,
         peek_response_tx: oneshot::Sender<PeekResponse>,
-    ) {
+    ) -> Result<(), crate::controller::error::PeekError> {
         self.call_sync(move |i| {
             i.peek(
                 peek_target,
@@ -285,9 +286,8 @@ where
                 target_replica,
                 peek_response_tx,
             )
-            .expect("validated by instance");
         })
-        .await
+        .await.map(|r| r.map_err(|e| e.into()))?
     }
 }
 
