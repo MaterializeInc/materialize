@@ -9,6 +9,7 @@
 
 
 from dataclasses import dataclass
+
 from materialize.checks.actions import Action, Initialize, Manipulate, Sleep, Validate
 from materialize.checks.checks import Check
 from materialize.checks.executors import Executor
