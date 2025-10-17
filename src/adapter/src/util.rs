@@ -395,7 +395,9 @@ impl ShouldTerminateGracefully for PeekError {
             PeekError::SinceViolation(_)
             | PeekError::InstanceMissing(_)
             | PeekError::CollectionMissing(_)
-            | PeekError::ReplicaMissing(_) => false,
+            | PeekError::ReplicaMissing(_)
+            | PeekError::ReadHoldIdMismatch(_)
+            | PeekError::ReadHoldInsufficient(_) => false,
         }
     }
 }

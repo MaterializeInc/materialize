@@ -169,6 +169,12 @@ pub enum PeekError {
     /// TODO(database-issues#7533): Add documentation.
     #[error("peek timestamp is not beyond the since of collection: {0}")]
     SinceViolation(GlobalId),
+    /// TODO(database-issues#7533): Add documentation.
+    #[error("read hold ID does not match peeked collection: {0}")]
+    ReadHoldIdMismatch(GlobalId),
+    /// TODO(database-issues#7533): Add documentation.
+    #[error("insufficient read hold provided: {0}")]
+    ReadHoldInsufficient(GlobalId),
 }
 
 impl From<InstanceMissing> for PeekError {
@@ -188,6 +194,17 @@ impl From<ReadHoldError> for PeekError {
         match error {
             ReadHoldError::CollectionMissing(id) => Self::CollectionMissing(id),
             ReadHoldError::SinceViolation(id) => Self::SinceViolation(id),
+        }
+    }
+}
+
+impl From<crate::controller::instance::PeekError> for PeekError {
+    fn from(error: crate::controller::instance::PeekError) -> Self {
+        use crate::controller::instance::PeekError::*;
+        match error {
+            ReplicaMissing(id) => PeekError::ReplicaMissing(id),
+            ReadHoldIdMismatch(id) => PeekError::ReadHoldIdMismatch(id),
+            ReadHoldInsufficient(id) => PeekError::ReadHoldInsufficient(id),
         }
     }
 }

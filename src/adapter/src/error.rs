@@ -33,6 +33,7 @@ use smallvec::SmallVec;
 use timely::progress::Antichain;
 use tokio::sync::oneshot;
 use tokio_postgres::error::SqlState;
+use mz_compute_client::controller::error::PeekError;
 
 use crate::coord::NetworkPolicyError;
 use crate::optimize::OptimizerError;
@@ -51,7 +52,10 @@ pub enum AdapterError {
     AmbiguousSystemColumnReference,
     /// An error occurred in a catalog operation.
     Catalog(mz_catalog::memory::error::Error),
-    /// The cached plan or descriptor changed.
+    /// 1. The cached plan or descriptor changed,
+    /// 2. or some dependency of a statement disappeared during sequencing.
+    /// TODO(ggevay): we should refactor 2. usages to use `ConcurrentDependencyDrop` instead
+    /// (e.g., in MV sequencing)
     ChangedPlan(String),
     /// The cursor already exists.
     DuplicateCursor(String),
@@ -97,6 +101,11 @@ pub enum AdapterError {
     ConstraintViolation(NotNullViolation),
     /// Transaction cluster was dropped in the middle of a transaction.
     ConcurrentClusterDrop,
+    /// A dependency was dropped while sequencing a statement.
+    ConcurrentDependencyDrop {
+        dependency_kind: &'static str,
+        dependency_id: String
+    },
     /// Target cluster has no replicas to service query.
     NoClusterReplicasAvailable {
         name: String,
@@ -492,6 +501,7 @@ impl AdapterError {
             AdapterError::InvalidTableMutationSelection => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::ConstraintViolation(NotNullViolation(_)) => SqlState::NOT_NULL_VIOLATION,
             AdapterError::ConcurrentClusterDrop => SqlState::INVALID_TRANSACTION_STATE,
+            AdapterError::ConcurrentDependencyDrop { .. } => SqlState::UNDEFINED_OBJECT,
             AdapterError::NoClusterReplicasAvailable { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::OperationProhibitsTransaction(_) => SqlState::ACTIVE_SQL_TRANSACTION,
             AdapterError::OperationRequiresTransaction(_) => SqlState::NO_ACTIVE_SQL_TRANSACTION,
@@ -664,6 +674,12 @@ impl fmt::Display for AdapterError {
             }
             AdapterError::ConcurrentClusterDrop => {
                 write!(f, "the transaction's active cluster has been dropped")
+            }
+            AdapterError::ConcurrentDependencyDrop {
+                dependency_kind,
+                dependency_id,
+            } => {
+                write!(f, "{dependency_kind} '{dependency_id}' was dropped while executing a statement")
             }
             AdapterError::NoClusterReplicasAvailable { name, .. } => {
                 write!(
@@ -1022,6 +1038,28 @@ impl From<NetworkPolicyError> for AdapterError {
 impl From<ConnectionValidationError> for AdapterError {
     fn from(e: ConnectionValidationError) -> AdapterError {
         AdapterError::ConnectionValidation(e)
+    }
+}
+
+impl From<PeekError> for AdapterError {
+    fn from(e: PeekError) -> AdapterError {
+        match e {
+            PeekError::InstanceMissing(id) => AdapterError::ConcurrentDependencyDrop{
+                dependency_kind: "cluster",
+                dependency_id: id.to_string(),
+            },
+            PeekError::CollectionMissing(id) => AdapterError::ConcurrentDependencyDrop {
+                dependency_kind: "collection",
+                dependency_id: id.to_string(),
+            },
+            PeekError::ReplicaMissing(id) => AdapterError::ConcurrentDependencyDrop {
+                dependency_kind: "replica",
+                dependency_id: id.to_string(),
+            },
+            e @ PeekError::SinceViolation(_) => AdapterError::internal("peek error", e),
+            e @ PeekError::ReadHoldIdMismatch(_) => AdapterError::internal("peek error", e),
+            e @ PeekError::ReadHoldInsufficient(_) => AdapterError::internal("peek error", e),
+        }
     }
 }
 
