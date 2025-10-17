@@ -509,3 +509,81 @@ class ActivateSourceVersioningMigration(Scenario):
             ),
             Validate(self),
         ]
+
+
+class PreflightCheckThenUpgradeToNewerVersion(Scenario):
+    """Preflight check, then upgrade to a newer version than the last upgrade version"""
+
+    def base_version(self) -> MzVersion:
+        return get_previous_version()
+
+    def actions(self) -> list[Action]:
+        print(f"Upgrading from tag {self.base_version()}")
+        return [
+            StartMz(
+                self,
+                tag=self.base_version(),
+                mz_service="mz_1",
+            ),
+            Initialize(self, mz_service="mz_1"),
+            Manipulate(self, phase=1, mz_service="mz_1"),
+            Manipulate(self, phase=2, mz_service="mz_1"),
+            # Try to upgrade to a new version
+            start_mz_read_only(
+                self,
+                tag=get_last_version(),
+                deploy_generation=1,
+                mz_service="mz_2",
+            ),
+            WaitReadyMz(mz_service="mz_2"),
+            KillMz(capture_logs=True, mz_service="mz_2"),
+            # Try to upgrade to a newer version than the last upgrade version
+            start_mz_read_only(
+                self,
+                tag=None,
+                deploy_generation=1,
+                mz_service="mz_3",
+            ),
+            WaitReadyMz(mz_service="mz_3"),
+            PromoteMz(mz_service="mz_3"),
+            Validate(self),
+        ]
+
+
+class PreflightCheckThenUpgradeToOlderVersion(Scenario):
+    """Preflight check, then upgrade"""
+
+    def base_version(self) -> MzVersion:
+        return get_previous_version()
+
+    def actions(self) -> list[Action]:
+        print(f"Upgrading from tag {self.base_version()}")
+        return [
+            StartMz(
+                self,
+                tag=self.base_version(),
+                mz_service="mz_1",
+            ),
+            Initialize(self, mz_service="mz_1"),
+            Manipulate(self, phase=1, mz_service="mz_1"),
+            Manipulate(self, phase=2, mz_service="mz_1"),
+            # Try to upgrade to a new version
+            start_mz_read_only(
+                self,
+                tag=None,
+                deploy_generation=1,
+                mz_service="mz_2",
+            ),
+            WaitReadyMz(mz_service="mz_2"),
+            KillMz(capture_logs=True, mz_service="mz_2"),
+            # Try to upgrade to a newer version than the last upgrade version
+            start_mz_read_only(
+                self,
+                tag=get_last_version(),
+                deploy_generation=1,
+                mz_service="mz_3",
+            ),
+            WaitReadyMz(mz_service="mz_3"),
+            PromoteMz(mz_service="mz_3"),
+            Validate(self),
+        ]
