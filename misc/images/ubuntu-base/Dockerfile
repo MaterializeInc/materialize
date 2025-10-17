@@ -17,6 +17,7 @@ ENV RUST_BACKTRACE=1
 ENV RUST_LIB_BACKTRACE=0
 
 ARG BUILD_PROFILE=optimize
+
 LABEL build.profile=$BUILD_PROFILE
 
 RUN sed -i -e 's#http://archive\.ubuntu\.com#http://us-east-1.ec2.archive.ubuntu.com#' \
