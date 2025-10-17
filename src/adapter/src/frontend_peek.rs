@@ -129,7 +129,8 @@ impl PeekClient {
         let select_plan = match &plan {
             Plan::Select(select_plan) => select_plan,
             _ => {
-                unreachable!("checked above at the Statement level that it's a SELECT")
+                debug!("Bailing out from try_frontend_peek_inner, because it's not a SELECT");
+                return Ok(None);
             }
         };
         let explain_ctx = ExplainContext::None; // EXPLAIN is not handled here for now, only SELECT
