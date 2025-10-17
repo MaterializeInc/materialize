@@ -1077,12 +1077,17 @@ impl<T: ComputeControllerTimestamp> InstanceState<T> {
         self.client.call(f)
     }
 
+    /// Calls the given function on the instance task, and awaits the result.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the instance corresponding to `self` does not exist.
     async fn call_sync<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut Instance<T>) -> R + Send + 'static,
         R: Send + 'static,
     {
-        self.client.call_sync(f).await
+        self.client.call_sync(f).await.expect("controller should validate")
     }
 
     /// Acquires a [`ReadHold`] for the identified compute collection.
