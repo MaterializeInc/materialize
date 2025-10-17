@@ -28,10 +28,12 @@
 //!    the [`RawOptimizerNotice`] enum and other boilerplate code.
 
 // Modules (one for each notice type).
+mod cross_join;
 mod index_already_exists;
 mod index_key_empty;
 mod index_too_wide_for_literal_constraints;
 
+pub use cross_join::CrossJoin;
 pub use index_already_exists::IndexAlreadyExists;
 pub use index_key_empty::IndexKeyEmpty;
 pub use index_too_wide_for_literal_constraints::IndexTooWideForLiteralConstraints;
@@ -359,6 +361,7 @@ raw_optimizer_notices![
     IndexAlreadyExists => "An identical index already exists",
     IndexTooWideForLiteralConstraints => "Index too wide for literal constraints",
     IndexKeyEmpty => "Empty index key",
+    CrossJoin => "Cross join",
 ];
 
 impl RawOptimizerNotice {

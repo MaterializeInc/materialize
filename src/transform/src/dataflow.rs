@@ -30,6 +30,7 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use crate::monotonic::MonotonicFlag;
+use crate::notice::CrossJoin;
 use crate::notice::RawOptimizerNotice;
 use crate::{IndexOracle, Optimizer, TransformCtx, TransformError};
 
@@ -104,6 +105,8 @@ pub fn optimize_dataflow(
     // `optimize_dataflow_monotonic` or `prune_and_annotate_dataflow_index_imports`.
 
     mz_repr::explain::trace_plan(dataflow);
+
+    gather_notices(dataflow, transform_ctx.df_meta);
 
     Ok(())
 }
@@ -1228,6 +1231,51 @@ impl IndexUsageContext {
                 }
             })
             .collect()
+    }
+}
+
+/// Gathers optimization notices by traversing the MIR plan.
+/// Note that some notices are collected elsewhere, e.g. inside `Transform`s or sequencing.
+#[mz_ore::instrument(
+    target = "optimizer",
+    level = "debug",
+    fields(path.segment = "index_imports")
+)]
+fn gather_notices(dataflow: &DataflowDesc, dataflow_metainfo: &mut DataflowMetainfo) {
+    for build_desc in dataflow.objects_to_build.iter() {
+        // Gather `CrossJoin` notices.
+        // Some system objects also have cross joins. We don't want them to create noise.
+        if !build_desc.id.is_system() {
+            build_desc.plan.visit_pre(&mut |expr: &MirRelationExpr| {
+                match expr {
+                    MirRelationExpr::Join { implementation, .. } => {
+                        match implementation {
+                            JoinImplementation::Differential(_start, order) => {
+                                for (_, key, _) in order {
+                                    if key.is_empty() {
+                                        dataflow_metainfo.push_optimizer_notice_dedup(CrossJoin)
+                                    }
+                                }
+                            }
+                            JoinImplementation::DeltaQuery(orders) => {
+                                for order in orders {
+                                    for (_, key, _) in order {
+                                        if key.is_empty() {
+                                            dataflow_metainfo.push_optimizer_notice_dedup(CrossJoin)
+                                        }
+                                    }
+                                }
+                            }
+                            JoinImplementation::IndexedFilter(..) => {
+                                // no cross joins
+                            }
+                            JoinImplementation::Unimplemented => {}
+                        }
+                    }
+                    _ => {}
+                }
+            });
+        }
     }
 }
 
