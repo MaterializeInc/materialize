@@ -1231,22 +1231,25 @@ def run(definition: dict[str, Any], expect_fail: bool):
                 break
         except subprocess.CalledProcessError:
             if expect_fail:
-                logs = spawn.capture(
-                    [
-                        "kubectl",
-                        "logs",
-                        "-l",
-                        "app.kubernetes.io/instance=operator",
-                        "-n",
-                        "materialize",
-                    ],
-                    stderr=subprocess.DEVNULL,
-                )
-                if (
-                    f"ERROR k8s_controller::controller: Materialize reconciliation error. err=reconciler for object Materialize.v1alpha1.materialize.cloud/{definition['materialize']['metadata']['name']}.materialize-environment failed"
-                    in logs
-                ):
-                    break
+                try:
+                    logs = spawn.capture(
+                        [
+                            "kubectl",
+                            "logs",
+                            "-l",
+                            "app.kubernetes.io/instance=operator",
+                            "-n",
+                            "materialize",
+                        ],
+                        stderr=subprocess.DEVNULL,
+                    )
+                    if (
+                        f"ERROR k8s_controller::controller: Materialize reconciliation error. err=reconciler for object Materialize.v1alpha1.materialize.cloud/{definition['materialize']['metadata']['name']}.materialize-environment failed"
+                        in logs
+                    ):
+                        break
+                except subprocess.CalledProcessError:
+                    pass
 
         time.sleep(1)
     else:
