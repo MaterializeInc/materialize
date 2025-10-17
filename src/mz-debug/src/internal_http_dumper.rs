@@ -307,23 +307,33 @@ pub async fn dump_self_managed_http_resources(
         &self_managed_context.mz_instance_name,
     )
     .await
-    .with_context(|| "Failed to find cluster services")?;
+    .unwrap_or_else(|e| {
+        warn!("Failed to find cluster services: {:#}", e);
+        vec![]
+    });
 
     let environmentd_service = find_environmentd_service(
         &self_managed_context.k8s_client,
         &self_managed_context.k8s_namespace,
         &self_managed_context.mz_instance_name,
     )
-    .await
-    .with_context(|| "Failed to find environmentd service")?;
+    .await;
+
+    // Add warning when environmentd service is not found
+    if let Err(e) = &environmentd_service {
+        warn!("Failed to find environmentd service: {:#}", e);
+    }
 
     let services = cluster_services
         .iter()
         .map(|service| (service, ServiceType::Clusterd))
-        .chain(std::iter::once((
-            &environmentd_service,
-            ServiceType::Environmentd,
-        )));
+        .chain(
+            environmentd_service
+                .as_ref()
+                .ok()
+                .into_iter()
+                .map(|service| (service, ServiceType::Environmentd)),
+        );
 
     // Scrape each service
     for (service_info, service_type) in services {
