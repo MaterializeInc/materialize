@@ -172,8 +172,7 @@ impl PeekClient {
             let storage_ids: Vec<_> = id_bundle.storage_ids.iter().copied().collect();
             for f in self
                 .storage_collections
-                .collections_frontiers(storage_ids)
-                .expect("missing collections")
+                .collections_frontiers(storage_ids)?
             {
                 upper.extend(f.write_frontier);
             }
