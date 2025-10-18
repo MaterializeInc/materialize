@@ -114,7 +114,7 @@ impl RustType<ProtoTz> for chrono_tz::Tz {
     }
 
     fn from_proto(proto: ProtoTz) -> Result<Self, TryFromProtoError> {
-        Tz::from_str(&proto.name).map_err(TryFromProtoError::DateConversionError)
+        Tz::from_str(&proto.name).map_err(|_| TryFromProtoError::DateConversionError(proto.name))
     }
 }
 
