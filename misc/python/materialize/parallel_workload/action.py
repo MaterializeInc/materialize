@@ -172,6 +172,7 @@ class Action:
                     "real-time source dropped before ingesting the upstream system's visible frontier",  # Expected, see https://buildkite.com/materialize/nightly/builds/9399#0191be17-1f4c-4321-9b51-edc4b08b71c5
                     "object state changed while transaction was in progress",  # Old error msg, can remove this ignore later
                     "another session modified the catalog while this DDL transaction was open",
+                    "was dropped while executing a statement",
                 ]
             )
         if exe.db.scenario == Scenario.Cancel:
