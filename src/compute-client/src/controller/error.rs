@@ -149,7 +149,6 @@ impl From<ReadHoldError> for DataflowCreationError {
     fn from(error: ReadHoldError) -> Self {
         match error {
             ReadHoldError::CollectionMissing(id) => Self::CollectionMissing(id),
-            ReadHoldError::SinceViolation(id) => Self::SinceViolation(id),
         }
     }
 }
@@ -193,7 +192,6 @@ impl From<ReadHoldError> for PeekError {
     fn from(error: ReadHoldError) -> Self {
         match error {
             ReadHoldError::CollectionMissing(id) => Self::CollectionMissing(id),
-            ReadHoldError::SinceViolation(id) => Self::SinceViolation(id),
         }
     }
 }
