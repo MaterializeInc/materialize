@@ -910,7 +910,7 @@ mod tests {
         fn collection_metadata(
             &self,
             _id: GlobalId,
-        ) -> Result<CollectionMetadata, StorageError<Self::Timestamp>> {
+        ) -> Result<CollectionMetadata, CollectionMissing> {
             unimplemented!()
         }
 

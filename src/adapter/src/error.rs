@@ -34,7 +34,7 @@ use timely::progress::Antichain;
 use tokio::sync::oneshot;
 use tokio_postgres::error::SqlState;
 use mz_compute_client::controller::error::{InstanceMissing, PeekError};
-
+use mz_storage_types::errors::CollectionMissing;
 use crate::coord::NetworkPolicyError;
 use crate::optimize::OptimizerError;
 
@@ -1067,6 +1067,15 @@ impl From<InstanceMissing> for AdapterError {
     fn from(e: InstanceMissing) -> Self {
         AdapterError::ConcurrentDependencyDrop {
             dependency_kind: "cluster",
+            dependency_id: e.0.to_string(),
+        }
+    }
+}
+
+impl From<CollectionMissing> for AdapterError {
+    fn from(e: CollectionMissing) -> Self {
+        AdapterError::ConcurrentDependencyDrop {
+            dependency_kind: "collection",
             dependency_id: e.0.to_string(),
         }
     }

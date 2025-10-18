@@ -293,8 +293,7 @@ impl PeekClient {
                 let literal_constraints = literal_constraint.map(|r| vec![r]);
                 let metadata = self
                     .storage_collections
-                    .collection_metadata(coll_id)
-                    .expect("storage collection for fast-path peek")
+                    .collection_metadata(coll_id)?
                     .clone();
                 let peek_target = PeekTarget::Persist {
                     id: coll_id,
