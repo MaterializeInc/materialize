@@ -95,6 +95,8 @@ impl PeekClient {
         let (stmt, params) = {
             let portal = session
                 .get_portal_unverified(portal_name)
+                // The portal is a session-level thing, so it couldn't have concurrently disappeared
+                // since the above verification.
                 .expect("called verify_portal above");
             let params = portal.parameters.clone();
             let stmt = portal.stmt.clone();
