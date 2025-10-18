@@ -46,6 +46,7 @@ use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::connections::inline::InlinedConnection;
 use mz_storage_types::controller::{CollectionMetadata, StorageError, TxnsCodecRow};
 use mz_storage_types::dyncfgs::STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION;
+use mz_storage_types::errors::CollectionMissing;
 use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::read_policy::ReadPolicy;
@@ -64,7 +65,6 @@ use timely::progress::{Antichain, ChangeBatch, Timestamp as TimelyTimestamp};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::MissedTickBehavior;
 use tracing::{debug, info, trace, warn};
-use mz_storage_types::errors::CollectionMissing;
 
 use crate::client::TimestamplessUpdateBuilder;
 use crate::controller::{
@@ -107,10 +107,7 @@ pub trait StorageCollections: Debug {
     fn update_parameters(&self, config_params: StorageParameters);
 
     /// Returns the [CollectionMetadata] of the collection identified by `id`.
-    fn collection_metadata(
-        &self,
-        id: GlobalId,
-    ) -> Result<CollectionMetadata, CollectionMissing>;
+    fn collection_metadata(&self, id: GlobalId) -> Result<CollectionMetadata, CollectionMissing>;
 
     /// Acquire an iterator over [CollectionMetadata] for all active
     /// collections.
@@ -1424,10 +1421,7 @@ where
             .update(config_params);
     }
 
-    fn collection_metadata(
-        &self,
-        id: GlobalId,
-    ) -> Result<CollectionMetadata, CollectionMissing> {
+    fn collection_metadata(&self, id: GlobalId) -> Result<CollectionMetadata, CollectionMissing> {
         let collections = self.collections.lock().expect("lock poisoned");
 
         collections
@@ -2532,9 +2526,7 @@ where
         // to pass around ReadHold tokens, we might tighten this up and instead
         // acquire read holds at the implied capability.
         for id in desired_holds.iter() {
-            let collection = collections
-                .get(id)
-                .ok_or(CollectionMissing(*id))?;
+            let collection = collections.get(id).ok_or(CollectionMissing(*id))?;
             let since = collection.read_capabilities.frontier().to_owned();
             advanced_holds.push((*id, since));
         }

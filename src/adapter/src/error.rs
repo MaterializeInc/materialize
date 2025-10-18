@@ -16,6 +16,7 @@ use dec::TryFromDecimalError;
 use itertools::Itertools;
 use mz_catalog::builtin::MZ_CATALOG_SERVER_CLUSTER;
 use mz_compute_client::controller::error as compute_error;
+use mz_compute_client::controller::error::{CollectionLookupError, InstanceMissing, PeekError};
 use mz_expr::EvalError;
 use mz_ore::error::ErrorExt;
 use mz_ore::stack::RecursionLimitError;
@@ -29,12 +30,12 @@ use mz_sql::rbac;
 use mz_sql::session::vars::VarError;
 use mz_storage_types::connections::ConnectionValidationError;
 use mz_storage_types::controller::StorageError;
+use mz_storage_types::errors::CollectionMissing;
 use smallvec::SmallVec;
 use timely::progress::Antichain;
 use tokio::sync::oneshot;
 use tokio_postgres::error::SqlState;
-use mz_compute_client::controller::error::{CollectionLookupError, InstanceMissing, PeekError};
-use mz_storage_types::errors::CollectionMissing;
+
 use crate::coord::NetworkPolicyError;
 use crate::optimize::OptimizerError;
 
@@ -104,7 +105,7 @@ pub enum AdapterError {
     /// A dependency was dropped while sequencing a statement.
     ConcurrentDependencyDrop {
         dependency_kind: &'static str,
-        dependency_id: String
+        dependency_id: String,
     },
     /// Target cluster has no replicas to service query.
     NoClusterReplicasAvailable {
@@ -633,22 +634,26 @@ impl AdapterError {
         }
     }
 
-    pub fn concurrent_dependency_drop_from_collection_lookup_error(e: CollectionLookupError) -> Self {
+    pub fn concurrent_dependency_drop_from_collection_lookup_error(
+        e: CollectionLookupError,
+    ) -> Self {
         match e {
             CollectionLookupError::InstanceMissing(id) => AdapterError::ConcurrentDependencyDrop {
                 dependency_kind: "cluster",
                 dependency_id: id.to_string(),
             },
-            CollectionLookupError::CollectionMissing(id) => AdapterError::ConcurrentDependencyDrop {
-                dependency_kind: "collection",
-                dependency_id: id.to_string(),
-            },
+            CollectionLookupError::CollectionMissing(id) => {
+                AdapterError::ConcurrentDependencyDrop {
+                    dependency_kind: "collection",
+                    dependency_id: id.to_string(),
+                }
+            }
         }
     }
 
     pub fn concurrent_dependency_drop_from_peek_error(e: PeekError) -> AdapterError {
         match e {
-            PeekError::InstanceMissing(id) => AdapterError::ConcurrentDependencyDrop{
+            PeekError::InstanceMissing(id) => AdapterError::ConcurrentDependencyDrop {
                 dependency_kind: "cluster",
                 dependency_id: id.to_string(),
             },
@@ -730,7 +735,10 @@ impl fmt::Display for AdapterError {
                 dependency_kind,
                 dependency_id,
             } => {
-                write!(f, "{dependency_kind} '{dependency_id}' was dropped while executing a statement")
+                write!(
+                    f,
+                    "{dependency_kind} '{dependency_id}' was dropped while executing a statement"
+                )
             }
             AdapterError::NoClusterReplicasAvailable { name, .. } => {
                 write!(
