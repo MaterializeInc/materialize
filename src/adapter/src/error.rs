@@ -33,7 +33,7 @@ use smallvec::SmallVec;
 use timely::progress::Antichain;
 use tokio::sync::oneshot;
 use tokio_postgres::error::SqlState;
-use mz_compute_client::controller::error::PeekError;
+use mz_compute_client::controller::error::{InstanceMissing, PeekError};
 
 use crate::coord::NetworkPolicyError;
 use crate::optimize::OptimizerError;
@@ -1059,6 +1059,15 @@ impl From<PeekError> for AdapterError {
             e @ PeekError::SinceViolation(_) => AdapterError::internal("peek error", e),
             e @ PeekError::ReadHoldIdMismatch(_) => AdapterError::internal("peek error", e),
             e @ PeekError::ReadHoldInsufficient(_) => AdapterError::internal("peek error", e),
+        }
+    }
+}
+
+impl From<InstanceMissing> for AdapterError {
+    fn from(e: InstanceMissing) -> Self {
+        AdapterError::ConcurrentDependencyDrop {
+            dependency_kind: "cluster",
+            dependency_id: e.0.to_string(),
         }
     }
 }
