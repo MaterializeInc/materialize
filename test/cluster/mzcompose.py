@@ -3688,15 +3688,23 @@ def workflow_statement_logging(c: Composition, parser: WorkflowArgumentParser) -
     ):
         c.up("materialized")
 
-        # TODO(peek-seq): enable_frontend_peek_sequencing when it supports statement logging.
         c.sql(
             """
             ALTER SYSTEM SET statement_logging_max_sample_rate = 1.0;
             ALTER SYSTEM SET statement_logging_default_sample_rate = 1.0;
-            ALTER SYSTEM SET enable_frontend_peek_sequencing = false;
         """,
             port=6877,
             user="mz_system",
+        )
+
+        # TODO(peek-seq): enable_frontend_peek_sequencing when it supports statement logging.
+        c.testdrive(
+            input=dedent(
+                """
+                $[version>=16200] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
+                ALTER SYSTEM SET enable_frontend_peek_sequencing = false;
+                """
+            )
         )
 
         c.run_testdrive_files("statement-logging/statement-logging.td")
