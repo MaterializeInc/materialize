@@ -386,6 +386,7 @@ pub enum SqlServerSourcePurificationError {
         tbl_name: Arc<str>,
         col_name: Arc<str>,
         col_type: Arc<str>,
+        context: String,
     },
     #[error("Table {tbl_name} had all columns excluded")]
     AllColumnsExcluded { tbl_name: Arc<str> },
@@ -412,6 +413,7 @@ impl SqlServerSourcePurificationError {
                 "the following columns are referenced but not added: {}",
                 itertools::join(items, ", ")
             )),
+            Self::UnsupportedColumn { context, .. } => Some(context.clone()),
             _ => None,
         }
     }

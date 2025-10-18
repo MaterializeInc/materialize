@@ -385,6 +385,7 @@ SELECT
     c.max_length as col_max_length,
     c.precision as col_precision,
     c.scale as col_scale,
+    c.is_computed as col_is_computed,
     tc.constraint_name AS col_primary_key_constraint
 FROM sys.tables t
 JOIN sys.schemas s ON t.schema_id = s.schema_id
@@ -457,7 +458,8 @@ pub async fn get_cdc_table_columns(
         t.name AS col_type, \
         c.max_length AS col_max_length, \
         c.precision AS col_precision, \
-        c.scale AS col_scale \
+        c.scale AS col_scale, \
+        c.is_computed as col_is_computed \
     FROM \
         sys.columns AS c \
     JOIN sys.types AS t ON c.system_type_id = t.system_type_id AND c.user_type_id = t.user_type_id \
@@ -479,6 +481,7 @@ pub async fn get_cdc_table_columns(
             max_length: get_value(row, "col_max_length")?,
             precision: get_value(row, "col_precision")?,
             scale: get_value(row, "col_scale")?,
+            is_computed: get_value(row, "col_is_computed")?,
         };
         columns.insert(column_name, column);
     }
@@ -696,6 +699,7 @@ fn deserialize_table_columns_to_raw_tables(
             max_length: get_value(row, "col_max_length")?,
             precision: get_value(row, "col_precision")?,
             scale: get_value(row, "col_scale")?,
+            is_computed: get_value(row, "col_is_computed")?,
         };
 
         let columns: &mut Vec<_> = tables
