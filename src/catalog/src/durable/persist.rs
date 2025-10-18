@@ -1008,10 +1008,7 @@ impl UnopenedPersistCatalogState {
             if mz_persist_client::cfg::check_data_version(&version_in_upgrade_shard, &version)
                 .is_err()
             {
-                return Err(DurableCatalogError::IncompatiblePersistVersion {
-                    found_version: version_in_upgrade_shard,
-                    catalog_version: version,
-                });
+                tracing::info!("optimistically ignoring persist version error");
             }
         }
 
