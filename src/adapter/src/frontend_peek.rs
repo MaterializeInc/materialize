@@ -540,7 +540,8 @@ impl PeekClient {
 
         let (read_holds, upper) = self
             .acquire_read_holds_and_least_valid_write(id_bundle)
-            .await.map_err(AdapterError::concurrent_dependency_drop_from_collection_lookup_error)?;
+            .await
+            .map_err(AdapterError::concurrent_dependency_drop_from_collection_lookup_error)?;
         let (det, read_holds) = <Coordinator as TimestampProvider>::determine_timestamp_for_inner(
             session,
             id_bundle,

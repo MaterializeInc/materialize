@@ -69,6 +69,7 @@ use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::connections::inline::InlinedConnection;
 use mz_storage_types::controller::{AlterError, CollectionMetadata, StorageError, TxnsCodecRow};
+use mz_storage_types::errors::CollectionMissing;
 use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::oneshot_sources::{OneshotIngestionRequest, OneshotResultCallback};
 use mz_storage_types::parameters::StorageParameters;
@@ -92,7 +93,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time::MissedTickBehavior;
 use tokio::time::error::Elapsed;
 use tracing::{debug, info, warn};
-use mz_storage_types::errors::CollectionMissing;
+
 use crate::collection_mgmt::{
     AppendOnlyIntrospectionConfig, CollectionManagerKind, DifferentialIntrospectionConfig,
 };
@@ -324,10 +325,7 @@ where
         &self.config
     }
 
-    fn collection_metadata(
-        &self,
-        id: GlobalId,
-    ) -> Result<CollectionMetadata, CollectionMissing> {
+    fn collection_metadata(&self, id: GlobalId) -> Result<CollectionMetadata, CollectionMissing> {
         self.storage_collections.collection_metadata(id)
     }
 
@@ -450,10 +448,7 @@ where
     fn collection_frontiers(
         &self,
         id: GlobalId,
-    ) -> Result<
-        (Antichain<Self::Timestamp>, Antichain<Self::Timestamp>),
-        CollectionMissing,
-    > {
+    ) -> Result<(Antichain<Self::Timestamp>, Antichain<Self::Timestamp>), CollectionMissing> {
         let frontiers = self.storage_collections.collection_frontiers(id)?;
         Ok((frontiers.implied_capability, frontiers.write_frontier))
     }

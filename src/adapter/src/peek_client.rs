@@ -84,7 +84,8 @@ impl PeekClient {
     pub async fn ensure_compute_instance_client(
         &mut self,
         compute_instance: ComputeInstanceId,
-    ) -> Result<&mut mz_compute_client::controller::instance::Client<Timestamp>, InstanceMissing> {
+    ) -> Result<&mut mz_compute_client::controller::instance::Client<Timestamp>, InstanceMissing>
+    {
         if !self.compute_instances.contains_key(&compute_instance) {
             let client = self
                 .call_coordinator(|tx| Command::GetComputeInstanceClient {
@@ -179,9 +180,7 @@ impl PeekClient {
         }
 
         for (&instance_id, collection_ids) in &id_bundle.compute_ids {
-            let client = self
-                .ensure_compute_instance_client(instance_id)
-                .await?;
+            let client = self.ensure_compute_instance_client(instance_id).await?;
 
             for (id, read_hold, write_frontier) in client
                 .acquire_read_holds_and_collection_write_frontiers(
@@ -293,7 +292,8 @@ impl PeekClient {
                 let literal_constraints = literal_constraint.map(|r| vec![r]);
                 let metadata = self
                     .storage_collections
-                    .collection_metadata(coll_id).map_err(AdapterError::concurrent_dependency_drop_from_collection_missing)?
+                    .collection_metadata(coll_id)
+                    .map_err(AdapterError::concurrent_dependency_drop_from_collection_missing)?
                     .clone();
                 let peek_target = PeekTarget::Persist {
                     id: coll_id,
@@ -330,7 +330,8 @@ impl PeekClient {
         // Issue the peek to the instance
         let client = self
             .ensure_compute_instance_client(compute_instance)
-            .await.map_err(AdapterError::concurrent_dependency_drop_from_instance_missing)?;
+            .await
+            .map_err(AdapterError::concurrent_dependency_drop_from_instance_missing)?;
         let finishing_for_instance = finishing.clone();
         client
             .peek(
@@ -345,7 +346,8 @@ impl PeekClient {
                 target_replica,
                 rows_tx,
             )
-            .await.map_err(AdapterError::concurrent_dependency_drop_from_peek_error)?;
+            .await
+            .map_err(AdapterError::concurrent_dependency_drop_from_peek_error)?;
 
         let peek_response_stream = Coordinator::create_peek_response_stream(
             rows_rx,

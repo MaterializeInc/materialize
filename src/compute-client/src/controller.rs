@@ -1087,7 +1087,10 @@ impl<T: ComputeControllerTimestamp> InstanceState<T> {
         F: FnOnce(&mut Instance<T>) -> R + Send + 'static,
         R: Send + 'static,
     {
-        self.client.call_sync(f).await.expect("controller should validate")
+        self.client
+            .call_sync(f)
+            .await
+            .expect("controller should validate")
     }
 
     /// Acquires a [`ReadHold`] for the identified compute collection.

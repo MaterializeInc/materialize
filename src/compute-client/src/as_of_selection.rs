@@ -869,12 +869,12 @@ mod tests {
     use mz_storage_types::StorageDiff;
     use mz_storage_types::connections::inline::InlinedConnection;
     use mz_storage_types::controller::{CollectionMetadata, StorageError};
+    use mz_storage_types::errors::CollectionMissing;
     use mz_storage_types::parameters::StorageParameters;
     use mz_storage_types::sources::{GenericSourceConnection, SourceDesc};
     use mz_storage_types::sources::{SourceData, SourceExportDataConfig};
     use mz_storage_types::time_dependence::{TimeDependence, TimeDependenceError};
     use timely::progress::Timestamp as TimelyTimestamp;
-    use mz_storage_types::errors::CollectionMissing;
 
     use super::*;
 
@@ -921,8 +921,7 @@ mod tests {
         fn collections_frontiers(
             &self,
             ids: Vec<GlobalId>,
-        ) -> Result<Vec<CollectionFrontiers<Self::Timestamp>>, CollectionMissing>
-        {
+        ) -> Result<Vec<CollectionFrontiers<Self::Timestamp>>, CollectionMissing> {
             let mut frontiers = Vec::with_capacity(ids.len());
             for id in ids {
                 let (read, write) = self.0.get(&id).ok_or(CollectionMissing(id))?;
@@ -1092,10 +1091,7 @@ mod tests {
         ) -> Result<Vec<ReadHold<Self::Timestamp>>, CollectionMissing> {
             let mut holds = Vec::with_capacity(desired_holds.len());
             for id in desired_holds {
-                let (read, _write) = self
-                    .0
-                    .get(&id)
-                    .ok_or(CollectionMissing(id))?;
+                let (read, _write) = self.0.get(&id).ok_or(CollectionMissing(id))?;
                 let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
                 holds.push(ReadHold::with_channel(id, read.clone(), tx));
             }
