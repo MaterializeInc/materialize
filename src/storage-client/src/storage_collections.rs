@@ -47,7 +47,7 @@ use mz_storage_types::connections::inline::InlinedConnection;
 use mz_storage_types::controller::{CollectionMetadata, StorageError, TxnsCodecRow};
 use mz_storage_types::dyncfgs::STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION;
 use mz_storage_types::parameters::StorageParameters;
-use mz_storage_types::read_holds::{ReadHold, ReadHoldError};
+use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sources::{
     GenericSourceConnection, SourceData, SourceDesc, SourceEnvelope, SourceExport,
@@ -64,6 +64,7 @@ use timely::progress::{Antichain, ChangeBatch, Timestamp as TimelyTimestamp};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::MissedTickBehavior;
 use tracing::{debug, info, trace, warn};
+use mz_storage_types::errors::CollectionMissing;
 
 use crate::client::TimestamplessUpdateBuilder;
 use crate::controller::{
@@ -343,7 +344,7 @@ pub trait StorageCollections: Debug {
     fn acquire_read_holds(
         &self,
         desired_holds: Vec<GlobalId>,
-    ) -> Result<Vec<ReadHold<Self::Timestamp>>, ReadHoldError>;
+    ) -> Result<Vec<ReadHold<Self::Timestamp>>, CollectionMissing>;
 
     /// Get the time dependence for a storage collection. Returns no value if unknown or if
     /// the object isn't managed by storage.
@@ -2512,7 +2513,7 @@ where
     fn acquire_read_holds(
         &self,
         desired_holds: Vec<GlobalId>,
-    ) -> Result<Vec<ReadHold<Self::Timestamp>>, ReadHoldError> {
+    ) -> Result<Vec<ReadHold<Self::Timestamp>>, CollectionMissing> {
         if desired_holds.is_empty() {
             return Ok(vec![]);
         }
@@ -2533,7 +2534,7 @@ where
         for id in desired_holds.iter() {
             let collection = collections
                 .get(id)
-                .ok_or(ReadHoldError::CollectionMissing(*id))?;
+                .ok_or(CollectionMissing(*id))?;
             let since = collection.read_capabilities.frontier().to_owned();
             advanced_holds.push((*id, since));
         }

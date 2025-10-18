@@ -18,7 +18,6 @@
 //! of each method and make it easy for callers to ensure that all possible errors are handled.
 
 use mz_repr::GlobalId;
-use mz_storage_types::read_holds::ReadHoldError;
 use thiserror::Error;
 
 use crate::controller::{ComputeInstanceId, ReplicaId};
@@ -142,14 +141,6 @@ impl From<CollectionMissing> for DataflowCreationError {
     }
 }
 
-impl From<ReadHoldError> for DataflowCreationError {
-    fn from(error: ReadHoldError) -> Self {
-        match error {
-            ReadHoldError::CollectionMissing(id) => Self::CollectionMissing(id),
-        }
-    }
-}
-
 /// Errors arising during peek processing.
 #[derive(Error, Debug)]
 pub enum PeekError {
@@ -182,14 +173,6 @@ impl From<InstanceMissing> for PeekError {
 impl From<CollectionMissing> for PeekError {
     fn from(error: CollectionMissing) -> Self {
         Self::CollectionMissing(error.0)
-    }
-}
-
-impl From<ReadHoldError> for PeekError {
-    fn from(error: ReadHoldError) -> Self {
-        match error {
-            ReadHoldError::CollectionMissing(id) => Self::CollectionMissing(id),
-        }
     }
 }
 
