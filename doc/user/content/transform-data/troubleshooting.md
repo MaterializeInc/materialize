@@ -238,44 +238,26 @@ triggered every time a cluster is restarted or sized up, including during
 
 #### Detect
 
-If your cluster runs out of memory (i.e., it OOMs), this will result in a crash.
-After a crash, the cluster has to restart, which can take a few seconds. On
-cluster restart, your query will also automatically restart execution from the
-beginning.
+If your cluster replica reaches its capacity (i.e., it OOMs at 100% Memory Utilization), this will result in a crash. After a crash, the cluster replica has to restart, which can take a few seconds. On cluster restart, your query will also automatically restart execution from the beginning.
 
-If your cluster is CPU-maxed out (\~100% utilization), your query may be blocked
-while the cluster processes the other activity. It may eventually complete, but
-it will continue to be slow and potentially blocked until the CPU usage goes
-down. As an example, if you issue a lot of resource-intensive queries at once,
-that might spike the CPU.
+If your cluster replica is CPU-maxed out (~100% CPU usage), your query may be blocked while the cluster processes the other activity. It may eventually complete, but it will continue to be slow and potentially blocked until the CPU usage goes down. As an example, if you issue a lot of resource-intensive queries at once, that might spike the CPU.
 
-To see memory and CPU usage for your cluster in the Materialize console, go to
-https://console.materialize.com/, click the **“Clusters”** tab in the
-navigation bar, and click on the cluster name.
+We recommend setting [Alerting thresholds](https://materialize.com/docs/manage/monitor/alerting/#thresholds) to notify your team when a cluster is reaching its capacity. Please note that these are recommendations, and some configurations may reach unstable memory utilization levels sooner than the thresholds.
+
+To see Memory Utilization and CPU usage for your cluster replica in the [Materialize console](https://materialize.com/docs/console/clusters/), go to [https://console.materialize.com/](https://console.materialize.com/), click the **“Clusters”** tab in the navigation bar, and click on the cluster name.
 
 #### Address
 
-Your query may have been the root cause of the increased memory and CPU usage,
-or it may have been something else happening on the cluster at the same time.
-To troubleshoot and fix memory and CPU usage, follow the steps in the
-[dataflow troubleshooting](/transform-data/dataflow-troubleshooting) guide.
+Your query may have been the root cause of the increased Memory Utilization and CPU usage, or it may have been something else happening on the cluster at the same time. To troubleshoot and fix Memory Utilization and CPU usage, follow the steps in the [dataflow troubleshooting](https://materialize.com/docs/transform-data/dataflow-troubleshooting) guide.
 
-For guidance on how to reduce memory and CPU usage for this or another query,
-take a look at the [indexing and query optimization](#indexing-and-query-optimization)
-and [result filtering](#result-filtering) sections above.
+For guidance on how to reduce Memory Utilization and CPU usage for this or another query, take a look at the [indexing and query optimization](https://materialize.com/docs/transform-data/troubleshooting/#indexing-and-query-optimization) and result filtering sections above.
 
-If your query was the root cause, you'll need to kill it for the cluster's
-memory or CPU to go down. If your query was causing an OOM, the cluster will
-continue to be in an "OOM loop" - every time the cluster restarts, the query
-restarts executing automatically then causes an OOM again - until you kill the
-query.
+If your query was the root cause, you’ll need to kill it for the cluster replica’s Memory Utilization or CPU to go down. If your query was causing an OOM, the cluster replica will continue to be in an “OOM loop” - every time the replica restarts, the query restarts executing automatically then causes an OOM again - until you kill the query.
 
-If your query was not the root cause, you can wait for the other activity on the
-cluster to stop and memory/CPU to go down, or switch to a different cluster.
+If your query was not the root cause, you can wait for the other activity on the cluster to stop and Memory Utilization/CPU to go down, or switch to a different cluster.
 
-If you've gone through the dataflow troubleshooting and do not want to make any
-changes to your query, consider [sizing up your cluster](/sql/create-cluster/#size).
-A larger size cluster will provision more memory and CPU resources.
+If you’ve gone through the dataflow troubleshooting and do not want to make any changes to your query, consider [sizing up your cluster](https://materialize.com/docs/sql/create-cluster/#size). A larger size cluster will provision more resources.
+
 
 ## Which part of my query runs slowly or uses a lot of memory?
 
