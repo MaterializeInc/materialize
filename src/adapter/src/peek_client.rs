@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use differential_dataflow::consolidation::consolidate;
-use mz_compute_client::controller::error::CollectionLookupError;
+use mz_compute_client::controller::error::{CollectionLookupError, InstanceMissing};
 use mz_compute_client::protocol::command::PeekTarget;
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::row::RowCollection;
@@ -84,7 +84,7 @@ impl PeekClient {
     pub async fn ensure_compute_instance_client(
         &mut self,
         compute_instance: ComputeInstanceId,
-    ) -> Result<&mut mz_compute_client::controller::instance::Client<Timestamp>, AdapterError> {
+    ) -> Result<&mut mz_compute_client::controller::instance::Client<Timestamp>, InstanceMissing> {
         if !self.compute_instances.contains_key(&compute_instance) {
             let client = self
                 .call_coordinator(|tx| Command::GetComputeInstanceClient {
@@ -183,8 +183,7 @@ impl PeekClient {
         for (&instance_id, collection_ids) in &id_bundle.compute_ids {
             let client = self
                 .ensure_compute_instance_client(instance_id)
-                .await
-                .expect("missing compute instance client");
+                .await?;
 
             for (id, read_hold, write_frontier) in client
                 .acquire_read_holds_and_collection_write_frontiers(
@@ -334,8 +333,7 @@ impl PeekClient {
         // Issue the peek to the instance
         let client = self
             .ensure_compute_instance_client(compute_instance)
-            .await
-            .expect("missing compute instance client");
+            .await?;
         let finishing_for_instance = finishing.clone();
         client
             .peek(

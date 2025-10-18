@@ -25,7 +25,7 @@ use mz_persist_client::PersistClient;
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::global_id::TransientIdGen;
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, ColumnIndex, RowIterator, Timestamp};
+use mz_repr::{CatalogItemId, ColumnIndex, RowIterator};
 use mz_sql::ast::{FetchDirection, Raw, Statement};
 use mz_sql::catalog::ObjectType;
 use mz_sql::optimizer_metrics::OptimizerMetrics;
@@ -164,7 +164,7 @@ pub enum Command {
         tx: oneshot::Sender<
             Result<
                 mz_compute_client::controller::instance::Client<mz_repr::Timestamp>,
-                AdapterError,
+                mz_compute_client::controller::error::InstanceMissing,
             >,
         >,
     },
@@ -172,7 +172,7 @@ pub enum Command {
     GetOracle {
         timeline: Timeline,
         tx: oneshot::Sender<
-            Result<Arc<dyn TimestampOracle<Timestamp> + Send + Sync>, AdapterError>,
+            Result<Arc<dyn TimestampOracle<mz_repr::Timestamp> + Send + Sync>, AdapterError>,
         >,
     },
 }
