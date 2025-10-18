@@ -51,7 +51,10 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::debug_span;
 use uuid::Uuid;
 
-use crate::controller::error::{CollectionLookupError, CollectionMissing, ERROR_TARGET_REPLICA_FAILED, HydrationCheckBadTarget, InstanceMissing};
+use crate::controller::error::{
+    CollectionLookupError, CollectionMissing, ERROR_TARGET_REPLICA_FAILED, HydrationCheckBadTarget,
+    InstanceMissing,
+};
 use crate::controller::replica::{ReplicaClient, ReplicaConfig};
 use crate::controller::{
     ComputeControllerResponse, ComputeControllerTimestamp, IntrospectionUpdates, PeekNotification,
@@ -179,7 +182,7 @@ impl<T: ComputeControllerTimestamp> Client<T> {
             }))
             .map_err(|_send_error| InstanceMissing(self.id))?;
 
-        Ok(rx.await.map_err(|_| InstanceMissing(self.id))?)
+        rx.await.map_err(|_| InstanceMissing(self.id))
     }
 }
 
@@ -287,7 +290,8 @@ where
                 peek_response_tx,
             )
         })
-        .await.map(|r| r.map_err(|e| e.into()))?
+        .await
+        .map(|r| r.map_err(|e| e.into()))?
     }
 }
 

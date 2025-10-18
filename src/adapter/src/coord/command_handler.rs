@@ -272,11 +272,7 @@ impl Coordinator {
                 }
 
                 Command::GetComputeInstanceClient { instance_id, tx } => {
-                    let _ = tx.send(
-                        self.controller
-                            .compute
-                            .instance_client(instance_id),
-                    );
+                    let _ = tx.send(self.controller.compute.instance_client(instance_id));
                 }
 
                 Command::GetOracle { timeline, tx } => {
