@@ -23,6 +23,8 @@ use thiserror::Error;
 
 use crate::controller::{ComputeInstanceId, ReplicaId};
 
+pub use mz_storage_types::errors::CollectionMissing;
+
 /// The error returned by replica-targeted peeks and subscribes when the target replica
 /// disconnects.
 pub const ERROR_TARGET_REPLICA_FAILED: &str = "target replica failed or was dropped";
@@ -37,11 +39,6 @@ pub struct InstanceMissing(pub ComputeInstanceId);
 #[derive(Error, Debug)]
 #[error("instance exists already: {0}")]
 pub struct InstanceExists(pub ComputeInstanceId);
-
-/// Error returned in response to a reference to an unknown compute collection.
-#[derive(Error, Debug)]
-#[error("collection does not exist: {0}")]
-pub struct CollectionMissing(pub GlobalId);
 
 /// Error returned in response to a reference to an unknown compute collection.
 #[derive(Error, Debug)]
