@@ -33,7 +33,7 @@ use smallvec::SmallVec;
 use timely::progress::Antichain;
 use tokio::sync::oneshot;
 use tokio_postgres::error::SqlState;
-use mz_compute_client::controller::error::{InstanceMissing, PeekError};
+use mz_compute_client::controller::error::{CollectionLookupError, InstanceMissing, PeekError};
 use mz_storage_types::errors::CollectionMissing;
 use crate::coord::NetworkPolicyError;
 use crate::optimize::OptimizerError;
@@ -1077,6 +1077,21 @@ impl From<CollectionMissing> for AdapterError {
         AdapterError::ConcurrentDependencyDrop {
             dependency_kind: "collection",
             dependency_id: e.0.to_string(),
+        }
+    }
+}
+
+impl From<CollectionLookupError> for AdapterError {
+    fn from(e: CollectionLookupError) -> Self {
+        match e {
+            CollectionLookupError::InstanceMissing(id) => AdapterError::ConcurrentDependencyDrop {
+                dependency_kind: "cluster",
+                dependency_id: id.to_string(),
+            },
+            CollectionLookupError::CollectionMissing(id) => AdapterError::ConcurrentDependencyDrop {
+                dependency_kind: "collection",
+                dependency_id: id.to_string(),
+            },
         }
     }
 }

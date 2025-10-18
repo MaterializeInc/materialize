@@ -540,8 +540,7 @@ impl PeekClient {
 
         let (read_holds, upper) = self
             .acquire_read_holds_and_least_valid_write(id_bundle)
-            .await
-            .expect("missing collection");
+            .await?;
         let (det, read_holds) = <Coordinator as TimestampProvider>::determine_timestamp_for_inner(
             session,
             id_bundle,
