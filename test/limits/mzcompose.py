@@ -32,6 +32,7 @@ from materialize.mzcompose.composition import (
 from materialize.mzcompose.services.balancerd import Balancerd
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.cockroach import Cockroach
+from materialize.mzcompose.services.foundationdb import FoundationDB
 from materialize.mzcompose.services.frontegg import FronteggMock
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
@@ -163,7 +164,7 @@ class Connections(Generator):
 class Tables(Generator):
     COUNT = 90  # https://github.com/MaterializeInc/database-issues/issues/3675 and https://github.com/MaterializeInc/database-issues/issues/7830
 
-    MAX_COUNT = 2880  # Too long-running with 5760 tables
+    # MAX_COUNT = 2880  # Too long-running with 5760 tables
 
     @classmethod
     def body(cls) -> None:
@@ -211,7 +212,7 @@ class Subscribe(Generator):
 
 
 class Indexes(Generator):
-    MAX_COUNT = 2000  # Too long-running with count=2562
+    # MAX_COUNT = 2000  # Too long-running with count=2562
 
     @classmethod
     def body(cls) -> None:
@@ -231,7 +232,7 @@ class Indexes(Generator):
 
 
 class IndexedViews(Generator):
-    MAX_COUNT = 1000  # TODO: Bump when https://github.com/MaterializeInc/database-issues/issues/9307 is fixed
+    # MAX_COUNT = 1000  # TODO: Bump when https://github.com/MaterializeInc/database-issues/issues/9307 is fixed
 
     @classmethod
     def body(cls) -> None:
@@ -253,7 +254,7 @@ class IndexedViews(Generator):
 class KafkaTopics(Generator):
     COUNT = min(Generator.COUNT, 20)  # CREATE SOURCE is slow
 
-    MAX_COUNT = 640  # Too long-running with count=1280
+    # MAX_COUNT = 640  # Too long-running with count=1280
 
     @classmethod
     def body(cls) -> None:
@@ -304,7 +305,7 @@ class KafkaTopics(Generator):
 class KafkaSourcesSameTopic(Generator):
     COUNT = 500  # high memory consumption
 
-    MAX_COUNT = COUNT  # Too long-running with 750 sources
+    # MAX_COUNT = COUNT  # Too long-running with 750 sources
 
     @classmethod
     def body(cls) -> None:
@@ -354,7 +355,7 @@ class KafkaSourcesSameTopic(Generator):
 
 class KafkaPartitions(Generator):
     COUNT = min(Generator.COUNT, 100)  # It takes 5+min to process 1K partitions
-    MAX_COUNT = 3200  # Too long-running with 6400 partitions
+    # MAX_COUNT = 3200  # Too long-running with 6400 partitions
 
     @classmethod
     def body(cls) -> None:
@@ -418,7 +419,7 @@ class KafkaPartitions(Generator):
 class KafkaRecordsEnvelopeNone(Generator):
     COUNT = Generator.COUNT * 10_000
 
-    MAX_COUNT = COUNT  # Only runs into max unsigned int size, takes a while
+    # MAX_COUNT = COUNT  # Only runs into max unsigned int size, takes a while
 
     @classmethod
     def body(cls) -> None:
@@ -464,7 +465,7 @@ class KafkaRecordsEnvelopeNone(Generator):
 class KafkaRecordsEnvelopeUpsertSameValue(Generator):
     COUNT = Generator.COUNT * 10_000
 
-    MAX_COUNT = COUNT  # Only runs into max unsigned int size, takes a while
+    # MAX_COUNT = COUNT  # Only runs into max unsigned int size, takes a while
 
     @classmethod
     def body(cls) -> None:
@@ -576,7 +577,7 @@ class KafkaRecordsEnvelopeUpsertDistinctValues(Generator):
 class KafkaSinks(Generator):
     COUNT = min(Generator.COUNT, 50)  # $ kafka-verify-data is slow
 
-    MAX_COUNT = 1600  # Too long-running with 3200 sinks
+    # MAX_COUNT = 1600  # Too long-running with 3200 sinks
 
     @classmethod
     def body(cls) -> None:
@@ -627,7 +628,7 @@ class KafkaSinks(Generator):
 class KafkaSinksSameSource(Generator):
     COUNT = min(Generator.COUNT, 50)  # $ kafka-verify-data is slow
 
-    MAX_COUNT = 3200  # Too long-running with 6400 sinks
+    # MAX_COUNT = 3200  # Too long-running with 6400 sinks
 
     @classmethod
     def body(cls) -> None:
@@ -688,7 +689,7 @@ class Columns(Generator):
 class TablesCommaJoinNoCondition(Generator):
     COUNT = 100  # https://github.com/MaterializeInc/database-issues/issues/3682
 
-    MAX_COUNT = 200  # Too long-running with 400 conditions
+    # MAX_COUNT = 200  # Too long-running with 400 conditions
 
     @classmethod
     def body(cls) -> None:
@@ -702,7 +703,7 @@ class TablesCommaJoinNoCondition(Generator):
 class TablesCommaJoinWithJoinCondition(Generator):
     COUNT = 20  # Otherwise is very slow
 
-    MAX_COUNT = 200  # Too long-running with 400 conditions
+    # MAX_COUNT = 200  # Too long-running with 400 conditions
 
     @classmethod
     def body(cls) -> None:
@@ -717,7 +718,7 @@ class TablesCommaJoinWithJoinCondition(Generator):
 class TablesCommaJoinWithCondition(Generator):
     COUNT = min(Generator.COUNT, 100)
 
-    MAX_COUNT = 200  # Too long-running with 400 conditions
+    # MAX_COUNT = 200  # Too long-running with 400 conditions
 
     @classmethod
     def body(cls) -> None:
@@ -843,7 +844,7 @@ class SubqueriesWhereClauseOr(Generator):
     COUNT = min(
         Generator.COUNT, 10
     )  # https://github.com/MaterializeInc/database-issues/issues/2630
-    MAX_COUNT = 160  # Too long-running with count=320
+    # MAX_COUNT = 160  # Too long-running with count=320
 
     @classmethod
     def body(cls) -> None:
@@ -899,7 +900,7 @@ class ViewsMaterializedNested(Generator):
         Generator.COUNT, 25
     )  # https://github.com/MaterializeInc/database-issues/issues/3958
 
-    MAX_COUNT = 400  # Too long-running with 800 views
+    # MAX_COUNT = 400  # Too long-running with 800 views
 
     @classmethod
     def body(cls) -> None:
@@ -926,7 +927,7 @@ class CTEs(Generator):
         Generator.COUNT, 10
     )  # https://github.com/MaterializeInc/database-issues/issues/2628
 
-    MAX_COUNT = 240  # Too long-running with count=480
+    # MAX_COUNT = 240  # Too long-running with count=480
 
     @classmethod
     def body(cls) -> None:
@@ -984,7 +985,7 @@ class DerivedTables(Generator):
         Generator.COUNT, 10
     )  # https://github.com/MaterializeInc/database-issues/issues/2630
 
-    MAX_COUNT = 160  # Too long-running with count=320
+    # MAX_COUNT = 160  # Too long-running with count=320
 
     @classmethod
     def body(cls) -> None:
@@ -1003,7 +1004,7 @@ class Lateral(Generator):
         Generator.COUNT, 10
     )  # https://github.com/MaterializeInc/database-issues/issues/2631
 
-    MAX_COUNT = 160  # Too long-running with count=320
+    # MAX_COUNT = 160  # Too long-running with count=320
 
     @classmethod
     def body(cls) -> None:
@@ -1304,7 +1305,7 @@ class Coalesce(Generator):
 
 
 class Concat(Generator):
-    MAX_COUNT = 250_000  # Too long-running with 500_000
+    # MAX_COUNT = 250_000  # Too long-running with 500_000
 
     @classmethod
     def body(cls) -> None:
@@ -1365,7 +1366,7 @@ class FilterSubqueries(Generator):
 
     COUNT = min(Generator.COUNT, 100)
 
-    MAX_COUNT = 111  # Too long-running with count=200
+    # MAX_COUNT = 111  # Too long-running with count=200
 
     @classmethod
     def body(cls) -> None:
@@ -1436,7 +1437,7 @@ class RowsAggregate(Generator):
 class RowsOrderByLimit(Generator):
     COUNT = 10_000_000
 
-    MAX_COUNT = 80_000_000  # Too long-running with 160_000_000
+    # MAX_COUNT = 80_000_000  # Too long-running with 160_000_000
 
     @classmethod
     def body(cls) -> None:
@@ -1463,7 +1464,7 @@ class RowsJoinOneToOne(Generator):
 class RowsJoinOneToMany(Generator):
     COUNT = 10_000_000
 
-    MAX_COUNT = 80_000_000  # Too long-running with 160_000_000
+    # MAX_COUNT = 80_000_000  # Too long-running with 160_000_000
 
     @classmethod
     def body(cls) -> None:
@@ -1477,7 +1478,7 @@ class RowsJoinOneToMany(Generator):
 class RowsJoinCross(Generator):
     COUNT = 1_000_000
 
-    MAX_COUNT = 64_000_000  # Too long-running with 128_000_000
+    # MAX_COUNT = 64_000_000  # Too long-running with 128_000_000
 
     @classmethod
     def body(cls) -> None:
@@ -1540,7 +1541,7 @@ class RowsJoinOuter(Generator):
 
 class PostgresSources(Generator):
     COUNT = 300  # high memory consumption, slower with source tables
-    MAX_COUNT = 600  # Too long-running with count=1200
+    # MAX_COUNT = 600  # Too long-running with count=1200
 
     @classmethod
     def body(cls) -> None:
@@ -1674,7 +1675,7 @@ class PostgresTablesOldSyntax(Generator):
 class MySqlSources(Generator):
     COUNT = 300  # high memory consumption, slower with source tables
 
-    MAX_COUNT = 400  # Too long-running with count=473
+    # MAX_COUNT = 400  # Too long-running with count=473
 
     @classmethod
     def body(cls) -> None:
@@ -1726,7 +1727,7 @@ class MySqlSources(Generator):
 class SqlServerSources(Generator):
     COUNT = 300
 
-    MAX_COUNT = 400  # Too long-running with count=450
+    # MAX_COUNT = 400  # Too long-running with count=450
 
     @classmethod
     def body(cls) -> None:
@@ -1784,7 +1785,7 @@ class SqlServerSources(Generator):
 class WebhookSources(Generator):
     COUNT = 100  # TODO: Remove when database-issues#8508 is fixed
 
-    MAX_COUNT = 400  # timeout expired with count=800
+    # MAX_COUNT = 400  # timeout expired with count=800
 
     @classmethod
     def body(cls) -> None:
@@ -1856,6 +1857,7 @@ SERVICES = [
         materialize_url=f"postgres://{quote(ADMIN_USER)}:{app_password(ADMIN_USER)}@balancerd:6875?sslmode=require",
         materialize_use_https=True,
         no_reset=True,
+        no_consistency_checks=True,
     ),
     TestCerts(),
     FronteggMock(
@@ -1890,6 +1892,7 @@ SERVICES = [
             "secrets:/secrets",
         ],
     ),
+    FoundationDB(),
     Cockroach(in_memory=True),
     Materialized(
         memory="8G",
@@ -1914,6 +1917,7 @@ SERVICES = [
         metadata_store="cockroach",
         listeners_config_path=f"{MZ_ROOT}/src/materialized/ci/listener_configs/no_auth_https.json",
         support_external_clusterd=True,
+        consensus_foundationdb=True,
     ),
     Mz(app_password=""),
 ]
@@ -1948,6 +1952,15 @@ service_names = [
 
 
 def setup(c: Composition, workers: int) -> None:
+    c.up("foundationdb")
+    c.run(
+        "foundationdb",
+        "-C",
+        "/etc/foundationdb/fdb.cluster",
+        "--exec",
+        "configure new single memory",
+        entrypoint="fdbcli",
+    )
     c.up(*service_names)
     setup_sql_server_testing(c)
 
@@ -2174,7 +2187,9 @@ def run_scenarios(
                     i = 0
                     while True:
                         try:
+                            c.kill("foundationdb")
                             c.kill(*service_names)
+                            c.rm("foundationdb")
                             c.rm(*service_names)
                             c.rm_volumes("mzdata")
                             break
@@ -2304,6 +2319,16 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
     assert args.clusters <= MAX_CLUSTERS, "SERVICES have to be static"
     assert args.replicas <= MAX_REPLICAS, "SERVICES have to be static"
     assert args.nodes <= MAX_NODES, "SERVICES have to be static"
+
+    c.up("foundationdb")
+    c.run(
+        "foundationdb",
+        "-C",
+        "/etc/foundationdb/fdb.cluster",
+        "--exec",
+        "configure new single memory",
+        entrypoint="fdbcli",
+    )
 
     c.up(
         "zookeeper",

@@ -96,6 +96,7 @@ from materialize.mzcompose.services.azurite import Azurite
 from materialize.mzcompose.services.balancerd import Balancerd
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.cockroach import Cockroach
+from materialize.mzcompose.services.foundationdb import FoundationDB
 from materialize.mzcompose.services.kafka import Kafka as KafkaService
 from materialize.mzcompose.services.kgen import Kgen as KgenService
 from materialize.mzcompose.services.materialized import Materialized
@@ -144,6 +145,7 @@ SERVICES = [
     SchemaRegistry(),
     Redpanda(),
     Cockroach(setup_materialize=True, in_memory=True),
+    FoundationDB(),
     Minio(setup_materialize=True),
     Azurite(),
     KgenService(),
@@ -254,6 +256,7 @@ def run_one_scenario(
                 metadata_store="cockroach",
                 external_blob_store=True,
                 blob_store_is_azure=args.azurite,
+                no_consistency_checks=True,
             )
         ):
             c.testdrive(
@@ -308,8 +311,8 @@ def run_one_scenario(
                         aggregation.name(),
                     )
 
-        c.kill("cockroach", "materialized", "clusterd", "testdrive")
-        c.rm("cockroach", "materialized", "clusterd", "testdrive")
+        c.kill("cockroach", "foundationdb", "materialized", "clusterd", "testdrive")
+        c.rm("cockroach", "foundationdb", "materialized", "clusterd", "testdrive")
         c.rm_volumes("mzdata")
 
         if early_abort:
@@ -354,6 +357,7 @@ def create_mz_service(
         blob_store_is_azure=azurite,
         sanity_restart=False,
         support_external_clusterd=True,
+        consensus_foundationdb=mz_image is None,
     )
 
 
@@ -374,6 +378,15 @@ def start_overridden_mz_clusterd_and_cockroach(
     first_run: bool,
 ) -> None:
     with c.override(mz, clusterd):
+        c.up("foundationdb")
+        c.run(
+            "foundationdb",
+            "-C",
+            "/etc/foundationdb/fdb.cluster",
+            "--exec",
+            "configure new single memory",
+            entrypoint="fdbcli",
+        )
         c.up(
             "cockroach",
             "materialized",

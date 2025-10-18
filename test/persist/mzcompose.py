@@ -13,20 +13,29 @@ Maelstrom test against the Persist subsystem.
 
 import argparse
 
+from materialize import MZ_ROOT
 from materialize.mzcompose.composition import (
     Composition,
     WorkflowArgumentParser,
 )
 from materialize.mzcompose.service import Service
 from materialize.mzcompose.services.cockroach import Cockroach
+from materialize.mzcompose.services.foundationdb import FoundationDB
 from materialize.mzcompose.services.postgres import PostgresMetadata
 
 SERVICES = [
     Cockroach(setup_materialize=True, in_memory=True),
     PostgresMetadata(),
+    FoundationDB(),
     Service(
         "maelstrom-persist",
-        {"mzbuild": "maelstrom-persist", "volumes": ["./maelstrom:/store"]},
+        {
+            "mzbuild": "maelstrom-persist",
+            "volumes": [
+                "./maelstrom:/store",
+                f"{MZ_ROOT}/misc/foundationdb/fdb.cluster:/etc/foundationdb/fdb.cluster",
+            ],
+        },
     ),
 ]
 
@@ -50,7 +59,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "--consensus",
         type=str,
-        choices=["mem", "cockroach", "maelstrom", "postgres"],
+        choices=["mem", "cockroach", "maelstrom", "postgres", "foundationdb"],
         default="maelstrom",
     )
     parser.add_argument(
@@ -76,6 +85,17 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             "postgres://root@postgres-metadata:26257?options=--search_path=consensus"
         )
         c.up("postgres-metadata")
+    elif args.consensus == "foundationdb":
+        consensus_uri = "foundationdb:"
+        c.up("foundationdb")
+        c.run(
+            "foundationdb",
+            "-C",
+            "/etc/foundationdb/fdb.cluster",
+            "--exec",
+            "configure new single memory",
+            entrypoint="fdbcli",
+        )
     else:
         # empty consensus uri defaults to Maelstrom consensus implementation
         consensus_uri = ""

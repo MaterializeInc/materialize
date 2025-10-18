@@ -24,6 +24,7 @@ from materialize.mzcompose import ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.balancerd import Balancerd
 from materialize.mzcompose.services.cockroach import Cockroach
+from materialize.mzcompose.services.foundationdb import FoundationDB
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.postgres import Postgres
@@ -79,6 +80,7 @@ from materialize.version_list import (
 
 SERVICES = [
     Cockroach(setup_materialize=True, in_memory=True),
+    FoundationDB(),
     Materialized(
         image="materialize/materialized:latest",
         sanity_restart=False,

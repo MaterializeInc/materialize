@@ -49,6 +49,7 @@ copyright_files=$(grep -vE \
     -e '^ci/test/lint-deps/' \
     -e '^misc/bazel/c_deps/patches/snappy-config.patch' \
     -e '^misc/completions/.*' \
+    -e '^misc/foundationdb/.*' \
     -e '^misc/mcp-materialize/uv.lock' \
     -e '^misc/mcp-materialize-agents/uv.lock' \
     -e '^misc/mcp-materialize-agents/mcp_materialize_agents/system_prompt.md' \
