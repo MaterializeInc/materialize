@@ -57,6 +57,7 @@ use timely::progress::Timestamp as TimelyTimestamp;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, Timestamp};
 use tokio::sync::{mpsc, oneshot};
+use mz_storage_types::errors::CollectionMissing;
 
 use crate::client::{AppendOnlyUpdate, StatusUpdate, TableData};
 use crate::statistics::WebhookStatistics;
@@ -329,7 +330,7 @@ pub trait StorageController: Debug {
         id: GlobalId,
     ) -> Result<
         (Antichain<Self::Timestamp>, Antichain<Self::Timestamp>),
-        StorageError<Self::Timestamp>,
+        CollectionMissing,
     >;
 
     /// Returns the since/upper frontiers of the identified collections.
@@ -349,14 +350,14 @@ pub trait StorageController: Debug {
             Antichain<Self::Timestamp>,
             Antichain<Self::Timestamp>,
         )>,
-        StorageError<Self::Timestamp>,
+        CollectionMissing,
     >;
 
     /// Acquire an iterator over [CollectionMetadata] for all active
     /// collections.
     ///
-    /// A collection is "active" when it has a non empty frontier of read
-    /// capabilties.
+    /// A collection is "active" when it has a non-empty frontier of read
+    /// capabilities.
     fn active_collection_metadatas(&self) -> Vec<(GlobalId, CollectionMetadata)>;
 
     /// Returns the IDs of ingestion exports running on the given instance. This

@@ -123,7 +123,7 @@ pub trait StorageCollections: Debug {
     fn collection_frontiers(
         &self,
         id: GlobalId,
-    ) -> Result<CollectionFrontiers<Self::Timestamp>, StorageError<Self::Timestamp>> {
+    ) -> Result<CollectionFrontiers<Self::Timestamp>, CollectionMissing> {
         let frontiers = self
             .collections_frontiers(vec![id])?
             .expect_element(|| "known to exist");
@@ -136,12 +136,12 @@ pub trait StorageCollections: Debug {
     fn collections_frontiers(
         &self,
         id: Vec<GlobalId>,
-    ) -> Result<Vec<CollectionFrontiers<Self::Timestamp>>, StorageError<Self::Timestamp>>;
+    ) -> Result<Vec<CollectionFrontiers<Self::Timestamp>>, CollectionMissing>;
 
     /// Atomically gets and returns the frontiers of all active collections.
     ///
-    /// A collection is "active" when it has a non empty frontier of read
-    /// capabilties.
+    /// A collection is "active" when it has a non-empty frontier of read
+    /// capabilities.
     fn active_collection_frontiers(&self) -> Vec<CollectionFrontiers<Self::Timestamp>>;
 
     /// Checks whether a collection exists under the given `GlobalId`. Returns
@@ -1449,7 +1449,7 @@ where
     fn collections_frontiers(
         &self,
         ids: Vec<GlobalId>,
-    ) -> Result<Vec<CollectionFrontiers<Self::Timestamp>>, StorageError<Self::Timestamp>> {
+    ) -> Result<Vec<CollectionFrontiers<Self::Timestamp>>, CollectionMissing> {
         if ids.is_empty() {
             return Ok(vec![]);
         }
@@ -1467,7 +1467,7 @@ where
                         implied_capability: c.implied_capability.clone(),
                         read_capabilities: c.read_capabilities.frontier().to_owned(),
                     })
-                    .ok_or(StorageError::IdentifierMissing(id))
+                    .ok_or(CollectionMissing(id))
             })
             .collect::<Result<Vec<_>, _>>()?;
 

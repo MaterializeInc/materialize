@@ -921,11 +921,11 @@ mod tests {
         fn collections_frontiers(
             &self,
             ids: Vec<GlobalId>,
-        ) -> Result<Vec<CollectionFrontiers<Self::Timestamp>>, StorageError<Self::Timestamp>>
+        ) -> Result<Vec<CollectionFrontiers<Self::Timestamp>>, CollectionMissing>
         {
             let mut frontiers = Vec::with_capacity(ids.len());
             for id in ids {
-                let (read, write) = self.0.get(&id).ok_or(StorageError::IdentifierMissing(id))?;
+                let (read, write) = self.0.get(&id).ok_or(CollectionMissing(id))?;
                 frontiers.push(CollectionFrontiers {
                     id,
                     write_frontier: write.clone(),

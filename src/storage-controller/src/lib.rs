@@ -92,7 +92,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time::MissedTickBehavior;
 use tokio::time::error::Elapsed;
 use tracing::{debug, info, warn};
-
+use mz_storage_types::errors::CollectionMissing;
 use crate::collection_mgmt::{
     AppendOnlyIntrospectionConfig, CollectionManagerKind, DifferentialIntrospectionConfig,
 };
@@ -452,7 +452,7 @@ where
         id: GlobalId,
     ) -> Result<
         (Antichain<Self::Timestamp>, Antichain<Self::Timestamp>),
-        StorageError<Self::Timestamp>,
+        CollectionMissing,
     > {
         let frontiers = self.storage_collections.collection_frontiers(id)?;
         Ok((frontiers.implied_capability, frontiers.write_frontier))
@@ -461,7 +461,7 @@ where
     fn collections_frontiers(
         &self,
         mut ids: Vec<GlobalId>,
-    ) -> Result<Vec<(GlobalId, Antichain<T>, Antichain<T>)>, StorageError<Self::Timestamp>> {
+    ) -> Result<Vec<(GlobalId, Antichain<T>, Antichain<T>)>, CollectionMissing> {
         let mut result = vec![];
         // In theory, we could pull all our frontiers from storage collections...
         // but in practice those frontiers may not be identical. For historical reasons, we use the
