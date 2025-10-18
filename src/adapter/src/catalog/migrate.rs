@@ -389,7 +389,7 @@ fn rewrite_sources_to_tables(
             CreateSourceConnection::Postgres { options, .. } => {
                 options.retain(|o| match o.name {
                     PgConfigOptionName::Details | PgConfigOptionName::Publication => true,
-                    PgConfigOptionName::TextColumns => false,
+                    PgConfigOptionName::TextColumns | PgConfigOptionName::ExcludeColumns => false,
                 });
             }
             CreateSourceConnection::SqlServer { options, .. } => {
