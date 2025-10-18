@@ -138,7 +138,8 @@ impl PeekClient {
     {
         let (tx, rx) = oneshot::channel();
         self.coordinator_client.send(f(tx));
-        rx.await.expect("sender dropped")
+        rx.await
+            .expect("if the coordinator is still alive, it shouldn't have dropped our call")
     }
 
     /// Acquire read holds on the given compute/storage collections, and
