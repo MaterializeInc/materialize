@@ -163,8 +163,7 @@ impl PeekClient {
             let desired_storage: Vec<_> = id_bundle.storage_ids.iter().copied().collect();
             let storage_read_holds = self
                 .storage_collections
-                .acquire_read_holds(desired_storage)
-                .expect("missing storage collections");
+                .acquire_read_holds(desired_storage)?;
             read_holds.storage_holds = storage_read_holds
                 .into_iter()
                 .map(|hold| (hold.id(), hold))
