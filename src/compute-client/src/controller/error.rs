@@ -18,10 +18,11 @@
 //! of each method and make it easy for callers to ensure that all possible errors are handled.
 
 use mz_repr::GlobalId;
-use mz_storage_types::read_holds::ReadHoldError;
 use thiserror::Error;
 
 use crate::controller::{ComputeInstanceId, ReplicaId};
+
+pub use mz_storage_types::errors::CollectionMissing;
 
 /// The error returned by replica-targeted peeks and subscribes when the target replica
 /// disconnects.
@@ -37,11 +38,6 @@ pub struct InstanceMissing(pub ComputeInstanceId);
 #[derive(Error, Debug)]
 #[error("instance exists already: {0}")]
 pub struct InstanceExists(pub ComputeInstanceId);
-
-/// Error returned in response to a reference to an unknown compute collection.
-#[derive(Error, Debug)]
-#[error("collection does not exist: {0}")]
-pub struct CollectionMissing(pub GlobalId);
 
 /// Error returned in response to a reference to an unknown compute collection.
 #[derive(Error, Debug)]
@@ -145,15 +141,6 @@ impl From<CollectionMissing> for DataflowCreationError {
     }
 }
 
-impl From<ReadHoldError> for DataflowCreationError {
-    fn from(error: ReadHoldError) -> Self {
-        match error {
-            ReadHoldError::CollectionMissing(id) => Self::CollectionMissing(id),
-            ReadHoldError::SinceViolation(id) => Self::SinceViolation(id),
-        }
-    }
-}
-
 /// Errors arising during peek processing.
 #[derive(Error, Debug)]
 pub enum PeekError {
@@ -169,6 +156,12 @@ pub enum PeekError {
     /// TODO(database-issues#7533): Add documentation.
     #[error("peek timestamp is not beyond the since of collection: {0}")]
     SinceViolation(GlobalId),
+    /// TODO(database-issues#7533): Add documentation.
+    #[error("read hold ID does not match peeked collection: {0}")]
+    ReadHoldIdMismatch(GlobalId),
+    /// TODO(database-issues#7533): Add documentation.
+    #[error("insufficient read hold provided: {0}")]
+    ReadHoldInsufficient(GlobalId),
 }
 
 impl From<InstanceMissing> for PeekError {
@@ -183,11 +176,13 @@ impl From<CollectionMissing> for PeekError {
     }
 }
 
-impl From<ReadHoldError> for PeekError {
-    fn from(error: ReadHoldError) -> Self {
+impl From<crate::controller::instance::PeekError> for PeekError {
+    fn from(error: crate::controller::instance::PeekError) -> Self {
+        use crate::controller::instance::PeekError::*;
         match error {
-            ReadHoldError::CollectionMissing(id) => Self::CollectionMissing(id),
-            ReadHoldError::SinceViolation(id) => Self::SinceViolation(id),
+            ReplicaMissing(id) => PeekError::ReplicaMissing(id),
+            ReadHoldIdMismatch(id) => PeekError::ReadHoldIdMismatch(id),
+            ReadHoldInsufficient(id) => PeekError::ReadHoldInsufficient(id),
         }
     }
 }
