@@ -1503,7 +1503,7 @@ pub fn auth_with_ws(
     }
     auth_with_ws_impl(
         ws,
-        Message::Text(
+        Message::text(
             serde_json::to_string(&WebSocketAuth::Basic {
                 user: "materialize".into(),
                 password: "".into(),

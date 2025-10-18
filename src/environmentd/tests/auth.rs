@@ -355,11 +355,11 @@ async fn run_tests<'a>(header: &str, server: &test_util::TestServer, tests: &[Te
                 let stream = make_ws_tls(&uri, configure);
                 let (mut ws, _resp) = tungstenite::client(uri, stream).unwrap();
 
-                ws.send(Message::Text(serde_json::to_string(&auth).unwrap()))
+                ws.send(Message::text(serde_json::to_string(&auth).unwrap()))
                     .unwrap();
 
-                ws.send(Message::Text(
-                    r#"{"query": "SELECT pg_catalog.current_user()"}"#.into(),
+                ws.send(Message::text(
+                    r#"{"query": "SELECT pg_catalog.current_user()"}"#,
                 ))
                 .unwrap();
 
@@ -3482,7 +3482,7 @@ async fn test_password_auth_http() {
         .unwrap();
 
     let query = r#"{"query":"SELECT current_user"}"#;
-    let ws_options_msg = Message::Text(r#"{"options": {}}"#.to_owned());
+    let ws_options_msg = Message::text(r#"{"options": {}}"#);
 
     let http_client = hyper_util::client::legacy::Client::builder(TokioExecutor::new())
         .pool_idle_timeout(Duration::from_secs(10))
@@ -3511,7 +3511,7 @@ async fn test_password_auth_http() {
         ws.read().unwrap(),
         Message::Close(Some(CloseFrame {
             code: CloseCode::Protocol,
-            reason: Cow::Borrowed("unauthorized"),
+            reason: "unauthorized".into(),
         })),
     );
 
@@ -3577,7 +3577,7 @@ async fn test_password_auth_http() {
                 let msg: WebSocketResponse = serde_json::from_str(&msg).unwrap();
                 match msg {
                     WebSocketResponse::ReadyForQuery(_) => {
-                        ws.send(Message::Text(query.to_owned())).unwrap();
+                        ws.send(Message::text(query)).unwrap();
                     }
                     WebSocketResponse::Row(rows) => {
                         assert_eq!(&rows, &[serde_json::Value::from("mz_system".to_owned())]);
