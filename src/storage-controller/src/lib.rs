@@ -327,7 +327,7 @@ where
     fn collection_metadata(
         &self,
         id: GlobalId,
-    ) -> Result<CollectionMetadata, StorageError<Self::Timestamp>> {
+    ) -> Result<CollectionMetadata, CollectionMissing> {
         self.storage_collections.collection_metadata(id)
     }
 

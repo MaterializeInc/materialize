@@ -110,7 +110,7 @@ pub trait StorageCollections: Debug {
     fn collection_metadata(
         &self,
         id: GlobalId,
-    ) -> Result<CollectionMetadata, StorageError<Self::Timestamp>>;
+    ) -> Result<CollectionMetadata, CollectionMissing>;
 
     /// Acquire an iterator over [CollectionMetadata] for all active
     /// collections.
@@ -1081,7 +1081,7 @@ where
     {
         let metadata = match self.collection_metadata(id) {
             Ok(metadata) => metadata.clone(),
-            Err(e) => return async { Err(e) }.boxed(),
+            Err(e) => return async { Err(e.into()) }.boxed(),
         };
         let txns_read = metadata.txns_shard.as_ref().map(|txns_id| {
             assert_eq!(txns_id, txns_read.txns_id());
@@ -1146,7 +1146,7 @@ where
 
         let metadata = match self.collection_metadata(id) {
             Ok(metadata) => metadata.clone(),
-            Err(e) => return async { Err(e) }.boxed(),
+            Err(e) => return async { Err(e.into()) }.boxed(),
         };
         let txns_read = metadata.txns_shard.as_ref().map(|txns_id| {
             assert_eq!(txns_id, txns_read.txns_id());
@@ -1427,13 +1427,13 @@ where
     fn collection_metadata(
         &self,
         id: GlobalId,
-    ) -> Result<CollectionMetadata, StorageError<Self::Timestamp>> {
+    ) -> Result<CollectionMetadata, CollectionMissing> {
         let collections = self.collections.lock().expect("lock poisoned");
 
         collections
             .get(&id)
             .map(|c| c.collection_metadata.clone())
-            .ok_or(StorageError::IdentifierMissing(id))
+            .ok_or(CollectionMissing(id))
     }
 
     fn active_collection_metadatas(&self) -> Vec<(GlobalId, CollectionMetadata)> {
@@ -1631,7 +1631,7 @@ where
     {
         let metadata = match self.collection_metadata(id) {
             Ok(metadata) => metadata.clone(),
-            Err(e) => return async { Err(e) }.boxed(),
+            Err(e) => return async { Err(e.into()) }.boxed(),
         };
         let txns_read = metadata.txns_shard.as_ref().map(|txns_id| {
             // Ensure the txn's shard the controller has is the same that this
@@ -1705,7 +1705,7 @@ where
     > {
         let metadata = match self.collection_metadata(id) {
             Ok(m) => m,
-            Err(e) => return Box::pin(async move { Err(e) }),
+            Err(e) => return Box::pin(async move { Err(e.into()) }),
         };
         let persist = Arc::clone(&self.persist);
 

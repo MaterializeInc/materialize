@@ -298,7 +298,7 @@ pub trait StorageController: Debug {
     fn collection_metadata(
         &self,
         id: GlobalId,
-    ) -> Result<CollectionMetadata, StorageError<Self::Timestamp>>;
+    ) -> Result<CollectionMetadata, CollectionMissing>;
 
     /// Returns `true` iff the given collection/ingestion has been hydrated.
     ///
