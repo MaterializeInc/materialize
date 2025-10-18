@@ -290,13 +290,19 @@ where
                     let (j, errs) = joined.flat_map_fallible::<CB<_>, CB<_>, _, _, _, _>(name, {
                         // Reuseable allocation for unpacking.
                         let mut datums = DatumVec::new();
+                        let mut output = DatumVec::new();
                         move |row| {
                             let mut row_builder = SharedRow::get();
                             let temp_storage = RowArena::new();
                             let mut datums_local = datums.borrow_with(&row);
                             // TODO(mcsherry): re-use `row` allocation.
                             closure
-                                .apply(&mut datums_local, &temp_storage, &mut row_builder)
+                                .apply(
+                                    &mut datums_local,
+                                    &temp_storage,
+                                    &mut output.borrow(),
+                                    &mut row_builder,
+                                )
                                 .map(|row| row.cloned())
                                 .map_err(DataflowError::from)
                                 .transpose()
@@ -334,13 +340,19 @@ where
                 let (updates, errs) = joined.flat_map_fallible::<CB<_>, CB<_>, _, _, _, _>(name, {
                     // Reuseable allocation for unpacking.
                     let mut datums = DatumVec::new();
+                    let mut output = DatumVec::new();
                     move |row| {
                         let mut row_builder = SharedRow::get();
                         let temp_storage = RowArena::new();
                         let mut datums_local = datums.borrow_with(&row);
                         // TODO(mcsherry): re-use `row` allocation.
                         closure
-                            .apply(&mut datums_local, &temp_storage, &mut row_builder)
+                            .apply(
+                                &mut datums_local,
+                                &temp_storage,
+                                &mut output.borrow(),
+                                &mut row_builder,
+                            )
                             .map(|row| row.cloned())
                             .map_err(DataflowError::from)
                             .transpose()
@@ -394,15 +406,17 @@ where
                             let mut key_buf = Row::default();
                             let mut val_buf = Row::default();
                             let mut datums = DatumVec::new();
+                            let mut output = DatumVec::new();
                             while let Some((time, data)) = input.next() {
                                 let mut ok_session = ok.session_with_builder(&time);
                                 let mut err_session = errs.session(&time);
                                 for (row, time, diff) in data.iter() {
                                     temp_storage.clear();
                                     let datums_local = datums.borrow_with(row);
-                                    let datums = stream_key
-                                        .iter()
-                                        .map(|e| e.eval(&datums_local, &temp_storage));
+                                    let mut output = output.borrow();
+                                    let datums = stream_key.iter().map(|e| {
+                                        e.eval_pop(&datums_local, &temp_storage, &mut output)
+                                    });
                                     let result = key_buf.packer().try_extend(datums);
                                     match result {
                                         Ok(()) => {
@@ -513,6 +527,7 @@ where
     {
         // Reuseable allocation for unpacking.
         let mut datums = DatumVec::new();
+        let mut output = DatumVec::new();
 
         if closure.could_error() {
             let (oks, err) = self
@@ -531,7 +546,12 @@ where
                         datums_local.extend(new.to_datum_iter());
 
                         closure
-                            .apply(&mut datums_local, &temp_storage, &mut row_builder)
+                            .apply(
+                                &mut datums_local,
+                                &temp_storage,
+                                &mut output.borrow(),
+                                &mut row_builder,
+                            )
                             .map(|row| row.cloned())
                             .map_err(DataflowError::from)
                             .transpose()
@@ -562,7 +582,12 @@ where
                     datums_local.extend(new.to_datum_iter());
 
                     closure
-                        .apply(&mut datums_local, &temp_storage, &mut row_builder)
+                        .apply(
+                            &mut datums_local,
+                            &temp_storage,
+                            &mut output.borrow(),
+                            &mut row_builder,
+                        )
                         .expect("Closure claimed to never error")
                         .cloned()
                 },

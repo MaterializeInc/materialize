@@ -28,6 +28,7 @@ where
     peek_timestamp: mz_repr::Timestamp,
     row_builder: Row,
     datum_vec: DatumVec,
+    output_vec: DatumVec,
     literals: Option<Literals<Tr>>,
 }
 
@@ -122,6 +123,7 @@ where
             peek_timestamp,
             row_builder: Row::default(),
             datum_vec: DatumVec::new(),
+            output_vec: DatumVec::new(),
             literals,
         }
     }
@@ -231,7 +233,12 @@ where
         }
         if let Some(result) = self
             .map_filter_project
-            .evaluate_into(&mut borrow, &arena, &mut self.row_builder)
+            .evaluate_into(
+                &mut borrow,
+                &arena,
+                &mut self.output_vec.borrow(),
+                &mut self.row_builder,
+            )
             .map(|row| row.cloned())
             .map_err_to_string_with_causes()?
         {

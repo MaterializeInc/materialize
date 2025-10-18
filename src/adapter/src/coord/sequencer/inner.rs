@@ -43,7 +43,7 @@ use mz_repr::explain::ExprHumanizer;
 use mz_repr::explain::json::json_string;
 use mz_repr::role_id::RoleId;
 use mz_repr::{
-    CatalogItemId, Datum, Diff, GlobalId, IntoRowIterator, RelationVersion,
+    CatalogItemId, Datum, DatumVec, Diff, GlobalId, IntoRowIterator, RelationVersion,
     RelationVersionSelector, Row, RowArena, RowIterator, Timestamp,
 };
 use mz_sql::ast::{
@@ -3156,6 +3156,7 @@ impl Coordinator {
             let make_diffs =
                 move |mut rows: Box<dyn RowIterator>| -> Result<(Vec<(Row, Diff)>, u64), AdapterError> {
                     let arena = RowArena::new();
+                    let mut output = DatumVec::new();
                     let mut diffs = Vec::new();
                     let mut datum_vec = mz_repr::DatumVec::new();
 
@@ -3166,9 +3167,10 @@ impl Coordinator {
                                 "only updates support assignments"
                             );
                             let mut datums = datum_vec.borrow_with(row);
+                            let mut output = output.borrow();
                             let mut updates = vec![];
                             for (idx, expr) in &assignments {
-                                let updated = match expr.eval(&datums, &arena) {
+                                let updated = match expr.eval_pop(&datums, &arena, &mut output) {
                                     Ok(updated) => updated,
                                     Err(e) => return Err(AdapterError::Unstructured(anyhow!(e))),
                                 };
@@ -3265,6 +3267,7 @@ impl Coordinator {
             let mut diff_err: Option<AdapterError> = None;
             if let (false, Ok(diffs)) = (returning.is_empty(), &diffs) {
                 let arena = RowArena::new();
+                let mut output = Vec::new();
                 for (row, diff) in diffs {
                     if !diff.is_positive() {
                         continue;
@@ -3273,7 +3276,7 @@ impl Coordinator {
                     let mut packer = returning_row.packer();
                     for expr in &returning {
                         let datums: Vec<_> = row.iter().collect();
-                        match expr.eval(&datums, &arena) {
+                        match expr.eval_pop(&datums, &arena, &mut output) {
                             Ok(datum) => {
                                 packer.push(datum);
                             }

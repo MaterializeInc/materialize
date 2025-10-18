@@ -91,7 +91,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_postgres_util::{Client, PostgresError, simple_query_opt};
-use mz_repr::{Datum, Diff, GlobalId, Row};
+use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row};
 use mz_sql_parser::ast::Ident;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_storage_types::errors::{DataflowError, SourceError, SourceErrorDetails};
@@ -485,16 +485,18 @@ fn verify_schema(
 }
 
 /// Casts a text row into the target types
-fn cast_row(
-    casts: &[(CastType, MirScalarExpr)],
-    datums: &[Datum<'_>],
+fn cast_row<'a>(
+    casts: &'a [(CastType, MirScalarExpr)],
+    datums: &[Datum<'a>],
+    output: &mut DatumVec,
     row: &mut Row,
 ) -> Result<(), DefiniteError> {
     let arena = mz_repr::RowArena::new();
     let mut packer = row.packer();
+    let mut output = output.borrow();
     for (_, column_cast) in casts {
         let datum = column_cast
-            .eval(datums, &arena)
+            .eval_pop(datums, &arena, &mut output)
             .map_err(DefiniteError::CastError)?;
         packer.push(datum);
     }

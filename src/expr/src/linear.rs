@@ -1619,17 +1619,14 @@ pub mod plan {
             &'a self,
             datums: &mut Vec<Datum<'a>>,
             arena: &'a RowArena,
+            output: &mut Vec<Datum<'a>>,
             row_buf: &'row mut Row,
         ) -> Result<Option<&'row Row>, EvalError> {
-            let passed_predicates = self.evaluate_inner(datums, arena)?;
-            if !passed_predicates {
-                Ok(None)
-            } else {
-                row_buf
-                    .packer()
-                    .extend(self.mfp.projection.iter().map(|c| datums[*c]));
-                Ok(Some(row_buf))
-            }
+            let ok = self.evaluate_iter(datums, arena, output)?;
+            Ok(ok.map(|iter| {
+                row_buf.packer().extend(iter);
+                &*row_buf
+            }))
         }
 
         /// A version of `evaluate` which produces an iterator over `Datum`
@@ -1642,8 +1639,9 @@ pub mod plan {
             &'a self,
             datums: &'b mut Vec<Datum<'a>>,
             arena: &'a RowArena,
+            output: &mut Vec<Datum<'a>>,
         ) -> Result<Option<impl Iterator<Item = Datum<'a>> + 'b>, EvalError> {
-            let passed_predicates = self.evaluate_inner(datums, arena)?;
+            let passed_predicates = self.evaluate_inner(datums, arena, output)?;
             if !passed_predicates {
                 Ok(None)
             } else {
@@ -1658,19 +1656,23 @@ pub mod plan {
             &'a self,
             datums: &'b mut Vec<Datum<'a>>,
             arena: &'a RowArena,
+            output: &mut Vec<Datum<'a>>,
         ) -> Result<bool, EvalError> {
             let mut expression = 0;
             for (support, predicate) in self.mfp.predicates.iter() {
                 while self.mfp.input_arity + expression < *support {
-                    datums.push(self.mfp.expressions[expression].eval(&datums[..], arena)?);
+                    self.mfp.expressions[expression].eval(&datums[..], arena, output)?;
+                    datums.push(output.pop().unwrap());
                     expression += 1;
                 }
-                if predicate.eval(&datums[..], arena)? != Datum::True {
+                predicate.eval(&datums[..], arena, output)?;
+                if output.pop().unwrap() != Datum::True {
                     return Ok(false);
                 }
             }
             while expression < self.mfp.expressions.len() {
-                datums.push(self.mfp.expressions[expression].eval(&datums[..], arena)?);
+                self.mfp.expressions[expression].eval(&datums[..], arena, output)?;
+                datums.push(output.pop().unwrap());
                 expression += 1;
             }
             Ok(true)
@@ -1847,10 +1849,11 @@ pub mod plan {
             diff: Diff,
             valid_time: V,
             row_builder: &mut Row,
+            output: &mut Vec<Datum<'a>>,
         ) -> impl Iterator<
             Item = Result<(Row, mz_repr::Timestamp, Diff), (E, mz_repr::Timestamp, Diff)>,
         > + use<E, V> {
-            match self.mfp.evaluate_inner(datums, arena) {
+            match self.mfp.evaluate_inner(datums, arena, output) {
                 Err(e) => {
                     return Some(Err((e.into(), time, diff))).into_iter().chain(None);
                 }
@@ -1870,22 +1873,19 @@ pub mod plan {
 
             // Advance our lower bound to be at least the result of any lower bound
             // expressions.
+            let mut output = Vec::new();
             for l in self.lower_bounds.iter() {
-                match l.eval(datums, arena) {
+                match l.eval(datums, arena, &mut output) {
                     Err(e) => {
                         return Some(Err((e.into(), time, diff)))
                             .into_iter()
                             .chain(None.into_iter());
                     }
-                    Ok(Datum::MzTimestamp(d)) => {
-                        lower_bound = lower_bound.max(d);
-                    }
-                    Ok(Datum::Null) => {
-                        null_eval = true;
-                    }
-                    x => {
-                        panic!("Non-mz_timestamp value in temporal predicate: {:?}", x);
-                    }
+                    Ok(()) => match output.pop().expect("eval always produces one output") {
+                        Datum::MzTimestamp(d) => lower_bound = lower_bound.max(d),
+                        Datum::Null => null_eval = true,
+                        x => panic!("Non-mz_timestamp value in temporal predicate: {:?}", x),
+                    },
                 }
             }
 
@@ -1894,37 +1894,38 @@ pub mod plan {
                 return None.into_iter().chain(None);
             }
 
+            let mut output = Vec::new();
+
             // If there are any upper bounds, determine the minimum upper bound.
             for u in self.upper_bounds.iter() {
+                output.clear();
                 // We can cease as soon as the lower and upper bounds match,
                 // as the update will certainly not be produced in that case.
                 if upper_bound != Some(lower_bound) {
-                    match u.eval(datums, arena) {
+                    match u.eval(datums, arena, &mut output) {
                         Err(e) => {
                             return Some(Err((e.into(), time, diff)))
                                 .into_iter()
                                 .chain(None.into_iter());
                         }
-                        Ok(Datum::MzTimestamp(d)) => {
-                            if let Some(upper) = upper_bound {
-                                upper_bound = Some(upper.min(d));
-                            } else {
-                                upper_bound = Some(d);
-                            };
-                            // Force the upper bound to be at least the lower
-                            // bound. The `is_some()` test should always be true
-                            // due to the above block, but maintain it here in
-                            // case that changes. It's hopefully optimized away.
-                            if upper_bound.is_some() && upper_bound < Some(lower_bound) {
-                                upper_bound = Some(lower_bound);
+                        Ok(()) => match output.pop().expect("must exist") {
+                            Datum::MzTimestamp(d) => {
+                                if let Some(upper) = upper_bound {
+                                    upper_bound = Some(upper.min(d));
+                                } else {
+                                    upper_bound = Some(d);
+                                };
+                                // Force the upper bound to be at least the lower
+                                // bound. The `is_some()` test should always be true
+                                // due to the above block, but maintain it here in
+                                // case that changes. It's hopefully optimized away.
+                                if upper_bound.is_some() && upper_bound < Some(lower_bound) {
+                                    upper_bound = Some(lower_bound);
+                                }
                             }
-                        }
-                        Ok(Datum::Null) => {
-                            null_eval = true;
-                        }
-                        x => {
-                            panic!("Non-mz_timestamp value in temporal predicate: {:?}", x);
-                        }
+                            Datum::Null => null_eval = true,
+                            x => panic!("Non-mz_timestamp value in temporal predicate: {:?}", x),
+                        },
                     }
                 }
             }

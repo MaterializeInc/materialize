@@ -1052,7 +1052,10 @@ mod scalar {
 
         // Evaluate into a datum
         let temp_storage = RowArena::default();
-        let datum = func.eval(&[], &temp_storage, &exprs).expect("datum");
+        let mut output = Vec::new();
+        func.eval(&[], &temp_storage, &exprs, &mut output)
+            .expect("datum");
+        let datum = output.pop().expect("datum");
         let typ = SqlScalarType::Array(Box::new(SqlScalarType::Int64)); // FIXME
         Ok(MirScalarExpr::literal_ok(datum, typ))
     }
@@ -1066,7 +1069,10 @@ mod scalar {
 
         // Evaluate into a datum
         let temp_storage = RowArena::default();
-        let datum = func.eval(&[], &temp_storage, &exprs).expect("datum");
+        let mut output = Vec::new();
+        func.eval(&[], &temp_storage, &exprs, &mut output)
+            .expect("datum");
+        let datum = output.pop().expect("datum");
         let typ = SqlScalarType::Array(Box::new(SqlScalarType::Int64)); // FIXME
         Ok(MirScalarExpr::literal_ok(datum, typ))
     }
