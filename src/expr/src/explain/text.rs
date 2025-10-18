@@ -1282,13 +1282,32 @@ where
             }
             CallUnmaterializable(func) => write!(f, "{}()", func),
             CallUnary { func, expr } => {
-                if let crate::UnaryFunc::Not(_) = *func {
-                    if let CallUnary { func, expr } = expr.as_ref() {
-                        if let Some(is) = func.is() {
-                            let expr = self.child::<MirScalarExpr>(&*expr);
-                            return write!(f, "({}) IS NOT {}", expr, is);
+                match func {
+                    crate::UnaryFunc::Not(_) => {
+                        if let CallUnary { func, expr } = expr.as_ref() {
+                            if let Some(is) = func.is() {
+                                let expr = self.child::<MirScalarExpr>(&*expr);
+                                return write!(f, "({}) IS NOT {}", expr, is);
+                            }
                         }
                     }
+                    crate::UnaryFunc::NormalizeNfc(_) => {
+                        let expr = self.child::<MirScalarExpr>(&*expr);
+                        return write!(f, "{}({}, NFC)", func, expr);
+                    }
+                    crate::UnaryFunc::NormalizeNfd(_) => {
+                        let expr = self.child::<MirScalarExpr>(&*expr);
+                        return write!(f, "{}({}, NFD)", func, expr);
+                    }
+                    crate::UnaryFunc::NormalizeNfkc(_) => {
+                        let expr = self.child::<MirScalarExpr>(&*expr);
+                        return write!(f, "{}({}, NFKC)", func, expr);
+                    }
+                    crate::UnaryFunc::NormalizeNfkd(_) => {
+                        let expr = self.child::<MirScalarExpr>(&*expr);
+                        return write!(f, "{}({}, NFKD)", func, expr);
+                    }
+                    _ => {}
                 }
                 if let Some(is) = func.is() {
                     let expr = self.child::<MirScalarExpr>(&*expr);
