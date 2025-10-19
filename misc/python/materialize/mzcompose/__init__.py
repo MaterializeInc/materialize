@@ -67,7 +67,9 @@ def get_minimal_system_parameters(
     version: MzVersion,
 ) -> dict[str, str]:
     """Settings we need in order to have tests run at all, but otherwise stay
-    with the defaults: not changing performance or increasing coverage."""
+    with the defaults: not changing performance or increasing coverage.
+    Note: This is not used unless we explicitly select "System Parameters: Minimal" in trigger-ci.
+    """
 
     return {
         # -----
@@ -130,6 +132,7 @@ class VariableSystemParameter:
 
 
 # TODO: The linter should check this too
+# Note: Only the default is tested unless we explicitly select "System Parameters: Random" in trigger-ci.
 def get_variable_system_parameters(
     version: MzVersion,
     force_source_table_syntax: bool,
@@ -184,6 +187,11 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "enable_password_auth",
             "true",
+            ["true", "false"],
+        ),
+        VariableSystemParameter(
+            "enable_frontend_peek_sequencing",
+            "false",
             ["true", "false"],
         ),
         VariableSystemParameter(

@@ -1323,6 +1323,10 @@ class FlipFlagsAction(Action):
             "314572800",  # 300 MiB, the production value
         ]
         self.flags_with_values["cluster"] = ["quickstart", "dont_exist"]
+        self.flags_with_values["enable_frontend_peek_sequencing"] = [
+            "true",
+            "false",
+        ]
 
         # If you are adding a new config flag in Materialize, consider using it
         # here instead of just marking it as uninteresting to silence the
