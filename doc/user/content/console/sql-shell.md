@@ -9,7 +9,7 @@ menu:
     identifier: console-sql-shell
 ---
 
-The [Materialize Console](https://console.materialize.com/) provides a **SQL
+The [Materialize Console](/console/) provides a **SQL
 Shell**, where you can issue your queries. Materialize follows the SQL standard
 (SQL-92) implementation, and strives for compatibility with the PostgreSQL
 dialect. If your query takes too long to complete, the SQL Shell provides

@@ -33,7 +33,7 @@ To make Materialize metadata available to Datadog, you must configure and run th
 
 ## Configure authentication
 
-* [Log in to the Materialize console](https://console.materialize.com/).
+* [Log in to the Materialize console](/console/).
 
 * Navigate to **Account** > **Account Settings** > **SSO**.
 

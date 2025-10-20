@@ -37,7 +37,7 @@ This is how Materialize ensures consistent results for all queries.
 To check if any materialized views or indexes are lagging, use the workflow
 graphs in the Materialize console.
 
-1. Go to https://console.materialize.com/.
+1. Go to /console/.
 2. Click on the **"Clusters"** tab in the side navigation bar.
 3. Click on the cluster that contains your upstream materialized view or index.
 4. Go to the **"Materialized Views"** or **"Indexes"** section, and click on the
@@ -183,7 +183,7 @@ on, taking longer to return. As an example, if you issue a lot of
 resource-intensive queries at once, that might spike the CPU.
 
 The measure of cluster busyness is CPU. You can monitor CPU usage in the
-[Materialize console](https://console.materialize.com/) by clicking
+[Materialize console](/console/) by clicking
 the **"Clusters"** tab in the navigation bar, and clicking into the cluster.
 You can also grab CPU usage from the system catalog using SQL:
 
@@ -244,7 +244,7 @@ If your cluster replica is CPU-maxed out (~100% CPU usage), your query may be bl
 
 We recommend setting [Alerting thresholds](https://materialize.com/docs/manage/monitor/alerting/#thresholds) to notify your team when a cluster is reaching its capacity. Please note that these are recommendations, and some configurations may reach unstable memory utilization levels sooner than the thresholds.
 
-To see Memory Utilization and CPU usage for your cluster replica in the [Materialize console](https://materialize.com/docs/console/clusters/), go to [https://console.materialize.com/](https://console.materialize.com/), click the **“Clusters”** tab in the navigation bar, and click on the cluster name.
+To see Memory Utilization and CPU usage for your cluster replica in the [Materialize console](https://materialize.com/docs/console/clusters/), go to [/console/](/console/), click the **“Clusters”** tab in the navigation bar, and click on the cluster name.
 
 #### Address
 
@@ -274,7 +274,7 @@ attribute performance information to each LIR operator.
 Materialize stores a (sampled) log of the SQL statements that are issued against
 your Materialize region in the last **three days**, along with various metadata
 about these statements. You can access this log via the **"Query history"** tab
-in the [Materialize console](https://console.materialize.com/). You can filter
+in the [Materialize console](/console/). You can filter
 and sort statements by type, duration, and other dimensions.
 
 This data is also available via the

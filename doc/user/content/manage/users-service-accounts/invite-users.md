@@ -16,7 +16,7 @@ menu:
 As an **Organization administrator**, you can invite new users via the
 Materialize Console.
 
-1. [Log in to the Materialize Console](https://console.materialize.com/).
+1. [Log in to the Materialize Console](/console/).
 
 1. Navigate to **Account** > **Account Settings** > **Users**.
 

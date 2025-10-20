@@ -42,7 +42,7 @@ is under the rate limit of 4 credits per hour.
 
 To continue using Materialize, you can upgrade to a paid, [On Demand
 plan](https://materialize.com/pdfs/on-demand-terms.pdf) from the billing section
-of the [Materialize console](https://console.materialize.com/). Otherwise,
+of the [Materialize console](/console/). Otherwise,
 Materialize will delete your resources and data at the end of the trial period.
 
 ## How do I monitor my credit consumption rate?

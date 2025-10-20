@@ -778,7 +778,7 @@ SELECT NULL AS col_with_constraints,
     the compiled statements under `/target/run` and `target/compiled` in the
     dbt project folder.
 
-1. Using the [SQL Shell](https://console.materialize.com/), or your preferred
+1. Using the [SQL Shell](/console/), or your preferred
    SQL client connected to Materialize, double-check that all objects have been
    created:
 
@@ -893,7 +893,7 @@ trigger **real-time alerts** downstream.
     This guarantees that your tests keep running in the background as views that
     are automatically updated as soon as an assertion fails.
 
-1. Using the [SQL Shell](https://console.materialize.com/), or your preferred
+1. Using the [SQL Shell](/console/), or your preferred
    SQL client connected to Materialize, that the schema storing the tests has been
    created, as well as the test materialized views:
 

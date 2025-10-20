@@ -9,7 +9,7 @@ menu:
     identifier: console-monitoring
 ---
 
-The [Materialize Console](https://console.materialize.com/) provides a
+The [Materialize Console](/console/) provides a
 **Monitoring** section where you can review the health of your environment and
 access your query history.
 
