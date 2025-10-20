@@ -102,7 +102,7 @@ ERROR_RE = re.compile(
     # for miri test summary
     | (FAIL|TIMEOUT)\s+\[\s*\d+\.\d+s\]
     # parallel-workload
-    | worker_.*\ still\ running: [\s\S]* Threads\ have\ not\ stopped\ within\ 5\ minutes,\ exiting\ hard
+    | Threads\ have\ not\ stopped\ within\ [0-9]+\ minutes,\ exiting\ hard
     # source-table migration
     | source-table-migration\ issue
     # sql logic tests
