@@ -1,0 +1,40 @@
+columns:
+  - column: "Terraform version"
+  - column: "Notable changes"
+
+rows:
+- "Terraform version": |
+    [v0.5.5](https://github.com/MaterializeInc/terraform-azurerm-materialize/releases/)
+  "Notable changes": |
+    - Uses `terraform-helm-materialize` v0.1.26.
+
+- "Terraform version": |
+    [v0.5.4](https://github.com/MaterializeInc/terraform-azurerm-materialize/releases/)
+  "Notable changes": |
+    - Uses `terraform-helm-materialize` v0.1.25.
+
+- "Terraform version": |
+    [v0.4.6](https://github.com/MaterializeInc/terraform-azurerm-materialize/releases/)
+  "Notable changes": |
+
+    - Uses `terraform-helm-materialize` v0.1.19.
+    - Bumps Materialize release to [self-managed 25.2](/releases/release-notes)
+    - Adds support for password authentication and enabling RBAC
+
+- "Terraform version": |
+    [v0.4.3](https://github.com/MaterializeInc/terraform-azurerm-materialize/releases/)
+  "Notable changes": |
+
+    - Adds support for passing in additional Materialize instance configuration
+      options via
+      [`environmentd_extra_args`](https://github.com/MaterializeInc/terraform-azurerm-materialize?tab=readme-ov-file#input_materialize_instances)
+
+      {{% include-md file="shared-content/materialized_extra_args.md" %}}
+
+    - Uses `terraform-helm-materialize` v0.1.15.
+
+- "Terraform version": |
+    [v0.4.1](https://github.com/MaterializeInc/terraform-azurerm-materialize/releases/tag/v0.4.1)
+  "Notable changes": |
+    - Defaults to using Materialize Operator v25.1.11 (via
+    `terraform-helm-materialize` v0.1.13).

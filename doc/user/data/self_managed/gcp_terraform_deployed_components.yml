@@ -1,0 +1,37 @@
+columns:
+  - column: "Component"
+  - column: "Version"
+
+rows:
+  - Component: "Google Kubernetes Engine (GKE) cluster"
+    Version: "All"
+  - Component: "Cloud Storage bucket for blob storage"
+
+    Version: "All"
+  - Component: "Cloud SQL PostgreSQL database for metadata storage"
+    Version: "All"
+  - Component: "Dedicated VPC"
+    Version: "All"
+  - Component: "Service accounts with proper IAM permissions"
+    Version: "All"
+  - Component: "Materialize Operator"
+    Version: "All"
+  - Component: |
+      Materialize instances (Deployed during subsequent runs after the Operator is running)
+    Version: "All"
+  - Component: |
+      Load balancers for each Materialize instance
+    Version: |
+      [v0.3.0+](/self-managed/installation/appendix-terraforms/#materialize-on-gcp-terraform-module)
+
+  - Component: |
+      `cert-manager` and a self-signed `ClusterIssuer`.
+      `ClusterIssuer` is
+      deployed on subsequent runs after the `cert-manager` is running.
+    Version: |
+      [v0.3.0+](/self-managed/installation/appendix-terraforms/#materialize-on-gcp-terraform-module)
+
+  - Component: |
+      OpenEBS and NVMe instance storage to enable spill-to-disk
+    Version: |
+      [v0.4.0+](/self-managed/installation/appendix-terraforms/#materialize-on-gcp-terraform-module)

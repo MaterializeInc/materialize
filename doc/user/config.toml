@@ -20,7 +20,7 @@ publishDate = ["publishDate"]
 [[menu.main]]
 identifier = "get-started"
 name = "Get started"
-weight = 5
+weight = 1
 
 #
 # Connect sources
@@ -89,7 +89,7 @@ weight = 65
 identifier = "changelogs"
 name = "Changelog ↗️"
 parent = "releases-previews"
-weight = 20
+weight = 40
 url = "https://materialize.com/changelog/"
 
 #

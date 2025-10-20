@@ -1,0 +1,20 @@
+
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Default</th>
+
+</tr>
+</thead>
+<tbody>
+{{ range $.Site.Data.self_managed.materialize_operator_chart_parameter.parameters }}
+<tr>
+<td><a href='#{{ replace .parameter "." "" | urlize}}'><code>{{ .parameter }}</code></a></td>
+<td>
+<code>{{ .default }}</code>
+</td>
+</tr>
+{{ end }}
+</tbody>
+</table>

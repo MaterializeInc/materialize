@@ -5,7 +5,8 @@ disable_list: true
 disable_toc: true
 menus:
   main:
-    weight: 5
+    parent: "get-started"
+    weight: 25
     identifier: 'console'
 ---
 

@@ -521,8 +521,6 @@ Like [array containment operators in PostgreSQL](https://www.postgresql.org/docs
 list containment operators in Materialize **do not** account for duplicates.
 {{< /note >}}
 
-{{< warn-if-unreleased "v0.107" >}}
-
 ```mzsql
 SELECT LIST[1,4,3] @> LIST[3,1] AS contains;
 ```
