@@ -65,7 +65,7 @@ impl SqlServerTableDesc {
     /// Creating a [`SqlServerTableDesc`] from a [`SqlServerTableRaw`] description.
     ///
     /// Note: Not all columns from SQL Server can be ingested into Materialize. To determine if a
-    /// column is supported see [`SqlServerColumnDesc::is_supported`].
+    /// column is supported see [`SqlServerColumnDesc::decode_type`].
     pub fn new(raw: SqlServerTableRaw) -> Self {
         let columns: Box<[_]> = raw
             .columns
@@ -230,14 +230,6 @@ impl SqlServerColumnDesc {
         }
     }
 
-    /// Returns true if this column can be replicated into Materialize.
-    pub fn is_supported(&self) -> bool {
-        !matches!(
-            self.decode_type,
-            SqlServerColumnDecodeType::Unsupported { .. }
-        )
-    }
-
     /// Change this [`SqlServerColumnDesc`] to be represented as text in Materialize.
     pub fn represent_as_text(&mut self) {
         self.column_type = self
@@ -297,6 +289,17 @@ pub struct UnsupportedDataType {
 fn parse_data_type(
     raw: &SqlServerColumnRaw,
 ) -> Result<(SqlScalarType, SqlServerColumnDecodeType), UnsupportedDataType> {
+    // The value of a computed column, persisted or not, will be readable by the snapshot, but will
+    // always be NULL in the CDC stream.  This can lead to issues in MZ (e.g. decoding errors,
+    // negative accumulations, etc.).
+    if raw.is_computed {
+        return Err(UnsupportedDataType {
+            column_name: raw.name.to_string(),
+            column_type: format!("{} (computed)", raw.data_type.to_lowercase()),
+            reason: "column is computed".into(),
+        });
+    }
+
     let scalar = match raw.data_type.to_lowercase().as_str() {
         "tinyint" => (SqlScalarType::Int16, SqlServerColumnDecodeType::U8),
         "smallint" => (SqlScalarType::Int16, SqlServerColumnDecodeType::I16),
@@ -541,6 +544,8 @@ pub struct SqlServerColumnRaw {
     pub precision: u8,
     /// Scale of the columns, if numeric-based; otherwise 0.
     pub scale: u8,
+    /// Whether the column is computed.
+    pub is_computed: bool,
 }
 
 /// Rust type that we should use when reading a column from SQL Server.
@@ -1048,6 +1053,7 @@ mod tests {
                 max_length: 0,
                 precision: 0,
                 scale: 0,
+                is_computed: false,
             }
         }
 
@@ -1107,7 +1113,10 @@ mod tests {
             .precision(100)
             .scale(10);
         let desc = SqlServerColumnDesc::new(&raw);
-        assert!(!desc.is_supported());
+        assert!(matches!(
+            desc.decode_type,
+            SqlServerColumnDecodeType::Unsupported { .. }
+        ));
 
         let raw = SqlServerColumnRaw::new("foo", "varchar").max_length(-1);
         let desc = SqlServerColumnDesc::new(&raw);
