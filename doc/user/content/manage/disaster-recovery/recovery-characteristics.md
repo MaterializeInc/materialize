@@ -1,6 +1,6 @@
 ---
-title: "Materialize DR characteristics"
-description: "Reference on various failure modes and recovery characteristics of Materialize."
+title: "Materialize Cloud DR characteristics"
+description: "Reference on various failure modes and recovery characteristics of Materializ Cloud."
 menu:
   main:
     parent: "disaster-recovery"

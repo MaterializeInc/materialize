@@ -1,9 +1,9 @@
 ---
 title: "Manage database roles"
-description: "Create and manage database roles and privileges in Materialize"
+description: "Create and manage database roles and privileges in Cloud Materialize."
 menu:
   main:
-    parent: access-control
+    parent: security-cloud
     weight: 15
 aliases:
   - /sql/builtin-roles/

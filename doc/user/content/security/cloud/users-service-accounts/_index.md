@@ -4,7 +4,7 @@ description: "Manage users and service accounts."
 disable_list: true
 menu:
   main:
-    parent: "manage"
+    parent: "security-cloud"
     identifier: "user-service-accounts"
     weight: 10
 ---

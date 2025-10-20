@@ -3,7 +3,7 @@ title: "Appendix: Privileges by commands"
 description: ""
 menu:
   main:
-    parent: access-control
+    parent: security
     weight: 99
 disable_toc: true
 ---

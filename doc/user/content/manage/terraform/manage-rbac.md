@@ -1,10 +1,12 @@
 ---
-title: "Tutorial: Manage privileges with Terraform"
+title: "Manage privileges with Terraform"
 description: "Add users, create roles, and assign privileges in Materialize with Terraform"
 menu:
   main:
-    parent: access-control
+    parent: manage-terraform
     weight: 30
+aliases:
+  - /manage/access-control/rbac-terraform-tutorial/
 ---
 
 This tutorial walks you through managing roles in Materialize with [Terraform](https://www.terraform.io/). By the end of this tutorial you will:

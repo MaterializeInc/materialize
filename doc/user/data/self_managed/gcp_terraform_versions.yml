@@ -18,7 +18,7 @@ rows:
   "Notable changes": |
 
     - Uses `terraform-helm-materialize` v0.1.19.
-    - Bumps Materialize release to [self-managed 25.2](/releases/release-notes)
+    - Bumps Materialize release to [self-managed 25.2](/releases/#self-managed-releases)
     - Adds support for password authentication and enabling RBAC
 
 - "Terraform version": |

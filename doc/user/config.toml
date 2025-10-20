@@ -81,14 +81,9 @@ weight = 100
 #
 
 [[menu.main]]
-identifier = "releases-previews"
-name = "Releases"
-weight = 65
-
-[[menu.main]]
 identifier = "changelogs"
 name = "Changelog ↗️"
-parent = "releases-previews"
+parent = "releases"
 weight = 40
 url = "https://materialize.com/changelog/"
 
@@ -102,13 +97,13 @@ name = "About"
 weight = 70
 
 [[menu.main]]
-name = "Security overview"
+name = "Materialize Cloud Security"
 parent = "about"
 url = "https://materialize.com/security-overview"
 weight = 25
 
 [[menu.main]]
-name = "Responsible disclosure policy"
+name = "Materialize Cloud Responsible disclosure policy"
 parent = "about"
 url = "https://materialize.com/securitydisclosure"
 weight = 30

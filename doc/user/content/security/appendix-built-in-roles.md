@@ -3,7 +3,7 @@ title: "Appendix: Built-in roles"
 description: "List of predefined built-in roles in Materialize."
 menu:
   main:
-    parent: access-control
+    parent: security
     weight: 100
 ---
 

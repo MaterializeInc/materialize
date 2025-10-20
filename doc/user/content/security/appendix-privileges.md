@@ -3,7 +3,7 @@ title: "Appendix: Privileges"
 description: "List of available  privileges in Materialize."
 menu:
   main:
-    parent: access-control
+    parent: security
     weight: 95
 ---
 
