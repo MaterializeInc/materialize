@@ -155,6 +155,7 @@ class Action:
             "out of range",
             "is only defined for finite arguments",
             "Window function performance issue",  # TODO: Remove when https://github.com/MaterializeInc/database-issues/issues/9644 is fixed
+            "unknown cluster 'dont_exist'",  # Set intentionally to find panics
         ]
         if exe.db.complexity in (Complexity.DDL, Complexity.DDLOnly):
             result.extend(
@@ -1320,6 +1321,7 @@ class FlipFlagsAction(Action):
             "1048576",  # 1 MiB, an in-between value
             "314572800",  # 300 MiB, the production value
         ]
+        self.flags_with_values["cluster"] = ["quickstart", "dont_exist"]
 
         # If you are adding a new config flag in Materialize, consider using it
         # here instead of just marking it as uninteresting to silence the
