@@ -92,7 +92,7 @@ To swap the name of this cluster with another cluster:
 
 ### Cluster configuration
 
-{{% alter-cluster/alter-cluster-options %}}
+{{% yaml-table data="syntax_options/alter_cluster_options" %}}
 
 ### `WITH` options
 
@@ -116,14 +116,50 @@ displays cluster resource utilization and sizing advice.
 
 #### Resource allocation
 
-The allocation of resources increases proportionally to the size of the cluster.
-For example, a cluster of size `600cc` has 2x as much CPU, memory, and disk as
-a cluster of size `300cc`, and 1.5x as much CPU, memory, and disk as a cluster
-of size `400cc`.
 
 To determine the specific resource allocation for a given cluster size, query
 the [`mz_cluster_replica_sizes`](/sql/system-catalog/mz_catalog/#mz_cluster_replica_sizes)
 system catalog table.
+
+{{< tabs >}}
+{{< tab "M1 Clusters" >}}
+{{< yaml-table data="m1_cluster_sizing" >}}
+
+{{< /tab >}}
+{{< tab "Legacy cc Clusters" >}}
+
+Valid legacy cc cluster sizes are:
+
+* `25cc`
+* `50cc`
+* `100cc`
+* `200cc`
+* `300cc`
+* `400cc`
+* `600cc`
+* `800cc`
+* `1200cc`
+* `1600cc`
+* `3200cc`
+* `6400cc`
+* `128C`
+* `256C`
+* `512C`
+
+The resource allocations are proportional to the number in the size name. For
+example, a cluster of size `600cc` has 2x as much CPU, memory, and disk as a
+cluster of size `300cc`, and 1.5x as much CPU, memory, and disk as a cluster of
+size `400cc`. To determine the specific resource allocations for a size,
+query the [`mz_cluster_replica_sizes`] table.
+
+{{< warning >}}
+The values in the `mz_cluster_replica_sizes` table may change at any
+time. You should not rely on them for any kind of capacity planning.
+{{< /warning >}}
+
+Clusters of larger sizes can process data faster and handle larger data volumes.
+{{< /tab >}}
+{{< /tabs >}}
 
 {{< warning >}}
 The values in the `mz_cluster_replica_sizes` system catalog table may change at

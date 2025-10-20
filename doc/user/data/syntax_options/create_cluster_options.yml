@@ -7,8 +7,12 @@ rows:
     Value: "text"
     Description: |
 
-      The size of the resource allocations for the cluster. See
-      [Size](/sql/create-cluster#size) for details.
+      The size of the resource allocations for the cluster.
+
+      {{< yaml-list column="Cluster size" data="m1_cluster_sizing" numColumns="3" >}}
+
+      See [Size](/sql/create-cluster#size) for details as well as legacy sizes
+      available.
 
   - Field: "`REPLICATION FACTOR`"
     Value: "text"

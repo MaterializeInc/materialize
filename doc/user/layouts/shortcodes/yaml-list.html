@@ -1,0 +1,15 @@
+{{- $column := .Get "column" -}}
+{{- $numColumns := .Get "numColumns" | default "1" -}}
+{{ $pathArray := split (lower (.Get "data")) "/" }}
+{{ $data := $.Site.Data }}
+
+{{ range $pathArray }}
+  {{ $data = index $data . }}
+{{ end }}
+
+<ul style="column-count: {{ $numColumns }}" >
+  {{- range $data.rows -}}
+    {{- $value := index . $column -}}
+    <li>{{ $value | markdownify }}</li>
+  {{- end -}}
+</ul>

@@ -69,10 +69,25 @@ Clusters are commonly used to isolate different classes of workloads. For
 example, you could place your development workloads in a cluster named
 `dev` and your production workloads in a cluster named `prod`.
 
+<a name="legacy-sizes"></a>
+
 ### Size
 
 The `SIZE` option determines the amount of compute resources (CPU, memory, and
-disk) available to the cluster. Valid sizes are:
+disk) available to the cluster.
+{{< tabs >}}
+{{< tab "M1 Clusters" >}}
+{{< yaml-table data="m1_cluster_sizing" >}}
+
+{{< note >}}
+During the free trial, only the **M.1-nano**, **M.1-micro**, and **M.1-xsmall**
+sizes are available.
+{{< /note >}}
+
+{{< /tab >}}
+{{< tab "Legacy cc Clusters" >}}
+
+Valid legacy cc cluster sizes are:
 
 * `25cc`
 * `50cc`
@@ -102,26 +117,16 @@ time. You should not rely on them for any kind of capacity planning.
 {{< /warning >}}
 
 Clusters of larger sizes can process data faster and handle larger data volumes.
+{{< /tab >}}
+{{< tab "Legacy T-shirt Clusters" >}}
 
-#### Cluster resizing
+Materialize also offers some legacy t-shirt sizes. Clusters using legacy t-shirt
+sizes run on older hardware without local disks attached.
 
-You can change the size of a cluster to respond to changes in your workload
-using [`ALTER CLUSTER`](/sql/alter-cluster). Depending on the type of objects
-the cluster is hosting, this operation **might incur downtime**.
-
-See the reference documentation for [`ALTER
-CLUSTER`](/sql/alter-cluster#zero-downtime-cluster-resizing) for more details
-on cluster resizing.
-
-#### Legacy sizes
-
-Materialize also offers some legacy sizes. Clusters using legacy sizes run on
-older hardware without local disks attached.
-
-In most cases, you **should not** use legacy sizes. [Standard sizes](#size)
-offer better performance per credit for nearly all workloads. We recommend using
-standard sizes for all new clusters, and recommend migrating existing
-legacy-sized clusters to standard sizes. In many cases, migrating from
+In most cases, you **should not** use legacy t-shirt sizes. [Standard
+sizes](#size) offer better performance per credit for nearly all workloads. We
+recommend using standard sizes for all new clusters, and recommend migrating
+existing legacy-sized clusters to standard sizes. In many cases, migrating from
 legacy to standard sizes will result in a 25-50% cost reduction.
 
 However, certain rare workloads exhibit better performance per credit on legacy
@@ -150,8 +155,22 @@ When legacy sizes are enabled for a region, the following sizes are available:
 * `5xlarge`
 * `6xlarge`
 
-The correspondence between non-legacy sizes and legacy sizes is shown in the [credit
-usage table](#credit-usage).
+The correspondence between legacy cc sizes and legacy t-shirt sizes is shown in
+the [credit usage table](#credit-usage).
+{{< /tab >}}
+{{< /tabs >}}
+
+#### Cluster resizing
+
+You can change the size of a cluster to respond to changes in your workload
+using [`ALTER CLUSTER`](/sql/alter-cluster). Depending on the type of objects
+the cluster is hosting, this operation **might incur downtime**.
+
+See the reference documentation for [`ALTER
+CLUSTER`](/sql/alter-cluster#zero-downtime-cluster-resizing) for more details
+on cluster resizing.
+
+
 
 ### Replication factor
 

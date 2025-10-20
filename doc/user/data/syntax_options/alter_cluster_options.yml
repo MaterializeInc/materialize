@@ -1,0 +1,62 @@
+columns:
+  - column: "Field"
+  - column: "Value"
+  - column: "Description"
+rows:
+  - Field: "`SIZE`"
+    Value: "text"
+    Description: |
+
+      <a name="alter-cluster-size"></a>
+      The size of the resource allocations for the cluster.
+
+      {{< yaml-list column="Cluster size" data="m1_cluster_sizing" numColumns="3" >}}
+
+      See [Size](/sql/create-cluster#size) for details as well as legacy sizes
+      available.
+
+      {{< warning >}}
+      Changing the size of a cluster may incur downtime. For more information,
+      see [Resizing considerations](#resizing).
+      {{< /warning >}}
+
+      Not available for `ALTER CLUSTER ... RESET` since there is no default
+      `SIZE` value.
+
+
+  - Field: "`REPLICATION FACTOR`"
+    Value: "int"
+    Description: |
+
+      The number of replicas to provision for the cluster. Each replica of the
+      cluster provisions a new pool of compute resources to perform exactly the
+      same computations on exactly the same data. For more information, see
+      [Replication factor considerations](#replication-factor).
+
+      Default: `1`
+  - Field: "`INTROSPECTION INTERVAL`"
+    Value: "interval"
+    Description: |
+
+      The interval at which to collect introspection data. See [Troubleshooting](/ops/troubleshooting) for details about introspection data. The special value `0` entirely disables the gathering of introspection data.
+
+      Default: `1s`
+  - Field: "`INTROSPECTION DEBUGGING`"
+    Value: "bool"
+    Description: |
+
+      Indicates whether to introspect the gathering of the introspection data.
+      Default: `FALSE`
+  - Field: "`MANAGED`"
+    Value: "bool"
+    Description: |
+
+      Whether to automatically manage the cluster's replicas based on the configured size and replication factor.
+
+      If `FALSE`, enables the use of the <em>deprecated</em> [`CREATE CLUSTER REPLICA`](/sql/create-cluster-replica) command.
+      Default: `TRUE`
+  - Field: "`SCHEDULE`"
+    Value: "[`MANUAL`,`ON REFRESH`]"
+    Description: |
+      The [scheduling type](/sql/create-cluster/#scheduling) for the cluster.
+      <br>Default: `MANUAL`
