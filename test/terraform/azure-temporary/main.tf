@@ -132,7 +132,6 @@ variable "materialize_instances" {
     memory_request   = optional(string, "1Gi")
     memory_limit     = optional(string, "1Gi")
     create_database  = optional(bool, true)
-    in_place_rollout = optional(bool, false)
     request_rollout  = optional(string)
     force_rollout    = optional(string)
   }))
