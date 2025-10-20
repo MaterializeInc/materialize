@@ -1,5 +1,5 @@
 ---
-title: "Self-managed Materialize"
+title: "Self-Managed Materialize"
 description: ""
 aliases:
   - /self-managed/
