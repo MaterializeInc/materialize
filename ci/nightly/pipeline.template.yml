@@ -10,11 +10,6 @@
 # Default priority, just set to be explicit
 priority: 0
 
-env:
-  CI_BAZEL_BUILD: 0
-  CI_BAZEL_REMOTE_CACHE: $BAZEL_REMOTE_CACHE
-  CI_BAZEL_LTO: 0
-
 steps:
   - group: Builds
     key: builds
@@ -24,7 +19,6 @@ steps:
         command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
         inputs:
           - "*"
-        artifact_paths: bazel-explain.log
         depends_on: []
         timeout_in_minutes: 60
         agents:
@@ -35,43 +29,38 @@ steps:
         command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
         inputs:
           - "*"
-        artifact_paths: bazel-explain.log
         depends_on: []
         timeout_in_minutes: 60
         agents:
           queue: l-builder-linux-aarch64
 
       - id: build-x86_64-asan
-        label: ":bazel: Build x86_64 (ASan)"
+        label: ":rust: Build x86_64 (ASan)"
         command: bin/ci-builder run min bin/pyactivate -m ci.test.build
         inputs:
           - "*"
-        artifact_paths: bazel-explain.log
         depends_on: []
         timeout_in_minutes: 60
         agents:
           queue: builder-linux-x86_64
         env:
           CI_SANITIZER: address
-          CI_BAZEL_BUILD: 1
 
         sanitizer: skip
         branches: "main"
         skip: "currently broken"
 
       - id: build-aarch64-asan
-        label: ":bazel: Build aarch64 (ASan)"
+        label: ":rust: Build aarch64 (ASan)"
         command: bin/ci-builder run min bin/pyactivate -m ci.test.build
         inputs:
           - "*"
-        artifact_paths: bazel-explain.log
         depends_on: []
         timeout_in_minutes: 60
         agents:
           queue: builder-linux-aarch64-mem
         env:
           CI_SANITIZER: address
-          CI_BAZEL_BUILD: 1
         sanitizer: skip
         branches: "main"
         skip: "currently broken"
@@ -134,8 +123,6 @@ steps:
     label: ":rust: Miri test (full)"
     depends_on: []
     timeout_in_minutes: 600
-    env:
-      CI_BAZEL_BUILD: 0
     plugins:
       - ./ci/plugins/mzcompose:
           composition: cargo-test
@@ -1105,10 +1092,6 @@ steps:
               composition: platform-checks
               args: [--scenario=ZeroDowntimeBumpedVersion, "--seed=$BUILDKITE_JOB_ID"]
               ci-builder: stable
-        env:
-          # Faster build, less memory used
-          CI_BAZEL_BUILD: 0
-          CI_BAZEL_LTO: 0
 
       - id: cloudtest-upgrade
         label: "Platform checks upgrade in Cloudtest/K8s"

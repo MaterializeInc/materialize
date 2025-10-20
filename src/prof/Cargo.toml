@@ -38,8 +38,3 @@ jemalloc = ["tikv-jemalloc-ctl", "jemalloc_pprof"]
 [package.metadata.cargo-udeps.ignore]
 # "bytesize" not used on linux
 normal = ["bytesize", "workspace-hack"]
-
-[package.metadata.cargo-gazelle]
-# We manually write this BUILD.bazel file because we need to carefully
-# configure when `jemalloc` gets used for ASAN.
-skip_generating = true

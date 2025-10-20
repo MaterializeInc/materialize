@@ -64,12 +64,6 @@ sudo apt update
 sudo apt install docker docker-compose-plugin
 ```
 
-### Bazel
-
-Materialize can also optionally be built with [Bazel](https://bazel.build/). To
-learn more about Bazel and how it's setup at Materialize, checkout our
-[Bazel documentation](/doc/developer/bazel.md).
-
 ### Metadata store
 
 Running Materialize locally requires a running Postgres / CockroachDB server.

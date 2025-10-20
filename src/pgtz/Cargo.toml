@@ -32,6 +32,3 @@ normal = ["workspace-hack"]
 
 [features]
 default = ["workspace-hack"]
-
-[package.metadata.cargo-gazelle.build]
-data = ["tznames/Default"]

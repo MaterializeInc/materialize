@@ -55,8 +55,3 @@ normal = ["workspace-hack"]
 
 [features]
 default = ["workspace-hack"]
-
-# This crate is relatively fast to compile and enabling optimizations greatly
-# speeds up test execution.
-[package.metadata.cargo-gazelle.lib]
-rustc_flags = ["-Copt-level=3"]

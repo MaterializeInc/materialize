@@ -55,8 +55,6 @@ flake.lock
 /misc/python/materialize/*.egg-info/
 /misc/python/materialize/dist/
 
-/bazel-*
-
 /src/testdrive/ci/protobuf-bin
 /src/testdrive/ci/protobuf-include
 /known-docker-images.txt

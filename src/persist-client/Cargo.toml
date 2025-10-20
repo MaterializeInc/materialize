@@ -86,9 +86,3 @@ default = ["mz-build-tools/default", "workspace-hack"]
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
-
-[package.metadata.cargo-gazelle.lib]
-disable_pipelining = true
-
-[package.metadata.cargo-gazelle.test.lib]
-compile_data = ["src/internal/state_serde.json"]

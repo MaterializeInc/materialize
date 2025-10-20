@@ -22,17 +22,10 @@ fn main() {
         .disable_comments(["."]);
 
     // Bazel places the `fivetran-sdk` submodule in a slightly different place.
-    let includes_directories = if mz_build_tools::is_bazel_build() {
-        &[
-            PathBuf::from("../../../fivetran_sdk"),
-            mz_build_tools::protoc_include(),
-        ]
-    } else {
-        &[
-            PathBuf::from("../../misc/fivetran-sdk"),
-            mz_build_tools::protoc_include(),
-        ]
-    };
+    let includes_directories = &[
+        PathBuf::from("../../misc/fivetran-sdk"),
+        mz_build_tools::protoc_include(),
+    ];
 
     const ATTR: &str = "#[derive(::serde::Serialize, ::serde::Deserialize)]";
 

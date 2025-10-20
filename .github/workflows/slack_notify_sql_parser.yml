@@ -56,11 +56,9 @@ jobs:
               - 'src/sql-parser/**'
               - 'src/sql-lexer/**'
               - '!**/Cargo.toml'
-              - '!**/BUILD.bazel'
             system-catalog:
               - 'src/catalog/src/builtin.rs'
               - '!**/Cargo.toml'
-              - '!**/BUILD.bazel'
             index-slt:
               - 'test/sqllogictest/mz_catalog_server_index_accounting.slt'
       - name: Checkout

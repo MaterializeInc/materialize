@@ -32,9 +32,3 @@ default = ["workspace-hack", "mz-ore/workspace-hack"]
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
-
-[package.metadata.cargo-gazelle.build]
-data = ["src/keywords.txt"]
-
-[package.metadata.cargo-gazelle.test.lexer]
-data = ["tests/testdata/**"]

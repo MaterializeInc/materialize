@@ -10,11 +10,6 @@
 # Runs long, but can block a release
 priority: 40
 
-env:
-  CI_BAZEL_BUILD: 0
-  CI_BAZEL_REMOTE_CACHE: $BAZEL_REMOTE_CACHE
-  CI_BAZEL_LTO: 0
-
 steps:
   - group: Builds
     key: builds
@@ -24,7 +19,6 @@ steps:
         command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
         inputs:
           - "*"
-        artifact_paths: bazel-explain.log
         depends_on: []
         timeout_in_minutes: 60
         agents:
@@ -41,7 +35,6 @@ steps:
         command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
         inputs:
           - "*"
-        artifact_paths: bazel-explain.log
         depends_on: []
         timeout_in_minutes: 60
         agents:

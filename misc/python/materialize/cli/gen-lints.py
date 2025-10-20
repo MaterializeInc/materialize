@@ -91,9 +91,7 @@ WARN_CLIPPY_LINTS = [
     "todo",
     # Wildcard dependencies are, by definition, incorrect. It is impossible
     # to be compatible with all future breaking changes in a crate.
-    #
-    # TODO(parkmycar): Re-enable this lint when it's supported in Bazel.
-    # "wildcard_dependencies",
+    "wildcard_dependencies",
     # Zero-prefixed literals may be incorrectly interpreted as octal literals.
     "zero_prefixed_literal",
     # Purely redundant tokens.
@@ -187,7 +185,7 @@ MESSAGE_LINT_INHERIT = "The lint section in {} does not inherit from the workspa
 
 EXCLUDE_CRATES = ["workspace-hack"]
 
-CHECK_CFGS = "bazel, stamped, coverage, nightly_doc_features, release, tokio_unstable"
+CHECK_CFGS = "stamped, coverage, nightly_doc_features, release, tokio_unstable"
 
 
 def main() -> None:

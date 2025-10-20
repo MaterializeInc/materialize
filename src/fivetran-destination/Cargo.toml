@@ -53,15 +53,3 @@ default = ["mz-build-tools/default", "workspace-hack"]
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
-
-[package.metadata.cargo-gazelle.lib]
-disable_pipelining = true
-
-[package.metadata.cargo-gazelle.build]
-# We depend on protobuf files that live in the fivetran-sdk submodule that
-# cargo-gazelle cannot find.
-skip_proto_search = true
-data = ["@fivetran_sdk//:all_protos"]
-
-[package.metadata.cargo-gazelle.test.lib]
-env = { INSTA_WORKSPACE_ROOT = "." }

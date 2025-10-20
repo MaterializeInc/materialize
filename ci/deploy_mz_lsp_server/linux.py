@@ -12,7 +12,7 @@ from pathlib import Path
 
 from ci import tarball_uploader
 from ci.deploy.deploy_util import rust_version
-from materialize import mzbuild, spawn, ui
+from materialize import mzbuild, spawn
 from materialize.mz_version import MzLspServerVersion
 from materialize.rustc_flags import Sanitizer
 
@@ -21,17 +21,10 @@ from .deploy_util import MZ_LSP_SERVER_VERSION
 
 
 def main() -> None:
-    bazel = ui.env_is_truthy("CI_BAZEL_BUILD")
-    bazel_remote_cache = os.getenv("CI_BAZEL_REMOTE_CACHE")
-    bazel_lto = ui.env_is_truthy("CI_BAZEL_LTO")
-
     repo = mzbuild.Repository(
         Path("."),
         coverage=False,
         sanitizer=Sanitizer.none,
-        bazel=bazel,
-        bazel_remote_cache=bazel_remote_cache,
-        bazel_lto=bazel_lto,
     )
     target = f"{repo.rd.arch}-unknown-linux-gnu"
 

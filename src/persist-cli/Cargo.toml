@@ -52,9 +52,5 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = tru
 default = ["tokio-console", "workspace-hack"]
 tokio-console = ["mz-ore/tokio-console"]
 
-[package.metadata.cargo-gazelle.binary.persistcli]
-# `num_enum` which depends on `proc-macro-crate` tries to read from the Cargo.toml at compile time.
-compile_data = ["Cargo.toml"]
-
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

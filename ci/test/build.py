@@ -12,7 +12,7 @@
 import os
 from pathlib import Path
 
-from materialize import bazel, mzbuild, spawn, ui
+from materialize import mzbuild, spawn, ui
 from materialize.ci_util.upload_debug_symbols_to_s3 import (
     DEBUGINFO_BINS,
     upload_debuginfo_to_s3,
@@ -27,17 +27,11 @@ def main() -> None:
         set_build_status("pending")
         coverage = ui.env_is_truthy("CI_COVERAGE_ENABLED")
         sanitizer = Sanitizer[os.getenv("CI_SANITIZER", "none")]
-        bazel = ui.env_is_truthy("CI_BAZEL_BUILD")
-        bazel_remote_cache = os.getenv("CI_BAZEL_REMOTE_CACHE")
-        bazel_lto = ui.env_is_truthy("CI_BAZEL_LTO")
 
         repo = mzbuild.Repository(
             Path("."),
             coverage=coverage,
             sanitizer=sanitizer,
-            bazel=bazel,
-            bazel_remote_cache=bazel_remote_cache,
-            bazel_lto=bazel_lto,
         )
 
         # Build and push any images that are not already available on Docker Hub,
@@ -86,9 +80,7 @@ def upload_debuginfo(
     """Uploads debuginfo to `DEBUGINFO_S3_BUCKET` if any DEBUGINFO_BINS were built."""
 
     # Find all binaries created by the `cargo-bin` pre-image.
-    bins, bazel_bins = find_binaries_created_by_cargo_bin(
-        repo, built_images, DEBUGINFO_BINS
-    )
+    bins = find_binaries_created_by_cargo_bin(repo, built_images, DEBUGINFO_BINS)
     if len(bins) == 0:
         print("No debuginfo bins were built")
         return
@@ -98,7 +90,7 @@ def upload_debuginfo(
     is_tag_build = ui.env_is_truthy("BUILDKITE_TAG")
 
     for bin in bins:
-        bin_path = get_bin_path(repo, bin, bazel_bins)
+        bin_path = get_bin_path(repo, bin)
 
         dbg_path = bin_path.with_suffix(bin_path.suffix + ".debug")
         spawn.runv(
@@ -118,36 +110,25 @@ def upload_debuginfo(
 
 def find_binaries_created_by_cargo_bin(
     repo: Repository, built_images: list[ResolvedImage], bin_names: set[str]
-) -> tuple[set[str], dict[str, str]]:
+) -> set[str]:
     bins: set[str] = set()
-    bazel_bins: dict[str, str] = dict()
     for image in built_images:
         for pre_image in image.image.pre_images:
             if isinstance(pre_image, CargoBuild):
                 for bin in pre_image.bins:
                     if bin in bin_names:
                         bins.add(bin)
-                    if repo.rd.bazel:
-                        bazel_bins[bin] = pre_image.bazel_bins[bin]
 
-    return bins, bazel_bins
+    return bins
 
 
-def get_bin_path(repo: Repository, bin: str, bazel_bins: dict[str, str]) -> Path:
-    if repo.rd.bazel:
-        options = repo.rd.bazel_config()
-        paths = bazel.output_paths(bazel_bins[bin], options)
-        assert len(paths) == 1, f"{bazel_bins[bin]} output more than 1 file"
-        return paths[0]
-    else:
-        cargo_profile = (
-            "release"
-            if repo.rd.profile == mzbuild.Profile.RELEASE
-            else (
-                "optimized" if repo.rd.profile == mzbuild.Profile.OPTIMIZED else "debug"
-            )
-        )
-        return repo.rd.cargo_target_dir() / cargo_profile / bin
+def get_bin_path(repo: Repository, bin: str) -> Path:
+    cargo_profile = (
+        "release"
+        if repo.rd.profile == mzbuild.Profile.RELEASE
+        else ("optimized" if repo.rd.profile == mzbuild.Profile.OPTIMIZED else "debug")
+    )
+    return repo.rd.cargo_target_dir() / cargo_profile / bin
 
 
 if __name__ == "__main__":

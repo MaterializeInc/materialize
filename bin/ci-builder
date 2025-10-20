@@ -108,8 +108,6 @@ case "$arch_gcc" in
     *) die "unknown host architecture \"$arch\"" ;;
 esac
 
-bazel_version=$(cat .bazelversion)
-
 uid=$(id -u)
 gid=$(id -g)
 [[ "$uid" -lt 500 ]] && uid=501
@@ -126,7 +124,6 @@ build() {
         --build-arg "RUST_COMPONENTS=$rust_components" \
         --build-arg "RUST_CPU_TARGET=$rust_cpu_target" \
         --build-arg "RUST_TARGET_FEATURES=$rust_target_features" \
-        --build-arg "BAZEL_VERSION=$bazel_version" \
         --tag materialize/ci-builder:"$tag" \
         --tag materialize/ci-builder:"$cache_tag" \
         --target $docker_target \
@@ -147,7 +144,7 @@ fi
 # *inside* this image. See materialize.git.expand_globs in the Python code for
 # details on this computation.
 files=$(cat \
-        <(git diff --name-only -z 4b825dc642cb6eb9a060e54bf8d69288fbee4904 ci/builder .bazelversion) \
+        <(git diff --name-only -z 4b825dc642cb6eb9a060e54bf8d69288fbee4904 ci/builder) \
         <(git ls-files --others --exclude-standard -z ci/builder) \
     | LC_ALL=C sort -z \
     | xargs -0 "$shasum")
@@ -378,11 +375,6 @@ case "$cmd" in
             args+=(
                 --env "RUSTC_WRAPPER=sccache"
                 --env SCCACHE_BUCKET
-            )
-        fi
-        if [[ "${CI_BAZEL_BUILD:-}" ]]; then
-            args+=(
-                --tmpfs "/dev/shm:exec,dev,suid,size=128g"
             )
         fi
         # For git-worktrees add the original repository at its original path

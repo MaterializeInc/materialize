@@ -19,22 +19,10 @@ use mz_storage_types::sources::SourceData;
 use crate::durable::objects::state_update::StateUpdateKindJson;
 use crate::durable::upgrade::AllVersionsStateUpdateKind;
 
-const PROTO_DIRECTORY: &str = {
-    if mz_build_tools::is_bazel_build() {
-        "src/catalog-protos/protos"
-    } else {
-        "../catalog-protos/protos"
-    }
-};
+const PROTO_DIRECTORY: &str = "../catalog-protos/protos";
 const PROTO_EXT: &str = "proto";
 
-static SNAPSHOT_DIRECTORY: &str = {
-    if mz_build_tools::is_bazel_build() {
-        "src/catalog/src/durable/upgrade/snapshots"
-    } else {
-        "src/durable/upgrade/snapshots"
-    }
-};
+static SNAPSHOT_DIRECTORY: &str = "src/durable/upgrade/snapshots";
 const SNAPSHOT_EXT: &str = "txt";
 
 #[mz_ore::test]

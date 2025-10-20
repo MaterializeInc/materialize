@@ -18,7 +18,6 @@ cd "$(dirname "$0")/.."
 . misc/shlib/shlib.bash
 
 try cargo fmt
-try bin/bazel fmt
 try buf format src -w
 
 if [[ ! "${MZDEV_NO_PYTHON:-}" ]]; then

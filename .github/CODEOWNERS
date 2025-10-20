@@ -18,7 +18,6 @@
 /doc/user                           @MaterializeInc/docs
 /doc/developer/reference/compute    @MaterializeInc/cluster
 /doc/developer/reference/storage    @MaterializeInc/cluster
-/misc/bazel                         @MaterializeInc/testing @ptravers @SangJunBak @DAlperin
 /misc/dbt-materialize               @morsapaes @MaterializeInc/integrations
 /misc/python/materialize/benches    @MaterializeInc/testing
 /misc/python/materialize/buildkite_insights @MaterializeInc/testing
@@ -51,7 +50,7 @@
 /src/avro                           @MaterializeInc/cluster
 /src/avro-derive                    @MaterializeInc/cluster
 /src/build-id                       @teskje
-/src/build-info                     @MaterializeInc/testing  @ptravers @SangJunBak @DAlperin
+/src/build-info                     @MaterializeInc/testing @SangJunBak @DAlperin
 /src/catalog                        @MaterializeInc/adapter
 /src/catalog-debug                  @MaterializeInc/adapter
 /src/ccsr                           @MaterializeInc/adapter @MaterializeInc/cluster
@@ -136,5 +135,3 @@
 /src/walkabout                      @MaterializeInc/adapter
 /src/workspace-hack                 @MaterializeInc/testing
 /test
-/MODULE.bazel                       @MaterializeInc/testing @ptravers @SangJunBak @DAlperin
-/WORKSPACE                          @MaterializeInc/testing @ptravers @SangJunBak @DAlperin

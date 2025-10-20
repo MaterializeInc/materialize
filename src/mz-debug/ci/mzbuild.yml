@@ -11,4 +11,3 @@ name: mz-debug
 pre-image:
   - type: cargo-build
     bin: mz-debug
-    bazel-bin: "@//src/mz-debug:mz_debug"

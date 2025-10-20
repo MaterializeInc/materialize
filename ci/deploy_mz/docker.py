@@ -7,11 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import os
 from pathlib import Path
 
 from ci import tarball_uploader
-from materialize import mzbuild, ui
+from materialize import mzbuild
 from materialize.rustc_flags import Sanitizer
 from materialize.xcompile import Arch
 
@@ -19,28 +18,18 @@ from .deploy_util import MZ_CLI_VERSION
 
 
 def main() -> None:
-    bazel = ui.env_is_truthy("CI_BAZEL_BUILD")
-    bazel_remote_cache = os.getenv("CI_BAZEL_REMOTE_CACHE")
-    bazel_lto = ui.env_is_truthy("CI_BAZEL_LTO")
-
     repos = [
         mzbuild.Repository(
             Path("."),
             Arch.X86_64,
             coverage=False,
             sanitizer=Sanitizer.none,
-            bazel=bazel,
-            bazel_remote_cache=bazel_remote_cache,
-            bazel_lto=bazel_lto,
         ),
         mzbuild.Repository(
             Path("."),
             Arch.AARCH64,
             coverage=False,
             sanitizer=Sanitizer.none,
-            bazel=bazel,
-            bazel_remote_cache=bazel_remote_cache,
-            bazel_lto=bazel_lto,
         ),
     ]
 

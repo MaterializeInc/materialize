@@ -11,4 +11,3 @@ name: ci-metabase-smoketest
 pre-image:
   - type: cargo-build
     bin: metabase-smoketest
-    bazel-bin: "@//test/metabase/smoketest:metabase_smoketest"

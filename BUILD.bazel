@@ -1,3 +1,0 @@
-# This file exists so the root of our repository, e.g. the root `Cargo.toml`, can be referenced by Bazel.
-
-exports_files(["Cargo.toml"])

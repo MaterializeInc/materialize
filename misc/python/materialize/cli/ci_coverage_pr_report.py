@@ -27,7 +27,6 @@ Coverage = dict[str, OrderedDict[int, int | None]]
 SOURCE_RE = re.compile(
     r"""
     ( src/(.*$)"
-    | bazel-out/.*/bin/(.*$)
     | external/(.*$)
     | /usr/local/lib/rustlib/(.*$)
     | /var/lib/buildkite-agent/builds/buildkite-.*/materialize/[^/]*/src/(.*$)
