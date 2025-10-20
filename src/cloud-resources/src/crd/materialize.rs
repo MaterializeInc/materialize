@@ -58,11 +58,12 @@ pub mod v1alpha1 {
         // Additional annotations and labels to include in the Certificate object.
         pub secret_template: Option<CertificateSecretTemplate>,
     }
-    #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+    #[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize, JsonSchema)]
     pub enum MaterializeRolloutStrategy {
         // Default. Create a new generation of pods, leaving the old generation around until the
         // new ones are ready to take over.
         // This minimizes downtime, and is what almost everyone should use.
+        #[default]
         WaitUntilReady,
 
         // WARNING!!!
@@ -76,11 +77,6 @@ pub mod v1alpha1 {
         // enough hardware for the WaitUntilReady strategy. If you think you want this, please
         // consult with Materialize engineering to discuss your situation.
         ImmediatelyPromoteCausingDowntime,
-    }
-    impl Default for MaterializeRolloutStrategy {
-        fn default() -> Self {
-            Self::WaitUntilReady
-        }
     }
 
     #[derive(
