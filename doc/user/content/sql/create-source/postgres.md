@@ -57,6 +57,7 @@ Field                                | Value     | Description
 -------------------------------------|-----------|-------------------------------------
 `PUBLICATION`                        | `text`    | **Required.** The PostgreSQL [publication](https://www.postgresql.org/docs/current/logical-replication-publication.html) (the replication data set containing the tables to be streamed to Materialize).
 `TEXT COLUMNS`                       | A list of names | Decode data as `text` for specific columns that contain PostgreSQL types that are unsupported in Materialize.
+`EXCLUDE COLUMNS`                    | A list of fully-qualified names | Exclude specific columns that cannot be decoded or should not be included in the subsources created in Materialize.
 
 ## Features
 

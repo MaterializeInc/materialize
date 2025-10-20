@@ -1139,6 +1139,13 @@ pub enum PgConfigOptionName {
     /// fully deprecating that feature and forcing users to use explicit
     /// `CREATE TABLE .. FROM SOURCE` statements
     TextColumns,
+    /// Columns you want to exclude
+    /// NOTE: This value is kept around to allow round-tripping a
+    /// `CREATE SOURCE` statement while we still allow creating implicit
+    /// subsources from `CREATE SOURCE`, but will be removed once
+    /// fully deprecating that feature and forcing users to use explicit
+    /// `CREATE TABLE .. FROM SOURCE` statements
+    ExcludeColumns,
 }
 
 impl AstDisplay for PgConfigOptionName {
@@ -1147,6 +1154,7 @@ impl AstDisplay for PgConfigOptionName {
             PgConfigOptionName::Details => "DETAILS",
             PgConfigOptionName::Publication => "PUBLICATION",
             PgConfigOptionName::TextColumns => "TEXT COLUMNS",
+            PgConfigOptionName::ExcludeColumns => "EXCLUDE COLUMNS",
         })
     }
 }
@@ -1162,7 +1170,8 @@ impl WithOptionName for PgConfigOptionName {
         match self {
             PgConfigOptionName::Details
             | PgConfigOptionName::Publication
-            | PgConfigOptionName::TextColumns => false,
+            | PgConfigOptionName::TextColumns
+            | PgConfigOptionName::ExcludeColumns => false,
         }
     }
 }

@@ -116,8 +116,8 @@ impl MySqlTableSchema {
     ) -> Result<MySqlTableDesc, MySqlError> {
         // Verify there are no duplicates in text_columns and exclude_columns
         match (&text_columns, &exclude_columns) {
-            (Some(text_cols), Some(ignore_cols)) => {
-                let intersection: Vec<_> = text_cols.intersection(ignore_cols).collect();
+            (Some(text_cols), Some(exclude_cols)) => {
+                let intersection: Vec<_> = text_cols.intersection(exclude_cols).collect();
                 if !intersection.is_empty() {
                     Err(MySqlError::DuplicatedColumnNames {
                         qualified_table_name: format!("{:?}.{:?}", self.schema_name, self.name),
