@@ -81,12 +81,12 @@ site.Data.self_managed.latest_versions.operator_helm_chart_version }}
    | `create_database`  | Set to `false`. |
    | `environmentd_version`  | New Materialize instance version.|
    | `request_rollout`  or `force_rollout` | A new UUID string.  Can be generated with `uuidgen`.<br> <ul><li>`request_rollout` triggers a rollout only if changes exist. </li><li>`force_rollout`  triggers a rollout even if no changes exist.</li></ul> |
-   | `inPlaceRollout` | Set to `true` to perform an in-place upgrade.<br>Set to `false` to perform a rolling upgrade. For rolling upgrades, ensure you have enough resources to support having both the old and new Materialize instances running during the upgrade. |
+   | `inPlaceRollout` | Set to `false` to perform a rolling upgrade. For rolling upgrades, ensure you have enough resources to support having both the old and new Materialize instances running during the upgrade. |
 
    For example, the following instance specifies:
 
    - a `create_database` of `false`,
-   - an `inPlaceRollout` of `true`,
+   - an `inPlaceRollout` of `false`,
    - an `environmentd_version` of `"{{ $environmentd_version }}"`, and
    - a `request_rollout` of `"12345678-1305-1304-1304-123456781304"`.
 
@@ -101,11 +101,19 @@ site.Data.self_managed.latest_versions.operator_helm_chart_version }}
          memory_limit   = "2Gi"
          create_database = false
          environmentd_version = "{{ $environmentd_version }}"
-         inPlaceRollout = true
-         request_rollout="12345678-1305-1304-1304-123456781304"
+         inPlaceRollout: false                                   # When false, performs a rolling upgrade rather than in-place
+         requestRollout: 22222222-2222-2222-2222-222222222222    # Enter a new UUID
        }
    ]
    ```
+
+   <div class="warning">
+      <strong class="gutter">WARNING!</strong> Please consult the Materialize team before setting inPlaceRollout to true and performing an in-place rollout. In almost all cases a rolling upgrade is preferred.
+   </div>
+
+
+
+
 
 1. Run `terraform plan` with both the `terraform.tfvars` and your
    `mz_instances.tfvars` files and review the changes to be made.
