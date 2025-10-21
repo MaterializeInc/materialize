@@ -21,7 +21,7 @@ use cloud_resource_controller::KubernetesResourceReader;
 use futures::TryFutureExt;
 use futures::stream::{BoxStream, StreamExt};
 use k8s_openapi::DeepMerge;
-use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetSpec};
+use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetSpec, StatefulSetUpdateStrategy};
 use k8s_openapi::api::core::v1::{
     Affinity, Capabilities, Container, ContainerPort, EnvVar, EnvVarSource, EphemeralVolumeSource,
     NodeAffinity, NodeSelector, NodeSelectorRequirement, NodeSelectorTerm, ObjectFieldSelector,
@@ -1202,6 +1202,10 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 service_name: Some(name.clone()),
                 replicas: Some(scale.into()),
                 template: pod_template_spec,
+                update_strategy: Some(StatefulSetUpdateStrategy {
+                    type_: Some("OnDelete".to_owned()),
+                    ..Default::default()
+                }),
                 pod_management_policy: Some("Parallel".to_string()),
                 volume_claim_templates,
                 ..Default::default()
