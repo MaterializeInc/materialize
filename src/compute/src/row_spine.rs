@@ -997,10 +997,7 @@ mod dictionary {
                     c2.report();
                     Some(ColumnsCodec::new_from([c1, c2]))
                 }
-                (None, None) => None,
-                _ => {
-                    panic!("Unclear codec configuration!")
-                }
+                _ => None,
             };
 
             Self {
