@@ -27,26 +27,3 @@
     - Replace `<host>` with your MySQL endpoint.
 
     AWS IAM authentication is also available, see the [`CREATE CONNECTION`](/sql/create-connection/#mysql) command for details.
-
-1. Use the [`CREATE SOURCE`](/sql/create-source/) command to connect Materialize
-   to your MySQL instance and start ingesting data:
-
-    ```mzsql
-    CREATE SOURCE mz_source
-      FROM mysql CONNECTION mysql_connection
-      FOR ALL TABLES;
-    ```
-
-    - By default, the source will be created in the active cluster; to use a
-      different cluster, use the `IN CLUSTER` clause.
-
-    - To ingest data from specific schemas or tables, use the `FOR SCHEMAS
-      (<schema1>,<schema2>)` or `FOR TABLES (<table1>, <table2>)` options
-      instead of `FOR ALL TABLES`.
-
-    - To handle unsupported data types, use the `TEXT COLUMNS` or `IGNORE
-      COLUMNS` options. Check out the [reference documentation](/sql/create-source/mysql/#supported-types)
-      for guidance.
-
-1. After source creation, you can handle upstream [schema changes](/sql/create-source/mysql/#schema-changes)
-   by dropping and recreating the source.

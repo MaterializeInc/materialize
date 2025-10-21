@@ -121,7 +121,7 @@ network to allow traffic from the bastion host.
 
 ## C. Ingest data in Materialize
 
-### 1. (Optional) Create a cluster
+### 1. (Recommended) Create a cluster
 
 {{< note >}}
 If you are prototyping and already have a cluster to host your PostgreSQL
@@ -132,10 +132,9 @@ scenarios, we recommend separating your workloads into multiple clusters for
 
 {{% postgres-direct/create-a-cluster %}}
 
-### 2. Start ingesting data
+### 2. Create a connection.
 
-With the network configured and an ingestion pipeline in place, connect
-Materialize to your AlloyDB instance and begin the data ingestion process.
+With the network configured, create a connection in Materialize to the upstream database.
 
 {{< tabs >}}
 
@@ -149,11 +148,15 @@ Materialize to your AlloyDB instance and begin the data ingestion process.
 
 {{< /tabs >}}
 
-### 3. Monitor the ingestion status
+### 3. Start ingesting data.
+
+{{< include-md file="shared-content/ingest-data/ingest-data-postgres-step.md" >}}
+
+### 4. Monitor the ingestion status
 
 {{% postgres-direct/check-the-ingestion-status %}}
 
-### 4. Right-size the cluster
+### 5. Right-size the cluster
 
 {{% postgres-direct/right-size-the-cluster %}}
 

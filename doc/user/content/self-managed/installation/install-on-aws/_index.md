@@ -1,5 +1,5 @@
 ---
-title: "Install on AWS (Terraform)"
+title: "Install on AWS (via Terraform)"
 description: "Install Materialize on AWS Elastic Kubernetes Service (EKS) using Terraform."
 aliases:
   - /self-hosted/install-on-aws/

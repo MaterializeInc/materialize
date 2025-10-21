@@ -78,7 +78,7 @@ refer to the [CockroachDB documentation](https://www.cockroachlabs.com/docs/stab
 
 ## B. Ingest data in Materialize
 
-### 1. (Optional) Create a cluster
+### 1. (Recommended) Create a cluster
 
 {{< note >}}
 If you are prototyping and already have a cluster to host your Kafka

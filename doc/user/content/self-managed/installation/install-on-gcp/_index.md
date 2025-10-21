@@ -1,5 +1,5 @@
 ---
-title: "Install on GCP"
+title: "Install on GCP (via Terraform)"
 description: "Install Materialize on GCP Google Kubernetes Engine (GKE) using Terraform."
 aliases:
   - /self-hosted/install-on-gcp/

@@ -220,7 +220,7 @@ The steps in this section are specific to Materialize. You can run them in the
 [Materialize console's SQL Shell](/console/) or your
 preferred SQL client connected to Materialize.
 
-### 1. (Optional) Create a cluster
+### 1. (Recommended) Create a cluster
 
 {{< note >}}
 If you are prototyping and already have a cluster to host your PostgreSQL

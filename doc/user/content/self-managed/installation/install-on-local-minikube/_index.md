@@ -1,5 +1,5 @@
 ---
-title: "Install locally on minikube (Helm)"
+title: "Install locally on minikube (via Helm)"
 description: "Deploy Self-managed Materialize to a local minikube cluster."
 aliases:
   - /self-hosted/install-on-local-minikube/

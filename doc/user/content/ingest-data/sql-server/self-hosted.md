@@ -225,7 +225,7 @@ traffic from the bastion host.
 
 ## C. Ingest data in Materialize
 
-### 1. (Optional) Create a cluster
+### 1. (Recommended) Create a cluster
 
 {{< note >}}
 If you are prototyping and already have a cluster to host your SQL Server

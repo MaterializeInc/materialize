@@ -52,7 +52,7 @@ If you are an SLA Supported Customer who is experiencing an **urgent** issue,
 
 - Alternatively, you can email `support@materialize.com`. To ensure priority
   handling, include **urgent** in the subject line.
-  
+
   - For Materialize Cloud SLA Supported Customer, email from your Materialize
   login email address.
 
