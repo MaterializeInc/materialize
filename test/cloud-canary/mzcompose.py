@@ -52,8 +52,8 @@ APP_PASSWORD = os.getenv("NIGHTLY_CANARY_APP_PASSWORD")
 VERSION = f"{MzVersion.parse_cargo()}--pr.g{os.getenv('BUILDKITE_COMMIT')}"
 
 # The DevEx account in the Confluent Cloud is used to provide Kafka services
-KAFKA_BOOTSTRAP_SERVER = "pkc-n00kk.us-east-1.aws.confluent.cloud:9092"
-SCHEMA_REGISTRY_ENDPOINT = "https://psrc-8kz20.us-east-2.aws.confluent.cloud"
+KAFKA_BOOTSTRAP_SERVER = "pkc-oxqxx9.us-east-1.aws.confluent.cloud:9092"
+SCHEMA_REGISTRY_ENDPOINT = "https://psrc-e0919.us-east-2.aws.confluent.cloud"
 # The actual values are stored in the i2 repository
 CONFLUENT_API_KEY = os.getenv("CONFLUENT_CLOUD_QA_CANARY_KAFKA_USERNAME")
 CONFLUENT_API_SECRET = os.getenv("CONFLUENT_CLOUD_QA_CANARY_KAFKA_PASSWORD")
