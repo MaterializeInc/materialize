@@ -1015,6 +1015,33 @@ impl UnopenedPersistCatalogState {
             }
         }
 
+        // If we are planning to write to the catalog shards, we need to ensure they have schemas
+        // registered _before_ opening the write handles.
+        let diagnostics = Diagnostics {
+            shard_name: CATALOG_SHARD_NAME.to_string(),
+            handle_purpose: "durable catalog register schemas".to_string(),
+        };
+        persist_client
+            .register_schema::<SourceData, (), Timestamp, StorageDiff>(
+                catalog_shard_id,
+                &desc(),
+                &UnitSchema,
+                diagnostics.clone(),
+            )
+            .await
+            .expect("valid usage")
+            .expect("valid schema");
+        persist_client
+            .register_schema::<(), (), Timestamp, StorageDiff>(
+                upgrade_shard_id,
+                &UnitSchema,
+                &UnitSchema,
+                diagnostics.clone(),
+            )
+            .await
+            .expect("valid usage")
+            .expect("valid schema");
+
         let open_handles_start = Instant::now();
         info!("startup: envd serve: catalog init: open handles beginning");
         let since_handle = persist_client
