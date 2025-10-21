@@ -25,7 +25,7 @@ from typing import Any, Literal, TypeVar
 
 import psycopg
 
-from materialize import spawn, ui, MZ_ROOT
+from materialize import MZ_ROOT, spawn, ui
 from materialize.mz_version import MzVersion
 from materialize.ui import UIError
 

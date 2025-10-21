@@ -2095,6 +2095,7 @@ class KillAction(Action):
                 additional_system_parameter_defaults=self.system_parameters,
                 metadata_store="cockroach",
                 default_replication_factor=1,
+                consensus_foundationdb=True,
             )
         ):
             self.composition.up("materialized", detach=True)
@@ -2145,6 +2146,7 @@ class ZeroDowntimeDeployAction(Action):
                 metadata_store="cockroach",
                 default_replication_factor=1,
                 additional_system_parameter_defaults=ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS,
+                consensus_foundationdb=True,
             ),
         ):
             self.composition.up(mz_service, detach=True)
