@@ -97,13 +97,13 @@ name = "About"
 weight = 70
 
 [[menu.main]]
-name = "Materialize Cloud Security"
+name = "Materialize Cloud Security and Compliance"
 parent = "about"
 url = "https://materialize.com/security-overview"
 weight = 25
 
 [[menu.main]]
-name = "Materialize Cloud Responsible disclosure policy"
+name = "Responsible disclosure policy"
 parent = "about"
 url = "https://materialize.com/securitydisclosure"
 weight = 30

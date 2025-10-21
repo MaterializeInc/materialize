@@ -35,8 +35,9 @@ you can use the **Report Production Outage** option for fastest response.
 
 ### Email
 
-You can also email us your questions at `support@materialize.com` from your
-Materialize login email address.
+You can also email us your questions at `support@materialize.com`. For
+Materialize Cloud SLA Supported Customer, email from your Materialize login
+email address.
 
 ### Join the Materialize Slack community
 
@@ -49,9 +50,11 @@ If you are an SLA Supported Customer who is experiencing an **urgent** issue,
 - Use the [messenger's](#messenger-app) **Report Production Outage** option for
   fastest response.
 
-- Alternatively, you can email `support@materialize.com` from your Materialize
-  login email address. To ensure priority handling, include **urgent** in the
-  subject line.
+- Alternatively, you can email `support@materialize.com`. To ensure priority
+  handling, include **urgent** in the subject line.
+  
+  - For Materialize Cloud SLA Supported Customer, email from your Materialize
+  login email address.
 
 Use the following definitions to determine what priority to assign to
 your support ticket:
@@ -104,6 +107,7 @@ Have ideas to improve Materialize? Use the messenger to start a conversation —
 
 We tailor support experiences based on your workspace and plan. To learn more about what's available to your team, reach out via the messenger or email us.
 
-## Checking service status
+## Checking Materialize Cloud service status
 
-Check the current status of our services on the [status page](https://status.materialize.com).
+Check the current status of Materialize Cloud on the [status
+page](https://status.materialize.com).

@@ -8,26 +8,20 @@ menu:
     weight: 65
 ---
 
+## Releases
 
-## Cloud releases
 
-
-## Self-managed releases
-
-### v25.3.0
+### Self-Managed release v25.3.0
 
 #### License keys
 
-
 #### Swap support
 
+#### SQL Server
 
 
-## Release schedules
-We are continually improving Materialize with new features and bug fixes. We
-periodically release these improvements to your Materialize account.
 
-### Cloud Schedule
+## Materialize Cloud Upgrade Schedule
 
 Materialize upgrades all regions to the latest release each week according to
 the following schedule:
