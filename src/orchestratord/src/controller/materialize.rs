@@ -326,6 +326,45 @@ impl Context {
             )
             .await
     }
+
+    async fn promote(
+        &self,
+        client: &Client,
+        mz: &Materialize,
+        resources: environmentd::Resources,
+        active_generation: u64,
+        desired_generation: u64,
+        resources_hash: String,
+    ) -> Result<(), Error> {
+        resources.promote_services(client, &mz.namespace()).await?;
+        resources
+            .teardown_generation(client, mz, active_generation)
+            .await?;
+        let mz_api: Api<Materialize> = Api::namespaced(client.clone(), &mz.namespace());
+        self.update_status(
+            &mz_api,
+            mz,
+            MaterializeStatus {
+                active_generation: desired_generation,
+                last_completed_rollout_request: mz.requested_reconciliation_id(),
+                resource_id: mz.status().resource_id,
+                resources_hash,
+                conditions: vec![Condition {
+                    type_: "UpToDate".into(),
+                    status: "True".into(),
+                    last_transition_time: Time(chrono::offset::Utc::now()),
+                    message: format!(
+                        "Successfully applied changes for generation {desired_generation}"
+                    ),
+                    observed_generation: mz.meta().generation,
+                    reason: "Applied".into(),
+                }],
+            },
+            false,
+        )
+        .await?;
+        Ok(())
+    }
 }
 
 #[async_trait::async_trait]
@@ -448,9 +487,27 @@ impl k8s_controller::Context for Context {
         );
         let resources_hash = resources.generate_hash();
 
-        let mut result = match (has_current_changes, mz.rollout_requested()) {
+        let mut result = match (
+            mz.is_promoting(),
+            has_current_changes,
+            mz.rollout_requested(),
+        ) {
+            // If we're in status promoting, we MUST promote now.
+            // We don't know if we successfully promoted or not yet.
+            (true, _, _) => {
+                self.promote(
+                    &client,
+                    mz,
+                    resources,
+                    active_generation,
+                    desired_generation,
+                    resources_hash,
+                )
+                .await?;
+                Ok(None)
+            }
             // There are changes pending, and we want to appy them.
-            (true, true) => {
+            (false, true, true) => {
                 // we remove the environment resources hash annotation here
                 // because if we fail halfway through applying the resources,
                 // things will be in an inconsistent state, and we don't want
@@ -516,32 +573,44 @@ impl k8s_controller::Context for Context {
                         // do this last, so that we keep traffic pointing at
                         // the previous environmentd until the new one is
                         // fully ready
-                        // TODO add condition saying we're about to promote,
-                        // and check it before aborting anything.
-                        resources.promote_services(&client, &mz.namespace()).await?;
-                        resources
-                            .teardown_generation(&client, mz, active_generation)
-                            .await?;
+
+                        // Update the status before calling promote, so that we know
+                        // we've crossed the point of no return.
+                        // Once we see this status, we must promote without taking other actions.
                         self.update_status(
                             &mz_api,
                             mz,
                             MaterializeStatus {
-                                active_generation: desired_generation,
-                                last_completed_rollout_request: mz.requested_reconciliation_id(),
+                                active_generation,
+                                // don't update the reconciliation id yet,
+                                // because the rollout hasn't yet completed. if
+                                // we fail later on, we want to ensure that the
+                                // rollout gets retried.
+                                last_completed_rollout_request: status
+                                    .last_completed_rollout_request,
                                 resource_id: status.resource_id,
-                                resources_hash,
+                                resources_hash: resources_hash.clone(),
                                 conditions: vec![Condition {
                                     type_: "UpToDate".into(),
-                                    status: "True".into(),
+                                    status: "Unknown".into(),
                                     last_transition_time: Time(chrono::offset::Utc::now()),
                                     message: format!(
-                                        "Successfully applied changes for generation {desired_generation}"
+                                        "Attempting to promote generation {desired_generation}"
                                     ),
                                     observed_generation: mz.meta().generation,
-                                    reason: "Applied".into(),
+                                    reason: "Promoting".into(),
                                 }],
                             },
-                            false,
+                            active_generation != desired_generation,
+                        )
+                        .await?;
+                        self.promote(
+                            &client,
+                            mz,
+                            resources,
+                            active_generation,
+                            desired_generation,
+                            resources_hash,
                         )
                         .await?;
                         Ok(None)
@@ -578,7 +647,7 @@ impl k8s_controller::Context for Context {
                 }
             }
             // There are changes pending, but we don't want to apply them yet.
-            (true, false) => {
+            (false, true, false) => {
                 let mut needs_update = mz.conditions_need_update();
                 if mz.update_in_progress() {
                     resources
@@ -614,7 +683,7 @@ impl k8s_controller::Context for Context {
                 Ok(None)
             }
             // No changes pending, but we might need to clean up a partially applied rollout.
-            (false, _) => {
+            (false, false, _) => {
                 // this can happen if we update the environment, but then revert
                 // that update before the update was deployed. in this case, we
                 // don't want the environment to still show up as
