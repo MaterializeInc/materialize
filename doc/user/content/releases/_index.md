@@ -5,7 +5,7 @@ disable_list: true
 menu:
   main:
     identifier: "releases"
-    weight: 65
+    weight: 80
 ---
 
 ## Releases

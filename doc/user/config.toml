@@ -67,7 +67,7 @@ weight = 12
 [[menu.main]]
 identifier = "reference"
 name = "Reference"
-weight = 15
+weight = 60
 
 [[menu.main]]
 name = "SQL commands"
@@ -94,7 +94,7 @@ url = "https://materialize.com/changelog/"
 [[menu.main]]
 identifier = "about"
 name = "About"
-weight = 70
+weight = 90
 
 [[menu.main]]
 name = "Materialize Cloud Security and Compliance"

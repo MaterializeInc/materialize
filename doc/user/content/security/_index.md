@@ -5,7 +5,7 @@ disable_list: true
 menu:
   main:
     identifier: "security"
-    weight: 13
+    weight: 40
 ---
 
 ## Access management guides

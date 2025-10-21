@@ -5,7 +5,7 @@ disable_list: true
 menu:
   main:
     identifier: "manage"
-    weight: 14
+    weight: 50
 ---
 
 This section contains various resources for managing Materialize.
