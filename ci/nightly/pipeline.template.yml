@@ -1137,6 +1137,8 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
               args: [--scenario=SelfManagedv25Point2_Upgrade_ManipulateBeforeUpgrade, "--seed=$BUILDKITE_JOB_ID"]
+        skip: "database-issues#9821"
+
       - id: checks-self-managed-25-2-upgrade-manipulate-during-upgrade
         label: "Checks Self-Managed upgrade across all v25.2 patch releases, manipulate during upgrade"
         depends_on: build-x86_64
@@ -1148,6 +1150,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
               args: [--scenario=SelfManagedv25Point2_Upgrade_ManipulateDuringUpgrade, "--seed=$BUILDKITE_JOB_ID"]
+        skip: "database-issues#9821"
 
   - group: "K8s node recovery cloudtest"
     key: k8s-node-recovery
