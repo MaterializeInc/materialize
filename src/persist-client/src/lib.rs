@@ -24,7 +24,7 @@ use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
 use mz_build_info::{BuildInfo, build_info};
 use mz_dyncfg::ConfigSet;
-use mz_ore::{instrument, soft_assert_or_log};
+use mz_ore::instrument;
 use mz_persist::location::{Blob, Consensus, ExternalError};
 use mz_persist_types::schema::SchemaId;
 use mz_persist_types::{Codec, Codec64, Opaque};
@@ -490,10 +490,6 @@ impl PersistClient {
     ///
     /// Use this to save latency and a bit of persist traffic if you're just
     /// going to immediately drop or expire the [ReadHandle].
-    ///
-    /// The `_schema` parameter is currently unused, but should be an object
-    /// that represents the schema of the data in the shard. This will be required
-    /// in the future.
     #[instrument(level = "debug", fields(shard = %shard_id))]
     pub async fn open_writer<K, V, T, D>(
         &self,
@@ -511,23 +507,11 @@ impl PersistClient {
         let machine = self.make_machine(shard_id, diagnostics.clone()).await?;
         let gc = GarbageCollector::new(machine.clone(), Arc::clone(&self.isolated_runtime));
 
-        // TODO: Because schemas are ordered, as part of the persist schema
-        // changes work, we probably want to build some way to allow persist
-        // users to control the order. For example, maybe a
-        // `PersistClient::compare_and_append_schema(current_schema_id,
-        // next_schema)`. Presumably this would then be passed in to open_writer
-        // instead of us implicitly registering it here.
-        // NB: The overwhelming common case is that this schema is already
-        // registered. In this case, the cmd breaks early and nothing is
-        // written to (or read from) CRDB.
-        let (schema_id, maintenance) = machine.register_schema(&*key_schema, &*val_schema).await;
-        maintenance.start_performing(&machine, &gc);
-        soft_assert_or_log!(
-            schema_id.is_some(),
-            "unable to register schemas {:?} {:?}",
-            key_schema,
-            val_schema,
-        );
+        // We defer registering the schema until write time, to allow opening
+        // write handles in a "read-only" mode where they don't implicitly
+        // modify persist state. But it might already be registered, in which
+        // case we can fetch its ID.
+        let schema_id = machine.find_schema(&*key_schema, &*val_schema);
 
         let writer_id = WriterId::new();
         let schemas = Schemas {
@@ -716,6 +700,26 @@ impl PersistClient {
             .make_machine::<K, V, T, D>(shard_id, diagnostics)
             .await?;
         Ok(machine.latest_schema())
+    }
+
+    /// Returns the ID of the given schema, if known at the current state.
+    pub async fn find_schema<K, V, T, D>(
+        &self,
+        shard_id: ShardId,
+        key_schema: &K::Schema,
+        val_schema: &V::Schema,
+        diagnostics: Diagnostics,
+    ) -> Result<Option<SchemaId>, InvalidUsage<T>>
+    where
+        K: Debug + Codec,
+        V: Debug + Codec,
+        T: Timestamp + Lattice + Codec64 + Sync,
+        D: Semigroup + Codec64 + Send + Sync,
+    {
+        let machine = self
+            .make_machine::<K, V, T, D>(shard_id, diagnostics)
+            .await?;
+        Ok(machine.find_schema(key_schema, val_schema))
     }
 
     /// Registers a new latest schema for the given shard.
