@@ -31,8 +31,9 @@ use mz_ore::{instrument, soft_panic_or_log};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Diff, SqlScalarType, Timestamp};
 use mz_sql::ast::{
-    AlterConnectionAction, AlterConnectionStatement, AlterSourceAction, AstInfo, ConstantVisitor,
-    CopyRelation, CopyStatement, CreateSourceOptionName, Raw, Statement, SubscribeStatement,
+    AlterConnectionAction, AlterConnectionStatement, AlterSinkAction, AlterSourceAction, AstInfo,
+    ConstantVisitor, CopyRelation, CopyStatement, CreateSourceOptionName, Raw, Statement,
+    SubscribeStatement,
 };
 use mz_sql::catalog::RoleAttributesRaw;
 use mz_sql::names::{Aug, PartialItemName, ResolvedIds};
@@ -1271,6 +1272,18 @@ impl Coordinator {
             // work can take hours (configured by the user), so would also be a bad experience for
             // users.
             Statement::AlterCluster(_) => false,
+
+            // `ALTER SINK SET FROM` waits for the old relation to make enough progress for a clean
+            // cutover. If the old collection is stalled, it may block forever. Checks in
+            // sequencing ensure that the operation fails if any one of these happens concurrently:
+            //   * the sink is dropped
+            //   * the new source relation is dropped
+            //   * another `ALTER SINK` for the same sink is applied first
+            Statement::AlterSink(stmt)
+                if matches!(stmt.action, AlterSinkAction::ChangeRelation(_)) =>
+            {
+                false
+            }
 
             // Everything else must be serialized.
             _ => true,

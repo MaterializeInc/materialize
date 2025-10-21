@@ -7042,33 +7042,20 @@ pub fn plan_alter_sink(
             let [stmt]: [StatementParseResult; 1] = stmts
                 .try_into()
                 .expect("create sql of sink was not exactly one statement");
-            let Statement::CreateSink(mut stmt) = stmt.ast else {
+            let Statement::CreateSink(stmt) = stmt.ast else {
                 unreachable!("invalid create SQL for sink item");
             };
-
-            // And then we find the existing version of the sink and increase it by one
-            let cur_version = stmt
-                .with_options
-                .extract_if(.., |o| o.name == CreateSinkOptionName::Version)
-                .map(|o| u64::try_from_value(o.value).expect("invalid sink create_sql"))
-                .max()
-                .unwrap_or(0);
-            let new_version = cur_version + 1;
-            stmt.with_options.push(CreateSinkOption {
-                name: CreateSinkOptionName::Version,
-                value: Some(WithOptionValue::Value(Value::Number(
-                    new_version.to_string(),
-                ))),
-            });
 
             // Then resolve and swap the resolved from relation to the new one
             let (mut stmt, _) = crate::names::resolve(scx.catalog, stmt)?;
             stmt.from = new_from;
 
             // Finally re-plan the modified create sink statement to verify the new configuration is valid
-            let Plan::CreateSink(plan) = plan_sink(scx, stmt)? else {
+            let Plan::CreateSink(mut plan) = plan_sink(scx, stmt)? else {
                 unreachable!("invalid plan for CREATE SINK statement");
             };
+
+            plan.sink.version += 1;
 
             Ok(Plan::AlterSink(AlterSinkPlan {
                 item_id: item.id(),

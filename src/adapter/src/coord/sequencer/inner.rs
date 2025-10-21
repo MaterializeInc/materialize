@@ -47,8 +47,9 @@ use mz_repr::{
     RelationVersionSelector, Row, RowArena, RowIterator, Timestamp,
 };
 use mz_sql::ast::{
-    AlterSourceAddSubsourceOption, CreateSourceOptionName, CreateSubsourceOption,
-    CreateSubsourceOptionName, SqlServerConfigOption, SqlServerConfigOptionName,
+    AlterSourceAddSubsourceOption, CreateSinkOption, CreateSinkOptionName, CreateSourceOptionName,
+    CreateSubsourceOption, CreateSubsourceOptionName, SqlServerConfigOption,
+    SqlServerConfigOptionName,
 };
 use mz_sql::ast::{CreateSubsourceStatement, MySqlConfigOptionName, UnresolvedItemName};
 use mz_sql::catalog::{
@@ -3646,30 +3647,11 @@ impl Coordinator {
 
         let plan_validity = PlanValidity::new(
             self.catalog().transient_revision(),
-            BTreeSet::from_iter([from_item_id]),
+            BTreeSet::from_iter([plan.item_id, from_item_id]),
             Some(plan.in_cluster),
             None,
             ctx.session().role_metadata().clone(),
         );
-
-        // Re-resolve items in the altered statement
-        // Parse statement.
-        let create_sink_stmt = match mz_sql::parse::parse(&plan.sink.create_sql)
-            .expect("invalid create sink sql")
-            .into_element()
-            .ast
-        {
-            Statement::CreateSink(stmt) => stmt,
-            _ => unreachable!("invalid statment kind for sink"),
-        };
-        let catalog = self.catalog().for_system_session();
-        let (_, resolved_ids) = match mz_sql::names::resolve(&catalog, create_sink_stmt) {
-            Ok(ok) => ok,
-            Err(e) => {
-                ctx.retire(Err(AdapterError::internal("ALTER SINK", e)));
-                return;
-            }
-        };
 
         info!(
             "preparing alter sink for {}: frontiers={:?} export={:?}",
@@ -3682,6 +3664,9 @@ impl Coordinator {
 
         // Now we must wait for the sink to make enough progress such that there is overlap between
         // the new `from` collection's read hold and the sink's write frontier.
+        //
+        // TODO(database-issues#9820): If the sink is dropped while we are waiting for progress,
+        // the watch set never completes and neither does the `ALTER SINK` command.
         self.install_storage_watch_set(
             ctx.session().conn_id().clone(),
             BTreeSet::from_iter([plan.global_id]),
@@ -3691,7 +3676,6 @@ impl Coordinator {
                 otel_ctx,
                 plan,
                 plan_validity,
-                resolved_ids,
                 read_hold,
             }),
         );
@@ -3700,6 +3684,23 @@ impl Coordinator {
     #[instrument]
     pub async fn sequence_alter_sink_finish(&mut self, mut ctx: AlterSinkReadyContext) {
         ctx.otel_ctx.attach_as_parent();
+
+        let plan::AlterSinkPlan {
+            item_id,
+            global_id,
+            sink: sink_plan,
+            with_snapshot,
+            in_cluster,
+        } = ctx.plan.clone();
+
+        // We avoid taking the DDL lock for `ALTER SINK SET FROM` commands, see
+        // `Coordinator::must_serialize_ddl`. We therefore must assume that the world has
+        // arbitrarily changed since we performed planning, and we must re-assert that it still
+        // matches our requirements.
+        //
+        // The `PlanValidity` check ensures that both the sink and the new source relation still
+        // exist. Apart from that we have to ensure that nobody else altered the sink in the mean
+        // time, which we do by comparing the catalog sink version to the one in the plan.
         match ctx.plan_validity.check(self.catalog()) {
             Ok(()) => {}
             Err(err) => {
@@ -3707,25 +3708,27 @@ impl Coordinator {
                 return;
             }
         }
-        {
-            let plan = &ctx.plan;
-            info!(
-                "finishing alter sink for {}: frontiers={:?} export={:?}",
-                plan.global_id,
-                self.controller
-                    .storage_collections
-                    .collections_frontiers(vec![plan.global_id, plan.sink.from]),
-                self.controller.storage.export(plan.global_id)
-            );
+
+        let entry = self.catalog().get_entry(&item_id);
+        let CatalogItem::Sink(old_sink) = entry.item() else {
+            panic!("invalid item kind for `AlterSinkPlan`");
+        };
+
+        if sink_plan.version != old_sink.version + 1 {
+            ctx.retire(Err(AdapterError::ChangedPlan(
+                "sink was altered concurrently".into(),
+            )));
+            return;
         }
 
-        let plan::AlterSinkPlan {
-            item_id,
-            global_id,
-            sink,
-            with_snapshot,
-            in_cluster,
-        } = ctx.plan.clone();
+        info!(
+            "finishing alter sink for {global_id}: frontiers={:?} export={:?}",
+            self.controller
+                .storage_collections
+                .collections_frontiers(vec![global_id, sink_plan.from]),
+            self.controller.storage.export(global_id),
+        );
+
         // Assert that we can recover the updates that happened at the timestamps of the write
         // frontier. This must be true in this call.
         let write_frontier = &self
@@ -3742,22 +3745,58 @@ impl Coordinator {
             &**write_frontier
         );
 
-        let catalog_sink = Sink {
-            create_sql: sink.create_sql,
+        // Parse the `create_sql` so we can update it to the new sink definition.
+        //
+        // Note that we need to use the `create_sql` from the catalog here, not the one from the
+        // sink plan. Even though we ensure that the sink version didn't change since planning, the
+        // names in the `create_sql` may have changed, for example due to a schema swap.
+        let create_sql = &old_sink.create_sql;
+        let parsed = mz_sql::parse::parse(create_sql).expect("valid create_sql");
+        let Statement::CreateSink(mut stmt) = parsed.into_element().ast else {
+            unreachable!("invalid statement kind for sink");
+        };
+
+        // Update the sink version.
+        stmt.with_options
+            .retain(|o| o.name != CreateSinkOptionName::Version);
+        stmt.with_options.push(CreateSinkOption {
+            name: CreateSinkOptionName::Version,
+            value: Some(WithOptionValue::Value(mz_sql::ast::Value::Number(
+                sink_plan.version.to_string(),
+            ))),
+        });
+
+        let conn_catalog = self.catalog().for_system_session();
+        let (mut stmt, resolved_ids) =
+            mz_sql::names::resolve(&conn_catalog, stmt).expect("resolvable create_sql");
+
+        // Update the `from` relation.
+        let from_entry = self.catalog().get_entry_by_global_id(&sink_plan.from);
+        let full_name = self.catalog().resolve_full_name(from_entry.name(), None);
+        stmt.from = ResolvedItemName::Item {
+            id: from_entry.id(),
+            qualifiers: from_entry.name.qualifiers.clone(),
+            full_name,
+            print_id: true,
+            version: from_entry.version,
+        };
+
+        let new_sink = Sink {
+            create_sql: stmt.to_ast_string_stable(),
             global_id,
-            from: sink.from,
-            connection: sink.connection.clone(),
-            envelope: sink.envelope,
-            version: sink.version,
+            from: sink_plan.from,
+            connection: sink_plan.connection.clone(),
+            envelope: sink_plan.envelope,
+            version: sink_plan.version,
             with_snapshot,
-            resolved_ids: ctx.resolved_ids.clone(),
+            resolved_ids: resolved_ids.clone(),
             cluster_id: in_cluster,
         };
 
         let ops = vec![catalog::Op::UpdateItem {
             id: item_id,
-            name: self.catalog.get_entry(&item_id).name().clone(),
-            to_item: CatalogItem::Sink(catalog_sink),
+            name: entry.name().clone(),
+            to_item: CatalogItem::Sink(new_sink),
         }];
 
         match self
@@ -3771,21 +3810,20 @@ impl Coordinator {
             }
         }
 
-        let from_entry = self.catalog().get_entry_by_global_id(&sink.from);
         let storage_sink_desc = StorageSinkDesc {
-            from: sink.from,
+            from: sink_plan.from,
             from_desc: from_entry
                 .desc_opt()
                 .expect("sinks can only be built on items with descs")
                 .into_owned(),
-            connection: sink
+            connection: sink_plan
                 .connection
                 .clone()
                 .into_inline_connection(self.catalog().state()),
-            envelope: sink.envelope,
+            envelope: sink_plan.envelope,
             as_of,
             with_snapshot,
-            version: sink.version,
+            version: sink_plan.version,
             from_storage_metadata: (),
             to_storage_metadata: (),
         };
