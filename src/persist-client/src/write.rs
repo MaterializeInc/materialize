@@ -221,6 +221,31 @@ where
         self.write_schemas.id
     }
 
+    /// Registers the write schema, if it isn't already registered.
+    ///
+    /// # Panics
+    ///
+    /// This method expects that either the shard doesn't yet have any schema registered, or one of
+    /// the registered schemas is the same as the write schema. If all registered schemas are
+    /// different from the write schema, it panics.
+    pub async fn ensure_schema_registered(&mut self) -> SchemaId {
+        let Schemas { id, key, val } = &self.write_schemas;
+
+        if let Some(id) = id {
+            return *id;
+        }
+
+        let (schema_id, maintenance) = self.machine.register_schema(key, val).await;
+        maintenance.start_performing(&self.machine, &self.gc);
+
+        let Some(schema_id) = schema_id else {
+            panic!("unable to register schemas: {key:?} {val:?}");
+        };
+
+        self.write_schemas.id = Some(schema_id);
+        schema_id
+    }
+
     /// A cached version of the shard-global `upper` frontier.
     ///
     /// This is the most recent upper discovered by this handle. It is
@@ -505,6 +530,16 @@ where
                     TODO: Error on very old versions once the leaked blob detector exists."
                 )
             }
+        }
+
+        // If we are writing any data, we require a registered write schema.
+        //
+        // We allow appending empty batches without a registered schema, because
+        // some clients expect to be able to advance the write frontier without
+        // knowing the schema. For example, shard finalization may not always
+        // know the schemas of shards to be finalized.
+        if batches.iter().any(|b| b.batch.len > 0) && self.schema_id().is_none() {
+            self.ensure_schema_registered().await;
         }
 
         let lower = expected_upper.clone();
