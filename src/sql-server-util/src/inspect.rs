@@ -11,7 +11,7 @@
 
 use anyhow::Context;
 use chrono::NaiveDateTime;
-use futures::Stream;
+use futures::{Stream, TryStreamExt};
 use itertools::Itertools;
 use mz_ore::cast::CastFrom;
 use mz_ore::retry::RetryResult;
@@ -237,7 +237,7 @@ fn parse_lsn(result: &[tiberius::Row]) -> Result<Lsn, SqlServerError> {
 /// user.
 pub fn get_changes_asc(
     client: &mut Client,
-    capture_instance: &str,
+    capture_instance: &Arc<str>,
     start_lsn: Lsn,
     end_lsn: Lsn,
     filter: RowFilterOption,
@@ -246,13 +246,22 @@ pub fn get_changes_asc(
     let query = format!(
         "SELECT * FROM cdc.fn_cdc_get_all_changes_{capture_instance}(@P1, @P2, N'{filter}') ORDER BY {START_LSN_COLUMN} ASC;"
     );
-    client.query_streaming(
-        query,
-        &[
-            &start_lsn.as_bytes().as_slice(),
-            &end_lsn.as_bytes().as_slice(),
-        ],
-    )
+    client
+        .query_streaming(
+            query,
+            &[
+                &start_lsn.as_bytes().as_slice(),
+                &end_lsn.as_bytes().as_slice(),
+            ],
+        )
+        // For Tiberius errors, additionally record the capture instance
+        .map_err(|sql_error| match sql_error {
+            SqlServerError::SqlServer(error) => SqlServerError::CaptureInstanceError {
+                capture_instance: Arc::clone(capture_instance),
+                error,
+            },
+            _ => sql_error,
+        })
 }
 
 /// Cleans up the change table associated with the specified `capture_instance` by

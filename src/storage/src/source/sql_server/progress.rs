@@ -30,9 +30,7 @@ use futures::StreamExt;
 use mz_ore::future::InTask;
 use mz_repr::GlobalId;
 use mz_sql_server_util::cdc::Lsn;
-use mz_sql_server_util::inspect::get_latest_restore_history_id;
 use mz_storage_types::connections::SqlServerConnectionDetails;
-use mz_storage_types::sources::SqlServerSourceExtras;
 use mz_storage_types::sources::sql_server::{
     CDC_CLEANUP_CHANGE_TABLE, CDC_CLEANUP_CHANGE_TABLE_MAX_DELETES, OFFSET_KNOWN_INTERVAL,
 };
@@ -40,14 +38,11 @@ use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, Pre
 use timely::dataflow::operators::Map;
 use timely::dataflow::{Scope, Stream as TimelyStream};
 use timely::progress::Antichain;
+use tokio::sync::oneshot;
 
-use crate::source::sql_server::{ReplicationError, SourceOutputInfo, TransientError};
+use crate::source::sql_server::{REPL_WORKER, ReplicationError, SourceOutputInfo, TransientError};
 use crate::source::types::Probe;
 use crate::source::{RawSourceCreationConfig, probe};
-
-/// Used as a partition ID to determine the worker that is responsible for
-/// handling progress.
-static PROGRESS_WORKER: &str = "progress";
 
 pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
     scope: G,
@@ -55,7 +50,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
     connection: SqlServerConnectionDetails,
     outputs: BTreeMap<GlobalId, SourceOutputInfo>,
     committed_uppers: impl futures::Stream<Item = Antichain<Lsn>> + 'static,
-    extras: SqlServerSourceExtras,
+    tether: oneshot::Sender<()>,
 ) -> (
     TimelyStream<G, ReplicationError>,
     TimelyStream<G, Probe<Lsn>>,
@@ -75,13 +70,15 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
             };
 
             // Only a single worker is responsible for processing progress.
-            if !config.responsible_for(PROGRESS_WORKER) {
+            if !config.responsible_for(REPL_WORKER) {
                 // Emit 0 to mark this worker as having started up correctly.
                 for stat in config.statistics.values() {
                     stat.set_offset_known(0);
                     stat.set_offset_committed(0);
                 }
+                return Ok(());
             }
+
             let conn_config = connection
                 .resolve_config(
                     &config.config.connection_context.secrets_reader,
@@ -90,19 +87,6 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                 )
                 .await?;
             let mut client = mz_sql_server_util::Client::connect(conn_config).await?;
-
-
-            // Terminate the progress probes if a restore has happened. Replication operator will
-            // emit a definite error at the max LSN, but we also have to terminate the RLU probes
-            // to ensure that the error propogates to downstream consumers, otherwise it will
-            // wait in reclock as the server LSN will always be less than the LSN of the definite
-            // error.
-            let current_restore_history_id = get_latest_restore_history_id(&mut client).await?;
-            if current_restore_history_id != extras.restore_history_id {
-                tracing::warn!("Restore detected, exiting");
-                return Ok(());
-             }
-
 
             let probe_interval = OFFSET_KNOWN_INTERVAL.handle(config.config.config_set());
             let mut probe_ticker = probe::Ticker::new(|| probe_interval.get(), config.now_fn);
@@ -146,6 +130,15 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                             );
                             continue;
                         }
+
+                        // If the replication operator emits a DefiniteError at the maximum LSN,
+                        // the progress operator must stop emitting probes, otherwise the errors will
+                        // be stuck in the reclock operator waiting for eternity to arrive.
+                        if tether.is_closed() {
+                            tracing::warn!("timely-{worker_id}: Progress operator existing because replication operator exited", worker_id=config.worker_id);
+                            return Ok(());
+                        }
+
                         let probe = Probe { probe_ts, upstream_frontier: Antichain::from_elem(known_lsn) };
                         emit_probe(&probe_cap[0], probe);
                         prev_offset_known = Some(known_lsn);

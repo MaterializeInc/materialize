@@ -285,7 +285,7 @@ impl<'a> CdcStream<'a> {
                             // Get a stream of all the changes for the current instance.
                             let changes = crate::inspect::get_changes_asc(
                                 self.client,
-                                &*instance,
+                                instance,
                                 *instance_lsn,
                                 db_max_lsn,
                                 RowFilterOption::AllUpdateOld,
@@ -363,8 +363,9 @@ impl<'a> CdcStream<'a> {
         // First, initialize all start LSNs. If a capture instance didn't have
         // one specified then we'll start from the current max.
         let max_lsn = crate::inspect::get_max_lsn(self.client).await?;
-        for (_instance, requsted_lsn) in self.capture_instances.iter_mut() {
+        for (instance, requsted_lsn) in self.capture_instances.iter_mut() {
             if requsted_lsn.is_none() {
+                tracing::debug!("Set start_lsn for {instance} to {max_lsn}");
                 requsted_lsn.replace(max_lsn);
             }
         }

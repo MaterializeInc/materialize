@@ -22,7 +22,8 @@ use itertools::Itertools;
 use mz_ore::cast::CastFrom;
 use mz_ore::future::InTask;
 use mz_repr::{Diff, GlobalId, Row, RowArena};
-use mz_sql_server_util::cdc::{CdcEvent, Lsn, Operation as CdcOperation};
+use mz_sql_server_util::SqlServerError;
+use mz_sql_server_util::cdc::{CdcError, CdcEvent, Lsn, Operation as CdcOperation};
 use mz_sql_server_util::desc::SqlServerRowDecoder;
 use mz_sql_server_util::inspect::get_latest_restore_history_id;
 use mz_storage_types::errors::{DataflowError, DecodeError, DecodeErrorKind};
@@ -39,19 +40,13 @@ use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::{CapabilitySet, Concat, Map};
 use timely::dataflow::{Scope, Stream as TimelyStream};
 use timely::progress::{Antichain, Timestamp};
+use tokio::sync::oneshot;
 
 use crate::source::RawSourceCreationConfig;
 use crate::source::sql_server::{
-    DefiniteError, ReplicationError, SourceOutputInfo, TransientError,
+    DefiniteError, REPL_WORKER, ReplicationError, SourceOutputInfo, TransientError,
 };
 use crate::source::types::{SignaledFuture, SourceMessage, StackedCollection};
-
-/// Used as a partition ID to determine the worker that is responsible for
-/// reading data from SQL Server.
-///
-/// TODO(sql_server2): It's possible we could have different workers
-/// replicate different tables, if we're using SQL Server's CDC features.
-static REPL_READER: &str = "reader";
 
 pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
     scope: G,
@@ -62,6 +57,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
     StackedCollection<G, (u64, Result<SourceMessage, DataflowError>)>,
     TimelyStream<G, Infallible>,
     TimelyStream<G, ReplicationError>,
+    oneshot::Sender<()>,
     PressOnDropButton,
 ) {
     let op_name = format!("SqlServerReplicationReader({})", config.id);
@@ -74,6 +70,9 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
     let (definite_error_handle, definite_errors) =
         builder.new_output::<CapacityContainerBuilder<_>>();
 
+    // A tether for the progress operator.  Once this is closed, the progress operator will exit.
+    let (tether_tx, tether_rx) = oneshot::channel();
+
     let (button, transient_errors) = builder.build_fallible(move |caps| {
         let busy_signal = Arc::clone(&config.busy_signal);
         Box::pin(SignaledFuture::new(busy_signal, async move {
@@ -82,6 +81,10 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                 upper_cap_set,
                 definite_error_cap_set,
             ]: &mut [_; 3] = caps.try_into().unwrap();
+
+
+            // move into scope
+            let _tether = tether_rx;
 
             let connection_config = source
                 .connection
@@ -142,7 +145,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
             }
             // We need to emit statistics before we exit
             // TODO(sql_server2): Run ingestions across multiple workers.
-            if !config.responsible_for(REPL_READER) {
+            if !config.responsible_for(REPL_WORKER) {
                 return Ok::<_, TransientError>(());
             }
 
@@ -353,9 +356,26 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
             // 10-byte LSN doesn't fit into the 8-byte integer that the progress event uses.
             let mut log_rewinds_complete = true;
             while let Some(event) = cdc_stream.next().await {
-                let event = event.map_err(TransientError::from)?;
-                tracing::trace!(?config.id, ?event, "got replication event");
+                let event = match event {
+                    Ok(inner) => inner,
+                    Err(error) => {
+                        let Some(definite_error) = as_definite_error(&error) else {
+                            Err(TransientError::from(error))?
+                        };
+                        return_definite_error(
+                            definite_error,
+                            capture_instances.values().flat_map(|indexes| indexes.iter().copied()),
+                            data_output,
+                            data_cap_set,
+                            definite_error_handle,
+                            definite_error_cap_set,
+                        )
+                        .await;
+                        return Ok(());
+                    },
+                };
 
+                tracing::trace!(?config.id, ?event, "got replication event");
                 match event {
                     // We've received all of the changes up-to this LSN, so
                     // downgrade our capability.
@@ -438,7 +458,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                                 data_output
                                     .give_fueled(
                                         &data_cap_set[0],
-                                        ((*partition_idx, Err(error.clone().into())), Lsn::minimum(), Diff::ONE),
+                                        ((*partition_idx, Err(error.clone().into())), ddl_event.lsn, Diff::ONE),
                                     )
                                     .await;
                             }
@@ -457,8 +477,34 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
         data_stream.as_collection(),
         upper_stream,
         error_stream,
+        tether_tx,
         button.press_on_drop(),
     )
+}
+
+/// If the [`SqlServerError`] is definite, returns a `Some(DefiniteError)`, otherwise returns `None`.
+fn as_definite_error(error: &SqlServerError) -> Option<DefiniteError> {
+    match error {
+        SqlServerError::CaptureInstanceError {
+            capture_instance,
+            error: tiberius::error::Error::Server(token_error),
+            // Error 208 is invalid object name, which could be either a definite or transient
+            // error, e.g. a source table could be dropped, or permissions might have been changed
+            // such that MZ can no longer see or access the object.  For now we treat this as
+            // a definite error. We can add a check in the future if we find that users are running
+            // into issues due to permissions.
+        } if token_error.code() == 208 => Some(DefiniteError::ObjectDropped(
+            Arc::clone(capture_instance),
+            token_error.message().to_string(),
+        )),
+        SqlServerError::CdcError(cdc_error) => match cdc_error {
+            err @ CdcError::LsnNotAvailable { .. } => {
+                Some(DefiniteError::Overcompacted(err.to_string()))
+            }
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 async fn handle_data_event(

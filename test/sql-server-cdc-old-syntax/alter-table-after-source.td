@@ -303,13 +303,7 @@ contains:Incompatible schema change
 $ sql-server-execute name=sql-server
 DROP TABLE drop_table;
 
-# Table is dropped, but detected as a transient error with a poor error message, we should improve
-# this test once database-issues#9703 is fixed.
-> SELECT
-    status,
-    error like '%Invalid object name%' as invalid_object_error
-  FROM mz_internal.mz_source_statuses
-  WHERE name = 'drop_table';
-stalled true
+! SELECT * FROM drop_table;
+regex:Object for capture instance .* is no longer available
 
 > DROP SOURCE mz_source CASCADE;

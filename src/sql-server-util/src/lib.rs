@@ -858,6 +858,11 @@ pub enum SqlServerError {
         tables: String,
         capture_instances: String,
     },
+    #[error("Capture instance '{capture_instance}' error: {error}")]
+    CaptureInstanceError {
+        capture_instance: Arc<str>,
+        error: tiberius::error::Error,
+    },
 }
 
 /// Errors returned from decoding SQL Server rows.

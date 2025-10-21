@@ -67,9 +67,7 @@ EXEC sys.sp_cdc_cleanup_change_table
 # Resume the ingestion by adding a replica to the cluster.
 > CREATE CLUSTER REPLICA storage.r1 SIZE = 'scale=1,workers=1';
 
-# This is a transient error, but should be a definite error: database-issues#9722
-> SELECT
-  error LIKE '%the requested LSN%is less than the minimum%'
-  FROM mz_internal.mz_source_statuses
-  WHERE name = 't1';
-true
+! SELECT * FROM t1;
+contains:Overcompacted
+
+> DROP SOURCE mz_source CASCADE;

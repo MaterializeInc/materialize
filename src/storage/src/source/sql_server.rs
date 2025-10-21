@@ -88,6 +88,10 @@ pub enum DefiniteError {
     RestoreHistoryChanged(Option<i32>, Option<i32>),
     #[error("Incompatible schema change for table {0} capture instance {1}")]
     IncompatibleSchemaChange(String, String),
+    #[error("Overcompacted: {0}")]
+    Overcompacted(String),
+    #[error("Object for capture instance '{0}' is no longer available: {1}")]
+    ObjectDropped(Arc<str>, String),
 }
 
 impl From<DefiniteError> for DataflowError {
@@ -98,6 +102,9 @@ impl From<DefiniteError> for DataflowError {
         }))
     }
 }
+
+/// Used as the parition identifier for the main replication and progress workers.
+pub const REPL_WORKER: u32 = 0;
 
 impl SourceRender for SqlServerSourceConnection {
     type Time = Lsn;
@@ -157,7 +164,7 @@ impl SourceRender for SqlServerSourceConnection {
             source_outputs.insert(*id, output_info);
         }
 
-        let (repl_updates, uppers, repl_errs, repl_token) = replication::render(
+        let (repl_updates, uppers, repl_errs, tether, repl_token) = replication::render(
             scope.clone(),
             config.clone(),
             source_outputs.clone(),
@@ -170,7 +177,7 @@ impl SourceRender for SqlServerSourceConnection {
             self.connection.clone(),
             source_outputs.clone(),
             resume_uppers,
-            self.extras.clone(),
+            tether,
         );
 
         let partition_count = u64::cast_from(config.source_exports.len());
