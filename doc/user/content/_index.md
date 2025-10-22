@@ -10,7 +10,7 @@ weight: 1
 # Materialize documentation
 
 Materialize is the live data layer for apps and AI agents. With Materialize, you
-can use SQL to up-to-the-second views on fast changing data.
+can use SQL to create up-to-the-second views on fast changing data.
 
 {{< callout >}}
 
