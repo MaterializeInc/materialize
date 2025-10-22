@@ -9,8 +9,8 @@ weight: 1
 
 # Materialize documentation
 
-Materialize is a real-time data integration platform that enables you to use SQL
-to transform, deliver, and act on fast changing data.
+Materialize is the live data layer for apps and AI agents. With Materialize, you
+can use SQL to up-to-the-second views on fast changing data.
 
 {{< callout >}}
 
